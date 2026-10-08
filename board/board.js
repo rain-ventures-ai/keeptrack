@@ -1,6 +1,13 @@
 (() => {
   'use strict';
-  const LS = {
+  // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
+  // tokens or routines. Only the look (theme, style) is shared.
+  const SANDBOX = new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style)$/, MEM = new Map();
+  const LS = SANDBOX ? {
+    get(k, d = '') { if (SHARED.test(k)) { try { return localStorage.getItem(k) ?? d; } catch { return d; } } return MEM.has(k) ? MEM.get(k) : d; },
+    set(k, v) { if (SHARED.test(k)) { try { localStorage.setItem(k, v); } catch {} } else MEM.set(k, String(v)); },
+    del(k) { if (SHARED.test(k)) { try { localStorage.removeItem(k); } catch {} } else MEM.delete(k); }
+  } : {
     get(k, d = '') { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
     del(k) { try { localStorage.removeItem(k); } catch {} }
