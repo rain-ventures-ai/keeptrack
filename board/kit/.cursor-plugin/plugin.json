@@ -1,0 +1,18 @@
+{
+  "name": "keeptrack",
+  "description": "Keeptrack: people, follow-ups, a simple pipeline and tasks in your own private GitHub repo. Log calls and messages, draft LinkedIn messages and emails (you send them), and see who to contact today.",
+  "author": {
+    "name": "Rain Ventures",
+    "url": "https://github.com/rain-ventures-ai"
+  },
+  "homepage": "https://github.com/rain-ventures-ai/keeptrack",
+  "repository": "https://github.com/rain-ventures-ai/keeptrack",
+  "keywords": [
+    "crm",
+    "follow-ups",
+    "pipeline",
+    "tasks",
+    "kanban"
+  ],
+  "license": "MIT"
+}

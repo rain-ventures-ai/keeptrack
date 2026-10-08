@@ -1,0 +1,542 @@
+{
+  "version": 3,
+  "demo_base": "2026-10-08",
+  "settings": {
+    "stale_after_minutes": 30,
+    "title": "Demo: people and pipeline",
+    "stages": [
+      "New",
+      "Contacted",
+      "Talking",
+      "Proposal",
+      "Won",
+      "Lost"
+    ],
+    "modes": [
+      "crm",
+      "tasks"
+    ]
+  },
+  "columns": [
+    {
+      "id": "backlog",
+      "name": "Backlog"
+    },
+    {
+      "id": "todo",
+      "name": "To do"
+    },
+    {
+      "id": "in-progress",
+      "name": "In progress"
+    },
+    {
+      "id": "done",
+      "name": "Done"
+    }
+  ],
+  "people": [
+    {
+      "github": "demo",
+      "name": "Demo user"
+    }
+  ],
+  "agents": [
+    "claude",
+    "codex"
+  ],
+  "clients": [
+    "General",
+    "Harbour Foods",
+    "Greenline Energy",
+    "Studio Lumen",
+    "Bluewater Marine"
+  ],
+  "labels": [],
+  "tasks": [
+    {
+      "id": "t_1",
+      "num": 1,
+      "title": "Write the Harbour Foods proposal (phase one)",
+      "column": "in-progress",
+      "client": "Harbour Foods",
+      "contact": "p_1",
+      "priority": "high",
+      "due": "2026-10-08",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [
+        {
+          "text": "Cut scope to phase one",
+          "done": true
+        },
+        {
+          "text": "Add a timeline",
+          "done": false
+        },
+        {
+          "text": "Check the price with the team",
+          "done": false
+        }
+      ],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_2",
+      "num": 2,
+      "title": "Plan the Greenline workshop agenda",
+      "column": "todo",
+      "client": "Greenline Energy",
+      "contact": "p_2",
+      "priority": "medium",
+      "due": "2026-10-11",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_3",
+      "num": 3,
+      "title": "Find two logistics case studies",
+      "column": "todo",
+      "client": "Bluewater Marine",
+      "contact": "p_6",
+      "priority": "high",
+      "due": "2026-10-09",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_4",
+      "num": 4,
+      "title": "Studio Lumen kick-off: book the room",
+      "column": "todo",
+      "client": "Studio Lumen",
+      "contact": "p_5",
+      "priority": "medium",
+      "due": "2026-10-12",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_5",
+      "num": 5,
+      "title": "Send the Studio Lumen invoice",
+      "column": "done",
+      "client": "Studio Lumen",
+      "contact": "p_5",
+      "priority": "medium",
+      "due": "2026-10-06",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_6",
+      "num": 6,
+      "title": "Update the price list",
+      "column": "backlog",
+      "client": "General",
+      "contact": "",
+      "priority": "low",
+      "due": "2026-10-22",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_7",
+      "num": 7,
+      "title": "Tidy the weekly prospect list",
+      "column": "todo",
+      "client": "General",
+      "contact": "",
+      "priority": "low",
+      "due": "2026-10-07",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_8",
+      "num": 8,
+      "title": "Write a LinkedIn post about the workshop format",
+      "column": "backlog",
+      "client": "General",
+      "contact": "",
+      "priority": "low",
+      "due": "",
+      "labels": [],
+      "assignees": [
+        "demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    }
+  ],
+  "contacts": [
+    {
+      "id": "p_1",
+      "name": "Amira Patel",
+      "company": "Harbour Foods",
+      "role": "Operations Director",
+      "email": "amira@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "Proposal",
+      "value": "12000",
+      "next": "Send the revised proposal",
+      "next_due": "2026-10-08",
+      "source": "referral",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-09-26T10:00:00.000Z",
+          "by": "demo",
+          "channel": "meeting",
+          "text": "Intro call. They lose orders in a spreadsheet. Wants one view of stock and orders.",
+          "draft": false
+        },
+        {
+          "id": "c2",
+          "at": "2026-10-03T11:00:00.000Z",
+          "by": "demo",
+          "channel": "email",
+          "text": "Sent first proposal (3 options).",
+          "draft": false
+        },
+        {
+          "id": "c3",
+          "at": "2026-10-07T12:00:00.000Z",
+          "by": "demo",
+          "channel": "email",
+          "text": "Hi Amira, here is the revised proposal with the smaller phase one. Shall we talk on Thursday?",
+          "draft": true
+        }
+      ],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "p_2",
+      "name": "Ben Okafor",
+      "company": "Greenline Energy",
+      "role": "CEO",
+      "email": "ben@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "Talking",
+      "value": "25000",
+      "next": "Book a workshop date",
+      "next_due": "2026-10-07",
+      "source": "LinkedIn",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-09-18T10:00:00.000Z",
+          "by": "demo",
+          "channel": "linkedin",
+          "text": "Connected after his post about field teams.",
+          "draft": false
+        },
+        {
+          "id": "c2",
+          "at": "2026-09-30T11:00:00.000Z",
+          "by": "demo",
+          "channel": "call",
+          "text": "Good call. Board meets next month. Wants a half-day workshop first.",
+          "draft": false
+        }
+      ],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "p_3",
+      "name": "Chloe Martin",
+      "company": "Fernwood Clinics",
+      "role": "Practice Manager",
+      "email": "chloe@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "Contacted",
+      "value": "6000",
+      "next": "Follow up on the intro email",
+      "next_due": "2026-10-10",
+      "source": "weekly run",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-10-05T10:00:00.000Z",
+          "by": "demo",
+          "channel": "email",
+          "text": "Intro email: patient reminders and no-shows.",
+          "draft": false
+        }
+      ],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "p_4",
+      "name": "Daniel Reyes",
+      "company": "Northgate Logistics",
+      "role": "Head of IT",
+      "email": "daniel@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "New",
+      "value": "",
+      "next": "Send a first LinkedIn message",
+      "next_due": "2026-10-08",
+      "source": "weekly run",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "p_5",
+      "name": "Elena Rossi",
+      "company": "Studio Lumen",
+      "role": "Founder",
+      "email": "elena@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "Won",
+      "value": "8000",
+      "next": "Kick-off meeting",
+      "next_due": "2026-10-13",
+      "source": "event",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-09-08T10:00:00.000Z",
+          "by": "demo",
+          "channel": "meeting",
+          "text": "Met at the design meetup.",
+          "draft": false
+        },
+        {
+          "id": "c2",
+          "at": "2026-09-28T11:00:00.000Z",
+          "by": "demo",
+          "channel": "email",
+          "text": "Signed. Start after the 15th.",
+          "draft": false
+        }
+      ],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "p_6",
+      "name": "Farid Haddad",
+      "company": "Bluewater Marine",
+      "role": "Commercial Director",
+      "email": "farid@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "Talking",
+      "value": "18000",
+      "next": "Send two case studies",
+      "next_due": "2026-10-09",
+      "source": "referral",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-10-02T10:00:00.000Z",
+          "by": "demo",
+          "channel": "call",
+          "text": "Asked for case studies in logistics.",
+          "draft": false
+        }
+      ],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "p_7",
+      "name": "Grace Lin",
+      "company": "Kestrel Finance",
+      "role": "COO",
+      "email": "grace@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "Lost",
+      "value": "",
+      "next": "Check in again in spring",
+      "next_due": "2027-02-05",
+      "source": "LinkedIn",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-08-29T10:00:00.000Z",
+          "by": "demo",
+          "channel": "linkedin",
+          "text": "Not now. Budget freeze until April.",
+          "draft": false
+        }
+      ],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "p_8",
+      "name": "Hugo Brennan",
+      "company": "Oakridge Schools",
+      "role": "Business Manager",
+      "email": "hugo@example.com",
+      "phone": "",
+      "linkedin": "",
+      "stage": "Contacted",
+      "value": "4000",
+      "next": "Call the office",
+      "next_due": "2026-10-05",
+      "source": "website form",
+      "notes": "Invented person for the demo.",
+      "links": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-09-29T10:00:00.000Z",
+          "by": "demo",
+          "channel": "email",
+          "text": "Replied to the website form.",
+          "draft": false
+        },
+        {
+          "id": "c2",
+          "at": "2026-10-04T11:00:00.000Z",
+          "by": "demo",
+          "channel": "linkedin",
+          "text": "Short note to say hello.",
+          "draft": false
+        }
+      ],
+      "history": [],
+      "created": "2026-09-08T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    }
+  ],
+  "client_info": {
+    "Harbour Foods": {
+      "links": [
+        {
+          "title": "Google Drive",
+          "url": "https://drive.google.com/"
+        },
+        {
+          "title": "Dropbox",
+          "url": "https://www.dropbox.com/"
+        }
+      ]
+    },
+    "Studio Lumen": {
+      "links": [
+        {
+          "title": "OneDrive",
+          "url": "https://onedrive.live.com/"
+        }
+      ]
+    }
+  }
+}

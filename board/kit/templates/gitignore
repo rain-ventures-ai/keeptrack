@@ -1,0 +1,4 @@
+.board-claim.json
+__pycache__/
+*.json.lock
+.tmp-*.part

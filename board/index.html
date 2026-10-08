@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keeptrack</title>
+<link rel="preconnect" href="https://api.github.com" crossorigin>
+<script src="theme.js"></script>
+<style>html:not(.ready) body { visibility: hidden; }</style>
+</head>
+<body>
+<header>
+  <div class="popwrap boardwrap">
+    <button id="boardBtn" class="logo boardbadge" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="boardPop" title="Board" aria-label="Board">▦</button>
+    <div id="boardPop" class="popover boardpop" hidden></div>
+  </div>
+  <div id="viewSw" class="seg" role="group" aria-label="View"><button data-view="today" title="Today: who to contact now"><span class="vi">⏰</span><span class="vt"> Today</span></button><button data-view="people" title="People"><span class="vi">👤</span><span class="vt"> People</span></button><button data-view="pipeline" title="Pipeline: people by stage"><span class="vi">📈</span><span class="vt"> Pipeline</span></button><button data-view="board" title="Board"><span class="vi">▦</span><span class="vt"> Board</span></button><button data-view="list" title="List"><span class="vi">☰</span><span class="vt"> List</span></button><button data-view="cal" title="Calendar"><span class="vi">📅</span><span class="vt"> Calendar</span></button><button data-view="sched" title="Schedule"><span class="vi">🗓</span><span class="vt"> Schedule</span></button><button data-view="activity" title="Activity: what was done today, yesterday or on a day you pick"><span class="vi">🕘</span><span class="vt"> Activity</span></button></div>
+  <div class="clientwrap">
+    <div id="clientBar" class="clientbar" role="group" aria-label="Filter by client"></div>
+    <div id="clientPop" class="popover clientpop" hidden></div>
+  </div>
+  <select id="fClient" hidden aria-hidden="true"></select>
+  <div id="peopleQ" class="peopleq" role="group" aria-label="Filter by person"></div>
+  <button id="btnAttn" class="attnbtn" hidden title="Cards that are overdue or have a stale, stuck or blocked agent: click to show only these" aria-label="Needs attention"><span class="ic">⚠️</span><span id="attnN"></span><span id="attnT" class="atx"></span><span id="attnS" class="atx short"> attention</span></button>
+  <button id="btnSearch" aria-label="Search" title="Search everything (press /)"><span class="ic">🔍</span><span class="tx"> Search</span></button>
+  <div class="popwrap">
+    <button id="btnFilter" aria-haspopup="true" aria-expanded="false" aria-controls="filterPop" aria-label="Filters" title="Filters"><span class="ic">🎚️</span><span class="tx"> Filters</span><span id="filterBadge" class="badge" hidden>0</span></button>
+    <div id="filterPop" class="popover filterpop" hidden>
+      <label>Assignee <select id="fWho"></select></label>
+      <label>Label <select id="fLabel"></select></label>
+      <label>Priority <select id="fPrio"><option value="">All</option><option>high</option><option>medium</option><option>low</option></select></label>
+      <label class="chk"><input type="checkbox" id="fAttn"> Needs attention <span id="attnCount" class="muted"></span></label>
+      <label class="chk"><input type="checkbox" id="fHideDone"> Hide done</label>
+      <div class="popfoot"><button id="fClear" type="button">Clear filters</button><button id="fCopyMd" type="button" title="Copy every card this view shows, with all details, comments and history">📋 Copy as Markdown</button></div>
+    </div>
+  </div>
+  <div class="hbreak"></div>
+  <span id="status">Not connected</span>
+  <button id="btnAgent" title="Copy instructions for an AI agent: the board, how to claim and update tasks, and the skill link" aria-label="Copy for agent"><span class="ic">🤖</span><span class="tx"> Copy for agent</span></button>
+  <button id="btnCopyMd" title="Copy as Markdown: every card this view shows (filters applied), with all details, comments and history" aria-label="Copy as Markdown"><span class="ic">📋</span><span class="tx"> Copy</span></button>
+  <button id="btnUnread" aria-label="Unread" title="Nothing new"><span class="ic">🔔</span><span id="unreadBadge" class="badge" hidden>0</span></button>
+  <button id="btnRefresh" title="Reload from GitHub" aria-label="Refresh"><span class="ic">🔄</span><span class="tx"> Refresh</span></button>
+  <button id="btnHelp" aria-label="Help" title="Help"><span class="ic">❓</span><span class="tx"> Help</span></button>
+  <button id="btnSettings" aria-label="Settings" title="Settings"><span class="ic">⚙️</span><span class="tx"> Settings</span></button>
+</header>
+<div id="kitBar" class="kitbar" role="status" hidden></div>
+<div id="roBar" class="kitbar robar" role="status" hidden></div>
+<div id="sizeBar" class="kitbar sizebar" role="status" hidden></div>
+<div id="legend" class="legend" aria-label="Colour key"></div>
+<nav id="tabs" aria-label="Columns"></nav>
+<div id="board"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<dialog id="dlgConflict">
+  <h3 style="margin-top:0">This board changed while you were working</h3>
+  <p id="cfIntro" style="color:var(--muted);font-size:13px;margin-top:0"></p>
+  <div id="cfBody"></div>
+  <div class="actions"><button id="cfDiscard">Discard my change</button><button id="cfApply" class="primary">Apply my change anyway</button></div>
+</dialog>
+
+<dialog id="dlgSend" class="settings" aria-label="Send to Claude">
+  <div class="sethead"><h3>Send to Claude?</h3></div>
+  <p>Your comment will be posted, then <b>your Claude routine</b> will be started to work on task <b id="sendNum"></b>. It will report back on this task with comments, and hand it back to you when it is done. It starts in about one to two minutes.</p>
+  <div class="actions"><button id="sendNo" type="button">Cancel</button><span class="spacer"></span><button id="sendPost" type="button">Post comment only</button><button id="sendYes" type="button" class="primary">Send to Claude</button></div>
+</dialog>
+<dialog id="dlgPublic" class="pubwarn" aria-labelledby="pubTitle">
+  <div class="pubicon" aria-hidden="true">⚠️</div>
+  <h2 id="pubTitle">This board is PUBLIC</h2>
+  <p>The repository <b id="pubRepo"></b> is public. <b>Anyone on the internet can read every card</b>: titles, descriptions, comments, contacts, links and history.</p>
+  <p>Unless that is what you want, make the repository private now: GitHub → the repo → Settings → General → Danger Zone → <b>Change visibility</b> → Make private.</p>
+  <div class="actions"><a id="pubLink" class="primary btnlink" href="#" target="_blank" rel="noopener noreferrer">Open the repo settings on GitHub</a><span class="spacer"></span><button id="pubOk" type="button">I understand, show the board</button></div>
+  <p class="hint">This warning shows on every page load while the repository is public.</p>
+</dialog>
+<dialog id="dlgSearch" class="settings qsearch" aria-label="Search">
+  <div class="qrow"><input id="qQ" type="search" placeholder="Search people, tasks, notes and messages…" autocomplete="off" aria-label="Search"><label class="chk"><input type="checkbox" id="qArch"> Include archive</label></div>
+  <div id="qRes" class="qres" role="list"></div>
+  <div class="qfoot"><span id="qInfo" class="muted"></span><button id="qClose" type="button">Close</button></div>
+</dialog>
+<dialog id="dlgArch" class="settings archview" aria-labelledby="aTitle">
+  <h2 id="aTitle"></h2>
+  <div id="aMeta" class="muted"></div>
+  <div id="aBody"></div>
+  <div class="cbtns"><button id="aRestore" type="button" class="primary">↩ Put back on the board</button><button id="aClose" type="button">Close</button></div>
+</dialog>
+<dialog id="dlgHelp" class="settings help" aria-labelledby="hTitle">
+  <h2 id="hTitle">Help</h2>
+  <div class="hgrid">
+    <section><h3>⏰ Today</h3><p>The people you must contact today or before today. Click a person to open their card.</p></section>
+    <section><h3>👤 People</h3><p>Everyone you keep track of. Type <b>Name | Company | Role</b> in the add box to add a person.</p></section>
+    <section><h3>📈 Pipeline</h3><p>People by stage. Drag a card to change the stage. Logging a sent message moves a new person to the second stage.</p></section>
+    <section><h3>✉️ Messages and calls</h3><p>In a person's card, write what you sent or said, pick the channel, then <b>Log</b>. Tick <b>Draft</b> to keep a message you have not sent yet. <b>Mark sent</b> when you send it.</p></section>
+    <section><h3>📁 Client files</h3><p>Keep big files in Google Drive, Dropbox or OneDrive. Add the folder links in the <b>Files</b> part of a person's card.</p></section>
+    <section><h3>▦ Tasks</h3><p>Board, List, Calendar and Schedule show the same tasks. Double-click a card to open it. A task can be linked to a person.</p></section>
+    <section><h3>🤖 AI assistants</h3><p><b>Copy for AI</b> copies a card for any chat. With the Keeptrack plugin, Claude, Codex or Cursor can read and update the board. AI drafts messages; it never sends them.</p></section>
+    <section><h3>🔍 Search and archive</h3><p>Press <b>/</b> or click 🔍 to search everything. Old done tasks and Lost people can be moved to the archive (Settings → General). Search finds them, and you can put them back.</p></section>
+    <section><h3>🔒 Read-only</h3><p>The demo board, a public board with no token, and a token without write access are read-only. A banner at the top tells you why.</p></section>
+  </div>
+  <p class="hlinks">Full help: <a data-doc="README.md">all topics</a> · <a data-doc="getting-started.md">getting started</a> · <a data-doc="people-and-follow-ups.md">people</a> · <a data-doc="ai-assistants.md">AI assistants</a> · <a data-doc="privacy-and-security.md">privacy</a> · <a data-doc="faq.md">problems</a> · demo boards: <a href="?demo=crm">people</a>, <a href="?demo=board">tasks</a></p>
+  <div class="cbtns"><button id="hClose" type="button" class="primary">Close</button></div>
+</dialog>
+<dialog id="dlgSettings" class="settings">
+  <div class="sethead"><h3>Settings</h3><button id="sClose" class="ico" aria-label="Close settings">✕</button></div>
+  <div class="stabs" role="tablist" aria-label="Settings sections">
+    <button id="tabGeneral" role="tab" aria-selected="true" data-tab="general">General</button>
+    <button id="tabConn" role="tab" aria-selected="false" data-tab="conn">Connection</button>
+    <button id="tabClaude" role="tab" aria-selected="false" data-tab="claude">Agents</button>
+    <button id="tabBoards" role="tab" aria-selected="false" data-tab="boards">Boards</button>
+    <button id="tabAlerts" role="tab" aria-selected="false" data-tab="alerts">Alerts</button>
+    <button id="tabChecks" role="tab" aria-selected="false" data-tab="checks">Checks</button>
+  </div>
+
+  <div id="panelGeneral" role="tabpanel" aria-labelledby="tabGeneral">
+    <p class="hint" style="margin-top:0">These apply straight away and are remembered in this browser.</p>
+    <div><label for="sStyle">Card style</label><select id="sStyle"><option value="classic">Classic</option><option value="colorful">Colourful (client and urgency colours)</option></select></div>
+    <div><label for="sTheme">Theme</label><select id="sTheme"><option value="auto">Auto (follows your device)</option><option value="light">Light</option><option value="dark">Dark</option><option value="midnight">Midnight</option><option value="sand">Sand</option></select></div>
+    <div><label>Unread markers</label><button id="sMarkAll" type="button">Mark all cards as read</button></div>
+    <div><label>App version</label><button id="sUpdate" type="button">Update to latest version</button><div class="hint">Version <code id="sVer">…</code>. The board checks for a new version about every 10 minutes and whenever you come back to the tab. This button forces a full refresh of the page, styles and scripts, skipping every cache.</div></div>
+    <div><label>Move settings to another device</label>
+      <div class="cbtns"><button id="xCode" type="button">📋 Copy settings code</button><button id="xLink" type="button">🔗 Copy setup link</button></div>
+      <div class="hint">Copies everything configured in this browser: repository, username, <b>access token</b>, theme, card style and view, and your <b>agent settings</b> (which agents you use, Claude routine URL and token, cron-job.org key). Open the setup link, or paste the code below, on your other browser or phone. Treat both like a password.</div>
+      <textarea id="xPaste" rows="2" placeholder="Paste a settings code or setup link here" aria-label="Settings code to import" style="width:100%;margin-top:8px"></textarea>
+      <div class="cbtns"><button id="xImport" type="button">⬇ Import settings</button></div></div>
+    <div><label>Archive</label><div id="archBox"></div></div>
+    <div class="actions"><button id="sDone" class="primary">Done</button></div>
+  </div>
+
+  <div id="panelConn" role="tabpanel" aria-labelledby="tabConn" hidden>
+    <label for="sRepo">Repository (owner/name)</label><input id="sRepo" placeholder="owner/repo">
+    <div class="row">
+      <div><label for="sBranch">Branch</label><input id="sBranch" placeholder="master"></div>
+      <div><label for="sPath">File path</label><input id="sPath" placeholder="board/tasks.json"></div>
+    </div>
+    <label for="sMe">Your GitHub username</label><input id="sMe" placeholder="osouthgate" autocomplete="off">
+    <div class="hint">Recorded as the author of your edits and comments, and used for unread markers and the default assignee.</div>
+    <label for="sToken">Fine-grained personal access token</label><input id="sToken" type="password" autocomplete="off" placeholder="github_pat_..."><div class="fldbtns"><button type="button" class="small" data-copy="sToken">📋 Copy</button><button type="button" class="small" data-show="sToken" aria-pressed="false">👁 Show</button></div>
+    <div class="hint"><a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create a fine-grained token on GitHub &rarr;</a> (the link pre-fills the name, expiry and <b>Contents: Read and write</b> plus <b>Issues: Read and write</b>, needed for the Create issue button). Choose <b>Only select repositories</b> and pick just the repo that holds your board file. If the repo belongs to an organisation, set <b>Resource owner</b> to that organisation. The token is kept only in this browser (localStorage) and is sent only to api.github.com.</div>
+    <div class="actions"><button id="sForget" class="danger">Forget token</button><span class="spacer"></span><button id="sTest" type="button">🩺 Test connection</button><button id="sCancel">Cancel</button><button id="sSave" class="primary">Save &amp; connect</button></div>
+  </div>
+  <div id="panelBoards" role="tabpanel" aria-labelledby="tabBoards" hidden>
+    <p class="hint" style="margin-top:0">The boards this browser knows. Each board is its own GitHub repo, with its own token and Claude routine, kept only in this browser. The menu next to the logo switches between them.</p>
+    <div id="bList" class="blist"></div>
+    <div class="cbtns"><button id="bAdd" type="button">＋ Add an existing board</button></div>
+    <div class="hint">Opens Connection with empty fields: type the repo (owner/name) and paste a token for that repo.</div>
+    <h4>Set up a new board</h4>
+    <p class="hint">A new board is a private GitHub repo with the board kit in it. Claude can set it up with you: you create the repo and the token, Claude adds the board files and checks them.</p>
+    <div class="cbtns"><button id="bNewPrompt" type="button" class="primary">📋 Copy new-board prompt for Claude</button></div>
+    <div class="hint">Paste it into a new chat with Claude (Claude Code, the desktop app or claude.ai). The steps are in <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/NEW-BOARD.md" target="_blank" rel="noopener noreferrer">NEW-BOARD.md</a>. Claude never handles your secrets.</div>
+  </div>
+  <div id="panelAlerts" role="tabpanel" aria-labelledby="tabAlerts" hidden>
+    <p class="hint" style="margin-top:0">Desktop notifications when someone else changes the board. They work while the board is open in a tab (a background or pinned tab is fine). Your own changes never alert you; your agents' changes do if you tick "Updates from my agents". Kept in this browser only.</p>
+    <label class="chk big"><input type="checkbox" id="alOn"> Alerts on</label>
+    <div id="alPerm" class="hint"></div>
+    <div><label for="alPreset">Alert me about</label><select id="alPreset"><option value="tagged">Only when I am tagged or assigned</option><option value="me">Me: tags, my cards and my agents</option><option value="all">Everything</option><option value="custom">Custom (ticks below)</option><option value="off">Nothing</option></select></div>
+    <div id="alKinds" class="alkinds"></div>
+    <div class="cbtns"><button id="alTest" type="button">🔔 Send a test alert</button></div>
+    <div class="hint">"My cards" are cards assigned to you. Your agents are entries by <code>claude@you</code> or <code>codex@you</code>. The page checks for changes about every 30 seconds.</div>
+  </div>
+  <div id="panelChecks" role="tabpanel" aria-labelledby="tabChecks" hidden>
+    <p class="hint" style="margin-top:0">Tests each step for the board that is open now (or, from Connection → Test connection, the values you typed): settings, token, repository, branch, board file, write access, board tools and the GitHub rate limit. It tells you which step fails and what to do.</p>
+    <div class="cbtns"><button id="ckRun" type="button" class="primary">🩺 Run checks</button><button id="ckCopy" type="button" hidden>📋 Copy report</button></div>
+    <ol id="ckList" class="cklist"></ol>
+    <div class="hint">The report never contains your token. Paste it to Claude or a teammate if you need help.</div>
+  </div>
+  <div id="panelClaude" role="tabpanel" aria-labelledby="tabClaude" hidden>
+    <p class="hint" style="margin-top:0">Choose the AI agents <b>you</b> use. Only these are offered when you type <b>@</b>. Each person chooses their own; the choice and any keys stay in this browser (like the GitHub token) and travel with "Copy settings code".</p>
+    <div class="agentsw"><label class="chk"><input type="checkbox" id="sUseClaude"> 🤖 Claude</label><label class="chk"><input type="checkbox" id="sUseCodex"> 🤖 Codex</label></div>
+    <div id="boxClaude" class="agentbox" hidden>
+    <h4>Claude</h4>
+    <p class="hint">Typing <b>@claude</b> in a comment can start <b>your own</b> Claude routine. Each person sets up their own.</p>
+    <div class="cbtns" style="margin:0 0 6px"><button id="sClaudePrompt" type="button" class="primary">📋 Copy setup prompt for Claude</button></div>
+    <div class="hint">Paste it into a new chat with Claude (Claude Code, the desktop app or claude.ai). Claude reads the setup guide and offers to guide you or to do the clicking in your browser. It never handles your secrets: you paste those yourself.</div>
+    <label for="sClaudeUrl">Routine trigger URL</label><input id="sClaudeUrl" placeholder="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire" autocomplete="off">
+    <label for="sClaudeTok">Routine token</label><input id="sClaudeTok" type="password" autocomplete="off" placeholder="sk-ant-oat01-…"><div class="fldbtns"><button type="button" class="small" data-copy="sClaudeTok">📋 Copy</button><button type="button" class="small" data-show="sClaudeTok" aria-pressed="false">👁 Show</button></div>
+    <div class="hint">Setup guide: <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/ROUTINE-SETUP.md" target="_blank" rel="noopener noreferrer">board/ROUTINE-SETUP.md</a> (or ask Claude Code in the repo to "set up my board routine"). From claude.ai/code/routines → your routine → Edit → add an <b>API</b> trigger → copy the URL and generate a token. The token can only start that one routine.</div>
+    <label for="sCronKey">cron-job.org API key</label><input id="sCronKey" type="password" autocomplete="off" placeholder="API key"><div class="fldbtns"><button type="button" class="small" data-copy="sCronKey">📋 Copy</button><button type="button" class="small" data-show="sCronKey" aria-pressed="false">👁 Show</button></div>
+    <div class="hint">Browsers can't call a routine directly, so a one-off job on your free <a href="https://console.cron-job.org/" target="_blank" rel="noopener noreferrer">cron-job.org</a> account makes the call (Settings → API → enable, create a key). <b>What cron-job.org sees:</b> your routine token and the task number (never the task's text); the job is deleted as soon as it has run. Starting takes about one to two minutes.</div>
+    <div class="actions"><button id="sClaudeTest" type="button">Test cron-job.org key</button></div>
+    </div>
+    <div id="boxCodex" class="agentbox" hidden>
+    <h4>Codex</h4>
+    <p class="hint"><b>How @codex works:</b> the board cannot start Codex by itself (OpenAI only starts Codex cloud tasks from an @codex comment on a GitHub pull request). So when a card's newest request is for <b>@codex</b>, the button at the top of the card turns into <b>🤖 Copy for Codex</b>. Press it and paste into Codex; Codex then claims the card and reports back with keeptrack.py. <b>@claude</b> is different: it starts your Claude routine straight away.</p>
+    </div>
+    <div id="sClaudeMsg" class="hint" role="status"></div>
+    <div class="actions"><span class="spacer"></span><button id="sClaudeSave" type="button" class="primary">Save</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlgContact" class="drawer" aria-label="Person details">
+  <div class="dhead"><span class="numchip big" aria-hidden="true">👤</span><span class="spacer"></span><button id="pAgent" type="button" class="small agentcopy" title="Copy this person and their recent contact for Claude, Codex or ChatGPT, for example to write a message" aria-label="Copy for AI"><span aria-hidden="true">🤖</span><span class="atxt"> Copy for AI</span></button><button id="pClose" class="ico" aria-label="Close">✕</button></div>
+  <div class="dbody">
+    <textarea id="pName" class="dtitle" rows="1" aria-label="Name" placeholder="Name"></textarea>
+    <div class="dchips">
+      <select id="pStage" class="pillsel" aria-label="Stage"></select>
+    </div>
+    <div class="nextbox">
+      <label for="pNext">➡️ Next step</label>
+      <input id="pNext" placeholder="For example: send a LinkedIn message">
+      <div class="nextdue"><input id="pNextDue" type="date" aria-label="Next step date"><button type="button" class="small" data-due="0">Today</button><button type="button" class="small" data-due="1">Tomorrow</button><button type="button" class="small" data-due="7">+1 week</button><button type="button" class="small" data-due="">No date</button></div>
+    </div>
+    <div class="pgrid">
+      <label>🏢 Company <input id="pCompany" list="pCompanies" autocomplete="off"><datalist id="pCompanies"></datalist></label>
+      <label>💼 Role <input id="pRole"></label>
+      <label>✉️ Email <span class="inwrap"><input id="pEmail" type="email"><a id="pMailGo" class="small" title="Write an email" hidden>↗</a></span></label>
+      <label>📞 Phone <input id="pPhone" type="tel"></label>
+      <label>🔗 LinkedIn <span class="inwrap"><input id="pLinkedin" placeholder="https://linkedin.com/in/..."><a id="pLiGo" class="small" target="_blank" rel="noopener noreferrer" title="Open LinkedIn profile" hidden>↗</a></span></label>
+      <label>💷 Value <input id="pValue" placeholder="For example: 5000"></label>
+      <label>🧭 Source <input id="pSource" placeholder="For example: weekly opportunity run"></label>
+    </div>
+    <section class="dsec"><div class="dsech"><h4>💬 Contact log <span id="pTouchCount" class="muted"></span></h4></div>
+      <div class="composer"><textarea id="pTouchText" rows="2" placeholder="What did you send or talk about? Paste a draft message here too." aria-label="Contact log entry"></textarea>
+        <div class="cbtns"><select id="pChan" class="pillsel" aria-label="Channel"><option value="linkedin">💼 LinkedIn</option><option value="email">✉️ Email</option><option value="call">📞 Call</option><option value="meeting">🤝 Meeting</option><option value="note">📝 Note</option></select>
+          <label class="chk" id="pDraftWrap"><input type="checkbox" id="pDraft"> Draft (not sent yet)</label><button id="pTouchPost" type="button" class="primary">Log it</button></div></div>
+      <div id="pTouches" class="cmlist" aria-live="polite"></div>
+    </section>
+    <section class="dsec"><div class="dsech"><h4>📝 Notes</h4></div><textarea id="pNotes" class="ddesc" placeholder="Anything to remember about this person." aria-label="Notes"></textarea></section>
+    <section class="dsec" id="pTasksSec"><div class="dsech"><h4>☑ Tasks</h4></div><div id="pTasks"></div><input id="pTaskNew" class="addinline wide" placeholder="＋ Add a task for this person"></section>
+    <section class="dsec"><div class="dsech"><h4>🔗 Links</h4></div><div id="pLinks"></div><input id="pLinkNew" class="addinline wide" placeholder="＋ Add a link (paste a URL, or Title | URL)"></section>
+    <section class="dsec" id="pFilesSec"><div class="dsech"><h4 id="pFilesH">🗂 Files</h4></div><div class="hint">Folders for this company in Google Drive, Dropbox, OneDrive or SharePoint. Keep large files there, not in GitHub.</div><div id="pFiles"></div><input id="pFileNew" class="addinline wide" placeholder="＋ Add a folder or file link (Title | URL)"></section>
+    <details class="dsec"><summary id="pHistSum">History</summary><ol id="pHist" class="hist"></ol></details>
+    <div class="dfoot2"><span id="pCreated" class="dcreated"></span><button id="pDelete" type="button" class="danger">Delete person</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlgCard" class="drawer" aria-label="Task details">
+  <div class="dhead"><button id="dNum" type="button" class="numchip big" title="Copy the task reference"></button><button id="dLink" type="button" class="small" title="Copy a link to this task" aria-label="Copy link to this task">🔗</button><span class="spacer"></span><span id="dSaved" class="dsaved" role="status"></span><button id="cIssue" type="button" class="small agentcopy" title="Create a GitHub issue for this task" aria-label="Create GitHub issue"><span aria-hidden="true">🐙</span><span class="atxt"> Create issue</span></button><button id="cCopyMd" type="button" class="small agentcopy" title="Copy this card as Markdown, with all details, comments and history" aria-label="Copy card as Markdown"><span aria-hidden="true">📋</span><span class="atxt"> Markdown</span></button><button id="cAgent" type="button" class="small agentcopy" title="Copy instructions for an AI agent to work on this task: the card, how to claim it, and the skill link" aria-label="Copy for agent"><span aria-hidden="true">🤖</span><span class="atxt"> Copy for agent</span></button><button id="cClose" class="ico" aria-label="Close">✕</button></div>
+  <div class="dbody" id="cBody">
+    <textarea id="cTitle" class="dtitle" rows="1" aria-label="Title" placeholder="Task title"></textarea>
+    <div class="dchips">
+      <select id="cCol" class="pillsel" aria-label="Status"></select>
+      <select id="cPrio" class="pillsel prio" aria-label="Priority"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+      <span class="duepill" title="Due date"><span aria-hidden="true">📅</span><input id="cDue" type="date" class="pillinput" aria-label="Due date"><button id="cDueClear" class="lx" type="button" aria-label="Clear due date" title="Clear" hidden>×</button></span>
+    </div>
+    <div id="cClaimWrap" class="claimbanner" hidden>
+      <div id="cClaim"></div>
+      <div class="cbtns"><button id="cStuck" type="button">Mark stuck</button><button id="cRelease" type="button" class="danger">Release claim</button></div>
+    </div>
+    <div id="cLastRun" class="lastrun" hidden></div>
+
+    <div class="props">
+      <div class="proprow">
+      <div class="prop stack"><span class="pk">👥 People</span><div class="pv" id="cWho"></div></div>
+      <div class="prop stack"><span class="pk">🏢 Client</span><div class="pv"><select id="cClient" class="pillsel" aria-label="Client"></select></div></div>
+      </div>
+      <div class="prop"><span class="pk">🏷 Labels</span><div class="pv"><span id="cLabelChips"></span><button id="cLabelAdd" type="button" class="tag lplus" title="Add a label" aria-label="Add a label">＋</button><input id="cLabelNew" list="labelList" class="addinline lnew" placeholder="Label name" hidden><datalist id="labelList"></datalist></div></div>
+    </div>
+
+    <section class="dsec">
+      <div class="dsech"><h4>📝 Description</h4><button id="cDescBtn" type="button" class="small">Edit</button></div>
+      <div id="cDescView" class="descview" tabindex="0" title="Double-click to edit"></div>
+      <div id="descEdit" hidden>
+        <textarea id="cDetails" class="ddesc" placeholder="Add a more detailed description. URLs become clickable." aria-label="Description"></textarea>
+        <div class="cbtns"><button id="cDescSave" type="button" class="primary">Save</button><button id="cDescCancel" type="button">Cancel</button><span class="hint">Ctrl/Cmd+Enter saves</span></div>
+      </div>
+    </section>
+
+    <section class="dsec" id="cmSec"><div class="dsech"><h4>💬 Comments <span id="cmCount" class="muted"></span></h4></div>
+      <div class="composer"><textarea id="cmText" rows="1" placeholder="Write a comment…" aria-label="Write a comment"></textarea>
+        <div class="cbtns" id="cmActions" hidden><button id="cmPost" type="button" class="primary">Comment</button><span class="hint">Ctrl/Cmd+Enter posts</span></div></div>
+      <div class="hint" id="cmHint" hidden>Set your GitHub username in Settings so comments show your name.</div>
+      <div id="cmStream" class="cmlist" aria-live="polite"></div>
+    </section>
+    <div class="addbar" id="addBar" role="group" aria-label="Add to this task"><button type="button" data-sec="todos">☑ Checklist</button><button type="button" data-sec="links">🔗 Link</button><button type="button" data-sec="contacts">👤 Contact</button></div>
+    <section class="dsec optsec" data-sec="todos"><div class="dsech"><h4>☑ Checklist <span id="cTodoCount" class="muted"></span></h4></div><div id="cTodos"></div></section>
+    <section class="dsec optsec" data-sec="links"><div class="dsech"><h4>🔗 Links <span id="cLinkCount" class="muted"></span></h4></div><div id="cLinkList"></div><input id="cLinkNew" class="addinline wide" placeholder="＋ Add a link (paste a URL, or Title | URL)"></section>
+    <section class="dsec optsec" data-sec="contacts"><div class="dsech"><h4>👤 Contacts</h4></div><div id="cContactList"></div><input id="cContactNew" class="addinline wide" placeholder="＋ Add a contact: Name | role | email | phone"></section>
+
+    <details id="cHistWrap" class="dsec"><summary id="cHistSum">Activity</summary><ol id="cHist" class="hist"></ol></details>
+    <div class="dfoot2"><span id="dCreated" class="dcreated"></span><button id="cDelete" type="button" class="danger">Delete task</button></div>
+  </div>
+</dialog>
+
+<div id="updateBar" class="updatebar" role="status" hidden><span>A new version of the board is available.</span><button id="updNow" class="primary" type="button">Update now</button><button id="updLater" type="button">Later</button></div>
+
+<script>
+/* Bootstrap: GitHub Pages lets browsers cache files for ~10 minutes, so a plain <script src> can serve stale code after a deploy.
+   Here every load revalidates board.css and board.js with the server (a cheap 304 when unchanged), then runs the fresh text.
+   Offline or on any failure it falls back to normal tags so the page still opens from cache. */
+(function () {
+  var done = false, reveal = function () { done = true; document.documentElement.classList.add('ready'); };
+  setTimeout(function () { if (!done) reveal(); }, 6000);                                   // never leave the page blank
+  function get(u) { return fetch(u, { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error(u + ' ' + r.status); return r.text(); }); }
+  function fallback() {
+    var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'board.css'; document.head.appendChild(l);
+    var s = document.createElement('script'); s.src = 'board.js'; document.body.appendChild(s); reveal();
+  }
+  Promise.all([get('board.css'), get('board.js')]).then(function (a) {
+    window.__kbAssets = { css: a[0], js: a[1] };
+    var st = document.createElement('style'); st.textContent = a[0] + '\n/*# sourceURL=board.css */'; document.head.appendChild(st); reveal();
+    var sc = document.createElement('script'); sc.textContent = a[1] + '\n//# sourceURL=board.js'; document.body.appendChild(sc);
+  }).catch(fallback);
+  // The HTML itself can be stale too: compare the cached copy with a revalidated one and reload once if they differ.
+  fetch(location.href, { cache: 'force-cache' }).then(function (r) { return r.text(); }).then(function (cached) {
+    return fetch(location.href, { cache: 'no-cache' }).then(function (r) { return r.text(); }).then(function (fresh) {
+      window.__kbHtml = fresh;
+      if (cached !== fresh) { var k = 'kb_html_reload', t = 0; try { t = +sessionStorage.getItem(k) || 0; } catch (e) {} if (Date.now() - t > 60000) { try { sessionStorage.setItem(k, String(Date.now())); } catch (e) {} location.reload(); } }
+    });
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>

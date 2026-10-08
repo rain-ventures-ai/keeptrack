@@ -1,0 +1,377 @@
+{
+  "version": 3,
+  "demo_base": "2026-10-08",
+  "settings": {
+    "stale_after_minutes": 30,
+    "title": "Demo: task board",
+    "modes": [
+      "tasks"
+    ]
+  },
+  "columns": [
+    {
+      "id": "backlog",
+      "name": "Backlog"
+    },
+    {
+      "id": "todo",
+      "name": "To do"
+    },
+    {
+      "id": "in-progress",
+      "name": "In progress"
+    },
+    {
+      "id": "done",
+      "name": "Done"
+    }
+  ],
+  "people": [
+    {
+      "github": "sam-demo",
+      "name": "Sam"
+    },
+    {
+      "github": "alex-demo",
+      "name": "Alex"
+    }
+  ],
+  "agents": [
+    "claude",
+    "codex"
+  ],
+  "clients": [
+    "Admin",
+    "Marketing",
+    "Website",
+    "Workshops"
+  ],
+  "labels": [
+    {
+      "name": "bug",
+      "color": "#ef4444"
+    },
+    {
+      "name": "writing",
+      "color": "#6366f1"
+    },
+    {
+      "name": "money",
+      "color": "#10b981"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t_1",
+      "num": 1,
+      "title": "Plan the spring newsletter",
+      "column": "backlog",
+      "client": "Marketing",
+      "priority": "low",
+      "due": "",
+      "labels": [
+        "writing"
+      ],
+      "assignees": [
+        "sam-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_2",
+      "num": 2,
+      "title": "Fix the broken link on the pricing page",
+      "column": "todo",
+      "client": "Website",
+      "priority": "high",
+      "due": "2026-10-08",
+      "labels": [
+        "bug"
+      ],
+      "assignees": [
+        "alex-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_3",
+      "num": 3,
+      "title": "Write the case study for Studio Lumen",
+      "column": "in-progress",
+      "client": "Marketing",
+      "priority": "medium",
+      "due": "2026-10-11",
+      "labels": [
+        "writing"
+      ],
+      "assignees": [
+        "sam-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [
+        {
+          "id": "c1",
+          "at": "2026-10-07T15:00:00.000Z",
+          "by": "alex-demo",
+          "text": "First draft looks good. Can we add one number from the client?"
+        }
+      ],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_4",
+      "num": 4,
+      "title": "Move the contact form to the new tool",
+      "column": "todo",
+      "client": "Website",
+      "priority": "medium",
+      "due": "2026-10-13",
+      "labels": [],
+      "assignees": [
+        "alex-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_5",
+      "num": 5,
+      "title": "Send the October invoices",
+      "column": "todo",
+      "client": "Admin",
+      "priority": "high",
+      "due": "2026-10-07",
+      "labels": [
+        "money"
+      ],
+      "assignees": [
+        "sam-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_6",
+      "num": 6,
+      "title": "Renew the domain name",
+      "column": "todo",
+      "client": "Admin",
+      "priority": "medium",
+      "due": "2026-10-20",
+      "labels": [
+        "money"
+      ],
+      "assignees": [
+        "alex-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_7",
+      "num": 7,
+      "title": "Update the team holiday calendar",
+      "column": "done",
+      "client": "Admin",
+      "priority": "low",
+      "due": "2026-10-04",
+      "labels": [],
+      "assignees": [
+        "sam-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_8",
+      "num": 8,
+      "title": "Make the workshop slides",
+      "column": "in-progress",
+      "client": "Workshops",
+      "priority": "high",
+      "due": "2026-10-10",
+      "labels": [
+        "writing"
+      ],
+      "assignees": [
+        "alex-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [
+        {
+          "text": "Outline",
+          "done": true
+        },
+        {
+          "text": "Draft slides",
+          "done": true
+        },
+        {
+          "text": "Practise once",
+          "done": false
+        }
+      ],
+      "comments": [],
+      "history": [],
+      "claim": {
+        "agent": "claude",
+        "on_behalf_of": "alex-demo",
+        "session_id": "demo",
+        "session_url": "",
+        "host": "demo",
+        "status": "running",
+        "note": "Drafting slide 4 of 9",
+        "claimed_at": "2026-10-08T09:00:00.000Z",
+        "heartbeat_at": "2026-10-08T09:00:00.000Z"
+      },
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_9",
+      "num": 9,
+      "title": "Book the room for the November workshop",
+      "column": "todo",
+      "client": "Workshops",
+      "priority": "medium",
+      "due": "2026-10-15",
+      "labels": [],
+      "assignees": [
+        "sam-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_10",
+      "num": 10,
+      "title": "Test the site on phones",
+      "column": "backlog",
+      "client": "Website",
+      "priority": "low",
+      "due": "",
+      "labels": [
+        "bug"
+      ],
+      "assignees": [
+        "alex-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_11",
+      "num": 11,
+      "title": "Choose the new laptop",
+      "column": "done",
+      "client": "Admin",
+      "priority": "low",
+      "due": "2026-10-02",
+      "labels": [
+        "money"
+      ],
+      "assignees": [
+        "alex-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "t_12",
+      "num": 12,
+      "title": "Ask three clients for feedback",
+      "column": "todo",
+      "client": "Marketing",
+      "priority": "medium",
+      "due": "2026-10-09",
+      "labels": [],
+      "assignees": [
+        "sam-demo"
+      ],
+      "details": "",
+      "links": [],
+      "contacts": [],
+      "todos": [],
+      "comments": [],
+      "history": [],
+      "claim": null,
+      "created": "2026-09-24T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    }
+  ],
+  "contacts": [],
+  "client_info": {}
+}

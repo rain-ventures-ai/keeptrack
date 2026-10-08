@@ -1,0 +1,13 @@
+{
+  "name": "keeptrack",
+  "owner": {
+    "name": "Rain Ventures"
+  },
+  "plugins": [
+    {
+      "name": "keeptrack",
+      "source": "./board/kit",
+      "description": "Keeptrack: people, follow-ups, a simple pipeline and tasks in your own private GitHub repo. Log calls and messages, draft LinkedIn messages and emails (you send them), and see who to contact today."
+    }
+  ]
+}
