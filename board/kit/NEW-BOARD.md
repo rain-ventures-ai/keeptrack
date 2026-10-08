@@ -1,7 +1,7 @@
 # Set up a new task board
 
 A board is a GitHub repo with the board kit and a `board/tasks.json`. The web board at
-https://rain-ventures-ai.github.io/co-assets/board/ works with any such repo. This guide is for a person and for the
+https://rain-ventures-ai.github.io/keeptrack/board/ works with any such repo. This guide is for a person and for the
 Claude that helps them. It is the target of the "Copy new-board prompt for Claude" button in Settings → Boards.
 
 ## Rules for Claude

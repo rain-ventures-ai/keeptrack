@@ -1737,6 +1737,9 @@
     code: ['Claude Code', [['Run in a terminal:', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
     codex: ['Codex', [['Run in a terminal:', 'codex plugin marketplace add rain-ventures-ai/keeptrack'], ['Type /plugins and install keeptrack.']]],
     cursor: ['Cursor', [['In Agent chat, type:', '/add-plugin https://github.com/rain-ventures-ai/keeptrack']]] };
+  $('agSetupPrompt').onclick = () => { const c = cfg();
+    copyText(`Set up Keeptrack for me: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it. Walk me through it one step at a time.` +
+      (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into a new chat with your assistant.'); };
   function renderTools() {
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg(); bar.textContent = body.textContent = '';
     Object.entries(TOOLS).forEach(([k, [name]]) => { const b = el('button', 'agpill' + (k === pick ? ' on' : ''), name); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(k === pick)); b.onclick = () => { LS.set('kb_tool', k); renderTools(); }; bar.append(b); });

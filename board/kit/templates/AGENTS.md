@@ -39,7 +39,7 @@ Auth: `gh` logged in with access to this repo, or (cloud sandboxes, CI, no `gh`)
 **Heartbeats:** `claim` records your active task in a local, gitignored `.board-claim.json`. In Claude Code a project hook runs `keeptrack.py auto-heartbeat` after tool calls, which refreshes the claim at most every 5 minutes and does nothing when no claim is active. Codex and other agents have no hook, so run `keeptrack.py heartbeat <id>` yourself every ~10 minutes. `done` and `release` clear the local record.
  Use `--file <copy.json>` to test safely against a local copy.
 
-Web board: https://rain-ventures-ai.github.io/co-assets/board/?repo={repo}&path=board/tasks.json
+Web board: https://rain-ventures-ai.github.io/keeptrack/board/?repo={repo}&path=board/tasks.json
 
 Full schema and details: `board/README.md`.
 

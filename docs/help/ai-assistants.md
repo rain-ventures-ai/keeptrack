@@ -23,7 +23,7 @@ The quickest way: in the web board open **⚙️ Settings → Agents → An assi
 | Cursor | In Agent chat: `/add-plugin https://github.com/rain-ventures-ai/keeptrack` |
 | ChatGPT | ChatGPT cannot update the board yet. Use **🤖 Copy for AI** on a person, paste it into ChatGPT, then log the draft on the board yourself. |
 
-While Keeptrack is private, you need access to the `rain-ventures-ai/keeptrack` repo to install the plugin. Full details: [board/kit/PLUGIN.md](../../board/kit/PLUGIN.md).
+The Keeptrack repo is public, so anyone can install the plugin. Full details: [board/kit/PLUGIN.md](../../board/kit/PLUGIN.md).
 
 ## First use: tell it your board
 The first time, the assistant asks for your board repo (for example `your-name/my-keeptrack`) and your GitHub username. It saves them in a hidden `.board` folder in your project. It never saves your token.
