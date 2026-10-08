@@ -7,14 +7,12 @@ A Trello-style kanban for this repo with no database and no server. The single s
 - **The web board** — a static page hosted from the public `keeptrack` repo: https://rain-ventures-ai.github.io/keeptrack/board/?repo=<owner>/<repo>&path=board/tasks.json (source: `rain-ventures-ai/keeptrack`, `board/index.html`). It holds no data. It talks to the GitHub API from your browser with a fine-grained token you paste in once (kept in your browser's localStorage, sent only to api.github.com).
 - **The agent CLI** — [`board/keeptrack.py`](keeptrack.py), used by Claude, Codex or any script, through your existing `gh` login.
 
-Every CLI write re-reads the latest board files and retries on a conflict. The current web board opens schema v4 read-only. Web writes arrive in phase 2.
+Every CLI and web-board write re-reads the latest board files and retries on a conflict.
 
 ## Using the web board
 1. Open the hosted page above (the link pre-fills the repo).
 2. Settings → check the file path is `board/tasks.json`, add your GitHub username and a **fine-grained token** limited to this repo with **Contents: Read and write**; the Settings dialog links to GitHub's token page with the name, expiry and permission pre-filled.
 3. Drag cards between columns, or use ◀ ▶. Double-click or **Edit** for the full card.
-
-Schema v4 boards open read-only in the current web board. Use `keeptrack.py` to save changes until the phase 2 web update is installed.
 
 Filters: client, assignee (including "Claimed by an agent"), label, priority, **Needs attention** (overdue, or an agent claim that is stale/stuck/blocked), hide done.
 
@@ -44,9 +42,9 @@ API reads use the branch tree. Blobs are cached by Git blob SHA under `.board/ca
 
 ### Migrate from schema 3
 
-Not released yet: split storage needs the phase 2 web board. Until then, do not migrate a real board. Bare `migrate` brings a board up to v3 only; only `migrate --to 4` splits it.
+Install the v8 web page before anyone migrates a board. Bare `migrate` brings a board up to v3 only. Only `migrate --to 4` splits it.
 
-When it is released, install the new kit on the default branch. Then check the migration:
+Install the new kit on the default branch. Then check the migration:
 
 ```bash
 python3 board/keeptrack.py migrate --to 4 --dry-run

@@ -24,11 +24,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### Schema 4: split storage (not released yet)
-Not released yet: it needs the phase 2 web board. Do not run `migrate --to 4` on a real board before then. A kit version number is given when it is released.
+### v8 (schema 4)
+Cards and CRM people use split storage. Install the v8 web page before anyone migrates a board.
 
-Cards and CRM people use split storage. Bare `migrate` still brings a board up to v3 only. Only `migrate --to 4` splits the board.
-- When it is released: run `python3 board/keeptrack.py migrate --to 4 --dry-run` after the kit is on the default branch.
+Bare `migrate` still brings a board up to v3 only. Only `migrate --to 4` splits the board.
+- Run `python3 board/keeptrack.py migrate --to 4 --dry-run` after the kit is on the default branch.
 - Check the file list and counts.
 - Run `python3 board/keeptrack.py migrate --to 4`.
 - The command makes a backup tag before it changes a GitHub board. Keep the tag permanently.
@@ -37,8 +37,6 @@ Cards and CRM people use split storage. Bare `migrate` still brings a board up t
 - Migrate the upgrade owner's own board first. Tell the team before you migrate a shared board.
 - Add `.board/cache/` to `.gitignore` if it is not there.
 - Check: `tasks.json` has `"version": 4` and `"layout": "split"`. Check that `cards/` and `people/` contain the item files.
-
-The web board before phase 2 cannot show a schema 4 board: it opens it read-only and with no cards.
 
 To roll back, revert the migration commit. You can also reset the branch to the `keeptrack-v3-backup-YYYYMMDD-HHMM` tag. A reset removes every later board save, so check with the team first.
 
