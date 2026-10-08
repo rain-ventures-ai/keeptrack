@@ -96,6 +96,12 @@ class Import(unittest.TestCase):
             self.assertIn(part, msg)
         self.assertEqual(open(self.file).read(), before)
 
+    def test_lone_strings_are_one_item(self):
+        json.dump({"tasks": [{"title": "T", "labels": "sales", "assignees": "osouthgate", "todos": "Call"}]}, open(self.staging, "w"))
+        self.run_import()
+        t = self.read()["tasks"][0]
+        self.assertEqual((t["labels"], t["assignees"], [x["text"] for x in t["todos"]]), (["sales"], ["osouthgate"], ["Call"]))
+
     def test_csv_people(self):
         csv = os.path.join(self.dir.name, "people.csv")
         open(csv, "w").write("Name,Company,Email,Stage\nSam Lee,Acme Ltd,sam@acme.example,New\n,,,\n")

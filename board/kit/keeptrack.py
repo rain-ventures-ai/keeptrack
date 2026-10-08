@@ -1236,6 +1236,11 @@ def _s(v):
     return v.strip() if isinstance(v, str) else ("" if v is None else str(v).strip())
 
 
+def _list(v):
+    """A list from a staging field; a lone string is one item (never split into letters)."""
+    return [v] if isinstance(v, str) else list(v or [])
+
+
 def _norm_url(u):
     return _s(u).rstrip("/").lower()
 
@@ -1385,10 +1390,10 @@ def apply_staging(data, st, label):
             c = _match_person(people, {"name": t["contact"], "email": t["contact"], "company": client})
             contact = c["id"] if c else ""
         x = {"id": "t_" + uuid.uuid4().hex[:8], "title": title, "column": _s(t.get("column")) or "todo", "client": client,
-             "priority": _s(t.get("priority")) or "medium", "due": _s(t.get("due")), "labels": list(t.get("labels") or []),
-             "assignees": list(t.get("assignees") or []), "details": _s(t.get("details")),
+             "priority": _s(t.get("priority")) or "medium", "due": _s(t.get("due")), "labels": _list(t.get("labels")),
+             "assignees": _list(t.get("assignees")), "details": _s(t.get("details")),
              "links": [{"title": _s(l.get("title")) or l["url"], "url": _s(l["url"])} for l in t.get("links") or []],
-             "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": _s(s), "done": False} for s in t.get("todos") or [] if _s(s)],
+             "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": _s(s), "done": False} for s in _list(t.get("todos")) if _s(s)],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
         if contact: x["contact"] = contact
         hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
