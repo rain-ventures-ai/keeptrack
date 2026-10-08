@@ -54,6 +54,7 @@ Read the file list and counts. Then migrate:
 
 ```bash
 python3 board/keeptrack.py migrate --to 4
+python3 board/keeptrack.py verify --against keeptrack-v3-backup-YYYYMMDD-HHMM
 python3 board/keeptrack.py doctor
 ```
 

@@ -578,3 +578,96 @@ class MoveInPlace(unittest.TestCase):
         moved = read_json(os.path.join(self.board_dir, "cards", "t_second.json"))
         self.assertEqual(second["column"], moved["column"])
         self.assertLess(moved["rank"], first["rank"])
+
+
+class Verify(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.board_dir = os.path.join(self.temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        self.backup = os.path.join(self.temp.name, "backup-tasks.json")
+        shutil.copy(os.path.join(self.board_dir, "tasks.json"), self.backup)
+        self.old_file = kt.FILE
+        kt.FILE = os.path.join(self.board_dir, "tasks.json")
+
+    def tearDown(self):
+        kt.FILE = self.old_file
+        self.temp.cleanup()
+
+    def run_verify(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = kt.cmd_verify(Args(against=self.backup))
+        return code, out.getvalue()
+
+    def test_migrated_board_matches_its_backup(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_migrate(Args(to=4, dry_run=False))
+        code, out = self.run_verify()
+        self.assertEqual(0, code, out)
+        self.assertIn("OK", out)
+
+    def test_a_lost_card_and_a_changed_field_are_reported(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_migrate(Args(to=4, dry_run=False))
+        os.remove(os.path.join(self.board_dir, "cards", "t_second.json"))
+        card_path = os.path.join(self.board_dir, "cards", "t_first.json")
+        card = read_json(card_path); card["title"] = "Changed"; write(card_path, card)
+        code, out = self.run_verify()
+        self.assertEqual(1, code)
+        self.assertIn("card t_second is missing", out)
+        self.assertIn("card t_first differs: title", out)
+
+
+class ImportOnSplitBoard(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.board_dir = os.path.join(self.temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        self.old_file = kt.FILE
+        kt.FILE = os.path.join(self.board_dir, "tasks.json")
+        self.staging = os.path.join(self.temp.name, "staging.json")
+        write(self.staging, {"source": "test", "people": [{"name": "Bea Acme", "company": "Acme", "evidence": "test"}],
+                             "tasks": [{"title": "Send the Acme notes", "client": "Acme", "evidence": "test"}]})
+
+    def tearDown(self):
+        kt.FILE = self.old_file
+        self.temp.cleanup()
+
+    def test_import_writes_new_files_with_rank_and_long_ids(self):
+        before = set(tree_bytes(self.board_dir))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_import(Args(path=self.staging, source=None, dry_run=False))
+        new = set(tree_bytes(self.board_dir)) - before
+        card = [p for p in new if p.startswith("cards")]
+        person = [p for p in new if p.startswith("people")]
+        self.assertEqual((1, 1), (len(card), len(person)), new)
+        self.assertRegex(os.path.basename(card[0]), r"^t_[0-9a-z]{10}\.json$")
+        self.assertTrue(kt.valid_rank(read_json(os.path.join(self.board_dir, card[0]))["rank"]))
+        self.assertNotIn("tasks", read_json(kt.FILE))
+
+    def test_dry_run_on_a_v3_board_does_not_split_in_memory(self):
+        shutil.rmtree(self.board_dir)
+        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        before = tree_bytes(self.board_dir)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_import(Args(path=self.staging, source=None, dry_run=True))
+        self.assertEqual(before, tree_bytes(self.board_dir))
+        data = kt.load_board(); kt.migrate_data(data)
+        self.assertEqual(3, data["version"])
+        self.assertNotIn("layout", data)
+
+
+class DuplicateFiles(unittest.TestCase):
+    def test_save_is_refused_when_two_files_share_an_id(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        board_dir = os.path.join(temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v4"), board_dir)
+        old = kt.FILE; kt.FILE = os.path.join(board_dir, "tasks.json"); self.addCleanup(setattr, kt, "FILE", old)
+        shutil.copy(os.path.join(board_dir, "cards", "t_first.json"), os.path.join(board_dir, "cards", "copy.json"))
+        before = tree_bytes(board_dir)
+        with self.assertRaises(SystemExit) as e:
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_comment(Args(id="t_second", text="hello", note=None))
+        self.assertIn("same id", str(e.exception))
+        self.assertEqual(before, tree_bytes(board_dir))

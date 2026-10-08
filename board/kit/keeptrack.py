@@ -48,6 +48,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py migrate             # bring tasks.json up to v3 (safe to run twice)
   keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person (install the v8 web page first)
   keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
+  keeptrack.py verify --against REF        # compare the board with a backup (tag, branch, commit or tasks.json file)
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, AGENTS.md, CLAUDE.md, empty tasks.json
 """
@@ -743,7 +744,23 @@ def _desired_files(data, state, extra=None):
     return desired
 
 
+def _duplicate_files(state):
+    """Item files that share an id. A save would keep only one of them, so saving is refused until doctor repairs it."""
+    seen, dup = {}, []
+    for rel, entry in sorted(state.get("files", {}).items()):
+        obj = entry.get("obj")
+        if rel.startswith(("cards/", "people/")) and isinstance(obj, dict) and obj.get("id"):
+            if obj["id"] in seen:
+                dup.append(f"{obj['id']} ({seen[obj['id']]} and {rel})")
+            else:
+                seen[obj["id"]] = rel
+    return dup
+
+
 def _changes(data, state, extra=None):
+    dup = _duplicate_files(state)
+    if dup:
+        sys.exit("not saved: two board files have the same id: " + ", ".join(dup) + ". Run keeptrack.py doctor (the board-doctor skill).")
     desired = _desired_files(data, state, extra)
     managed = {p for p in state.get("files", {}) if p == "tasks.json" or
                (p.startswith(("cards/", "people/")) and p.endswith(".json"))}
@@ -914,7 +931,10 @@ def _to_v4(d):
     return d
 
 
-def migrate_data(data, target=SCHEMA):
+AUTO_MIGRATE_TO = 3  # writes bring older files up to v3 only; split storage (v4) needs an explicit `migrate --to 4`
+
+
+def migrate_data(data, target=AUTO_MIGRATE_TO):
     v = data.get("version", 1) if isinstance(data.get("version", 1), int) else 1
     steps = []
     while v < target:
@@ -1732,9 +1752,72 @@ def _migrate_v4(a):
                 continue
             if saved:
                 print(f"migrated tasks.json to schema v4" + (f" (backup tag: {tag})" if tag else ""))
+                print(f"Next: keeptrack.py verify --against {tag or '<backup of tasks.json>'}, then keeptrack.py doctor")
                 return
             time.sleep(0.4 * (attempt + 1))
         sys.exit("could not migrate after retries (board busy)")
+
+
+def _read_backup(ref):
+    """The board at a backup: a local tasks.json path, or a git tag/branch/commit of the board repo."""
+    if os.path.isfile(ref):
+        with open(ref, encoding="utf-8") as f:
+            return json.load(f)
+    if FILE or WRITE == "git":
+        if not ROOT:
+            sys.exit(f"cannot read backup {ref}: not in a clone of the board repo")
+        git("fetch", "-q", "origin", "--tags", ref)
+        for name in (ref, f"origin/{ref}", "FETCH_HEAD"):
+            rc, raw, _ = git("show", f"{name}:{PATH}")
+            if rc == 0:
+                return json.loads(raw)
+        sys.exit(f"cannot read {PATH} at backup {ref}")
+    rc, out, err = gh(f"repos/{REPO}/contents/{PATH}?ref={urllib.parse.quote(ref, safe='')}")
+    if rc:
+        sys.exit(f"cannot read {PATH} at backup {ref}: {err.strip() or out.strip()}")
+    return json.loads(content_text(PATH, json.loads(out)))
+
+
+def verify_board(now, backup):
+    """Differences between the board now and a backup, ignoring layout, version and rank. [] means the same data."""
+    def normal(d):
+        d = json.loads(json.dumps(d))
+        d.pop("layout", None); d.pop("version", None)
+        for t in d.get("tasks", []):
+            t.pop("rank", None)
+        return d
+    a, b = normal(backup), normal(now)
+    out = []
+    for kind, label in (("tasks", "card"), ("contacts", "person")):
+        old = {x.get("id"): x for x in a.get(kind, [])}
+        new = {x.get("id"): x for x in b.get(kind, [])}
+        out += [f"{label} {i} is missing" for i in sorted(set(old) - set(new), key=str)]
+        out += [f"{label} {i} is new" for i in sorted(set(new) - set(old), key=str)]
+        for i in sorted(set(old) & set(new), key=str):
+            fields = sorted(k for k in set(old[i]) | set(new[i]) if old[i].get(k) != new[i].get(k))
+            if fields:
+                out.append(f"{label} {i} differs: {', '.join(fields)}")
+    for key in sorted(set(a) | set(b)):
+        if key not in ("tasks", "contacts") and a.get(key) != b.get(key):
+            out.append(f"board setting {key} differs")
+    return out
+
+
+def cmd_verify(a):
+    backup = _read_backup(a.against)
+    migrate_data(backup, 3)
+    now = load_board()
+    diffs = verify_board(now, backup)
+    counts = migration_counts(now)
+    print(f"now: {counts['tasks']} tasks, {counts['people']} people, {counts['comments']} comments, "
+          f"{counts['history']} history lines, {counts['todos']} to-dos")
+    if not diffs:
+        print(f"OK: the board has the same data as {a.against}")
+        return 0
+    for d in diffs:
+        print("DIFF " + d)
+    print(f"{len(diffs)} difference(s) from {a.against}. Changes saved after the backup also show here.")
+    return 1
 
 
 def cmd_kit_owner(a):
@@ -2016,6 +2099,210 @@ def cmd_client_link(a):
         if a.client not in data.setdefault("clients", []): data["clients"].append(a.client)
         print(f"linked {a.client}: {a.title or a.url}")
     mutate(fn, f"Files: {a.client}")
+
+
+# ---- import: load an onboarding staging file (people, companies, folders, tasks) in one save -------------------
+# The agent reads each source (a spreadsheet, Gmail, Trello...) and writes one staging file; this is the only door in.
+# Rules: nothing is overwritten (empty fields are filled, nothing else), a second run adds nothing, every record keeps
+# a line of evidence in its history, and a bad file is refused whole (no half import).
+IMPORT_PERSON_FIELDS = ("company", "role", "email", "phone", "linkedin", "value", "next", "notes", "source")
+IMPORT_CSV_COLUMNS = ("name",) + IMPORT_PERSON_FIELDS + ("stage", "due", "evidence")
+
+
+def _s(v):
+    return v.strip() if isinstance(v, str) else ("" if v is None else str(v).strip())
+
+
+def _list(v):
+    """A list from a staging field; a lone string is one item (never split into letters)."""
+    return [v] if isinstance(v, str) else list(v or [])
+
+
+def _norm_url(u):
+    return _s(u).rstrip("/").lower()
+
+
+def _folder_url(u):
+    """An https link, or an absolute path on the person's computer (kept as a file:// link)."""
+    u = _s(u)
+    if re.match(r"https?://", u) or u.startswith("file://"):
+        return u
+    if u.startswith("/") or re.match(r"[A-Za-z]:[\\/]", u):  # not ~/: the agent's home may not be the person's
+        return "file://" + u.replace("\\", "/")
+    return ""
+
+
+def read_staging(path):
+    """A staging JSON file, or a CSV of people with the columns in IMPORT_CSV_COLUMNS (other columns are refused)."""
+    try:
+        raw = open(path, encoding="utf-8-sig").read()
+    except OSError as e:
+        sys.exit(f"cannot read {path}: {e}")
+    if path.lower().endswith(".csv"):
+        import csv
+        rows = list(csv.DictReader(io.StringIO(raw)))
+        cols = {(c or "").strip().lower() for r in rows[:1] for c in r.keys()}
+        bad = sorted(c for c in cols if c and c not in IMPORT_CSV_COLUMNS)
+        if bad:
+            sys.exit(f"unknown CSV column(s): {', '.join(bad)}. Columns: {', '.join(IMPORT_CSV_COLUMNS)}")
+        rows = [r for r in rows if any(_s(v) for v in r.values())]  # spreadsheets often end with empty rows
+        return {"people": [{(k or "").strip().lower(): v for k, v in r.items()} for r in rows]}
+    try:
+        st = json.loads(raw)
+    except ValueError as e:
+        sys.exit(f"{path} is not valid JSON: {e}")
+    if not isinstance(st, dict):
+        sys.exit("the staging file must be a JSON object with people, companies, folders and tasks lists")
+    return st
+
+
+def check_staging(data, st):
+    """Return a list of problems ('people[3]: no name'). Empty means the file can be imported."""
+    errs = []
+    for key in ("people", "companies", "folders", "tasks"):
+        if key in st and not isinstance(st[key], list):
+            errs.append(f"{key}: must be a list")
+    if errs:
+        return errs
+    names = {s.lower() for s in stages(data)}
+    for i, p in enumerate(st.get("people", [])):
+        w = f"people[{i}]"
+        if not isinstance(p, dict) or not _s(p.get("name")):
+            errs.append(f"{w}: no name"); continue
+        if _s(p.get("stage")) and _s(p.get("stage")).lower() not in names:
+            errs.append(f"{w} {p['name']}: unknown stage '{p['stage']}' (stages: {', '.join(stages(data))})")
+        if _s(p.get("due")) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", _s(p["due"])):
+            errs.append(f"{w} {p['name']}: due must be YYYY-MM-DD")
+        if _s(p.get("due")) and not _s(p.get("next")):
+            errs.append(f"{w} {p['name']}: a due date needs a next step (next)")
+    for i, c in enumerate(st.get("companies", [])):
+        if not (isinstance(c, str) and _s(c)) and not (isinstance(c, dict) and _s(c.get("name"))):
+            errs.append(f"companies[{i}]: no name")
+    for i, f in enumerate(st.get("folders", [])):
+        if not isinstance(f, dict) or not _s(f.get("company")):
+            errs.append(f"folders[{i}]: no company"); continue
+        if not _folder_url(f.get("url")):
+            errs.append(f"folders[{i}] {f['company']}: url must be an https link or an absolute folder path")
+    cols = {c.get("id") for c in data.get("columns") or [] if isinstance(c, dict)} or {"backlog", "todo", "in-progress", "done"}
+    for i, t in enumerate(st.get("tasks", [])):
+        w = f"tasks[{i}]"
+        if not isinstance(t, dict) or not _s(t.get("title")):
+            errs.append(f"{w}: no title"); continue
+        if _s(t.get("column")) and _s(t["column"]) not in cols:
+            errs.append(f"{w} {t['title']}: column must be one of {', '.join(sorted(cols))}")
+        if _s(t.get("due")) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", _s(t["due"])):
+            errs.append(f"{w} {t['title']}: due must be YYYY-MM-DD")
+        if _s(t.get("priority")) and _s(t["priority"]) not in ("high", "medium", "low"):
+            errs.append(f"{w} {t['title']}: priority must be high, medium or low")
+        for l in t.get("links") or []:
+            if not isinstance(l, dict) or not re.match(r"https?://", _s(l.get("url"))):
+                errs.append(f"{w} {t['title']}: each link needs an https url")
+    return errs
+
+
+def _match_person(people, p):
+    email, li = _s(p.get("email")).lower(), _norm_url(p.get("linkedin"))
+    key = (_s(p.get("name")).lower(), _s(p.get("company")).lower())
+    for q in people:
+        if email and _s(q.get("email")).lower() == email: return q
+        if li and _norm_url(q.get("linkedin")) == li: return q
+    for q in people:
+        if (_s(q.get("name")).lower(), _s(q.get("company")).lower()) == key: return q
+    return None
+
+
+def apply_staging(data, st, label):
+    """Apply the staging file to data. Returns counts and report lines. Never overwrites a field that has a value."""
+    out = {"added": 0, "filled": 0, "same": 0, "lines": []}
+    say = out["lines"].append
+    people = data.setdefault("contacts", []); clients = data.setdefault("clients", [])
+    info = data.setdefault("client_info", {})
+    by = who_am_i()
+
+    def add_client(name):
+        if name and name not in clients:
+            clients.append(name); say(f"+ company  {name}"); out["added"] += 1
+
+    for c in st.get("companies", []):
+        add_client(_s(c if isinstance(c, str) else c.get("name")))
+    for p in st.get("people", []):
+        ev = _s(p.get("evidence")) or label
+        q = _match_person(people, p)
+        if q is None:
+            q = {"id": new_board_id(data, "p_", "people"), "name": _s(p["name"]), "company": "", "role": "", "email": "", "phone": "",
+                 "linkedin": "", "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "",
+                 "links": [], "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": by}
+            for k in IMPORT_PERSON_FIELDS:
+                if _s(p.get(k)): q[k] = _s(p[k])
+            if _s(p.get("stage")): q["stage"] = check_stage(data, _s(p["stage"]))
+            if _s(p.get("due")): q["next_due"] = _s(p["due"])
+            hist(q, f"imported ({ev})", by); people.append(q); add_client(q["company"])
+            say(f"+ person   {q['name']}{' (' + q['company'] + ')' if q['company'] else ''}  [{q['stage']}]  {ev}"); out["added"] += 1
+            continue
+        filled = [k for k in IMPORT_PERSON_FIELDS if _s(p.get(k)) and not _s(q.get(k))]
+        for k in filled: q[k] = _s(p[k])
+        if _s(p.get("due")) and not q.get("next_due") and "next" in filled:
+            q["next_due"] = _s(p["due"]); filled.append("next_due")
+        if filled:
+            hist(q, f"import filled {', '.join(filled)} ({ev})", by); q["updated"] = now(); add_client(q.get("company"))
+            say(f"~ person   {q['name']}: filled {', '.join(filled)}"); out["filled"] += 1
+        else:
+            out["same"] += 1
+    for f in st.get("folders", []):
+        name, url = _s(f["company"]), _folder_url(f["url"])
+        links = info.setdefault(name, {}).setdefault("links", [])
+        if any(_norm_url(l.get("url")) == _norm_url(url) for l in links):
+            out["same"] += 1; continue
+        links.append({"title": _s(f.get("title")) or url, "url": url}); add_client(name)
+        say(f"+ folder   {name}: {_s(f.get('title')) or url}"); out["added"] += 1
+    tasks = data.setdefault("tasks", [])
+    for t in st.get("tasks", []):
+        title, client = _s(t["title"]), _s(t.get("client"))
+        urls = {_norm_url(l["url"]) for l in t.get("links") or []}
+        if any((_s(x.get("title")).lower(), _s(x.get("client")).lower()) == (title.lower(), client.lower())
+               or urls & {_norm_url(l.get("url")) for l in x.get("links") or []} for x in tasks):
+            out["same"] += 1; continue
+        contact = ""
+        if _s(t.get("contact")):
+            c = _match_person(people, {"name": t["contact"], "email": t["contact"], "company": client})
+            contact = c["id"] if c else ""
+        x = {"id": new_board_id(data, "t_", "cards"), "title": title, "column": _s(t.get("column")) or "todo", "client": client,
+             "priority": _s(t.get("priority")) or "medium", "due": _s(t.get("due")), "labels": _list(t.get("labels")),
+             "assignees": _list(t.get("assignees")), "details": _s(t.get("details")),
+             "links": [{"title": _s(l.get("title")) or l["url"], "url": _s(l["url"])} for l in t.get("links") or []],
+             "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": _s(s), "done": False} for s in _list(t.get("todos")) if _s(s)],
+             "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
+        if contact: x["contact"] = contact
+        if data.get("layout") == "split":
+            ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
+            x["rank"] = key_between(max(ranks) if ranks else None, None)
+        hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
+        say(f"+ task     {title}{' [' + client + ']' if client else ''}"); out["added"] += 1
+    return out
+
+
+def cmd_import(a):
+    st = read_staging(a.path)
+    label = a.source or _s(st.get("source")) or f"import of {os.path.basename(a.path)}"
+    data, _ = load(); guard_schema(data); migrate_data(data)
+    errs = check_staging(data, st)
+    if errs:
+        sys.exit("the staging file has problems, so nothing was imported:\n  " + "\n  ".join(errs[:50])
+                 + (f"\n  ... and {len(errs) - 50} more" if len(errs) > 50 else ""))
+    if a.dry_run:
+        r = apply_staging(data, st, label)
+        for l in r["lines"]: print(l)
+        print(f"DRY RUN: would add {r['added']}, fill in {r['filled']}, skip {r['same']} already on the board. Nothing was saved.")
+        if r["added"] or r["filled"]:
+            print(f"To import, run: keeptrack.py import {a.path}" + (f" --source \"{a.source}\"" if a.source else ""))
+        return
+
+    def fn(d):
+        r = apply_staging(d, st, label)
+        for l in r["lines"]: print(l)
+        print(f"imported: added {r['added']}, filled in {r['filled']}, skipped {r['same']} already on the board.")
+        return r
+    mutate(fn, f"Import: {label}")
 
 
 # ---- archive: old done tasks, old Lost people and long histories move to <board dir>/archive/<year>.json ----------
@@ -2328,6 +2615,7 @@ def main():
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
     s.set_defaults(f=cmd_kit_update)
     s = sub.add_parser("migrate"); s.add_argument("--to", type=int, help="4 = split storage; without --to the board goes up to v3 only"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
+    s = sub.add_parser("verify"); s.add_argument("--against", required=True, help="backup tag, branch or commit, or a tasks.json file"); s.set_defaults(f=cmd_verify)
     s = sub.add_parser("doctor"); s.add_argument("--fix", action="store_true"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_doctor)
     s = sub.add_parser("kit-owner"); s.add_argument("user", nargs="?"); s.set_defaults(f=cmd_kit_owner)
     s = sub.add_parser("init"); s.add_argument("--person", action="append", required=True, help="github-user:Display Name (repeatable; the first is the upgrade owner)")
@@ -2355,6 +2643,7 @@ def main():
     s = sub.add_parser("archived-history", help="older history lines moved to the archive, for a task or person"); s.add_argument("ref"); s.set_defaults(f=cmd_archived_history)
     s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref"); s.set_defaults(f=cmd_unarchive)
     s = sub.add_parser("client-link", help="link a client to a file store folder"); s.add_argument("client"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_client_link)
+    s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     a = p.parse_args()
     FILE = a.file
     return a.f(a) or 0

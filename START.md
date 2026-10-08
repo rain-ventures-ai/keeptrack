@@ -66,12 +66,13 @@ $B where
 The assistant also needs access to the repo. Pick the first that works:
 1. **A GitHub login on this computer:** run `gh auth status`. If it says logged in, nothing more to do. If `gh` is installed but not logged in, ask the person to run `gh auth login` themselves.
 2. **A token in an environment variable:** the person makes a fine-grained token (only this repo, **Contents: Read and write**) and puts it in an environment variable, for example `KEEPTRACK_TOKEN`, in their shell profile or the tool's settings. Then run `$B use <owner/repo> --user <github-username> --token-env KEEPTRACK_TOKEN`. You only ever learn the variable's **name**.
-3. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, use a GitHub connector or MCP server that can write files, as the skill's section **No token: use a GitHub connector** says. Then no token is needed. A read-only connector can read the board but not save.
+3. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, set the person up with Claude Code on the web (next section) instead.
 
-### Claude Code on the web (claude.ai/code) and Claude chat
-- **Claude chat on claude.ai in a browser** (not Code) is not tested. Its sandbox may not reach GitHub, so it may not be able to save to the board. Prefer the Claude desktop app (Cowork) or Claude Code.
+### Claude Code on the web and in the Claude app: the easiest way, with no token
+For people who do not use a terminal, this is the main way. It works in a browser (https://claude.ai/code), in the desktop app and in the phone app (the **Code** tab), and it needs **no GitHub token**.
 - **Claude Code on the web**, in a session on the board repo: nothing to install. The repo has the board skill and `keeptrack.py`. The cloud blocks GitHub API writes, so `keeptrack.py` saves with `git push` from the clone by itself.
 - **Claude Code on the web**, in a session on another repo: the person adds the board repo as a second repo of the session (or of its environment). Then use `python3 <board clone>/board/keeptrack.py`. A plugin copy cannot save there, because it is not in a clone of the board repo.
+- **Claude chat** (claude.ai or the phone app, not the Code tab) is not supported. Use Claude Code or the web board.
 
 ### Step 4. Check that it works
 ```bash
