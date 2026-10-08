@@ -51,7 +51,9 @@ function keyBetween(a, b) {
   if (ia === ib) return ia + rankMidpoint(a.slice(ia.length), b.slice(ib.length));
   const inc = rankStep(ia, 1); return inc !== null && inc < b ? inc : ia + rankMidpoint(a.slice(ia.length), null);
 }
-if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank };
+// File text, byte-identical to keeptrack.py json.dumps(indent=2, ensure_ascii=False) + "\n" for board data (strings, integers, booleans, null).
+const jsonText = o => JSON.stringify(o, null, 2) + '\n';
+if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText };
 
 if (typeof window !== 'undefined') (() => {
   'use strict';
@@ -180,7 +182,7 @@ if (typeof window !== 'undefined') (() => {
     const d = DEFAULT(), o = obj && typeof obj === 'object' ? obj : {};
     const people = Array.isArray(o.people) ? o.people : [];
     const n = {
-      version: Number.isInteger(o.version) ? o.version : 3, settings: Object.assign(d.settings, o.settings || {}),
+      version: Number.isInteger(o.version) && o.version > 3 ? o.version : 3, settings: Object.assign(d.settings, o.settings || {}),
       columns: Array.isArray(o.columns) && o.columns.length ? o.columns : d.columns, people,
       agents: Array.isArray(o.agents) ? o.agents : d.agents, clients: Array.isArray(o.clients) && o.clients.length ? o.clients : d.clients,
       labels: Array.isArray(o.labels) ? o.labels : [], tasks: Array.isArray(o.tasks) ? o.tasks : [], next_num: o.next_num,
@@ -223,7 +225,6 @@ if (typeof window !== 'undefined') (() => {
     return { d, raw: JSON.parse(text) };
   }
   const isSplit = o => !!o && o.version === 4 && o.layout === 'split';
-  const jsonText = o => JSON.stringify(o, null, 2) + '\n';
   const remotePath = rel => { const p = cfg().path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
   const wantedRel = p => p === 'tasks.json' || /^(cards|people|archive)\/[^/]+$/.test(p);
   const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
@@ -240,7 +241,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function modelFromSplit(files) {
     const root = files.get('tasks.json'); if (!root) throw new Error(`cannot read ${cfg().path}`);
-    const raw = clone(root.obj), tasks = [], contacts = [];
+    const raw = clone(root.obj), tasks = [], contacts = []; if (!isSplit(raw)) return raw;   // tasks.json is no longer split: it holds the whole board
     [...files.entries()].sort().forEach(([p, x]) => { if (/^cards\/[^/]+\.json$/.test(p)) tasks.push(clone(x.obj)); else if (/^people\/[^/]+\.json$/.test(p)) contacts.push(clone(x.obj)); });
     raw.tasks = tasks; raw.contacts = contacts; return raw;
   }
@@ -321,6 +322,7 @@ if (typeof window !== 'undefined') (() => {
     try {
       if (splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`) {
         const got = await splitSnapshot(false); if (stale()) return false;
+        if (!isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
         if (got.unchanged) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); return true; }
         const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); state = normalise(got.data);
         if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true;
@@ -435,7 +437,11 @@ if (typeof window !== 'undefined') (() => {
     { const ordered = clone(oldRoot); Object.keys(ordered).forEach(k => { if (!(k in root)) delete ordered[k]; }); Object.keys(root).forEach(k => { ordered[k] = root[k]; }); root = ordered; }
     const canon = o => { if (Array.isArray(o)) return o.map(canon); if (o && typeof o === 'object') { const x = {}; Object.keys(o).sort().forEach(k => x[k] = canon(o[k])); return x; } return o; };
     const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
-    const outText = (p, obj) => { const old = meta.files.get(p); return old && same(old.obj, obj) ? old.text : jsonText(obj); };
+    const asRead = (p, o) => { const base = { settings: root.settings, people: root.people, columns: root.columns };   // what normalise makes of the file as read
+      return p.startsWith('cards/') ? normalise(Object.assign(base, { tasks: [clone(o)] })).tasks[0] : p.startsWith('people/') ? normalise(Object.assign(base, { contacts: [clone(o)] })).contacts[0] : o; };
+    const outText = (p, obj) => { const old = meta.files.get(p); return old && (same(old.obj, obj) || same(asRead(p, old.obj), obj)) ? old.text : jsonText(obj); };
+    const ids = [...next.tasks, ...(next.contacts || [])].map(x => x.id);
+    if (new Set(ids).size !== ids.length || ids.some(x => typeof x !== 'string' || !x || /[/\\]/.test(x) || x === '.' || x === '..')) throw new Error('two items share an id, or an id cannot be a file name');   // never let two items write one file
     const desired = new Map([['tasks.json', outText('tasks.json', root)]]);
     next.tasks.forEach(t => { const p = `cards/${t.id}.json`; desired.set(p, outText(p, t)); });
     (next.contacts || []).forEach(x => { const p = `people/${x.id}.json`; desired.set(p, outText(p, x)); });
@@ -456,7 +462,8 @@ if (typeof window !== 'undefined') (() => {
       else { body.content = b64e(changes.get(rel)); if (old) body.sha = old.sha; res = await gh('PUT', body, false, { path: remotePath(rel) }); }
       if (!res.ok) return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       const out = await res.json(), files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
-      splitMeta = Object.assign({}, meta, { head: out.commit.sha, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
+      const parent = ((out.commit.parents || [])[0] || {}).sha;
+      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
     }
     const made = await mapLimit([...changes], 8, async ([rel, content]) => { const r = await ghApi('POST', '/git/blobs', { content, encoding: 'utf-8' }); if (!r.ok) throw new Error(`GitHub error ${r.status} creating ${rel}`); return [rel, content, (await r.json()).sha]; });
     const entries = made.map(([rel, , blob]) => ({ path: remotePath(rel), mode: '100644', type: 'blob', sha: blob }));
@@ -568,14 +575,19 @@ if (typeof window !== 'undefined') (() => {
       const o = clone(state); fn(o); ensureRanks(o); assignNums(o); state = o; render(); // optimistic
       for (let i = 0; i < 4; i++) {
         let res = null, latest = DEFAULT(), readSha = null, rawL = null;
-        if (isSplit(state) || splitMeta) { const got = await splitSnapshot(true); latest = normalise(got.data); rawL = got.data; readSha = got.meta; }
+        let viaTree = false;
+        if (isSplit(state) || splitMeta) { const got = await splitSnapshot(true); rawL = got.data; readSha = got.meta; viaTree = true;
+          if (!isSplit(rawL)) { splitMeta = null; readSha = (got.meta.files.get('tasks.json') || {}).sha || null; } }   // no longer split: save it as one file
         else { res = await gh('GET');
           if (!res.ok && res.status !== 404) { setStatus(`GitHub error ${res.status}`, 'err'); state = before; render(); return false; }
+          if (res.ok) { const got = await fileJson(res); readSha = got.d.sha; rawL = got.raw; boardSize = got.d.size || boardSize;
+            if (isSplit(rawL)) { const sp = await splitSnapshot(true); rawL = sp.data; readSha = sp.meta; viaTree = true; } }   // migrated to split while this page was open
         }
-        if (res && res.ok) { const got = await fileJson(res); readSha = got.d.sha; rawL = got.raw; boardSize = got.d.size || boardSize;
+        if (rawL && !(viaTree && isSplit(rawL))) {
           if (Number.isInteger(rawL.version) && rawL.version > KNOWN_SCHEMA) { newerSchema = rawL.version; state = before; render(); checkKit(); setStatus('Not saved: board saved by newer tools', 'err'); return false; }
           if (rawL.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); state = before; render(); roToast(); return false; }   // a demo file is never written
           latest = normalise(rawL); }
+        else if (rawL) latest = normalise(rawL);
         const pre = clone(latest); fn(latest); ensureRanks(latest); assignNums(latest);
         // checked on every attempt: "Apply anyway" covers only the revision that was shown, so a newer clash asks again
         const gone = deletedUnderMe(base, pre, targetIds);
@@ -1429,8 +1441,8 @@ if (typeof window !== 'undefined') (() => {
   function place(n, id, colId, beforeId) {
     const i = n.tasks.findIndex(x => x.id === id); if (i < 0) return;
     if (isSplit(n)) {
-      const t = n.tasks[i], mode = sortMode(); t.column = colId;
-      if (mode === 'due' || mode === 'newest') { stamp(t); return; }
+      const t = n.tasks[i], mode = sortMode(), from = t.column; t.column = colId;
+      if (mode === 'due' || mode === 'newest') { if (from !== colId) stamp(t); return; }   // these orders ignore rank: a drop in the same column changes nothing
       const target = beforeId && n.tasks.find(x => x.id === beforeId);
       if (mode === 'smart' && target && target.priority !== t.priority) t.priority = target.priority;
       let peers = displayTasks(n.tasks.filter(x => x.id !== id && x.column === colId), n);
@@ -2658,7 +2670,7 @@ if (typeof window !== 'undefined') (() => {
         const extras = {}, gone = new Set(), histories = {}, counts = {};
         years.forEach(y => { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           extras[rel] = jsonText(merged); counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length };
-          plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.assign(histories, plan[y].history); });
+          plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); }); });
         fresh.tasks = fresh.tasks.filter(x => !gone.has(x.id)); fresh.contacts = fresh.contacts.filter(x => !gone.has(x.id));
         [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
         fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, counts); fresh.archive.last_run = nowIso();
@@ -2710,7 +2722,9 @@ if (typeof window !== 'undefined') (() => {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
       for (let attempt = 0; attempt < 4; attempt++) {
         try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (!entry) break; const nextArchive = clone(entry.obj), fresh = normalise(got.data);
-          if (!fresh[k].some(x => x.id === item.id)) { const x = clone(item); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }
+          const arch = (entry.obj[k] || []).find(x => x.id === item.id), h = (entry.obj.history || {})[item.id];   // the archive as it is now, not the copy the dialog showed
+          const src = arch ? (h && h.length ? Object.assign({}, arch, { history: h.concat(arch.history || []) }) : arch) : item;
+          if (!fresh[k].some(x => x.id === item.id)) { const x = clone(src); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }
           nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
           fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
           const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) });
