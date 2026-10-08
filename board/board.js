@@ -1691,7 +1691,7 @@
   $('alTest').onclick = () => notify('Test alert', 'Board alerts work in this browser.', null);
   function settingsTab(name) {
     const ids = { general: ['panelGeneral', 'tabGeneral'], conn: ['panelConn', 'tabConn'], claude: ['panelClaude', 'tabClaude'], boards: ['panelBoards', 'tabBoards'], checks: ['panelChecks', 'tabChecks'], alerts: ['panelAlerts', 'tabAlerts'] };
-    Object.keys(ids).forEach(n => { const on = n === name; $(ids[n][0]).hidden = !on; $(ids[n][1]).setAttribute('aria-selected', String(on)); });
+    Object.keys(ids).forEach(n => { const on = n === name; $(ids[n][0]).hidden = !on; $(ids[n][1]).setAttribute('aria-selected', String(on)); }); $('sBody').scrollTop = 0;
     if (name === 'conn') setTimeout(() => $('sRepo').focus(), 30);
     if (name === 'boards') renderBoards();
     if (name === 'alerts') renderAlerts();

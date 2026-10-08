@@ -98,7 +98,7 @@
   <p class="hlinks">Full help: <a data-doc="README.md">all topics</a> · <a data-doc="getting-started.md">getting started</a> · <a data-doc="people-and-follow-ups.md">people</a> · <a data-doc="ai-assistants.md">AI assistants</a> · <a data-doc="privacy-and-security.md">privacy</a> · <a data-doc="faq.md">problems</a> · demo boards: <a href="?demo=crm">people</a>, <a href="?demo=board">tasks</a></p>
   <div class="cbtns"><button id="hClose" type="button" class="primary">Close</button></div>
 </dialog>
-<dialog id="dlgSettings" class="settings">
+<dialog id="dlgSettings" class="settings drawer setsheet">
   <div class="sethead"><h3>Settings</h3><button id="sClose" class="ico" aria-label="Close settings">✕</button></div>
   <div class="stabs" role="tablist" aria-label="Settings sections">
     <button id="tabGeneral" role="tab" aria-selected="true" data-tab="general">General</button>
@@ -109,6 +109,7 @@
     <button id="tabChecks" role="tab" aria-selected="false" data-tab="checks">Checks</button>
   </div>
 
+  <div id="sBody" class="dbody">
   <div id="panelGeneral" role="tabpanel" aria-labelledby="tabGeneral">
     <p class="hint" style="margin-top:0">These apply straight away and are remembered in this browser.</p>
     <div><label for="sStyle">Card style</label><select id="sStyle"><option value="classic">Classic</option><option value="colorful">Colourful (client and urgency colours)</option></select></div>
@@ -182,6 +183,7 @@
     </div>
     <div id="sClaudeMsg" class="hint" role="status"></div>
     <div class="actions"><span class="spacer"></span><button id="sClaudeSave" type="button" class="primary">Save</button></div>
+  </div>
   </div>
 </dialog>
 
