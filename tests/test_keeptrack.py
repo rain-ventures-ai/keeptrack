@@ -80,3 +80,12 @@ class LocalBoard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WebBoardCopies(unittest.TestCase):
+    def test_routine_loader_matches_kit(self):
+        # Settings → Agents shows the routine instructions from board.js; they must match board/kit/routine-loader.txt
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        loader = open(os.path.join(root, 'board', 'kit', 'routine-loader.txt'), encoding='utf-8').read().rstrip('\n')
+        js = open(os.path.join(root, 'board', 'board.js'), encoding='utf-8').read()
+        self.assertIn('const LOADER = ' + json.dumps(loader, ensure_ascii=False) + ';', js)
