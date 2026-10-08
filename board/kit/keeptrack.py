@@ -46,7 +46,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-check [--card]  # is this repo's kit older than the published one? --card adds an upgrade task for the upgrade owner
   keeptrack.py kit-update [--from DIR]   # copy the published kit into this repo and set board/KIT_VERSION (does not commit)
   keeptrack.py migrate             # bring tasks.json up to v3 (safe to run twice)
-  keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person (needs the phase 2 web board)
+  keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person (install the v8 web page first)
   keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, AGENTS.md, CLAUDE.md, empty tasks.json
@@ -1775,7 +1775,7 @@ def cmd_init(a):
     if os.path.exists(tj):
         print(f"kept existing {PATH}")
     else:
-        # New boards stay v3 until the web board can read split storage (schema v4, phase 2).
+        # New boards stay v3. Splitting storage is an explicit migration with a backup.
         data = {"version": 3, "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
                 "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"},
                             {"id": "in-progress", "name": "In progress"}, {"id": "done", "name": "Done"}],

@@ -1,6 +1,6 @@
 {
-  "version": 6,
-  "schema": 3,
+  "version": 8,
+  "schema": 4,
   "files": {
     "board/keeptrack.py": "keeptrack.py",
     "board/README.md": "README.md",
