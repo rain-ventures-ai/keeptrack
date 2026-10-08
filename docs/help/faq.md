@@ -36,5 +36,8 @@ The banner tells you why:
 - **Public board with no token:** you can read the board but not change it. To change it, add a token in **Settings → Connection**.
 - **Your token cannot change this board:** the token has **Contents: Read** only. On GitHub, edit the token and set **Contents** to **Read and write**, or make a new token. Then paste it again in **Settings → Connection**.
 
+**Does the demo show my own boards?**
+No. A demo link (`?demo=crm` or `?demo=board`) uses empty settings in memory. It does not read or change your boards, tokens or routines in this browser. Only the theme is shared.
+
 **Is the board fast with a lot of data?**
 Yes. A board with 500 tasks and 300 people changes views in less than a quarter of a second. Long lists show the first 150 items and a **Show more** button. When the file gets large, archive old items: see [Search and archive](search-and-archive.md). The page shows the last copy that it loaded at once, and then gets the newest version from GitHub. You can make changes when the status says "Synced".
