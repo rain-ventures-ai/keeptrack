@@ -361,6 +361,73 @@ class Doctor(unittest.TestCase):
         issues, _, _ = kt.doctor_board(False)
         self.assertIn("NEW_SCHEMA", {x["code"] for x in issues})
 
+    def run_cli(self, *flags):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = kt.cmd_doctor(Args(fix="--fix" in flags, json="--json" in flags))
+        return code, out.getvalue()
+
+    def test_exit_codes_and_json_output(self):
+        code, out = self.run_cli()
+        self.assertEqual((0, True), (code, "healthy" in out))
+        root = read_json(kt.FILE); root["next_num"] = 1; write(kt.FILE, root)
+        code, out = self.run_cli("--json")
+        report = json.loads(out)
+        self.assertEqual(1, code)
+        self.assertFalse(report["healthy"])
+        self.assertEqual(["NEXT_NUM"], [x["code"] for x in report["issues"]])
+        with open(kt.FILE, "w") as f:
+            f.write("{broken")
+        code, _ = self.run_cli()
+        self.assertEqual(2, code)
+
+    def test_fix_does_nothing_when_ids_are_duplicated(self):
+        second_path = os.path.join(self.board_dir, "cards", "t_second.json")
+        second = read_json(second_path); second["id"] = "t_first"; second.pop("rank"); write(second_path, second)
+        before = tree_bytes(self.board_dir)
+        issues, fixes, code = kt.doctor_board(True)
+        self.assertEqual((1, []), (code, fixes))
+        self.assertIn("DUPLICATE_ID", {x["code"] for x in issues})
+        self.assertEqual(before, tree_bytes(self.board_dir))
+
+    def test_fix_does_not_rename_over_an_existing_file(self):
+        first = read_json(os.path.join(self.board_dir, "cards", "t_first.json"))
+        write(os.path.join(self.board_dir, "cards", "copy.json"), first)
+        before = tree_bytes(self.board_dir)
+        issues, fixes, _ = kt.doctor_board(True)
+        self.assertIn("FILE_NAME", {x["code"] for x in issues})
+        self.assertEqual([], fixes)
+        self.assertEqual(before, tree_bytes(self.board_dir))
+
+    def test_fix_does_nothing_on_a_newer_schema(self):
+        root = read_json(kt.FILE); root["version"] = kt.SCHEMA + 1; root["next_num"] = 1; write(kt.FILE, root)
+        before = tree_bytes(self.board_dir)
+        _, fixes, _ = kt.doctor_board(True)
+        self.assertEqual([], fixes)
+        self.assertEqual(before, tree_bytes(self.board_dir))
+
+    def test_fix_rebuilds_duplicate_ranks_and_keeps_order(self):
+        first_path = os.path.join(self.board_dir, "cards", "t_first.json")
+        second_path = os.path.join(self.board_dir, "cards", "t_second.json")
+        first, second = read_json(first_path), read_json(second_path)
+        order = [t["id"] for t in sorted([first, second], key=kt.task_order_key)]
+        second["rank"] = first["rank"]; write(second_path, second)
+        _, fixes, _ = kt.doctor_board(True)
+        self.assertTrue(any("rebuilt ranks" in x for x in fixes))
+        first, second = read_json(first_path), read_json(second_path)
+        self.assertNotEqual(first["rank"], second["rank"])
+        self.assertEqual(order, [t["id"] for t in sorted([first, second], key=kt.task_order_key)])
+        self.assertEqual(([], [], 0), kt.doctor_board(False))
+
+    def test_fix_on_a_v3_board_keeps_one_file(self):
+        shutil.rmtree(self.board_dir)
+        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        data = read_json(kt.FILE); data["tasks"][1].pop("num"); data["next_num"] = 1; write(kt.FILE, data)
+        _, fixes, _ = kt.doctor_board(True)
+        self.assertTrue(fixes)
+        self.assertEqual(["tasks.json"], sorted(os.listdir(self.board_dir)))
+        self.assertEqual(([], [], 0), kt.doctor_board(False))
+
 
 class PhaseOneSafety(unittest.TestCase):
     """Schema 4 must not reach real boards before the web board can read it (phase 2)."""
@@ -459,6 +526,34 @@ class PhaseOneSafety(unittest.TestCase):
         self.assertEqual({"tasks.json", "cards/t_a.json"}, set(files))
         self.assertEqual("root", state["base_tree"])
         self.assertFalse(any("big" in c or c.endswith("/git/trees/c1?recursive=1") for c in calls))
+
+    def test_doctor_fix_in_git_mode_makes_one_commit(self):
+        remote, work = os.path.join(self.temp.name, "remote.git"), os.path.join(self.temp.name, "work")
+        run = lambda *a, cwd=None: subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True)
+        run("git", "init", "-q", "--bare", "-b", "main", remote)
+        run("git", "clone", "-q", remote, work)
+        shutil.copytree(os.path.join(FIXTURES, "v4"), os.path.join(work, "board"))
+        card_path = os.path.join(work, "board", "cards", "t_first.json")
+        card = read_json(card_path); card.pop("rank"); card["comments"][0].pop("id"); write(card_path, card)
+        root = read_json(os.path.join(work, "board", "tasks.json")); root["next_num"] = 1
+        write(os.path.join(work, "board", "tasks.json"), root)
+        run("git", "add", "-A", cwd=work)
+        run("git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "board", cwd=work)
+        run("git", "push", "-q", "origin", "main", cwd=work)
+        kt.FILE, kt.ROOT, kt.REPO, kt.BRANCH, kt.WRITE = None, work, "acme/board", "main", "git"
+        kt.remote_repo = lambda url: "acme/board"
+        env = {k: os.environ.get(k) for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")}
+        os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        try:
+            _, fixes, _ = kt.doctor_board(True)
+        finally:
+            for k, v in env.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        self.assertGreaterEqual(len(fixes), 3)
+        log = run("git", "--git-dir", remote, "log", "--oneline", "main").stdout.splitlines()
+        self.assertEqual(2, len(log))
+        self.assertIn("Repair board data", log[0])
+        self.assertEqual(([], [], 0), kt.doctor_board(False))
 
 
 class MoveInPlace(unittest.TestCase):
