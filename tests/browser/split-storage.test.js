@@ -102,6 +102,29 @@ let base;
     await cp.locator('#cTitle').blur(); await cp.waitForFunction(() => document.querySelector('#dlgConflict').open);
     assert.equal(cf.calls.filter(x => ['PUT', 'PATCH', 'DELETE'].includes(x.method)).length, 0, 'nothing is written before the person chooses'); await cp.close();
 
+    {
+    // A card file without fields the page fills in (here: no "details" and no "links") is not rewritten by an unrelated save.
+    const sparse = new Github(true); const bare = JSON.parse(sparse.files['cards/t_two.json']); delete bare.details; delete bare.links; sparse.files['cards/t_two.json'] = JSON.stringify(bare, null, 2) + '\n';
+    const sp = await openBoard(browser, sparse); sparse.calls = []; await sp.locator('.card').filter({ hasText: 'First' }).dblclick(); await sp.locator('#cTitle').fill('First again'); const spSaved = sp.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().includes('/repos/acme/board/')); await sp.locator('#cTitle').blur(); await spSaved;
+    assert.deepEqual(sparse.calls.filter(x => ['PUT', 'PATCH', 'POST'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/cards/t_one.json']); await sp.close();
+
+    // Two files with one id: the page refuses to save (a save would keep only one of them).
+    const dupe = new Github(true); dupe.files['cards/copy.json'] = dupe.files['cards/t_one.json'];
+    const dp = await openBoard(browser, dupe); dupe.calls = []; await dp.locator('.card').filter({ hasText: 'Second' }).first().dblclick(); await dp.locator('#cTitle').fill('Second edited'); await dp.locator('#cTitle').blur(); await dp.waitForFunction(() => /Save failed/.test(document.querySelector('#status').textContent));
+    assert.equal(dupe.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).length, 0, 'nothing may be written'); await dp.close();
+
+    // A page that loaded a v3 board saves correctly after the board is split by keeptrack.py.
+    const moving = new Github(false), mv = await openBoard(browser, moving);
+    const split = new Github(true); moving.v4 = true; moving.files = split.files; moving.calls = [];
+    await mv.locator('.card').filter({ hasText: 'First' }).dblclick(); await mv.locator('#cTitle').fill('After split'); const mvSaved = mv.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/')); await mv.locator('#cTitle').blur(); await mvSaved;
+    assert.deepEqual(moving.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/cards/t_one.json']);
+    assert.equal(JSON.parse(moving.files['cards/t_one.json']).title, 'After split'); assert(!('tasks' in JSON.parse(moving.files['tasks.json'])), 'tasks.json must stay settings only'); await mv.close();
+
+    // An old (v2) board file is saved as v3, as before.
+    const v2 = new Github(false); const v2root = JSON.parse(v2.files['tasks.json']); v2root.version = 2; v2.files['tasks.json'] = JSON.stringify(v2root, null, 2) + '\n';
+    const vp = await openBoard(browser, v2); await vp.locator('.card').first().dblclick(); await vp.locator('#cTitle').fill('v2 edit'); const v2Saved = vp.waitForResponse(r => r.request().method() === 'PUT'); await vp.locator('#cTitle').blur(); await v2Saved;
+    assert.equal(JSON.parse(v2.files['tasks.json']).version, 3); await vp.close();
+    }
     console.log('split storage browser tests passed');
   } finally { await browser.close(); server.close(); }
 })().catch(err => { console.error(err); server.close(); process.exitCode = 1; });
