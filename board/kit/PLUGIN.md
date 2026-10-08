@@ -23,7 +23,7 @@ The plugin gives the skill `keeptrack:keeptrack`, `keeptrack.py` at `${CLAUDE_PL
 ## Claude Desktop and Cowork (no terminal)
 **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. A Team or Enterprise admin can add the marketplace for the whole organisation. Then say, for example, "Who do I need to follow up with today?" or "Help me write a LinkedIn message to the CEO of Acme".
 
-Not yet checked: whether the Cowork sandbox lets `keeptrack.py` reach api.github.com. If it cannot, use a GitHub connector or MCP server that can write files: the skill's section **No token: use a GitHub connector** has the steps (read, change a local copy with `keeptrack.py --file`, write back with the file SHA, try again on a conflict). It works for boards up to about 100 KB.
+Not yet checked: whether the Cowork sandbox lets `keeptrack.py` reach api.github.com. If it cannot, use Claude Code on the web or in the Claude app's **Code** tab, in a session on the board repo: it saves with no token.
 
 ## Codex (CLI, IDE extension, app)
 ```bash
