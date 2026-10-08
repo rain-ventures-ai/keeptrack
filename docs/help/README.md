@@ -5,6 +5,7 @@ Keeptrack keeps your people, follow-ups, pipeline and tasks in a private GitHub 
 | If you want to... | Read |
 |---|---|
 | Set up your board for the first time | [Getting started](getting-started.md) |
+| Bring in your clients, tasks and folders from what you use now | [Bring in what you have](onboarding.md) |
 | See who to contact today, add people, log messages and calls | [People and follow-ups](people-and-follow-ups.md) |
 | Move people through your stages | [Pipeline](pipeline.md) |
 | Link a client's folders in Google Drive, Dropbox or OneDrive | [Client files](client-files.md) |
