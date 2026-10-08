@@ -36,11 +36,13 @@ The plugin gives you the Keeptrack skill and `keeptrack.py`.
 | Tool | What to do |
 |---|---|
 | Claude Code | Run `claude plugin marketplace add rain-ventures-ai/keeptrack` then `claude plugin install keeptrack@keeptrack`. Tell the person to start a new session so the skill loads. |
-| Claude desktop app or Cowork | The person does this: **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. Then start a new chat and paste the prompt again. |
+| Claude desktop app or Cowork | The person does this: open https://claude.ai/customize/plugins (or **Customize → Plugins** in the app), click **Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. Then start a new chat and paste the prompt again. If it says "Failed to add marketplace", try once more with `https://github.com/rain-ventures-ai/keeptrack`; if that also fails, use Claude Code instead (see the next row), where the same plugin installs from the terminal. |
 | Codex | Run `codex plugin marketplace add rain-ventures-ai/keeptrack`, then the person types `/plugins` and installs **keeptrack**. |
 | Cursor | The person types `/add-plugin https://github.com/rain-ventures-ai/keeptrack` in Agent chat. |
 
 If the plugin is already installed, say so and go on. Details: [board/kit/PLUGIN.md](board/kit/PLUGIN.md).
+
+Useful links for the person: Claude plugins https://claude.ai/customize/plugins · make a private repo https://github.com/new?name=my-keeptrack&visibility=private · GitHub tokens https://github.com/settings/personal-access-tokens · the web board https://rain-ventures-ai.github.io/keeptrack/board/
 
 Find `keeptrack.py` as the skill says (Claude Code: `python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py`). Below, `$B` means that command.
 
@@ -67,7 +69,7 @@ The assistant also needs access to the repo. Pick the first that works:
 3. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, use the GitHub connector to read and update `board/tasks.json`, and still follow the skill's rules.
 
 ### Claude Code on the web (claude.ai/code) and Claude chat
-- **Claude chat on claude.ai** (not Code) cannot run `keeptrack.py` and cannot change the board. The person uses the web board there.
+- **Claude chat on claude.ai in a browser** (not Code) is not tested. Its sandbox may not reach GitHub, so it may not be able to save to the board. Prefer the Claude desktop app (Cowork) or Claude Code.
 - **Claude Code on the web**, in a session on the board repo: nothing to install. The repo has the board skill and `keeptrack.py`. The cloud blocks GitHub API writes, so `keeptrack.py` saves with `git push` from the clone by itself.
 - **Claude Code on the web**, in a session on another repo: the person adds the board repo as a second repo of the session (or of its environment). Then use `python3 <board clone>/board/keeptrack.py`. A plugin copy cannot save there, because it is not in a clone of the board repo.
 

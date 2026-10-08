@@ -1733,7 +1733,7 @@
   };
   $('cwLogClear').onclick = () => { LS.del('kb_relay_log'); renderRelayLog(); };
   // "An assistant in your chat app": pick a tool, get its install steps and the first thing to say (from board/kit/PLUGIN.md)
-  const TOOLS = { desktop: ['Claude app', [['Open Customize, then Plugins, then Add, then Add marketplace. Type:', 'rain-ventures-ai/keeptrack'], ['Install keeptrack.']]],
+  const TOOLS = { desktop: ['Claude app', [['Open Customize → Plugins (link below), click Add, then Add marketplace. Type:', 'rain-ventures-ai/keeptrack', ['Open Claude plugins ↗', 'https://claude.ai/customize/plugins']], ['Install keeptrack. Use it in the Claude desktop app (Cowork). Claude chat in a web browser is not tested and may not be able to save to the board.']]],
     code: ['Claude Code', [['Run in a terminal:', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
     codex: ['Codex', [['Run in a terminal:', 'codex plugin marketplace add rain-ventures-ai/keeptrack'], ['Type /plugins and install keeptrack.']]],
     cursor: ['Cursor', [['In Agent chat, type:', '/add-plugin https://github.com/rain-ventures-ai/keeptrack']]] };
@@ -1744,8 +1744,8 @@
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg(); bar.textContent = body.textContent = '';
     Object.entries(TOOLS).forEach(([k, [name]]) => { const b = el('button', 'agpill' + (k === pick ? ' on' : ''), name); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(k === pick)); b.onclick = () => { LS.set('kb_tool', k); renderTools(); }; bar.append(b); });
     const ol = el('ol', 'wmini'), say = `Use my Keeptrack board ${c.repo || 'owner/repo'}. My GitHub username is ${c.me || 'my-username'}.`;
-    const step = (text, code) => { const li = el('li', null, text); if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = el('button', 'small', '📋 Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
-    (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code]) => step(t, code));
+    const step = (text, code, link) => { const li = el('li', null, text); if (link) { const a = el('a', 'agl', link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; li.append(' ', a); } if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = el('button', 'small', '📋 Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
+    (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code, link]) => step(t, code, link));
     step('Then say:', say);
     body.append(ol, el('p', 'hint', 'It needs a GitHub login on your computer (gh auth login) or a token in an environment variable. Never paste a token into the chat.'));
   }
