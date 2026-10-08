@@ -2,7 +2,7 @@
   'use strict';
   // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
   // tokens or routines. Only the look (theme, style) is shared.
-  const SANDBOX = new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style)$/, MEM = new Map();
+  const SANDBOX = new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style|custom)$/, MEM = new Map();
   const LS = SANDBOX ? {
     get(k, d = '') { if (SHARED.test(k)) { try { return localStorage.getItem(k) ?? d; } catch { return d; } } return MEM.has(k) ? MEM.get(k) : d; },
     set(k, v) { if (SHARED.test(k)) { try { localStorage.setItem(k, v); } catch {} } else MEM.set(k, String(v)); },
@@ -34,7 +34,7 @@
     else { if (repo && REPO_RE.test(repo) && !cur) LS.set('kb_repo', repo); Object.keys(over).forEach(k => { if (!LS.get('kb_' + k)) LS.set('kb_' + k, over[k]); }); }
     stashBoard(); })();
   // ---- move settings between browsers/devices: one pasteable code or a setup link (token included) --------------
-  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: ['auto', 'light', 'dark', 'midnight', 'sand'], style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity'] } };
+  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
   function exportCode() { const o = {}; XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '') o[k] = v; }); return 'kbcfg1.' + xEnc(o); }
@@ -74,6 +74,13 @@
   let newerSchema = 0;
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  // Line icons from Lucide (lucide.dev, ISC licence, v0.544.0, see vendor/lucide-LICENSE.txt). They draw in the text colour, so every theme colours them.
+  const ICONS = {"alarm-clock":"<circle cx=\"12\" cy=\"13\" r=\"8\"/><path d=\"M12 9v4l2 2\"/><path d=\"M5 3 2 6\"/><path d=\"m22 6-3-3\"/><path d=\"M6.38 18.7 4 21\"/><path d=\"M17.64 18.67 20 21\"/>","archive":"<rect width=\"20\" height=\"5\" x=\"2\" y=\"3\" rx=\"1\"/><path d=\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8\"/><path d=\"M10 12h4\"/>","arrow-right":"<path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/>","arrow-up-right":"<path d=\"M7 7h10v10\"/><path d=\"M7 17 17 7\"/>","bell":"<path d=\"M10.268 21a2 2 0 0 0 3.464 0\"/><path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\"/>","bot":"<path d=\"M12 8V4H8\"/><rect width=\"16\" height=\"12\" x=\"4\" y=\"8\" rx=\"2\"/><path d=\"M2 14h2\"/><path d=\"M20 14h2\"/><path d=\"M15 13v2\"/><path d=\"M9 13v2\"/>","briefcase":"<path d=\"M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16\"/><rect width=\"20\" height=\"14\" x=\"2\" y=\"6\" rx=\"2\"/>","building-2":"<path d=\"M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z\"/><path d=\"M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2\"/><path d=\"M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2\"/><path d=\"M10 6h4\"/><path d=\"M10 10h4\"/><path d=\"M10 14h4\"/><path d=\"M10 18h4\"/>","calendar":"<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/>","calendar-days":"<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/><path d=\"M8 14h.01\"/><path d=\"M12 14h.01\"/><path d=\"M16 14h.01\"/><path d=\"M8 18h.01\"/><path d=\"M12 18h.01\"/><path d=\"M16 18h.01\"/>","check":"<path d=\"M20 6 9 17l-5-5\"/>","chevron-down":"<path d=\"m6 9 6 6 6-6\"/>","chevron-right":"<path d=\"m9 18 6-6-6-6\"/>","circle-help":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3\"/><path d=\"M12 17h.01\"/>","clipboard-copy":"<rect width=\"8\" height=\"4\" x=\"8\" y=\"2\" rx=\"1\" ry=\"1\"/><path d=\"M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2\"/><path d=\"M16 4h2a2 2 0 0 1 2 2v4\"/><path d=\"M21 14H11\"/><path d=\"m15 10-4 4 4 4\"/>","compass":"<path d=\"m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z\"/><circle cx=\"12\" cy=\"12\" r=\"10\"/>","copy":"<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/>","download":"<path d=\"M12 15V3\"/><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><path d=\"m7 10 5 5 5-5\"/>","eye":"<path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","eye-off":"<path d=\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49\"/><path d=\"M14.084 14.158a3 3 0 0 1-4.242-4.242\"/><path d=\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143\"/><path d=\"m2 2 20 20\"/>","file-text":"<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M10 9H8\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/>","flag":"<path d=\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\"/>","folder":"<path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"/>","folders":"<path d=\"M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z\"/><path d=\"M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1\"/>","github":"<path d=\"M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4\"/><path d=\"M9 18c-4.51 2-5-2-7-2\"/>","handshake":"<path d=\"m11 17 2 2a1 1 0 1 0 3-3\"/><path d=\"m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4\"/><path d=\"m21 3 1 11h-2\"/><path d=\"M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3\"/><path d=\"M3 4h8\"/>","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\"/><path d=\"M3 3v5h5\"/><path d=\"M12 7v5l4 2\"/>","laptop":"<path d=\"M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z\"/><path d=\"M20.054 15.987H3.946\"/>","link":"<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/>","list":"<path d=\"M3 5h.01\"/><path d=\"M3 12h.01\"/><path d=\"M3 19h.01\"/><path d=\"M8 5h13\"/><path d=\"M8 12h13\"/><path d=\"M8 19h13\"/>","lock":"<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>","mail":"<path d=\"m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7\"/><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/>","message-square":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\"/>","moon":"<path d=\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\"/>","notebook-pen":"<path d=\"M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4\"/><path d=\"M2 6h4\"/><path d=\"M2 10h4\"/><path d=\"M2 14h4\"/><path d=\"M2 18h4\"/><path d=\"M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z\"/>","palette":"<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\"/><circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\"/><circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\"/><circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\"/><circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\"/>","pencil":"<path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"/><path d=\"m15 5 4 4\"/>","phone":"<path d=\"M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384\"/>","pin":"<path d=\"M12 17v5\"/><path d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"/>","plus":"<path d=\"M5 12h14\"/><path d=\"M12 5v14\"/>","pound-sterling":"<path d=\"M18 7c0-5.333-8-5.333-8 0\"/><path d=\"M10 7v14\"/><path d=\"M6 21h12\"/><path d=\"M6 13h10\"/>","puzzle":"<path d=\"M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z\"/>","refresh-cw":"<path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/><path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\"/><path d=\"M8 16H3v5\"/>","search":"<path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/>","settings":"<path d=\"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","sliders-horizontal":"<path d=\"M10 5H3\"/><path d=\"M12 19H3\"/><path d=\"M14 3v4\"/><path d=\"M16 17v4\"/><path d=\"M21 12h-9\"/><path d=\"M21 19h-5\"/><path d=\"M21 5h-7\"/><path d=\"M8 10v4\"/><path d=\"M8 12H3\"/>","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/>","square-check":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"m9 12 2 2 4-4\"/>","square-kanban":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"M8 7v7\"/><path d=\"M12 7v4\"/><path d=\"M16 7v9\"/>","stethoscope":"<path d=\"M11 2v2\"/><path d=\"M5 2v2\"/><path d=\"M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1\"/><path d=\"M8 15a6 6 0 0 0 12 0v-3\"/><circle cx=\"20\" cy=\"10\" r=\"2\"/>","sun":"<circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2\"/><path d=\"M12 20v2\"/><path d=\"m4.93 4.93 1.41 1.41\"/><path d=\"m17.66 17.66 1.41 1.41\"/><path d=\"M2 12h2\"/><path d=\"M20 12h2\"/><path d=\"m6.34 17.66-1.41 1.41\"/><path d=\"m19.07 4.93-1.41 1.41\"/>","tag":"<path d=\"M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z\"/><circle cx=\"7.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\"/>","trending-up":"<path d=\"M16 7h6v6\"/><path d=\"m22 7-8.5 8.5-5-5L2 17\"/>","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/>","undo-2":"<path d=\"M9 14 4 9l5-5\"/><path d=\"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11\"/>","upload":"<path d=\"M12 3v12\"/><path d=\"m17 8-5-5-5 5\"/><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/>","user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/>","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><path d=\"M16 3.128a4 4 0 0 1 0 7.744\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/>","x":"<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>"};
+  const svgIcon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`; return t.content.firstChild; };
+  const elI = (tag, cls, icon, text) => { const e = el(tag, cls); if (icon) e.append(svgIcon(icon)); if (text != null && text !== '') e.append((icon ? ' ' : '') + text); return e; };   // el() with a leading icon
+  const setI = (e, icon, text) => { e.textContent = ''; e.append(svgIcon(icon)); if (text) e.append(' ' + text); };
+  const fillIcons = root => root.querySelectorAll('i[data-i]').forEach(i => i.replaceWith(svgIcon(i.dataset.i)));   // static markup: <i data-i="name"></i>
+  fillIcons(document);
   const b64e = s => { const b = new TextEncoder().encode(s); let r = ''; b.forEach(x => r += String.fromCharCode(x)); return btoa(r); };
   const b64d = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -282,7 +289,7 @@
       b.onclick = async () => { if (!confirm(`Create ${c.path} on ${c.branch} in ${c.repo}?`)) return; state = DEFAULT(); sha = null; await save(clone(state), 'Create board file'); render(); };
       box.append(b);
     }
-    const ck = el('button', null, '🩺 Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); }; box.append(ck);
+    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); }; box.append(ck);
     board.append(box);
   }
   function noTokenBox() {   // e.g. a ?repo= link to a board this browser has no token for
@@ -292,7 +299,7 @@
     const others = Object.keys(boardsMap()).filter(r => r !== c.repo && boardsMap()[r].token);
     if (others.length) { const p = el('p'); others.forEach(r => { const x = el('button', 'small', r); x.onclick = () => switchRepo(r); p.append(x, document.createTextNode(' ')); }); box.append(p); }
     const add = el('button', 'primary', 'Add a token for ' + c.repo); add.onclick = () => { $('btnSettings').click(); settingsTab('conn'); };
-    const ck = el('button', null, '🩺 Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); };
+    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); };
     box.append(add, document.createTextNode(' '), ck); board.append(box);
   }
   function offerCreate() {
@@ -536,7 +543,7 @@
   async function hardRefresh() {   // bypass every cache, then reload
     toast('Updating to the latest version…');
     const here = new URL(location.href), bare = here.origin + here.pathname, base = bare.replace(/[^/]*$/, '');
-    const urls = [...new Set([location.href, bare, base, base + 'board.css', base + 'board.js', base + 'theme.js'])];
+    const urls = [...new Set([location.href, bare, base, base + 'board.css', base + 'board.js', base + 'theme.js', base + 'designmd.js'])];
     await Promise.all(urls.map(u => fetch(u, { cache: 'reload' }).catch(() => {})));
     try { if (window.caches) await Promise.all((await caches.keys()).map(k => caches.delete(k))); } catch {}
     try { if (navigator.serviceWorker) await Promise.all((await navigator.serviceWorker.getRegistrations()).map(r => r.unregister())); } catch {}
@@ -828,7 +835,7 @@
       stamp(t); }, `Comment: ${titleOf(id)}`, [id]);
     $('cmPost').disabled = false;
     { const t2 = state.tasks.find(x => x.id === id); if (t2) syncAgentBtn(t2);
-      if (mentionsCodex(text) && myAgents().includes('codex')) toast('Codex can’t be started from the board. Press 🤖 Copy for Codex at the top of the card, then paste it into Codex.'); }
+      if (mentionsCodex(text) && myAgents().includes('codex')) toast('Codex can’t be started from the board. Press Copy for Codex at the top of the card, then paste it into Codex.'); }
     if (send && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
       const t1 = state.tasks.find(x => x.id === id);
       try { const j = await sendToClaude(t1, who, cid); toast('Sent to Claude. It should start within about two minutes.'); watchClaudeJob(j.jobId, id, who); }
@@ -872,10 +879,10 @@
 
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
   const firstLine = t => (t.details || '').split('\n').find(x => x.trim()) || '';
-  function chipTodo(t) { const tc = todoCount(t); if (!tc.all) return null; const b = el('button', 'chip todochip' + (tc.done === tc.all ? ' full' : ''), `☑ ${tc.done}/${tc.all}`); b.title = 'Show or hide the checklist'; b.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; return b; }
-  function chipComments(t) { const n = t.comments.length; if (!n) return null; const fr = freshInfo(t); const b = el('button', 'chip cmchip has' + (fr.unread ? ' unread' : ''), `💬 ${n}`); if (fr.unread) b.append(newBadge(fr.unread)); b.title = `${n} comment${n > 1 ? 's' : ''}`; b.onclick = () => openCard(t.id, 'comments'); return b; }
+  function chipTodo(t) { const tc = todoCount(t); if (!tc.all) return null; const b = elI('button', 'chip todochip' + (tc.done === tc.all ? ' full' : ''), 'square-check', `${tc.done}/${tc.all}`); b.title = 'Show or hide the checklist'; b.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; return b; }
+  function chipComments(t) { const n = t.comments.length; if (!n) return null; const fr = freshInfo(t); const b = elI('button', 'chip cmchip has' + (fr.unread ? ' unread' : ''), 'message-square', String(n)); if (fr.unread) b.append(newBadge(fr.unread)); b.title = `${n} comment${n > 1 ? 's' : ''}`; b.onclick = () => openCard(t.id, 'comments'); return b; }
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
-  function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return el('span', 'chip agentchip ' + st, `🤖 ${t.claim.agent} · ${st}`); }
+  function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
   function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; out.push(a); }); return out; }
   const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { const s = el('span', 'tag label', l); s.style.background = labelColor(l); out.push(s); }); if (max && t.labels.length > max) out.push(el('span', 'tag', '+' + (t.labels.length - max))); return out; };
 
@@ -886,7 +893,7 @@
     const c0 = el('div', 'c-check'); c0.append(circ);
     const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.prepend(d); } task.append(title);
     const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title
-    if (t.due) mm.append(el('span', 'chip due' + dueState(t), '📅 ' + fmtDue(t.due)));
+    if (t.due) mm.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
     if (t.priority) mm.append(el('span', 'pr ' + t.priority, cap(t.priority)));
     mm.append(...labelTags(t)); if (t.client) mm.append(el('span', 'tag client', t.client));
     [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
@@ -895,11 +902,11 @@
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
     const ppl = el('div', 'c-people'); t.assignees.forEach(a => ppl.append(avatar(a)));
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
-    const due = el('div', 'c-due'); if (t.due) due.append(el('span', 'chip due' + dueState(t), '📅 ' + fmtDue(t.due)));
+    const due = el('div', 'c-due'); if (t.due) due.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
     const pr = el('div', 'c-prio'); if (t.priority) pr.append(el('span', 'pr ' + t.priority, cap(t.priority)));
     const more = el('div', 'c-more'); [chipTodo(t), chipComments(t), chipAgent(t)].forEach(x => x && more.append(x));
-    const edit = el('button', 'ico', '✏️'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
-    const bot = el('button', 'ico', '🤖'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
+    const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
+    const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     row.append(c0, task, desc, ppl, lab, due, pr, more); return row;
   }
 
@@ -912,7 +919,7 @@
   }
   function tableOf(items, key = 'tbl') {   // header row + rows; on a phone the header disappears and rows reflow
     const box = el('div', 'ttable'), hd = el('div', 'trow thead');
-    ['', '📝 Task', '☰ Description', '👥 People', '🏷 Labels', '📅 Due', '⚑ Priority', ''].forEach((x, i) => hd.append(el('div', ['c-check', 'c-task', 'c-desc', 'c-people', 'c-labels', 'c-due', 'c-prio', 'c-more'][i], x)));
+    [[], ['notebook-pen', 'Task'], ['list', 'Description'], ['users', 'People'], ['tag', 'Labels'], ['calendar', 'Due'], ['flag', 'Priority'], []].forEach(([ic, x], i) => hd.append(elI('div', ['c-check', 'c-task', 'c-desc', 'c-people', 'c-labels', 'c-due', 'c-prio', 'c-more'][i], ic, x)));
     box.append(hd); capList(key, items, listRow, box); return box;
   }
 
@@ -1034,7 +1041,7 @@
     ws.onchange = () => { actWho = ws.value; LS.set('kb_act_who', actWho); render(); };
     const ag = el('label', 'chk'), agc = el('input'); agc.type = 'checkbox'; agc.checked = actAgents; agc.disabled = actWho === '__agents';
     agc.onchange = () => { actAgents = agc.checked; LS.set('kb_act_agents', actAgents ? '1' : ''); render(); }; ag.append(agc, document.createTextNode(' Include agents'));
-    const cp = el('button', 'primary', '📋 Copy as Markdown'); cp.type = 'button'; cp.onclick = copyMarkdown;
+    const cp = elI('button', 'primary', 'clipboard-copy', 'Copy as Markdown'); cp.type = 'button'; cp.onclick = copyMarkdown;
     bar.append(ws, ag, el('span', 'spacer'), cp); wrap.append(bar);
 
     const a = activityData();
@@ -1056,7 +1063,7 @@
         const ol = el('ol', 'actlog');
         ev.forEach(e => { const li = el('li', (e.comment ? 'cm' : '') + (e.done ? ' dn' : '')), tm = el('time', null, fmtTime(e.at)); tm.title = e.at;
           const who = el('b', AGENT_BY.test(String(e.by || '')) ? 'agent' : '', ' ' + (e.by || '?') + ' ');
-          li.append(tm, who); if (e.comment) li.append(el('span', 'cmic', '💬 ')); linkify(li, e.text); ol.append(li); });
+          li.append(tm, who); if (e.comment) li.append(elI('span', 'cmic', 'message-square'), ' '); linkify(li, e.text); ol.append(li); });
         box.append(head, ol); sec.append(box);
       });
       wrap.append(sec);
@@ -1186,7 +1193,7 @@
     c.addEventListener('touchstart', e => liftStart(e, t, c), { passive: true });   // phones: hold to pick it up and drop it on another lane   // phones: tap a card to open it (and change its status there)
     const fr = freshInfo(t);
     const top = el('div', 'top'); top.append(numChip(t)); if (fr.changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; top.append(d); } if (t.priority) top.append(el('span', 'prio ' + t.priority, t.priority)); top.append(el('span', 'spacer'));
-    const edit = el('button', 'ico', '✏️'), bot = el('button', 'ico', '🤖');
+    const edit = elI('button', 'ico', 'pencil'), bot = elI('button', 'ico', 'bot');
     edit.title = 'Edit task'; edit.setAttribute('aria-label', 'Edit task'); edit.onclick = () => openCard(t.id);
     bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent');
     top.append(edit, bot); c.append(top);
@@ -1198,16 +1205,16 @@
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
     const foot = el('div', 'foot'); { const mc = chipMention(t); if (mc) foot.append(mc); }
-    { const tc = todoCount(t), chip = el('button', 'chip todochip' + (tc.all && tc.done === tc.all ? ' full' : ''), tc.all ? `☑ ${tc.done}/${tc.all}` : '☑ +');
+    { const tc = todoCount(t), chip = elI('button', 'chip todochip' + (tc.all && tc.done === tc.all ? ' full' : ''), 'square-check', tc.all ? `${tc.done}/${tc.all}` : '+');
       chip.title = tc.all ? 'Show or hide the checklist' : 'Add a checklist'; chip.setAttribute('aria-expanded', String(openLists.has(t.id)));
       chip.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; foot.append(chip); }
-    { const n = t.comments.length, cm = el('button', 'chip cmchip' + (n ? ' has' : ''), n ? `💬 ${n}` : '💬'); cm.title = n ? `${n} comment${n > 1 ? 's' : ''}${fr.unread ? ', ' + fr.unread + ' unread' : ''}` : 'Add a comment'; if (fr.unread) { cm.classList.add('unread'); cm.append(newBadge(fr.unread)); } cm.setAttribute('aria-label', cm.title); cm.onclick = () => openComments(t.id); foot.append(cm); }
-    if (t.due) { const late = t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); foot.append(el('span', 'chip' + (late ? ' late' : ''), '📅 ' + t.due)); }
+    { const n = t.comments.length, cm = elI('button', 'chip cmchip' + (n ? ' has' : ''), 'message-square', n ? String(n) : ''); cm.title = n ? `${n} comment${n > 1 ? 's' : ''}${fr.unread ? ', ' + fr.unread + ' unread' : ''}` : 'Add a comment'; if (fr.unread) { cm.classList.add('unread'); cm.append(newBadge(fr.unread)); } cm.setAttribute('aria-label', cm.title); cm.onclick = () => openComments(t.id); foot.append(cm); }
+    if (t.due) { const late = t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); foot.append(elI('span', 'chip' + (late ? ' late' : ''), 'calendar', t.due)); }
     const other = [];
     t.links.forEach(l => { const g = ghLink(l.url); if (!g) { other.push(l); return; }
       const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; foot.append(a); });
-    if (other.length) foot.append(el('span', 'chip', '🔗 ' + other.length));
-    if (t.contacts.length) foot.append(el('span', 'chip', '👤 ' + t.contacts.length));
+    if (other.length) foot.append(elI('span', 'chip', 'link', String(other.length)));
+    if (t.contacts.length) foot.append(elI('span', 'chip', 'user', String(t.contacts.length)));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
     c.append(foot);
@@ -1331,7 +1338,7 @@
       let host = ''; try { host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
       const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove link'; x.setAttribute('aria-label', 'Remove link');
       x.onclick = () => edit(editing, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(editing)}`);
-      row.append(el('span', 'li', g ? '🐙' : '🔗'), a, el('span', 'host', g && l.title && l.title !== l.url ? l.title : host), x); box.append(row);
+      row.append(elI('span', 'li', g ? 'github' : 'link'), a, el('span', 'host', g && l.title && l.title !== l.url ? l.title : host), x); box.append(row);
     });
   }
   $('cLinkNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = parseLine($('cLinkNew').value); if (!v) { toast('Paste an http(s) link, or use: Title | https://url', true); return; }
@@ -1481,7 +1488,7 @@
     const refresh = () => {
       tok = token(); if (!tok) { close(); return; }
       const q = tok.q.toLowerCase();
-      if (tok.ch === '@') items = [...state.people.map(p => ({ id: p.github, name: p.name || '', kind: '' })), ...myAgents().map(a => ({ id: a, name: 'agent', kind: '🤖 ' }))]
+      if (tok.ch === '@') items = [...state.people.map(p => ({ id: p.github, name: p.name || '', kind: '' })), ...myAgents().map(a => ({ id: a, name: 'agent', kind: '' }))]
         .filter(p => p.id.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)).slice(0, 6).map(p => ({ insert: '@' + p.id, parts: [el('b', null, p.kind + '@' + p.id), el('span', 'sm', p.name)] }));
       else items = state.tasks.filter(t => !q || String(t.num).startsWith(q) || t.title.toLowerCase().includes(q)).sort((a, b) => b.num - a.num).slice(0, 6)
         .map(t => ({ insert: '#' + t.num, parts: [el('b', null, '#' + t.num), el('span', 'sm', t.title)] }));
@@ -1583,8 +1590,8 @@
   const SAVED = { sToken: 'kb_token', sClaudeTok: 'kb_claude_token', sCronKey: 'kb_cron_key' };   // the saved value, for fields that are left blank on purpose
   const secretOf = id => $(id).value || LS.get(SAVED[id]);
   document.querySelectorAll('[data-copy]').forEach(b => { b.onclick = () => { const v = secretOf(b.dataset.copy); if (!v) { toast('Nothing to copy: no value saved yet', true); return; } copyText(v, 'Copied. Treat it like a password.'); }; });
-  document.querySelectorAll('[data-show]').forEach(b => { b.onclick = () => { const id = b.dataset.show, i = $(id), on = i.type === 'password'; if (on && !i.value) i.value = LS.get(SAVED[id]); i.type = on ? 'text' : 'password'; b.textContent = on ? '🙈 Hide' : '👁 Show'; b.setAttribute('aria-pressed', String(on)); }; });
-  $('dlgSettings').addEventListener('close', () => document.querySelectorAll('[data-show]').forEach(b => { $(b.dataset.show).type = 'password'; b.textContent = '👁 Show'; b.setAttribute('aria-pressed', 'false'); }));
+  document.querySelectorAll('[data-show]').forEach(b => { b.onclick = () => { const id = b.dataset.show, i = $(id), on = i.type === 'password'; if (on && !i.value) i.value = LS.get(SAVED[id]); i.type = on ? 'text' : 'password'; setI(b, on ? 'eye-off' : 'eye', on ? 'Hide' : 'Show'); b.setAttribute('aria-pressed', String(on)); }; });
+  $('dlgSettings').addEventListener('close', () => document.querySelectorAll('[data-show]').forEach(b => { $(b.dataset.show).type = 'password'; setI(b, 'eye', 'Show'); b.setAttribute('aria-pressed', 'false'); }));
   $('sClaudePrompt').onclick = () => {
     const c = cfg(), base = `https://github.com/${c.repo}/blob/${c.branch}`, who = c.me || '<your-github-username>';
     copyText([`Please set up my Claude routine for the task board in ${c.repo}, so that typing @claude in a task comment starts it.`, '',
@@ -1725,7 +1732,7 @@
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg(); bar.textContent = body.textContent = '';
     Object.entries(TOOLS).forEach(([k, [name]]) => { const b = el('button', 'agpill' + (k === pick ? ' on' : ''), name); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(k === pick)); b.onclick = () => { LS.set('kb_tool', k); renderTools(); }; bar.append(b); });
     const ol = el('ol', 'wmini'), say = `Use my Keeptrack board ${c.repo || 'owner/repo'}. My GitHub username is ${c.me || 'my-username'}.`;
-    const step = (text, code) => { const li = el('li', null, text); if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = el('button', 'small', '📋 Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
+    const step = (text, code) => { const li = el('li', null, text); if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = elI('button', 'small', 'clipboard-copy', 'Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
     (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code]) => step(t, code));
     step('Then say:', say);
     body.append(ol, el('p', 'hint', 'It needs a GitHub login on your computer (gh auth login) or a token in an environment variable. Never paste a token into the chat.'));
@@ -1846,7 +1853,7 @@
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
     settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'conn'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; renderArchiveBox(); $('dlgSettings').showModal(); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'conn'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; renderArchiveBox(); $('dlgSettings').showModal(); };
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
     if (/^[\w.-]+$/.test(owner)) q.set('target_name', owner);
@@ -1870,7 +1877,7 @@
   function badge(repo, cls) { const b = el('span', cls || 'bbadge', boardInitials(repo)); b.style.background = boardColour(repo); return b; }
   function renderSwitcher() {
     const btn = $('boardBtn'), pop = $('boardPop'); if (!btn) return; const cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).sort();
-    btn.textContent = cur ? boardInitials(cur) : '▦'; if (cur) btn.style.background = boardColour(cur); btn.title = cur ? `Board: ${cur} (click to switch)` : 'Board'; btn.setAttribute('aria-label', btn.title);
+    if (cur) btn.textContent = boardInitials(cur); else setI(btn, 'square-kanban'); if (cur) btn.style.background = boardColour(cur); btn.title = cur ? `Board: ${cur} (click to switch)` : 'Board'; btn.setAttribute('aria-label', btn.title);
     pop.textContent = ''; pop.append(el('div', 'bphead', 'Boards'));
     repos.forEach(r => { const row = el('button', 'bprow' + (r === cur ? ' cur' : '')); row.type = 'button'; row.append(badge(r), el('span', 'bpname', r), el('span', 'bpmark', r === cur ? '✓' : ''));
       row.onclick = () => { closePops(); if (r !== cur) { activateBoard(r); location.replace(boardUrl()); } }; pop.append(row); });
@@ -1927,7 +1934,7 @@
   // A draft is never a contact: it counts only when it is marked sent. Client files live in external stores (Drive, Dropbox...)
   // and are linked from data.client_info[<client>].links.
   const DEFAULT_STAGES = ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'];
-  const CHANNELS = [['linkedin', '💼', 'LinkedIn'], ['email', '✉️', 'Email'], ['call', '📞', 'Call'], ['meeting', '🤝', 'Meeting'], ['note', '📝', 'Note']];
+  const CHANNELS = [['linkedin', 'briefcase', 'LinkedIn'], ['email', 'mail', 'Email'], ['call', 'phone', 'Call'], ['meeting', 'handshake', 'Meeting'], ['note', 'notebook-pen', 'Note']];
   const chan = id => CHANNELS.find(c => c[0] === id) || CHANNELS[4];
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
@@ -2002,23 +2009,23 @@
     const board = $('board'), t = todayIso(), week = plusDays(7);
     const open = state.contacts.filter(p => !closedStage(p.stage) && crmFilter(p));
     const groups = [
-      ['⏰ Overdue', open.filter(p => p.next_due && p.next_due < t)],
-      ['📌 Today', open.filter(p => p.next_due === t)],
-      ['🗓 Next 7 days', open.filter(p => p.next_due > t && p.next_due <= week)],
-      ['❔ No next step', open.filter(p => !p.next_due)],
-      ['💤 Gone quiet (no contact for 30 days)', open.filter(p => p.next_due && p.next_due > week && (daysSince(lastTouch(p)) ?? 999) >= 30)]
+      [['alarm-clock', 'Overdue'], open.filter(p => p.next_due && p.next_due < t)],
+      [['pin', 'Today'], open.filter(p => p.next_due === t)],
+      [['calendar-days', 'Next 7 days'], open.filter(p => p.next_due > t && p.next_due <= week)],
+      [['circle-help', 'No next step'], open.filter(p => !p.next_due)],
+      [['moon', 'Gone quiet (no contact for 30 days)'], open.filter(p => p.next_due && p.next_due > week && (daysSince(lastTouch(p)) ?? 999) >= 30)]
     ];
     const wrap = el('div', 'today'), head = el('div', 'todayhead');
     const n = groups[0][1].length + groups[1][1].length;
     head.append(el('h2', null, n ? `${n} ${n === 1 ? 'person' : 'people'} to contact today` : 'Nothing due today'), el('span', 'muted', new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })));
     wrap.append(head);
-    groups.forEach(([title, items]) => {
-      if (!items.length) return; const sec = el('section', 'tsec'); sec.append(el('h3', null, `${title} (${items.length})`));
+    groups.forEach(([[ic, title], items]) => {
+      if (!items.length) return; const sec = el('section', 'tsec'); sec.append(elI('h3', null, ic, `${title} (${items.length})`));
       items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec); wrap.append(sec);
     });
     if (modes().includes('tasks')) {
       const due = state.tasks.filter(x => x.due && x.due <= t && x.column !== doneColId() && filtered(x));
-      if (due.length) { const sec = el('section', 'tsec'); sec.append(el('h3', null, `☑ Tasks due (${due.length})`)); due.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', due, taskTodayRow, sec); wrap.append(sec); }
+      if (due.length) { const sec = el('section', 'tsec'); sec.append(elI('h3', null, 'square-check', `Tasks due (${due.length})`)); due.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', due, taskTodayRow, sec); wrap.append(sec); }
     }
     if (!state.contacts.length) { const e = el('div', 'empty'); e.append(el('p', null, 'No people yet. Add the first person you want to keep track of.')); wrap.append(e); }
     wrap.append(addPersonBox()); board.append(wrap);
@@ -2089,7 +2096,7 @@
     // links: this person's own, and the files of their company (client)
     renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); }, `Links: ${p.name}`));
     const co = p.company, info = co ? ((state.client_info || {})[co] || { links: [] }) : null;
-    $('pFilesSec').hidden = !co; if (co) { $('pFilesH').textContent = `🗂 Files for ${co}`; renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`)); }
+    $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`)); }
     renderTouches(p); renderPersonTasks(p);
     const ol = $('pHist'); ol.textContent = ''; $('pHistSum').textContent = `History (${p.history.length})`;
     p.history.slice().reverse().forEach(h => { const li2 = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li2.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li2); });
@@ -2100,21 +2107,21 @@
     links.forEach(l => { const row = el('div', 'linkrow'), a = el('a', null, l.title || l.url); a.href = safeUrl(l.url) || '#'; a.target = '_blank'; a.rel = 'noopener noreferrer';
       const host = (() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
       const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = () => onRemove(l);
-      row.append(el('span', null, storeIcon(host)), a, el('span', 'muted small', ' ' + host), x); box.append(row); });
+      row.append(elI('span', 'li', storeIcon(host)), a, el('span', 'muted small', ' ' + host), x); box.append(row); });
     if (!links.length) box.append(el('div', 'muted small', 'No links yet.'));
   }
-  const storeIcon = h => /drive\.google|docs\.google/.test(h) ? '🟢 ' : /dropbox/.test(h) ? '🟦 ' : /sharepoint|onedrive|office|live\.com/.test(h) ? '🟪 ' : /github/.test(h) ? '🐙 ' : /notion/.test(h) ? '⬛ ' : '🔗 ';
+  const storeIcon = h => /drive\.google|docs\.google|dropbox|sharepoint|onedrive|office|live\.com/.test(h) ? 'folder' : /github/.test(h) ? 'github' : /notion/.test(h) ? 'file-text' : 'link';
   const parseLink = v => { const i = v.indexOf('|'), url = (i >= 0 ? v.slice(i + 1) : v).trim(), title = i >= 0 ? v.slice(0, i).trim() : ''; return safeUrl(url) ? { title: title || url, url } : null; };
 
   function renderTouches(p) {
     const box = $('pTouches'); box.textContent = ''; $('pTouchCount').textContent = p.comments.length ? `(${p.comments.length})` : '';
     p.comments.slice().reverse().forEach(cm => {
       const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
-      head.append(el('span', 'tchan', ic + ' ' + label), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
+      head.append(elI('span', 'tchan', ic, label), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at;
       if (cm.draft) { head.append(el('span', 'draftpill', 'Draft, not sent'));
         const s = el('button', 'small primary', 'Mark sent'); s.type = 'button'; s.onclick = () => markSent(p.id, cm.id); head.append(s);
-        const cp = el('button', 'small', '📋 Copy'); cp.type = 'button'; cp.onclick = () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.'); head.append(cp); }
+        const cp = elI('button', 'small', 'clipboard-copy', 'Copy'); cp.type = 'button'; cp.onclick = () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.'); head.append(cp); }
       const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
     });
   }
@@ -2189,8 +2196,8 @@
     if (s === 0) {
       body.append(el('p', null, 'Keeptrack keeps your people, follow-ups and tasks in a private GitHub repo that only you control. There is no server and no subscription. Setup takes about five minutes.'));
       const pick = el('div', 'wpick'), card = (k, icon, title, text) => { const b = el('button', 'wcard' + (WZ[k] ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(WZ[k]));
-        b.append(el('span', 'wic', icon), el('b', null, title), el('span', 'muted', text)); b.onclick = () => { WZ[k] = !WZ[k]; renderWelcome(); }; return b; };
-      pick.append(card('crm', '👤', 'People', 'Who to contact, follow-ups and a simple pipeline'), card('tasks', '🗂', 'Tasks', 'A to-do board with lists, dates and checklists'));
+        b.append(elI('span', 'wic', icon), el('b', null, title), el('span', 'muted', text)); b.onclick = () => { WZ[k] = !WZ[k]; renderWelcome(); }; return b; };
+      pick.append(card('crm', 'users', 'People', 'Who to contact, follow-ups and a simple pipeline'), card('tasks', 'square-kanban', 'Tasks', 'A to-do board with lists, dates and checklists'));
       const name = el('input'); name.placeholder = 'My Keeptrack'; name.value = WZ.title; name.oninput = () => { WZ.title = name.value; };
       const lab = el('label', 'wlabel', 'Board name'); lab.append(name);
       body.append(el('h3', null, 'What do you want to keep track of?'), pick, lab);
@@ -2372,7 +2379,7 @@
     const body = $('aBody'); body.textContent = '';
     const txt = kind === 'task' ? item.details : [item.email, item.phone, item.linkedin, item.notes].filter(Boolean).join('\n');
     if (txt) body.append(el('pre', 'atext', txt));
-    if ((item.todos || []).length) { const ul = el('ul'); item.todos.forEach(x => ul.append(el('li', null, (x.done ? '☑ ' : '☐ ') + x.text))); body.append(el('h3', null, 'Checklist'), ul); }
+    if ((item.todos || []).length) { const ul = el('ul'); item.todos.forEach(x => ul.append(elI('li', null, x.done ? 'square-check' : 'square', x.text))); body.append(el('h3', null, 'Checklist'), ul); }
     if ((item.comments || []).length) { body.append(el('h3', null, kind === 'task' ? 'Comments' : 'Contact log')); item.comments.forEach(c => body.append(el('div', 'acm', `${(c.at || '').slice(0, 10)} · ${c.channel ? c.channel + ' · ' : ''}${c.by || ''}${c.draft ? ' · draft' : ''}\n${c.text || ''}`))); }
     if ((item.history || []).length) { const det = el('details'); det.append(el('summary', null, `History (${item.history.length})`)); item.history.forEach(h => det.append(el('div', 'small', `${(h.at || '').slice(0, 16).replace('T', ' ')} · ${h.by || ''} · ${h.text}`))); body.append(det); }
     $('aRestore').hidden = !!ro; $('aRestore').onclick = () => restoreArchived(kind, item, y);
@@ -2385,7 +2392,7 @@
     const tot = Object.values(files).reduce((m, f) => ({ t: m.t + (f.tasks || 0), p: m.p + (f.contacts || 0) }), { t: 0, p: 0 });
     box.append(el('div', 'hint', `Board file: ${kb ? kb + ' KB' : 'size not known yet'}${kb >= SIZE_WARN / 1024 ? ' (large: archive old items)' : ''}. In the archive: ${tot.t} tasks and ${tot.p} people${Object.keys(files).length ? ' (' + Object.keys(files).sort().join(', ') + ')' : ''}.`));
     box.append(el('div', 'hint', `Archive moves tasks that have been done for more than ${r.done_days} days, Lost people with no change for ${r.lost_days} days, and all but the last ${r.keep_history} history lines of each card. Search still finds them, and you can bring any of them back.`));
-    const b = el('button', null, n.tasks + n.contacts + n.history ? `🗄 Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : '🗄 Nothing to archive yet'); b.type = 'button'; b.disabled = !!ro || !(n.tasks + n.contacts + n.history); b.onclick = archiveNow; box.append(b);
+    const b = elI('button', null, 'archive', n.tasks + n.contacts + n.history ? `Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : 'Nothing to archive yet'); b.type = 'button'; b.disabled = !!ro || !(n.tasks + n.contacts + n.history); b.onclick = archiveNow; box.append(b);
   }
   function sizeBar() {   // a quiet nudge once the board file gets large
     const bar = $('sizeBar'); if (!bar) return; const big = !ro && boardSize >= SIZE_WARN && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
@@ -2393,7 +2400,7 @@
     const a = el('button', 'small', 'Archive old items'), x = el('button', 'small', 'Later'); a.type = x.type = 'button';
     a.onclick = () => { $('btnSettings').click(); settingsTab('general'); renderArchiveBox(); $('archBox').scrollIntoView({ block: 'center' }); };
     x.onclick = () => { LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))); bar.hidden = true; };
-    bar.append(el('span', null, `🗄 The board file is ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`), a, x);
+    bar.append(elI('span', null, 'archive', `The board file is ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`), a, x);
   }
 
   // ---- search everything: people, tasks, notes, comments and (on request) the archive, with MiniSearch ---------------
@@ -2418,7 +2425,7 @@
     if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} cards. Press / anywhere to search.${archYears().length && !withArch ? ' Tick “Include archive” to search old items too.' : ''}`; return; }
     const hits = msIndex.search(q).slice(0, 60);
     $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : 'Nothing found. Check the spelling, or tick “Include archive”.');
-    hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(el('span', 'qic', h.kind === 'task' ? '☑' : '👤'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
+    hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
       b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
         else if (h.kind === 'task') openCard(h.ref); else openContact(h.ref); };
       res.append(b); if (i === 0) b.classList.add('first'); });
@@ -2441,7 +2448,7 @@
   function roToast() { toast((RO_TEXT[ro] || ['Read-only'])[0], true); }
   function applyRo() {
     document.body.classList.toggle('ro', !!ro); const bar = $('roBar'); bar.hidden = !ro; bar.textContent = ''; if (!ro) return;
-    const [msg, label, go] = RO_TEXT[ro], b = el('button', 'small', label); b.type = 'button'; b.onclick = go; bar.append(el('span', null, '🔒 ' + msg), b); lockDrawers();
+    const [msg, label, go] = RO_TEXT[ro], b = el('button', 'small', label); b.type = 'button'; b.onclick = go; bar.append(elI('span', null, 'lock', msg), b); lockDrawers();
   }
   const RO_KEEP = new Set(['cClose', 'pClose', 'cCopyMd', 'cAgent', 'pAgent', 'dLink']);   // buttons that only read or copy
   function lockDrawers() {
@@ -2456,6 +2463,20 @@
   $('sStyle').value = window.kbStyle ? window.kbStyle.get() : 'classic'; $('sStyle').onchange = e => { window.kbStyle && window.kbStyle.set(e.target.value); render(); };
   $('sTheme').value = window.kbTheme ? window.kbTheme.get() : 'auto';
   $('sTheme').onchange = e => window.kbTheme && window.kbTheme.set(e.target.value);
+  // DESIGN.md (Google's open design-token format): import its colours as a custom theme, or copy the current theme as one.
+  const themeMsg = (t, bad) => { $('sThemeMsg').textContent = t; $('sThemeMsg').classList.toggle('err', !!bad); };
+  const syncCustomOpt = () => { let c = null; try { c = JSON.parse(LS.get('kb_custom', 'null')); } catch {} $('sThemeCustom').hidden = !c; if (c) $('sThemeCustom').textContent = c.name || 'Your DESIGN.md'; };
+  syncCustomOpt();
+  $('sThemeImport').onclick = () => $('sThemeFile').click();
+  $('sThemeFile').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    if (!window.kbDesignMd) { themeMsg('The DESIGN.md reader did not load. Reload the page and try again.', true); return; }
+    try {
+      const t = window.kbDesignMd.parse(await f.text()); window.kbDesignMd.apply(t); syncCustomOpt(); $('sTheme').value = 'custom';
+      themeMsg(`Using “${t.name}”.` + (t.warnings.length ? ' ' + t.warnings.join(' ') : ''), t.warnings.length > 0);
+    } catch (err) { themeMsg(err.message, true); }
+  };
+  $('sThemeExport').onclick = () => { if (window.kbDesignMd) copyText(window.kbDesignMd.exportCurrent(), 'Theme copied as DESIGN.md'); };
   applyRo(); render();
   (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); } })();
 })();

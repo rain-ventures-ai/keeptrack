@@ -676,3 +676,67 @@ body.setup header { justify-content: flex-start; } body.setup #btnHelp { margin-
 @media (max-width: 520px) { .cwb { padding-left: 4px; } .cprow { flex-wrap: wrap; } .cprow > span { width: 100%; } }
 .cwlogh { margin: 14px 0 4px; font-size: 13px; } .cwlog { max-height: 260px; overflow: auto; } .cwlog .wck { padding: 4px 0; border-bottom: 1px solid var(--border); } .cwlog .wck .muted { font-size: 12px; word-break: break-word; }
 #cwDebug .cbtns { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+
+/* ---- colour themes: 3 colours (paper, ink, hero) or 5 (+ surface, line) ------------------------------------------------
+   Each theme sets 3 colours (paper, ink, hero) or 5 colours (paper, surface, line, ink, hero).
+   One shared rule below derives every board token (--bg, --panel, --card, --border, --muted ...)
+   from those colours, so a new theme, or a theme imported from a DESIGN.md file, is 3 to 5 lines.
+   "custom" is a theme imported from a DESIGN.md file: designmd.js and theme.js set its colours on <html>. */
+
+:root[data-theme="paper"] { --paper: #f7f4ed; --ink: #23201b; --hero: #c2410c; --on-hero: #ffffff; --lift: #ffffff; --lift-pct: 70%;
+  --danger: #c8312b; --ok: #1d7f4e; --warn: #a96a00; color-scheme: light; }  /* 3-colour: Warm paper, dark ink, one vermilion accent. */
+:root[data-theme="mono"] { --paper: #ffffff; --ink: #0a0a0a; --hero: #0a0a0a; --on-hero: #ffffff; --lift: #ffffff; --lift-pct: 70%;
+  --danger: #c8312b; --ok: #1d7f4e; --warn: #a96a00; color-scheme: light; }  /* 3-colour: Black and white only. The accent is the ink. */
+:root[data-theme="iris"] { --paper: #fcfcfd; --ink: #16181d; --hero: #5e6ad2; --on-hero: #ffffff; --lift: #ffffff; --lift-pct: 70%;
+  --danger: #c8312b; --ok: #1d7f4e; --warn: #a96a00; color-scheme: light; }  /* 3-colour: Cool white with a soft violet. Calm SaaS look. */
+:root[data-theme="forest"] { --paper: #f3f5f0; --ink: #1c2a21; --hero: #2f7d4f; --on-hero: #ffffff; --lift: #ffffff; --lift-pct: 70%;
+  --danger: #c8312b; --ok: #1d7f4e; --warn: #a96a00; color-scheme: light; }  /* 3-colour: Pale sage, deep green ink, green accent. */
+:root[data-theme="ember"] { --paper: #0f1012; --ink: #ececec; --hero: #f5a524; --on-hero: #0f1012; --lift: #ececec; --lift-pct: 7%;
+  --danger: #ff7a70; --ok: #4fd49c; --warn: #e8b33a; color-scheme: dark; }  /* 3-colour: Near-black with an amber accent. */
+:root[data-theme="ink"] { --paper: #111318; --ink: #e6e8ee; --hero: #8b9bff; --on-hero: #111318; --lift: #e6e8ee; --lift-pct: 7%;
+  --danger: #ff7a70; --ok: #4fd49c; --warn: #e8b33a; color-scheme: dark; }  /* 3-colour: Dark blue-black with a periwinkle accent. */
+:root[data-theme="studio"] { --paper: #f4f4f5; --surface: #ffffff; --line: #d4d4d8; --ink: #18181b; --hero: #2563eb; --on-hero: #ffffff; --lift: #ffffff; --lift-pct: 70%;
+  --danger: #c8312b; --ok: #1d7f4e; --warn: #a96a00; color-scheme: light; }  /* 5-colour: Light grey page, white cards, mid-grey borders, black text, one blue. */
+:root[data-theme="newsprint"] { --paper: #ece7dc; --surface: #fbf9f4; --line: #cbc1ad; --ink: #1a1a1a; --hero: #b91c1c; --on-hero: #ffffff; --lift: #ffffff; --lift-pct: 70%;
+  --danger: #c8312b; --ok: #1d7f4e; --warn: #a96a00; color-scheme: light; }  /* 5-colour: Newspaper cream with a red masthead accent. */
+:root[data-theme="blueprint"] { --paper: #eaf0f8; --surface: #ffffff; --line: #c3cfe2; --ink: #0f1e3d; --hero: #c4410c; --on-hero: #ffffff; --lift: #ffffff; --lift-pct: 70%;
+  --danger: #c8312b; --ok: #1d7f4e; --warn: #a96a00; color-scheme: light; }  /* 5-colour: Cool blue page, navy ink, orange accent. */
+:root[data-theme="graphite"] { --paper: #0b0b0c; --surface: #161618; --line: #2e2e33; --ink: #ededed; --hero: #3dd68c; --on-hero: #0b0b0c; --lift: #ededed; --lift-pct: 7%;
+  --danger: #ff7a70; --ok: #4fd49c; --warn: #e8b33a; color-scheme: dark; }  /* 5-colour: Dark grey with a mint accent. Good for long sessions. */
+:root[data-theme="paper"],
+:root[data-theme="mono"],
+:root[data-theme="iris"],
+:root[data-theme="forest"],
+:root[data-theme="ember"],
+:root[data-theme="ink"],
+:root[data-theme="studio"],
+:root[data-theme="newsprint"],
+:root[data-theme="blueprint"],
+:root[data-theme="graphite"],
+:root[data-theme="custom"] {
+  --bg: var(--paper);
+  --panel: color-mix(in srgb, var(--ink) 5%, var(--paper));
+  --card: var(--surface, color-mix(in srgb, var(--lift) var(--lift-pct), var(--paper)));
+  --card-hover: color-mix(in srgb, var(--ink) 3%, var(--card));
+  --header: var(--card);
+  --text: var(--ink);
+  --muted: color-mix(in srgb, var(--ink) 62%, var(--paper));
+  --border: var(--line, color-mix(in srgb, var(--ink) 16%, var(--paper)));
+  --accent: var(--hero);
+  --accent-soft: color-mix(in srgb, var(--hero) 14%, var(--paper));
+  --on-accent: var(--on-hero);
+  --shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent), 0 1px 1px color-mix(in srgb, var(--ink) 6%, transparent);
+  --shadow-hover: 0 6px 16px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+/* Mono: the accent is the ink, so give soft accents a neutral grey and keep links underlined. */
+:root[data-theme="mono"] { --accent-soft: color-mix(in srgb, var(--ink) 9%, var(--paper)); }
+:root[data-theme="mono"] a { text-decoration: underline; }
+:root[data-theme="mono"] .tag.label { background: var(--ink) !important; color: var(--paper); }   /* labels go monochrome too */
+/* The read-only banner uses the theme accent, not a fixed amber. */
+:root[data-theme="paper"] .robar, :root[data-theme="mono"] .robar, :root[data-theme="iris"] .robar, :root[data-theme="forest"] .robar, :root[data-theme="ember"] .robar, :root[data-theme="ink"] .robar, :root[data-theme="studio"] .robar, :root[data-theme="newsprint"] .robar, :root[data-theme="blueprint"] .robar, :root[data-theme="graphite"] .robar, :root[data-theme="custom"] .robar { background: var(--accent-soft); }
+
+/* ---- icons: inline SVG line icons (Lucide), sized to the text around them ---- */
+.i { width: 1.15em; height: 1.15em; flex: none; vertical-align: -.2em; }
+.ico .i, header .ic .i, .vi .i { width: 1.2em; height: 1.2em; }
+.pubicon .i { width: 52px; height: 52px; color: var(--danger); }
+.themeio { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; } #sThemeMsg.err { color: var(--danger); }
