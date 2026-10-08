@@ -66,6 +66,18 @@ $B unarchive '#12'            # put a task (or a person id) back on the board
 ```
 Run `archive` when the board file is large (the web board warns at 600 KB), or when the user asks. Before you say a person or task does not exist, also check `archived -q`.
 
+## 5. No token: use a GitHub connector
+Use this only when `keeptrack.py` cannot reach GitHub (no `gh` login, no token, or the sandbox blocks it) and you have a GitHub connector or MCP tool that can read **and write** a repo file. A connector that can only read (for example the built-in GitHub connector in claude.ai) lets you read the board but not save: tell the user, and give them the change to make on the web board.
+
+Do not edit the JSON yourself. Let `keeptrack.py` make the change on a local copy:
+1. **Read:** get `board/tasks.json` from the board repo (default branch) with the connector. Keep the file **SHA** it gives you.
+2. **Size check:** if the file is larger than 100 KB, do not save through the connector (each save sends the whole file and costs too many tokens). Read only, and tell the user to run the step where `keeptrack.py` can reach GitHub, or to run `archive` there first.
+3. **Change:** save the content, unchanged, to a scratch folder outside any git repo (for example `kt/tasks.json`). Run the command on it: `BOARD_USER=<user> $B --file kt/tasks.json <command> ...`. Read-only commands (`today`, `people`, `list`, `show`) stop here.
+4. **Write:** put `kt/tasks.json` back with the connector: same repo, path and branch, the SHA from step 1, and a message like `keeptrack: <what changed>`. Send the whole file exactly as `keeptrack.py` wrote it.
+5. **Conflict:** if the write is refused because the SHA is stale (someone saved first), do not write your copy. Go back to step 1, read the new file and SHA, run the **same command** again on it, and write again. Stop after 3 tries and tell the user.
+
+Never run `archive` or `unarchive` in this mode (they write more than one file). Never paste the board file into the chat.
+
 ## Rules
 - Do not send anything outside the repo (messages, emails, quotes) without the user's explicit say-so. Drafts are logged with `--draft`.
 - Contacts are personal data. Keep the board repo private. Do not copy contact details into other places.

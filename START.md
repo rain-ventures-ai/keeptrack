@@ -66,7 +66,7 @@ $B where
 The assistant also needs access to the repo. Pick the first that works:
 1. **A GitHub login on this computer:** run `gh auth status`. If it says logged in, nothing more to do. If `gh` is installed but not logged in, ask the person to run `gh auth login` themselves.
 2. **A token in an environment variable:** the person makes a fine-grained token (only this repo, **Contents: Read and write**) and puts it in an environment variable, for example `KEEPTRACK_TOKEN`, in their shell profile or the tool's settings. Then run `$B use <owner/repo> --user <github-username> --token-env KEEPTRACK_TOKEN`. You only ever learn the variable's **name**.
-3. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, use the GitHub connector to read and update `board/tasks.json`, and still follow the skill's rules.
+3. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, use a GitHub connector or MCP server that can write files, as the skill's section **No token: use a GitHub connector** says. Then no token is needed. A read-only connector can read the board but not save.
 
 ### Claude Code on the web (claude.ai/code) and Claude chat
 - **Claude chat on claude.ai in a browser** (not Code) is not tested. Its sandbox may not reach GitHub, so it may not be able to save to the board. Prefer the Claude desktop app (Cowork) or Claude Code.
