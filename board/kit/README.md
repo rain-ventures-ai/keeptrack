@@ -46,6 +46,8 @@ Filters: client, assignee (including "Claimed by an agent"), label, priority, **
     "details": "free text; URLs become clickable",
     "todos":   [{ "id": "d_ab12cd", "text": "…", "done": false, "doneBy": "…", "doneAt": "…" }],   // checklist inside the card (not separate tasks)
     "comments": [{ "id": "c_ab12cd", "at": "…", "by": "JezHub", "text": "append-only stream for people and agents" }],
+    // a comment can carry "session_url" (the Claude session that works on it). type "activity" is a one-line event that the web board adds, for example
+    // { "type": "activity", "by": "claude", "text": "Claude started a session for @JezHub: https://claude.ai/code/session_…", "session_url": "…", "reply_to": "c_ab12cd" }
     "history": [{ "at": "…", "by": "claude@osouthgate", "text": "✓ step one" }],               // automatic log, newest last, capped at 200
     "links":    [{ "title": "Drive folder", "url": "https://…" }],   // any URL; GitHub issue/PR/repo links (any repo) show as chips on the card, so use them to group related work
     "contacts": [{ "name": "…", "role": "…", "email": "…", "phone": "…" }],

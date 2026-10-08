@@ -801,12 +801,19 @@
   let commentsFor = null, cmSig = '', todoSig = '';
   function renderComments() {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
-    const sig = JSON.stringify(t.comments.map(m => m.id)) + t.comments.length; if (sig === cmSig) return; cmSig = sig;
+    const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length; if (sig === cmSig) return; cmSig = sig;
     $('cmCount').textContent = t.comments.length ? `(${t.comments.length})` : ''; const box = $('cmStream'); box.textContent = '';
     t.comments.slice().reverse().forEach(cm => {      // newest first, like Trello: the composer is always at the top
+      if (cm.type === 'activity') {   // a one-line event (for example "Claude started a session"), not a message
+        const row = el('div', 'cmact' + (/failed/i.test(cm.text) ? ' bad' : '')), url = safeUrl(cm.session_url);
+        row.append(el('span', 'cmacti', /failed/i.test(cm.text) ? '⚠' : '⚡'), el('span', null, String(cm.text || '').replace(/[:.]?\s*(Session:\s*)?https?:\/\/\S+$/, '')));
+        if (url) { const a = el('a', null, 'Open session ↗'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; row.append(a); }
+        const tm = el('time', null, ago2(cm.at)); tm.title = cm.at; row.append(tm); box.append(row); return;
+      }
       const row = el('div', 'cmcard' + (mentionsMe(cm.text) ? ' mine' : '')), head = el('div', 'cmhead');
       head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
-      head.lastChild.title = cm.at; const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
+      head.lastChild.title = cm.at; if (safeUrl(cm.session_url)) { const a = el('a', 'cmsess', '🤖 Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
+      const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
     });
   }
   const openComments = id => openCard(id, 'comments');
@@ -831,7 +838,7 @@
       if (mentionsCodex(text) && myAgents().includes('codex')) toast('Codex can’t be started from the board. Press 🤖 Copy for Codex at the top of the card, then paste it into Codex.'); }
     if (send && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
       const t1 = state.tasks.find(x => x.id === id);
-      try { const j = await sendToClaude(t1, who, cid); toast('Sent to Claude. It should start within about two minutes.'); watchClaudeJob(j.jobId, id, who); }
+      try { const j = await sendToClaude(t1, who, cid); toast('Sent to Claude. It should start within about two minutes.'); watchClaudeJob(j.jobId, id, who, cid); }
       catch (e) { toast('Not sent: ' + e.message, true); edit(id, t => { if (t.claim && String(t.claim.session_id || '').indexOf('pending-') === 0) { t.claim.status = 'stuck'; t.claim.note = 'Send to Claude failed: ' + e.message; } }, 'Send to Claude failed'); }
     }
     if ((state.tasks.find(x => x.id === id) || { comments: [] }).comments.length <= n0) { ta.value = text; autosize(ta); toast('Comment not saved. Your text is still in the box.', true); }
@@ -1538,8 +1545,8 @@
     const jobId = (await r.json()).jobId; rlog(t.num, 'Job made', `cron-job.org job ${jobId} runs at ${hhmm(at)}`, true);
     return { jobId, at };
   }
-  async function watchClaudeJob(jobId, taskId, who) {   // find the session URL in the routine's response, record it on the card, delete the job
-    const sleep = ms => new Promise(r => setTimeout(r, ms)), num = (state.tasks.find(x => x.id === taskId) || {}).num; let session = null, err = '', noBody = 0, logged = false;
+  async function watchClaudeJob(jobId, taskId, who, cid) {   // find the session URL in the routine's response, record it on the card and in the comments, delete the job
+    const sleep = ms => new Promise(r => setTimeout(r, ms)), num = (state.tasks.find(x => x.id === taskId) || {}).num; let session = null, err = '', noBody = 0, logged = false, ranAt = '';
     try {
       for (let i = 0; i < 24 && !session && !err; i++) {
         await sleep(FAST ? 300 : (i === 0 ? 70000 : 15000));
@@ -1548,6 +1555,7 @@
         const it = h[0]; if (it.status && it.status !== 1 && it.httpStatus && it.httpStatus >= 400) err = `routine returned HTTP ${it.httpStatus}`;
         const dr = await cronFetch('GET', `/jobs/${jobId}/history/${it.identifier}`); let body = '';
         if (dr.ok) { const d = (await dr.json()).jobHistoryDetails || {}; body = d.body || ''; }
+        if (it.date && !ranAt) ranAt = new Date(it.date * 1000).toISOString();
         if (!logged) { logged = true; rlog(num, 'Job ran', `The routine answered HTTP ${it.httpStatus || '?'}${body ? ': ' + body : ''}`, !err); }
         const m = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/.exec(body); if (m) session = { url: m[0], id: m[0].split('/').pop() };
         else if (!err && it.httpStatus && it.httpStatus < 400 && ++noBody >= 3) session = { url: routinePage(), id: 'started' };   // started, but cron-job.org kept no reply: link the routine's run list
@@ -1556,6 +1564,14 @@
     rlog(num, session ? 'Claude started' : 'Failed', session ? session.url : (err || 'no response from the routine after 6 minutes'), !!session);
     try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there
     await edit(taskId, t => {
+      // an activity line in the comments (shown smaller than a comment), and the session link on the comment that asked
+      if (!t.comments.some(m => m.type === 'activity' && m.job === jobId)) {
+        const ask = cid && t.comments.find(m => m.id === cid); if (ask && session && session.url && session.id !== 'started') { ask.session_url = session.url; ask.session_id = session.id; }
+        const act = { id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at: [ranAt || nowIso(), (ask || {}).at || ''].sort().pop(), by: 'claude', type: 'activity', job: jobId, ...(cid ? { reply_to: cid } : {}),
+          ...(session ? { session_url: session.url, ...(session.id !== 'started' ? { session_id: session.id } : {}) } : {}),
+          text: session ? (session.id === 'started' ? `Claude started for @${who}. Session: ${session.url}` : `Claude started a session for @${who}: ${session.url}`) : `Send to Claude failed: ${err || 'no response from the routine'}` };
+        const i = t.comments.findIndex(m => m.at > act.at); if (i < 0) t.comments.push(act); else t.comments.splice(i, 0, act);   // in time order: the session started before Claude's first reply
+      }
       if (!t.claim || String(t.claim.session_id || '').indexOf('pending-') !== 0) {   // the routine already took over the claim (or finished): add the link if it has none
         const k = t.claim && t.claim.agent === 'claude' ? t.claim : (t.last_run && t.last_run.agent === 'claude' ? t.last_run : null);
         if (session && session.url && k && !k.session_url) k.session_url = session.url;
@@ -1663,14 +1679,14 @@
     let j; try { j = await sendToClaude(t, who, cid); }
     catch (e) { ckRow(box, false, 'Not sent: ' + e.message); edit(id, x => { if (x.claim) { x.claim.status = 'stuck'; x.claim.note = 'Send to Claude failed: ' + e.message; } }, 'Send to Claude failed'); btn.disabled = false; return; }
     ckRow(box, true, `Sent. cron-job.org starts your routine at ${hhmm(j.at)}.`);
-    watchClaudeJob(j.jobId, id, who);
+    watchClaudeJob(j.jobId, id, who, cid);
     const started = ckRow(box, null, 'Waiting for Claude to start…'), replied = ckRow(box, null, 'Waiting for Claude to reply on the task…');
     const t0 = Date.now(), tick = setInterval(async () => {
       if (!busy && !document.hidden) await load(true);
       const x = state.tasks.find(y => y.id === id), k = x && (x.claim || x.last_run), url = k && k.session_url;
       if (url && started.classList.contains('wait')) { started.replaceWith(ckRow(el('div'), true, 'Claude started.', ['Open the session', url])); }
       if (x && x.claim && x.claim.status === 'stuck') { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, x.claim.note || 'The routine did not start.')); btn.disabled = false; return; }
-      const said = x && x.comments.find(m => /^claude\b/i.test(m.by || '') && m.at > at);
+      const said = x && x.comments.find(m => m.type !== 'activity' && /^claude\b/i.test(m.by || '') && m.at > at);
       if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); LS.set('kb_claude_ok', nowIso()); stashBoard(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
       if (Date.now() - t0 > 10 * 60000) { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, `No reply after 10 minutes. Open task #${x ? x.num : '?'} or your routine's recent runs to see why.`)); btn.disabled = false; }
     }, FAST ? 300 : 15000);
