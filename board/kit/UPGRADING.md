@@ -17,6 +17,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 3. The web board and `keeptrack.py` must still read the schema version before the new one, so boards that are not upgraded yet continue to work.
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
 
+## Backups and checks for every upgrade
+1. Before the upgrade, make a backup of the default branch: a tag or branch named `backup/kit<old version>-<YYYY-MM-DD>`. Keep it permanently. It costs almost nothing, because git already stores those files.
+2. Upgrade on a branch with a pull request. Never upgrade on the default branch directly.
+3. After the merge, run `python3 board/keeptrack.py verify --against backup/kit<old version>-<YYYY-MM-DD>`. Also check that the web board loads and saves.
+4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
+
 ## Versions
 ### Schema 4: split storage (not released yet)
 Not released yet: it needs the phase 2 web board. Do not run `migrate --to 4` on a real board before then. A kit version number is given when it is released.
@@ -25,8 +31,10 @@ Cards and CRM people use split storage. Bare `migrate` still brings a board up t
 - When it is released: run `python3 board/keeptrack.py migrate --to 4 --dry-run` after the kit is on the default branch.
 - Check the file list and counts.
 - Run `python3 board/keeptrack.py migrate --to 4`.
-- The command makes a backup tag before it changes a GitHub board.
+- The command makes a backup tag before it changes a GitHub board. Keep the tag permanently.
+- Run `python3 board/keeptrack.py verify --against <backup tag>`. It must say OK.
 - Run `python3 board/keeptrack.py doctor` after migration.
+- Migrate the upgrade owner's own board first. Tell the team before you migrate a shared board.
 - Add `.board/cache/` to `.gitignore` if it is not there.
 - Check: `tasks.json` has `"version": 4` and `"layout": "split"`. Check that `cards/` and `people/` contain the item files.
 

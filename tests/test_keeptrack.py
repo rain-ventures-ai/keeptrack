@@ -578,3 +578,42 @@ class MoveInPlace(unittest.TestCase):
         moved = read_json(os.path.join(self.board_dir, "cards", "t_second.json"))
         self.assertEqual(second["column"], moved["column"])
         self.assertLess(moved["rank"], first["rank"])
+
+
+class Verify(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.board_dir = os.path.join(self.temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        self.backup = os.path.join(self.temp.name, "backup-tasks.json")
+        shutil.copy(os.path.join(self.board_dir, "tasks.json"), self.backup)
+        self.old_file = kt.FILE
+        kt.FILE = os.path.join(self.board_dir, "tasks.json")
+
+    def tearDown(self):
+        kt.FILE = self.old_file
+        self.temp.cleanup()
+
+    def run_verify(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = kt.cmd_verify(Args(against=self.backup))
+        return code, out.getvalue()
+
+    def test_migrated_board_matches_its_backup(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_migrate(Args(to=4, dry_run=False))
+        code, out = self.run_verify()
+        self.assertEqual(0, code, out)
+        self.assertIn("OK", out)
+
+    def test_a_lost_card_and_a_changed_field_are_reported(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_migrate(Args(to=4, dry_run=False))
+        os.remove(os.path.join(self.board_dir, "cards", "t_second.json"))
+        card_path = os.path.join(self.board_dir, "cards", "t_first.json")
+        card = read_json(card_path); card["title"] = "Changed"; write(card_path, card)
+        code, out = self.run_verify()
+        self.assertEqual(1, code)
+        self.assertIn("card t_second is missing", out)
+        self.assertIn("card t_first differs: title", out)

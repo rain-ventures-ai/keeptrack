@@ -48,6 +48,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py migrate             # bring tasks.json up to v3 (safe to run twice)
   keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person (needs the phase 2 web board)
   keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
+  keeptrack.py verify --against REF        # compare the board with a backup (tag, branch, commit or tasks.json file)
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, AGENTS.md, CLAUDE.md, empty tasks.json
 """
@@ -1732,9 +1733,72 @@ def _migrate_v4(a):
                 continue
             if saved:
                 print(f"migrated tasks.json to schema v4" + (f" (backup tag: {tag})" if tag else ""))
+                print(f"Next: keeptrack.py verify --against {tag or '<backup of tasks.json>'}, then keeptrack.py doctor")
                 return
             time.sleep(0.4 * (attempt + 1))
         sys.exit("could not migrate after retries (board busy)")
+
+
+def _read_backup(ref):
+    """The board at a backup: a local tasks.json path, or a git tag/branch/commit of the board repo."""
+    if os.path.isfile(ref):
+        with open(ref, encoding="utf-8") as f:
+            return json.load(f)
+    if FILE or WRITE == "git":
+        if not ROOT:
+            sys.exit(f"cannot read backup {ref}: not in a clone of the board repo")
+        git("fetch", "-q", "origin", "--tags", ref)
+        for name in (ref, f"origin/{ref}", "FETCH_HEAD"):
+            rc, raw, _ = git("show", f"{name}:{PATH}")
+            if rc == 0:
+                return json.loads(raw)
+        sys.exit(f"cannot read {PATH} at backup {ref}")
+    rc, out, err = gh(f"repos/{REPO}/contents/{PATH}?ref={urllib.parse.quote(ref, safe='')}")
+    if rc:
+        sys.exit(f"cannot read {PATH} at backup {ref}: {err.strip() or out.strip()}")
+    return json.loads(content_text(PATH, json.loads(out)))
+
+
+def verify_board(now, backup):
+    """Differences between the board now and a backup, ignoring layout, version and rank. [] means the same data."""
+    def normal(d):
+        d = json.loads(json.dumps(d))
+        d.pop("layout", None); d.pop("version", None)
+        for t in d.get("tasks", []):
+            t.pop("rank", None)
+        return d
+    a, b = normal(backup), normal(now)
+    out = []
+    for kind, label in (("tasks", "card"), ("contacts", "person")):
+        old = {x.get("id"): x for x in a.get(kind, [])}
+        new = {x.get("id"): x for x in b.get(kind, [])}
+        out += [f"{label} {i} is missing" for i in sorted(set(old) - set(new), key=str)]
+        out += [f"{label} {i} is new" for i in sorted(set(new) - set(old), key=str)]
+        for i in sorted(set(old) & set(new), key=str):
+            fields = sorted(k for k in set(old[i]) | set(new[i]) if old[i].get(k) != new[i].get(k))
+            if fields:
+                out.append(f"{label} {i} differs: {', '.join(fields)}")
+    for key in sorted(set(a) | set(b)):
+        if key not in ("tasks", "contacts") and a.get(key) != b.get(key):
+            out.append(f"board setting {key} differs")
+    return out
+
+
+def cmd_verify(a):
+    backup = _read_backup(a.against)
+    migrate_data(backup, 3)
+    now = load_board()
+    diffs = verify_board(now, backup)
+    counts = migration_counts(now)
+    print(f"now: {counts['tasks']} tasks, {counts['people']} people, {counts['comments']} comments, "
+          f"{counts['history']} history lines, {counts['todos']} to-dos")
+    if not diffs:
+        print(f"OK: the board has the same data as {a.against}")
+        return 0
+    for d in diffs:
+        print("DIFF " + d)
+    print(f"{len(diffs)} difference(s) from {a.against}. Changes saved after the backup also show here.")
+    return 1
 
 
 def cmd_kit_owner(a):
@@ -2328,6 +2392,7 @@ def main():
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
     s.set_defaults(f=cmd_kit_update)
     s = sub.add_parser("migrate"); s.add_argument("--to", type=int, help="4 = split storage; without --to the board goes up to v3 only"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
+    s = sub.add_parser("verify"); s.add_argument("--against", required=True, help="backup tag, branch or commit, or a tasks.json file"); s.set_defaults(f=cmd_verify)
     s = sub.add_parser("doctor"); s.add_argument("--fix", action="store_true"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_doctor)
     s = sub.add_parser("kit-owner"); s.add_argument("user", nargs="?"); s.set_defaults(f=cmd_kit_owner)
     s = sub.add_parser("init"); s.add_argument("--person", action="append", required=True, help="github-user:Display Name (repeatable; the first is the upgrade owner)")
