@@ -20,7 +20,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py archived-history ID     # older history lines that `archive` moved to archive/<year>.json
   keeptrack.py comment ID "text"       # post a comment on the card (questions, updates, hand-offs for people and agents)
   keeptrack.py comments ID             # print the whole comment stream
-  keeptrack.py move ID COLUMN [--note ...]          # change status (column id, e.g. todo, in-progress, done)
+  keeptrack.py move ID --column COLUMN [--before ID | --after ID | --top] [--priority high|medium|low]
   keeptrack.py assign ID USER [USER...] [--add|--remove] [--note ...]   # hand the task to people (replaces assignees unless --add/--remove)
   keeptrack.py link ID URL [--title ...]            # attach a link, e.g. the pull request
   ID may also be a task number: '#12' (quote the # in a shell).
@@ -45,11 +45,12 @@ From any other project (Claude plugin "board"): name the board once, then use th
 Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-check [--card]  # is this repo's kit older than the published one? --card adds an upgrade task for the upgrade owner
   keeptrack.py kit-update [--from DIR]   # copy the published kit into this repo and set board/KIT_VERSION (does not commit)
-  keeptrack.py migrate             # bring tasks.json up to the schema this keeptrack.py knows (safe to run twice)
+  keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person
+  keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, AGENTS.md, CLAUDE.md, empty tasks.json
 """
-import argparse, base64, contextlib, datetime as dt, io, json, os, re, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.request, uuid
+import argparse, base64, contextlib, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 try:
     import fcntl
 except ImportError:   # Windows
@@ -98,7 +99,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
     if _top and os.path.isfile(os.path.join(_top, "board", "tasks.json")):
         ROOT = _top
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
-SCHEMA = 3  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
+SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
 KIT_URL = os.environ.get("BOARD_KIT_URL", "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack/main/board/kit")
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 
@@ -238,6 +239,158 @@ def assign_nums(data):
     return data
 
 
+# Fractional indexing, ported from David Greenspan's published algorithm. The
+# integer prefix leaves room on both sides. The fractional suffix fills only
+# the gap that is needed, so repeated inserts do not renumber other cards.
+RANK_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def _rank_midpoint(a, b):
+    if b is not None and a >= b:
+        raise ValueError(f"rank lower bound {a!r} is not below upper bound {b!r}")
+    if a.endswith(RANK_DIGITS[0]) or (b is not None and b.endswith(RANK_DIGITS[0])):
+        raise ValueError("rank cannot end with the first base-62 digit")
+    prefix = ""
+    while b is not None and ((a[:1] or RANK_DIGITS[0]) == b[:1]):
+        prefix += b[0]
+        a = a[1:] if a else ""
+        b = b[1:]
+    da = RANK_DIGITS.index(a[0]) if a else 0
+    db = RANK_DIGITS.index(b[0]) if b else len(RANK_DIGITS)
+    if db - da > 1:
+        return prefix + RANK_DIGITS[(da + db + 1) // 2]
+    if b is not None and len(b) > 1:
+        return prefix + b[0]
+    return prefix + RANK_DIGITS[da] + _rank_midpoint(a[1:] if a else "", None)
+
+
+def _rank_integer(key):
+    if not isinstance(key, str) or not key:
+        raise ValueError("rank must be a non-empty string")
+    head = key[0]
+    if "a" <= head <= "z":
+        length = ord(head) - ord("a") + 2
+    elif "A" <= head <= "Z":
+        length = ord("Z") - ord(head) + 2
+    else:
+        raise ValueError(f"invalid rank head {head!r}")
+    integer = key[:length]
+    if len(integer) != length or any(c not in RANK_DIGITS for c in integer[1:]):
+        raise ValueError(f"invalid rank {key!r}")
+    return integer
+
+
+def _rank_increment(integer):
+    head, digits = integer[0], list(integer[1:])
+    carry = True
+    for i in range(len(digits) - 1, -1, -1):
+        n = RANK_DIGITS.index(digits[i]) + 1
+        if n == len(RANK_DIGITS):
+            digits[i] = RANK_DIGITS[0]
+        else:
+            digits[i] = RANK_DIGITS[n]; carry = False; break
+    if carry:
+        if head == "Z":
+            return "a" + RANK_DIGITS[0]
+        if head == "z":
+            return None
+        head = chr(ord(head) + 1)
+        if head > "a":
+            digits.append(RANK_DIGITS[0])
+        else:
+            digits.pop()
+    return head + "".join(digits)
+
+
+def _rank_decrement(integer):
+    head, digits = integer[0], list(integer[1:])
+    borrow = True
+    for i in range(len(digits) - 1, -1, -1):
+        n = RANK_DIGITS.index(digits[i]) - 1
+        if n < 0:
+            digits[i] = RANK_DIGITS[-1]
+        else:
+            digits[i] = RANK_DIGITS[n]; borrow = False; break
+    if borrow:
+        if head == "a":
+            return "Z" + RANK_DIGITS[-1]
+        if head == "A":
+            return None
+        head = chr(ord(head) - 1)
+        if head < "Z":
+            digits.append(RANK_DIGITS[-1])
+        else:
+            digits.pop()
+    return head + "".join(digits)
+
+
+def valid_rank(key):
+    try:
+        integer = _rank_integer(key)
+        fraction = key[len(integer):]
+        return all(c in RANK_DIGITS for c in fraction) and not fraction.endswith(RANK_DIGITS[0])
+    except (TypeError, ValueError):
+        return False
+
+
+def key_between(a, b):
+    """Return a base-62 fractional-index key strictly between a and b."""
+    if a is not None and not valid_rank(a):
+        raise ValueError(f"invalid lower rank {a!r}")
+    if b is not None and not valid_rank(b):
+        raise ValueError(f"invalid upper rank {b!r}")
+    if a is not None and b is not None and a >= b:
+        raise ValueError("lower rank must be below upper rank")
+    if a is None:
+        if b is None:
+            return "a0"
+        ib = _rank_integer(b)
+        dec = _rank_decrement(ib)
+        return dec if dec is not None else ib + _rank_midpoint("", b[len(ib):])
+    ia = _rank_integer(a)
+    if b is None:
+        inc = _rank_increment(ia)
+        return inc if inc is not None else ia + _rank_midpoint(a[len(ia):], None)
+    ib = _rank_integer(b)
+    if ia == ib:
+        return ia + _rank_midpoint(a[len(ia):], b[len(ib):])
+    inc = _rank_increment(ia)
+    if inc is not None and inc < b:
+        return inc
+    return ia + _rank_midpoint(a[len(ia):], None)
+
+
+def new_id(prefix, existing=()):
+    used = set(existing)
+    while True:
+        value = prefix + "".join(secrets.choice(RANK_DIGITS[:10] + RANK_DIGITS[36:]) for _ in range(10))
+        if value not in used:
+            return value
+
+
+def new_board_id(data, prefix, folder):
+    used = {x.get("id") for x in data.get("tasks", []) + data.get("contacts", []) if x.get("id")}
+    state = _BOARD_STATES.get(id(data), {})
+    used.update(os.path.splitext(os.path.basename(path))[0] for path in state.get("files", {})
+                if path.startswith(folder + "/"))
+    return new_id(prefix, used)
+
+
+def task_order_key(t):
+    priority = {"high": 0, "medium": 1, "low": 2}.get(t.get("priority"), 1)
+    due = t.get("due") or "9999-99-99"
+    rank = t.get("rank") if valid_rank(t.get("rank")) else "zzzzzzzzzzzz"
+    num = t.get("num") if isinstance(t.get("num"), int) else sys.maxsize
+    return priority, due, rank, num
+
+
+def sort_tasks(data):
+    data["tasks"] = sorted(data.get("tasks", []), key=lambda t: (
+        t.get("rank") if valid_rank(t.get("rank")) else "zzzzzzzzzzzz",
+        t.get("num") if isinstance(t.get("num"), int) else sys.maxsize))
+    return data
+
+
 # ---- git transport: commit tasks.json on top of the remote branch and push it, without touching the working tree
 
 
@@ -253,35 +406,32 @@ def remote_repo(url):
     return f"{m.group(1)}/{m.group(2)}" if m else ""
 
 
-def git_load():
+def _check_git_clone():
     if not ROOT:
         sys.exit(f"cannot save with git: keeptrack.py is not in a clone of {REPO}. Here the GitHub API must accept writes "
                  "(set BOARD_TOKEN, or use gh), or run keeptrack.py from a clone of the board repo.")
     rc, url, _ = git("remote", "get-url", "origin")
     if rc or remote_repo(url).lower() != REPO.lower():
         sys.exit(f"cannot save with git: {ROOT} is not a clone of {REPO} (origin is {url or 'missing'})")
-    rc, _, err = git("fetch", "-q", "origin", BRANCH)
-    if rc:
-        sys.exit(f"cannot fetch {REPO}@{BRANCH} with git: {err}")
-    rc, parent, _ = git("rev-parse", "FETCH_HEAD")
-    rc2, raw, err = git("show", f"{parent}:{PATH}")
-    if rc or rc2:
-        sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH} with git: {err}")
-    return assign_nums(json.loads(raw)), parent
 
 
-def git_save(text, parent, message, extra=None):
-    """Commit the new file (and any `extra` {path: text}) on top of `parent` and push it as a fast-forward; False when someone else got there first."""
-    blobs = []
-    for pth, txt in [(PATH, text), *(extra or {}).items()]:
-        _, blob, _ = git("hash-object", "-w", "--stdin", inp=txt)
-        blobs.append(("update-index", "--add", "--cacheinfo", f"100644,{blob},{pth}"))
+def git_save_changes(changes, deletes, parent, message):
+    """Commit a set of paths on parent and push it. False means the branch moved."""
+    _check_git_clone()
+    ops = []
+    for pth, txt in changes.items():
+        rc, blob, err = git("hash-object", "-w", "--stdin", inp=txt)
+        if rc:
+            sys.exit(f"write failed (git hash-object): {err}")
+        ops.append(("update-index", "--add", "--cacheinfo", f"100644,{blob},{pth}"))
+    for pth in deletes:
+        ops.append(("update-index", "--remove", "--ignore-unmatch", pth))
     fd, idx = tempfile.mkstemp(prefix="board-index-")
     os.close(fd)
     os.remove(idx)  # git creates the index file itself
     try:
         e = {"GIT_INDEX_FILE": idx}
-        for args in (("read-tree", parent), *blobs):
+        for args in (("read-tree", parent), *ops):
             rc, _, err = git(*args, env=e)
             if rc:
                 sys.exit(f"write failed (git {args[0]}): {err}")
@@ -303,23 +453,9 @@ def git_save(text, parent, message, extra=None):
     sys.exit(f"write failed: git push to {REPO}@{BRANCH} was refused: {err}")
 
 
-def load():
-    if not REPO and not FILE:
-        sys.exit("cannot tell which board to use: run keeptrack.py from a clone of the board repo, run `keeptrack.py use owner/name` "
-                 "in this project, or set BOARD_REPO=owner/name")
-    if FILE:
-        raw = open(FILE, "rb").read()
-        return assign_nums(json.loads(raw)), None
-    if WRITE == "git":
-        return git_load()
-    hit = cached_read(PATH)
-    if hit:
-        return assign_nums(json.loads(hit[0])), hit[1]
-    rc, out, err = gh(f"repos/{REPO}/contents/{PATH}?ref={BRANCH}")
-    if rc:
-        sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}: {err.strip() or out.strip()}")
-    d = json.loads(out)
-    return assign_nums(json.loads(content_text(PATH, d))), d["sha"]
+def git_save(text, parent, message, extra=None):
+    """Compatibility wrapper for archive code."""
+    return git_save_changes({PATH: text, **(extra or {})}, set(), parent, message)
 
 
 # ---- read cache: a local copy of each file with its ETag; an unchanged file comes back as "304 Not Modified",
@@ -395,38 +531,298 @@ def content_text(path, d):
     return out
 
 
-def save(data, sha, message):
-    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    if FILE:
-        atomic_write(FILE, text)
-        return True
-    if WRITE == "git":
-        return git_save(text, sha, message)
-    body = {"message": message, "branch": BRANCH, "sha": sha,
-            "content": base64.b64encode(text.encode()).decode()}
-    rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{PATH}", "--input", "-", body=body)
-    if rc == 0:
-        return True
-    if "409" in err or "422" in err or "does not match" in err:
-        return False
+def _json_text(value):
+    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+
+
+def _remote_path(rel):
+    base = os.path.dirname(PATH).strip("/")
+    return f"{base}/{rel}" if base else rel
+
+
+def _local_path(rel):
+    return os.path.join(os.path.dirname(os.path.abspath(FILE)), *rel.split("/"))
+
+
+def _blob_cache_file(sha):
+    return os.path.join(CACHE_DIR, *REPO.split("/"), sha + ".json")
+
+
+def _api_blob(sha):
+    cache = _blob_cache_file(sha)
     try:
-        gh_msg = json.loads(out).get("message", "")
+        with open(cache, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        pass
+    rc, out, err = gh(f"repos/{REPO}/git/blobs/{sha}")
+    if rc:
+        sys.exit(f"cannot read board blob {sha}: {err.strip() or out.strip()}")
+    d = json.loads(out)
+    text = base64.b64decode(d.get("content", "")).decode() if d.get("encoding") == "base64" else d.get("content", "")
+    try:
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        ignore = os.path.join(CACHE_DIR, "..", ".gitignore")
+        if not os.path.exists(ignore):
+            atomic_write(ignore, "# local board files for this project; never committed\n*\n")
+        atomic_write(cache, text)
+    except OSError:
+        pass
+    return text
+
+
+def _wanted_rel(rel):
+    return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|archive)/[^/]+", rel) is not None
+
+
+def _local_snapshot():
+    files = {}
+    board_dir = os.path.dirname(os.path.abspath(FILE))
+    for rel in ["tasks.json"]:
+        path = _local_path(rel)
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                files[rel] = {"text": f.read(), "sha": None, "size": os.path.getsize(path)}
+    for folder in ("cards", "people", "archive"):
+        path = os.path.join(board_dir, folder)
+        if not os.path.isdir(path):
+            continue
+        for name in sorted(os.listdir(path)):
+            full = os.path.join(path, name)
+            if os.path.isfile(full):
+                rel = f"{folder}/{name}"
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    files[rel] = {"text": f.read(), "sha": None, "size": os.path.getsize(full)}
+    return files, None
+
+
+def _git_snapshot():
+    _check_git_clone()
+    rc, _, err = git("fetch", "-q", "origin", BRANCH)
+    if rc:
+        sys.exit(f"cannot fetch {REPO}@{BRANCH} with git: {err}")
+    rc, head, err = git("rev-parse", "FETCH_HEAD")
+    if rc:
+        sys.exit(f"cannot resolve {REPO}@{BRANCH}: {err}")
+    base = os.path.dirname(PATH).strip("/")
+    rc, names, err = git("ls-tree", "-r", "--name-only", head, "--", PATH,
+                         *[f"{base + '/' if base else ''}{x}" for x in ("cards", "people", "archive")])
+    if rc:
+        sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
+    files = {}
+    prefix = base + "/" if base else ""
+    for full in names.splitlines():
+        rel = full[len(prefix):] if full.startswith(prefix) else full
+        if not _wanted_rel(rel):
+            continue
+        rc, raw, err = git("show", f"{head}:{full}")
+        if rc:
+            sys.exit(f"cannot read {full} from {REPO}@{BRANCH}: {err}")
+        files[rel] = {"text": raw + "\n", "sha": None, "size": len(raw.encode())}
+    if "tasks.json" not in files:
+        sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
+    return files, head
+
+
+def _api_snapshot():
+    ref = urllib.parse.quote(BRANCH, safe="")
+    rc, out, err = gh(f"repos/{REPO}/git/ref/heads/{ref}")
+    if rc:
+        sys.exit(f"cannot read {REPO}@{BRANCH}: {err.strip() or out.strip()}")
+    head = json.loads(out)["object"]["sha"]
+    rc, out, err = gh(f"repos/{REPO}/git/trees/{head}?recursive=1")
+    if rc:
+        sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
+    tree = json.loads(out)
+    if tree.get("truncated"):
+        sys.exit("cannot read the board: the Git tree response was truncated")
+    base = os.path.dirname(PATH).strip("/")
+    prefix = base + "/" if base else ""
+    files = {}
+    for item in tree.get("tree", []):
+        full = item.get("path", "")
+        rel = full[len(prefix):] if full.startswith(prefix) else ""
+        if item.get("type") != "blob" or not _wanted_rel(rel):
+            continue
+        text = _api_blob(item["sha"])
+        files[rel] = {"text": text, "sha": item["sha"], "size": item.get("size", len(text.encode()))}
+    if "tasks.json" not in files:
+        sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
+    return files, {"head": head, "base_tree": tree["sha"]}
+
+
+_BOARD_STATES = {}
+
+
+def _decode_json(rel, entry):
+    try:
+        obj = json.loads(entry["text"])
+    except (ValueError, UnicodeError) as e:
+        sys.exit(f"cannot read {rel}: invalid JSON ({e})")
+    entry["obj"] = json.loads(json.dumps(obj))
+    return obj
+
+
+def load_board():
+    """Load either layout into the v3-shaped in-memory model used by commands."""
+    if not REPO and not FILE:
+        sys.exit("cannot tell which board to use: run keeptrack.py from a clone of the board repo, run `keeptrack.py use owner/name` "
+                 "in this project, or set BOARD_REPO=owner/name")
+    if FILE:
+        files, head = _local_snapshot()
+        mode = "local"
+    elif WRITE == "git":
+        files, head = _git_snapshot()
+        mode = "git"
+    else:
+        files, head = _api_snapshot()
+        mode = "api"
+    root = _decode_json("tasks.json", files["tasks.json"])
+    data = dict(root)
+    layout = root.get("layout")
+    if root.get("version") == 4 and layout == "split":
+        tasks, people = [], []
+        for rel, entry in sorted(files.items()):
+            if rel.startswith("cards/") and rel.endswith(".json"):
+                tasks.append(_decode_json(rel, entry))
+            elif rel.startswith("people/") and rel.endswith(".json"):
+                people.append(_decode_json(rel, entry))
+        data["tasks"], data["contacts"] = tasks, people
+    else:
+        data.setdefault("tasks", [])
+        data.setdefault("contacts", [])
+    assign_nums(data)
+    if layout == "split":
+        sort_tasks(data)
+    state = {"mode": mode, "head": head.get("head") if isinstance(head, dict) else head,
+             "base_tree": head.get("base_tree") if isinstance(head, dict) else None,
+             "files": files, "layout": layout,
+             "root": root, "data_id": id(data)}
+    _BOARD_STATES[id(data)] = state
+    return data
+
+
+def load():
+    data = load_board()
+    return data, _BOARD_STATES[id(data)]
+
+
+def _desired_files(data, state, extra=None):
+    split = data.get("version") == 4 and data.get("layout") == "split"
+    root = {k: v for k, v in data.items() if not (split and k in ("tasks", "contacts"))}
+    desired_obj = {"tasks.json": root}
+    if split:
+        for t in data.get("tasks", []):
+            desired_obj[f"cards/{t['id']}.json"] = t
+        for p in data.get("contacts", []):
+            desired_obj[f"people/{p['id']}.json"] = p
+    desired = {}
+    for rel, obj in desired_obj.items():
+        old = state.get("files", {}).get(rel)
+        desired[rel] = old["text"] if old and old.get("obj") == obj else _json_text(obj)
+    desired.update(extra or {})
+    return desired
+
+
+def _changes(data, state, extra=None):
+    desired = _desired_files(data, state, extra)
+    managed = {p for p in state.get("files", {}) if p == "tasks.json" or
+               (p.startswith(("cards/", "people/")) and p.endswith(".json"))}
+    if extra:
+        managed.update(extra)
+    changes = {p: text for p, text in desired.items() if state.get("files", {}).get(p, {}).get("text") != text}
+    deletes = managed - set(desired)
+    return changes, deletes
+
+
+def _api_error(rc, out, err):
+    try:
+        msg = json.loads(out).get("message", "")
     except (ValueError, AttributeError):
-        gh_msg = ""
-    detail = (err.strip() + (f" ({gh_msg})" if gh_msg else "")) or out.strip()
-    if "403" in err and "proxy" in gh_msg.lower():
-        # Claude's cloud sandbox: the GitHub API is read-only from here, git pushes are allowed. Not a token problem.
-        if WRITE == "auto":
-            raise UseGit()
-        sys.exit(f"write failed: {detail}\nThis is Claude's cloud sandbox blocking GitHub API writes, not your token. "
-                 "Unset BOARD_WRITE (or set it to git) so keeptrack.py saves with git push instead.")
+        msg = ""
+    if "403" in err and "proxy" in msg.lower() and WRITE == "auto":
+        raise UseGit()
+    detail = (err.strip() + (f" ({msg})" if msg else "")) or out.strip()
     hint = ""
     if "403" in err or "404" in err:
-        hint = (f"\nThe token can read this repo but cannot write it. It needs Contents: Read and write on {REPO} "
-                "(fine-grained token: github.com/settings/personal-access-tokens, edit the token's repository permissions; the "
-                "token value does not change). If the repo belongs to an organisation, an owner may need to approve the change. "
+        hint = (f"\nThe token can read this repo but cannot write it. It needs Contents: Read and write on {REPO}. "
                 "A person or agent cannot fix this from the board: tell a human.")
     sys.exit(f"write failed: {detail}{hint}")
+
+
+def _api_save_changes(changes, deletes, state, message):
+    paths = set(changes) | set(deletes)
+    if len(paths) == 1:
+        rel = next(iter(paths)); old = state.get("files", {}).get(rel)
+        if rel in deletes:
+            body = {"message": message, "branch": BRANCH, "sha": old["sha"]}
+            rc, out, err = gh("-X", "DELETE", f"repos/{REPO}/contents/{_remote_path(rel)}", "--input", "-", body=body)
+        else:
+            body = {"message": message, "branch": BRANCH,
+                    "content": base64.b64encode(changes[rel].encode()).decode(), **({"sha": old["sha"]} if old else {})}
+            rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{_remote_path(rel)}", "--input", "-", body=body)
+        if rc == 0:
+            return True
+        if "409" in err or "422" in err or "does not match" in err:
+            return False
+        _api_error(rc, out, err)
+    entries = []
+    for rel, text in changes.items():
+        rc, out, err = gh("-X", "POST", f"repos/{REPO}/git/blobs", "--input", "-",
+                          body={"content": text, "encoding": "utf-8"})
+        if rc:
+            _api_error(rc, out, err)
+        entries.append({"path": _remote_path(rel), "mode": "100644", "type": "blob", "sha": json.loads(out)["sha"]})
+    entries.extend({"path": _remote_path(rel), "mode": "100644", "type": "blob", "sha": None} for rel in deletes)
+    rc, out, err = gh("-X", "POST", f"repos/{REPO}/git/trees", "--input", "-",
+                      body={"base_tree": state.get("base_tree") or state["head"], "tree": entries})
+    if rc:
+        _api_error(rc, out, err)
+    tree = json.loads(out)["sha"]
+    rc, out, err = gh("-X", "POST", f"repos/{REPO}/git/commits", "--input", "-",
+                      body={"message": message, "tree": tree, "parents": [state["head"]]})
+    if rc:
+        _api_error(rc, out, err)
+    commit = json.loads(out)["sha"]
+    ref = urllib.parse.quote(BRANCH, safe="")
+    rc, out, err = gh("-X", "PATCH", f"repos/{REPO}/git/refs/heads/{ref}", "--input", "-",
+                      body={"sha": commit, "force": False})
+    if rc == 0:
+        return True
+    if "409" in err or "422" in err:
+        return False
+    _api_error(rc, out, err)
+
+
+def save_changes(data, state=None, message="Update board", extra=None):
+    """Write only changed item files, and remove files for deleted items."""
+    state = state if isinstance(state, dict) else _BOARD_STATES.get(id(data))
+    if not state:
+        # Compatibility for callers that supplied the old SHA value.
+        state = {"mode": "local" if FILE else ("git" if WRITE == "git" else "api"), "head": state,
+                 "files": {}, "layout": data.get("layout")}
+    changes, deletes = _changes(data, state, extra)
+    if not changes and not deletes:
+        return True
+    if state["mode"] == "local":
+        # Item files first and the settings file last. A reader therefore never
+        # sees an index that points at a card that has not been written yet.
+        ordered = sorted(changes, key=lambda p: p == "tasks.json")
+        for rel in ordered:
+            path = _local_path(rel); os.makedirs(os.path.dirname(path), exist_ok=True); atomic_write(path, changes[rel])
+        for rel in sorted(deletes):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(_local_path(rel))
+        return True
+    remote_changes = {_remote_path(p): v for p, v in changes.items()}
+    remote_deletes = {_remote_path(p) for p in deletes}
+    if state["mode"] == "git":
+        return git_save_changes(remote_changes, remote_deletes, state["head"], message)
+    return _api_save_changes(changes, deletes, state, message)
+
+
+def save(data, state, message):
+    return save_changes(data, state, message)
 
 
 class UseGit(Exception):
@@ -444,7 +840,9 @@ def _mutate(fn, message):
     for attempt in range(6):
         data, sha = load()
         guard_schema(data)
-        migrate_data(data)  # an older file is brought up to SCHEMA by the first write (the web board does the same)
+        # v1/v2 still move to v3 on write. Split storage is an explicit
+        # migration because it creates many files and first makes a backup tag.
+        migrate_data(data, min(SCHEMA, 3))
         out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
         with contextlib.redirect_stdout(out):
             result = fn(data)
@@ -472,6 +870,7 @@ def guard_schema(data):
 MIGRATIONS = {
     1: lambda d: d,  # v1 -> v2: the web board and keeptrack.py already read v1 cards; only the version number changes
     2: lambda d: _to_v3(d),  # v2 -> v3: Keeptrack CRM (people with a stage and a next step, client file links)
+    3: lambda d: _to_v4(d),  # v3 -> v4: cards and CRM people are serialized to their own files
 }
 DEFAULT_STAGES = ["New", "Contacted", "Talking", "Proposal", "Won", "Lost"]
 
@@ -484,10 +883,22 @@ def _to_v3(d):
     return d
 
 
-def migrate_data(data):
+def _to_v4(d):
+    last = {}
+    for t in d.setdefault("tasks", []):
+        column = t.get("column", "")
+        if not valid_rank(t.get("rank")):
+            t["rank"] = key_between(last.get(column), None)
+        last[column] = t["rank"]
+    d.setdefault("contacts", [])
+    d["layout"] = "split"
+    return d
+
+
+def migrate_data(data, target=SCHEMA):
     v = data.get("version", 1) if isinstance(data.get("version", 1), int) else 1
     steps = []
-    while v < SCHEMA:
+    while v < target:
         MIGRATIONS[v](data); v += 1; data["version"] = v; steps.append(v)
     return steps
 
@@ -558,7 +969,8 @@ def line(data, t):
 
 def cmd_list(a):
     data, _ = load()
-    for t in data["tasks"]:
+    ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
+    for t in ordered:
         if a.column and t["column"] != a.column: continue
         if a.assignee and a.assignee.lower() not in [x.lower() for x in t.get("assignees", [])]: continue
         if a.unclaimed and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): continue
@@ -629,7 +1041,8 @@ def cmd_claim(a):
 def cmd_next(a):
     def fn(data):
         user = a.for_user or default_user()
-        for t in data["tasks"]:
+        ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
+        for t in ordered:
             if t["column"] in ("todo",) and user.lower() in [x.lower() for x in t.get("assignees", [])] \
                     and claim_state(data, t.get("claim")) in (None, "done", "stale"):
                 return do_claim(a, t["id"], data)
@@ -687,12 +1100,40 @@ def cmd_done(a):
 def cmd_move(a):
     def fn(data):
         t = find(data, a.id)
+        column = getattr(a, "column", None) or getattr(a, "column_pos", None)
         cols = [c["id"] for c in data.get("columns", [])]
-        if a.column not in cols:
-            sys.exit(f"unknown column '{a.column}'. Columns: {', '.join(cols)}")
-        old = t["column"]; t["column"] = a.column
-        hist(t, f"moved {old} -> {a.column}" + (f": {a.note}" if a.note else "")); t["updated"] = now()
-        print(f"#{t['num']} {t['title']}: {old} -> {a.column}")
+        if column not in cols:
+            sys.exit(f"unknown column '{column}'. Columns: {', '.join(cols)}")
+        if getattr(a, "priority", None):
+            t["priority"] = a.priority
+        if data.get("layout") == "split":
+            before = find(data, a.before) if getattr(a, "before", None) else None
+            after = find(data, a.after) if getattr(a, "after", None) else None
+            if sum(bool(x) for x in (before, after, getattr(a, "top", False))) > 1:
+                sys.exit("use only one of --before, --after or --top")
+            anchor = before or after
+            if anchor and anchor["id"] == t["id"]:
+                sys.exit("a task cannot be moved before or after itself")
+            if anchor and anchor.get("column") != column:
+                sys.exit(f"#{anchor.get('num')} is in '{anchor.get('column')}', not '{column}'")
+            peers = sorted((x for x in data.get("tasks", []) if x["id"] != t["id"] and x.get("column") == column),
+                           key=lambda x: (x.get("rank") if valid_rank(x.get("rank")) else "zzzzzzzzzzzz", x.get("num", sys.maxsize)))
+            if before:
+                i = peers.index(before); lo = peers[i - 1].get("rank") if i else None; hi = before.get("rank")
+            elif after:
+                i = peers.index(after); lo = after.get("rank"); hi = peers[i + 1].get("rank") if i + 1 < len(peers) else None
+            elif getattr(a, "top", False):
+                lo = None; hi = peers[0].get("rank") if peers else None
+            else:
+                lo = peers[-1].get("rank") if peers else None; hi = None
+            if lo is not None and not valid_rank(lo): lo = None
+            if hi is not None and not valid_rank(hi): hi = None
+            t["rank"] = key_between(lo, hi)
+        elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
+            sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
+        old = t["column"]; t["column"] = column
+        hist(t, f"moved {old} -> {column}" + (f": {a.note}" if a.note else "")); t["updated"] = now()
+        print(f"#{t['num']} {t['title']}: {old} -> {column}")
     mutate(fn, f"Agent move: {a.id}")
 
 
@@ -816,11 +1257,15 @@ def cmd_auto_heartbeat(a):
 
 def cmd_add(a):
     def fn(data):
-        t = {"id": "t_" + uuid.uuid4().hex[:8], "title": a.title, "column": a.column or "todo",
+        column = a.column or "todo"
+        ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
+        t = {"id": new_board_id(data, "t_", "cards"), "title": a.title, "column": column,
              "client": a.client or "", "priority": a.priority, "due": a.due or "",
              "labels": a.label or [], "assignees": a.assign or [], "details": a.details or "", "links": [],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": x, "done": False} for x in (a.todo or [])],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
+        if data.get("layout") == "split":
+            t["rank"] = key_between(max(ranks) if ranks else None, None)
         hist(t, "created")
         data["tasks"].append(t); assign_nums(data); print(f"added #{t['num']} ({t['id']})")
     mutate(fn, f"Add task: {a.title}")
@@ -895,7 +1340,8 @@ def cmd_kit_check(a):
             if any(t.get("title") == title and t.get("column") != "done" for t in data["tasks"]):
                 print(f"an open card '{title}' already exists"); return
             owner = kit_owner(data)
-            t = {"id": "t_" + uuid.uuid4().hex[:8], "title": title, "column": "todo", "client": "", "priority": "medium", "due": "",
+            ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == "todo" and valid_rank(t.get("rank"))]
+            t = {"id": new_board_id(data, "t_", "cards"), "title": title, "column": "todo", "client": "", "priority": "medium", "due": "",
                  "labels": ["board"] if any(l.get("name") == "board" for l in data.get("labels", [])) else [],
                  "assignees": [owner] if owner else [], "links": [{"title": "Upgrade notes", "url": f"{KIT_GIT}/blob/master/board/kit/UPGRADING.md"}],
                  "details": f"This repo's board tools are kit v{have}; the published kit is v{want}.\n\n"
@@ -906,6 +1352,8 @@ def cmd_kit_check(a):
                                            ["Read UPGRADING.md for each version", "kit-update on a branch", "migrate", "Check repo-specific files",
                                             "Checks pass", "Open and link the PR"]],
                  "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
+            if data.get("layout") == "split":
+                t["rank"] = key_between(max(ranks) if ranks else None, None)
             hist(t, "created by kit-check")
             data["tasks"].append(t); assign_nums(data); print(f"added #{t['num']} for @{owner or '?'}: {title}")
         mutate(fn, f"Add task: Upgrade board tools to kit v{want}")
@@ -931,17 +1379,330 @@ def cmd_kit_update(a):
     open(os.path.join(ROOT, "board", "KIT_VERSION"), "w").write(f"{m['version']}\n")
     print(f"board kit v{have} -> v{m['version']}; changed: " + (", ".join(changed) or "nothing"))
     if not getattr(a, "quiet", False):
-        print("Next: read board/UPGRADING.md for every version after v%d, check this repo's own files, commit on a branch "
-              "(the data migrates on the first write after the merge)." % have)
+        print("Next: read board/UPGRADING.md for every version after v%d. Follow its migration steps, check this repo's own files, "
+              "and commit on a branch." % have)
+
+
+def _doctor_snapshot():
+    if FILE:
+        files, head = _local_snapshot(); mode = "local"
+    elif WRITE == "git":
+        files, head = _git_snapshot(); mode = "git"
+    else:
+        files, head = _api_snapshot(); mode = "api"
+    return files, {"mode": mode, "head": head.get("head") if isinstance(head, dict) else head,
+                   "base_tree": head.get("base_tree") if isinstance(head, dict) else None, "files": files}
+
+
+def doctor_board(fix=False):
+    """Return (issues, fixes, exit code). Each issue is safe to print or serialize."""
+    try:
+        files, state = _doctor_snapshot()
+    except SystemExit as e:
+        return [{"code": "READ", "path": "tasks.json", "message": str(e)}], [], 2
+    issues, fixes, parsed, invalid = [], [], {}, set()
+
+    def problem(code, path, message):
+        issues.append({"code": code, "path": path, "message": message})
+
+    for rel, entry in sorted(files.items()):
+        if rel.startswith(("cards/", "people/")) and not rel.endswith(".json"):
+            problem("FILE_TYPE", rel, "This file is not JSON.")
+            continue
+        if not rel.endswith(".json"):
+            continue
+        try:
+            parsed[rel] = json.loads(entry["text"])
+            entry["obj"] = json.loads(json.dumps(parsed[rel]))
+        except (ValueError, UnicodeError) as e:
+            invalid.add(rel); problem("INVALID_JSON", rel, f"Invalid JSON: {e}.")
+    if "tasks.json" in invalid or "tasks.json" not in parsed:
+        return issues or [{"code": "READ", "path": "tasks.json", "message": "The board settings file is missing."}], fixes, 2
+    root = parsed["tasks.json"]
+    version = root.get("version", 1)
+    if isinstance(version, int) and version > SCHEMA:
+        problem("NEW_SCHEMA", "tasks.json", f"Schema v{version} is newer than this tool (v{SCHEMA}).")
+    split = version == 4 and root.get("layout") == "split"
+    data = dict(root)
+    if split:
+        tasks = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("cards/") and rel.endswith(".json")]
+        people = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("people/") and rel.endswith(".json")]
+    else:
+        tasks = data.setdefault("tasks", []) if isinstance(data.get("tasks", []), list) else []
+        people = data.setdefault("contacts", []) if isinstance(data.get("contacts", []), list) else []
+    data["tasks"], data["contacts"] = tasks, people
+
+    ids, duplicate_ids = {}, False
+    for kind, items in (("task", tasks), ("person", people)):
+        for item in items:
+            ident = item.get("id")
+            if ident in ids:
+                duplicate_ids = True
+                problem("DUPLICATE_ID", "tasks.json", f"{kind.title()} id {ident!r} is also used by {ids[ident]}.")
+            elif ident:
+                ids[ident] = kind
+    nums = {}
+    missing_nums = []
+    for t in tasks:
+        num = t.get("num")
+        if not isinstance(num, int):
+            missing_nums.append(t); problem("NUM_MISSING", f"card {t.get('id', '?')}", "The task number is missing.")
+        elif num in nums:
+            problem("DUPLICATE_NUM", f"card {t.get('id', '?')}", f"Task number #{num} is also used by {nums[num]}.")
+        else:
+            nums[num] = t.get("id", "?")
+    maximum = max(nums or {0: None})
+    if not isinstance(data.get("next_num"), int) or data.get("next_num", 0) <= maximum:
+        problem("NEXT_NUM", "tasks.json", f"next_num must be greater than {maximum}.")
+
+    rename_conflict = False
+    if split:
+        for rel, obj in parsed.items():
+            folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else None
+            if folder and rel.endswith(".json") and obj.get("id") and rel != f"{folder}/{obj['id']}.json":
+                problem("FILE_NAME", rel, f"The file name does not match id {obj['id']}.")
+                if f"{folder}/{obj['id']}.json" in state["files"]:
+                    rename_conflict = True
+
+    archived_ids = {}
+    for rel, obj in parsed.items():
+        if rel.startswith("archive/"):
+            for item in obj.get("tasks", []) + obj.get("contacts", []):
+                if item.get("id"):
+                    archived_ids[item["id"]] = rel
+    for ident in sorted(set(ids) & set(archived_ids)):
+        problem("LIVE_AND_ARCHIVED", archived_ids[ident], f"{ident} is also on the live board. The live item wins.")
+
+    columns = {x.get("id") for x in data.get("columns", [])}
+    labels = {x.get("name") for x in data.get("labels", [])}
+    assignees = {x.get("github") for x in data.get("people", [])}
+    valid_stages = set(stages(data))
+    bad_rank_columns = set()
+    ranks = {}
+    for t in tasks:
+        path = f"card {t.get('id', '?')}"
+        if t.get("column") not in columns:
+            problem("COLUMN", path, f"Column {t.get('column')!r} does not exist.")
+        for label in t.get("labels", []):
+            if label not in labels:
+                problem("LABEL", path, f"Label {label!r} does not exist.")
+        for user in t.get("assignees", []):
+            if user not in assignees:
+                problem("ASSIGNEE", path, f"Assignee {user!r} does not exist.")
+        rank = t.get("rank")
+        if split and not valid_rank(rank):
+            problem("RANK", path, "The rank is missing or invalid."); bad_rank_columns.add(t.get("column"))
+        elif split:
+            key = (t.get("column"), rank)
+            if key in ranks:
+                problem("DUPLICATE_RANK", path, f"Rank {rank!r} is also used by {ranks[key]} in this column."); bad_rank_columns.add(t.get("column"))
+            else:
+                ranks[key] = t.get("id", "?")
+        claim = t.get("claim")
+        if claim:
+            required = ("agent", "on_behalf_of", "session_id", "status", "claimed_at", "heartbeat_at")
+            absent = [x for x in required if not claim.get(x)]
+            if absent:
+                problem("CLAIM_FIELDS", path, "The claim is missing: " + ", ".join(absent) + ".")
+            if claim.get("status") == "running" and (claim.get("heartbeat_at") or claim.get("claimed_at")):
+                try:
+                    age = (dt.datetime.now(dt.timezone.utc) - parse(claim.get("heartbeat_at") or claim["claimed_at"])).total_seconds() / 60
+                    limit = data.get("settings", {}).get("stale_after_minutes", 30)
+                    if age > limit:
+                        problem("STALE_CLAIM", path, f"The running claim has no heartbeat for {int(age)} minutes.")
+                except (ValueError, TypeError):
+                    problem("CLAIM_FIELDS", path, "The claim heartbeat time is invalid.")
+    for p in people:
+        if p.get("stage") not in valid_stages:
+            problem("STAGE", f"person {p.get('id', '?')}", f"Stage {p.get('stage')!r} does not exist.")
+    for item in tasks + people:
+        for comment in item.get("comments", []):
+            absent = [x for x in ("id", "at", "by") if not comment.get(x)]
+            if absent:
+                problem("COMMENT_FIELDS", f"item {item.get('id', '?')}", "A comment is missing: " + ", ".join(absent) + ".")
+
+    root_size = state["files"]["tasks.json"].get("size", len(state["files"]["tasks.json"]["text"].encode()))
+    if not split and root_size > 600 * 1024:
+        problem("BOARD_SIZE", "tasks.json", "The board file is larger than 600 KB.")
+    if split:
+        total = sum(x.get("size", len(x["text"].encode())) for x in state["files"].values())
+        if total > 5 * 1024 * 1024:
+            problem("BOARD_SIZE", "board", "The board files total more than 5 MB.")
+        for rel, entry in state["files"].items():
+            if entry.get("size", len(entry["text"].encode())) > 200 * 1024:
+                problem("FILE_SIZE", rel, "This board file is larger than 200 KB.")
+
+    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)):
+        before = json.loads(json.dumps(data))
+        if missing_nums or not isinstance(data.get("next_num"), int) or data.get("next_num", 0) <= maximum:
+            assign_nums(data); fixes.append("assigned missing task numbers and raised next_num")
+        for column in bad_rank_columns:
+            previous = None
+            for t in sorted([x for x in tasks if x.get("column") == column], key=task_order_key):
+                t["rank"] = key_between(previous, None); previous = t["rank"]
+            fixes.append(f"rebuilt ranks in column {column!r}")
+        for item in tasks + people:
+            for comment in item.get("comments", []):
+                if not comment.get("id"):
+                    comment["id"] = "c_" + uuid.uuid4().hex[:6]
+                    fixes.append(f"added a comment id on {item.get('id', '?')}")
+        if split:
+            for rel, obj in parsed.items():
+                folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else None
+                canonical = f"{folder}/{obj.get('id')}.json" if folder and obj.get("id") else rel
+                if folder and rel != canonical and canonical not in state["files"]:
+                    fixes.append(f"renamed {rel} to {canonical}")
+        # Invalid JSON entries are removed from the change tracker. They remain
+        # byte-for-byte untouched even when other safe fixes are saved.
+        safe_state = dict(state); safe_state["files"] = {p: e for p, e in state["files"].items() if p not in invalid}
+        if before != data or any(x.startswith("renamed ") for x in fixes):
+            try:
+                saved = save_changes(data, safe_state, "Repair board data")
+            except UseGit:
+                global WRITE
+                WRITE = "git"
+                return doctor_board(fix)
+            if not saved:
+                return issues + [{"code": "BUSY", "path": "board", "message": "The board changed during repair."}], fixes, 2
+    return issues, fixes, 1 if issues else 0
+
+
+def cmd_doctor(a):
+    if a.fix:
+        with local_lock():
+            issues, fixes, code = doctor_board(True)
+    else:
+        issues, fixes, code = doctor_board(False)
+    if a.json:
+        print(json.dumps({"healthy": not issues, "issues": issues, "fixes": fixes}, indent=2, ensure_ascii=False))
+    else:
+        for issue in issues:
+            print(f"{issue['code']} {issue['path']}: {issue['message']}")
+        if not issues:
+            print("OK: the board is healthy.")
+        if fixes:
+            for change in fixes:
+                print(f"FIXED: {change}")
+        elif a.fix and issues:
+            print("No safe fixes were available.")
+    return code
+
+
+def migration_counts(data):
+    items = data.get("tasks", []) + data.get("contacts", [])
+    return {"tasks": len(data.get("tasks", [])), "people": len(data.get("contacts", [])),
+            "comments": sum(len(x.get("comments", [])) for x in items),
+            "history": sum(len(x.get("history", [])) for x in items),
+            "todos": sum(len(x.get("todos", [])) for x in data.get("tasks", []))}
+
+
+def migration_files(data, state):
+    """The complete v4 file set. Kept separate so verification tests can plant a bad file."""
+    return _desired_files(data, state)
+
+
+def load_v4_from_files(files):
+    root = json.loads(files["tasks.json"])
+    out = dict(root)
+    out["tasks"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("cards/") and path.endswith(".json")]
+    out["contacts"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("people/") and path.endswith(".json")]
+    return out
+
+
+def migration_differences(before, after):
+    """Compare every v3 field. Only the new v4 layout fields and card rank are ignored."""
+    def normal(d):
+        d = json.loads(json.dumps(d))
+        d.pop("layout", None)
+        d["version"] = 3
+        for t in d.get("tasks", []):
+            t.pop("rank", None)
+        d["tasks"] = sorted(d.get("tasks", []), key=lambda x: x.get("id", ""))
+        d["contacts"] = sorted(d.get("contacts", []), key=lambda x: x.get("id", ""))
+        return d
+    a, b = normal(before), normal(after)
+    if a == b:
+        return []
+    diffs = []
+    for key in sorted(set(a) | set(b)):
+        if a.get(key) != b.get(key):
+            diffs.append(key)
+    return diffs
+
+
+def _backup_tag(state):
+    if state["mode"] == "local":
+        return None
+    tag = "keeptrack-v3-backup-" + dt.datetime.now().strftime("%Y%m%d-%H%M")
+    if state["mode"] == "git":
+        rc, existing, _ = git("ls-remote", "--tags", "origin", f"refs/tags/{tag}")
+        if rc == 0 and existing:
+            if existing.split()[0] == state["head"]:
+                return tag
+            sys.exit(f"backup tag {tag} already exists on a different commit; wait one minute and try again")
+        rc, _, err = git("push", "-q", "origin", f"{state['head']}:refs/tags/{tag}")
+        if rc:
+            sys.exit(f"could not create backup tag {tag}: {err}")
+    else:
+        ref = urllib.parse.quote(tag, safe="")
+        rc, out, _ = gh(f"repos/{REPO}/git/ref/tags/{ref}")
+        if rc == 0:
+            if json.loads(out).get("object", {}).get("sha") == state["head"]:
+                return tag
+            sys.exit(f"backup tag {tag} already exists on a different commit; wait one minute and try again")
+        rc, out, err = gh("-X", "POST", f"repos/{REPO}/git/refs", "--input", "-",
+                          body={"ref": f"refs/tags/{tag}", "sha": state["head"]})
+        if rc:
+            _api_error(rc, out, err)
+    return tag
 
 
 def cmd_migrate(a):
-    def fn(data):
-        print(f"migrated tasks.json to schema v{SCHEMA}")  # mutate() has already applied the steps
-    data, _ = load(); guard_schema(data)
-    if data.get("version", 1) == SCHEMA:
-        print(f"tasks.json is already schema v{SCHEMA}: nothing to migrate"); return
-    mutate(fn, f"Migrate tasks.json to schema v{SCHEMA}")
+    global WRITE
+    if getattr(a, "to", 4) != 4:
+        sys.exit("this tool can migrate only to schema v4")
+    with (contextlib.nullcontext() if getattr(a, "dry_run", False) else local_lock()):
+        tag = None
+        for attempt in range(6):
+            data, state = load(); guard_schema(data)
+            version = data.get("version", 1)
+            if version == 4:
+                sys.exit("tasks.json is already schema v4; migration refused")
+            if version != 3:
+                migrate_data(data, 3)
+            before = json.loads(json.dumps(data))
+            migrate_data(data, 4)
+            files = migration_files(data, state)
+            if attempt == 0:
+                counts = migration_counts(before)
+                print(f"schema v3 -> v4: {counts['tasks']} tasks, {counts['people']} people, {counts['comments']} comments, "
+                      f"{counts['history']} history lines, {counts['todos']} to-dos")
+                for path in sorted(files):
+                    if path == "tasks.json" or path.startswith(("cards/", "people/")):
+                        print(f"  write {_remote_path(path) if not FILE else _local_path(path)}")
+                if getattr(a, "dry_run", False):
+                    print("dry run: wrote nothing")
+                    return
+            try:
+                check = load_v4_from_files(files)
+            except (KeyError, ValueError) as e:
+                sys.exit(f"migration count check failed: cannot load the new layout ({e}); wrote nothing")
+            diffs = migration_differences(before, check)
+            if diffs:
+                sys.exit("migration count check failed; fields differ: " + ", ".join(diffs) + ". Wrote nothing.")
+            try:
+                if tag is None:
+                    tag = _backup_tag(state)
+                saved = save_changes(data, state, "Migrate board storage to schema v4")
+            except UseGit:
+                WRITE = "git"
+                tag = None
+                continue
+            if saved:
+                print(f"migrated tasks.json to schema v4" + (f" (backup tag: {tag})" if tag else ""))
+                return
+            time.sleep(0.4 * (attempt + 1))
+        sys.exit("could not migrate after retries (board busy)")
 
 
 def cmd_kit_owner(a):
@@ -982,13 +1743,13 @@ def cmd_init(a):
     if os.path.exists(tj):
         print(f"kept existing {PATH}")
     else:
-        data = {"version": SCHEMA, "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
+        data = {"version": SCHEMA, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
                 "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"},
                             {"id": "in-progress", "name": "In progress"}, {"id": "done", "name": "Done"}],
                 "people": people, "agents": ["claude", "codex"], "clients": a.client or ["General"],
                 "labels": [{"name": "follow-up", "color": "#b38600"}, {"name": "decision", "color": "#e56910"},
                            {"name": "admin", "color": "#6b778c"}, {"name": "board", "color": "#5e4db2"}],
-                "tasks": [], "next_num": 1}
+                "next_num": 1}
         os.makedirs(os.path.dirname(tj), exist_ok=True)
         open(tj, "w").write(json.dumps(data, indent=2, ensure_ascii=False) + "\n"); print(f"wrote {PATH} (empty board, upgrade owner @{people[0]['github']})")
     print("Next: commit and push to the default branch, then add the board in the web board: Settings → Boards → Add an existing board.")
@@ -1163,7 +1924,7 @@ def cmd_person_add(a):
                or (a.email and p.get("email") and p["email"].lower() == a.email.lower())]
         if dup and not a.force:
             print(f"already on the board: {person_line(dup[0])}  (nothing added; use person-set to change it, or --force)"); return
-        p = {"id": "p_" + uuid.uuid4().hex[:8], "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "",
+        p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "",
              "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
              "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": who_am_i()}
         set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p)}")
@@ -1226,6 +1987,7 @@ def cmd_client_link(a):
 
 # ---- archive: old done tasks, old Lost people and long histories move to <board dir>/archive/<year>.json ----------
 ARCHIVE_DEFAULTS = {"done_days": 90, "lost_days": 180, "keep_history": 20}
+ARCHIVE_SCHEMA = 3
 
 
 def archive_rules(data):
@@ -1303,7 +2065,7 @@ def archive_plan(data, rules, today=None):
 
 def archive_merge(cur, part, year):
     """Add a plan part to an archive file's data (replace by id, so a retried run does not duplicate)."""
-    cur = cur or {"version": SCHEMA, "archive": True, "year": year, "tasks": [], "contacts": [], "history": {}}
+    cur = cur or {"version": ARCHIVE_SCHEMA, "archive": True, "year": year, "tasks": [], "contacts": [], "history": {}}
     for k in ("tasks", "contacts"):
         ids = {x["id"] for x in part[k]}
         cur[k] = [x for x in cur.get(k, []) if x["id"] not in ids] + part[k]
@@ -1322,11 +2084,22 @@ def archive_index(data, year, cur):
 def read_archive(year, base):
     """(data or None, sha) of one archive file, from the same place as the board file."""
     pth = archive_path(year)
+    rel = f"archive/{check_year(year)}.json"
+    if isinstance(base, dict) and rel in base.get("files", {}):
+        entry = base["files"][rel]
+        try:
+            return json.loads(entry["text"]), entry.get("sha")
+        except ValueError as e:
+            sys.exit(f"cannot read {pth}: invalid JSON ({e})")
     if FILE:
         f = local_archive_file(year)
-        return (json.load(open(f)) if os.path.exists(f) else None), None
+        if not os.path.exists(f):
+            return None, None
+        with open(f, encoding="utf-8") as src:
+            return json.load(src), None
     if WRITE == "git":
-        rc, raw, _ = git("show", f"{base}:{pth}")
+        head = base.get("head") if isinstance(base, dict) else base
+        rc, raw, _ = git("show", f"{head}:{pth}")
         return (json.loads(raw) if rc == 0 else None), None
     hit = cached_read(pth)
     if hit:
@@ -1366,7 +2139,7 @@ def _cmd_archive(a):
     global WRITE
     for attempt in range(6):
         data, base = load()
-        guard_schema(data); migrate_data(data)
+        guard_schema(data); migrate_data(data, min(SCHEMA, 3))
         rules = archive_rules(data)
         for k in ("done_days", "lost_days", "keep_history"):
             if getattr(a, k) is not None:
@@ -1390,17 +2163,8 @@ def _cmd_archive(a):
                 cur, sha = read_archive(y, base)
                 cur = archive_merge(cur, p, y); archive_index(data, y, cur); files[y] = (cur, sha)
             assign_nums(data)
-            if WRITE == "git" or FILE:
-                text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-                if FILE:
-                    for y, (cur, sha) in files.items(): write_archive(y, cur, sha, msg)
-                    ok = save(data, base, msg)
-                else:
-                    ok = git_save(text, base, msg, {archive_path(y): json.dumps(c, indent=2, ensure_ascii=False) + "\n" for y, (c, _) in files.items()})
-            else:   # API: archive files first (merging by id makes a retry safe), then the board file
-                if not all(write_archive(y, c, sha, msg) for y, (c, sha) in files.items()):
-                    time.sleep(0.4 * (attempt + 1)); continue
-                ok = save(data, base, msg)
+            extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
+            ok = save_changes(data, base, msg, extra=extra)
         except UseGit:
             WRITE = "git"; continue
         if ok:
@@ -1466,10 +2230,13 @@ def cmd_unarchive(a):
 def _cmd_unarchive(a):
     global WRITE
     for attempt in range(6):
-        data, base = load(); guard_schema(data); migrate_data(data)
+        data, base = load(); guard_schema(data); migrate_data(data, min(SCHEMA, 3))
         y, k, item, cur, sha = find_archived(data, base, a.ref.lstrip("#"))
         label = item.get("title") or item.get("name")
         if not any(x["id"] == item["id"] for x in data.setdefault(k, [])):
+            if k == "tasks" and data.get("layout") == "split" and not valid_rank(item.get("rank")):
+                ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
+                item["rank"] = key_between(max(ranks) if ranks else None, None)
             data[k].append(item); hist(item, f"restored from {archive_path(y)}")
         cur[k] = [x for x in cur[k] if x["id"] != item["id"]]
         idx = data.setdefault("archive", {}).setdefault("files", {}).setdefault(y, {"tasks": 0, "contacts": 0})
@@ -1477,17 +2244,11 @@ def _cmd_unarchive(a):
         assign_nums(data)
         msg = f"Restore {label} from the archive"
         try:
-            if WRITE == "git":   # one commit: the board and the archive change together, so neither can be left behind
-                ok = git_save(json.dumps(data, indent=2, ensure_ascii=False) + "\n", base, msg,
-                              {archive_path(y): json.dumps(cur, indent=2, ensure_ascii=False) + "\n"})
-            else:   # board first: a failure after it leaves a duplicate (harmless, the next archive run removes it), never a lost record
-                ok = save(data, base, msg)
+            ok = save_changes(data, base, msg, extra={f"archive/{y}.json": _json_text(cur)})
         except UseGit:
             WRITE = "git"; continue
         if not ok:
             time.sleep(0.4 * (attempt + 1)); continue
-        if WRITE != "git" and not write_archive(y, cur, sha, f"Restore {item['id']} from the archive"):
-            print("note: restored, but the archive copy stays until the next archive run")
         print(f"restored {label}"); return
     sys.exit("could not restore after retries (board busy)")
 
@@ -1516,7 +2277,9 @@ def main():
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
-    s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column"); s.add_argument("--note"); s.set_defaults(f=cmd_move)
+    s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column")
+    s.add_argument("--before"); s.add_argument("--after"); s.add_argument("--top", action="store_true")
+    s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); s.set_defaults(f=cmd_move)
     s = sub.add_parser("assign"); s.add_argument("id"); s.add_argument("users", nargs="+"); s.add_argument("--add", action="store_true")
     s.add_argument("--remove", action="store_true"); s.add_argument("--note"); s.set_defaults(f=cmd_assign)
     s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_link)
@@ -1531,7 +2294,8 @@ def main():
     s = sub.add_parser("kit-check"); s.add_argument("--card", action="store_true"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_kit_check)
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
     s.set_defaults(f=cmd_kit_update)
-    s = sub.add_parser("migrate"); s.set_defaults(f=cmd_migrate)
+    s = sub.add_parser("migrate"); s.add_argument("--to", type=int, default=4); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
+    s = sub.add_parser("doctor"); s.add_argument("--fix", action="store_true"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_doctor)
     s = sub.add_parser("kit-owner"); s.add_argument("user", nargs="?"); s.set_defaults(f=cmd_kit_owner)
     s = sub.add_parser("init"); s.add_argument("--person", action="append", required=True, help="github-user:Display Name (repeatable; the first is the upgrade owner)")
     s.add_argument("--client", action="append"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_init)
@@ -1560,8 +2324,8 @@ def main():
     s = sub.add_parser("client-link", help="link a client to a file store folder"); s.add_argument("client"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_client_link)
     a = p.parse_args()
     FILE = a.file
-    a.f(a)
+    return a.f(a) or 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
