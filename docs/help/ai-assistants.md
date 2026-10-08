@@ -13,6 +13,8 @@ Not sure which assistant to use, or whether you need Python? See [Where your ass
 - "Move Tom to Proposal." / "What is in my pipeline?"
 
 ## Install
+The quickest way: in the web board open **⚙️ Settings → Agents → An assistant in your chat app**, select your tool, and copy the steps.
+
 | Tool | How |
 |---|---|
 | Claude Desktop or Cowork | **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. |
@@ -29,6 +31,9 @@ The first time, the assistant asks for your board repo (for example `your-name/m
 It needs access to your repo in one of these ways:
 - a GitHub login on your computer (`gh auth login`), or
 - a token in an environment variable. Tell the assistant the **name** of the variable, never the token itself.
+
+## @claude on the board
+Type **@claude** in a task comment and your own Claude routine starts work on that task. To set it up, open **⚙️ Settings → Agents** and tick **I use @claude**. Five steps with a ✓ for each, then a real test. Details: [ROUTINE-SETUP.md](../../board/kit/ROUTINE-SETUP.md).
 
 ## Rules the assistant follows
 - It never sends messages, emails or quotes. It writes drafts.

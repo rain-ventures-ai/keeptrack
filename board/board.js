@@ -17,7 +17,7 @@
     token: LS.get('kb_token'), me: LS.get('kb_me', ''), api: LS.get('kb_api', 'https://api.github.com') // api override is for local testing only
   });
   // ---- several boards: each repo keeps its own branch, path, token and Claude routine in kb_boards (this browser only) ----
-  const BOARD_KEYS = ['branch', 'path', 'token', 'claude_url', 'claude_token'], REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+  const BOARD_KEYS = ['branch', 'path', 'token', 'claude_url', 'claude_token', 'claude_steps', 'claude_ok'], REPO_RE = /^[\w.-]+\/[\w.-]+$/;
   const boardsMap = () => { try { const o = JSON.parse(LS.get('kb_boards', '{}')); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } };
   function stashBoard() { const repo = LS.get('kb_repo'); if (!repo) return; const m = boardsMap(), e = {};
     BOARD_KEYS.forEach(k => { const v = LS.get('kb_' + k); if (v) e[k] = v; }); m[repo] = e; LS.set('kb_boards', JSON.stringify(m)); }
@@ -1507,11 +1507,16 @@
   // which agents this person uses (Settings → Agents); before they choose, Claude counts as on if its routine is set up
   const KNOWN_AGENTS = ['claude', 'codex'];
   const myAgents = () => { const v = LS.get('kb_agents', null); return v === null ? (claudeReady() ? ['claude'] : []) : v.split(',').filter(a => KNOWN_AGENTS.includes(a)); };
-  const showAgentBoxes = () => { $('boxClaude').hidden = !$('sUseClaude').checked; $('boxCodex').hidden = !$('sUseCodex').checked; };
-  $('sUseClaude').onchange = $('sUseCodex').onchange = showAgentBoxes;
   const cronFetch = (method, path, body) => fetch(CRON + path, { method, headers: { Authorization: 'Bearer ' + claudeCfg().cron, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const pad = n => String(n).padStart(2, '0');
   const utcStamp = d => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00`;
+  const hhmm = d => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const nextRun = () => new Date(Math.ceil((Date.now() + 75000) / 60000) * 60000);   // cron-job.org runs on whole minutes: the next one at least ~75 s away
+  const onceAt = at => { const exp = new Date(at.getTime() + 60000); return { timezone: 'UTC', expiresAt: Number(utcStamp(exp)), hours: [at.getUTCHours()], mdays: [at.getUTCDate()], months: [at.getUTCMonth() + 1], wdays: [-1], minutes: [at.getUTCMinutes()] }; };
+  // relay log (this browser only, last 30 events): what each send did, for "Test and fix problems". Never holds a token.
+  const scrub = v => String(v || '').replace(/sk-ant-[\w-]+/g, 'sk-ant-…').replace(/Bearer\s+\S+/gi, 'Bearer …').slice(0, 240);
+  const relayLog = () => { try { const a = JSON.parse(LS.get('kb_relay_log', '[]')); return Array.isArray(a) ? a : []; } catch { return []; } };
+  function rlog(num, ev, detail, ok) { const a = relayLog(); a.unshift({ at: nowIso(), num, ev, detail: scrub(detail), ok }); LS.set('kb_relay_log', JSON.stringify(a.slice(0, 30))); if (!$('cwDebug').hidden && $('cwDebug').open) renderRelayLog(); }
   function routineText(t, who, cid) {
     const { c, skill, agents } = boardInfo();
     return [`Board request from @${who} for task #${t.num}${cid ? ` (comment ${cid})` : ''}. Board repo: ${c.repo} (branch ${c.branch}).`,
@@ -1522,19 +1527,19 @@
       `3. Report on the board only: comment '#${t.num}' for progress or questions, move / assign / link as needed. When finished: comment with the outcome, assign the task back to ${who}, and run keeptrack.py done '#${t.num}' --note "<result>".`].join('\n');
   }
   async function sendToClaude(t, who, cid) {   // returns { jobId } or throws
-    const c = claudeCfg(), now = new Date(), at = new Date(Math.ceil((now.getTime() + 75000) / 60000) * 60000), exp = new Date(at.getTime() + 60000);
+    const c = claudeCfg(), now = new Date(), at = nextRun();
     const job = { url: c.url, enabled: true, saveResponses: true, title: `kbclaude:${Math.floor(now.getTime() / 1000)}:#${t.num}`, requestMethod: 1,
       requestTimeout: 30, redirectSuccess: false,
       extendedData: { headers: { Authorization: 'Bearer ' + c.token, 'anthropic-beta': 'experimental-cc-routine-2026-04-01', 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }, body: JSON.stringify({ text: routineText(t, who, cid) }) },
-      schedule: { timezone: 'UTC', expiresAt: Number(utcStamp(exp)), hours: [at.getUTCHours()], mdays: [at.getUTCDate()], months: [at.getUTCMonth() + 1], wdays: [-1], minutes: [at.getUTCMinutes()] } };
-    const r = await cronFetch('PUT', '/jobs', { job });
-    if (r.status === 401 || r.status === 403) throw new Error('cron-job.org rejected the API key');
-    if (r.status === 429) throw new Error('cron-job.org rate limit reached, try again in a minute');
-    if (!r.ok) throw new Error('cron-job.org error ' + r.status);
-    return { jobId: (await r.json()).jobId, at };
+      schedule: onceAt(at) };
+    let r; try { r = await cronFetch('PUT', '/jobs', { job }); } catch { rlog(t.num, 'Not sent', 'could not reach cron-job.org', false); throw new Error('could not reach cron-job.org'); }
+    const fail = r.status === 401 || r.status === 403 ? 'cron-job.org rejected the API key' : r.status === 429 ? 'cron-job.org rate limit reached, try again in a minute' : !r.ok ? 'cron-job.org error ' + r.status : '';
+    if (fail) { rlog(t.num, 'Not sent', fail, false); throw new Error(fail); }
+    const jobId = (await r.json()).jobId; rlog(t.num, 'Job made', `cron-job.org job ${jobId} runs at ${hhmm(at)}`, true);
+    return { jobId, at };
   }
   async function watchClaudeJob(jobId, taskId, who) {   // find the session URL in the routine's response, record it on the card, delete the job
-    const sleep = ms => new Promise(r => setTimeout(r, ms)); let session = null, err = '', noBody = 0;
+    const sleep = ms => new Promise(r => setTimeout(r, ms)), num = (state.tasks.find(x => x.id === taskId) || {}).num; let session = null, err = '', noBody = 0, logged = false;
     try {
       for (let i = 0; i < 24 && !session && !err; i++) {
         await sleep(FAST ? 300 : (i === 0 ? 70000 : 15000));
@@ -1543,11 +1548,13 @@
         const it = h[0]; if (it.status && it.status !== 1 && it.httpStatus && it.httpStatus >= 400) err = `routine returned HTTP ${it.httpStatus}`;
         const dr = await cronFetch('GET', `/jobs/${jobId}/history/${it.identifier}`); let body = '';
         if (dr.ok) { const d = (await dr.json()).jobHistoryDetails || {}; body = d.body || ''; }
+        if (!logged) { logged = true; rlog(num, 'Job ran', `The routine answered HTTP ${it.httpStatus || '?'}${body ? ': ' + body : ''}`, !err); }
         const m = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/.exec(body); if (m) session = { url: m[0], id: m[0].split('/').pop() };
         else if (!err && it.httpStatus && it.httpStatus < 400 && ++noBody >= 3) session = { url: routinePage(), id: 'started' };   // started, but cron-job.org kept no reply: link the routine's run list
       }
     } catch (e) { err = 'could not read the result from cron-job.org'; }
-    try { await cronFetch('DELETE', `/jobs/${jobId}`); } catch {}   // never leave the routine token parked there
+    rlog(num, session ? 'Claude started' : 'Failed', session ? session.url : (err || 'no response from the routine after 6 minutes'), !!session);
+    try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there
     await edit(taskId, t => {
       if (!t.claim || String(t.claim.session_id || '').indexOf('pending-') !== 0) {   // the routine already took over the claim (or finished): add the link if it has none
         const k = t.claim && t.claim.agent === 'claude' ? t.claim : (t.last_run && t.last_run.agent === 'claude' ? t.last_run : null);
@@ -1556,7 +1563,7 @@
       if (session) { t.claim.session_id = session.id; t.claim.session_url = session.url; t.claim.note = `Claude is working for @${who}`; t.claim.heartbeat_at = nowIso(); }
       else { t.claim.status = 'stuck'; t.claim.note = `Send to Claude failed: ${err || 'no response from the routine'}`; }
     }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed');
-    if (!session) toast('Send to Claude failed: ' + (err || 'no response'), true); else toast('Claude is working on it');
+    if (!session) toast('Send to Claude failed: ' + (err || 'no response'), true); else { toast('Claude is working on it'); if (!LS.get('kb_claude_ok')) { LS.set('kb_claude_ok', nowIso()); stashBoard(); } }
   }
   async function sweepClaudeJobs() {   // best-effort: remove finished/abandoned relay jobs (and the token they hold)
     if (!claudeReady()) return;
@@ -1588,21 +1595,141 @@
       'Rules: never type, paste, read back or store a secret (routine trigger token, BOARD_TOKEN, cron-job.org API key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Remove all connectors from the routine. Finish by running the verification checklist and the first test from the runbook and tell me what passed and failed.'].join('\n'),
       'Setup prompt copied. Paste it into a new chat with Claude.');
   };
-  $('sClaudeSave').onclick = () => {
-    const u = $('sClaudeUrl').value.trim(), t = $('sClaudeTok').value.trim(), k = $('sCronKey').value.trim(), m = $('sClaudeMsg');
-    if (u && !FIRE_RE.test(u)) { m.textContent = 'The routine URL should look like https://api.anthropic.com/v1/claude_code/routines/trig_…/fire'; m.className = 'hint bad'; return; }
-    LS.set('kb_claude_url', u); LS.set('kb_claude_token', t); LS.set('kb_cron_key', k);
-    LS.set('kb_agents', KNOWN_AGENTS.filter(a => $(a === 'claude' ? 'sUseClaude' : 'sUseCodex').checked).join(','));
-    stashBoard();
-    m.textContent = 'Saved in this browser.'; m.className = 'hint ok'; toast('Agent settings saved');
+  // ---- Settings → Agents: a guided "Connect Claude" checklist. Each step shows ✓ when it is done, values save as you
+  // type, and step 5 sends a real test task to the routine. Which steps are done is kept per board (BOARD_KEYS).
+  const LOADER = "You work for the person named in the routine-fire-payload block that starts this run. It gives the task number (like #12)\nand who asked. Your full instructions live in this repository, which is already cloned: read board/routine-prompt.md now\nand follow it exactly, using the task number and requester from the payload. Do nothing else until you have read it.";   // the same text as board/kit/routine-loader.txt (a unit test checks this)
+  const showAgentBoxes = () => { $('boxClaude').hidden = !$('sUseClaude').checked; $('boxCodex').hidden = !$('sUseCodex').checked; };
+  const saveAgents = () => LS.set('kb_agents', KNOWN_AGENTS.filter(a => $(a === 'claude' ? 'sUseClaude' : 'sUseCodex').checked).join(','));
+  $('sUseClaude').onchange = $('sUseCodex').onchange = () => { saveAgents(); showAgentBoxes(); cwRender(); };
+  const khash = v => { let h = 5381; for (const ch of String(v)) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h.toString(36); };   // remembers which key was tested, without keeping the key twice
+  const cronOk = () => { const k = claudeCfg().cron; return !!k && LS.get('kb_cron_ok') === khash(k); };
+  const cwMarks = () => LS.get('kb_claude_steps').split(',').filter(Boolean);
+  const cwMark = n => { const m = new Set(cwMarks()); m.add(String(n)); LS.set('kb_claude_steps', [...m].sort().join(',')); stashBoard(); };
+  function cwState() {   // [routine made, BOARD_TOKEN given, trigger pasted, cron-job.org key works, a real run started]
+    const c = claudeCfg(), m = cwMarks(), works = !!LS.get('kb_claude_ok'), trig = FIRE_RE.test(c.url) && !!c.token;
+    return [m.includes('1') || trig || works, m.includes('2') || works, trig, cronOk(), works];
+  }
+  let cwOpen = 0;   // the step the person opened by hand (0: the first step that is not done, -1: none)
+  function cwChip() {
+    const ch = $('agClaudeChip'), st = cwState(), on = $('sUseClaude').checked, next = st.indexOf(false) + 1;
+    ch.textContent = !on ? 'Off' : st[4] ? '✓ Working' : next === 5 ? 'Ready to test' : st.some(Boolean) ? `Step ${next} of 5` : 'Not set up';
+    ch.className = 'agchip' + (!on ? '' : st[4] ? ' ok' : ' warn');
+  }
+  function cwRender() {
+    const c = cfg(), st = cwState(), open = cwOpen || st.indexOf(false) + 1, owner = (c.repo || '').split('/')[0];
+    $('cwName').textContent = `Board assistant (${c.me || 'your name'})`; $('cwRepo').textContent = $('cwRepo2').textContent = c.repo || 'your board repo'; $('cwLoader').textContent = LOADER;
+    $('cwTokLink').href = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({ name: 'Keeptrack routine', description: `Lets my Claude routine update the board in ${c.repo}`, ...(owner ? { target_name: owner } : {}), expires_in: '90', contents: 'write' });
+    document.querySelectorAll('#cwSteps .cw').forEach(li => { const n = +li.dataset.step, done = st[n - 1];
+      li.classList.toggle('done', done); li.classList.toggle('open', n === open);
+      li.querySelector('.cwst').textContent = done ? '✓' : ''; li.querySelector('.cwh').setAttribute('aria-expanded', String(n === open)); });
+    cwTrigCheck(); cwChip();
+  }
+  document.querySelectorAll('#cwSteps .cwh').forEach(h => { h.onclick = () => { const n = +h.parentNode.dataset.step; cwOpen = h.parentNode.classList.contains('open') ? -1 : n; cwRender(); }; });
+  document.querySelectorAll('[data-cw-done]').forEach(b => { b.onclick = () => { cwMark(b.dataset.cwDone); cwOpen = 0; cwRender(); }; });
+  document.querySelectorAll('[data-cw-copy]').forEach(b => { b.onclick = () => copyText($(b.dataset.cwCopy).textContent, 'Copied'); });
+  const ckRow = (box, ok, text, link) => { const d = el('div', 'wck ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'wait'), (ok === true ? '✓ ' : ok === false ? '✕ ' : '… ') + text);
+    if (link) { const a = el('a', null, link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; d.append(' ', a); } box.append(d); return d; };
+  function cwTrigCheck() {
+    const box = $('cwTrigCk'), u = $('sClaudeUrl').value.trim(), t = $('sClaudeTok').value.trim(); box.textContent = '';
+    if (u) ckRow(box, FIRE_RE.test(u), FIRE_RE.test(u) ? 'The URL looks right' : 'The URL must look like https://api.anthropic.com/v1/claude_code/routines/trig_…/fire');
+    if (t) ckRow(box, true, 'Token added');
+  }
+  const cwSave = (k, v) => { const was = cwState().join(); LS.set(k, v); stashBoard(); if (cwState().join() !== was) { cwOpen = 0; cwRender(); } else cwTrigCheck(); };
+  $('sClaudeUrl').oninput = () => { const u = $('sClaudeUrl').value.trim(); if (!u || FIRE_RE.test(u)) cwSave('kb_claude_url', u); else cwTrigCheck(); };
+  $('sClaudeTok').oninput = () => cwSave('kb_claude_token', $('sClaudeTok').value.trim());
+  async function cronTest() {
+    const box = $('cwCronCk'), k = claudeCfg().cron; box.textContent = ''; if (!k) return;
+    const was = cwState().join(); ckRow(box, null, 'Checking the key…');
+    try { const r = await cronFetch('GET', '/jobs'); if (k !== claudeCfg().cron) return; box.textContent = '';
+      if (r.ok) { LS.set('kb_cron_ok', khash(k)); ckRow(box, true, 'The key works'); }
+      else { LS.del('kb_cron_ok'); ckRow(box, false, r.status === 401 || r.status === 403 ? 'cron-job.org did not accept this key. Copy it again.' : 'cron-job.org error ' + r.status); }
+    } catch { box.textContent = ''; ckRow(box, false, 'Could not reach cron-job.org. Check your connection.'); }
+    if (cwState().join() !== was) { cwOpen = 0; cwRender(); } else cwChip();
+  }
+  let cronTmr; $('sCronKey').oninput = () => { LS.set('kb_cron_key', $('sCronKey').value.trim()); LS.del('kb_cron_ok'); cwChip(); clearTimeout(cronTmr); cronTmr = setTimeout(cronTest, 600); };
+  $('cwTest').onclick = async () => {
+    const box = $('cwTestCk'), btn = $('cwTest'), who = cfg().me; box.textContent = '';
+    if (!claudeReady()) { ckRow(box, false, 'Finish steps 3 and 4 first.'); return; }
+    if (!who) { ckRow(box, false, 'Add your GitHub username in Settings → Connection first.'); return; }
+    if (ro) { ckRow(box, false, 'This board is read-only here, so the test cannot make a task.'); return; }
+    btn.disabled = true;
+    const id = uid(), cid = 'c_' + Date.now().toString(36), at = nowIso(), title = 'Test: Claude says hello',
+      text = '@claude This is a test from Settings → Agents. Add a comment that says hello, then mark this task done.';
+    await mutate(n => { n.tasks.push({ id, title, column: reopenColId(), client: '', priority: 'low', due: '', labels: [], assignees: [who], details: 'A test of the @claude connection. You can delete this task.', links: [], contacts: [], todos: [],
+      comments: [{ id: cid, at, by: who, text }], history: [], created: at, updated: at, createdBy: who, updatedBy: who,
+      claim: { agent: 'claude', on_behalf_of: who, session_id: 'pending-' + Date.now().toString(36), session_url: '', host: 'cron-job.org relay', status: 'running', note: `Sent to Claude by @${who}; waiting for the routine to start (about 1 to 2 minutes)`, claimed_at: at, heartbeat_at: at } }); }, `Add task: ${title}`);
+    const t = state.tasks.find(x => x.id === id); if (!t) { ckRow(box, false, 'Could not save the test task. Try again.'); btn.disabled = false; return; }
+    ckRow(box, true, `Made test task #${t.num}`);
+    let j; try { j = await sendToClaude(t, who, cid); }
+    catch (e) { ckRow(box, false, 'Not sent: ' + e.message); edit(id, x => { if (x.claim) { x.claim.status = 'stuck'; x.claim.note = 'Send to Claude failed: ' + e.message; } }, 'Send to Claude failed'); btn.disabled = false; return; }
+    ckRow(box, true, `Sent. cron-job.org starts your routine at ${hhmm(j.at)}.`);
+    watchClaudeJob(j.jobId, id, who);
+    const started = ckRow(box, null, 'Waiting for Claude to start…'), replied = ckRow(box, null, 'Waiting for Claude to reply on the task…');
+    const t0 = Date.now(), tick = setInterval(async () => {
+      if (!busy && !document.hidden) await load(true);
+      const x = state.tasks.find(y => y.id === id), k = x && (x.claim || x.last_run), url = k && k.session_url;
+      if (url && started.classList.contains('wait')) { started.replaceWith(ckRow(el('div'), true, 'Claude started.', ['Open the session', url])); }
+      if (x && x.claim && x.claim.status === 'stuck') { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, x.claim.note || 'The routine did not start.')); btn.disabled = false; return; }
+      const said = x && x.comments.find(m => /^claude\b/i.test(m.by || '') && m.at > at);
+      if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); LS.set('kb_claude_ok', nowIso()); stashBoard(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
+      if (Date.now() - t0 > 10 * 60000) { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, `No reply after 10 minutes. Open task #${x ? x.num : '?'} or your routine's recent runs to see why.`)); btn.disabled = false; }
+    }, FAST ? 300 : 15000);
   };
-  $('sClaudeTest').onclick = async () => {
-    const m = $('sClaudeMsg'); $('sClaudeSave').onclick(); const c = claudeCfg();
-    if (!c.cron) { m.textContent = 'Add your cron-job.org API key first.'; m.className = 'hint bad'; return; }
-    m.textContent = 'Checking cron-job.org…'; m.className = 'hint';
-    try { const r = await cronFetch('GET', '/jobs'); m.textContent = r.ok ? `cron-job.org key works (${((await r.json()).jobs || []).length} jobs on the account). The routine itself is only tested when you first send something.` : (r.status === 401 ? 'cron-job.org rejected that API key.' : 'cron-job.org error ' + r.status); m.className = 'hint ' + (r.ok ? 'ok' : 'bad'); }
-    catch { m.textContent = 'Could not reach cron-job.org.'; m.className = 'hint bad'; }
+  // ---- Test and fix problems: test cron-job.org without starting Claude, see and remove relay jobs, read the relay log ----
+  function renderRelayLog() {
+    const box = $('cwLog'), a = relayLog(); box.textContent = '';
+    if (!a.length) { box.append(el('div', 'muted', 'Nothing sent from this browser yet.')); return; }
+    a.forEach(e => { const d = el('div', 'wck ' + (e.ok === false ? 'bad' : e.ok ? 'ok' : 'wait')); d.append(el('b', null, `${hhmm(e.at)} · #${e.num ?? '?'} · ${e.ev}`), el('div', 'muted', e.detail)); box.append(d); });
+  }
+  $('cwDebug').addEventListener('toggle', () => { if ($('cwDebug').open) renderRelayLog(); });
+  $('cwCronTest').onclick = async () => {
+    const box = $('cwDbgCk'), btn = $('cwCronTest'); box.textContent = '';
+    if (!claudeCfg().cron) { ckRow(box, false, 'Add your cron-job.org key in step 4 first.'); return; }
+    btn.disabled = true; const at = nextRun(), target = location.origin + location.pathname;
+    try {
+      const r = await cronFetch('PUT', '/jobs', { job: { url: target, enabled: true, saveResponses: false, title: `kbtest:${Math.floor(Date.now() / 1000)}`, requestMethod: 0, requestTimeout: 30, schedule: onceAt(at) } });
+      if (!r.ok) { ckRow(box, false, r.status === 401 || r.status === 403 ? 'cron-job.org did not accept the key.' : r.status === 429 ? 'cron-job.org says: too many requests. Wait one minute.' : 'cron-job.org error ' + r.status); btn.disabled = false; return; }
+      const jobId = (await r.json()).jobId; ckRow(box, true, `Test job made. It opens this page (it does not start Claude) at ${hhmm(at)}.`); const wait = ckRow(box, null, 'Waiting for cron-job.org to run it…');
+      let res = null; for (let i = 0; i < 20 && !res; i++) { await new Promise(ok => setTimeout(ok, FAST ? 300 : (i === 0 ? at - Date.now() + 8000 : 10000)));
+        const hr = await cronFetch('GET', `/jobs/${jobId}/history`).catch(() => null); const h = hr && hr.ok ? (await hr.json()).history || [] : []; if (h.length) res = h[0]; }
+      await cronFetch('DELETE', `/jobs/${jobId}`).catch(() => {});
+      wait.replaceWith(res ? ckRow(el('div'), res.httpStatus < 400, `cron-job.org ran the job at ${hhmm((res.date || Date.now() / 1000) * 1000)} and got HTTP ${res.httpStatus}. ${res.httpStatus < 400 ? 'cron-job.org works.' : 'The call failed.'}`) : ckRow(el('div'), false, 'cron-job.org did not run the job within 4 minutes. Open console.cron-job.org and look at the job history.'));
+    } catch { ckRow(box, false, 'Could not reach cron-job.org. Check your connection.'); }
+    btn.disabled = false;
   };
+  $('cwJobs').onclick = async () => {
+    const box = $('cwDbgCk'); box.textContent = '';
+    if (!claudeCfg().cron) { ckRow(box, false, 'Add your cron-job.org key in step 4 first.'); return; }
+    try { const r = await cronFetch('GET', '/jobs'); if (!r.ok) { ckRow(box, false, 'cron-job.org error ' + r.status); return; }
+      const all = (await r.json()).jobs || [], ours = all.filter(j => /^kb(claude|test):/.test(j.title || ''));
+      ckRow(box, true, `${all.length} job${all.length === 1 ? '' : 's'} on the account, ${ours.length} from Keeptrack.`);
+      ours.forEach(j => { ckRow(box, null, `${j.title} · job ${j.jobId} · last result HTTP ${j.lastStatus || '-'}`); });
+      if (ours.length) { const b = el('button', 'small danger', `Remove ${ours.length} Keeptrack job${ours.length === 1 ? '' : 's'}`); b.type = 'button';
+        b.onclick = async () => { b.disabled = true; let n = 0; for (const j of ours) { const d = await cronFetch('DELETE', `/jobs/${j.jobId}`).catch(() => null); if (d && d.ok) n++; } box.textContent = ''; ckRow(box, n === ours.length, `Removed ${n} of ${ours.length} jobs.`); };
+        box.append(b); }
+    } catch { ckRow(box, false, 'Could not reach cron-job.org.'); }
+  };
+  $('cwReport').onclick = () => {
+    const c = claudeCfg(), st = cwState(), lines = ['Keeptrack @claude debug report (no tokens or keys)', `Board: ${cfg().repo} · me: ${cfg().me || '(not set)'} · page: ${location.origin + location.pathname}`,
+      `Steps done: ${st.map((x, i) => (i + 1) + (x ? '✓' : '✗')).join(' ')}`, `Trigger URL: ${c.url ? (FIRE_RE.test(c.url) ? 'looks right (' + c.url.replace(/.*\/(trig_\w{4})\w*\/fire$/, '$1…') + ')' : 'WRONG FORMAT') : 'missing'} · trigger token: ${c.token ? 'set' : 'missing'} · cron-job.org key: ${c.cron ? (cronOk() ? 'set, tested OK' : 'set, not tested') : 'missing'}`, '', 'Relay log (newest first):',
+      ...relayLog().map(e => `${e.at} #${e.num ?? '?'} ${e.ev}: ${e.detail}`)];
+    copyText(lines.join('\n'), 'Debug report copied. It has no tokens or keys.');
+  };
+  $('cwLogClear').onclick = () => { LS.del('kb_relay_log'); renderRelayLog(); };
+  // "An assistant in your chat app": pick a tool, get its install steps and the first thing to say (from board/kit/PLUGIN.md)
+  const TOOLS = { desktop: ['Claude app', [['Open Customize, then Plugins, then Add, then Add marketplace. Type:', 'rain-ventures-ai/keeptrack'], ['Install keeptrack.']]],
+    code: ['Claude Code', [['Run in a terminal:', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
+    codex: ['Codex', [['Run in a terminal:', 'codex plugin marketplace add rain-ventures-ai/keeptrack'], ['Type /plugins and install keeptrack.']]],
+    cursor: ['Cursor', [['In Agent chat, type:', '/add-plugin https://github.com/rain-ventures-ai/keeptrack']]] };
+  function renderTools() {
+    const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg(); bar.textContent = body.textContent = '';
+    Object.entries(TOOLS).forEach(([k, [name]]) => { const b = el('button', 'agpill' + (k === pick ? ' on' : ''), name); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(k === pick)); b.onclick = () => { LS.set('kb_tool', k); renderTools(); }; bar.append(b); });
+    const ol = el('ol', 'wmini'), say = `Use my Keeptrack board ${c.repo || 'owner/repo'}. My GitHub username is ${c.me || 'my-username'}.`;
+    const step = (text, code) => { const li = el('li', null, text); if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = el('button', 'small', '📋 Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
+    (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code]) => step(t, code));
+    step('Then say:', say);
+    body.append(ol, el('p', 'hint', 'It needs a GitHub login on your computer (gh auth login) or a token in an environment variable. Never paste a token into the chat.'));
+  }
   setTimeout(sweepClaudeJobs, 5000);
 
   // ---- settings ---------------------------------------------------------------
@@ -1709,7 +1836,8 @@
     if (name === 'boards') renderBoards();
     if (name === 'alerts') renderAlerts();
     if (name === 'claude') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key'); $('sClaudeMsg').textContent = '';
-      const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); showAgentBoxes(); }
+      const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
+      $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
   }
   document.querySelectorAll('.stabs button').forEach(b => { b.onclick = () => settingsTab(b.dataset.tab); });
   $('pubOk').onclick = () => $('dlgPublic').close();

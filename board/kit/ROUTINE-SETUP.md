@@ -82,7 +82,13 @@ In the routine → Edit → **Add another trigger → API**. Save. Open the trig
 Browsers cannot call a routine's URL directly (Anthropic's endpoint allows no cross-origin calls), but cron-job.org's API does. Create a free account at https://console.cron-job.org/, then Settings → API → enable → create a key. When you send something to Claude, the board creates a one-off job there that POSTs to your routine, reads the result, then deletes the job. cron-job.org sees your routine token and the task *number* (never the task's text) for about one to two minutes.
 
 ### 5. Board Settings → Agents
-Tick **Claude** (the switch at the top of the tab), then paste the routine URL, routine token and cron-job.org key, Save, then **Test cron-job.org key**.
+Tick **I use @claude**. The tab shows the same steps as this guide, with a ✓ for each step that is done. It saves each value as you paste it and checks the cron-job.org key at once. Step 5, **Send a test to Claude**, makes a small test task, sends it to your routine and shows when Claude starts and when it replies.
+
+**Test and fix problems** (under the steps):
+- **Test cron-job.org** makes a one-off job that opens the board page. It does not start Claude. It shows when cron-job.org ran it and the HTTP status.
+- **Show jobs on cron-job.org** lists the Keeptrack jobs on your account, with their last result, and can remove them.
+- **What happened to each send** lists each step of your recent sends from this browser: job made, job ran (with the routine's answer), Claude started or failed, job deleted.
+- **Copy debug report** copies the setup state and that list, without tokens or keys, to paste to Claude or a teammate.
 
 ### 6. First run
 1. **Test the routine's write access first.** In the routine page click **Run now** with text `Board request from @<you> for task #1. Run keeptrack.py comment '#1' "routine write test" and report whether it worked.` In the run log the comment command must say `commented on ...` (not `write failed: HTTP 403`). If it fails, fix `BOARD_TOKEN` (see Troubleshooting) before going further.

@@ -162,26 +162,99 @@
     <div class="hint">The report never contains your token. Paste it to Claude or a teammate if you need help.</div>
   </div>
   <div id="panelClaude" role="tabpanel" aria-labelledby="tabClaude" hidden>
-    <p class="hint" style="margin-top:0">Choose the AI agents <b>you</b> use. Only these are offered when you type <b>@</b>. Each person chooses their own; the choice and any keys stay in this browser (like the GitHub token) and travel with "Copy settings code".</p>
-    <div class="agentsw"><label class="chk"><input type="checkbox" id="sUseClaude"> 🤖 Claude</label><label class="chk"><input type="checkbox" id="sUseCodex"> 🤖 Codex</label></div>
-    <div id="boxClaude" class="agentbox" hidden>
-    <h4>Claude</h4>
-    <p class="hint">Typing <b>@claude</b> in a comment can start <b>your own</b> Claude routine. Each person sets up their own.</p>
-    <div class="cbtns" style="margin:0 0 6px"><button id="sClaudePrompt" type="button" class="primary">📋 Copy setup prompt for Claude</button></div>
-    <div class="hint">Paste it into a new chat with Claude (Claude Code, the desktop app or claude.ai). Claude reads the setup guide and offers to guide you or to do the clicking in your browser. It never handles your secrets: you paste those yourself.</div>
-    <label for="sClaudeUrl">Routine trigger URL</label><input id="sClaudeUrl" placeholder="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire" autocomplete="off">
-    <label for="sClaudeTok">Routine token</label><input id="sClaudeTok" type="password" autocomplete="off" placeholder="sk-ant-oat01-…"><div class="fldbtns"><button type="button" class="small" data-copy="sClaudeTok">📋 Copy</button><button type="button" class="small" data-show="sClaudeTok" aria-pressed="false">👁 Show</button></div>
-    <div class="hint">Setup guide: <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/ROUTINE-SETUP.md" target="_blank" rel="noopener noreferrer">board/ROUTINE-SETUP.md</a> (or ask Claude Code in the repo to "set up my board routine"). From claude.ai/code/routines → your routine → Edit → add an <b>API</b> trigger → copy the URL and generate a token. The token can only start that one routine.</div>
-    <label for="sCronKey">cron-job.org API key</label><input id="sCronKey" type="password" autocomplete="off" placeholder="API key"><div class="fldbtns"><button type="button" class="small" data-copy="sCronKey">📋 Copy</button><button type="button" class="small" data-show="sCronKey" aria-pressed="false">👁 Show</button></div>
-    <div class="hint">Browsers can't call a routine directly, so a one-off job on your free <a href="https://console.cron-job.org/" target="_blank" rel="noopener noreferrer">cron-job.org</a> account makes the call (Settings → API → enable, create a key). <b>What cron-job.org sees:</b> your routine token and the task number (never the task's text); the job is deleted as soon as it has run. Starting takes about one to two minutes.</div>
-    <div class="actions"><button id="sClaudeTest" type="button">Test cron-job.org key</button></div>
-    </div>
-    <div id="boxCodex" class="agentbox" hidden>
-    <h4>Codex</h4>
-    <p class="hint"><b>How @codex works:</b> the board cannot start Codex by itself (OpenAI only starts Codex cloud tasks from an @codex comment on a GitHub pull request). So when a card's newest request is for <b>@codex</b>, the button at the top of the card turns into <b>🤖 Copy for Codex</b>. Press it and paste into Codex; Codex then claims the card and reports back with keeptrack.py. <b>@claude</b> is different: it starts your Claude routine straight away.</p>
-    </div>
+    <p class="hint" style="margin-top:0">AI agents can read and update this board for you. They write drafts and never send messages for you. Your choices and keys stay in this browser, like the GitHub token.</p>
+
+    <section class="agcard" id="agClaude">
+      <div class="aghead"><span class="agic" aria-hidden="true">🤖</span><div class="agt"><b>@claude on the board</b><span class="muted">Type <b>@claude</b> in a task comment, and your own Claude routine starts work on that task.</span></div><span id="agClaudeChip" class="agchip"></span></div>
+      <label class="chk agon"><input type="checkbox" id="sUseClaude"> I use @claude</label>
+      <div id="boxClaude" hidden>
+        <ol class="cwsteps" id="cwSteps">
+          <li class="cw" data-step="1"><button type="button" class="cwh"><span class="cwn">1</span><b>Make your routine</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>A routine is Claude working in the cloud for you. It uses your own Claude plan.</p>
+              <a class="wbig" href="https://claude.ai/code/routines" target="_blank" rel="noopener noreferrer">Open Claude routines →</a>
+              <p>Click <b>New routine</b> and fill in:</p>
+              <div class="cprows">
+                <div class="cprow"><span>Name</span><code id="cwName"></code><button type="button" class="small" data-cw-copy="cwName">📋 Copy</button></div>
+                <div class="cprow"><span>Instructions</span><code id="cwLoader" class="clip"></code><button type="button" class="small" data-cw-copy="cwLoader">📋 Copy</button></div>
+                <div class="cprow"><span>Repository</span><code id="cwRepo"></code><button type="button" class="small" data-cw-copy="cwRepo">📋 Copy</button></div>
+              </div>
+              <ul class="wmini">
+                <li><b>Environment:</b> add a new one with the same name. Keep network access at <b>Trusted</b>.</li>
+                <li><b>Connectors:</b> remove all of them.</li>
+                <li><b>Model:</b> Sonnet is enough.</li>
+              </ul>
+              <div class="cwfoot"><button type="button" class="primary" data-cw-done="1">Done, next step</button></div>
+            </div></li>
+          <li class="cw" data-step="2"><button type="button" class="cwh"><span class="cwn">2</span><b>Let the routine change the board</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>The routine needs its own GitHub token for this board.</p>
+              <a class="wbig" id="cwTokLink" target="_blank" rel="noopener noreferrer">Open GitHub: make a token →</a>
+              <ol class="wmini">
+                <li><b>Repository access:</b> select <b>Only select repositories</b>, then <b id="cwRepo2"></b>.</li>
+                <li>Check that <b>Contents</b> is <b>Read and write</b> (the link sets it). Click <b>Generate token</b> and copy it.</li>
+                <li>In your routine, open the environment. Add an environment variable with this name, then paste the token as its value:</li>
+              </ol>
+              <div class="cprows"><div class="cprow"><span>Name</span><code id="cwVar">BOARD_TOKEN</code><button type="button" class="small" data-cw-copy="cwVar">📋 Copy</button></div></div>
+              <p class="hint">This token stays in your routine. This page never sees it.</p>
+              <div class="cwfoot"><button type="button" class="primary" data-cw-done="2">Done, next step</button></div>
+            </div></li>
+          <li class="cw" data-step="3"><button type="button" class="cwh"><span class="cwn">3</span><b>Add a start button to the routine</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <ol class="wmini">
+                <li>In your routine, click <b>Edit</b>, then <b>Add another trigger</b>, then <b>API</b>. Save.</li>
+                <li>Copy the trigger's <b>URL</b> and paste it below.</li>
+                <li>Click <b>Generate token</b>. Copy it at once, because it shows only one time. Paste it below.</li>
+              </ol>
+              <label for="sClaudeUrl">Trigger URL</label><input id="sClaudeUrl" placeholder="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire" autocomplete="off">
+              <label for="sClaudeTok">Trigger token</label><input id="sClaudeTok" type="password" autocomplete="off" placeholder="sk-ant-oat01-…"><div class="fldbtns"><button type="button" class="small" data-copy="sClaudeTok">📋 Copy</button><button type="button" class="small" data-show="sClaudeTok" aria-pressed="false">👁 Show</button></div>
+              <div id="cwTrigCk" class="wchecks"></div>
+            </div></li>
+          <li class="cw" data-step="4"><button type="button" class="cwh"><span class="cwn">4</span><b>Connect cron-job.org</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>A web page cannot start a routine by itself. A free cron-job.org account does it for the page, in about one minute.</p>
+              <a class="wbig" href="https://console.cron-job.org/settings" target="_blank" rel="noopener noreferrer">Open cron-job.org →</a>
+              <ol class="wmini"><li>Sign up (free) or sign in.</li><li>Go to <b>Settings → API</b>, enable it and click <b>Create API key</b>.</li><li>Copy the key and paste it below.</li></ol>
+              <label for="sCronKey">cron-job.org API key</label><input id="sCronKey" type="password" autocomplete="off" placeholder="API key"><div class="fldbtns"><button type="button" class="small" data-copy="sCronKey">📋 Copy</button><button type="button" class="small" data-show="sCronKey" aria-pressed="false">👁 Show</button></div>
+              <div id="cwCronCk" class="wchecks"></div>
+              <details class="hint"><summary>What does cron-job.org see?</summary>Your routine's trigger token and the task number, never the task's text. The page deletes the job as soon as it has run.</details>
+            </div></li>
+          <li class="cw" data-step="5"><button type="button" class="cwh"><span class="cwn">5</span><b>Test it</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>The page makes a small test task and asks Claude to say hello on it. This takes about two minutes.</p>
+              <div class="cwfoot left"><button type="button" class="primary" id="cwTest">Send a test to Claude</button></div>
+              <div id="cwTestCk" class="wchecks"></div>
+            </div></li>
+        </ol>
+        <details class="agalt" id="cwDebug"><summary>Test and fix problems</summary>
+          <p class="hint">Test cron-job.org on its own: it opens this page one time and does not start Claude. Takes about two minutes.</p>
+          <div class="cbtns"><button type="button" class="small" id="cwCronTest">Test cron-job.org</button><button type="button" class="small" id="cwJobs">Show jobs on cron-job.org</button></div>
+          <div id="cwDbgCk" class="wchecks"></div>
+          <h5 class="cwlogh">What happened to each send <span class="muted">(this browser)</span></h5>
+          <div id="cwLog" class="wchecks cwlog"></div>
+          <div class="cbtns"><button type="button" class="small" id="cwReport">📋 Copy debug report</button><button type="button" class="small" id="cwLogClear">Clear the list</button></div>
+          <p class="hint">The report has no tokens or keys. Paste it to Claude or to a teammate to get help.</p>
+        </details>
+        <details class="agalt"><summary>Other ways to set it up</summary>
+          <p class="hint"><b>Let Claude guide you.</b> Paste this prompt into a new chat with Claude. Claude explains each step or does the clicking in your browser. It never handles your secrets: you paste those yourself.</p>
+          <button id="sClaudePrompt" type="button" class="small">📋 Copy setup prompt for Claude</button>
+          <p class="hint">Full guide: <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/ROUTINE-SETUP.md" target="_blank" rel="noopener noreferrer">ROUTINE-SETUP.md</a></p>
+        </details>
+      </div>
+    </section>
+
+    <section class="agcard" id="agLocal">
+      <div class="aghead"><span class="agic" aria-hidden="true">💻</span><div class="agt"><b>An assistant in your chat app</b><span class="muted">Claude, Codex or Cursor can read and update the board while you chat with it.</span></div></div>
+      <div class="agtools" id="agTools" role="tablist" aria-label="Your AI tool"></div>
+      <div id="agToolBody"></div>
+    </section>
+
+    <section class="agcard" id="agCodex">
+      <div class="aghead"><span class="agic" aria-hidden="true">🧩</span><div class="agt"><b>@codex on the board</b><span class="muted">Hand a task to Codex with one copy and paste.</span></div></div>
+      <label class="chk agon"><input type="checkbox" id="sUseCodex"> I use @codex</label>
+      <p id="boxCodex" class="hint" hidden>The board cannot start Codex by itself. When a card's newest request is for <b>@codex</b>, the button at the top of the card changes to <b>🤖 Copy for Codex</b>. Press it and paste into Codex. Codex then claims the card and reports back on it.</p>
+    </section>
     <div id="sClaudeMsg" class="hint" role="status"></div>
-    <div class="actions"><span class="spacer"></span><button id="sClaudeSave" type="button" class="primary">Save</button></div>
   </div>
 </dialog>
 

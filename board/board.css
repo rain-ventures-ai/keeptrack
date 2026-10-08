@@ -494,8 +494,6 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .fldbtns { display: flex; gap: 6px; margin-top: 4px; }
 
 /* Settings → Agents: per-person agent switches */
-.agentsw { display: flex; gap: 18px; flex-wrap: wrap; margin: 4px 0 8px; } .agentsw label.chk { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 600; min-height: 40px; margin: 0; }
-.agentbox { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 6px; } .agentbox h4 { margin: 6px 0 2px; font-size: 14px; }
 .lastrun { font-size: 12.5px; color: var(--muted); margin: -2px 0 10px; } .lastrun .sesslink { font-weight: 600; }
 /* phones: hold a card to pick it up, drop it on a lane in the Move bar */
 @media (max-width: 760px) { .card { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } }
@@ -649,3 +647,32 @@ dialog.archview { max-width: 640px; } .archview pre.atext { white-space: pre-wra
 @media (max-width: 760px) { .wiz { margin: 8px; padding: 16px; border-radius: 12px; } .wpick { grid-template-columns: 1fr; } }
 body.setup header > *:not(.boardwrap):not(#btnHelp):not(#btnSettings) { display: none !important; }
 body.setup header { justify-content: flex-start; } body.setup #btnHelp { margin-left: auto; }
+
+/* Settings → Agents: one card per way of working with an agent, and the guided "Connect Claude" steps */
+.agcard { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 12px 14px; margin: 12px 0; }
+.aghead { display: flex; align-items: flex-start; gap: 10px; } .agic { font-size: 22px; line-height: 1.2; }
+.agt { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; } .agt b { font-size: 15px; } .agt .muted { font-size: 13px; }
+.agchip { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: var(--panel); color: var(--muted); white-space: nowrap; }
+.agchip.ok { background: color-mix(in srgb, var(--ok) 16%, var(--card)); color: var(--ok); } .agchip.warn { background: color-mix(in srgb, var(--warn) 16%, var(--card)); color: var(--warn); }
+.agcard label.chk.agon { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 600; min-height: 36px; margin: 8px 0 0; }
+.cwsteps { list-style: none; padding: 0; margin: 10px 0 0; counter-reset: none; }
+.cw { border-top: 1px solid var(--border); }
+.cwh { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: 0; padding: 10px 2px; text-align: left; font-size: 14px; color: var(--text); cursor: pointer; min-height: 44px; }
+.cwh b { flex: 1; } .cwst { color: var(--ok); font-weight: 700; }
+.cwn { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; background: var(--panel); color: var(--muted); flex: none; }
+.cw.open .cwn { background: var(--accent); color: var(--on-accent, #fff); } .cw.done .cwn { background: var(--ok); color: #fff; } .cw.done:not(.open) .cwh b { color: var(--muted); font-weight: 600; }
+.cwb { display: none; padding: 0 2px 12px 34px; font-size: 13.5px; } .cw.open .cwb { display: block; } .cwb p { margin: 4px 0 8px; }
+.cwfoot { display: flex; justify-content: flex-end; margin-top: 10px; } .cwfoot.left { justify-content: flex-start; }
+.cprows { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.cprow { display: flex; align-items: center; gap: 8px; } .cprow > span { width: 86px; flex: none; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.cprow code { flex: 1; min-width: 0; background: var(--panel); border-radius: 6px; padding: 6px 8px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.cprow code.clip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wck.wait { color: var(--muted); }
+.agalt { margin-top: 8px; } .agalt summary { cursor: pointer; font-size: 13px; color: var(--muted); padding: 6px 0; }
+.agtools { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
+.agpill { border: 1px solid var(--border); background: var(--card); border-radius: 999px; padding: 6px 12px; font-size: 13px; min-height: 36px; cursor: pointer; color: var(--text); }
+.agpill.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+#agToolBody .cprow { margin-top: 6px; }
+@media (max-width: 520px) { .cwb { padding-left: 4px; } .cprow { flex-wrap: wrap; } .cprow > span { width: 100%; } }
+.cwlogh { margin: 14px 0 4px; font-size: 13px; } .cwlog { max-height: 260px; overflow: auto; } .cwlog .wck { padding: 4px 0; border-bottom: 1px solid var(--border); } .cwlog .wck .muted { font-size: 12px; word-break: break-word; }
+#cwDebug .cbtns { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }

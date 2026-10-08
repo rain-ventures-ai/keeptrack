@@ -39,5 +39,8 @@ The banner tells you why:
 **Does the demo show my own boards?**
 No. A demo link (`?demo=crm` or `?demo=board`) uses empty settings in memory. It does not read or change your boards, tokens or routines in this browser. Only the theme is shared.
 
+**@claude does not start, or I want to check it.**
+Open **⚙️ Settings → Agents**. Each setup step shows ✓ when it is done. Open **Test and fix problems**: **Test cron-job.org** checks cron-job.org without starting Claude, and **What happened to each send** shows where a send stopped. **Copy debug report** gives a report without tokens or keys.
+
 **Is the board fast with a lot of data?**
 Yes. A board with 500 tasks and 300 people changes views in less than a quarter of a second. Long lists show the first 150 items and a **Show more** button. When the file gets large, archive old items: see [Search and archive](search-and-archive.md). The page shows the last copy that it loaded at once, and then gets the newest version from GitHub. You can make changes when the status says "Synced".
