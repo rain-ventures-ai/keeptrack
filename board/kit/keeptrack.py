@@ -45,7 +45,8 @@ From any other project (Claude plugin "board"): name the board once, then use th
 Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-check [--card]  # is this repo's kit older than the published one? --card adds an upgrade task for the upgrade owner
   keeptrack.py kit-update [--from DIR]   # copy the published kit into this repo and set board/KIT_VERSION (does not commit)
-  keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person
+  keeptrack.py migrate             # bring tasks.json up to v3 (safe to run twice)
+  keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person (needs the phase 2 web board)
   keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, AGENTS.md, CLAUDE.md, empty tasks.json
@@ -611,14 +612,21 @@ def _git_snapshot():
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
     prefix = base + "/" if base else ""
-    for full in names.splitlines():
-        rel = full[len(prefix):] if full.startswith(prefix) else full
-        if not _wanted_rel(rel):
-            continue
-        rc, raw, err = git("show", f"{head}:{full}")
-        if rc:
-            sys.exit(f"cannot read {full} from {REPO}@{BRANCH}: {err}")
-        files[rel] = {"text": raw + "\n", "sha": None, "size": len(raw.encode())}
+    wanted = [(full, full[len(prefix):] if full.startswith(prefix) else full) for full in names.splitlines()]
+    wanted = [(full, rel) for full, rel in wanted if _wanted_rel(rel)]
+    # One `git cat-file --batch` reads every board file; one process per file is slow on big boards.
+    p = subprocess.run(["git", "-C", ROOT, "cat-file", "--batch"], capture_output=True,
+                       input="".join(f"{head}:{full}\n" for full, _ in wanted).encode())
+    if p.returncode:
+        sys.exit(f"cannot read board files from {REPO}@{BRANCH}: {p.stderr.decode().strip()}")
+    out, pos = p.stdout, 0
+    for full, rel in wanted:
+        end = out.index(b"\n", pos)
+        header = out[pos:end].decode().split()
+        if len(header) != 3:
+            sys.exit(f"cannot read {full} from {REPO}@{BRANCH}")
+        size = int(header[2]); raw = out[end + 1:end + 1 + size]; pos = end + 2 + size
+        files[rel] = {"text": raw.decode("utf-8", errors="replace"), "sha": header[0], "size": size}
     if "tasks.json" not in files:
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
     return files, head
@@ -630,25 +638,36 @@ def _api_snapshot():
     if rc:
         sys.exit(f"cannot read {REPO}@{BRANCH}: {err.strip() or out.strip()}")
     head = json.loads(out)["object"]["sha"]
-    rc, out, err = gh(f"repos/{REPO}/git/trees/{head}?recursive=1")
+    rc, out, err = gh(f"repos/{REPO}/git/commits/{head}")
+    if rc:
+        sys.exit(f"cannot read {REPO}@{BRANCH}: {err.strip() or out.strip()}")
+    root_tree = sha = json.loads(out)["tree"]["sha"]
+    # Go down to the board folder and read only that subtree: a recursive read of the
+    # whole repo is large in a repo with client files, and GitHub truncates it.
+    base = os.path.dirname(PATH).strip("/")
+    for part in [x for x in base.split("/") if x]:
+        rc, out, err = gh(f"repos/{REPO}/git/trees/{sha}")
+        if rc:
+            sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
+        sha = next((x["sha"] for x in json.loads(out).get("tree", []) if x.get("path") == part and x.get("type") == "tree"), None)
+        if not sha:
+            sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
+    rc, out, err = gh(f"repos/{REPO}/git/trees/{sha}?recursive=1")
     if rc:
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
     tree = json.loads(out)
     if tree.get("truncated"):
         sys.exit("cannot read the board: the Git tree response was truncated")
-    base = os.path.dirname(PATH).strip("/")
-    prefix = base + "/" if base else ""
     files = {}
     for item in tree.get("tree", []):
-        full = item.get("path", "")
-        rel = full[len(prefix):] if full.startswith(prefix) else ""
+        rel = item.get("path", "")
         if item.get("type") != "blob" or not _wanted_rel(rel):
             continue
         text = _api_blob(item["sha"])
         files[rel] = {"text": text, "sha": item["sha"], "size": item.get("size", len(text.encode()))}
     if "tasks.json" not in files:
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
-    return files, {"head": head, "base_tree": tree["sha"]}
+    return files, {"head": head, "base_tree": root_tree}
 
 
 _BOARD_STATES = {}
@@ -1100,7 +1119,7 @@ def cmd_done(a):
 def cmd_move(a):
     def fn(data):
         t = find(data, a.id)
-        column = getattr(a, "column", None) or getattr(a, "column_pos", None)
+        column = getattr(a, "column", None) or getattr(a, "column_pos", None) or t["column"]
         cols = [c["id"] for c in data.get("columns", [])]
         if column not in cols:
             sys.exit(f"unknown column '{column}'. Columns: {', '.join(cols)}")
@@ -1658,9 +1677,22 @@ def _backup_tag(state):
 
 
 def cmd_migrate(a):
+    to = getattr(a, "to", None)
+    if to is None:
+        # Bare `migrate` keeps its old meaning (upgrade flows run it): bring the file up to v3.
+        # Split storage changes many files, so it needs an explicit `--to 4`.
+        data, _ = load(); guard_schema(data)
+        if data.get("version", 1) >= 3:
+            print(f"tasks.json is already schema v{data.get('version')}: nothing to migrate"); return
+        mutate(lambda d: print("migrated tasks.json to schema v3"), "Migrate tasks.json to schema v3")
+        return
+    if to != 4:
+        sys.exit("this tool can migrate only to schema v4 (--to 4), or up to v3 with a bare `migrate`")
+    _migrate_v4(a)
+
+
+def _migrate_v4(a):
     global WRITE
-    if getattr(a, "to", 4) != 4:
-        sys.exit("this tool can migrate only to schema v4")
     with (contextlib.nullcontext() if getattr(a, "dry_run", False) else local_lock()):
         tag = None
         for attempt in range(6):
@@ -1743,13 +1775,14 @@ def cmd_init(a):
     if os.path.exists(tj):
         print(f"kept existing {PATH}")
     else:
-        data = {"version": SCHEMA, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
+        # New boards stay v3 until the web board can read split storage (schema v4, phase 2).
+        data = {"version": 3, "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
                 "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"},
                             {"id": "in-progress", "name": "In progress"}, {"id": "done", "name": "Done"}],
                 "people": people, "agents": ["claude", "codex"], "clients": a.client or ["General"],
                 "labels": [{"name": "follow-up", "color": "#b38600"}, {"name": "decision", "color": "#e56910"},
                            {"name": "admin", "color": "#6b778c"}, {"name": "board", "color": "#5e4db2"}],
-                "next_num": 1}
+                "tasks": [], "next_num": 1}
         os.makedirs(os.path.dirname(tj), exist_ok=True)
         open(tj, "w").write(json.dumps(data, indent=2, ensure_ascii=False) + "\n"); print(f"wrote {PATH} (empty board, upgrade owner @{people[0]['github']})")
     print("Next: commit and push to the default branch, then add the board in the web board: Settings → Boards → Add an existing board.")
@@ -2294,7 +2327,7 @@ def main():
     s = sub.add_parser("kit-check"); s.add_argument("--card", action="store_true"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_kit_check)
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
     s.set_defaults(f=cmd_kit_update)
-    s = sub.add_parser("migrate"); s.add_argument("--to", type=int, default=4); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
+    s = sub.add_parser("migrate"); s.add_argument("--to", type=int, help="4 = split storage; without --to the board goes up to v3 only"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
     s = sub.add_parser("doctor"); s.add_argument("--fix", action="store_true"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_doctor)
     s = sub.add_parser("kit-owner"); s.add_argument("user", nargs="?"); s.set_defaults(f=cmd_kit_owner)
     s = sub.add_parser("init"); s.add_argument("--person", action="append", required=True, help="github-user:Display Name (repeatable; the first is the upgrade owner)")

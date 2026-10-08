@@ -1,5 +1,5 @@
 """Tests for board/kit/keeptrack.py against a local --file board. Run: python3 -m unittest discover tests"""
-import contextlib, copy, importlib.util, io, json, os, random, shutil, tempfile, unittest
+import contextlib, copy, importlib.util, io, json, os, random, re, shutil, subprocess, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("keeptrack", os.path.join(HERE, "..", "board", "kit", "keeptrack.py"))
@@ -360,3 +360,126 @@ class Doctor(unittest.TestCase):
         data["version"] = kt.SCHEMA + 1; write(kt.FILE, data)
         issues, _, _ = kt.doctor_board(False)
         self.assertIn("NEW_SCHEMA", {x["code"] for x in issues})
+
+
+class PhaseOneSafety(unittest.TestCase):
+    """Schema 4 must not reach real boards before the web board can read it (phase 2)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(kt, k) for k in ("FILE", "ROOT", "REPO", "BRANCH", "WRITE", "gh", "need_repo_clone",
+                                                  "cmd_kit_update", "kit_fetch", "remote_repo")}
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(kt, k, v)
+        self.temp.cleanup()
+
+    def test_manifest_schema_is_one_the_web_board_reads(self):
+        with open(os.path.join(HERE, "..", "board", "kit", "manifest.json")) as f:
+            schema = json.load(f)["schema"]
+        with open(os.path.join(HERE, "..", "board", "board.js")) as f:
+            known = int(re.search(r"const KNOWN_SCHEMA = (\d+)", f.read()).group(1))
+        self.assertLessEqual(schema, known)
+
+    def test_bare_migrate_does_not_split(self):
+        board_dir = os.path.join(self.temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v3"), board_dir)
+        kt.FILE = os.path.join(board_dir, "tasks.json")
+        old = read_json(kt.FILE); old["version"] = 2; write(kt.FILE, old)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_migrate(Args(to=None, dry_run=False))
+        data = read_json(kt.FILE)
+        self.assertEqual(3, data["version"])
+        self.assertNotIn("layout", data)
+        self.assertEqual(2, len(data["tasks"]))
+        self.assertFalse(os.path.exists(os.path.join(board_dir, "cards")))
+
+    def test_init_writes_a_v3_board(self):
+        kt.ROOT, kt.REPO = self.temp.name, "acme/board"
+        kt.need_repo_clone = lambda: None
+        kt.cmd_kit_update = lambda a: None
+        kt.kit_fetch = lambda src, source=None: b""
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_init(Args(person=["alex:Alex"], client=None, source=None))
+        data = read_json(os.path.join(self.temp.name, kt.PATH))
+        self.assertEqual(3, data["version"])
+        self.assertNotIn("layout", data)
+        self.assertEqual([], data["tasks"])
+
+    def test_git_load_reads_every_board_file_in_one_batch(self):
+        remote, work = os.path.join(self.temp.name, "remote.git"), os.path.join(self.temp.name, "work")
+        run = lambda *a, cwd=None: subprocess.run(a, cwd=cwd, check=True, capture_output=True)
+        run("git", "init", "-q", "--bare", "-b", "main", remote)
+        run("git", "clone", "-q", remote, work)
+        shutil.copytree(os.path.join(FIXTURES, "v4"), os.path.join(work, "board"))
+        with open(os.path.join(work, "README.md"), "w") as f:
+            f.write("not a board file\n")
+        run("git", "add", "-A", cwd=work)
+        run("git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "board", cwd=work)
+        run("git", "push", "-q", "origin", "main", cwd=work)
+        kt.FILE, kt.ROOT, kt.REPO, kt.BRANCH, kt.WRITE = None, work, "acme/board", "main", "git"
+        kt.remote_repo = lambda url: "acme/board"
+        files, head = kt._git_snapshot()
+        self.assertEqual({"tasks.json", "cards/t_first.json", "cards/t_second.json", "people/p_acme.json"}, set(files))
+        for rel, entry in files.items():
+            with open(os.path.join(FIXTURES, "v4", *rel.split("/")), encoding="utf-8") as f:
+                self.assertEqual(f.read(), entry["text"])
+        data = kt.load_board()
+        self.assertEqual({"t_first", "t_second"}, {t["id"] for t in data["tasks"]})
+
+    def test_api_load_reads_only_the_board_subtree(self):
+        calls = []
+        cache = os.path.join(self.temp.name, "cache")
+        def fake_gh(*args, body=None):
+            calls.append(args[0])
+            ep = args[0]
+            if "/git/ref/heads/" in ep:
+                return 0, json.dumps({"object": {"sha": "c1"}}), ""
+            if ep.endswith("/git/commits/c1"):
+                return 0, json.dumps({"tree": {"sha": "root"}}), ""
+            if ep.endswith("/git/trees/root"):
+                return 0, json.dumps({"tree": [{"path": "clients", "type": "tree", "sha": "big"},
+                                               {"path": "board", "type": "tree", "sha": "bt"}]}), ""
+            if ep.endswith("/git/trees/bt?recursive=1"):
+                return 0, json.dumps({"sha": "bt", "tree": [{"path": "tasks.json", "type": "blob", "sha": "s1"},
+                                                            {"path": "cards", "type": "tree", "sha": "x"},
+                                                            {"path": "cards/t_a.json", "type": "blob", "sha": "s2"}]}), ""
+            if ep.endswith("/git/blobs/s1"):
+                return 0, json.dumps({"encoding": "utf-8", "content": json.dumps({"version": 4, "layout": "split", "next_num": 2})}), ""
+            if ep.endswith("/git/blobs/s2"):
+                return 0, json.dumps({"encoding": "utf-8", "content": json.dumps({"id": "t_a", "num": 1, "column": "todo"})}), ""
+            return 1, "", f"unexpected call {ep}"
+        kt.gh, kt.FILE, kt.REPO, kt.BRANCH, kt.WRITE = fake_gh, None, "acme/board", "main", "api"
+        old_cache = kt.CACHE_DIR; kt.CACHE_DIR = cache
+        try:
+            files, state = kt._api_snapshot()
+        finally:
+            kt.CACHE_DIR = old_cache
+        self.assertEqual({"tasks.json", "cards/t_a.json"}, set(files))
+        self.assertEqual("root", state["base_tree"])
+        self.assertFalse(any("big" in c or c.endswith("/git/trees/c1?recursive=1") for c in calls))
+
+
+class MoveInPlace(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.board_dir = os.path.join(self.temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        self.old_file = kt.FILE
+        kt.FILE = os.path.join(self.board_dir, "tasks.json")
+
+    def tearDown(self):
+        kt.FILE = self.old_file
+        self.temp.cleanup()
+
+    def test_move_without_column_keeps_the_column(self):
+        first = read_json(os.path.join(self.board_dir, "cards", "t_first.json"))
+        second = read_json(os.path.join(self.board_dir, "cards", "t_second.json"))
+        self.assertEqual(first["column"], second["column"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_move(Args(id="t_second", column=None, column_pos=None, before=None, after=None, top=True,
+                             priority=None, note=None))
+        moved = read_json(os.path.join(self.board_dir, "cards", "t_second.json"))
+        self.assertEqual(second["column"], moved["column"])
+        self.assertLess(moved["rank"], first["rank"])

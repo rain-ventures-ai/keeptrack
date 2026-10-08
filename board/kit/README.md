@@ -44,7 +44,9 @@ API reads use the branch tree. Blobs are cached by Git blob SHA under `.board/ca
 
 ### Migrate from schema 3
 
-First install kit v7 on the default branch. Then check the migration:
+Not released yet: split storage needs the phase 2 web board. Until then, do not migrate a real board. Bare `migrate` brings a board up to v3 only; only `migrate --to 4` splits it.
+
+When it is released, install the new kit on the default branch. Then check the migration:
 
 ```bash
 python3 board/keeptrack.py migrate --to 4 --dry-run

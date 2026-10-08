@@ -18,9 +18,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
 
 ## Versions
-### v7 (schema 4)
-Cards and CRM people now use split storage.
-- Run `python3 board/keeptrack.py migrate --to 4 --dry-run` after this kit is on the default branch.
+### Schema 4: split storage (not released yet)
+Not released yet: it needs the phase 2 web board. Do not run `migrate --to 4` on a real board before then. A kit version number is given when it is released.
+
+Cards and CRM people use split storage. Bare `migrate` still brings a board up to v3 only. Only `migrate --to 4` splits the board.
+- When it is released: run `python3 board/keeptrack.py migrate --to 4 --dry-run` after the kit is on the default branch.
 - Check the file list and counts.
 - Run `python3 board/keeptrack.py migrate --to 4`.
 - The command makes a backup tag before it changes a GitHub board.
@@ -28,7 +30,7 @@ Cards and CRM people now use split storage.
 - Add `.board/cache/` to `.gitignore` if it is not there.
 - Check: `tasks.json` has `"version": 4` and `"layout": "split"`. Check that `cards/` and `people/` contain the item files.
 
-The web board from kit v6 does not write schema v4. It opens the board read-only until the phase 2 web update is installed.
+The web board before phase 2 cannot show a schema 4 board: it opens it read-only and with no cards.
 
 To roll back, revert the migration commit. You can also reset the branch to the `keeptrack-v3-backup-YYYYMMDD-HHMM` tag. A reset removes every later board save, so check with the team first.
 
