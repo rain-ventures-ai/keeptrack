@@ -656,3 +656,18 @@ class ImportOnSplitBoard(unittest.TestCase):
         data = kt.load_board(); kt.migrate_data(data)
         self.assertEqual(3, data["version"])
         self.assertNotIn("layout", data)
+
+
+class DuplicateFiles(unittest.TestCase):
+    def test_save_is_refused_when_two_files_share_an_id(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        board_dir = os.path.join(temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v4"), board_dir)
+        old = kt.FILE; kt.FILE = os.path.join(board_dir, "tasks.json"); self.addCleanup(setattr, kt, "FILE", old)
+        shutil.copy(os.path.join(board_dir, "cards", "t_first.json"), os.path.join(board_dir, "cards", "copy.json"))
+        before = tree_bytes(board_dir)
+        with self.assertRaises(SystemExit) as e:
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_comment(Args(id="t_second", text="hello", note=None))
+        self.assertIn("same id", str(e.exception))
+        self.assertEqual(before, tree_bytes(board_dir))

@@ -744,7 +744,23 @@ def _desired_files(data, state, extra=None):
     return desired
 
 
+def _duplicate_files(state):
+    """Item files that share an id. A save would keep only one of them, so saving is refused until doctor repairs it."""
+    seen, dup = {}, []
+    for rel, entry in sorted(state.get("files", {}).items()):
+        obj = entry.get("obj")
+        if rel.startswith(("cards/", "people/")) and isinstance(obj, dict) and obj.get("id"):
+            if obj["id"] in seen:
+                dup.append(f"{obj['id']} ({seen[obj['id']]} and {rel})")
+            else:
+                seen[obj["id"]] = rel
+    return dup
+
+
 def _changes(data, state, extra=None):
+    dup = _duplicate_files(state)
+    if dup:
+        sys.exit("not saved: two board files have the same id: " + ", ".join(dup) + ". Run keeptrack.py doctor (the board-doctor skill).")
     desired = _desired_files(data, state, extra)
     managed = {p for p in state.get("files", {}) if p == "tasks.json" or
                (p.startswith(("cards/", "people/")) and p.endswith(".json"))}
