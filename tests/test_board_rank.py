@@ -46,9 +46,9 @@ process.stdin.on('end', () => process.stdout.write(JSON.stringify(JSON.parse(raw
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_json_text_matches_python_utf8_format(self):
-        value = {"title": "Acme café £", "done": False, "items": [1, "two"], "empty": None}
+        value = {"title": "Acme café £ \u2028 \"quoted\" \\ tab\t", "emoji": "\U0001F600", "done": False, "items": [1, -2, 0, "two", [], {}], "empty": None, "nested": {"a": {"b": []}}}
         proc = subprocess.run(
-            ["node", "-e", "let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(JSON.parse(s),null,2)+'\\n'))"],
+            ["node", "-e", "const { jsonText } = require(process.argv[1]); let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(jsonText(JSON.parse(s))))", os.path.join(ROOT, "board", "board.js")],
             input=json.dumps(value, ensure_ascii=False), text=True, capture_output=True, check=True,
         )
         self.assertEqual(proc.stdout, json.dumps(value, indent=2, ensure_ascii=False) + "\n")
