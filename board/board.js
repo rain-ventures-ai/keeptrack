@@ -25,7 +25,8 @@
     stashBoard(); const e = Object.assign({}, boardsMap()[repo] || {}, over); LS.set('kb_repo', repo);
     BOARD_KEYS.forEach(k => { if (e[k]) LS.set('kb_' + k, e[k]); else LS.del('kb_' + k); }); stashBoard(); }
   const boardUrl = () => `${location.pathname}?repo=${LS.get('kb_repo')}&branch=${LS.get('kb_branch', 'master')}&path=${LS.get('kb_path', 'board/tasks.json')}`;
-  function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m)); }
+  function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
+    const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {}); }   // also drop the cached copy of its cards
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
   (() => { const q = new URLSearchParams(location.search), repo = q.get('repo'), over = {};
     ['branch', 'path'].forEach(k => { const v = q.get(k); if (v && /^[\w./-]+$/.test(v)) over[k] = v; });
@@ -50,12 +51,13 @@
     if (!Object.keys(out).length) throw new Error('No usable settings found in that code.');
     return out;
   }
-  function applyCode(raw) { const o = parseCode(raw); Object.keys(o).forEach(k => LS.set('kb_' + k, o[k])); return o; }
+  function applyCode(raw) { const o = parseCode(raw); // replace, not merge: a key the code leaves out must not keep this browser's old value (an old token, routine or cron key)
+    new Set(XFER.text.concat(BOARD_KEYS)).forEach(k => LS.del('kb_' + k)); Object.keys(o).forEach(k => LS.set('kb_' + k, o[k])); return o; }
   // setup link: the code rides in the #fragment, which browsers never send to any server; it is stripped straight away
   (() => { const m = /[#&]kbcfg=([^&]+)/.exec(location.hash); if (!m) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch {}
     try { const o = parseCode('kbcfg1.' + m[1]);
-      if (confirm(`Import board settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ', including the access token' : ''}?\n\nThis replaces the settings stored in this browser.`)) { applyCode('kbcfg1.' + m[1]); location.reload(); }
+      if (confirm(`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?\n\nThis replaces the settings stored in this browser.`)) { applyCode('kbcfg1.' + m[1]); location.reload(); }
     } catch (e) { alert('Could not import the settings link: ' + e.message); } })();
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
@@ -590,7 +592,8 @@
     if ($('fAttn').checked && !needsAttention(t)) return false;
     return true;
   }
-  const labelColor = n => (state.labels.find(l => l.name === n) || {}).color || '#6b778c';
+  const COLOR_RE = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d\s.,%/-]+\))$/i;   // a colour from the file goes into style: no url() or other CSS
+  const labelColor = n => { const c = (state.labels.find(l => l.name === n) || {}).color; return typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : '#6b778c'; };
 
   function render() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
@@ -1529,8 +1532,9 @@
   const onceAt = at => { const exp = new Date(at.getTime() + 60000); return { timezone: 'UTC', expiresAt: Number(utcStamp(exp)), hours: [at.getUTCHours()], mdays: [at.getUTCDate()], months: [at.getUTCMonth() + 1], wdays: [-1], minutes: [at.getUTCMinutes()] }; };
   // relay log (this browser only, last 30 events): what each send did, for "Test and fix problems". Never holds a token.
   const scrub = v => String(v || '').replace(/sk-ant-[\w-]+/g, 'sk-ant-…').replace(/Bearer\s+\S+/gi, 'Bearer …').slice(0, 240);
+  const INST = (() => { let v = LS.get('kb_inst'); if (!/^[a-z0-9]{6,12}$/.test(v || '')) { v = Math.random().toString(36).slice(2, 10).padEnd(6, '0'); LS.set('kb_inst', v); } return v; })();   // this browser: the sweep removes only its own relay jobs
   const relayLog = () => { try { const a = JSON.parse(LS.get('kb_relay_log', '[]')); return Array.isArray(a) ? a : []; } catch { return []; } };
-  function rlog(num, ev, detail, ok) { const a = relayLog(); a.unshift({ at: nowIso(), num, ev, detail: scrub(detail), ok }); LS.set('kb_relay_log', JSON.stringify(a.slice(0, 30))); if (!$('cwDebug').hidden && $('cwDebug').open) renderRelayLog(); }
+  function rlog(num, ev, detail, ok) { const a = relayLog(); a.unshift({ at: nowIso(), repo: cfg().repo, num, ev, detail: scrub(detail), ok }); LS.set('kb_relay_log', JSON.stringify(a.slice(0, 30))); if (!$('cwDebug').hidden && $('cwDebug').open) renderRelayLog(); }
   function routineText(t, who, cid) {
     const { c, skill, agents } = boardInfo();
     return [`Board request from @${who} for task #${t.num}${cid ? ` (comment ${cid})` : ''}. Board repo: ${c.repo} (branch ${c.branch}).`,
@@ -1542,7 +1546,7 @@
   }
   async function sendToClaude(t, who, cid) {   // returns { jobId } or throws
     const c = claudeCfg(), now = new Date(), at = nextRun();
-    const job = { url: c.url, enabled: true, saveResponses: true, title: `kbclaude:${Math.floor(now.getTime() / 1000)}:#${t.num}`, requestMethod: 1,
+    const job = { url: c.url, enabled: true, saveResponses: true, title: `kbclaude:${INST}:${Math.floor(now.getTime() / 1000)}:#${t.num}`, requestMethod: 1,
       requestTimeout: 30, redirectSuccess: false,
       extendedData: { headers: { Authorization: 'Bearer ' + c.token, 'anthropic-beta': 'experimental-cc-routine-2026-04-01', 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }, body: JSON.stringify({ text: routineText(t, who, cid) }) },
       schedule: onceAt(at) };
@@ -1552,6 +1556,10 @@
     const jobId = (await r.json()).jobId; rlog(t.num, 'Job made', `cron-job.org job ${jobId} runs at ${hhmm(at)}`, true);
     return { jobId, at };
   }
+  const bodyNote = b => {   // the log keeps only what helps: an error message, or whether there was a session link (never the raw reply)
+    if (!b) return ''; if (/claude\.ai\/code\/session_/.test(b)) return ', with a session link';
+    try { const o = JSON.parse(b), e = o && (o.error || o); const msg = e && (e.message || e.type); if (typeof msg === 'string') return ': ' + msg.slice(0, 160); } catch {}
+    return ', with no session link'; };
   async function watchClaudeJob(jobId, taskId, who, cid) {   // find the session URL in the routine's response, record it on the card and in the comments, delete the job
     const sleep = ms => new Promise(r => setTimeout(r, ms)), num = (state.tasks.find(x => x.id === taskId) || {}).num; let session = null, err = '', noBody = 0, logged = false, ranAt = '';
     try {
@@ -1563,13 +1571,12 @@
         const dr = await cronFetch('GET', `/jobs/${jobId}/history/${it.identifier}`); let body = '';
         if (dr.ok) { const d = (await dr.json()).jobHistoryDetails || {}; body = d.body || ''; }
         if (it.date && !ranAt) ranAt = new Date(it.date * 1000).toISOString();
-        if (!logged) { logged = true; rlog(num, 'Job ran', `The routine answered HTTP ${it.httpStatus || '?'}${body ? ': ' + body : ''}`, !err); }
+        if (!logged) { logged = true; rlog(num, 'Job ran', `The routine answered HTTP ${it.httpStatus || '?'}${bodyNote(body)}`, !err); }
         const m = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/.exec(body); if (m) session = { url: m[0], id: m[0].split('/').pop() };
         else if (!err && it.httpStatus && it.httpStatus < 400 && ++noBody >= 3) session = { url: routinePage(), id: 'started' };   // started, but cron-job.org kept no reply: link the routine's run list
       }
     } catch (e) { err = 'could not read the result from cron-job.org'; }
     rlog(num, session ? 'Claude started' : 'Failed', session ? session.url : (err || 'no response from the routine after 6 minutes'), !!session);
-    try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there
     await edit(taskId, t => {
       // an activity line in the comments (shown smaller than a comment), and the session link on the comment that asked
       if (!t.comments.some(m => m.type === 'activity' && m.job === jobId)) {
@@ -1585,13 +1592,14 @@
         return; }
       if (session) { t.claim.session_id = session.id; t.claim.session_url = session.url; t.claim.note = `Claude is working for @${who}`; t.claim.heartbeat_at = nowIso(); }
       else { t.claim.status = 'stuck'; t.claim.note = `Send to Claude failed: ${err || 'no response from the routine'}`; }
-    }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed');
-    if (!session) toast('Send to Claude failed: ' + (err || 'no response'), true); else { toast('Claude is working on it'); if (!LS.get('kb_claude_ok')) { LS.set('kb_claude_ok', nowIso()); stashBoard(); } }
+    }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed');   // save the result before the job (and its reply) is deleted
+    try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there
+    if (!session) toast('Send to Claude failed: ' + (err || 'no response'), true); else { toast('Claude is working on it'); if (!claudeWorks()) markWorks(); }
   }
   async function sweepClaudeJobs() {   // best-effort: remove finished/abandoned relay jobs (and the token they hold)
     if (!claudeReady()) return;
     try { const r = await cronFetch('GET', '/jobs'); if (!r.ok) return; const now = Date.now() / 1000;
-      for (const j of (await r.json()).jobs || []) { const m = /^kbclaude:(\d+):/.exec(j.title || ''); if (m && now - Number(m[1]) > 600) await cronFetch('DELETE', `/jobs/${j.jobId}`); } } catch {}
+      for (const j of (await r.json()).jobs || []) { const m = /^kbclaude:(?:([a-z0-9]+):)?(\d+):/.exec(j.title || ''); if (m && (!m[1] || m[1] === INST) && now - Number(m[2]) > 600) await cronFetch('DELETE', `/jobs/${j.jobId}`); } } catch {}
   }
   const wantsClaude = text => /(^|[\s(])@claude\b/i.test(String(text || ''));
   function askSend(num) {   // 'send' | 'post' | 'cancel'
@@ -1625,11 +1633,14 @@
   const saveAgents = () => LS.set('kb_agents', KNOWN_AGENTS.filter(a => $(a === 'claude' ? 'sUseClaude' : 'sUseCodex').checked).join(','));
   $('sUseClaude').onchange = $('sUseCodex').onchange = () => { saveAgents(); showAgentBoxes(); cwRender(); };
   const khash = v => { let h = 5381; for (const ch of String(v)) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h.toString(36); };   // remembers which key was tested, without keeping the key twice
+  const claudeFp = () => { const c = claudeCfg(); return khash([c.url, c.token, c.cron].join('|')); };
+  const claudeWorks = () => { const v = LS.get('kb_claude_ok'); return !!v && (!v.includes('|') || v.split('|')[0] === claudeFp()); };   // a pass counts only for the same URL, token and key (old values had no fingerprint)
+  const markWorks = () => { LS.set('kb_claude_ok', claudeFp() + '|' + nowIso()); stashBoard(); };
   const cronOk = () => { const k = claudeCfg().cron; return !!k && LS.get('kb_cron_ok') === khash(k); };
   const cwMarks = () => LS.get('kb_claude_steps').split(',').filter(Boolean);
   const cwMark = n => { const m = new Set(cwMarks()); m.add(String(n)); LS.set('kb_claude_steps', [...m].sort().join(',')); stashBoard(); };
   function cwState() {   // [routine made, BOARD_TOKEN given, trigger pasted, cron-job.org key works, a real run started]
-    const c = claudeCfg(), m = cwMarks(), works = !!LS.get('kb_claude_ok'), trig = FIRE_RE.test(c.url) && !!c.token;
+    const c = claudeCfg(), m = cwMarks(), works = claudeWorks(), trig = FIRE_RE.test(c.url) && !!c.token;
     return [m.includes('1') || trig || works, m.includes('2') || works, trig, cronOk(), works];
   }
   let cwOpen = 0;   // the step the person opened by hand (0: the first step that is not done, -1: none)
@@ -1694,13 +1705,13 @@
       if (url && started.classList.contains('wait')) { started.replaceWith(ckRow(el('div'), true, 'Claude started.', ['Open the session', url])); }
       if (x && x.claim && x.claim.status === 'stuck') { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, x.claim.note || 'The routine did not start.')); btn.disabled = false; return; }
       const said = x && x.comments.find(m => m.type !== 'activity' && /^claude\b/i.test(m.by || '') && m.at > at);
-      if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); LS.set('kb_claude_ok', nowIso()); stashBoard(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
+      if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); markWorks(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
       if (Date.now() - t0 > 10 * 60000) { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, `No reply after 10 minutes. Open task #${x ? x.num : '?'} or your routine's recent runs to see why.`)); btn.disabled = false; }
     }, FAST ? 300 : 15000);
   };
   // ---- Test and fix problems: test cron-job.org without starting Claude, see and remove relay jobs, read the relay log ----
   function renderRelayLog() {
-    const box = $('cwLog'), a = relayLog(); box.textContent = '';
+    const box = $('cwLog'), repo = cfg().repo, a = relayLog().filter(e => !e.repo || e.repo === repo); box.textContent = '';   // this board's sends only
     if (!a.length) { box.append(el('div', 'muted', 'Nothing sent from this browser yet.')); return; }
     a.forEach(e => { const d = el('div', 'wck ' + (e.ok === false ? 'bad' : e.ok ? 'ok' : 'wait')); d.append(el('b', null, `${hhmm(e.at)} · #${e.num ?? '?'} · ${e.ev}`), el('div', 'muted', e.detail)); box.append(d); });
   }
@@ -1928,8 +1939,8 @@
         row.append(o, x); }
       box.append(row); }); }
   // "Add a board": pick new or existing; for an existing one, paste a token, pick the repo, the page checks for the board file
-  const AW = { step: 0, tok: '', me: '', repos: [], repo: '', busy: false, rows: [], found: null };
-  $('bAdd').onclick = () => { Object.assign(AW, { step: 0, tok: '', me: '', repos: [], repo: '', rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); $('bWiz').scrollIntoView({ block: 'nearest' }); };
+  const AW = { step: 0, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null };
+  $('bAdd').onclick = () => { Object.assign(AW, { step: 0, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); $('bWiz').scrollIntoView({ block: 'nearest' }); };
   function renderAddWiz() {
     const w = $('bWiz'); w.textContent = ''; const s = AW.step, foot = el('div', 'wfoot'), back = el('button', null, s ? 'Back' : 'Cancel'), next = el('button', 'primary', 'Next');
     back.type = next.type = 'button'; back.onclick = () => { if (s) { AW.step--; renderAddWiz(); } else { w.hidden = true; $('bAdd').hidden = false; } };
@@ -1946,31 +1957,57 @@
       const ol = el('ol', 'wmini'); ['Resource owner: the account or organisation that owns the board repo.', 'Repository access: Only select repositories, then the board repo.', 'Generate token, copy it, and paste it below.'].forEach(t => ol.append(el('li', null, t)));
       const tok = el('input'); tok.type = 'password'; tok.placeholder = 'github_pat_…'; tok.autocomplete = 'off'; tok.value = AW.tok; const lab = el('label', 'wlabel', 'Token'); lab.append(tok);
       const res = el('div', 'wchecks'); w.append(a, ol, lab, res, el('p', 'hint', 'The token stays in this browser and goes only to api.github.com.'));
-      const draw = () => { res.textContent = ''; AW.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === null ? 'wait' : 'bad'), (ok === true ? '✓ ' : ok === null ? '… ' : '✕ ') + t))); next.disabled = !AW.repos.length; };
-      const check = async () => { const t = AW.tok; AW.repos = []; if (!t) { AW.rows = []; draw(); return; } AW.rows = [[null, 'Checking the token…']]; draw();
+      const draw = () => { res.textContent = ''; AW.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === null ? 'wait' : 'bad'), (ok === true ? '✓ ' : ok === null ? '… ' : '✕ ') + t))); next.disabled = !AW.ok; };
+      const check = async () => { const t = AW.tok; AW.repos = []; AW.ok = false; if (!t) { AW.rows = []; draw(); return; } AW.rows = [[null, 'Checking the token…']]; draw();
         const api = cfg().api, u = await fetch(`${api}/user`, { headers: ghH(t) }).catch(() => null); if (t !== AW.tok) return;
         if (!u || !u.ok) { AW.rows = [[false, u && u.status === 401 ? 'GitHub did not accept this token. Copy it again.' : 'Could not reach GitHub. Check your connection.']]; draw(); return; }
-        AW.me = (await u.json()).login; const lr = await fetch(`${api}/user/repos?per_page=100&sort=updated&affiliation=owner,organization_member,collaborator`, { headers: ghH(t) }).catch(() => null); if (t !== AW.tok) return;
-        AW.repos = (lr && lr.ok ? await lr.json() : []).filter(r => r.permissions && r.permissions.push);
-        AW.rows = [[true, `Token works for @${AW.me}`], AW.repos.length ? [true, `It can change ${AW.repos.length} repo${AW.repos.length === 1 ? '' : 's'}`] : [false, 'This token cannot change any repo. On GitHub, edit the token: pick the board repo and set Contents to Read and write.']]; draw(); };
+        AW.me = (await u.json()).login; AW.ok = true; const all = [];
+        for (let pg = 1; pg <= 10; pg++) {   // up to 1000 repos; the next step also takes a typed owner/repo
+          const lr = await fetch(`${api}/user/repos?per_page=100&page=${pg}&sort=updated&affiliation=owner,organization_member,collaborator`, { headers: ghH(t) }).catch(() => null); if (t !== AW.tok) return;
+          const got = lr && lr.ok ? await lr.json() : []; all.push(...got); if (got.length < 100) break; }
+        AW.repos = all; const rw = all.filter(r => r.permissions && r.permissions.push).length;
+        AW.rows = [[true, `Token works for @${AW.me}`], all.length ? [true, `It can see ${all.length} repo${all.length === 1 ? '' : 's'}${rw < all.length ? ` (it can save to ${rw})` : ''}`] : [false, 'This token cannot see any repo. On GitHub, edit the token and pick the board repo. You can also type the repo on the next step.']]; draw(); };
       let tmr; tok.oninput = () => { AW.tok = tok.value.trim(); clearTimeout(tmr); tmr = setTimeout(check, 400); };
       next.onclick = () => { AW.step = 2; AW.found = null; renderAddWiz(); }; draw(); if (AW.tok && !AW.rows.length) check(); setTimeout(() => tok.focus(), 30);
     } else {
       const known = Object.keys(boardsMap()), list = AW.repos.slice().sort((x, y) => (/keeptrack|board|task/i.test(y.name) - /keeptrack|board|task/i.test(x.name)) || (known.includes(x.full_name) - known.includes(y.full_name)));
-      if (!AW.repo || !list.some(r => r.full_name === AW.repo)) AW.repo = (list[0] || {}).full_name || '';
-      const sel = el('select'); list.forEach(r => { const o = el('option', null, r.full_name + (known.includes(r.full_name) ? ' (already added)' : '')); o.value = r.full_name; sel.append(o); }); sel.value = AW.repo;
-      const lab = el('label', 'wlabel', 'Board repo'); lab.append(sel); const res = el('div', 'wchecks'); w.append(lab, res);
+      if (!AW.repo) AW.repo = (list[0] || {}).full_name || '';
+      const sel = el('select'), other = '\u0000other'; list.forEach(r => { const o = el('option', null, r.full_name + (known.includes(r.full_name) ? ' (already added)' : '') + (r.permissions && !r.permissions.push ? ' (read only)' : '')); o.value = r.full_name; sel.append(o); });
+      const oo = el('option', null, 'Another repo: type it below'); oo.value = other; sel.append(oo);
+      const typed = !list.some(r => r.full_name === AW.repo); sel.value = typed ? other : AW.repo;
+      const rin = el('input'); rin.placeholder = 'owner/repo'; rin.value = typed ? AW.repo : ''; rin.autocomplete = 'off'; const rlab = el('label', 'wlabel', 'Repo (owner/name)'); rlab.append(rin); rlab.hidden = !typed;
+      const lab = el('label', 'wlabel', 'Board repo'); lab.append(sel);
+      const adv = el('details', 'wadv'), bin = el('input'), pin = el('input'); adv.append(el('summary', null, 'Branch and file (only if the board is not in the usual place)'));
+      bin.placeholder = 'the repo’s default branch'; bin.value = AW.branch || ''; pin.value = AW.path || 'board/tasks.json'; bin.autocomplete = pin.autocomplete = 'off';
+      const bl = el('label', 'wlabel', 'Branch'), pl = el('label', 'wlabel', 'File'); bl.append(bin); pl.append(pin); adv.append(bl, pl); adv.open = !!(AW.branch || (AW.path && AW.path !== 'board/tasks.json'));
+      const res = el('div', 'wchecks'), meBox = el('label', 'wck warn wme'), meCb = el('input'); meCb.type = 'checkbox'; meBox.hidden = true;
+      w.append(lab, rlab, adv, res, meBox);
       const draw = () => { res.textContent = ''; const f = AW.found; next.disabled = !(f && f.ok);
         if (!f) return; if (f.busy) { res.append(el('div', 'wck wait', '… Looking for the board…')); return; }
-        res.append(el('div', 'wck ' + (f.ok ? 'ok' : 'bad'), (f.ok ? '✓ ' : '✕ ') + f.text)); if (f.ok && f.pub) res.append(el('div', 'wck warn', '⚠ This repo is PUBLIC: everybody can read the board.')); };
-      const look = async () => { const r = list.find(x => x.full_name === AW.repo); if (!r) { AW.found = { ok: false, text: 'Pick a repo.' }; draw(); return; }
-        AW.found = { busy: true }; draw(); const br = r.default_branch || 'main';
-        const g = await fetch(`${cfg().api}/repos/${r.full_name}/contents/board/tasks.json?ref=${encodeURIComponent(br)}`, { headers: ghH(AW.tok), cache: 'no-store' }).catch(() => null); if (r.full_name !== AW.repo) return;
-        AW.found = g && g.ok ? { ok: true, text: `Board found in ${r.full_name} (branch ${br})`, branch: br, pub: !r.private } : { ok: false, text: g && g.status === 404 ? `${r.full_name} has no board yet (no board/tasks.json on ${br}). Pick another repo, or go back and choose "Make a new board".` : 'GitHub error ' + (g ? g.status : '') };
+        res.append(el('div', 'wck ' + (f.ok ? 'ok' : 'bad'), (f.ok ? '✓ ' : '✕ ') + f.text));
+        if (f.ok && !f.push) res.append(el('div', 'wck warn', '⚠ This token can read the board but cannot save to it. The board opens read-only. To change that, edit the token on GitHub: Contents, Read and write.'));
+        if (f.ok && f.pub) res.append(el('div', 'wck warn', '⚠ This repo is PUBLIC: everybody can read the board.'));
+        const me = cfg().me; meBox.textContent = ''; meBox.hidden = !(f.ok && AW.me && me && me.toLowerCase() !== AW.me.toLowerCase());
+        if (!meBox.hidden) { meCb.checked = !!AW.useMe; meCb.onchange = () => { AW.useMe = meCb.checked; }; meBox.append(meCb, ` This token is for @${AW.me}, but your name in this browser is "${me}". Use @${AW.me} from now on.`); } };
+      const look = async () => { const name = AW.repo, path = (pin.value.trim() || 'board/tasks.json'); AW.path = path; AW.branch = bin.value.trim();
+        if (!REPO_RE.test(name)) { AW.found = { ok: false, text: 'Type the repo as owner/name, for example acme/team-board.' }; draw(); return; }
+        if (!/^[\w./-]+$/.test(path) || (AW.branch && !/^[\w./-]+$/.test(AW.branch))) { AW.found = { ok: false, text: 'The branch or file name has characters a board link cannot use.' }; draw(); return; }
+        AW.found = { busy: true }; draw();
+        let r = list.find(x => x.full_name === name);
+        if (!r) { const g = await fetch(`${cfg().api}/repos/${name}`, { headers: ghH(AW.tok) }).catch(() => null); if (name !== AW.repo) return;
+          if (!g || !g.ok) { AW.found = { ok: false, text: g && g.status === 404 ? `This token cannot see ${name}. Check the name, or edit the token on GitHub and add this repo.` : 'GitHub error ' + (g ? g.status : '') }; draw(); return; }
+          r = await g.json(); }
+        const br = AW.branch || r.default_branch || 'main';
+        const g = await fetch(`${cfg().api}/repos/${name}/contents/${path}?ref=${encodeURIComponent(br)}`, { headers: ghH(AW.tok), cache: 'no-store' }).catch(() => null); if (name !== AW.repo || path !== AW.path) return;
+        AW.found = g && g.ok ? { ok: true, text: `Board found in ${name} (branch ${br}${path !== 'board/tasks.json' ? ', file ' + path : ''})`, branch: br, path, pub: !r.private, push: !!(r.permissions && r.permissions.push) }
+          : { ok: false, text: g && g.status === 404 ? `${name} has no board at ${path} on branch ${br}. Pick another repo, set the branch and file below, or go back and choose "Make a new board".` : 'GitHub error ' + (g ? g.status : '') };
         draw(); };
-      sel.onchange = () => { AW.repo = sel.value; look(); };
+      let tmr; const later = () => { clearTimeout(tmr); tmr = setTimeout(look, 500); };
+      sel.onchange = () => { const o = sel.value === other; rlab.hidden = !o; AW.repo = o ? rin.value.trim() : sel.value; if (o) setTimeout(() => rin.focus(), 30); look(); };
+      rin.oninput = () => { AW.repo = rin.value.trim(); later(); }; bin.oninput = pin.oninput = later;
       next.textContent = 'Open this board'; next.onclick = () => { const f = AW.found; if (!f || !f.ok) return;
-        activateBoard(AW.repo, { token: AW.tok, branch: f.branch, path: 'board/tasks.json' }); LS.del('kb_ro:' + AW.repo); if (AW.me && (!cfg().me || cfg().me.toLowerCase() === AW.me.toLowerCase())) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); };
+        activateBoard(AW.repo, { token: AW.tok, branch: f.branch, path: f.path }); LS.del('kb_ro:' + AW.repo);
+        const me = cfg().me; if (AW.me && (!me || me.toLowerCase() === AW.me.toLowerCase() || AW.useMe)) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); };
       look();
     }
     foot.append(back, el('span', 'spacer'), next); w.append(foot);

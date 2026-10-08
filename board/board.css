@@ -752,3 +752,4 @@ body.setup header { justify-content: flex-start; } body.setup #btnHelp { margin-
 .bwiz { margin-top: 10px; } .bwiz h4 { margin: 0 0 6px; font-size: 15px; } .bwiz .wfoot { display: flex; gap: 8px; margin-top: 14px; }
 .wck.wait { color: var(--muted); }
 @media (max-width: 520px) { .bwiz .wpick { grid-template-columns: 1fr; } }
+.wadv { margin-top: 12px; font-size: 13px; } .wadv summary { cursor: pointer; color: var(--muted); } .wme { display: flex; gap: 6px; align-items: flex-start; margin-top: 8px; font-size: 13.5px; }
