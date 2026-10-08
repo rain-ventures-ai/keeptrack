@@ -915,7 +915,10 @@ def _to_v4(d):
     return d
 
 
-def migrate_data(data, target=SCHEMA):
+AUTO_MIGRATE_TO = 3  # writes bring older files up to v3 only; split storage (v4) needs an explicit `migrate --to 4`
+
+
+def migrate_data(data, target=AUTO_MIGRATE_TO):
     v = data.get("version", 1) if isinstance(data.get("version", 1), int) else 1
     steps = []
     while v < target:
@@ -2210,7 +2213,7 @@ def apply_staging(data, st, label):
         ev = _s(p.get("evidence")) or label
         q = _match_person(people, p)
         if q is None:
-            q = {"id": "p_" + uuid.uuid4().hex[:8], "name": _s(p["name"]), "company": "", "role": "", "email": "", "phone": "",
+            q = {"id": new_board_id(data, "p_", "people"), "name": _s(p["name"]), "company": "", "role": "", "email": "", "phone": "",
                  "linkedin": "", "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "",
                  "links": [], "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": by}
             for k in IMPORT_PERSON_FIELDS:
@@ -2247,13 +2250,16 @@ def apply_staging(data, st, label):
         if _s(t.get("contact")):
             c = _match_person(people, {"name": t["contact"], "email": t["contact"], "company": client})
             contact = c["id"] if c else ""
-        x = {"id": "t_" + uuid.uuid4().hex[:8], "title": title, "column": _s(t.get("column")) or "todo", "client": client,
+        x = {"id": new_board_id(data, "t_", "cards"), "title": title, "column": _s(t.get("column")) or "todo", "client": client,
              "priority": _s(t.get("priority")) or "medium", "due": _s(t.get("due")), "labels": _list(t.get("labels")),
              "assignees": _list(t.get("assignees")), "details": _s(t.get("details")),
              "links": [{"title": _s(l.get("title")) or l["url"], "url": _s(l["url"])} for l in t.get("links") or []],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": _s(s), "done": False} for s in _list(t.get("todos")) if _s(s)],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
         if contact: x["contact"] = contact
+        if data.get("layout") == "split":
+            ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
+            x["rank"] = key_between(max(ranks) if ranks else None, None)
         hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
         say(f"+ task     {title}{' [' + client + ']' if client else ''}"); out["added"] += 1
     return out

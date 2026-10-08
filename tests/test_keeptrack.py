@@ -617,3 +617,42 @@ class Verify(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("card t_second is missing", out)
         self.assertIn("card t_first differs: title", out)
+
+
+class ImportOnSplitBoard(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.board_dir = os.path.join(self.temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        self.old_file = kt.FILE
+        kt.FILE = os.path.join(self.board_dir, "tasks.json")
+        self.staging = os.path.join(self.temp.name, "staging.json")
+        write(self.staging, {"source": "test", "people": [{"name": "Bea Acme", "company": "Acme", "evidence": "test"}],
+                             "tasks": [{"title": "Send the Acme notes", "client": "Acme", "evidence": "test"}]})
+
+    def tearDown(self):
+        kt.FILE = self.old_file
+        self.temp.cleanup()
+
+    def test_import_writes_new_files_with_rank_and_long_ids(self):
+        before = set(tree_bytes(self.board_dir))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_import(Args(path=self.staging, source=None, dry_run=False))
+        new = set(tree_bytes(self.board_dir)) - before
+        card = [p for p in new if p.startswith("cards")]
+        person = [p for p in new if p.startswith("people")]
+        self.assertEqual((1, 1), (len(card), len(person)), new)
+        self.assertRegex(os.path.basename(card[0]), r"^t_[0-9a-z]{10}\.json$")
+        self.assertTrue(kt.valid_rank(read_json(os.path.join(self.board_dir, card[0]))["rank"]))
+        self.assertNotIn("tasks", read_json(kt.FILE))
+
+    def test_dry_run_on_a_v3_board_does_not_split_in_memory(self):
+        shutil.rmtree(self.board_dir)
+        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        before = tree_bytes(self.board_dir)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_import(Args(path=self.staging, source=None, dry_run=True))
+        self.assertEqual(before, tree_bytes(self.board_dir))
+        data = kt.load_board(); kt.migrate_data(data)
+        self.assertEqual(3, data["version"])
+        self.assertNotIn("layout", data)
