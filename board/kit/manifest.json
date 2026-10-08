@@ -1,6 +1,6 @@
 {
-  "version": 6,
-  "schema": 3,
+  "version": 7,
+  "schema": 4,
   "files": {
     "board/keeptrack.py": "keeptrack.py",
     "board/README.md": "README.md",
@@ -9,6 +9,7 @@
     "board/routine-loader.txt": "routine-loader.txt",
     "board/routine-prompt.md": "routine-prompt.md",
     ".claude/skills/board/SKILL.md": "repo-skills/board/SKILL.md",
+    ".claude/skills/board-doctor/SKILL.md": "repo-skills/board-doctor/SKILL.md",
     ".claude/skills/board-routine-setup/SKILL.md": "repo-skills/board-routine-setup/SKILL.md",
     ".claude/skills/board-upgrade/SKILL.md": "repo-skills/board-upgrade/SKILL.md"
   }

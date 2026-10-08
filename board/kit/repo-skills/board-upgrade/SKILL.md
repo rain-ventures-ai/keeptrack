@@ -11,7 +11,7 @@ You act for the board's upgrade owner (`python3 board/keeptrack.py kit-owner`). 
 2. Claim the card. Make a branch: `git checkout -b claude/board-kit-v<N>`.
 3. `python3 board/keeptrack.py kit-update`. It copies the kit files and writes `board/KIT_VERSION`. It does not commit.
 4. Read `board/UPGRADING.md`. Do the agent steps of each version after the old version, in order.
-5. Do **not** run `migrate` before the PR is merged: the board's live data would then be newer than the tools other agents run from the default branch, and they would stop writing. After the merge, the first board write migrates the data (keeptrack.py and the web board both do it); `python3 board/keeptrack.py migrate` does it at once. Say this in the PR and on the card when the upgrade changes the schema.
+5. Do **not** run `migrate` before the PR is merged. The board data would be newer than the tools on the default branch. After the merge, follow the migration steps in `board/UPGRADING.md`. Say this in the PR and on the card when the upgrade changes the schema.
 6. Keep this repo's own files: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json` and anything outside the manifest are not kit files. Change them only when the upgrade notes say so. Do not put repo-specific text into kit files: if a kit file is wrong for this repo, say so in a card comment for the kit to be fixed in keeptrack.
 7. Check: `python3 -m py_compile board/keeptrack.py`, `python3 board/keeptrack.py kit-check` (current), `python3 board/keeptrack.py list` (works), and every check the upgrade notes give.
 8. Commit, push the branch, open a pull request, and `keeptrack.py link` it on the card. Tick the card's checklist as you go.

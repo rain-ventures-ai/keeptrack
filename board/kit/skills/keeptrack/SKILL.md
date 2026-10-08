@@ -7,6 +7,8 @@ description: Use a Keeptrack board (people, follow-ups, pipeline and tasks in bo
 
 A Keeptrack board is `board/tasks.json` in the user's private GitHub repo. People use the web board. Agents use `keeptrack.py`. Never edit `tasks.json` by hand.
 
+If the board shows errors, a save fails, or a migration has just run, use `$B doctor`. Run `$B doctor --fix` only after the user agrees.
+
 ## Find keeptrack.py
 - Claude Code plugin: `B="python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py"`.
 - Codex, Cursor or another tool: `keeptrack.py` is two folders above this file (`../../keeptrack.py` from this SKILL.md). Use its full path in `B`.
