@@ -1463,7 +1463,7 @@
     try {
       const r = await fetch(`${c.api}/repos/${c.repo}/issues`, { method: 'POST', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: `[#${t.num}] ${t.title}`, body: issueBody(t), labels: ['board-task'] }) });
-      if (r.status === 403 || r.status === 404) { toast('GitHub refused: your token needs Issues: Read and write on this repo (Settings → Connection → create a new token)', true); return; }
+      if (r.status === 403 || r.status === 404) { toast('GitHub refused: your token needs Issues: Read and write on this repo (Settings → Boards → create a new token)', true); return; }
       if (!r.ok) { toast(`GitHub error ${r.status} creating the issue`, true); return; }
       const iss = await r.json(), id = t.id;
       await edit(id, x => { if (!x.links.some(l => l.url === iss.html_url)) x.links.push({ title: `Issue #${iss.number}`, url: iss.html_url }); }, `Issue #${iss.number} for task #${t.num}`);
@@ -1673,7 +1673,7 @@
   $('cwTest').onclick = async () => {
     const box = $('cwTestCk'), btn = $('cwTest'), who = cfg().me; box.textContent = '';
     if (!claudeReady()) { ckRow(box, false, 'Finish steps 3 and 4 first.'); return; }
-    if (!who) { ckRow(box, false, 'Add your GitHub username in Settings → Connection first.'); return; }
+    if (!who) { ckRow(box, false, 'Add your GitHub username in Settings → Boards first.'); return; }
     if (ro) { ckRow(box, false, 'This board is read-only here, so the test cannot make a task.'); return; }
     btn.disabled = true;
     const id = uid(), cid = 'c_' + Date.now().toString(36), at = nowIso(), title = 'Test: Claude says hello',
@@ -1767,7 +1767,7 @@
     const score = r => { const [ro, rn] = r.toLowerCase().split('/'); return (ro === o ? 2 : 0) + words.filter(w => rn.includes(w)).length; };
     return all.filter(r => r.toLowerCase() !== String(repo).toLowerCase()).sort((a, b) => score(b) - score(a)).slice(0, 5);
   }
-  function switchRepo(r) { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Connection', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }
+  function switchRepo(r) { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Boards', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }
   let lastReport = '';
   async function runChecks(over) {   // over: values typed in Connection but not saved yet
     const c = Object.assign(cfg(), over || {}), out = $('ckList'), rows = []; out.textContent = ''; $('ckRun').disabled = true;
@@ -1781,7 +1781,7 @@
       let login = '';
       try { const r = await ghGet('/user', null, c); if (r.ok) { login = (await r.json()).login; const exp = r.headers.get('github-authentication-token-expiration');
           add(true, 'Token works', `Signed in as @${login}${exp ? ' · expires ' + exp : ''}`); if (c.me && login.toLowerCase() !== c.me.toLowerCase()) add(null, 'Username differs from token', `The token belongs to @${login}, but Settings says @${c.me}.`); }
-        else add(false, 'Token works', r.status === 401 ? 'GitHub rejected the token (401). It is wrong, revoked or expired. Make a new one in Settings → Connection.' : `GitHub said ${r.status}.`); } catch (e) { add(false, 'Reach GitHub', 'No connection to api.github.com: ' + (e.message || e)); return; }
+        else add(false, 'Token works', r.status === 401 ? 'GitHub rejected the token (401). It is wrong, revoked or expired. Make a new one in Settings → Boards.' : `GitHub said ${r.status}.`); } catch (e) { add(false, 'Reach GitHub', 'No connection to api.github.com: ' + (e.message || e)); return; }
       const rr = await ghGet(`/repos/${c.repo}`, null, c);
       if (!rr.ok) {
         const near = await nearRepos(c.repo, c), fix = el('div', 'ckfix');
@@ -1855,11 +1855,11 @@
     if (o.on && 'Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch {} } renderAlerts(); };
   $('alTest').onclick = () => notify('Test alert', 'Board alerts work in this browser.', null);
   function settingsTab(name) {
-    const ids = { general: ['panelGeneral', 'tabGeneral'], conn: ['panelConn', 'tabConn'], claude: ['panelClaude', 'tabClaude'], boards: ['panelBoards', 'tabBoards'], checks: ['panelChecks', 'tabChecks'], alerts: ['panelAlerts', 'tabAlerts'] };
+    let edit = false; if (name === 'conn') { name = 'boards'; edit = true; }   // the connection fields live in Boards → This board → Change connection
+    const ids = { general: ['panelGeneral', 'tabGeneral'], claude: ['panelClaude', 'tabClaude'], boards: ['panelBoards', 'tabBoards'], checks: ['panelChecks', 'tabChecks'], alerts: ['panelAlerts', 'tabAlerts'] };
     Object.keys(ids).forEach(n => { const on = n === name; $(ids[n][0]).hidden = !on; $(ids[n][1]).setAttribute('aria-selected', String(on)); });
     $('dlgSettings').scrollTop = 0;   // each tab starts at the top
-    if (name === 'conn') setTimeout(() => $('sRepo').focus(), 30);
-    if (name === 'boards') renderBoards();
+    if (name === 'boards') { renderBoards(); showEdit(edit || !cfg().token); if (edit) setTimeout(() => (cfg().repo ? $('sToken') : $('sRepo')).focus(), 30); }
     if (name === 'alerts') renderAlerts();
     if (name === 'claude') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key'); $('sClaudeMsg').textContent = '';
       const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
@@ -1872,7 +1872,7 @@
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
     settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'conn'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; renderArchiveBox(); $('dlgSettings').showModal(); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; renderArchiveBox(); $('dlgSettings').showModal(); };
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
     if (/^[\w.-]+$/.test(owner)) q.set('target_name', owner);
@@ -1905,10 +1905,21 @@
     pop.onclick = e => e.stopPropagation();
   }
   renderSwitcher();
-  // Settings → Boards: the list, add an existing board, and the new-board prompt for Claude
+  // Settings → Boards: this board (status, change connection, checks), the other boards, and the "Add a board" wizard
+  const showEdit = on => { $('bEdit').hidden = !on; $('bEditBtn').setAttribute('aria-expanded', String(on)); };
+  $('bEditBtn').onclick = () => showEdit($('bEdit').hidden);
+  $('bCheck').onclick = () => { settingsTab('checks'); runChecks(); };
+  function renderThis() {
+    const c = cfg(), has = !!c.repo; $('bThisBadge').textContent = ''; if (has) $('bThisBadge').append(badge(c.repo));
+    $('bThisRepo').textContent = has ? c.repo : 'No board connected';
+    $('bThisSub').textContent = has ? `${c.branch} · ${c.path}${c.me ? ' · you are @' + c.me : ''}` : 'Add a board below, or fill in the connection.';
+    const [t, k] = !has ? ['Not set up', 'warn'] : !c.token ? ['No token', 'warn'] : ro === 'token' ? ['Read-only', 'warn'] : ro === 'demo' ? ['Demo', ''] : lastSyncOk ? ['Connected', 'ok'] : ['Not connected', 'warn'];
+    const ch = $('bThisChip'); ch.textContent = t; ch.className = 'agchip' + (k ? ' ' + k : '');
+  }
   function renderBoards() {
-    const box = $('bList'), cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).sort(); box.textContent = '';
-    if (!repos.length) box.append(el('div', 'hint', 'No board yet. Use Connection to connect one.'));
+    renderThis(); if ($('bWiz').hidden) $('bAdd').hidden = false;
+    const box = $('bList'), cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).filter(r => r !== cur).sort(); box.textContent = '';
+    if (!repos.length) box.append(el('div', 'hint', cur ? 'No other boards yet.' : 'No board yet.'));
     repos.forEach(r => { const row = el('div', 'brow'), name = el('span', 'bname', r); row.append(badge(r), name);
       if (r === cur) row.append(el('span', 'bcur', 'this board'));
       else { const o = el('button', 'small', 'Open'), x = el('button', 'small danger', 'Remove');
@@ -1916,7 +1927,54 @@
         x.onclick = () => { if (!confirm(`Remove ${r} from the boards in this browser?\n\nIts saved token and routine settings are deleted here. The repo itself is not changed.`)) return; forgetBoard(r); renderBoards(); renderSwitcher(); };
         row.append(o, x); }
       box.append(row); }); }
-  $('bAdd').onclick = () => { settingsTab('conn'); $('sRepo').value = ''; $('sToken').value = ''; $('sToken').placeholder = 'github_pat_... (a token for the new repo)'; $('patLink').href = patUrl(); };
+  // "Add a board": pick new or existing; for an existing one, paste a token, pick the repo, the page checks for the board file
+  const AW = { step: 0, tok: '', me: '', repos: [], repo: '', busy: false, rows: [], found: null };
+  $('bAdd').onclick = () => { Object.assign(AW, { step: 0, tok: '', me: '', repos: [], repo: '', rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); $('bWiz').scrollIntoView({ block: 'nearest' }); };
+  function renderAddWiz() {
+    const w = $('bWiz'); w.textContent = ''; const s = AW.step, foot = el('div', 'wfoot'), back = el('button', null, s ? 'Back' : 'Cancel'), next = el('button', 'primary', 'Next');
+    back.type = next.type = 'button'; back.onclick = () => { if (s) { AW.step--; renderAddWiz(); } else { w.hidden = true; $('bAdd').hidden = false; } };
+    const dots = el('ol', 'wdots'); ['Choose', 'Token', 'Board'].forEach((t, i) => dots.append(el('li', i < s ? 'done' : i === s ? 'on' : '', t)));
+    w.append(el('h4', null, 'Add a board'), dots);
+    if (s === 0) {
+      const pick = el('div', 'wpick'), card = (icon, title, text, fn) => { const b = el('button', 'wcard'); b.type = 'button'; b.append(elI('span', 'wic', icon), el('b', null, title), el('span', 'muted', text)); b.onclick = fn; return b; };
+      pick.append(card('link', 'Connect a board I have', 'A teammate shared it with you, or you made it on another device.', () => { AW.step = 1; renderAddWiz(); }),
+        card('plus', 'Make a new board', 'A new private repo for your people and tasks. About five minutes.', () => { location.href = location.pathname + '?setup'; }));
+      w.append(pick); next.hidden = true;
+    } else if (s === 1) {
+      w.append(el('p', null, 'Each board needs its own GitHub token. Make one for the board’s repo:'));
+      const a = elI('a', 'wbig', 'github', 'Open GitHub: make a token'); a.href = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({ name: 'Keeptrack board', description: 'Keeptrack: read and write board/tasks.json', expires_in: '90', contents: 'write', issues: 'write' }); a.target = '_blank'; a.rel = 'noopener noreferrer';
+      const ol = el('ol', 'wmini'); ['Resource owner: the account or organisation that owns the board repo.', 'Repository access: Only select repositories, then the board repo.', 'Generate token, copy it, and paste it below.'].forEach(t => ol.append(el('li', null, t)));
+      const tok = el('input'); tok.type = 'password'; tok.placeholder = 'github_pat_…'; tok.autocomplete = 'off'; tok.value = AW.tok; const lab = el('label', 'wlabel', 'Token'); lab.append(tok);
+      const res = el('div', 'wchecks'); w.append(a, ol, lab, res, el('p', 'hint', 'The token stays in this browser and goes only to api.github.com.'));
+      const draw = () => { res.textContent = ''; AW.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === null ? 'wait' : 'bad'), (ok === true ? '✓ ' : ok === null ? '… ' : '✕ ') + t))); next.disabled = !AW.repos.length; };
+      const check = async () => { const t = AW.tok; AW.repos = []; if (!t) { AW.rows = []; draw(); return; } AW.rows = [[null, 'Checking the token…']]; draw();
+        const api = cfg().api, u = await fetch(`${api}/user`, { headers: ghH(t) }).catch(() => null); if (t !== AW.tok) return;
+        if (!u || !u.ok) { AW.rows = [[false, u && u.status === 401 ? 'GitHub did not accept this token. Copy it again.' : 'Could not reach GitHub. Check your connection.']]; draw(); return; }
+        AW.me = (await u.json()).login; const lr = await fetch(`${api}/user/repos?per_page=100&sort=updated&affiliation=owner,organization_member,collaborator`, { headers: ghH(t) }).catch(() => null); if (t !== AW.tok) return;
+        AW.repos = (lr && lr.ok ? await lr.json() : []).filter(r => r.permissions && r.permissions.push);
+        AW.rows = [[true, `Token works for @${AW.me}`], AW.repos.length ? [true, `It can change ${AW.repos.length} repo${AW.repos.length === 1 ? '' : 's'}`] : [false, 'This token cannot change any repo. On GitHub, edit the token: pick the board repo and set Contents to Read and write.']]; draw(); };
+      let tmr; tok.oninput = () => { AW.tok = tok.value.trim(); clearTimeout(tmr); tmr = setTimeout(check, 400); };
+      next.onclick = () => { AW.step = 2; AW.found = null; renderAddWiz(); }; draw(); if (AW.tok && !AW.rows.length) check(); setTimeout(() => tok.focus(), 30);
+    } else {
+      const known = Object.keys(boardsMap()), list = AW.repos.slice().sort((x, y) => (/keeptrack|board|task/i.test(y.name) - /keeptrack|board|task/i.test(x.name)) || (known.includes(x.full_name) - known.includes(y.full_name)));
+      if (!AW.repo || !list.some(r => r.full_name === AW.repo)) AW.repo = (list[0] || {}).full_name || '';
+      const sel = el('select'); list.forEach(r => { const o = el('option', null, r.full_name + (known.includes(r.full_name) ? ' (already added)' : '')); o.value = r.full_name; sel.append(o); }); sel.value = AW.repo;
+      const lab = el('label', 'wlabel', 'Board repo'); lab.append(sel); const res = el('div', 'wchecks'); w.append(lab, res);
+      const draw = () => { res.textContent = ''; const f = AW.found; next.disabled = !(f && f.ok);
+        if (!f) return; if (f.busy) { res.append(el('div', 'wck wait', '… Looking for the board…')); return; }
+        res.append(el('div', 'wck ' + (f.ok ? 'ok' : 'bad'), (f.ok ? '✓ ' : '✕ ') + f.text)); if (f.ok && f.pub) res.append(el('div', 'wck warn', '⚠ This repo is PUBLIC: everybody can read the board.')); };
+      const look = async () => { const r = list.find(x => x.full_name === AW.repo); if (!r) { AW.found = { ok: false, text: 'Pick a repo.' }; draw(); return; }
+        AW.found = { busy: true }; draw(); const br = r.default_branch || 'main';
+        const g = await fetch(`${cfg().api}/repos/${r.full_name}/contents/board/tasks.json?ref=${encodeURIComponent(br)}`, { headers: ghH(AW.tok), cache: 'no-store' }).catch(() => null); if (r.full_name !== AW.repo) return;
+        AW.found = g && g.ok ? { ok: true, text: `Board found in ${r.full_name} (branch ${br})`, branch: br, pub: !r.private } : { ok: false, text: g && g.status === 404 ? `${r.full_name} has no board yet (no board/tasks.json on ${br}). Pick another repo, or go back and choose "Make a new board".` : 'GitHub error ' + (g ? g.status : '') };
+        draw(); };
+      sel.onchange = () => { AW.repo = sel.value; look(); };
+      next.textContent = 'Open this board'; next.onclick = () => { const f = AW.found; if (!f || !f.ok) return;
+        activateBoard(AW.repo, { token: AW.tok, branch: f.branch, path: 'board/tasks.json' }); LS.del('kb_ro:' + AW.repo); if (AW.me && (!cfg().me || cfg().me.toLowerCase() === AW.me.toLowerCase())) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); };
+      look();
+    }
+    foot.append(back, el('span', 'spacer'), next); w.append(foot);
+  }
   $('bNewPrompt').onclick = () => { const who = cfg().me || '<your-github-username>';
     copyText(['Please help me set up a new Keeptrack board (a private GitHub repo with the Keeptrack board kit).', '',
       `My GitHub username is ${who}.`, 'Read this guide first and follow it step by step: ' + HOME + '/board/kit/NEW-BOARD.md', '',
@@ -2266,7 +2324,7 @@
       next.textContent = 'Create my board'; next.onclick = () => wizardGo(next);
     }
     foot.append(back, el('span', 'spacer'), next); w.append(body, foot); board.append(w);
-    const have = $('wHave'); if (have) have.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('conn'); };
+    const have = $('wHave'); if (have) have.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('boards'); $('bAdd').click(); AW.step = 1; renderAddWiz(); };
     const imp = $('wImport'); if (imp) imp.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('general'); setTimeout(() => { const t = document.querySelector('#panelGeneral textarea'); if (t) t.focus(); }, 60); };
   }
   function endSetup() { if (SETUP) { SETUP = false; history.replaceState(null, '', location.pathname); } $('board').className = ''; }

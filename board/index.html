@@ -103,9 +103,8 @@
   <div class="sethead"><h3>Settings</h3><button id="sClose" class="ico" aria-label="Close settings"><i data-i="x"></i></button></div>
   <div class="stabs" role="tablist" aria-label="Settings sections">
     <button id="tabGeneral" role="tab" aria-selected="true" data-tab="general">General</button>
-    <button id="tabConn" role="tab" aria-selected="false" data-tab="conn">Connection</button>
-    <button id="tabClaude" role="tab" aria-selected="false" data-tab="claude">Agents</button>
     <button id="tabBoards" role="tab" aria-selected="false" data-tab="boards">Boards</button>
+    <button id="tabClaude" role="tab" aria-selected="false" data-tab="claude">Agents</button>
     <button id="tabAlerts" role="tab" aria-selected="false" data-tab="alerts">Alerts</button>
     <button id="tabChecks" role="tab" aria-selected="false" data-tab="checks">Checks</button>
   </div>
@@ -126,27 +125,31 @@
     <div class="actions"><button id="sDone" class="primary">Done</button></div>
   </div>
 
-  <div id="panelConn" role="tabpanel" aria-labelledby="tabConn" hidden>
-    <label for="sRepo">Repository (owner/name)</label><input id="sRepo" placeholder="owner/repo">
-    <div class="row">
-      <div><label for="sBranch">Branch</label><input id="sBranch" placeholder="master"></div>
-      <div><label for="sPath">File path</label><input id="sPath" placeholder="board/tasks.json"></div>
-    </div>
-    <label for="sMe">Your GitHub username</label><input id="sMe" placeholder="osouthgate" autocomplete="off">
-    <div class="hint">Recorded as the author of your edits and comments, and used for unread markers and the default assignee.</div>
-    <label for="sToken">Fine-grained personal access token</label><input id="sToken" type="password" autocomplete="off" placeholder="github_pat_..."><div class="fldbtns"><button type="button" class="small" data-copy="sToken"><i data-i="clipboard-copy"></i> Copy</button><button type="button" class="small" data-show="sToken" aria-pressed="false"><i data-i="eye"></i> Show</button></div>
-    <div class="hint"><a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create a fine-grained token on GitHub &rarr;</a> (the link pre-fills the name, expiry and <b>Contents: Read and write</b> plus <b>Issues: Read and write</b>, needed for the Create issue button). Choose <b>Only select repositories</b> and pick just the repo that holds your board file. If the repo belongs to an organisation, set <b>Resource owner</b> to that organisation. The token is kept only in this browser (localStorage) and is sent only to api.github.com.</div>
-    <div class="actions"><button id="sForget" class="danger">Forget token</button><span class="spacer"></span><button id="sTest" type="button"><i data-i="stethoscope"></i> Test connection</button><button id="sCancel">Cancel</button><button id="sSave" class="primary">Save &amp; connect</button></div>
-  </div>
   <div id="panelBoards" role="tabpanel" aria-labelledby="tabBoards" hidden>
-    <p class="hint" style="margin-top:0">The boards this browser knows. Each board is its own GitHub repo, with its own token and Claude routine, kept only in this browser. The menu next to the logo switches between them.</p>
+    <section class="agcard" id="bThis">
+      <div class="aghead"><span id="bThisBadge"></span><div class="agt"><b id="bThisRepo"></b><span class="muted" id="bThisSub"></span></div><span id="bThisChip" class="agchip"></span></div>
+      <div class="cbtns"><button id="bEditBtn" type="button" class="small" aria-expanded="false"><i data-i="pencil"></i> Change connection</button><button id="bCheck" type="button" class="small"><i data-i="stethoscope"></i> Run checks</button></div>
+      <div id="bEdit" class="bedit" hidden>
+        <label for="sRepo">Repository (owner/name)</label><input id="sRepo" placeholder="owner/repo">
+        <div class="row">
+          <div><label for="sBranch">Branch</label><input id="sBranch" placeholder="master"></div>
+          <div><label for="sPath">File path</label><input id="sPath" placeholder="board/tasks.json"></div>
+        </div>
+        <label for="sMe">Your GitHub username</label><input id="sMe" placeholder="osouthgate" autocomplete="off">
+        <div class="hint">Recorded as the author of your edits and comments, and used for unread markers and the default assignee.</div>
+        <label for="sToken">GitHub token for this board</label><input id="sToken" type="password" autocomplete="off" placeholder="github_pat_..."><div class="fldbtns"><button type="button" class="small" data-copy="sToken"><i data-i="clipboard-copy"></i> Copy</button><button type="button" class="small" data-show="sToken" aria-pressed="false"><i data-i="eye"></i> Show</button></div>
+        <div class="hint"><a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Make a new token on GitHub &rarr;</a> Select <b>Only select repositories</b> and this repo. The link sets <b>Contents</b> and <b>Issues</b> to Read and write. For a repo of an organisation, set <b>Resource owner</b> to the organisation. The token stays in this browser and goes only to api.github.com.</div>
+        <div class="actions"><button id="sForget" class="danger">Forget token</button><span class="spacer"></span><button id="sTest" type="button"><i data-i="stethoscope"></i> Test connection</button><button id="sCancel">Cancel</button><button id="sSave" class="primary">Save &amp; connect</button></div>
+      </div>
+    </section>
+    <h4 class="bh">Your boards <span class="muted">(in this browser)</span></h4>
     <div id="bList" class="blist"></div>
-    <div class="cbtns"><button id="bAdd" type="button">＋ Add an existing board</button></div>
-    <div class="hint">Opens Connection with empty fields: type the repo (owner/name) and paste a token for that repo.</div>
-    <h4>Set up a new board</h4>
-    <p class="hint">A new board is a private GitHub repo with the board kit in it. Claude can set it up with you: you create the repo and the token, Claude adds the board files and checks them.</p>
-    <div class="cbtns"><button id="bNewPrompt" type="button" class="primary"><i data-i="clipboard-copy"></i> Copy new-board prompt for Claude</button></div>
-    <div class="hint">Paste it into a new chat with Claude (Claude Code, the desktop app or claude.ai). The steps are in <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/NEW-BOARD.md" target="_blank" rel="noopener noreferrer">NEW-BOARD.md</a>. Claude never handles your secrets.</div>
+    <div class="cbtns"><button id="bAdd" type="button" class="primary"><i data-i="plus"></i> Add a board</button></div>
+    <section id="bWiz" class="agcard wiz bwiz" hidden></section>
+    <details class="agalt"><summary>Ask Claude to set up a new board</summary>
+      <p class="hint">Claude can set up a board with you: you create the repo and the token, Claude adds the board files and checks them. The steps are in <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/NEW-BOARD.md" target="_blank" rel="noopener noreferrer">NEW-BOARD.md</a>. Claude never handles your secrets.</p>
+      <div class="cbtns"><button id="bNewPrompt" type="button"><i data-i="clipboard-copy"></i> Copy new-board prompt for Claude</button></div>
+    </details>
   </div>
   <div id="panelAlerts" role="tabpanel" aria-labelledby="tabAlerts" hidden>
     <p class="hint" style="margin-top:0">Desktop notifications when someone else changes the board. They work while the board is open in a tab (a background or pinned tab is fine). Your own changes never alert you; your agents' changes do if you tick "Updates from my agents". Kept in this browser only.</p>
@@ -158,7 +161,7 @@
     <div class="hint">"My cards" are cards assigned to you. Your agents are entries by <code>claude@you</code> or <code>codex@you</code>. The page checks for changes about every 30 seconds.</div>
   </div>
   <div id="panelChecks" role="tabpanel" aria-labelledby="tabChecks" hidden>
-    <p class="hint" style="margin-top:0">Tests each step for the board that is open now (or, from Connection → Test connection, the values you typed): settings, token, repository, branch, board file, write access, board tools and the GitHub rate limit. It tells you which step fails and what to do.</p>
+    <p class="hint" style="margin-top:0">Tests each step for the board that is open now (or, from Boards → Change connection → Test connection, the values you typed): settings, token, repository, branch, board file, write access, board tools and the GitHub rate limit. It tells you which step fails and what to do.</p>
     <div class="cbtns"><button id="ckRun" type="button" class="primary"><i data-i="stethoscope"></i> Run checks</button><button id="ckCopy" type="button" hidden><i data-i="clipboard-copy"></i> Copy report</button></div>
     <ol id="ckList" class="cklist"></ol>
     <div class="hint">The report never contains your token. Paste it to Claude or a teammate if you need help.</div>

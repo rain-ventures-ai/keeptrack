@@ -12,7 +12,7 @@ If you would like an agent to walk you through this, ask Claude Code in this rep
 | Routine trigger URL + token | Yes, one per routine | Their browser (board Settings → Agents); also held by cron-job.org for the minute or two a send takes |
 | `BOARD_TOKEN` (GitHub token, Contents read/write on this repo) | Yes, their own | The routine's cloud environment on claude.ai (never in the repo) |
 | cron-job.org API key | One per cron-job.org account. Each person can have their own free account (simplest), or share one key | Their browser (board Settings → Agents) |
-| GitHub token for the web board | Yes (already done) | Their browser (board Settings → Connection) |
+| GitHub token for the web board | Yes (already done) | Their browser (board Settings → Boards) |
 
 Nothing secret is ever committed to this repo. "Copy settings code" on the board moves your browser's values to your phone or another browser.
 

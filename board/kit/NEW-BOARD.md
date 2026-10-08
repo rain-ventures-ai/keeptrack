@@ -38,9 +38,9 @@ branch to `main` in the web board and `BOARD_BRANCH=main` for agents.
 
 ## 4. Connect the web board (the person)
 1. Make a fine-grained token: owner = the repo's owner, **Only select repositories** = this repo, **Contents: Read and
-   write**, and **Issues: Read and write** for the Create issue button. The token link in Settings → Connection fills
+   write**, and **Issues: Read and write** for the Create issue button. The token link in Settings → Boards fills
    most of this in.
-2. On the web board: Settings → **Boards** → **Add an existing board**. Type `<owner>/<name>` and paste the token.
+2. On the web board: Settings → **Boards** → **Add a board** → **Connect a board I have**. Paste the token and pick the repo.
 3. The header's board menu now switches between your boards. Each board keeps its own token in this browser.
 
 Each person on the board does steps 4.1 and 4.2 in their own browser, with their own token.
