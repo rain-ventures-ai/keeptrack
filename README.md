@@ -20,7 +20,12 @@
 
 To try it locally: `python3 -m http.server 8000` in this folder, then open http://localhost:8000/board/.
 
-To look before you set up, open a read-only demo board with invented data: `board/?demo=crm` (people and pipeline) or `board/?demo=board` (tasks). The data is in [demo/](demo/README.md).
+## Try the demo
+Read-only demo boards with invented data. Nothing you do there is saved.
+- **People and pipeline:** https://rain-ventures-ai.github.io/keeptrack/board/?demo=crm
+- **Tasks:** https://rain-ventures-ai.github.io/keeptrack/board/?demo=board
+
+The demo data is in [demo/](demo/README.md). To set up your own board, open https://rain-ventures-ai.github.io/keeptrack/board/?setup
 
 Help for users: [docs/help](docs/help/README.md). In the web board, click **❓ Help**.
 

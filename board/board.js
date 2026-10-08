@@ -178,9 +178,11 @@
       state = normalise(demoShift(await r.json())); lastSyncOk = true; setStatus('Demo board (read-only)', 'ok'); applyRo(); render(); return true;
     } catch (e) { console.error(e); setStatus('Could not load the demo board', 'err'); return false; }
   }
+  let SETUP = new URLSearchParams(location.search).has('setup');
   async function load(quiet) {
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
     if (DEMO) return quiet ? true : loadDemo();
+    if (SETUP) { if ($('board').className !== 'v-welcome') { setStatus('Set up a new board'); renderWelcome(); } return false; }   // ?setup: the wizard, even when this browser has a board
     if (!c.token && c.repo) {   // no token: a public board can still be read
       const r = await gh('GET', null, !!quiet).catch(() => null);
       if (stale()) return false;
@@ -190,7 +192,7 @@
         setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
       if (ro === 'public') { ro = ''; applyRo(); }
     }
-    if (!c.token) { setStatus('Not connected', 'err'); render(); if (c.repo) noTokenBox(); else renderWelcome(); return false; }
+    if (!c.token) { setStatus('Not connected', 'err'); if ($('board').className !== 'v-welcome') render(); if (c.repo) noTokenBox(); else if ($('board').className !== 'v-welcome') renderWelcome(); return false; }
     { const want = fileDemo ? 'demo' : LS.get(roKey()) ? 'token' : ''; if (ro !== want) { ro = want; applyRo(); } }   // a 304 keeps the last file's demo status
     if (!quiet) setStatus(fromSnap ? 'Showing the last copy, syncing…' : 'Loading…');
     try {
@@ -577,6 +579,8 @@
   const labelColor = n => (state.labels.find(l => l.name === n) || {}).color || '#6b778c';
 
   function render() {
+    if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
+    document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
     fillSelect($('fClient'), [...new Set([...state.clients, ...state.tasks.map(t => t.client)].filter(Boolean))].map(c => [c, c]), 'All');
     fillSelect($('fWho'), [...state.people.map(p => [p.github, '@' + p.github]), ['__none', 'Unassigned'], ['__agent', 'Claimed by an agent']], 'Everyone');
     fillSelect($('fLabel'), state.labels.map(l => [l.name, l.name]), 'All');
@@ -837,6 +841,7 @@
   function applyModes() {   // settings.modes: 'crm' (Today, People, Pipeline) and/or 'tasks' (the task views); title from settings.title
     const m = modes(), ok = v => CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks');
     document.querySelectorAll('#viewSw button').forEach(b => { b.hidden = !ok(b.dataset.view); });
+    document.querySelectorAll('#viewSw .vgrp').forEach(g => { g.hidden = m.length < 2 || !m.includes(g.dataset.grp); });   // group names only when a board has both
     if (!ok(view)) view = m.includes('crm') ? 'today' : 'board';
   }
   const setView = v => { view = v; if (!DEMO) LS.set('kb_view', v); render(); };
@@ -1097,7 +1102,7 @@
     return L.join('\n');
   }
   function boardMarkdown() {
-    const hideDone = $('fHideDone').checked, f = filterDesc(), names = { board: 'Board', list: 'List', cal: 'Calendar', sched: 'Schedule' };
+    const hideDone = $('fHideDone').checked, f = filterDesc(), names = { board: 'Kanban', list: 'List', cal: 'Calendar', sched: 'Schedule' };
     const L = [`# Board: ${cfg().repo}`, '', `_${names[view] || 'Board'} view${f ? ' · filters: ' + f : ''} · copied ${fmtStamp(new Date().toISOString())}_`, ''];
     let n = 0;
     state.columns.forEach(col => {
@@ -1692,6 +1697,7 @@
   function settingsTab(name) {
     const ids = { general: ['panelGeneral', 'tabGeneral'], conn: ['panelConn', 'tabConn'], claude: ['panelClaude', 'tabClaude'], boards: ['panelBoards', 'tabBoards'], checks: ['panelChecks', 'tabChecks'], alerts: ['panelAlerts', 'tabAlerts'] };
     Object.keys(ids).forEach(n => { const on = n === name; $(ids[n][0]).hidden = !on; $(ids[n][1]).setAttribute('aria-selected', String(on)); });
+    $('dlgSettings').scrollTop = 0;   // each tab starts at the top
     if (name === 'conn') setTimeout(() => $('sRepo').focus(), 30);
     if (name === 'boards') renderBoards();
     if (name === 'alerts') renderAlerts();
@@ -1715,6 +1721,7 @@
   $('sCancel').onclick = () => $('dlgSettings').close();
   $('sForget').onclick = () => { loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
   $('sSave').onclick = () => {
+    if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
     if (!REPO_RE.test(nr)) { toast('The repository must look like owner/name', true); return; }
     if (moved) activateBoard(nr);   // another repo = another board, with its own token
@@ -1840,6 +1847,14 @@
     const lt = lastTouch(p), ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
     row.append(who, stagePill(p.stage), nx, ago); return row;
   }
+  function taskTodayRow(t) {   // a task on Today, in the same layout as a person row
+    const row = el('div', 'prow ttoday'); row.tabIndex = 0; row.onclick = () => openCard(t.id); row.onkeydown = e => { if (e.key === 'Enter') openCard(t.id); };
+    const who = el('div', 'pwho'); who.append(el('b', null, (t.num ? '#' + t.num + ' ' : '') + t.title), el('span', 'muted', [t.client, colName(t.column)].filter(Boolean).join(' · ')));
+    const pr = el('span', 'stagepill tprio', t.priority ? t.priority[0].toUpperCase() + t.priority.slice(1) : 'Task'); pr.dataset.v = t.priority || '';
+    const done = t.todos.filter(d => d.done).length, nx = el('div', 'pnext');
+    nx.append(el('span', null, t.todos.length ? `Checklist ${done}/${t.todos.length}` : 'Task'), dueBadge({ next_due: t.due, next: 'x' }));
+    row.append(who, pr, nx, el('span', 'plast muted', t.assignees.length ? t.assignees.map(a => '@' + a).join(', ') : 'nobody assigned')); return row;
+  }
   function addPersonBox(placeholder, extra) {
     const add = el('div', 'add padd'), inp = el('input'), btn = el('button', 'primary', 'Add');
     inp.placeholder = placeholder || 'Add a person: Name | Company | role | email';
@@ -1868,7 +1883,7 @@
     });
     if (modes().includes('tasks')) {
       const due = state.tasks.filter(x => x.due && x.due <= t && x.column !== doneColId() && filtered(x));
-      if (due.length) { const sec = el('section', 'tsec'); sec.append(el('h3', null, `☑ Tasks due (${due.length})`)); due.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', due, listRow, sec); wrap.append(sec); }
+      if (due.length) { const sec = el('section', 'tsec'); sec.append(el('h3', null, `☑ Tasks due (${due.length})`)); due.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', due, taskTodayRow, sec); wrap.append(sec); }
     }
     if (!state.contacts.length) { const e = el('div', 'empty'); e.append(el('p', null, 'No people yet. Add the first person you want to keep track of.')); wrap.append(e); }
     wrap.append(addPersonBox()); board.append(wrap);
@@ -2024,53 +2039,93 @@
   const refreshContact = () => { if ($('dlgContact').open) fillContact(false); };
 
   // ---- first-run wizard: no repo or no token in this browser ----------------
+  // ---- first-run wizard: one step per screen; the token tells us the username and the repos, so nothing else is typed ----
+  const WZ = { step: 0, crm: true, tasks: false, title: '', tok: '', me: '', repos: [], repo: '', checks: null };
+  const WZ_STEPS = ['What to track', 'Private repo', 'Connect'];
+  const ghH = tok => ({ Authorization: `Bearer ${tok}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' });
   function renderWelcome() {
-    const board = $('board'); board.textContent = ''; board.className = 'v-welcome'; const w = el('div', 'welcome');
-    w.innerHTML = `<h2>Welcome to Keeptrack</h2>
-      <p>Keeptrack keeps your people, follow-ups and tasks in a <b>private</b> GitHub repo that only you control. There is no server and no subscription. Set it up in three steps.</p>
-      <ol class="wsteps">
-        <li><b>Make a private repo.</b> <a id="wNew" target="_blank" rel="noopener noreferrer" href="https://github.com/new?name=my-keeptrack&visibility=private&description=My%20Keeptrack%20board">Open GitHub: new private repo →</a><div class="hint">Keep it <b>Private</b>: it will hold names and contact details.</div></li>
-        <li><b>Make an access token for that repo only.</b> <a id="wPat" target="_blank" rel="noopener noreferrer" href="#">Open GitHub: new token →</a><div class="hint">Choose <b>Only select repositories</b> and pick your new repo. The token stays in this browser and goes only to api.github.com.</div></li>
-        <li><b>Connect.</b>
-          <div class="wform">
-            <label>Repo (owner/name) <input id="wRepo" placeholder="your-name/my-keeptrack" autocomplete="off"></label>
-            <label>Your GitHub username <input id="wMe" placeholder="your-name" autocomplete="off"></label>
-            <label>Token <input id="wTok" type="password" placeholder="github_pat_..." autocomplete="off"></label>
-            <label>Board name <input id="wTitle" placeholder="My Keeptrack"></label>
-            <fieldset><legend>What do you want to keep track of?</legend>
-              <label class="chk"><input type="checkbox" id="wCrm" checked> People, follow-ups and pipeline</label>
-              <label class="chk"><input type="checkbox" id="wTasks"> Tasks</label></fieldset>
-            <div class="cbtns"><button id="wGo" class="primary" type="button">Create my board</button><span id="wMsg" class="muted"></span></div>
-          </div></li>
-      </ol>
-      <p class="hint">Want to look first? Open a demo board (read-only, invented data): <a href="?demo=crm">people and pipeline</a> or <a href="?demo=board">tasks</a>. Already have a board? Use ⚙️ Settings → Connection.</p>`;
-    board.append(w);
-    const me0 = cfg().me; if (me0) { $('wMe').value = me0; $('wRepo').value = me0 + '/my-keeptrack'; }
-    const syncPat = () => { $('wPat').href = 'https://github.com/settings/personal-access-tokens/new?name=' + encodeURIComponent('Keeptrack ' + ($('wRepo').value.split('/')[1] || 'board')) + '&description=' + encodeURIComponent('Keeptrack web board') + '&target_name=' + encodeURIComponent($('wRepo').value.split('/')[0] || '') + '&expires_in=365&contents=write'; };
-    $('wRepo').oninput = syncPat; $('wMe').oninput = () => { if (!$('wRepo').value || /^[^/]*\/my-keeptrack$/.test($('wRepo').value)) $('wRepo').value = $('wMe').value.trim() + '/my-keeptrack'; syncPat(); }; syncPat();
-    $('wGo').onclick = wizardGo;
+    const board = $('board'); board.textContent = ''; board.className = 'v-welcome'; document.body.classList.add('setup');   // the header shows only the logo, Help and Settings
+    const w = el('div', 'welcome wiz'), s = WZ.step;
+    const dots = el('ol', 'wdots'); WZ_STEPS.forEach((t, i) => { const li = el('li', i < s ? 'done' : i === s ? 'on' : '', t); dots.append(li); });
+    w.append(el('h2', null, s === 0 ? 'Set up Keeptrack' : WZ_STEPS[s]), dots);
+    const body = el('div', 'wbody'), foot = el('div', 'wfoot'), back = el('button', null, 'Back'), next = el('button', 'primary', 'Next');
+    back.type = next.type = 'button'; back.hidden = s === 0; back.onclick = () => { WZ.step--; renderWelcome(); };
+    const go = n => { WZ.step = n; renderWelcome(); window.scrollTo(0, 0); };
+    if (s === 0) {
+      body.append(el('p', null, 'Keeptrack keeps your people, follow-ups and tasks in a private GitHub repo that only you control. There is no server and no subscription. Setup takes about five minutes.'));
+      const pick = el('div', 'wpick'), card = (k, icon, title, text) => { const b = el('button', 'wcard' + (WZ[k] ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(WZ[k]));
+        b.append(el('span', 'wic', icon), el('b', null, title), el('span', 'muted', text)); b.onclick = () => { WZ[k] = !WZ[k]; renderWelcome(); }; return b; };
+      pick.append(card('crm', '👤', 'People', 'Who to contact, follow-ups and a simple pipeline'), card('tasks', '🗂', 'Tasks', 'A to-do board with lists, dates and checklists'));
+      const name = el('input'); name.placeholder = 'My Keeptrack'; name.value = WZ.title; name.oninput = () => { WZ.title = name.value; };
+      const lab = el('label', 'wlabel', 'Board name'); lab.append(name);
+      body.append(el('h3', null, 'What do you want to keep track of?'), pick, lab);
+      const alt = el('p', 'hint'); alt.innerHTML = 'Want to look first? <a href="?demo=crm">Demo: people</a> · <a href="?demo=board">Demo: tasks</a><br>Already have a board? <a href="#" id="wHave">Connect it</a> · On another device? <a href="#" id="wImport">Paste a setup link</a>';
+      body.append(alt); next.disabled = !WZ.crm && !WZ.tasks; next.onclick = () => go(1);
+    } else if (s === 1) {
+      body.append(el('p', null, 'Your board lives in a private repo on your GitHub account. Make one now:'));
+      const a = el('a', 'wbig', 'Open GitHub: make a private repo →'); a.href = 'https://github.com/new?name=my-keeptrack&visibility=private&description=' + encodeURIComponent('My Keeptrack board'); a.target = '_blank'; a.rel = 'noopener noreferrer';
+      const ul = el('ol', 'wmini'); ['Keep the name my-keeptrack (or choose your own).', 'Make sure that Private is selected.', 'Click Create repository, then come back here.'].forEach(t => ul.append(el('li', null, t)));
+      body.append(a, ul, el('p', 'hint', 'Keep it private: it will hold names, emails and phone numbers.'));
+      next.textContent = 'I made it'; next.onclick = () => go(2);
+    } else {
+      body.append(el('p', null, 'Now give this page a key to that one repo. GitHub calls it a fine-grained token.'));
+      const a = el('a', 'wbig', 'Open GitHub: make a token →'); a.href = 'https://github.com/settings/personal-access-tokens/new?name=' + encodeURIComponent('Keeptrack') + '&description=' + encodeURIComponent('Keeptrack web board') + '&expires_in=365&contents=write'; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      const ul = el('ol', 'wmini'); [['Repository access', ': select Only select repositories, then your new repo.'], ['Permissions', ': check that Contents is Read and write (the link sets it).'], ['Generate token', ', copy it, and paste it below.']].forEach(([b, t]) => { const li = el('li'); li.append(el('b', null, b), document.createTextNode(t)); ul.append(li); });
+      const tok = el('input'); tok.type = 'password'; tok.placeholder = 'github_pat_…'; tok.autocomplete = 'off'; tok.value = WZ.tok;
+      const lab = el('label', 'wlabel', 'Token'); lab.append(tok);
+      const res = el('div', 'wchecks'), pickBox = el('div');
+      body.append(a, ul, lab, pickBox, res, el('p', 'hint', 'The token stays in this browser and goes only to api.github.com. Treat it like a password.'));
+      const draw = () => {
+        res.textContent = ''; pickBox.textContent = ''; const c = WZ.checks; next.disabled = !(c && c.ok);
+        if (!c) return; if (c.busy) { res.append(el('div', 'muted', 'Checking…')); return; }
+        if (WZ.repos.length > 1) { const sel = el('select'); WZ.repos.forEach(r => { const o = el('option', null, r.full_name + (r.private ? '' : ' (public)')); o.value = r.full_name; sel.append(o); }); sel.value = WZ.repo;
+          sel.onchange = () => { WZ.repo = sel.value; check(); }; const l = el('label', 'wlabel', 'Repo'); l.append(sel); pickBox.append(l); }
+        c.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === 'warn' ? 'warn' : 'bad'), (ok === true ? '✓ ' : ok === 'warn' ? '⚠ ' : '✕ ') + t)));
+      };
+      const check = async () => {
+        const t = WZ.tok; if (!t) { WZ.checks = null; draw(); return; }
+        WZ.checks = { busy: true }; draw(); const api = cfg().api, rows = [];
+        const u = await fetch(`${api}/user`, { headers: ghH(t) }).catch(() => null);
+        if (t !== WZ.tok) return;
+        if (!u || !u.ok) { WZ.checks = { rows: [[false, u && u.status === 401 ? 'GitHub did not accept this token. Copy it again.' : 'Could not reach GitHub. Check your connection.']] }; draw(); return; }
+        WZ.me = (await u.json()).login; rows.push([true, `Token works for @${WZ.me}`]);
+        if (!WZ.repos.length || !WZ.repos.some(r => r.full_name === WZ.repo)) {
+          const lr = await fetch(`${api}/user/repos?per_page=100&sort=created&affiliation=owner,organization_member,collaborator`, { headers: ghH(t) }).catch(() => null);
+          const all = lr && lr.ok ? await lr.json() : []; WZ.repos = all.filter(r => r.permissions && r.permissions.push).sort((x, y) => (y.private - x.private) || (/keeptrack/i.test(y.name) - /keeptrack/i.test(x.name)));
+          if (!WZ.repos.some(r => r.full_name === WZ.repo)) WZ.repo = (WZ.repos[0] || {}).full_name || '';
+        }
+        const r = WZ.repos.find(x => x.full_name === WZ.repo);
+        if (!r) { rows.push([false, 'This token cannot change any repo. On GitHub, edit the token: pick your repo, and set Contents to Read and write.']); WZ.checks = { rows }; draw(); return; }
+        rows.push([true, `Can change ${r.full_name}`]);
+        rows.push(r.private ? [true, 'The repo is private'] : ['warn', 'The repo is PUBLIC: everybody can read names and contact details in it. Make it private on GitHub first.']);
+        WZ.checks = { rows, ok: true }; draw();
+      };
+      let tmr; tok.oninput = () => { WZ.tok = tok.value.trim(); WZ.repos = []; clearTimeout(tmr); tmr = setTimeout(check, 400); };
+      draw(); if (WZ.tok && !WZ.checks) check();
+      next.textContent = 'Create my board'; next.onclick = () => wizardGo(next);
+    }
+    foot.append(back, el('span', 'spacer'), next); w.append(body, foot); board.append(w);
+    const have = $('wHave'); if (have) have.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('conn'); };
+    const imp = $('wImport'); if (imp) imp.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('general'); setTimeout(() => { const t = document.querySelector('#panelGeneral textarea'); if (t) t.focus(); }, 60); };
   }
-  async function wizardGo() {
-    const repo = $('wRepo').value.trim(), meV = $('wMe').value.trim(), tok = $('wTok').value.trim(), msg = $('wMsg');
-    const crm = $('wCrm').checked, tasks = $('wTasks').checked, title = $('wTitle').value.trim() || 'Keeptrack';
-    if (!REPO_RE.test(repo)) { msg.textContent = 'Write the repo as owner/name.'; return; } if (!tok) { msg.textContent = 'Paste the token.'; return; } if (!crm && !tasks) { msg.textContent = 'Choose at least one.'; return; }
-    msg.textContent = 'Checking the repo…';
-    const api = cfg().api, H = { Authorization: `Bearer ${tok}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
-    const r = await fetch(`${api}/repos/${repo}`, { headers: H }).catch(() => null);
-    if (!r || !r.ok) { msg.textContent = r && r.status === 401 ? 'GitHub did not accept the token.' : `Cannot see ${repo} with this token (${r ? r.status : 'network error'}). Check the name, and that the token includes this repo.`; return; }
-    const info = await r.json();
-    if (info.private === false && !confirm(`${repo} is PUBLIC. Everybody can read names and contact details in it. Continue anyway?`)) { msg.textContent = 'Stopped. Make the repo private first.'; return; }
-    if (info.permissions && info.permissions.push === false) { msg.textContent = 'The token can read but not write. Give it Contents: Read and write.'; return; }
-    LS.set('kb_repo', repo); LS.set('kb_token', tok); LS.del('kb_ro:' + repo); LS.set('kb_branch', info.default_branch || 'main'); LS.set('kb_path', 'board/tasks.json'); if (meV) LS.set('kb_me', meV); stashBoard && stashBoard();
+  function endSetup() { if (SETUP) { SETUP = false; history.replaceState(null, '', location.pathname); } $('board').className = ''; }
+  async function wizardGo(btn) {
+    const repo = WZ.repo, tok = WZ.tok, meV = WZ.me, title = WZ.title.trim() || 'Keeptrack', r = WZ.repos.find(x => x.full_name === repo);
+    if (!r || !tok) return;
+    if (!r.private && !confirm(`${repo} is PUBLIC. Everybody can read names and contact details in it. Continue anyway?`)) return;
+    btn.disabled = true; btn.textContent = 'Creating…';
+    LS.set('kb_repo', repo); LS.set('kb_token', tok); LS.del('kb_ro:' + repo); LS.set('kb_branch', r.default_branch || 'main'); LS.set('kb_path', 'board/tasks.json'); if (meV) LS.set('kb_me', meV); stashBoard && stashBoard();
     const ex = await gh('GET');
-    if (ex.ok) { msg.textContent = 'This repo already has a board. Opening it.'; await load(); return; }
-    if (ex.status !== 404) { msg.textContent = `GitHub error ${ex.status}.`; return; }
-    msg.textContent = 'Creating your board…';
-    state = DEFAULT(); state.settings.title = title; state.settings.modes = [...(crm ? ['crm'] : []), ...(tasks ? ['tasks'] : [])];
+    if (ex.ok) { endSetup(); toast('This repo already has a board. Opening it.'); await load(); return; }
+    if (ex.status !== 404) { toast(`GitHub error ${ex.status}.`, true); btn.disabled = false; btn.textContent = 'Create my board'; return; }
+    state = DEFAULT(); state.settings.title = title; state.settings.modes = [...(WZ.crm ? ['crm'] : []), ...(WZ.tasks ? ['tasks'] : [])];
     if (meV) state.people = [{ github: meV, name: meV }];
     sha = null; const out = await save(clone(state), 'Create Keeptrack board');
-    if (out !== 'ok') { msg.textContent = 'Could not create the board file (' + out + ').'; return; }
-    view = crm ? 'today' : 'board'; LS.set('kb_view', view); await load();
+    if (out !== 'ok') { toast('Could not create the board file (' + out + ').', true); btn.disabled = false; btn.textContent = 'Create my board'; return; }
+    view = WZ.crm ? 'today' : 'board'; LS.set('kb_view', view); Object.assign(WZ, { step: 0, tok: '', checks: null });
+    endSetup(); await load();
+    setTimeout(() => { const i = document.querySelector('.padd input, .addbar input'); if (i) i.focus(); }, 80);
+    toast(WZ.crm ? 'Your board is ready. Add the first person you want to keep track of.' : 'Your board is ready. Add your first task.');
   }
 
   // ---- archive: old done tasks, old Lost people and long histories live in <board dir>/archive/<year>.json ----------
@@ -2244,7 +2299,7 @@
 
   // ---- read-only mode: a banner, no add boxes, locked drawer fields; every write path also stops in mutate() and save() ----
   const RO_TEXT = {
-    demo: ['Demo board: read-only, with invented data. Nothing you do here is saved.', 'Create my own board', () => { location.href = location.pathname; }],
+    demo: ['Demo board: read-only, with invented data. Nothing you do here is saved.', 'Create my own board', () => { location.href = location.pathname + '?setup'; }],
     public: ['Read-only: this is a public board and this browser has no token for it.', 'Add a token', () => { $('btnSettings').click(); settingsTab('conn'); }],
     token: ['Read-only: your token can read this board but cannot change it. Give the token "Contents: Read and write" to edit.', 'Change the token', () => { $('btnSettings').click(); settingsTab('conn'); }]
   };
