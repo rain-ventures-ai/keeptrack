@@ -1,7 +1,7 @@
 # Tasks
 
-If you selected **Tasks** when you made your board, you also have these views:
-- **Board:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Double-click a card to open it.
+If you selected **Tasks** when you made your board, you also have these views. They are under **Tasks** in the view bar (the people views are under **People**):
+- **Kanban:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Double-click a card to open it.
 - **List**, **Calendar** and **Schedule:** the same tasks by group, by due date and by week.
 - **Activity:** what was done today, yesterday or on a day that you select, by you and your agents. **📋 Copy** gives it as Markdown.
 

@@ -837,6 +837,7 @@
   function applyModes() {   // settings.modes: 'crm' (Today, People, Pipeline) and/or 'tasks' (the task views); title from settings.title
     const m = modes(), ok = v => CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks');
     document.querySelectorAll('#viewSw button').forEach(b => { b.hidden = !ok(b.dataset.view); });
+    document.querySelectorAll('#viewSw .vgrp').forEach(g => { g.hidden = m.length < 2 || !m.includes(g.dataset.grp); });   // group names only when a board has both
     if (!ok(view)) view = m.includes('crm') ? 'today' : 'board';
   }
   const setView = v => { view = v; if (!DEMO) LS.set('kb_view', v); render(); };
@@ -1097,7 +1098,7 @@
     return L.join('\n');
   }
   function boardMarkdown() {
-    const hideDone = $('fHideDone').checked, f = filterDesc(), names = { board: 'Board', list: 'List', cal: 'Calendar', sched: 'Schedule' };
+    const hideDone = $('fHideDone').checked, f = filterDesc(), names = { board: 'Kanban', list: 'List', cal: 'Calendar', sched: 'Schedule' };
     const L = [`# Board: ${cfg().repo}`, '', `_${names[view] || 'Board'} view${f ? ' · filters: ' + f : ''} · copied ${fmtStamp(new Date().toISOString())}_`, ''];
     let n = 0;
     state.columns.forEach(col => {
@@ -1692,6 +1693,7 @@
   function settingsTab(name) {
     const ids = { general: ['panelGeneral', 'tabGeneral'], conn: ['panelConn', 'tabConn'], claude: ['panelClaude', 'tabClaude'], boards: ['panelBoards', 'tabBoards'], checks: ['panelChecks', 'tabChecks'], alerts: ['panelAlerts', 'tabAlerts'] };
     Object.keys(ids).forEach(n => { const on = n === name; $(ids[n][0]).hidden = !on; $(ids[n][1]).setAttribute('aria-selected', String(on)); });
+    $('dlgSettings').scrollTop = 0;   // each tab starts at the top
     if (name === 'conn') setTimeout(() => $('sRepo').focus(), 30);
     if (name === 'boards') renderBoards();
     if (name === 'alerts') renderAlerts();
@@ -1840,6 +1842,14 @@
     const lt = lastTouch(p), ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
     row.append(who, stagePill(p.stage), nx, ago); return row;
   }
+  function taskTodayRow(t) {   // a task on Today, in the same layout as a person row
+    const row = el('div', 'prow ttoday'); row.tabIndex = 0; row.onclick = () => openCard(t.id); row.onkeydown = e => { if (e.key === 'Enter') openCard(t.id); };
+    const who = el('div', 'pwho'); who.append(el('b', null, (t.num ? '#' + t.num + ' ' : '') + t.title), el('span', 'muted', [t.client, colName(t.column)].filter(Boolean).join(' · ')));
+    const pr = el('span', 'stagepill tprio', t.priority ? t.priority[0].toUpperCase() + t.priority.slice(1) : 'Task'); pr.dataset.v = t.priority || '';
+    const done = t.todos.filter(d => d.done).length, nx = el('div', 'pnext');
+    nx.append(el('span', null, t.todos.length ? `Checklist ${done}/${t.todos.length}` : 'Task'), dueBadge({ next_due: t.due, next: 'x' }));
+    row.append(who, pr, nx, el('span', 'plast muted', t.assignees.length ? t.assignees.map(a => '@' + a).join(', ') : 'nobody assigned')); return row;
+  }
   function addPersonBox(placeholder, extra) {
     const add = el('div', 'add padd'), inp = el('input'), btn = el('button', 'primary', 'Add');
     inp.placeholder = placeholder || 'Add a person: Name | Company | role | email';
@@ -1868,7 +1878,7 @@
     });
     if (modes().includes('tasks')) {
       const due = state.tasks.filter(x => x.due && x.due <= t && x.column !== doneColId() && filtered(x));
-      if (due.length) { const sec = el('section', 'tsec'); sec.append(el('h3', null, `☑ Tasks due (${due.length})`)); due.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', due, listRow, sec); wrap.append(sec); }
+      if (due.length) { const sec = el('section', 'tsec'); sec.append(el('h3', null, `☑ Tasks due (${due.length})`)); due.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', due, taskTodayRow, sec); wrap.append(sec); }
     }
     if (!state.contacts.length) { const e = el('div', 'empty'); e.append(el('p', null, 'No people yet. Add the first person you want to keep track of.')); wrap.append(e); }
     wrap.append(addPersonBox()); board.append(wrap);
