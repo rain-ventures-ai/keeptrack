@@ -1,7 +1,7 @@
 # Questions and problems
 
 **The board says "Not connected".**
-Open **⚙️ Settings → Connection**. Check the repo name (`owner/name`) and paste the token again. Then open **Settings → Checks** and click **Run checks**. It tells you what is wrong. **Copy report** gives a report without your token.
+Open **⚙️ Settings → Boards**. Check the repo name (`owner/name`) and paste the token again. Then open **Settings → Checks** and click **Run checks**. It tells you what is wrong. **Copy report** gives a report without your token.
 
 **"Cannot see repository" or a 404 error.**
 - The repo name has a typing error, or
@@ -9,7 +9,7 @@ Open **⚙️ Settings → Connection**. Check the repo name (`owner/name`) and 
 - the repo belongs to an organisation, and the token's **Resource owner** is your own account. Make a new token with the organisation as Resource owner.
 
 **The board says the file does not exist.**
-The repo has no `board/tasks.json` yet, or the branch is wrong. New repos use the branch `main`. Older boards use `master`. Check the branch in **Settings → Connection**.
+The repo has no `board/tasks.json` yet, or the branch is wrong. New repos use the branch `main`. Older boards use `master`. Check the branch in **Settings → Boards**.
 
 **I see a big warning that my board is public.**
 Make the repo private. See [Privacy and security](privacy-and-security.md).
@@ -33,8 +33,8 @@ Today shows what is due each time you open the board. While a tab is open, **Set
 **The board says "Read-only".**
 The banner tells you why:
 - **Demo board:** this is the example board. To make your own board, click **Create my own board**.
-- **Public board with no token:** you can read the board but not change it. To change it, add a token in **Settings → Connection**.
-- **Your token cannot change this board:** the token has **Contents: Read** only. On GitHub, edit the token and set **Contents** to **Read and write**, or make a new token. Then paste it again in **Settings → Connection**.
+- **Public board with no token:** you can read the board but not change it. To change it, add a token in **Settings → Boards**.
+- **Your token cannot change this board:** the token has **Contents: Read** only. On GitHub, edit the token and set **Contents** to **Read and write**, or make a new token. Then paste it again in **Settings → Boards**.
 
 **Does the demo show my own boards?**
 No. A demo link (`?demo=crm` or `?demo=board`) uses empty settings in memory. It does not read or change your boards, tokens or routines in this browser. Only the theme is shared.
