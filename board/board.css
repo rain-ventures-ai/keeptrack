@@ -629,3 +629,23 @@ dialog.archview { max-width: 640px; } .archview pre.atext { white-space: pre-wra
 /* ---- view groups (People / Tasks): keep the header on one line ---- */
 @media (max-width: 1440px) { .seg button:not(.on) .vt { display: none; } .seg button:not(.on) { padding-left: 8px; padding-right: 8px; } }
 @media (max-width: 760px) { .vgrp { font-size: 0; padding: 0; } .vgrp[data-grp="crm"] { display: none; } .vgrp[data-grp="tasks"] { margin: 6px 2px; } .seg button.on .vt { display: none; } }
+
+/* ---- setup wizard ---- */
+.wiz { max-width: 600px; margin: 24px auto; padding: 24px 28px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+.wiz h2 { margin: 0 0 10px; } .wiz h3 { font-size: 15px; margin: 18px 0 8px; }
+.wdots { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0 0 18px; counter-reset: wd; }
+.wdots li { flex: 1; font-size: 12px; color: var(--muted); padding-top: 8px; border-top: 3px solid var(--border); counter-increment: wd; }
+.wdots li::before { content: counter(wd) ". "; } .wdots li.on { color: var(--accent); border-color: var(--accent); font-weight: 700; } .wdots li.done { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.wpick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wcard { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 14px; border: 2px solid var(--border); border-radius: 12px; background: var(--panel); cursor: pointer; font: inherit; color: inherit; }
+.wcard .wic { font-size: 24px; } .wcard .muted { font-size: 12.5px; line-height: 1.4; }
+.wcard.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); } .wcard.on b::after { content: " ✓"; color: var(--accent); }
+.wlabel { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); margin-top: 14px; } .wlabel input, .wlabel select { font-size: 15px; padding: 9px 10px; }
+.wbig { display: inline-block; margin: 6px 0 4px; padding: 10px 16px; border-radius: 10px; background: var(--accent); color: var(--on-accent, #fff) !important; font-weight: 700; text-decoration: none; }
+.wmini { padding-left: 20px; margin: 10px 0; } .wmini li { margin: 5px 0; }
+.wchecks { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; } .wck.ok { color: var(--ok); } .wck.bad { color: var(--danger); } .wck.warn { color: var(--warn); font-weight: 600; }
+.wfoot { display: flex; align-items: center; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); } .wfoot .spacer { flex: 1; }
+.wfoot button[hidden] { display: none; } .wfoot .primary { padding: 9px 18px; } .wfoot .primary:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 760px) { .wiz { margin: 8px; padding: 16px; border-radius: 12px; } .wpick { grid-template-columns: 1fr; } }
+body.setup header > *:not(.boardwrap):not(#btnHelp):not(#btnSettings) { display: none !important; }
+body.setup header { justify-content: flex-start; } body.setup #btnHelp { margin-left: auto; }

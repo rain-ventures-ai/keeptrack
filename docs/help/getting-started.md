@@ -4,30 +4,28 @@ You need a GitHub account. Setup takes about ten minutes. You do not need a term
 
 Do you want to look first? On the welcome page, open a demo board: **people and pipeline** or **tasks**. You can also add `?demo=crm` or `?demo=board` at the end of the board address. The demo board is read-only and has invented data. Nothing you do there is saved.
 
-## 1. Make a private repo
-1. Open the Keeptrack web board. The **Welcome to Keeptrack** page opens.
-2. Click **Open GitHub: new private repo**. GitHub opens with the name `my-keeptrack`.
-3. Make sure that **Private** is selected. Click **Create repository**.
+The setup wizard has three steps. To open it at any time, add `?setup` to the board address. In a demo board, click **Create my own board**.
+
+## 1. What to track
+Select **People** (follow-ups and a pipeline), **Tasks**, or both. Type a name for your board, for example "Sales". Click **Next**.
+
+## 2. Make a private repo
+1. Click **Open GitHub: make a private repo**. GitHub opens with the name `my-keeptrack`.
+2. Make sure that **Private** is selected. Click **Create repository**.
+3. Come back to the wizard and click **I made it**.
 
 > Keep the repo private. It will hold names, emails and phone numbers.
 
-## 2. Make an access token
-The token lets the web board read and write one file in your repo.
-1. On the Welcome page, click **Open GitHub: new token**. GitHub opens with most fields filled in.
+## 3. Connect
+The token lets the web board read and write your repo.
+1. Click **Open GitHub: make a token**. GitHub opens with most fields filled in.
 2. Under **Repository access**, select **Only select repositories**, then select your new repo.
 3. Make sure that **Contents** is **Read and write**.
-4. Click **Generate token** and copy it.
+4. Click **Generate token**, copy it, and paste it in the wizard.
+
+The wizard finds your GitHub username and your repo by itself. Green ticks show that the token works, that it can change the repo, and that the repo is private. Click **Create my board**. The board makes the file `board/tasks.json` in your repo and opens.
 
 The token stays in this browser only. The board sends it only to `api.github.com`. Treat it like a password.
-
-## 3. Connect
-1. On the Welcome page, type the repo as `your-name/my-keeptrack`, and your GitHub username.
-2. Paste the token.
-3. Type a name for your board, for example "Sales".
-4. Select what you want to keep track of: **People, follow-ups and pipeline**, **Tasks**, or both.
-5. Click **Create my board**.
-
-The board checks that the repo is private and that the token can write to it. Then it makes the file `board/tasks.json` in your repo and opens **Today**.
 
 ## 4. Add your first people
 Type in the box at the bottom of **Today** or **People**:
