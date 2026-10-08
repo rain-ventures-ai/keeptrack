@@ -11,9 +11,9 @@ You do not run `keeptrack.py` yourself. You ask your assistant, for example "Who
 
 | You are... | Use |
 |---|---|
-| Not a terminal user (on a Mac or Windows PC) | The web board, and **Claude Desktop (Cowork)** for the assistant. |
+| Not a terminal user | The web board, and **Claude Code in the Claude app** (the **Code** tab, or claude.ai/code in a browser), in a session on your board repo. It needs no token. |
 | A developer | The web board, and **Claude Code**, **Codex** or **Cursor** on your computer. |
-| Away from your computer | The web board on your phone. **Claude Code on the web** can do agent work in the cloud. |
+| Away from your computer | The web board on your phone, and the **Code** tab in the Claude phone app. |
 
 ## Summary
 
@@ -21,7 +21,8 @@ You do not run `keeptrack.py` yourself. You ask your assistant, for example "Who
 |---|---|---|---|---|
 | Claude Desktop (Cowork) | Cowork's own machine on your computer | No. Cowork has it. | A token | Writes to GitHub not tested yet |
 | Claude Code on your computer | Your computer | Yes (Python 3) | `gh auth login` or a token | Works |
-| Claude Code on the web | A Claude cloud machine | No. It has Python. | The Claude GitHub app, with `git push` | Works, from a session on your board repo |
+| Claude Code on the web and in the Claude app (Code tab) | A Claude cloud machine | No. It has Python. | The Claude GitHub app, with `git push`. No token. | Works, from a session on your board repo |
+| Claude chat (not the Code tab) | - | - | - | Not supported. Use the Code tab. |
 | Codex on your computer | Your computer | Yes (Python 3) | `gh auth login` or a token | Works |
 | Codex cloud | A Codex cloud machine | No | Needs internet access to GitHub | Not tested yet |
 | Cursor | Your computer | Yes (Python 3) | `gh auth login` or a token | Works |
@@ -66,7 +67,8 @@ Claude Code on the web runs in a Claude cloud machine. It has Python.
 
 - Start the session **on your board repo** (add the repo to the environment). Then the tool can save with `git push`.
 - The cloud machine blocks writes through the GitHub API. This is not a token problem. `keeptrack.py` changes to `git push` by itself when it runs inside a clone of the board repo.
-- From a session on a different repo, the tool can read your board but cannot save. Do the step from a session on the board repo, or in the web board.
+- From a session on a different repo, add the board repo as a second repo of the session. Then use `keeptrack.py` from that clone. Or do the step in the web board.
+- The same works in the Claude desktop and phone apps: open the **Code** tab and start a session on your board repo.
 
 ## Codex cloud
 
