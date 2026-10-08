@@ -366,13 +366,16 @@ html[data-style="colorful"] .seg button.on { background: linear-gradient(135deg,
 @media (max-width: 760px) { html[data-style="colorful"] .legend { flex-wrap: nowrap; overflow-x: auto; padding: 6px 12px; } .lgchip, .lgl { flex: 0 0 auto; white-space: nowrap; } }
 
 /* ---- settings tabs ------------------------------------------------------- */
-dialog.settings { max-width: 520px; }
-.sethead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; } .sethead h3 { margin: 0; }
-.stabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 6px 0 4px; }
+/* a side sheet with a fixed height: the tabs stay in the same place whatever the length of each panel */
+dialog.settings { margin: 0 0 0 auto; width: min(560px, 100vw); max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 16px 0 0 16px; border-width: 0 0 0 1px; padding: 0 20px 28px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+dialog.settings[open] { animation: slidein .22s ease; }
+@media (prefers-reduced-motion: reduce) { dialog.settings[open] { animation: none; } }
+.sethead { display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 3; background: var(--card); margin: 0 -20px; padding: 12px 20px 4px; height: 52px; box-sizing: border-box; } .sethead h3 { margin: 0; }
+.stabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); position: sticky; top: 52px; z-index: 3; background: var(--card); margin: 0 -20px 4px; padding: 0 20px; overflow-x: auto; scrollbar-width: none; }
 .stabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 8px 14px; font-weight: 600; color: var(--muted); margin-bottom: -1px; }
 .stabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 dialog.settings [role="tabpanel"][hidden] { display: none; }
-@media (max-width: 760px) { .stabs button { min-height: 44px; flex: 1; } }
+@media (max-width: 760px) { .stabs button { min-height: 44px; flex: 1 0 auto; } dialog.settings { width: 100vw; border-radius: 0; border: 0; } }
 
 /* ---- top bar v2: logo, views, client pills, quick people, filters ---------------------------------------- */
 header { flex-wrap: nowrap; gap: 10px; padding: 8px 14px; } .hbreak { display: none; }
