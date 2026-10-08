@@ -18,6 +18,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
 
 ## Versions
+### v7 (schema 3)
+Onboarding. No data change.
+- New repo skill `keeptrack-onboard` (`.claude/skills/keeptrack-onboard/`): a guided set-up from what a person already has (named clients, spreadsheets, email, calendar, Trello and other task tools, Drive, Dropbox or local folders). Files stay where they are; the board stores links.
+- New command: `import <staging.json|people.csv> [--dry-run] [--source TEXT]`. It never overwrites a field that has a value, a second run adds nothing, and a file with a problem is refused whole.
+- Agent steps: run `kit-update` only. Add `onboarding/` to the repo's `.gitignore` only if the owner does not want the onboarding notes in the repo (they hold names and evidence lines, no email text).
+- Check: `python3 board/keeptrack.py kit-check` says v7 is current, and `python3 board/keeptrack.py import --help` works.
+
 ### v6 (schema 3)
 Fixes from a code review. No data change.
 - `--file` boards: atomic writes, and a lock (`<file>.lock`, gitignored) for each read-modify-write.

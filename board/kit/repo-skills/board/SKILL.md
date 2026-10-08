@@ -67,7 +67,7 @@ python3 board/keeptrack.py add "Title" --assign <user> --label <label> --due YYY
 
 ## People and follow-ups (Keeptrack CRM)
 If the board has people (`contacts` in `board/tasks.json`), use:
-`keeptrack.py today` (who to contact), `people`, `person "<name>"`, `person-add` (refuses duplicates), `person-set`, `touch "<name>" "<text>" --channel linkedin|email|call|meeting|note [--draft]`, `sent "<name>"` and `client-link "<company>" <url>`.
+`keeptrack.py today` (who to contact), `people`, `person "<name>"`, `person-add` (refuses duplicates), `person-set`, `touch "<name>" "<text>" --channel linkedin|email|call|meeting|note [--draft]`, `sent "<name>"` and `client-link "<company>" <url>`. To set up a board from a spreadsheet, email, Trello or folders, use the `keeptrack-onboard` skill (it ends with `import`).
 When you write a message for someone, log it with `--draft`. Never send it yourself. Run `sent` only after the human says it is sent.
 
 ## Never

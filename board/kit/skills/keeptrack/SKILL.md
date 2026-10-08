@@ -32,6 +32,7 @@ $B person-add "Name" --company "Co" --role CEO --linkedin <url> --email <e> --so
 $B person-set "<name>" --stage talking --next "Send proposal" --due 2026-10-20
 $B touch "<name>" "summary of the call" --channel call --next "Send notes" --due +1
 $B client-link "<company>" <folder url> --title "Drive folder"   # client files stay in Drive, Dropbox, OneDrive...
+$B import <staging.json> --dry-run         # many people, folders or tasks at once; then without --dry-run
 ```
 Dates: `YYYY-MM-DD`, `today` or `+N` (days from today). `person-add` refuses a duplicate (same name and company, same LinkedIn URL or same email) and prints the person who is already there. Use that to keep the weekly opportunity run from adding the same lead twice.
 
