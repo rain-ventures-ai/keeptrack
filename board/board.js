@@ -1,4 +1,61 @@
-(() => {
+// Fractional ranks. This is the same algorithm as board/kit/keeptrack.py.
+// Keep it outside the browser closure so the Python parity test can load it in Node.
+const RANK_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+function rankMidpoint(a, b) {
+  if (b !== null && a >= b) throw new Error('rank lower bound is not below upper bound');
+  if (a.endsWith(RANK_DIGITS[0]) || (b !== null && b.endsWith(RANK_DIGITS[0]))) throw new Error('rank cannot end in 0');
+  let prefix = '';
+  while (b !== null && ((a[0] || RANK_DIGITS[0]) === b[0])) { prefix += b[0]; a = a.slice(1); b = b.slice(1); }
+  const da = a ? RANK_DIGITS.indexOf(a[0]) : 0, db = b ? RANK_DIGITS.indexOf(b[0]) : RANK_DIGITS.length;
+  if (db - da > 1) return prefix + RANK_DIGITS[Math.floor((da + db + 1) / 2)];
+  if (b !== null && b.length > 1) return prefix + b[0];
+  return prefix + RANK_DIGITS[da] + rankMidpoint(a ? a.slice(1) : '', null);
+}
+function rankInteger(key) {
+  if (typeof key !== 'string' || !key) throw new Error('rank must be a non-empty string');
+  const h = key[0], n = h >= 'a' && h <= 'z' ? h.charCodeAt(0) - 95 : h >= 'A' && h <= 'Z' ? 92 - h.charCodeAt(0) : 0;
+  if (!n) throw new Error('invalid rank head');
+  const out = key.slice(0, n);
+  if (out.length !== n || [...out.slice(1)].some(c => !RANK_DIGITS.includes(c))) throw new Error('invalid rank');
+  return out;
+}
+function rankStep(integer, delta) {
+  let head = integer[0], digits = [...integer.slice(1)], carry = true;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    const n = RANK_DIGITS.indexOf(digits[i]) + delta;
+    if (n < 0 || n === RANK_DIGITS.length) digits[i] = delta > 0 ? RANK_DIGITS[0] : RANK_DIGITS.at(-1);
+    else { digits[i] = RANK_DIGITS[n]; carry = false; break; }
+  }
+  if (carry) {
+    if (delta > 0) {
+      if (head === 'Z') return 'a0'; if (head === 'z') return null;
+      head = String.fromCharCode(head.charCodeAt(0) + 1); if (head > 'a') digits.push('0'); else digits.pop();
+    } else {
+      if (head === 'a') return 'Zz'; if (head === 'A') return null;
+      head = String.fromCharCode(head.charCodeAt(0) - 1); if (head < 'Z') digits.push('z'); else digits.pop();
+    }
+  }
+  return head + digits.join('');
+}
+function validRank(key) {
+  try { const i = rankInteger(key), f = key.slice(i.length); return [...f].every(c => RANK_DIGITS.includes(c)) && !f.endsWith('0'); } catch { return false; }
+}
+function keyBetween(a, b) {
+  if (a !== null && !validRank(a)) throw new Error('invalid lower rank');
+  if (b !== null && !validRank(b)) throw new Error('invalid upper rank');
+  if (a !== null && b !== null && a >= b) throw new Error('lower rank must be below upper rank');
+  if (a === null) { if (b === null) return 'a0'; const ib = rankInteger(b), dec = rankStep(ib, -1); return dec !== null ? dec : ib + rankMidpoint('', b.slice(ib.length)); }
+  const ia = rankInteger(a);
+  if (b === null) { const inc = rankStep(ia, 1); return inc !== null ? inc : ia + rankMidpoint(a.slice(ia.length), null); }
+  const ib = rankInteger(b);
+  if (ia === ib) return ia + rankMidpoint(a.slice(ia.length), b.slice(ib.length));
+  const inc = rankStep(ia, 1); return inc !== null && inc < b ? inc : ia + rankMidpoint(a.slice(ia.length), null);
+}
+// File text, byte-identical to keeptrack.py json.dumps(indent=2, ensure_ascii=False) + "\n" for board data (strings, integers, booleans, null).
+const jsonText = o => JSON.stringify(o, null, 2) + '\n';
+if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText };
+
+if (typeof window !== 'undefined') (() => {
   'use strict';
   // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
   // tokens or routines. Only the look (theme, style) is shared.
@@ -26,7 +83,7 @@
     BOARD_KEYS.forEach(k => { if (e[k]) LS.set('kb_' + k, e[k]); else LS.del('kb_' + k); }); stashBoard(); }
   const boardUrl = () => `${location.pathname}?repo=${LS.get('kb_repo')}&branch=${LS.get('kb_branch', 'master')}&path=${LS.get('kb_path', 'board/tasks.json')}`;
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
-    const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {}); }   // also drop the cached copy of its cards
+    const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {}); }   // also drop the cached copy of its cards
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
   (() => { const q = new URLSearchParams(location.search), repo = q.get('repo'), over = {};
     ['branch', 'path'].forEach(k => { const v = q.get(k); if (v && /^[\w./-]+$/.test(v)) over[k] = v; });
@@ -66,13 +123,13 @@
   });
 
   const HOME = 'https://github.com/rain-ventures-ai/keeptrack/blob/main';   // where Keeptrack itself lives (docs, kit, plugins)
-  let state = DEFAULT(), sha = null, etag = null, busy = false, lastSyncOk = false, fromSnap = false;
+  let state = DEFAULT(), sha = null, etag = null, busy = false, lastSyncOk = false, fromSnap = false, splitMeta = null;
   let loadGen = 0, fileDemo = false;   // loadGen: a newer load, a save or "Forget token" makes older in-flight loads drop their result; fileDemo: the board file has demo_base
   // read-only: 'demo' (an example board: ?demo=crm or ?demo=board, or any file with demo_base), 'public' (a public repo read with no token), 'token' (the token can read but not write)
   const DEMO = (() => { const q = new URLSearchParams(location.search); if (!q.has('demo')) return ''; const v = q.get('demo'); return /^[a-z0-9-]+$/.test(v) && v !== '1' ? v : 'crm'; })();
   let ro = DEMO ? 'demo' : '';
   const roKey = () => 'kb_ro:' + cfg().repo;
-  const KNOWN_SCHEMA = 3;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
+  const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   let newerSchema = 0;
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -125,7 +182,7 @@
     const d = DEFAULT(), o = obj && typeof obj === 'object' ? obj : {};
     const people = Array.isArray(o.people) ? o.people : [];
     const n = {
-      version: 3, settings: Object.assign(d.settings, o.settings || {}),
+      version: Number.isInteger(o.version) && o.version > 3 ? o.version : 3, settings: Object.assign(d.settings, o.settings || {}),
       columns: Array.isArray(o.columns) && o.columns.length ? o.columns : d.columns, people,
       agents: Array.isArray(o.agents) ? o.agents : d.agents, clients: Array.isArray(o.clients) && o.clients.length ? o.clients : d.clients,
       labels: Array.isArray(o.labels) ? o.labels : [], tasks: Array.isArray(o.tasks) ? o.tasks : [], next_num: o.next_num,
@@ -154,6 +211,12 @@
     return fetch(url, { method, cache: 'no-store', body: body ? JSON.stringify(body) : undefined,
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cond && tag ? { 'If-None-Match': tag } : {}) } });
   }
+  async function ghApi(method, endpoint, body, opt = {}, over) {
+    const c = over || cfg();
+    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', body: body == null ? undefined : JSON.stringify(body),
+      headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+        ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
+  }
 
   // The contents API sends no content for a file over 1 MB (encoding "none"); then read the same file raw (up to 100 MB).
   async function fileJson(res, path) {
@@ -161,7 +224,50 @@
     const text = d.content || d.encoding !== 'none' ? b64d(d.content || '') : await (await gh('GET', null, false, { path: path || cfg().path, accept: 'application/vnd.github.raw+json' })).text();
     return { d, raw: JSON.parse(text) };
   }
-  let boardSize = 0;   // bytes of the board file, from the last load
+  const isSplit = o => !!o && o.version === 4 && o.layout === 'split';
+  const remotePath = rel => { const p = cfg().path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
+  const wantedRel = p => p === 'tasks.json' || /^(cards|people|archive)\/[^/]+$/.test(p);
+  const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
+  async function mapLimit(items, limit, fn) {
+    const out = new Array(items.length); let at = 0;
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => { while (at < items.length) { const i = at++; out[i] = await fn(items[i], i); } }));
+    return out;
+  }
+  async function blobText(item) {
+    let text = await idb.get(blobKey(item.sha));
+    if (typeof text !== 'string') { const r = await ghApi('GET', `/git/blobs/${item.sha}`); if (!r.ok) throw new Error(`GitHub error ${r.status} reading ${item.path}`);
+      const d = await r.json(); text = d.encoding === 'base64' ? b64d(d.content || '') : d.content || ''; idb.set(blobKey(item.sha), text); }
+    return text;
+  }
+  function modelFromSplit(files) {
+    const root = files.get('tasks.json'); if (!root) throw new Error(`cannot read ${cfg().path}`);
+    const raw = clone(root.obj), tasks = [], contacts = []; if (!isSplit(raw)) return raw;   // tasks.json is no longer split: it holds the whole board
+    [...files.entries()].sort().forEach(([p, x]) => { if (/^cards\/[^/]+\.json$/.test(p)) tasks.push(clone(x.obj)); else if (/^people\/[^/]+\.json$/.test(p)) contacts.push(clone(x.obj)); });
+    raw.tasks = tasks; raw.contacts = contacts; return raw;
+  }
+  async function splitSnapshot(force = false) {
+    const c = cfg(), ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
+    const rr = await ghApi('GET', `/git/ref/heads/${ref}`, null, !force && sameBoard && splitMeta.headEtag ? { etag: splitMeta.headEtag } : {});
+    if (rr.status === 304 && sameBoard) return { unchanged: true, data: modelFromSplit(splitMeta.files), meta: splitMeta };
+    if (!rr.ok) throw new Error(`GitHub error ${rr.status} reading branch`);
+    const rd = await rr.json(), head = rd.object.sha, headEtag = rr.headers.get('ETag');
+    if (sameBoard && head === splitMeta.head) { splitMeta.headEtag = headEtag || splitMeta.headEtag; return { unchanged: true, data: modelFromSplit(splitMeta.files), meta: splitMeta }; }
+    const cr = await ghApi('GET', `/git/commits/${head}`); if (!cr.ok) throw new Error(`GitHub error ${cr.status} reading commit`);
+    let tree = (await cr.json()).tree.sha, rootTree = tree;
+    const p = c.path, slash = p.lastIndexOf('/'), parts = (slash < 0 ? '' : p.slice(0, slash)).split('/').filter(Boolean);
+    for (const part of parts) { const tr = await ghApi('GET', `/git/trees/${tree}`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board folder`);
+      tree = ((await tr.json()).tree || []).find(x => x.type === 'tree' && x.path === part)?.sha; if (!tree) throw new Error(`cannot read ${c.path}`); }
+    const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board files`);
+    const td = await tr.json(); if (td.truncated) throw new Error('The board file list was too large for GitHub.');
+    const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
+    const old = sameBoard ? splitMeta.files : new Map(), files = new Map(), changed = listed.filter(x => !old.has(x.path) || old.get(x.path).sha !== x.sha);
+    old.forEach((v, k) => { const item = byPath.get(k); if (item && item.sha === v.sha) files.set(k, v); });
+    await mapLimit(changed, 8, async item => { const text = await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
+      files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
+    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files };
+    return { unchanged: false, data: modelFromSplit(files), meta };
+  }
+  let boardSize = 0;   // bytes of the board file, or all split board files, from the last load
   const SIZE_WARN = 600 * 1024;
 
   // ---- IndexedDB: a cache that can hold the board and its archive files (localStorage holds only ~5 MB, and blocks) ----
@@ -183,7 +289,7 @@
     try { const raw = await Promise.race([idb.get(snapKey(c)), new Promise(r => setTimeout(r, 400))]); if (!raw || lastSyncOk) return;
       if (Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA) return; state = normalise(raw); fromSnap = true; setStatus('Showing the last copy, syncing…'); } catch {}
   }
-  const snapClear = async () => { archMem = {}; for (const k of await idb.keys()) if (/^kb_(snap|arch):/.test(k)) idb.del(k); };
+  const snapClear = async () => { archMem = {}; for (const k of await idb.keys()) if (/^kb_(snap|arch|blob):/.test(k)) idb.del(k); };
   function demoShift(raw) {   // demo files carry demo_base (the day they were written): move every date so that "today" is always today
     const base = raw && raw.demo_base; if (!base || !/^\d{4}-\d{2}-\d{2}$/.test(base)) return raw;
     const shift = Math.round((new Date(todayIso() + 'T00:00:00Z') - new Date(base + 'T00:00:00Z')) / 864e5);
@@ -199,11 +305,13 @@
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
     if (DEMO) return quiet ? true : loadDemo();
     if (SETUP) { if ($('board').className !== 'v-welcome') { setStatus('Set up a new board'); renderWelcome(); } return false; }   // ?setup: the wizard, even when this browser has a board
-    if (!c.token && c.repo) {   // no token: a public board can still be read
+    if (!c.token && c.repo) {   // no token: a public v3 board can still be read
       const r = await gh('GET', null, !!quiet).catch(() => null);
       if (stale()) return false;
       if (r && r.status === 304) return true;
-      if (r && r.ok) { const { d: data, raw: raw0 } = await fileJson(r); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = r.headers.get('ETag'); let raw = raw0; const isDemo = fileDemo = !!raw.demo_base; raw = demoShift(raw);
+      if (r && r.ok) { const { d: data, raw: raw0 } = await fileJson(r); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = r.headers.get('ETag'); let raw = raw0;
+        if (isSplit(raw)) { ro = 'public'; applyRo(); setStatus('This board needs a token to read', 'err'); const b = $('board'); b.textContent = ''; b.append(el('div', 'empty', 'This board needs a token to read')); return false; }
+        const isDemo = fileDemo = !!raw.demo_base; raw = demoShift(raw);
         newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo();
         setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
       if (ro === 'public') { ro = ''; applyRo(); }
@@ -212,6 +320,13 @@
     { const want = fileDemo ? 'demo' : LS.get(roKey()) ? 'token' : ''; if (ro !== want) { ro = want; applyRo(); } }   // a 304 keeps the last file's demo status
     if (!quiet) setStatus(fromSnap ? 'Showing the last copy, syncing…' : 'Loading…');
     try {
+      if (splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`) {
+        const got = await splitSnapshot(false); if (stale()) return false;
+        if (!isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
+        if (got.unchanged) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); return true; }
+        const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); state = normalise(got.data);
+        if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true;
+      }
       const res = await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
       if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); return true; }
@@ -222,6 +337,8 @@
       fileDemo = !!raw.demo_base;
       if (fileDemo) { raw = demoShift(raw); ro = 'demo'; applyRo(); }   // a demo file is read-only even with a token that can write
       else if (ro === 'demo') { ro = LS.get(roKey()) ? 'token' : ''; applyRo(); }
+      if (isSplit(raw)) { const got = await splitSnapshot(true); if (stale()) return false; splitMeta = got.meta; raw = got.data; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); }
+      else splitMeta = null;
       newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkPublic(); lastSyncOk = true; initSeen(); setTimeout(openFromHash, 30);
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true;
     } catch (e) { console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
@@ -312,9 +429,60 @@
     box.append(b); board.append(box);
   }
 
-  async function save(next, message, expectedSha = sha) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
+  function splitChanges(next, meta, extra = {}) {
+    let root = clone(next); delete root.tasks; delete root.contacts;
+    const oldRoot = (meta.files.get('tasks.json') || {}).obj || {}, defaults = DEFAULT();
+    if (root.settings && oldRoot.settings) Object.keys(defaults.settings).forEach(k => { if (!(k in oldRoot.settings) && JSON.stringify(root.settings[k]) === JSON.stringify(defaults.settings[k])) delete root.settings[k]; });
+    if (root.settings && oldRoot.settings) { const ordered = clone(oldRoot.settings); Object.keys(ordered).forEach(k => { if (!(k in root.settings)) delete ordered[k]; }); Object.keys(root.settings).forEach(k => { ordered[k] = root.settings[k]; }); root.settings = ordered; }
+    { const ordered = clone(oldRoot); Object.keys(ordered).forEach(k => { if (!(k in root)) delete ordered[k]; }); Object.keys(root).forEach(k => { ordered[k] = root[k]; }); root = ordered; }
+    const canon = o => { if (Array.isArray(o)) return o.map(canon); if (o && typeof o === 'object') { const x = {}; Object.keys(o).sort().forEach(k => x[k] = canon(o[k])); return x; } return o; };
+    const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+    const asRead = (p, o) => { const base = { settings: root.settings, people: root.people, columns: root.columns };   // what normalise makes of the file as read
+      return p.startsWith('cards/') ? normalise(Object.assign(base, { tasks: [clone(o)] })).tasks[0] : p.startsWith('people/') ? normalise(Object.assign(base, { contacts: [clone(o)] })).contacts[0] : o; };
+    const outText = (p, obj) => { const old = meta.files.get(p); return old && (same(old.obj, obj) || same(asRead(p, old.obj), obj)) ? old.text : jsonText(obj); };
+    const ids = [...next.tasks, ...(next.contacts || [])].map(x => x.id);
+    if (new Set(ids).size !== ids.length || ids.some(x => typeof x !== 'string' || !x || /[/\\]/.test(x) || x === '.' || x === '..')) throw new Error('two items share an id, or an id cannot be a file name');   // never let two items write one file
+    const desired = new Map([['tasks.json', outText('tasks.json', root)]]);
+    next.tasks.forEach(t => { const p = `cards/${t.id}.json`; desired.set(p, outText(p, t)); });
+    (next.contacts || []).forEach(x => { const p = `people/${x.id}.json`; desired.set(p, outText(p, x)); });
+    Object.entries(extra).forEach(([p, text]) => { if (text !== null) desired.set(p, text); });
+    const managed = new Set([...meta.files.keys()].filter(p => p === 'tasks.json' || /^(cards|people)\/[^/]+\.json$/.test(p)));
+    Object.keys(extra).forEach(p => managed.add(p));
+    const changes = new Map([...desired].filter(([p, text]) => !meta.files.has(p) || meta.files.get(p).text !== text));
+    const deletes = new Set([...managed].filter(p => !desired.has(p) || extra[p] === null));
+    deletes.forEach(p => changes.delete(p)); return { changes, deletes };
+  }
+  async function splitSave(next, message, meta, extra) {
+    const { changes, deletes } = splitChanges(next, meta, extra), paths = [...changes.keys(), ...deletes];
+    if (!paths.length) { state = next; return 'ok'; }
+    if (paths.length === 1) {
+      const rel = paths[0], old = meta.files.get(rel), body = { message, branch: cfg().branch };
+      let res;
+      if (deletes.has(rel)) { body.sha = old.sha; res = await gh('DELETE', body, false, { path: remotePath(rel) }); }
+      else { body.content = b64e(changes.get(rel)); if (old) body.sha = old.sha; res = await gh('PUT', body, false, { path: remotePath(rel) }); }
+      if (!res.ok) return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
+      const out = await res.json(), files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
+      const parent = ((out.commit.parents || [])[0] || {}).sha;
+      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
+    }
+    const made = await mapLimit([...changes], 8, async ([rel, content]) => { const r = await ghApi('POST', '/git/blobs', { content, encoding: 'utf-8' }); if (!r.ok) throw new Error(`GitHub error ${r.status} creating ${rel}`); return [rel, content, (await r.json()).sha]; });
+    const entries = made.map(([rel, , blob]) => ({ path: remotePath(rel), mode: '100644', type: 'blob', sha: blob }));
+    deletes.forEach(rel => entries.push({ path: remotePath(rel), mode: '100644', type: 'blob', sha: null }));
+    const tr = await ghApi('POST', '/git/trees', { base_tree: meta.rootTree, tree: entries }); if (!tr.ok) return 'error:' + tr.status; const tree = (await tr.json()).sha;
+    const cr = await ghApi('POST', '/git/commits', { message, tree, parents: [meta.head] }); if (!cr.ok) return 'error:' + cr.status; const commit = (await cr.json()).sha;
+    const rr = await ghApi('PATCH', `/git/refs/heads/${encodeURIComponent(cfg().branch)}`, { sha: commit, force: false });
+    if (!rr.ok) return (rr.status === 409 || rr.status === 422) ? 'conflict' : 'error:' + rr.status;
+    const files = new Map(meta.files); made.forEach(([rel, text, blob]) => { files.set(rel, { sha: blob, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(blob), text); }); deletes.forEach(rel => files.delete(rel));
+    splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
+  }
+
+  async function save(next, message, expectedSha = sha, extra = {}) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
     if (ro) { roToast(); return 'error:readonly'; }
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return 'error:schema'; }
+    if (isSplit(next)) {
+      try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra); }
+      catch (e) { console.error(e); return 'error:network'; }
+    }
     const body = { message, content: b64e(JSON.stringify(next, null, 2) + '\n'), branch: cfg().branch }; if (expectedSha) body.sha = expectedSha;
     const res = await gh('PUT', body);
     if (res.ok) { sha = (await res.json()).content.sha; etag = null; state = next; return 'ok'; }
@@ -404,16 +572,23 @@
     if (fromSnap) { setStatus('Still loading the latest board, try again in a moment', 'err'); return false; }
     busy = true; loadGen++; const before = clone(state); let base = baseState || before;
     try {
-      const o = clone(state); fn(o); assignNums(o); state = o; render(); // optimistic
+      const o = clone(state); fn(o); ensureRanks(o); assignNums(o); state = o; render(); // optimistic
       for (let i = 0; i < 4; i++) {
-        const res = await gh('GET');
-        if (!res.ok && res.status !== 404) { setStatus(`GitHub error ${res.status}`, 'err'); state = before; render(); return false; }
-        let latest = DEFAULT(), readSha = null;
-        if (res.ok) { const { d, raw: rawL } = await fileJson(res); readSha = d.sha; boardSize = d.size || boardSize;
+        let res = null, latest = DEFAULT(), readSha = null, rawL = null;
+        let viaTree = false;
+        if (isSplit(state) || splitMeta) { const got = await splitSnapshot(true); rawL = got.data; readSha = got.meta; viaTree = true;
+          if (!isSplit(rawL)) { splitMeta = null; readSha = (got.meta.files.get('tasks.json') || {}).sha || null; } }   // no longer split: save it as one file
+        else { res = await gh('GET');
+          if (!res.ok && res.status !== 404) { setStatus(`GitHub error ${res.status}`, 'err'); state = before; render(); return false; }
+          if (res.ok) { const got = await fileJson(res); readSha = got.d.sha; rawL = got.raw; boardSize = got.d.size || boardSize;
+            if (isSplit(rawL)) { const sp = await splitSnapshot(true); rawL = sp.data; readSha = sp.meta; viaTree = true; } }   // migrated to split while this page was open
+        }
+        if (rawL && !(viaTree && isSplit(rawL))) {
           if (Number.isInteger(rawL.version) && rawL.version > KNOWN_SCHEMA) { newerSchema = rawL.version; state = before; render(); checkKit(); setStatus('Not saved: board saved by newer tools', 'err'); return false; }
           if (rawL.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); state = before; render(); roToast(); return false; }   // a demo file is never written
           latest = normalise(rawL); }
-        const pre = clone(latest); fn(latest); assignNums(latest);
+        else if (rawL) latest = normalise(rawL);
+        const pre = clone(latest); fn(latest); ensureRanks(latest); assignNums(latest);
         // checked on every attempt: "Apply anyway" covers only the revision that was shown, so a newer clash asks again
         const gone = deletedUnderMe(base, pre, targetIds);
         const conflicts = findConflicts(base, pre, latest);
@@ -427,7 +602,7 @@
         base = pre;   // from here on, "what you saw" is this revision
         autoLog(pre, latest); contactLog(pre, latest);
         const out = await save(latest, message, readSha);
-        if (out === 'ok') { setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
+        if (out === 'ok') { snapSave(cfg(), latest); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
         if (out !== 'conflict') { setStatus('Save failed (' + out + ')', 'err'); state = before; render(); return false; }
         setStatus('Someone else changed the board, retrying…', 'err');
       }
@@ -435,9 +610,20 @@
     } catch (e) { console.error(e); setStatus('Save failed', 'err'); state = before; render(); return false; } finally { busy = false; }
   }
 
-  const uid = () => 't_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  function boardId(prefix) {
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyz', used = new Set([...state.tasks, ...(state.contacts || [])].map(x => x.id));
+    if (splitMeta) splitMeta.files.forEach((_, p) => { if (/^(cards|people)\/[^/]+\.json$/.test(p)) used.add(p.slice(p.indexOf('/') + 1, -5)); });
+    for (;;) { const a = new Uint8Array(10); crypto.getRandomValues(a); const id = prefix + [...a].map(x => chars[x % chars.length]).join(''); if (!used.has(id)) return id; }
+  }
+  const uid = () => boardId('t_');
   const me = () => cfg().me;
   const stamp = t => { t.updated = nowIso(); if (me()) t.updatedBy = me(); };
+  function ensureRanks(d) {
+    if (!isSplit(d)) return d;
+    d.columns.forEach(c => { let last = null; d.tasks.filter(t => t.column === c.id && validRank(t.rank)).forEach(t => { if (last === null || t.rank > last) last = t.rank; });
+      d.tasks.filter(t => t.column === c.id && !validRank(t.rank)).forEach(t => { t.rank = keyBetween(last, null); last = t.rank; }); });
+    return d;
+  }
 
   // ---- claims -----------------------------------------------------------
   function claimState(c) {
@@ -592,6 +778,20 @@
     if ($('fAttn').checked && !needsAttention(t)) return false;
     return true;
   }
+  const sortKey = () => 'kb_sort:' + cfg().repo;
+  const sortMode = () => ['smart', 'manual', 'due', 'newest'].includes(LS.get(sortKey())) ? LS.get(sortKey()) : 'smart';
+  const rankOf = t => validRank(t.rank) ? t.rank : 'zzzzzzzzzzzz';
+  const numOf = t => Number.isInteger(t.num) ? t.num : Number.MAX_SAFE_INTEGER;
+  function displayTasks(items, model = state) {
+    const mode = sortMode(), split = isSplit(model), pos = new Map((model.tasks || []).map((t, i) => [t.id, i]));
+    if (!split && mode === 'manual') return items.slice().sort((a, b) => pos.get(a.id) - pos.get(b.id));
+    const due = t => t.due || '9999-99-99', rank = (a, b) => rankOf(a).localeCompare(rankOf(b));
+    if (mode === 'manual') return items.slice().sort((a, b) => rank(a, b) || numOf(a) - numOf(b));
+    if (mode === 'due') return items.slice().sort((a, b) => due(a).localeCompare(due(b)) || rank(a, b));
+    if (mode === 'newest') return items.slice().sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+    const pri = { high: 0, medium: 1, low: 2 };
+    return items.slice().sort((a, b) => (pri[a.priority] ?? 1) - (pri[b.priority] ?? 1) || due(a).localeCompare(due(b)) || rank(a, b) || numOf(a) - numOf(b));
+  }
   const COLOR_RE = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d\s.,%/-]+\))$/i;   // a colour from the file goes into style: no url() or other CSS
   const labelColor = n => { const c = (state.labels.find(l => l.name === n) || {}).color; return typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : '#6b778c'; };
 
@@ -611,7 +811,7 @@
     const board = $('board'); board.className = ''; board.textContent = ''; const hideDone = $('fHideDone').checked;
     state.columns.forEach((col, ci) => {
       if (hideDone && col.id === 'done') return;
-      const items = state.tasks.filter(t => t.column === col.id && filtered(t));
+      const items = displayTasks(state.tasks.filter(t => t.column === col.id && filtered(t)));
       const c = el('section', 'col' + (col.id === activeCol() ? ' active' : '')); c.dataset.col = col.id; const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', col.name), el('span', 'count', String(items.length))); const hb = el('button', 'hadd', '＋'); hb.type = 'button'; hb.title = 'Add a task to ' + col.name; hb.setAttribute('aria-label', 'Add a task to ' + col.name); h.append(hb); c.append(h);
       const cards = el('div', 'cards');
       cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
@@ -1240,6 +1440,18 @@
 
   function place(n, id, colId, beforeId) {
     const i = n.tasks.findIndex(x => x.id === id); if (i < 0) return;
+    if (isSplit(n)) {
+      const t = n.tasks[i], mode = sortMode(), from = t.column; t.column = colId;
+      if (mode === 'due' || mode === 'newest') { if (from !== colId) stamp(t); return; }   // these orders ignore rank: a drop in the same column changes nothing
+      const target = beforeId && n.tasks.find(x => x.id === beforeId);
+      if (mode === 'smart' && target && target.priority !== t.priority) t.priority = target.priority;
+      let peers = displayTasks(n.tasks.filter(x => x.id !== id && x.column === colId), n);
+      if (mode === 'smart') peers = peers.filter(x => x.priority === t.priority);
+      let at = beforeId ? peers.findIndex(x => x.id === beforeId) : peers.length; if (at < 0) at = peers.length;
+      const lower = at ? peers[at - 1] : null, upper = at < peers.length ? peers[at] : null;
+      let a = lower && validRank(lower.rank) ? lower.rank : null, b = upper && validRank(upper.rank) ? upper.rank : null; if (a !== null && b !== null && a >= b) a = null;
+      t.rank = keyBetween(a, b); stamp(t); return;
+    }
     const [t] = n.tasks.splice(i, 1); t.column = colId; stamp(t);
     let at = beforeId ? n.tasks.findIndex(x => x.id === beforeId) : -1;
     if (at < 0) { let last = -1; n.tasks.forEach((x, k) => { if (x.column === colId) last = k; }); at = last + 1; }
@@ -1247,7 +1459,7 @@
   }
   const titleOf = id => (state.tasks.find(x => x.id === id) || {}).title || id;
   const moveTo = (id, col) => mutate(n => place(n, id, col, null), `Move "${titleOf(id)}" to ${col}`, [id]);
-  function dropOn(e, col, beforeId) { const id = e.dataTransfer.getData('text/plain'); if (!id || id === beforeId) return; mutate(n => place(n, id, col, beforeId), `Move "${titleOf(id)}" to ${col}`, [id]); }
+  function dropOn(e, col, beforeId) { const id = e.dataTransfer.getData('text/plain'); if (!id || id === beforeId) return; mutate(n => place(n, id, col, beforeId), `Move "${titleOf(id)}" to ${col}`, [id]); if (isSplit(state) && ['due', 'newest'].includes(sortMode())) toast('Use Manual or Smart to change card order.'); }
   function addTask(title, col, due) {
     const fc = $('fClient').value, w = $('fWho').value;
     const mine = me() && state.people.some(p => p.github.toLowerCase() === me().toLowerCase()) ? [state.people.find(p => p.github.toLowerCase() === me().toLowerCase()).github] : [];
@@ -1806,7 +2018,13 @@
       if (!br.ok) { add(false, 'Branch', `Branch "${c.branch}" does not exist. The default branch is "${repo.default_branch}".`); return; } add(true, 'Branch', c.branch);
       const fr = await ghGet(`/repos/${c.repo}/contents/${c.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(c.branch)}`, null, c);
       if (!fr.ok) { add(false, 'Board file', `"${c.path}" is not on ${c.branch} (GitHub said ${fr.status}).`); return; }
-      try { const { d, raw } = await fileJson(fr); const kb = Math.round((d.size || 0) / 1024); add(kb < 600, 'Board size', `${kb} KB. GitHub's limit for this page is 100 MB, but the board stays fast below about 1 MB. ${kb >= 600 ? 'Archive old items: Settings → General → Archive.' : ''}`); add(Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? false : true, 'Board file', `${(raw.tasks || []).length} tasks · ${(raw.people || []).length} people · schema v${raw.version || 1} (this page reads up to v${KNOWN_SCHEMA}) · ${Math.round(d.size / 1024)} KB`); }
+      try { const { d, raw } = await fileJson(fr); const kb = Math.round((d.size || 0) / 1024);
+        if (isSplit(raw) && c.repo === cfg().repo && c.branch === cfg().branch && c.path === cfg().path) {
+          const got = await splitSnapshot(true), files = [...got.meta.files.entries()].filter(([p]) => p === 'tasks.json' || /^(cards|people)\/[^/]+\.json$/.test(p));
+          const total = files.reduce((n, [, x]) => n + (x.size || 0), 0), largest = files.reduce((a, b) => (b[1].size || 0) > (a[1].size || 0) ? b : a, ['', { size: 0 }]);
+          add(total <= 5 * 1024 * 1024 && largest[1].size <= 200 * 1024 ? true : null, 'Split board size', `${files.filter(([p]) => p.startsWith('cards/')).length} card files · ${files.filter(([p]) => p.startsWith('people/')).length} person files · ${Math.round(total / 1024)} KB total · largest file ${Math.round((largest[1].size || 0) / 1024)} KB${total > 5 * 1024 * 1024 ? '. Warning: total size is above 5 MB.' : ''}${largest[1].size > 200 * 1024 ? `. Warning: ${largest[0]} is above 200 KB.` : ''}`);
+          add(true, 'Board file', `schema v4 split (this page reads up to v${KNOWN_SCHEMA})`);
+        } else { add(kb < 600, 'Board size', `${kb} KB. GitHub's limit for this page is 100 MB, but the board stays fast below about 1 MB. ${kb >= 600 ? 'Archive old items: Settings → General → Archive.' : ''}`); add(Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? false : true, 'Board file', `${(raw.tasks || []).length} tasks · ${(raw.contacts || []).length} people · schema v${raw.version || 1} (this page reads up to v${KNOWN_SCHEMA}) · ${Math.round(d.size / 1024)} KB`); } }
       catch (e) { add(false, 'Board file', 'The file is not valid board JSON: ' + (e.message || e)); return; }
       const perm = repo.permissions || {}; add(perm.push ? true : null, 'Write access', perm.push ? 'Your account can write to this repo. The token also needs Contents: Read and write; a save shows "Token rejected" if it does not.' : 'Your account cannot push to this repo, so saves will fail.');
       try { const want = (await (await fetch('kit/manifest.json', { cache: 'no-store' })).json()).version, dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : '';
@@ -2020,6 +2238,7 @@
       'New-board prompt copied. Paste it into a new chat with Claude.'); };
   document.querySelectorAll('#viewSw button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
   $('btnUnread').onclick = () => { freshOnly = !freshOnly; render(); };
+  $('sortMenu').value = sortMode(); $('sortMenu').onchange = e => { LS.set(sortKey(), e.target.value); render(); };
   $('sMarkAll').onclick = () => { markAllSeen(); render(); toast('All cards marked as read'); };
   $('btnRefresh').onclick = () => load();
   $('btnAgent').onclick = () => copyText(agentPrompt(null), 'Board instructions copied for an agent');
@@ -2056,7 +2275,7 @@
   const CRM_VIEWS = ['today', 'people', 'pipeline'], TASK_VIEWS = ['board', 'list', 'cal', 'sched', 'activity'];
   const contactNow = () => state.contacts.find(x => x.id === editingContact);
   const nameOf = id => (state.contacts.find(x => x.id === id) || {}).name || id;
-  const cid = () => 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const cid = () => boardId('p_');
   const lastTouch = p => p.comments.filter(c => c.channel && c.channel !== 'note' && !c.draft).map(c => c.sent_at || c.at).sort().pop() || '';
   const daysSince = iso => iso ? Math.floor((Date.now() - Date.parse(iso)) / 86400000) : null;
   const plusDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d); };
@@ -2403,7 +2622,7 @@
     return plan;
   }
   function archiveMerge(cur, part, y) {   // replace by id, so a retried run never makes duplicates
-    cur = cur || { version: KNOWN_SCHEMA, archive: true, year: y, tasks: [], contacts: [], history: {} };
+    cur = cur || { version: 3, archive: true, year: y, tasks: [], contacts: [], history: {} };
     ['tasks', 'contacts'].forEach(k => { const ids = new Set(part[k].map(x => x.id)); cur[k] = (cur[k] || []).filter(x => !ids.has(x.id)).concat(part[k]); });
     cur.history = cur.history || {};
     Object.keys(part.history || {}).forEach(id => { const old = cur.history[id] || (cur.history[id] = []), seen = new Set(old.map(e => JSON.stringify(e))); part.history[id].forEach(e => { if (!seen.has(JSON.stringify(e))) old.push(e); }); });
@@ -2442,11 +2661,32 @@
   }
   function archiveCounts() { const p = archivePlan(clone(state), archRules()), v = Object.values(p);
     return { tasks: v.reduce((n, x) => n + x.tasks.length, 0), contacts: v.reduce((n, x) => n + x.contacts.length, 0), history: v.reduce((n, x) => n + Object.values(x.history).reduce((m, h) => m + h.length, 0), 0) }; }
+  async function archiveSplitNow(rules, what) {
+    const message = 'Archive board items'; setStatus('Archiving…');
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const got = await splitSnapshot(true), fresh = normalise(got.data), plan = archivePlan(clone(fresh), rules), years = Object.keys(plan);
+        if (!years.length) { setStatus(''); toast('Nothing to archive yet'); return; }
+        const extras = {}, gone = new Set(), histories = {}, counts = {};
+        years.forEach(y => { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
+          extras[rel] = jsonText(merged); counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length };
+          plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); }); });
+        fresh.tasks = fresh.tasks.filter(x => !gone.has(x.id)); fresh.contacts = fresh.contacts.filter(x => !gone.has(x.id));
+        [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
+        fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, counts); fresh.archive.last_run = nowIso();
+        const out = await save(fresh, message, got.meta, extras);
+        if (out === 'ok') { archived = null; archivedSig = ''; snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); toast('Archived ' + what + '.'); return; }
+        if (out !== 'conflict') throw new Error(out); setStatus('Someone else changed the board, retrying…', 'err');
+      } catch (e) { console.error(e); setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
+    }
+    setStatus('Could not archive after retries', 'err'); toast('The board stayed busy. Try Archive again.', true);
+  }
   async function archiveNow() {
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }
     const rules = archRules(); let n = archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
     const what = `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
     if (!confirm(`Archive ${what}?\n\nThey move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`)) return;
+    if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
     // plan from the board as it is on GitHub now, not from this page's copy, so nobody's newer comment or edit is archived away
     let fresh;
@@ -2478,6 +2718,22 @@
   }
   async function restoreArchived(kind, item, y) {
     if (writeBlocked()) return;
+    if (isSplit(state)) {
+      const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (!entry) break; const nextArchive = clone(entry.obj), fresh = normalise(got.data);
+          const arch = (entry.obj[k] || []).find(x => x.id === item.id), h = (entry.obj.history || {})[item.id];   // the archive as it is now, not the copy the dialog showed
+          const src = arch ? (h && h.length ? Object.assign({}, arch, { history: h.concat(arch.history || []) }) : arch) : item;
+          if (!fresh[k].some(x => x.id === item.id)) { const x = clone(src); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }
+          nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
+          fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
+          const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) });
+          if (out === 'ok') { archived = null; archivedSig = ''; $('dlgArch').close(); render(); toast(`${item.title || item.name} is back on the board.`); if (kind === 'task') openCard(item.id); else openContact(item.id); return; }
+          if (out !== 'conflict') throw new Error(out);
+        } catch (e) { console.error(e); toast('Could not restore the archived item: ' + (e.message || e), true); return; }
+      }
+      toast('The board stayed busy. Try again.', true); return;
+    }
     const k = kind === 'task' ? 'tasks' : 'contacts';   // item already carries its archived history lines (loadArchived)
     const ok = await mutate(d => { d[k] = d[k] || []; if (!d[k].some(x => x.id === item.id)) { const x = clone(item); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); d[k].push(x); } }, `Restore ${item.title || item.name} from the archive`);
     if (!ok) { toast('Not restored: the board could not be saved. The archived copy is unchanged.', true); return; }
@@ -2502,19 +2758,19 @@
   $('aClose').onclick = () => $('dlgArch').close();
   function renderArchiveBox() {   // Settings → General → Archive
     const box = $('archBox'); if (!box) return; box.textContent = '';
-    const kb = Math.round(boardSize / 1024), files = (state.archive || {}).files || {}, r = archRules(), n = archiveCounts();
+    const kb = Math.round(boardSize / 1024), limit = isSplit(state) ? 5 * 1024 : SIZE_WARN / 1024, files = (state.archive || {}).files || {}, r = archRules(), n = archiveCounts();
     const tot = Object.values(files).reduce((m, f) => ({ t: m.t + (f.tasks || 0), p: m.p + (f.contacts || 0) }), { t: 0, p: 0 });
-    box.append(el('div', 'hint', `Board file: ${kb ? kb + ' KB' : 'size not known yet'}${kb >= SIZE_WARN / 1024 ? ' (large: archive old items)' : ''}. In the archive: ${tot.t} tasks and ${tot.p} people${Object.keys(files).length ? ' (' + Object.keys(files).sort().join(', ') + ')' : ''}.`));
+    box.append(el('div', 'hint', `Board ${isSplit(state) ? 'files' : 'file'}: ${kb ? kb + ' KB' : 'size not known yet'}${kb > limit ? ' (large: archive old items)' : ''}. In the archive: ${tot.t} tasks and ${tot.p} people${Object.keys(files).length ? ' (' + Object.keys(files).sort().join(', ') + ')' : ''}.`));
     box.append(el('div', 'hint', `Archive moves tasks that have been done for more than ${r.done_days} days, Lost people with no change for ${r.lost_days} days, and all but the last ${r.keep_history} history lines of each card. Search still finds them, and you can bring any of them back.`));
     const b = elI('button', null, 'archive', n.tasks + n.contacts + n.history ? `Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : 'Nothing to archive yet'); b.type = 'button'; b.disabled = !!ro || !(n.tasks + n.contacts + n.history); b.onclick = archiveNow; box.append(b);
   }
   function sizeBar() {   // a quiet nudge once the board file gets large
-    const bar = $('sizeBar'); if (!bar) return; const big = !ro && boardSize >= SIZE_WARN && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
+    const bar = $('sizeBar'); if (!bar) return; const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
     bar.hidden = !big; if (!big) return; bar.textContent = '';
     const a = el('button', 'small', 'Archive old items'), x = el('button', 'small', 'Later'); a.type = x.type = 'button';
     a.onclick = () => { $('btnSettings').click(); settingsTab('general'); renderArchiveBox(); $('archBox').scrollIntoView({ block: 'center' }); };
     x.onclick = () => { LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))); bar.hidden = true; };
-    bar.append(elI('span', null, 'archive', `The board file is ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`), a, x);
+    bar.append(elI('span', null, 'archive', `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`), a, x);
   }
 
   // ---- search everything: people, tasks, notes, comments and (on request) the archive, with MiniSearch ---------------

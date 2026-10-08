@@ -1,0 +1,21 @@
+{
+  "id": "p_acme",
+  "name": "Casey Example",
+  "company": "Acme",
+  "role": "Buyer",
+  "email": "casey@example.invalid",
+  "phone": "",
+  "linkedin": "",
+  "stage": "Contacted",
+  "value": "",
+  "source": "Example",
+  "notes": "",
+  "next": "Reply",
+  "next_due": "2026-10-21",
+  "links": [],
+  "comments": [],
+  "history": [],
+  "created": "2026-10-01T08:00:00.000Z",
+  "updated": "2026-10-01T08:00:00.000Z",
+  "createdBy": "alex"
+}

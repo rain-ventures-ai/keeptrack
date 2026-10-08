@@ -2,12 +2,12 @@
 
 > **This folder is the task board for this repo.** It is not the repo's other work. A task can reference a client or area (the `client` field) or be about anything else. Leave `client` empty, or use a label like `internal`.
 
-A Trello-style kanban for this repo with no database and no server. The single source of truth is [`board/tasks.json`](tasks.json). Two things read and write it:
+A Trello-style kanban for this repo with no database and no server. The single source of truth is the board folder. Its settings start in [`board/tasks.json`](tasks.json). Two things read it:
 
 - **The web board** — a static page hosted from the public `keeptrack` repo: https://rain-ventures-ai.github.io/keeptrack/board/?repo=<owner>/<repo>&path=board/tasks.json (source: `rain-ventures-ai/keeptrack`, `board/index.html`). It holds no data. It talks to the GitHub API from your browser with a fine-grained token you paste in once (kept in your browser's localStorage, sent only to api.github.com).
 - **The agent CLI** — [`board/keeptrack.py`](keeptrack.py), used by Claude, Codex or any script, through your existing `gh` login.
 
-Every write re-reads the latest `tasks.json` and retries on a SHA conflict, so edits from the browser and from agents merge instead of overwriting each other.
+Every CLI and web-board write re-reads the latest board files and retries on a conflict.
 
 ## Using the web board
 1. Open the hosted page above (the link pre-fills the repo).
@@ -16,7 +16,61 @@ Every write re-reads the latest `tasks.json` and retries on a SHA conflict, so e
 
 Filters: client, assignee (including "Claimed by an agent"), label, priority, **Needs attention** (overdue, or an agent claim that is stale/stuck/blocked), hide done.
 
-## `tasks.json` schema (version 3)
+## Split storage (schema 4)
+
+Schema v4 keeps each card and CRM person in a separate file:
+
+```text
+board/
+  tasks.json
+  cards/<task-id>.json
+  people/<person-id>.json
+  archive/<year>.json
+```
+
+`tasks.json` has `"version": 4` and `"layout": "split"`. It keeps board settings, columns, team members, agents, clients, labels, client links, `next_num`, and the archive index. It has no `tasks` or `contacts` array.
+
+A card file keeps all card fields. It also has `rank`. A person file keeps all CRM person fields. Each file name must match the item `id`.
+
+New task ids start with `t_`. New person ids start with `p_`. The suffix has 10 lower-case letters or digits. Old ids do not change. Task numbers still come from `next_num`.
+
+`rank` is a base-62 fractional index. It lets one card move without renumbering the other cards. The CLI orders cards in a column by priority, due date, rank, and task number.
+
+The CLI writes only files that changed. Adding a task writes `tasks.json` and one new card file in one commit. A card edit writes only that card. When an API save changes several files, it uses one Git Data API commit. Local `--file` saves use the board folder that contains the selected `tasks.json`.
+
+API reads use the branch tree. Blobs are cached by Git blob SHA under `.board/cache/`. The cache is local and ignored by git.
+
+### Migrate from schema 3
+
+Install the v8 web page before anyone migrates a board. Bare `migrate` brings a board up to v3 only. Only `migrate --to 4` splits it.
+
+Install the new kit on the default branch. Then check the migration:
+
+```bash
+python3 board/keeptrack.py migrate --to 4 --dry-run
+```
+
+Read the file list and counts. Then migrate:
+
+```bash
+python3 board/keeptrack.py migrate --to 4
+python3 board/keeptrack.py verify --against keeptrack-v3-backup-YYYYMMDD-HHMM
+python3 board/keeptrack.py doctor
+```
+
+For a GitHub board, migration creates a tag named `keeptrack-v3-backup-YYYYMMDD-HHMM`. It then writes all new files in one commit. It checks every field before it saves.
+
+To roll back, revert the migration commit. You can also reset to the backup tag. A reset removes all board saves made after the tag. Check with the team before you reset.
+
+### Check and repair
+
+Run `python3 board/keeptrack.py doctor` when a save fails, after migration, or when the board reports an error. Add `--json` for machine-readable output.
+
+Read the report before you run `doctor --fix`. The fix command repairs only safe fields in one save. It never deletes data. It never changes invalid JSON.
+
+Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit code 2 means the tool could not read the board.
+
+## Legacy `tasks.json` schema (version 3)
 ```jsonc
 {
   "version": 3,

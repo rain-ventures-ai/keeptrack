@@ -13,11 +13,33 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Rules for a kit change (for whoever changes keeptrack board/kit)
 1. Increase `version` in `manifest.json` by one, and add a section below for the new version.
-2. If `tasks.json` changes shape: increase `SCHEMA` in `keeptrack.py` and `KNOWN_SCHEMA` in the web board's `board.js` together, increase `schema` in `manifest.json`, add a step to `MIGRATIONS` in `keeptrack.py`, and make the web board's `normalise()` do the same change. The step must be safe to run two times. The first write after a repo's upgrade PR is merged migrates the data; do not migrate before the merge.
+2. If `tasks.json` changes shape, increase `SCHEMA` and the manifest schema. Add a safe step to `MIGRATIONS`. Update each writer in the phase that adds its write support. Follow the version notes for the migration command. Do not migrate before the upgrade is merged.
 3. The web board and `keeptrack.py` must still read the schema version before the new one, so boards that are not upgraded yet continue to work.
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
 
+## Backups and checks for every upgrade
+1. Before the upgrade, make a backup of the default branch: a tag or branch named `backup/kit<old version>-<YYYY-MM-DD>`. Keep it permanently. It costs almost nothing, because git already stores those files.
+2. Upgrade on a branch with a pull request. Never upgrade on the default branch directly.
+3. After the merge, run `python3 board/keeptrack.py verify --against backup/kit<old version>-<YYYY-MM-DD>`. Also check that the web board loads and saves.
+4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
+
 ## Versions
+### v8 (schema 4)
+Cards and CRM people use split storage. Install the v8 web page before anyone migrates a board.
+
+Bare `migrate` still brings a board up to v3 only. Only `migrate --to 4` splits the board.
+- Run `python3 board/keeptrack.py migrate --to 4 --dry-run` after the kit is on the default branch.
+- Check the file list and counts.
+- Run `python3 board/keeptrack.py migrate --to 4`.
+- The command makes a backup tag before it changes a GitHub board. Keep the tag permanently.
+- Run `python3 board/keeptrack.py verify --against <backup tag>`. It must say OK.
+- Run `python3 board/keeptrack.py doctor` after migration.
+- Migrate the upgrade owner's own board first. Tell the team before you migrate a shared board.
+- Add `.board/cache/` to `.gitignore` if it is not there.
+- Check: `tasks.json` has `"version": 4` and `"layout": "split"`. Check that `cards/` and `people/` contain the item files.
+
+To roll back, revert the migration commit. You can also reset the branch to the `keeptrack-v3-backup-YYYYMMDD-HHMM` tag. A reset removes every later board save, so check with the team first.
+
 ### v7 (schema 3)
 Onboarding. No data change.
 - New repo skill `keeptrack-onboard` (`.claude/skills/keeptrack-onboard/`): a guided set-up from what a person already has (named clients, spreadsheets, email, calendar, Trello and other task tools, Drive, Dropbox or local folders). Files stay where they are; the board stores links.

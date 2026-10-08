@@ -1,0 +1,46 @@
+{
+  "version": 4,
+  "layout": "split",
+  "settings": {
+    "stale_after_minutes": 30,
+    "stages": [
+      "New",
+      "Contacted",
+      "Won",
+      "Lost"
+    ]
+  },
+  "columns": [
+    {
+      "id": "todo",
+      "name": "To do"
+    },
+    {
+      "id": "done",
+      "name": "Done"
+    }
+  ],
+  "people": [
+    {
+      "github": "alex",
+      "name": "Alex"
+    }
+  ],
+  "agents": [
+    "codex"
+  ],
+  "clients": [
+    "Acme"
+  ],
+  "labels": [
+    {
+      "name": "call",
+      "color": "#0c66e4"
+    }
+  ],
+  "client_info": {},
+  "next_num": 3,
+  "archive": {
+    "files": {}
+  }
+}
