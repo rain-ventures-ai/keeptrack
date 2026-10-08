@@ -2,8 +2,6 @@
 
 One plugin folder serves every tool: `board/kit/` in `rain-ventures-ai/keeptrack`. It holds `keeptrack.py` (the command-line tool), the skill `skills/keeptrack/SKILL.md` (how an agent uses it) and one small manifest for each tool. All tools use the same skill text and the same `keeptrack.py`.
 
-> While the Keeptrack repo is private, only people with access to it can install the plugin. Each install needs a GitHub login that can read the repo.
-
 ## Claude Code
 ```bash
 claude plugin marketplace add rain-ventures-ai/keeptrack

@@ -676,6 +676,11 @@ body.setup header { justify-content: flex-start; } body.setup #btnHelp { margin-
 @media (max-width: 520px) { .cwb { padding-left: 4px; } .cprow { flex-wrap: wrap; } .cprow > span { width: 100%; } }
 .cwlogh { margin: 14px 0 4px; font-size: 13px; } .cwlog { max-height: 260px; overflow: auto; } .cwlog .wck { padding: 4px 0; border-bottom: 1px solid var(--border); } .cwlog .wck .muted { font-size: 12px; word-break: break-word; }
 #cwDebug .cbtns { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+/* activity lines in the comment stream (for example "Claude started a session") */
+.cmact { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 12px; font-size: 12.5px; color: var(--muted); }
+.cmact .cmacti { width: 20px; display: inline-flex; justify-content: center; } .cmact a { color: var(--accent); font-weight: 600; } .cmact time { margin-left: auto; }
+.cmact.bad { color: var(--danger); }
+.cmhead .cmsess { margin-left: auto; font-size: 12px; color: var(--accent); text-decoration: none; font-weight: 600; }
 
 /* ---- colour themes: 3 colours (paper, ink, hero) or 5 (+ surface, line) ------------------------------------------------
    Each theme sets 3 colours (paper, ink, hero) or 5 colours (paper, surface, line, ink, hero).

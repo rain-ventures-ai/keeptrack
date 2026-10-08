@@ -14,6 +14,13 @@
 - **AI helpers:** a plugin for Claude (Code, Desktop, Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
 
 ## Start
+**Easiest:** paste this into a new chat with Claude, Codex or Cursor. It walks you through everything, also when you have no board yet:
+
+```
+Set up Keeptrack for me: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it. Walk me through it one step at a time.
+```
+
+Or by hand:
 1. Open the web board (`board/index.html`, served by GitHub Pages or any static host). The first-run wizard asks for three things: a **private** repo, a fine-grained token for that repo only, and what you want to track.
 2. Install the plugin for your AI tool: see [board/kit/PLUGIN.md](board/kit/PLUGIN.md).
 3. Ask your agent: "Who do I need to follow up with today?"

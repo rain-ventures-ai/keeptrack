@@ -4,7 +4,7 @@
 
 A Trello-style kanban for this repo with no database and no server. The single source of truth is [`board/tasks.json`](tasks.json). Two things read and write it:
 
-- **The web board** — a static page hosted from the public `co-assets` repo: https://rain-ventures-ai.github.io/co-assets/board/?repo=<owner>/<repo>&path=board/tasks.json (source: `rain-ventures-ai/co-assets`, `board/index.html`). It holds no data. It talks to the GitHub API from your browser with a fine-grained token you paste in once (kept in your browser's localStorage, sent only to api.github.com).
+- **The web board** — a static page hosted from the public `keeptrack` repo: https://rain-ventures-ai.github.io/keeptrack/board/?repo=<owner>/<repo>&path=board/tasks.json (source: `rain-ventures-ai/keeptrack`, `board/index.html`). It holds no data. It talks to the GitHub API from your browser with a fine-grained token you paste in once (kept in your browser's localStorage, sent only to api.github.com).
 - **The agent CLI** — [`board/keeptrack.py`](keeptrack.py), used by Claude, Codex or any script, through your existing `gh` login.
 
 Every write re-reads the latest `tasks.json` and retries on a SHA conflict, so edits from the browser and from agents merge instead of overwriting each other.
@@ -46,6 +46,8 @@ Filters: client, assignee (including "Claimed by an agent"), label, priority, **
     "details": "free text; URLs become clickable",
     "todos":   [{ "id": "d_ab12cd", "text": "…", "done": false, "doneBy": "…", "doneAt": "…" }],   // checklist inside the card (not separate tasks)
     "comments": [{ "id": "c_ab12cd", "at": "…", "by": "JezHub", "text": "append-only stream for people and agents" }],
+    // a comment can carry "session_url" (the Claude session that works on it). type "activity" is a one-line event that the web board adds, for example
+    // { "type": "activity", "by": "claude", "text": "Claude started a session for @JezHub: https://claude.ai/code/session_…", "session_url": "…", "reply_to": "c_ab12cd" }
     "history": [{ "at": "…", "by": "claude@osouthgate", "text": "✓ step one" }],               // automatic log, newest last, capped at 200
     "links":    [{ "title": "Drive folder", "url": "https://…" }],   // any URL; GitHub issue/PR/repo links (any repo) show as chips on the card, so use them to group related work
     "contacts": [{ "name": "…", "role": "…", "email": "…", "phone": "…" }],
@@ -120,7 +122,7 @@ Never edit tasks.json by hand; always go through keeptrack.py so conflicts are h
 Useful environment variables: `BOARD_USER`, `BOARD_AGENT`, `BOARD_SESSION` (also `CLAUDE_SESSION_ID` / `CODEX_SESSION_ID`), `BOARD_REPO`, `BOARD_BRANCH`, `BOARD_PATH` (default `board/tasks.json`). Test safely with `--file some-copy.json`.
 
 ## Hosting the web page
-GitHub Pages is not available for private repos on the current (free) org plan, so the page lives in the small public repo `rain-ventures-ai/co-assets` (served by GitHub Pages). It contains no client data; the data stays in this private repo and is fetched only with your token. Edit the page there, not here.
+GitHub Pages is not available for private repos on the current (free) org plan, so the page lives in the public repo `rain-ventures-ai/keeptrack` (served by GitHub Pages). It contains no client data; the data stays in this private repo and is fetched only with your token. Edit the page there, not here.
 
 ## Security notes
 - The token is stored in localStorage; use a fine-grained token scoped to this repo only, with an expiry.
