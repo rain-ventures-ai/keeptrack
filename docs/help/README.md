@@ -14,5 +14,6 @@ Keeptrack keeps your people, follow-ups, pipeline and tasks in a private GitHub 
 | Choose where your assistant runs (Cowork, your computer, the cloud) and set it up | [Where your assistant runs](where-agents-run.md) |
 | Know where your data is and who can see it | [Privacy and security](privacy-and-security.md) |
 | Fix a problem | [Questions and problems](faq.md) |
+| Check or repair board data | [Repair a board](repair-a-board.md) |
 
 In the web board, click **❓** at the top for a short version of these pages.

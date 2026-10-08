@@ -13,11 +13,25 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Rules for a kit change (for whoever changes keeptrack board/kit)
 1. Increase `version` in `manifest.json` by one, and add a section below for the new version.
-2. If `tasks.json` changes shape: increase `SCHEMA` in `keeptrack.py` and `KNOWN_SCHEMA` in the web board's `board.js` together, increase `schema` in `manifest.json`, add a step to `MIGRATIONS` in `keeptrack.py`, and make the web board's `normalise()` do the same change. The step must be safe to run two times. The first write after a repo's upgrade PR is merged migrates the data; do not migrate before the merge.
+2. If `tasks.json` changes shape, increase `SCHEMA` and the manifest schema. Add a safe step to `MIGRATIONS`. Update each writer in the phase that adds its write support. Follow the version notes for the migration command. Do not migrate before the upgrade is merged.
 3. The web board and `keeptrack.py` must still read the schema version before the new one, so boards that are not upgraded yet continue to work.
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
 
 ## Versions
+### v7 (schema 4)
+Cards and CRM people now use split storage.
+- Run `python3 board/keeptrack.py migrate --to 4 --dry-run` after this kit is on the default branch.
+- Check the file list and counts.
+- Run `python3 board/keeptrack.py migrate --to 4`.
+- The command makes a backup tag before it changes a GitHub board.
+- Run `python3 board/keeptrack.py doctor` after migration.
+- Add `.board/cache/` to `.gitignore` if it is not there.
+- Check: `tasks.json` has `"version": 4` and `"layout": "split"`. Check that `cards/` and `people/` contain the item files.
+
+The web board from kit v6 does not write schema v4. It opens the board read-only until the phase 2 web update is installed.
+
+To roll back, revert the migration commit. You can also reset the branch to the `keeptrack-v3-backup-YYYYMMDD-HHMM` tag. A reset removes every later board save, so check with the team first.
+
 ### v6 (schema 3)
 Fixes from a code review. No data change.
 - `--file` boards: atomic writes, and a lock (`<file>.lock`, gitignored) for each read-modify-write.
