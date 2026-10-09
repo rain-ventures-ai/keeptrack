@@ -380,6 +380,10 @@ dialog.settings[open] { animation: slidein .22s ease; }
 .stabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 8px 14px; font-weight: 600; color: var(--muted); margin-bottom: -1px; }
 .stabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 dialog.settings [role="tabpanel"][hidden] { display: none; }
+.modeset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 12px; margin: 12px 0 16px; }
+.modeset legend { padding: 0 5px; font-weight: 700; }
+.modeset label.chk { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+.modeset .hint { margin-top: 9px; line-height: 1.45; }
 @media (max-width: 760px) { .stabs button { min-height: 44px; flex: 1 0 auto; } dialog.settings { width: 100vw; border-radius: 0; border: 0; } }
 
 /* ---- top bar v2: logo, views, client pills, quick people, filters ---------------------------------------- */

@@ -111,7 +111,13 @@
   </div>
 
   <div id="panelGeneral" role="tabpanel" aria-labelledby="tabGeneral">
-    <p class="hint" style="margin-top:0">These apply straight away and are remembered in this browser.</p>
+    <p class="hint" style="margin-top:0">Appearance changes apply straight away and are remembered in this browser.</p>
+    <fieldset class="modeset">
+      <legend>Board sections</legend>
+      <label class="chk big"><input id="sModeTasks" type="checkbox"> Tasks</label>
+      <label class="chk big"><input id="sModeCrm" type="checkbox"> People &amp; pipeline (CRM)</label>
+      <div class="hint">These switches are saved to the shared board. Turning a section off only hides its views: nothing is deleted. Turn it on again to see the same tasks or people. If CRM has no people yet, it opens empty; adding the first person creates their record automatically.</div>
+    </fieldset>
     <div><label for="sStyle">Card style</label><select id="sStyle"><option value="classic">Classic</option><option value="colorful">Colourful (client and urgency colours)</option></select></div>
     <div><label for="sTheme">Theme</label><select id="sTheme"><option value="auto">Auto (follows your device)</option><optgroup label="Classic"><option value="light">Light</option><option value="dark">Dark</option><option value="midnight">Midnight</option><option value="sand">Sand</option></optgroup><optgroup label="3 colours: paper, ink, accent"><option value="paper">Paper</option><option value="mono">Mono</option><option value="iris">Iris</option><option value="forest">Forest</option><option value="ember">Ember (dark)</option><option value="ink">Ink (dark)</option></optgroup><optgroup label="5 colours: + cards, borders"><option value="studio">Studio</option><option value="newsprint">Newsprint</option><option value="blueprint">Blueprint</option><option value="graphite">Graphite (dark)</option></optgroup><option value="custom" id="sThemeCustom" hidden>Your DESIGN.md</option></select></div>
     <div class="themeio"><span class="hint">Use your own colours: import a <a href="https://github.com/google-labs-code/design.md" target="_blank" rel="noopener noreferrer">DESIGN.md</a> file. Keeptrack reads its colours only.</span><div class="cbtns"><button id="sThemeImport" type="button"><i data-i="upload"></i> Import DESIGN.md</button><button id="sThemeExport" type="button"><i data-i="clipboard-copy"></i> Copy theme as DESIGN.md</button></div><input id="sThemeFile" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden><div id="sThemeMsg" class="hint" role="status"></div></div>
