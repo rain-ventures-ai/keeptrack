@@ -862,8 +862,26 @@ if (typeof window !== 'undefined') (() => {
   }
   function paintLabel(node, name) { const background = labelColor(name); node.style.background = background; node.style.color = labelInk(background); return node; }
 
+  function boardScrollPosition() {
+    if (view !== 'board' || document.body.dataset.view !== 'board') return null;
+    const board = $('board'), columns = {};
+    board.querySelectorAll('.col[data-col] .cards').forEach(cards => {
+      columns[cards.closest('.col').dataset.col] = { top: cards.scrollTop, left: cards.scrollLeft };
+    });
+    return { top: board.scrollTop, left: board.scrollLeft, columns };
+  }
+  function restoreBoardScroll(pos) {
+    if (!pos) return;
+    const board = $('board'); board.scrollTop = pos.top; board.scrollLeft = pos.left;
+    board.querySelectorAll('.col[data-col] .cards').forEach(cards => {
+      const at = pos.columns[cards.closest('.col').dataset.col]; if (!at) return;
+      cards.scrollTop = at.top; cards.scrollLeft = at.left;
+    });
+  }
+
   function render() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
+    const scroll = boardScrollPosition();
     document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
     fillClientSelect([...new Set([...state.clients, ...state.tasks.map(t => t.client)].filter(Boolean))].map(c => [c, c]));
     fillSelect($('fWho'), [...state.people.map(p => [p.github, '@' + p.github]), ['__none', 'Unassigned'], ['__agent', 'Claimed by an agent']], 'Everyone');
@@ -896,7 +914,7 @@ if (typeof window !== 'undefined') (() => {
       btn.onclick = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
       add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = () => { inp.scrollIntoView({ block: 'nearest' }); inp.focus(); }; board.append(c);
     });
-    renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer();
+    renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); restoreBoardScroll(scroll);
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------

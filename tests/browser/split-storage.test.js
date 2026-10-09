@@ -139,6 +139,15 @@ let base;
     assert(secondCinema.y > firstCinema.y, 'cinema cards must flow downward first'); assert(lastCinema.x > firstCinema.x, 'later low-priority cards must continue in a column to the right');
     await cinema.keyboard.press('Escape'); assert.equal(await cinema.locator('body').getAttribute('class'), ''); assert.equal(await cinema.locator('body > header').isVisible(), true); assert.equal(await cinema.locator('.col[data-col="done"]').isVisible(), true); await cinema.close();
 
+    // A GitHub refresh rebuilds the lanes, but must leave each lane at the reader's current position.
+    const scrollApi = new Github(true), scrollRoot = JSON.parse(scrollApi.files['tasks.json']); scrollRoot.next_num = 25; scrollApi.files['tasks.json'] = text(scrollRoot);
+    for (let num = 3; num < 25; num++) scrollApi.files[`cards/t_${num}.json`] = text({ ...cards['cards/t_two.json'], id: `t_${num}`, num, title: `Task ${num}`, rank: `b${String(num).padStart(2, '0')}` });
+    const scrollPage = await openBoard(browser, scrollApi); await scrollPage.setViewportSize({ width: 1000, height: 500 });
+    const beforeRefresh = await scrollPage.locator('.col[data-col="todo"] .cards').evaluate(n => { n.scrollTop = Math.min(420, n.scrollHeight - n.clientHeight); return n.scrollTop; }); assert(beforeRefresh > 100, 'test lane must be scrollable');
+    { const changed = JSON.parse(scrollApi.files['cards/t_one.json']); changed.title = 'First refreshed'; scrollApi.files['cards/t_one.json'] = text(changed); scrollApi.head = 'head-' + ++scrollApi.n; }
+    await scrollPage.evaluate(() => document.querySelector('#btnRefresh').click()); await scrollPage.locator('.card .t', { hasText: 'First refreshed' }).waitFor();
+    const afterRefresh = await scrollPage.locator('.col[data-col="todo"] .cards').evaluate(n => n.scrollTop); assert(Math.abs(afterRefresh - beforeRefresh) <= 2, `refresh changed lane scroll from ${beforeRefresh} to ${afterRefresh}`); await scrollPage.close();
+
     // The compact header has intentional rows: board + views, then board filters. Low-priority utilities move into
     // one More menu on phones instead of wrapping into loose buttons on a third line.
     const compactApi = new Github(true), compact = await browser.newPage({ viewport: { width: 700, height: 800 } }); compact.on('pageerror', e => console.error('page error:', e.message));
