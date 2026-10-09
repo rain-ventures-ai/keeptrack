@@ -7,6 +7,8 @@ Google Drive or another meeting-notes source, create a separate least-privilege 
 `.claude/skills/keeptrack-notes/references/routines.md`. That guide includes a copyable prompt and an incremental log
 of source document revisions and resulting task numbers, without storing transcript text. It defaults to a rolling
 seven-day lookback, skips documents already logged at the same revision, and matches repeated actions across meetings.
+It also explains how to recover a verified legacy import and how explicit versus uncertain completion evidence changes
+an existing task.
 
 If you would like an agent to walk you through this, ask Claude Code in this repo: **"set up my board routine"**. It uses the `board-routine-setup` skill, checks each step, and tells you when it needs you to paste a secret. An agent can guide, check and verify, but it cannot create the API trigger or paste secrets for you (see "What only you can do").
 
