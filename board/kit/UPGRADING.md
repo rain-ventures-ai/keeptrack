@@ -24,6 +24,15 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v12 (schema 4)
+Recurring meeting-notes imports now have a dedicated routine guide and copyable prompt. The guide keeps a privacy-safe
+incremental checkpoint in `automation/meeting-notes-ingestion.json`, distinguishes assignees and clients from labels,
+and prevents unchanged notes or shared meeting links from creating duplicate work.
+- Run `kit-update` only. There is no data migration.
+- Use a separate least-privilege meeting-notes routine; do not add Drive access to the comment-triggered `@claude`
+  board assistant.
+- Check: `.claude/skills/keeptrack-notes/references/routines.md` exists and the notes skill links to it.
+
 ### v11 (schema 4)
 The guided onboarding skill is now named `onboard-keeptrack`, so it sorts after the main `keeptrack` plugin skill in
 agent skill lists. New boards now start directly on schema v4 split storage, whether they are created by the web setup
