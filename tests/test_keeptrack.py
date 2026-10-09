@@ -161,7 +161,7 @@ class WebBoardCopies(unittest.TestCase):
         self.assertIn('const LOADER = ' + json.dumps(loader, ensure_ascii=False) + ';', js)
 
 
-FIXTURES = os.path.join(HERE, "fixtures")
+from board_fixtures import FIXTURES, copy_board_fixture
 
 
 def tree_bytes(path):
@@ -191,7 +191,7 @@ class SplitStorage(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        copy_board_fixture("v4", self.board_dir)
         self.old_file = kt.FILE
         kt.FILE = os.path.join(self.board_dir, "tasks.json")
 
@@ -279,7 +279,7 @@ class MigrationAndRanks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        copy_board_fixture("v3", self.board_dir)
         self.old_file = kt.FILE
         kt.FILE = os.path.join(self.board_dir, "tasks.json")
 
@@ -387,7 +387,7 @@ class Doctor(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        copy_board_fixture("v4", self.board_dir)
         self.old_file = kt.FILE
         kt.FILE = os.path.join(self.board_dir, "tasks.json")
 
@@ -457,7 +457,7 @@ class Doctor(unittest.TestCase):
 
     def test_v3_size_and_newer_schema_are_reported(self):
         shutil.rmtree(self.board_dir)
-        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        copy_board_fixture("v3", self.board_dir)
         data = read_json(kt.FILE); data["padding"] = "x" * (601 * 1024); write(kt.FILE, data)
         issues, _, _ = kt.doctor_board(False)
         self.assertIn("BOARD_SIZE", {x["code"] for x in issues})
@@ -525,7 +525,7 @@ class Doctor(unittest.TestCase):
 
     def test_fix_on_a_v3_board_keeps_one_file(self):
         shutil.rmtree(self.board_dir)
-        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        copy_board_fixture("v3", self.board_dir)
         data = read_json(kt.FILE); data["tasks"][1].pop("num"); data["next_num"] = 1; write(kt.FILE, data)
         _, fixes, _ = kt.doctor_board(True)
         self.assertTrue(fixes)
@@ -578,7 +578,7 @@ class PhaseOneSafety(unittest.TestCase):
 
     def test_bare_migrate_does_not_split(self):
         board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v3"), board_dir)
+        copy_board_fixture("v3", board_dir)
         kt.FILE = os.path.join(board_dir, "tasks.json")
         old = read_json(kt.FILE); old["version"] = 2; write(kt.FILE, old)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -627,7 +627,7 @@ class PhaseOneSafety(unittest.TestCase):
         run = lambda *a, cwd=None: subprocess.run(a, cwd=cwd, check=True, capture_output=True)
         run("git", "init", "-q", "--bare", "-b", "main", remote)
         run("git", "clone", "-q", remote, work)
-        shutil.copytree(os.path.join(FIXTURES, "v4"), os.path.join(work, "board"))
+        copy_board_fixture("v4", os.path.join(work, "board"))
         with open(os.path.join(work, "README.md"), "w") as f:
             f.write("not a board file\n")
         run("git", "add", "-A", cwd=work)
@@ -680,7 +680,7 @@ class PhaseOneSafety(unittest.TestCase):
         run = lambda *a, cwd=None: subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True)
         run("git", "init", "-q", "--bare", "-b", "main", remote)
         run("git", "clone", "-q", remote, work)
-        shutil.copytree(os.path.join(FIXTURES, "v4"), os.path.join(work, "board"))
+        copy_board_fixture("v4", os.path.join(work, "board"))
         card_path = os.path.join(work, "board", "cards", "t_first.json")
         card = read_json(card_path); card.pop("rank"); card["comments"][0].pop("id"); write(card_path, card)
         root = read_json(os.path.join(work, "board", "tasks.json")); root["next_num"] = 1
@@ -708,7 +708,7 @@ class MoveInPlace(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        copy_board_fixture("v4", self.board_dir)
         self.old_file = kt.FILE
         kt.FILE = os.path.join(self.board_dir, "tasks.json")
 
@@ -732,7 +732,7 @@ class Verify(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        copy_board_fixture("v3", self.board_dir)
         self.backup = os.path.join(self.temp.name, "backup-tasks.json")
         shutil.copy(os.path.join(self.board_dir, "tasks.json"), self.backup)
         self.old_file = kt.FILE
@@ -771,7 +771,7 @@ class ImportOnSplitBoard(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        copy_board_fixture("v4", self.board_dir)
         self.old_file = kt.FILE
         kt.FILE = os.path.join(self.board_dir, "tasks.json")
         self.staging = os.path.join(self.temp.name, "staging.json")
@@ -796,7 +796,7 @@ class ImportOnSplitBoard(unittest.TestCase):
 
     def test_dry_run_on_a_v3_board_does_not_split_in_memory(self):
         shutil.rmtree(self.board_dir)
-        shutil.copytree(os.path.join(FIXTURES, "v3"), self.board_dir)
+        copy_board_fixture("v3", self.board_dir)
         before = tree_bytes(self.board_dir)
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_import(Args(path=self.staging, source=None, dry_run=True))
@@ -810,7 +810,7 @@ class DuplicateFiles(unittest.TestCase):
     def test_save_is_refused_when_two_files_share_an_id(self):
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         board_dir = os.path.join(temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v4"), board_dir)
+        copy_board_fixture("v4", board_dir)
         old = kt.FILE; kt.FILE = os.path.join(board_dir, "tasks.json"); self.addCleanup(setattr, kt, "FILE", old)
         shutil.copy(os.path.join(board_dir, "cards", "t_first.json"), os.path.join(board_dir, "cards", "copy.json"))
         before = tree_bytes(board_dir)
@@ -918,7 +918,7 @@ class SplitProjects(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.board_dir = os.path.join(self.temp.name, "board")
-        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        copy_board_fixture("v4", self.board_dir)
         root = read_json(os.path.join(self.board_dir, "tasks.json"))
         root["clients"] = ["Acme"]
         root["client_info"] = {"Acme": {"links": []}}
