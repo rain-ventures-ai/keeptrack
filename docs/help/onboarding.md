@@ -7,7 +7,7 @@ In Cowork, or in Claude Code or Codex opened on your board repo, say:
 
 > Onboard my existing work into Keeptrack.
 
-The assistant uses the **keeptrack-onboard** skill. It first asks whether to bring in **people and clients (CRM),
+The assistant uses the **onboard-keeptrack** skill. It first asks whether to bring in **people and clients (CRM),
 tasks, or both**. If you choose CRM, its first CRM question is **"Name your clients."** Five names are enough to
 start. You can answer "skip" to any other question.
 

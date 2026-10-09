@@ -24,6 +24,15 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v11 (schema 4)
+The guided onboarding skill is now named `onboard-keeptrack`, so it sorts after the main `keeptrack` plugin skill in
+agent skill lists. Its behaviour and data format are unchanged.
+- Run `kit-update` only. There is no data migration. The update installs `.claude/skills/onboard-keeptrack` and removes
+  the old kit-managed `.claude/skills/keeptrack-onboard` directory.
+- Start a fresh agent session after updating so it discovers the new name.
+- Check: the repo has only `.claude/skills/onboard-keeptrack`, and asking to "Onboard my existing work into Keeptrack"
+  starts by asking whether to bring in CRM, tasks or both.
+
 ### v10 (schema 4)
 Guided onboarding is now available from the Keeptrack plugin as well as from a board repo, and setup explicitly hands
 off to it instead of improvising an import. It asks whether to bring in people/clients (CRM), tasks, or both before it

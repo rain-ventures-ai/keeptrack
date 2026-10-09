@@ -1,5 +1,5 @@
 ---
-name: keeptrack-onboard
+name: onboard-keeptrack
 description: Set up a new Keeptrack board from what a person or company already has (client lists, spreadsheets, email, calendar, Trello or other task tools, Drive, Dropbox or local folders). Use when someone asks to onboard, migrate, import, "get my clients in", "set up my CRM", "move my tasks across", or "add my older clients".
 ---
 

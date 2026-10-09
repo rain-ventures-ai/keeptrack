@@ -151,7 +151,7 @@ $B list       # tasks (if the board tracks tasks)
 Both must run with no error. Then ask the person to look at the web board, and add a test with their OK, for example `$B add "Test from my assistant"`, and ask them to check that it shows on the web board. Delete or finish the test task after.
 
 Then offer the guided import once: **"Would you like me to bring in existing people and clients (CRM), tasks, or
-both?"** A yes hands over to `keeptrack-onboard`. If the skill is not available in this session, do not substitute
+both?"** A yes hands over to `onboard-keeptrack`. If the skill is not available in this session, do not substitute
 your own import process; start a fresh session on the board repo after the plugin/kit is current.
 
 ### Step 5. Tell the person what they can ask now
