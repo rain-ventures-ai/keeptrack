@@ -595,6 +595,14 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .kitbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 18px; font-size: 13px; background: var(--header); border-bottom: 1px solid var(--border); color: var(--text, inherit); }
 .kitbar[hidden] { display: none; }
 .memberbar { gap: 10px; }
+.cpill { display: inline-flex; align-items: center; gap: 4px; }
+.cpillgo { flex: 0 0 auto; display: inline-grid; place-items: center; width: 22px; height: 22px; margin-left: 2px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; opacity: .85; }
+.cpillgo:hover { background: var(--accent-soft); opacity: 1; }
+.cmenurow { display: flex; gap: 4px; align-items: stretch; }
+.cmenurow .cmenu { flex: 1; }
+.cmenurow .cmenu.detail { flex: 0 0 auto; font-size: 12px; color: var(--muted); }
+.tag.project { background: var(--panel); border: 1px solid var(--border); }
+.tag.project.done, .tag.project.paused { opacity: .72; font-style: italic; }
 .prowbtn { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 8px 10px; margin: 4px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: inherit; font: inherit; cursor: pointer; }
 .prowbtn:hover { border-color: var(--accent); background: var(--accent-soft); }
 .suggestrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }

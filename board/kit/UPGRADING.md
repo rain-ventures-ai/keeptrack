@@ -25,10 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Versions
 ### v17 (schema 4)
-Lightweight CRM extensions: client **north star** text in `client_info`, **projects** under clients (one file per project in split layout), optional **project** on tasks, optional **github** on CRM person records, and `doctor` warnings when a board member has no matching person.
-- Run `kit-update` only. There is no required data migration: older boards keep working; new fields appear when you use them.
-- Split boards store projects as `projects/<pr_id>.json` (same conflict-retry pattern as cards and people). Monolithic v3 boards may keep a `projects` array in `tasks.json`.
-- Check: double-click a client pill to set a north star and open projects; filter tasks by project; `keeptrack.py project-add`, `project`, `list --project`, `client-set --north-star`, `doctor` for `MEMBER_NO_PERSON`.
+Lightweight CRM extensions: client **north star** text in `client_info`, **projects** under clients (one file per project in split layout), optional **project** on tasks, optional **github** on CRM person records, and `doctor` warnings when a board member has no matching person or a task points at a missing project.
+- **Order matters on split boards:** deploy the hosted web board (or hard-refresh after GitHub Pages updates) **before** anyone creates or edits projects on a split-layout board. Run `kit-update` on each board repo so the CLI can read and write `projects/*.json`. An older hosted page (v16) leaves project files on disk but cannot edit them; v17 only deletes `projects/` files when the board has successfully loaded projects from the repo (it will not wipe the folder if project data was missing from memory).
+- Run `kit-update` on board repos. There is no required data migration: older boards keep working; new fields appear when you use them.
+- Split boards store projects as `projects/<pr_id>.json` (same conflict-retry pattern as cards and people). Monolithic v3 boards may keep a `projects` array in `tasks.json`. Remove projects with `keeptrack.py project-remove` (use `--clear-project` to clear `task.project` on linked tasks).
+- Check: client pill **details** button or person drawer **Open client**; filter tasks by project; `keeptrack.py project-add`, `project-remove`, `project`, `list --project`, `client-set --north-star`, `doctor` for `MEMBER_NO_PERSON` and `PROJECT`.
 
 ### v16 (schema 4)
 Recurring contact-email reconciliation now has a dedicated `keeptrack-email` skill and scheduled-routine guide. It

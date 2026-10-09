@@ -1336,7 +1336,7 @@ def cmd_add(a):
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": x, "done": False} for x in (a.todo or [])],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
         if t["project"]:
-            find_project(data, t["project"], quiet=True)
+            find_project(data, t["project"])
         if data.get("layout") == "split":
             t["rank"] = key_between(max(ranks) if ranks else None, None)
         hist(t, "created")
@@ -1804,7 +1804,7 @@ def _migrate_v4(a):
                 print(f"schema v3 -> v4: {counts['tasks']} tasks, {counts['people']} people, {counts['comments']} comments, "
                       f"{counts['history']} history lines, {counts['todos']} to-dos")
                 for path in sorted(files):
-                    if path == "tasks.json" or path.startswith(("cards/", "people/")):
+                    if path == "tasks.json" or path.startswith(("cards/", "people/", "projects/")):
                         print(f"  write {_remote_path(path) if not FILE else _local_path(path)}")
                 if getattr(a, "dry_run", False):
                     print("dry run: wrote nothing")
@@ -1995,7 +1995,7 @@ def cmd_where(a):
 # "channel". A draft is never a contact: it counts only when it is marked sent (`sent`). Agents never send messages.
 CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
-DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON"})
+DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "PROJECT"})
 
 
 def person_for_github(data, github):
@@ -2018,7 +2018,8 @@ def person_for_email(data, email):
     return None
 
 
-def find_project(data, ref, quiet=False):
+def find_project(data, ref, allow_missing=False):
+    """Resolve a project by id, id prefix, or name. Exits unless allow_missing and nothing matches."""
     projects = data.setdefault("projects", [])
     m = [p for p in projects if p["id"] == ref] or [p for p in projects if p["id"].startswith(ref)]
     if not m:
@@ -2026,8 +2027,8 @@ def find_project(data, ref, quiet=False):
         m = [p for p in projects if p.get("name", "").lower() == r]
         m = m or [p for p in projects if r in (p.get("name", "") + " " + p.get("client", "")).lower()]
     if len(m) != 1:
-        if quiet:
-            sys.exit(f"unknown project '{ref}'")
+        if allow_missing and not m:
+            return None
         sys.exit(f"no project matches '{ref}'" if not m else f"'{ref}' matches several projects: " + "; ".join(f"{p['id']} {p['name']} ({p.get('client', '')})" for p in m))
     return m[0]
 
@@ -2395,6 +2396,21 @@ def cmd_project_link(a):
     mutate(fn, f"Project link: {a.ref}")
 
 
+def cmd_project_remove(a):
+    def fn(data):
+        pr = find_project(data, a.ref)
+        pid = pr["id"]
+        linked = [t for t in data.get("tasks", []) if t.get("project") == pid]
+        if linked and not a.clear_project:
+            sys.exit(f"{len(linked)} task(s) still reference {pid}; use --clear-project to clear task.project")
+        for t in linked:
+            t["project"] = ""
+            t["updated"] = now()
+        data["projects"] = [p for p in data.get("projects", []) if p["id"] != pid]
+        print(f"removed {project_line(pr)}")
+    mutate(fn, f"Remove project: {a.ref}")
+
+
 def cmd_project_person(a):
     def fn(data):
         pr = find_project(data, a.ref)
@@ -2420,7 +2436,7 @@ def cmd_task_set(a):
                 data["clients"].append(a.client)
         if a.project is not None:
             if a.project:
-                find_project(data, a.project, quiet=True)
+                find_project(data, a.project)
             t["project"] = a.project
         if a.contact is not None:
             t["contact"] = a.contact
@@ -3002,6 +3018,7 @@ def main():
     s.add_argument("--north-star", dest="north_star"); s.add_argument("--status", choices=PROJECT_STATUSES); s.set_defaults(f=cmd_project_set)
     s = sub.add_parser("project-link", help="link a project to a file or folder"); s.add_argument("ref"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_project_link)
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
+    s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
     s = sub.add_parser("task-set", help="change task client, project or contact"); s.add_argument("id"); s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     a = p.parse_args()

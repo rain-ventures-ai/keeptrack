@@ -287,6 +287,20 @@ class MigrationAndRanks(unittest.TestCase):
         kt.FILE = self.old_file
         self.temp.cleanup()
 
+    def test_migrate_dry_run_lists_project_paths(self):
+        data = read_json(kt.FILE)
+        data["projects"] = [{"id": "pr_test01ab", "client": "Acme", "name": "Pilot", "north_star": "",
+                              "status": "active", "links": [], "people": [], "created": "2026-01-01T00:00:00Z",
+                              "updated": "2026-01-01T00:00:00Z"}]
+        data["tasks"][0]["project"] = "pr_test01ab"
+        write(kt.FILE, data)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_migrate(Args(to=4, dry_run=True))
+        text = out.getvalue()
+        self.assertIn("projects/pr_test01ab.json", text)
+        self.assertIn("dry run: wrote nothing", text)
+
     def test_migrate_dry_run_then_migrate_and_refuse_twice(self):
         before = tree_bytes(self.board_dir)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -868,3 +882,65 @@ class CrmProjects(unittest.TestCase):
         issues, _, code = kt.doctor_board(False)
         self.assertEqual(0, code, "MEMBER_NO_PERSON is a warning only")
         self.assertIn("MEMBER_NO_PERSON", {x["code"] for x in issues})
+
+    def test_project_remove_and_clear_task_reference(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_add(Args(name="Rollout", client="Acme", north_star="", status="active"))
+        pr = read_json(self.file)["projects"][0]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_task_set(Args(id="t_live", client=None, project=pr["id"], contact=None))
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_project_remove(Args(ref=pr["id"], clear_project=False))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_remove(Args(ref=pr["id"], clear_project=True))
+        data = read_json(self.file)
+        self.assertEqual([], data["projects"])
+        live = next(t for t in data["tasks"] if t["id"] == "t_live")
+        self.assertEqual("", live.get("project"))
+
+    def test_doctor_warns_orphan_project_reference(self):
+        data = read_json(self.file)
+        nums = [1, 2]
+        for i, task in enumerate(data.get("tasks", [])):
+            task["num"] = nums[i] if i < len(nums) else nums[-1] + i
+        data["next_num"] = max(t["num"] for t in data["tasks"]) + 1
+        data["tasks"][1]["project"] = "pr_missing99"
+        data["people"] = [{"github": "osouthgate", "name": "O"}]
+        data["contacts"][0]["github"] = "osouthgate"
+        write(self.file, data)
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual(0, code, "PROJECT is a warning only")
+        self.assertIn("PROJECT", {x["code"] for x in issues})
+
+
+class SplitProjects(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.board_dir = os.path.join(self.temp.name, "board")
+        shutil.copytree(os.path.join(FIXTURES, "v4"), self.board_dir)
+        root = read_json(os.path.join(self.board_dir, "tasks.json"))
+        root["clients"] = ["Acme"]
+        root["client_info"] = {"Acme": {"links": []}}
+        write(os.path.join(self.board_dir, "tasks.json"), root)
+        self.old_file = kt.FILE
+        kt.FILE = os.path.join(self.board_dir, "tasks.json")
+
+    def tearDown(self):
+        kt.FILE = self.old_file
+        self.temp.cleanup()
+
+    def test_split_v4_project_round_trip(self):
+        before = tree_bytes(self.board_dir)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_add(Args(name="Rollout", client="Acme", north_star="Go live", status="active"))
+        changed = {p for p in set(before) | set(tree_bytes(self.board_dir)) if before.get(p) != tree_bytes(self.board_dir).get(p)}
+        proj_files = [p for p in changed if p.startswith("projects/")]
+        self.assertEqual(1, len(proj_files))
+        pr_id = os.path.basename(proj_files[0]).replace(".json", "")
+        on_disk = read_json(os.path.join(self.board_dir, proj_files[0]))
+        self.assertEqual("Rollout", on_disk["name"])
+        kt.FILE = os.path.join(self.board_dir, "tasks.json")
+        loaded = kt.load_board()
+        self.assertEqual(1, len(loaded["projects"]))
+        self.assertEqual(pr_id, loaded["projects"][0]["id"])

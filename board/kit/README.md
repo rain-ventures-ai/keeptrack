@@ -45,6 +45,8 @@ API reads use the branch tree. Blobs are cached by Git blob SHA under `.board/ca
 
 Install the v8 web page before anyone migrates a board. Bare `migrate` brings a board up to v3 only. Only `migrate --to 4` splits it.
 
+**Projects on split boards (kit v17+):** deploy the hosted web board (or hard-refresh after Pages updates) and run `kit-update` on the board repo **before** anyone creates or edits projects on a split layout. An older hosted page cannot edit `projects/*.json`; the v17 board only deletes project files when project data was loaded successfully.
+
 Install the new kit on the default branch. Then check the migration:
 
 ```bash

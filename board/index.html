@@ -122,7 +122,7 @@
   <h2 id="hTitle">Help</h2>
   <div class="hgrid">
     <section><h3><i data-i="alarm-clock"></i> Today</h3><p>One place for people to contact and tasks that are overdue or due today. It shows whichever board sections you have enabled.</p></section>
-    <section><h3><i data-i="user"></i> People</h3><p>Everyone you keep track of. Press <b>Add…</b> for a simple form, or type <b>Name | Company | Role</b> and press Enter for a quick add.</p></section>
+    <section><h3><i data-i="user"></i> People</h3><p>Everyone you keep track of. Press <b>Add…</b> for a simple form, or type <b>Name | Client | Role</b> and press Enter for a quick add.</p></section>
     <section><h3><i data-i="trending-up"></i> Pipeline</h3><p>People by stage. Drag a card to change the stage. Logging a sent message moves a new person to the second stage.</p></section>
     <section><h3><i data-i="mail"></i> Messages and calls</h3><p>In a person's card, write what you sent or said, pick the channel, then <b>Log</b>. Tick <b>Draft</b> to keep a message you have not sent yet. <b>Mark sent</b> when you send it.</p></section>
     <section><h3><i data-i="folder"></i> Client files</h3><p>Keep big files in Google Drive, Dropbox or OneDrive. Add the folder links in the <b>Files</b> part of a person's card.</p></section>
@@ -323,7 +323,7 @@
     <div class="formhead"><div><h3 id="apTitle">Add a person</h3><p class="hint">Only their name is required. You can add more details now or later.</p></div><button id="apX" type="button" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
     <label for="apName">Name <span class="required">Required</span></label><input id="apName" name="name" autocomplete="name" required aria-required="true">
     <div class="pgrid">
-      <label for="apCompany"><span><i data-i="building-2"></i> Company <span class="optional">Optional</span></span><input id="apCompany" name="company" list="apCompanies" autocomplete="organization"><datalist id="apCompanies"></datalist></label>
+      <label for="apCompany"><span><i data-i="building-2"></i> Client <span class="optional">Optional</span></span><input id="apCompany" name="company" list="apCompanies" autocomplete="organization" aria-label="Client"><datalist id="apCompanies"></datalist></label>
       <label for="apRole"><span><i data-i="briefcase"></i> Role <span class="optional">Optional</span></span><input id="apRole" name="role" autocomplete="organization-title"></label>
       <label for="apEmail"><span><i data-i="mail"></i> Email <span class="optional">Optional</span></span><input id="apEmail" name="email" type="email" autocomplete="email"></label>
       <label for="apPhone"><span><i data-i="phone"></i> Phone <span class="optional">Optional</span></span><input id="apPhone" name="phone" type="tel" autocomplete="tel"></label>
@@ -347,7 +347,7 @@
       <div class="nextdue"><input id="pNextDue" type="date" aria-label="Next step date"><button type="button" class="small" data-due="0">Today</button><button type="button" class="small" data-due="1">Tomorrow</button><button type="button" class="small" data-due="7">+1 week</button><button type="button" class="small" data-due="">No date</button></div>
     </div>
     <div class="pgrid">
-      <label><span><i data-i="building-2"></i> Company</span> <input id="pCompany" list="pCompanies" autocomplete="off"><datalist id="pCompanies"></datalist></label>
+      <label><span><i data-i="building-2"></i> Client</span> <input id="pCompany" list="pCompanies" autocomplete="off" aria-label="Client"><datalist id="pCompanies"></datalist></label>
       <label><span><i data-i="briefcase"></i> Role</span> <input id="pRole"></label>
       <label><span><i data-i="pound-sterling"></i> Value</span> <input id="pValue" placeholder="For example: 5000"></label>
       <label><span><i data-i="compass"></i> Source</span> <input id="pSource" placeholder="For example: weekly opportunity run"></label>
@@ -368,7 +368,7 @@
     <section class="dsec"><div class="dsech"><h4><i data-i="link"></i> Profile and reference links</h4></div><div class="hint">LinkedIn, company website, blog, portfolio, or another page about this person.</div><div id="pLinks"></div><div class="methodadd"><input id="pLinkTitle" placeholder="Label (for example LinkedIn)"><input id="pLinkNew" type="url" placeholder="https://…"><button id="pLinkAdd" type="button">Add</button></div></section>
     <section class="dsec" id="pNorthSec"><div class="dsech"><h4><i data-i="compass"></i> Client north star</h4><button id="pClientOpen" type="button" class="small" hidden>Open client</button></div><textarea id="pNorthStar" class="ddesc" rows="3" placeholder="What we are trying to solve for this client and what success looks like." aria-label="Client north star"></textarea></section>
     <section class="dsec" id="pProjSec"><div class="dsech"><h4><i data-i="flag"></i> Projects</h4></div><div id="pProjList"></div></section>
-    <section class="dsec" id="pFilesSec"><div class="dsech"><h4 id="pFilesH"><i data-i="folders"></i> Files and folders</h4></div><div class="hint">Working material for this company in Drive, Dropbox, OneDrive, SharePoint, or a local folder. Agents need the matching connector/plugin/MCP for cloud links, or a session on the right computer for local paths. If they cannot access one, they should ask you.</div><div id="pFiles"></div><div class="methodadd"><input id="pFileTitle" placeholder="Label (for example Client Drive)"><input id="pFileNew" placeholder="Cloud URL or local path"><button id="pFileAdd" type="button">Add</button></div></section>
+    <section class="dsec" id="pFilesSec"><div class="dsech"><h4 id="pFilesH"><i data-i="folders"></i> Files and folders</h4></div><div class="hint">Working material for this client in Drive, Dropbox, OneDrive, SharePoint, or a local folder. Agents need the matching connector/plugin/MCP for cloud links, or a session on the right computer for local paths. If they cannot access one, they should ask you.</div><div id="pFiles"></div><div class="methodadd"><input id="pFileTitle" placeholder="Label (for example Client Drive)"><input id="pFileNew" placeholder="Cloud URL or local path"><button id="pFileAdd" type="button">Add</button></div></section>
     <details class="dsec"><summary id="pHistSum">History</summary><ol id="pHist" class="hist"></ol></details>
     <div class="dfoot2"><span id="pCreated" class="dcreated"></span><button id="pDelete" type="button" class="danger">Delete person</button></div>
   </div>
@@ -379,7 +379,7 @@
   <div class="dbody">
     <h3 id="clName" class="dtitleplain"></h3>
     <section class="dsec"><div class="dsech"><h4><i data-i="compass"></i> North star</h4></div><textarea id="clNorth" class="ddesc" rows="4" placeholder="What we are trying to solve and what success looks like." aria-label="North star"></textarea></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="flag"></i> Projects</h4></div><div id="clProjects"></div><button id="clProjAdd" type="button" class="small primary">Add project</button></section>
+    <section class="dsec"><div class="dsech"><h4><i data-i="flag"></i> Projects</h4></div><div id="clProjects"></div><div class="methodadd"><input id="clProjName" placeholder="New project name" aria-label="New project name"><button id="clProjAdd" type="button">Add</button></div></section>
     <section class="dsec"><div class="dsech"><h4 id="clFilesH"><i data-i="folders"></i> Files and folders</h4></div><div id="clFiles"></div><div class="methodadd"><input id="clFileTitle" placeholder="Label"><input id="clFileNew" placeholder="Cloud URL or local path"><button id="clFileAdd" type="button">Add</button></div></section>
   </div>
 </dialog>
@@ -393,6 +393,8 @@
     <section class="dsec"><div class="dsech"><h4><i data-i="users"></i> People</h4></div><div id="prPeople"></div><div id="prSuggest" class="suggestrow"></div><div class="methodadd"><input id="prPersonEmail" type="email" placeholder="email@example.com" aria-label="Person email"><button id="prPersonAdd" type="button">Add</button></div></section>
     <section class="dsec"><div class="dsech"><h4><i data-i="link"></i> Links</h4></div><div id="prLinks"></div><div class="methodadd"><input id="prLinkTitle" placeholder="Label"><input id="prLinkNew" placeholder="Cloud URL or local path"><button id="prLinkAdd" type="button">Add</button></div></section>
     <section class="dsec"><div class="dsech"><h4><i data-i="square-check"></i> Open tasks</h4></div><div id="prTasks"></div></section>
+    <section class="dsec"><div class="dsech"><h4><i data-i="circle-check"></i> Completed tasks</h4></div><div id="prDoneTasks"></div></section>
+    <div class="dfoot2"><button id="prDelete" type="button" class="danger">Delete project</button></div>
   </div>
 </dialog>
 
@@ -416,7 +418,7 @@
       <div class="proprow">
       <div class="prop stack"><span class="pk"><i data-i="users"></i> People</span><div class="pv" id="cWho"></div></div>
       <div class="prop stack"><span class="pk"><i data-i="building-2"></i> Client</span><div class="pv"><select id="cClient" class="pillsel" aria-label="Client"></select></div></div>
-      <div class="prop stack"><span class="pk"><i data-i="flag"></i> Project</span><div class="pv"><select id="cProject" class="pillsel" aria-label="Project"></select></div></div>
+      <div class="prop stack"><span class="pk"><i data-i="flag"></i> Project</span><div class="pv"><select id="cProject" class="pillsel" aria-label="Project"></select><div id="cProjNew" class="methodadd" hidden><input id="cProjNewName" placeholder="New project name" aria-label="New project name"><button id="cProjNewAdd" type="button">Add</button></div></div></div>
       </div>
       <div class="prop"><span class="pk"><i data-i="tag"></i> Labels</span><div class="pv"><span id="cLabelChips"></span><button id="cLabelAdd" type="button" class="tag lplus" title="Add a label" aria-label="Add a label">＋</button><input id="cLabelNew" list="labelList" class="addinline lnew" placeholder="Label name" hidden><datalist id="labelList"></datalist></div></div>
     </div>

@@ -301,7 +301,7 @@ if (typeof window !== 'undefined') (() => {
     old.forEach((v, k) => { const item = byPath.get(k); if (item && item.sha === v.sha) files.set(k, v); });
     await mapLimit(changed, 8, async item => { const text = await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
-    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files };
+    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true };
     return { unchanged: false, data: modelFromSplit(files), meta };
   }
   let boardSize = 0;   // bytes of the board file, or all split board files, from the last load
@@ -477,7 +477,7 @@ if (typeof window !== 'undefined') (() => {
     const asRead = (p, o) => { const base = { settings: root.settings, people: root.people, columns: root.columns };   // what normalise makes of the file as read
       return p.startsWith('cards/') ? normalise(Object.assign(base, { tasks: [clone(o)] })).tasks[0] : p.startsWith('people/') ? normalise(Object.assign(base, { contacts: [clone(o)] })).contacts[0] : o; };
     const outText = (p, obj) => { const old = meta.files.get(p); return old && (same(old.obj, obj) || same(asRead(p, old.obj), obj)) ? old.text : jsonText(obj); };
-    const ids = [...next.tasks, ...(next.contacts || [])].map(x => x.id);
+    const ids = [...next.tasks, ...(next.contacts || []), ...(next.projects || [])].map(x => x.id);
     if (new Set(ids).size !== ids.length || ids.some(x => typeof x !== 'string' || !x || /[/\\]/.test(x) || x === '.' || x === '..')) throw new Error('two items share an id, or an id cannot be a file name');   // never let two items write one file
     const desired = new Map([['tasks.json', outText('tasks.json', root)]]);
     next.tasks.forEach(t => { const p = `cards/${t.id}.json`; desired.set(p, outText(p, t)); });
@@ -487,7 +487,8 @@ if (typeof window !== 'undefined') (() => {
     const managed = new Set([...meta.files.keys()].filter(p => p === 'tasks.json' || /^(cards|people|projects)\/[^/]+\.json$/.test(p)));
     Object.keys(extra).forEach(p => managed.add(p));
     const changes = new Map([...desired].filter(([p, text]) => !meta.files.has(p) || meta.files.get(p).text !== text));
-    const deletes = new Set([...managed].filter(p => !desired.has(p) || extra[p] === null));
+    let deletes = new Set([...managed].filter(p => !desired.has(p) || extra[p] === null));
+    if (!meta.projectsLoaded) { for (const p of deletes) if (p.startsWith('projects/')) deletes.delete(p); }
     deletes.forEach(p => changes.delete(p)); return { changes, deletes };
   }
   async function splitSave(next, message, meta, extra) {
@@ -565,8 +566,11 @@ if (typeof window !== 'undefined') (() => {
   function askConflict(list) {
     return new Promise(res => {
       const d = $('dlgConflict'), body = $('cfBody'); body.textContent = '';
-      const nP = list.filter(x => (x.b || x.p || x.a).name !== undefined && !(x.b || x.p || x.a).title).length, nT = list.length - nP;
-      const what = [nT && `${nT} card${nT > 1 ? 's' : ''}`, nP && `${nP} ${nP > 1 ? 'people' : 'person'}`].filter(Boolean).join(' and ');
+      const items = list.map(x => x.a || x.p || x.b);
+      const nT = items.filter(t => t.title).length;
+      const nPr = items.filter(t => !t.title && String(t.id || '').startsWith('pr_')).length;
+      const nP = items.filter(t => !t.title && !String(t.id || '').startsWith('pr_')).length;
+      const what = [nT && `${nT} card${nT > 1 ? 's' : ''}`, nP && `${nP} ${nP > 1 ? 'people' : 'person'}`, nPr && `${nPr} project${nPr > 1 ? 's' : ''}`].filter(Boolean).join(', ');
       $('cfIntro').textContent = `${what} you are changing ${list.length > 1 ? 'were' : 'was'} changed by someone else (or an agent) since you loaded the board.`;
       list.forEach(({ b, p, a }) => {
         const t = a || p || b, box = el('div', 'cfcard'); box.append(el('strong', null, t.title || t.name || t.id));
@@ -748,6 +752,9 @@ if (typeof window !== 'undefined') (() => {
     const all = el('option', null, 'All'); all.value = ''; sel.append(all);
     items.forEach(([v, l]) => { const o = el('option', null, l); o.value = v; o.selected = v === cur; sel.append(o); });
   }
+  const projectStatusOrder = st => ({ active: 0, paused: 1, done: 2 }[st || 'active'] ?? 0);
+  const projectPickerLabel = p => { const st = p.status || 'active', mark = st === 'done' ? ' · done' : st === 'paused' ? ' · paused' : ''; return `${p.name}${p.client ? ' · ' + p.client : ''}${mark}`; };
+  const sortedProjects = () => [...(state.projects || [])].sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || String(a.client || '').localeCompare(b.client || '') || String(a.name || '').localeCompare(b.name || ''));
   // ---- colour: a card's left edge is its client, its right edge is its urgency -------------------------------
   // Any text can become a colour: hash it (FNV-1a), take the hash modulo 360 as a hue. Known clients are spaced by the golden angle
   // (137.5 degrees) past the first six; the first six clients get hand-picked hues that avoid the urgency colours. Unknown text falls back to the hash.
@@ -786,9 +793,11 @@ if (typeof window !== 'undefined') (() => {
   };
   function clientPill(c) {
     const on = clientValues().includes(c.name), b = el('button', 'cpill' + (on ? ' on' : '')); b.type = 'button'; b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`); b.setAttribute('aria-pressed', String(on));
-    b.title = on ? `Remove ${c.name} from the filter` : `Add ${c.name} to the filter (${c.open} open)`; b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
-    b.onclick = () => toggleClient(c.name);
-    b.ondblclick = e => { e.stopPropagation(); openClient(c.name); };
+    b.title = on ? `Filter: click to remove ${c.name}` : `Filter: click to show only ${c.name} (${c.open} open) · use ▸ for client details`;
+    b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
+    const det = el('button', 'cpillgo'); det.type = 'button'; det.title = 'Client details'; det.setAttribute('aria-label', `Client details for ${c.name}`);
+    det.append(svgIcon('panel-right-open')); det.onclick = e => { e.stopPropagation(); openClient(c.name); };
+    b.append(det); b.onclick = () => toggleClient(c.name);
     return b;
   }
   const activeClaim = t => t.claim && t.claim.status !== 'done' ? t.claim : null;
@@ -824,8 +833,11 @@ if (typeof window !== 'undefined') (() => {
       const label = () => { more.textContent = `+${rest.length} ▾`; };
       label(); while (box.scrollWidth > box.clientWidth + 1 && shown.length) { shown.pop().remove(); rest = order.slice(shown.length); label(); }
       more.onclick = e => { e.stopPropagation(); const pop = $('clientPop'); if (!pop.hidden) { closePops(); return; } closePops();
-        pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
-          b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name); pop.append(b); });
+        pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), row = el('div', 'cmenurow');
+          const b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
+          b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name);
+          const det = el('button', 'cmenu detail', 'Details'); det.type = 'button'; det.title = 'Open client details'; det.onclick = () => { closePops(); openClient(c.name); };
+          row.append(b, det); pop.append(row); });
         pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; pop.hidden = false; };
     }
     const pq = $('peopleQ'); pq.textContent = ''; const w = $('fWho').value;
@@ -969,7 +981,7 @@ if (typeof window !== 'undefined') (() => {
     fillSelect($('fWho'), [...state.people.map(p => [p.github, '@' + p.github]), ['__none', 'Unassigned'], ['__agent', 'Any active agent'], ...agentAssignments().map(a => [a.value, a.label])], 'Everyone');
     fillSelect($('fDoneBy'), completionOptions().map(x => [completionFilterValue(x), x.label]), 'Anyone');
     fillSelect($('fLabel'), state.labels.map(l => [l.name, l.name]), 'All');
-    fillProjectSelect((state.projects || []).map(p => [p.id, `${p.name}${p.client ? ' · ' + p.client : ''}`]));
+    fillProjectSelect(sortedProjects().map(p => [p.id, projectPickerLabel(p)]));
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
     applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact();
@@ -1640,6 +1652,7 @@ if (typeof window !== 'undefined') (() => {
     const tags = el('div', 'tags');
     t.labels.forEach(l => { tags.append(paintLabel(el('span', 'tag label', l), l)); });
     if (t.client) tags.append(el('span', 'tag client', t.client));
+    if (t.project) { const pr = projectById(t.project); if (pr) tags.append(el('span', 'tag project' + (pr.status === 'done' ? ' done' : pr.status === 'paused' ? ' paused' : ''), pr.name)); }
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
     if (detailed) { const actions = taskQuickActions(t); actions.classList.add('cinemaactions'); c.append(actions); }
@@ -1766,15 +1779,21 @@ if (typeof window !== 'undefined') (() => {
     }
     edit(editing, t => { t.client = v; if (v && t.project) { const pr = projectById(t.project); if (pr && pr.client && pr.client !== v) t.project = ''; } }, `Client: ${titleOf(editing)}`);
   };
+  $('cProjNewAdd').onclick = () => {
+    const name = $('cProjNewName').value.trim(), client = $('cProjNew').dataset.client || '';
+    if (!name) { toast('Enter a project name.', true); return; }
+    const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
+    edit(editing, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
+    $('cProjNew').hidden = true; $('cProjNewName').value = '';
+  };
   $('cProject').onchange = e => {
     let v = e.target.value;
     const t0 = taskNow();
     if (v === '__new') {
       const client = (t0 && t0.client) || '';
-      const name = (prompt('New project name:') || '').trim();
-      if (!name) { e.target.value = (t0 && t0.project) || ''; return; }
-      const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
-      edit(editing, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
+      $('cProjNew').hidden = false; $('cProjNewName').value = ''; $('cProjNewName').focus();
+      e.target.value = (t0 && t0.project) || '';
+      $('cProjNew').dataset.client = client;
       return;
     }
     edit(editing, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(editing)}`);
@@ -1856,8 +1875,9 @@ if (typeof window !== 'undefined') (() => {
     const set = (x, v) => { if ((force || document.activeElement !== x) && x.value !== v) x.value = v; };
     const cl = [...new Set([...state.clients, t.client].filter(Boolean))];
     if (force || $('cClient').options.length !== cl.length + 2) fillSelect($('cClient'), [['', '(none)'], ...cl.map(c => [c, c]), ['__new', '＋ New client…']]);
-    const prOpts = [['', '(none)'], ...projectsOf().filter(p => !t.client || p.client === t.client).map(p => [p.id, p.name]), ['__new', '＋ New project…']];
+    const prOpts = [['', '(none)'], ...sortedProjects().filter(p => !t.client || p.client === t.client).map(p => [p.id, projectPickerLabel(p)]), ['__new', '＋ New project…']];
     if (force || $('cProject').options.length !== prOpts.length) fillSelect($('cProject'), prOpts);
+    if (force) $('cProjNew').hidden = true;
     if (force) { fillSelect($('cCol'), state.columns.map(c => [c.id, c.name])); }
     set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cClient'), t.client || ''); set($('cProject'), t.project || ''); set($('cDue'), t.due || '');
     { const who = completionOf(t), done = $('cCompletedBy'); done.hidden = !who; done.className = 'chip doneby' + (who && who.agent ? ' agent' : ' person'); done.textContent = who ? 'Completed by ' + who.label : ''; done.title = who && who.at ? fmtStamp(who.at) : ''; }
@@ -2637,7 +2657,7 @@ if (typeof window !== 'undefined') (() => {
     const info = clientInfo(co);
     if (force || document.activeElement !== $('clNorth')) $('clNorth').value = info.north_star || '';
     const box = $('clProjects'); box.textContent = '';
-    projectsForClient(co).forEach(pr => {
+    projectsForClient(co).sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => {
       const row = el('button', 'prowbtn'); row.type = 'button';
       row.append(el('b', null, pr.name), el('span', 'muted', ' · ' + (pr.status || 'active')));
       row.onclick = () => { $('dlgClient').close(); openProject(pr.id); };
@@ -2649,9 +2669,13 @@ if (typeof window !== 'undefined') (() => {
   $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
   $('clClose').onclick = () => $('dlgClient').close();
   $('dlgClient').addEventListener('close', () => { editingClient = ''; render(); });
-  $('clProjAdd').onclick = () => { const co = editingClient, name = prompt('Project name:'); if (!name || !co) return;
-    const pr = { id: boardId('pr_'), client: co, name: name.trim(), north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
-    mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) openProject(pr.id); }); };
+  function addClientProject() {
+    const co = editingClient, name = ($('clProjName').value || '').trim(); if (!name || !co) { if (!name) toast('Enter a project name.', true); return; }
+    const pr = { id: boardId('pr_'), client: co, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
+    mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) { $('clProjName').value = ''; openProject(pr.id); } });
+  }
+  $('clProjAdd').onclick = addClientProject;
+  $('clProjName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addClientProject(); } });
   function addClientFile(co, title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return; }
     mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
   $('clFileAdd').onclick = () => { const co = editingClient; if (!co) return; addClientFile(co, $('clFileTitle').value, $('clFileNew').value); $('clFileTitle').value = ''; $('clFileNew').value = ''; };
@@ -2682,8 +2706,13 @@ if (typeof window !== 'undefined') (() => {
     }
     renderLinkBox($('prLinks'), pr.links || [], l => projectEdit(pr.id, x => { x.links = (x.links || []).filter(y => y.url !== l.url); }, `Project links`), true, 'project resource');
     const tbox = $('prTasks'); tbox.textContent = '';
-    state.tasks.filter(t => t.project === pr.id && t.column !== doneCol()).forEach(t => tbox.append(listRow(t)));
+    const dc = doneCol();
+    state.tasks.filter(t => t.project === pr.id && t.column !== dc).forEach(t => tbox.append(listRow(t)));
     if (!tbox.childNodes.length) tbox.append(el('div', 'muted small', 'No open tasks linked to this project.'));
+    const doneBox = $('prDoneTasks'); doneBox.textContent = '';
+    state.tasks.filter(t => t.project === pr.id && t.column === dc).forEach(t => doneBox.append(listRow(t)));
+    if (!doneBox.childNodes.length) doneBox.append(el('div', 'muted small', 'No completed tasks linked to this project.'));
+    $('prDelete').hidden = !!ro;
   }
   const projectEdit = (id, fn, msg) => mutate(n => { const p = (n.projects || []).find(x => x.id === id); if (p) { fn(p); p.updated = nowIso(); } }, msg || 'Update project');
   $('prName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) projectEdit(editingProject, p => { p.name = v; }); });
@@ -2693,6 +2722,18 @@ if (typeof window !== 'undefined') (() => {
   $('prLinkAdd').onclick = () => { const l = parseNamedLink($('prLinkTitle').value, $('prLinkNew').value, true); if (!l) { toast('Enter a cloud URL or local path.', true); return; }
     projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); $('prLinkTitle').value = ''; $('prLinkNew').value = ''; };
   $('prClose').onclick = () => $('dlgProject').close();
+  $('prDelete').onclick = () => {
+    const pr = projectById(editingProject); if (!pr || ro) return;
+    const linked = state.tasks.filter(t => t.project === pr.id);
+    let clear = false;
+    if (linked.length) clear = confirm(`Remove project "${pr.name}" and clear it from ${linked.length} task(s)?\n\nOK clears task.project. Cancel keeps the project.`);
+    else if (!confirm(`Remove project "${pr.name}"?`)) return;
+    if (linked.length && !clear) return;
+    mutate(n => {
+      n.projects = (n.projects || []).filter(p => p.id !== pr.id);
+      if (clear) n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });
+    }, `Remove project: ${pr.name}`).then(ok => { if (ok) $('dlgProject').close(); });
+  };
   $('dlgProject').addEventListener('close', () => { editingProject = ''; render(); });
 
   // ==== Keeptrack CRM: people (contacts) with a stage and a next step; Today, People and Pipeline views ====
@@ -2812,7 +2853,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonBox(placeholder, extra) {
     const add = el('div', 'add padd'), inp = el('input'), btn = el('button', 'primary', 'Add…');
-    inp.placeholder = placeholder || 'Quick add: Name | Company | role | email';
+    inp.placeholder = placeholder || 'Quick add: Name | Client | role | email';
     const go = async () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; const [name, f] = parsePerson(v); const id = await addContact(name, Object.assign(f, extra || {})); if (id && state.contacts.some(x => x.id === id)) openContact(id); };
     btn.type = 'button'; btn.title = 'Open a form to add a person'; btn.onclick = () => openAddPersonForm(inp.value, extra); inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); add.append(inp, btn); return add;
   }
@@ -2884,7 +2925,7 @@ if (typeof window !== 'undefined') (() => {
       }, cards);
       if (!items.length) cards.append(el('div', 'emptycol', 'Drop a person here.'));
       c.append(cards);
-      if (s === stages()[0]) c.append(addPersonBox('Add: Name | Company', { stage: s }));
+      if (s === stages()[0]) c.append(addPersonBox('Add: Name | Client', { stage: s }));
       board.append(c);
     });
   }
