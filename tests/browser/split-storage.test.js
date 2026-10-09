@@ -14,9 +14,9 @@ const server = http.createServer((req, res) => {
   fs.readFile(file, (err, data) => { if (err) res.writeHead(404).end(); else { res.setHeader('Content-Type', mime[path.extname(file)] || 'application/octet-stream'); res.end(data); } });
 });
 
-const root = { version: 4, layout: 'split', settings: { title: 'Test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }], agents: ['codex'], clients: ['Acme'], labels: [], client_info: {}, next_num: 3, archive: { files: {} } };
+const root = { version: 4, layout: 'split', settings: { title: 'Test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }], agents: ['codex'], clients: ['Acme'], labels: [{ name: 'pale', color: '#dce1e7' }, { name: 'dark', color: '#334155' }], client_info: {}, next_num: 3, archive: { files: {} } };
 const cards = {
-  'cards/t_one.json': { id: 't_one', num: 1, title: 'First', column: 'todo', client: 'Acme', priority: 'high', due: '', labels: [], assignees: ['alex'], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: '2026-10-01T08:00:00.000Z', updated: '2026-10-01T08:00:00.000Z', rank: 'a0' },
+  'cards/t_one.json': { id: 't_one', num: 1, title: 'First', column: 'todo', client: 'Acme', priority: 'high', due: '', labels: ['pale', 'dark'], assignees: ['alex'], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: '2026-10-01T08:00:00.000Z', updated: '2026-10-01T08:00:00.000Z', rank: 'a0' },
   'cards/t_two.json': { id: 't_two', num: 2, title: 'Second', column: 'todo', client: '', priority: 'medium', due: '', labels: [], assignees: [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: '2026-10-02T08:00:00.000Z', updated: '2026-10-02T08:00:00.000Z', rank: 'a1' },
 };
 const person = { id: 'p_one', name: 'Casey Example', company: 'Acme', role: '', email: '', phone: '', linkedin: '', stage: 'New', value: '', source: '', notes: '', next: '', next_due: '', links: [], comments: [], history: [], created: '2026-10-01T08:00:00.000Z', updated: '2026-10-01T08:00:00.000Z' };
@@ -79,6 +79,8 @@ let base;
 
     const api = new Github(true), page = await openBoard(browser, api);
     assert.deepEqual(await page.locator('.card .t').allTextContents(), ['First', 'Second']);
+    const labelStyles = await page.locator('.card .tag.label').evaluateAll(xs => xs.map(x => ({ text: x.textContent, background: getComputedStyle(x).backgroundColor, color: getComputedStyle(x).color })));
+    assert.deepEqual(labelStyles, [{ text: 'pale', background: 'rgb(220, 225, 231)', color: 'rgb(0, 0, 0)' }, { text: 'dark', background: 'rgb(51, 65, 85)', color: 'rgb(255, 255, 255)' }]);
     assert.deepEqual(await page.locator('#viewSw > .viewgroup > .vgrp').allTextContents(), ['Today', 'People views', 'Task views']);
     assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="today"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['today']);
     assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="crm"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['people', 'pipeline']);
