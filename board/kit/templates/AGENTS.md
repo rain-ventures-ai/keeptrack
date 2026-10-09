@@ -3,7 +3,7 @@
 This repo holds the task board `{repo}` (`board/`). People on the board: {people}. Add this repo's own rules below the board sections.
 
 ## Rules
-1. **Never edit `board/tasks.json` by hand.** Use `python3 board/keeptrack.py ...`. It re-reads the latest file and retries on conflict, so humans editing in the browser are never overwritten.
+1. **Never edit the JSON files under `board/` by hand.** Use `python3 board/keeptrack.py ...`. It re-reads the latest board and retries on conflict, so humans editing in the browser are never overwritten.
 2. **Only work on tasks assigned to the human you act for.** Claims on other people's tasks are refused unless a human tells you to `--force`.
 3. **Claim before you start, heartbeat while you work, finish or release when you stop.** A claim with no heartbeat for 30 minutes shows as STALE so people can spot a stuck session.
 4. **Keep confidential detail out of task cards.** Link to the file or Drive document instead.
@@ -57,7 +57,7 @@ Give a direct answer; do not send them back to the Keeptrack maintainer and do n
 
 After explaining, verify with `python3 board/keeptrack.py where` and `list` or `today`. Ask before creating a test task.
 
-**Board kit:** `board/keeptrack.py`, the other files in `board/` (except `tasks.json`) and `.claude/skills/board*` are the shared board kit from `rain-ventures-ai/keeptrack` (`board/kit/`). Do not edit them here; change the kit there. `board/KIT_VERSION` is this repo's version. Upgrades: `board/UPGRADING.md` and the `board-upgrade` skill.
+**Board kit:** `board/keeptrack.py`, the documentation and routine files in `board/`, and `.claude/skills/board*` are the shared board kit from `rain-ventures-ai/keeptrack` (`board/kit/`). The board data is `board/tasks.json`, `board/cards/`, `board/people/` and `board/archive/`. Do not edit kit files here; change the kit in Keeptrack. `board/KIT_VERSION` is this repo's version. Upgrades: `board/UPGRADING.md` and the `board-upgrade` skill.
 
 ## Task numbers and mentions
 Tasks have short numbers (`#12`); `keeptrack.py` accepts them in place of ids (quote the `#`). When you need a person, comment on the task with `@github-username` and say why. Humans see an "@ you" marker next time they open the board.

@@ -1,15 +1,19 @@
 ---
 name: keeptrack
-description: Use a Keeptrack board (people, follow-ups, pipeline and tasks in board/tasks.json in a private GitHub repo). Use when asked who to follow up with, to add or update a contact or lead, to log a call or message, to help write a LinkedIn message or email to someone, to move a deal stage, or to find, claim, update, finish or add a task.
+description: Use a Keeptrack board (people, follow-ups, pipeline and tasks in the board/ folder of a private GitHub repo). Use for follow-ups, contacts, leads, messages, pipeline and task work, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
 ---
 
 # Keeptrack (people, follow-ups, pipeline and tasks)
 
-A Keeptrack board is `board/tasks.json` in the user's private GitHub repo. People use the web board. Agents use `keeptrack.py`. Never edit `tasks.json` by hand.
+A Keeptrack board is the `board/` folder in the user's private GitHub repo; `board/tasks.json` is its entry point. People use the web board. Agents use `keeptrack.py`. Never edit the board JSON files by hand.
 
 If the user asks to set up, onboard, migrate or import existing people, clients or tasks, use the separate
 `onboard-keeptrack` skill. Do not improvise an import: that skill asks whether they want CRM, tasks or both, shows a
 dry-run plan and waits for approval before it writes anything.
+
+If the source is a meeting transcript, call notes, minutes or free-form notes, use the separate `keeptrack-notes`
+skill. It matches attendees and actions against the existing board, asks about material ambiguity and avoids storing
+the transcript itself. Use `onboard-keeptrack` instead for a bulk migration from another CRM or task system.
 
 If the board shows errors, a save fails, or a migration has just run, use `$B doctor`. Run `$B doctor --fix` only after the user agrees.
 
@@ -27,6 +31,12 @@ If it says `board: (none)`, ask the user for the board repo (owner/name) and the
 $B use <owner/name> --user <github-user> [--token-env <VAR_NAME>]
 ```
 This writes `.board/config.json` (ignored by git). It finds the default branch itself. Never write, read back or store a token. `--token-env` takes only the NAME of an environment variable.
+
+### Board status and truth audits
+Natural requests such as “is my board accurate?”, “these say merged but not published”, “make the statuses truthful” or
+“check the board against the repos” are Keeptrack requests. Do not require the user to name this skill, repeat their
+board repo, or explain the safety rules when `$B where` already supplies the board. Read
+[references/status-audits.md](references/status-audits.md) and follow it.
 
 ## 2. People and follow-ups (CRM)
 A person has a stage (by default New, Contacted, Talking, Proposal, Won, Lost), a next step with a date, and a contact log.
@@ -54,6 +64,7 @@ Dates: `YYYY-MM-DD`, `today` or `+N` (days from today). `person-add` refuses a d
 ```bash
 export BOARD_AGENT=<claude|codex|cursor> BOARD_SESSION=<short session id>
 $B list --assignee <user> --column todo --unclaimed
+$B list -q "not published"                       # find text in titles, details, labels, links, comments or history
 $B show '#12'                                    # read the comments before you start
 $B claim '#12' --note "starting: <one-line plan>"
 $B heartbeat '#12' --note "<current step>"       # at each milestone

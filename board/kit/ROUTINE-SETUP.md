@@ -66,14 +66,14 @@ What the routine's cloud session needs, and what the default **Trusted** network
 | Clone the repo, push `claude/` branches, open PRs | Anthropic's GitHub proxy, independent of the network level | Yes |
 | `keeptrack.py` talking to the board (`api.github.com`) | Direct HTTPS from the session | Yes: `api.github.com` and `github.com` are on the default allowlist |
 | Python for `keeptrack.py` | Python 3 is pre-installed in the image | Yes |
-| `keeptrack.py` saving the board | The sandbox blocks GitHub API *writes*, so `keeptrack.py` saves by committing `tasks.json` and running `git push` to `master` from the clone (allowed). It does this automatically | Yes |
+| `keeptrack.py` saving the board | The sandbox blocks GitHub API *writes*, so `keeptrack.py` saves by committing the changed board files and running `git push` to `master` from the clone (allowed). It does this automatically | Yes |
 | Installing packages (pip/npm) | Package registries are on the allowlist | Yes |
 | General web research (arbitrary sites) | Not on the allowlist, so shell/script requests to other sites fail with 403 `host_not_allowed` | **No**: use Custom (Trusted list plus the domains you need) or Full |
 
 **Recommendation: start with Trusted.** It already covers everything the board needs. Switch to Custom or Full only when you want the routine to research the open web. Anthropic's docs do not say whether Claude's built-in web search and fetch tools are bound by this setting, so test it: ask the routine to look something up and read the run log. Be aware of the trade-off: with open internet, text a run reads (a board comment, a web page) could trick it into sending data out, and `BOARD_TOKEN` lives in that environment. If you widen access, keep the token's scope to this one repository, keep the expiry short, and keep connectors off.
 
 ### 2. Give the routine `BOARD_TOKEN`
-Create a GitHub fine-grained token: owner `rain-ventures-ai`, only this repository, **Contents: Read and write** (add **Issues: Read and write** if you want issue-driven work), expiry 90 days. Put it in the routine's environment as `BOARD_TOKEN` (on Pro/Max use the environment's API-credentials section so it is not visible to others who use the environment). `keeptrack.py` uses it to read and write `tasks.json` over the GitHub API.
+Create a GitHub fine-grained token: owner `rain-ventures-ai`, only this repository, **Contents: Read and write** (add **Issues: Read and write** if you want issue-driven work), expiry 90 days. Put it in the routine's environment as `BOARD_TOKEN` (on Pro/Max use the environment's API-credentials section so it is not visible to others who use the environment). `keeptrack.py` uses it to read and write the board files over the GitHub API.
 
 ### 3. Add the API trigger
 In the routine → Edit → **Add another trigger → API**. Save. Open the trigger modal, copy the **URL** (`https://api.anthropic.com/v1/claude_code/routines/trig_.../fire`) and click **Generate token**; copy it immediately (shown once). This token can start only this routine.

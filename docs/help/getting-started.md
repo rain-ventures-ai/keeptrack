@@ -23,7 +23,7 @@ The token lets the web board read and write your repo.
 3. Make sure that **Contents** is **Read and write**.
 4. Click **Generate token**, copy it, and paste it in the wizard.
 
-The wizard finds your GitHub username and your repo by itself. Green ticks show that the token works, that it can change the repo, and that the repo is private. Click **Create my board**. The board makes the file `board/tasks.json` in your repo and opens.
+The wizard finds your GitHub username and your repo by itself. Green ticks show that the token works, that it can change the repo, and that the repo is private. Click **Create my board**. Keeptrack creates the `board/` data folder, starting with `board/tasks.json`, and opens it. Tasks and CRM people get their own files as you add them.
 
 The token stays in this browser only. The board sends it only to `api.github.com`. Treat it like a password.
 

@@ -4,7 +4,8 @@ Keeptrack has two parts:
 
 - **People use the web board.** You look at Today, People, the pipeline and tasks. You add people, assign tasks and move cards. You do not install anything.
 - **AI assistants use `keeptrack.py`.** Every board repo contains this small tool and its agent instructions. The
-  Keeptrack plugin supplies another copy for working from other local projects. Both read and change the same board.
+  Keeptrack plugin supplies another copy for working from other local projects. Both read and change the same `board/`
+  folder as the web board in your private repo.
 
 You do not run `keeptrack.py` yourself. You ask your assistant, for example "Who do I need to follow up with today?", and it runs the tool.
 
@@ -114,7 +115,7 @@ ChatGPT cannot read or change your board yet. A connector for ChatGPT is planned
 
 ## How the tool reads and saves your board
 
-- Each command reads only `board/tasks.json` (and, for archive commands, the files in `board/archive/`). It does not download the whole repo.
+- Each command reads only the board subtree: `board/tasks.json` plus the task, CRM-person and archive files under `board/cards/`, `board/people/` and `board/archive/`. It does not download the whole repo.
 - It always reads the newest version, so the assistant sees changes that you make in the web board at once. It keeps a copy in `.board/cache` (never committed). When the file has not changed, GitHub says so, and the tool uses the copy. This is fast and does not count against your GitHub limit.
-- When it saves, GitHub checks that nobody else saved first. If somebody did, the tool reads the file again, makes the change again and saves. Your changes and the assistant's changes are not lost.
+- When it saves, GitHub checks that nobody else saved first. If somebody did, the tool reads the board again, makes the change again and saves. Your changes and the assistant's changes are not lost.
 - In Claude Code on the web, the tool uses `git fetch` for the board branch. This downloads only new changes. It does not change the files in your folder.

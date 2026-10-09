@@ -148,7 +148,7 @@ Schema 3 (migration step 2 to 3) adds the Keeptrack CRM: `contacts` (default `[]
 A task can point at a person with `"contact": "<person id>"`. Last contact is the newest `sent_at` (else `at`) of a comment that has a channel other than `note` and is not a draft.
 
 ## Archive files (schema 3)
-Old items move out of `tasks.json` so that it stays small (the GitHub contents API sends no content above 1 MB; the web board and `keeptrack.py` then read the file raw, up to 100 MB, but the board is fastest below about 600 KB).
+Old items move out of the active card and person files so that the current board stays small. Legacy v3 boards keep their active items in `tasks.json` (the GitHub contents API sends no content above 1 MB; the web board and `keeptrack.py` can read it raw up to 100 MB, but legacy boards are fastest below about 600 KB).
 - `keeptrack.py archive` (or the web board: Settings → General → Archive) moves tasks in the done column with no change for `settings.archive.done_days` (default 90), people at stage Lost with no change for `lost_days` (180) and no future next step, and all but the last `keep_history` (20) history lines of each card.
 - They go to `archive/<year>.json` next to `tasks.json`: `{ "version": 3, "archive": true, "year": "2025", "tasks": [...], "contacts": [...], "history": { "<card id>": [...] } }`. The year is the year of the item's last change (four digits; an item whose date has no valid year stays on the board, and any other archive key is refused); trimmed history goes to the current year.
 - `tasks.json` keeps an index: `"archive": { "files": { "2025": { "tasks": 120, "contacts": 8 } }, "last_run": "<ISO time>" }`.
@@ -157,7 +157,7 @@ Old items move out of `tasks.json` so that it stays small (the GitHub contents A
 
 ## Agent protocol (copy into an agent's instructions)
 ```
-You work from the team board (board/tasks.json) using board/keeptrack.py.
+You work from the team board in `board/` using `board/keeptrack.py` (`board/tasks.json` is its entry point).
 1. Find work:      python3 board/keeptrack.py list --assignee <github-user> --column todo --unclaimed
 2. Claim it:       python3 board/keeptrack.py claim <id> --for <github-user> --agent <claude|codex> --session <session-id> --note "starting"
                    (or:  keeptrack.py next --for <github-user> --agent claude --session <id>)
@@ -165,9 +165,9 @@ You work from the team board (board/tasks.json) using board/keeptrack.py.
 3. While working:  keeptrack.py heartbeat <id> --note "<what you are doing>"      # at least every 10 minutes
    If blocked:     keeptrack.py heartbeat <id> --status blocked --note "<why>"
 4. Finish:         keeptrack.py done <id> --note "<result, PR link>"            # or: keeptrack.py release <id> --column todo
-Never edit tasks.json by hand; always go through keeptrack.py so conflicts are handled.
+Never edit board JSON files by hand; always go through `keeptrack.py` so conflicts are handled.
 ```
-**In Claude's cloud sandbox** (routines, Claude Code on the web) the GitHub API is read-only: writes come back `403 ... not permitted through this proxy`. `keeptrack.py` then saves by committing `tasks.json` on top of the latest `master` and running `git push` from its clone (retrying if someone else pushed first), without touching your working tree. `BOARD_WRITE=git` forces this, `BOARD_WRITE=api` disables it.
+**In Claude's cloud sandbox** (routines, Claude Code on the web) the GitHub API is read-only: writes come back `403 ... not permitted through this proxy`. `keeptrack.py` then commits the changed board files on top of the latest `master` and runs `git push` from its clone (retrying if someone else pushed first), without touching your working tree. `BOARD_WRITE=git` forces this, `BOARD_WRITE=api` disables it.
 
 **Auth without `gh`:** set `BOARD_TOKEN` (or `GH_TOKEN`/`GITHUB_TOKEN`) to a fine-grained token with Contents: Read and write on this repo and `keeptrack.py` calls the GitHub API directly with the standard library. If `BOARD_TOKEN` is set it is used even when `gh` exists. This is the route for cloud agent sandboxes.
 

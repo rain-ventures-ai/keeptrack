@@ -26,12 +26,20 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ## Versions
 ### v11 (schema 4)
 The guided onboarding skill is now named `onboard-keeptrack`, so it sorts after the main `keeptrack` plugin skill in
-agent skill lists. Its behaviour and data format are unchanged.
+agent skill lists. New boards now start directly on schema v4 split storage, whether they are created by the web setup
+wizard or by `keeptrack.py init`. Documentation now consistently describes the board folder rather than calling
+`tasks.json` the whole database. Kit v11 also adds automatic routing for board-status audits and imports from meeting
+transcripts or notes.
 - Run `kit-update` only. There is no data migration. The update installs `.claude/skills/onboard-keeptrack` and removes
-  the old kit-managed `.claude/skills/keeptrack-onboard` directory.
+  the old kit-managed `.claude/skills/keeptrack-onboard` directory. Existing boards keep their current schema.
 - Start a fresh agent session after updating so it discovers the new name.
 - Check: the repo has only `.claude/skills/onboard-keeptrack`, and asking to "Onboard my existing work into Keeptrack"
   starts by asking whether to bring in CRM, tasks or both.
+- An existing schema-v3 board still uses the guarded v8 migration procedure below: dry-run, `migrate --to 4`, verify,
+  then doctor.
+- Check a newly initialised board: `board/tasks.json` has `"version": 4` and `"layout": "split"`, with no `tasks` or
+  `contacts` arrays. Adding a task creates `board/cards/<id>.json`; adding a CRM person creates
+  `board/people/<id>.json`.
 
 ### v10 (schema 4)
 Guided onboarding is now available from the Keeptrack plugin as well as from a board repo, and setup explicitly hands

@@ -1,6 +1,7 @@
 # Set up a new task board
 
-A board is a GitHub repo with the board kit and a `board/tasks.json`. The web board at
+A board is a GitHub repo with the board kit and a `board/` data folder. `board/tasks.json` is its entry point; current
+boards keep individual tasks in `board/cards/` and CRM people in `board/people/`. The web board at
 https://rain-ventures-ai.github.io/keeptrack/board/ works with any such repo. This guide is for a person and for the
 Claude that helps them. It is the target of the "Copy new-board prompt for Claude" button in Settings → Boards.
 
@@ -33,7 +34,7 @@ python3 board/keeptrack.py --file board/tasks.json list   # empty board, no erro
 python3 board/keeptrack.py kit-check                      # says the kit is current
 git add -A && git commit -m "Set up task board (board kit)" && git push -u origin master
 ```
-`init` first runs the kit update, which **overwrites** every kit file whose content differs from the published kit (`board/keeptrack.py`, `board/README.md`, `board/UPGRADING.md`, the routine files and `.claude/skills/board*`). It then writes the repo-owned starter files, root `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore` and `.claude/settings.json`, and an empty `board/tasks.json`, **only when they do not exist yet**; existing ones are kept. The root README explains that the repo uses Keeptrack and links directly to its web board. Add the repo's own rules to `AGENTS.md` if it has other work.
+`init` first runs the kit update, which **overwrites** every kit file whose content differs from the published kit (`board/keeptrack.py`, `board/README.md`, `board/UPGRADING.md`, the routine files and `.claude/skills/board*`). It then writes the repo-owned starter files, root `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore` and `.claude/settings.json`, and an empty schema-v4 `board/tasks.json`, **only when they do not exist yet**; existing ones are kept. The root README explains that the repo uses Keeptrack and links directly to its web board. `AGENTS.md` is the safety and workflow contract for repo-local agents. Add the repo's own rules to it if the repo has other work.
 If the repo's default branch is `main`, either make `master` the default branch in GitHub (Settings → General) or set the
 branch to `main` in the web board and `BOARD_BRANCH=main` for agents.
 
