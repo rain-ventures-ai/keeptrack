@@ -1994,6 +1994,27 @@ def check_date(d):
     return d
 
 
+def check_event_time(value):
+    """A source event time, normalised to UTC; recurring imports must not pretend processing time was contact time."""
+    if not value:
+        return now()
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        sys.exit(f"time '{value}' must be an ISO timestamp with a timezone, for example 2026-10-09T09:30:00Z")
+    if parsed.tzinfo is None:
+        sys.exit(f"time '{value}' needs a timezone, for example Z or +01:00")
+    return parsed.astimezone(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def check_source_id(value):
+    """An opaque, privacy-safe retry key such as email:<sha256>; never accept addresses or message text here."""
+    value = str(value or "").strip().lower()
+    if value and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}:[0-9a-f]{16,64}", value):
+        sys.exit("source id must be an opaque key such as email:<16-to-64 hex characters>; hash provider ids before storing them")
+    return value
+
+
 def last_touch(p):
     ts = [c.get("sent_at") or c["at"] for c in p.get("comments", []) if c.get("channel") not in (None, "note") and not c.get("draft")]
     return max(ts) if ts else ""
@@ -2156,9 +2177,15 @@ def cmd_person_set(a):
 
 def cmd_touch(a):
     """Log a contact. --draft records a message that is not sent yet (it does not count as contact)."""
+    event_at, source_id = check_event_time(getattr(a, "at", None)), check_source_id(getattr(a, "source_id", None))
     def fn(data):
         p = find_person(data, a.ref)
-        c = {"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(), "channel": a.channel, "text": a.text, "draft": bool(a.draft and a.channel != "note")}
+        if source_id:
+            old = next((c for c in p.get("comments", []) if c.get("source_id") == source_id), None)
+            if old:
+                print(f"already logged {a.channel} for {p['name']} ({old['id']})"); return
+        c = {"id": "c_" + uuid.uuid4().hex[:6], "at": event_at, "by": who_am_i(), "channel": a.channel, "text": a.text, "draft": bool(a.draft and a.channel != "note")}
+        if source_id: c["source_id"] = source_id
         p.setdefault("comments", []).append(c)
         if not c["draft"] and a.channel != "note" and p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
             hist(p, f"stage {p['stage']} -> {stages(data)[1]}"); p["stage"] = stages(data)[1]
@@ -2733,7 +2760,10 @@ def main():
     s = sub.add_parser("person-add", help="add a person (refuses duplicates)"); s.add_argument("name"); pf(s); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_person_add)
     s = sub.add_parser("person-set", help="change a person's fields, stage or next step"); s.add_argument("ref"); s.add_argument("--name"); pf(s); s.set_defaults(f=cmd_person_set)
     s = sub.add_parser("touch", help="log a contact; --draft for a message that is not sent yet"); s.add_argument("ref"); s.add_argument("text")
-    s.add_argument("--channel", choices=CHANNELS, default="note"); s.add_argument("--draft", action="store_true"); pf(s); s.set_defaults(f=cmd_touch)
+    s.add_argument("--channel", choices=CHANNELS, default="note"); s.add_argument("--draft", action="store_true")
+    s.add_argument("--at", help="actual contact time as an ISO timestamp with timezone")
+    s.add_argument("--source-id", help="opaque retry key such as email:<sha256>; duplicate keys are not logged twice")
+    pf(s); s.set_defaults(f=cmd_touch)
     s = sub.add_parser("sent", help="mark a draft as sent (the human sent it)"); s.add_argument("ref"); s.add_argument("--touch", help="draft id (default: latest)"); pf(s); s.set_defaults(f=cmd_sent)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("--done-days", type=int); s.add_argument("--lost-days", type=int); s.add_argument("--keep-history", type=int)

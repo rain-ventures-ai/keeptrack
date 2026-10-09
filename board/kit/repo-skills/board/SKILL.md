@@ -84,6 +84,9 @@ Read [references/status-audits.md](references/status-audits.md) and follow it.
 If the board has CRM people, use:
 `keeptrack.py today` (who to contact), `people`, `person "<name>"`, `person-add` (refuses duplicates), `person-set`, `touch "<name>" "<text>" --channel linkedin|email|call|meeting|note [--draft]`, `sent "<name>"` and `client-link "<company>" <cloud-url-or-local-path>`. `person` lists every labelled email and phone number, profile/reference link, and company file/folder resource. To set up a board from a spreadsheet, email, Trello or folders, use the `onboard-keeptrack` skill (it ends with `import`).
 When you write a message for someone, log it with `--draft`. Never send it yourself. Run `sent` only after the human says it is sent.
+For a mailbox scan or recurring Gmail/Outlook reconciliation, use the separate `keeptrack-email` skill. Imported
+events use `touch --at <actual ISO timestamp> --source-id email:<sha256>` so contact time is accurate and retries do
+not duplicate the log.
 
 ## Never
 - Edit any board JSON file directly.

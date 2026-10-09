@@ -150,6 +150,11 @@ Schema 3 (migration step 2 to 3) adds the Keeptrack CRM: `contacts` (default `[]
 ```
 A task can point at a person with `"contact": "<person id>"`. Last contact is the newest `sent_at` (else `at`) of a comment that has a channel other than `note` and is not a draft.
 
+For imported contact events, `touch` accepts `--at <ISO timestamp with timezone>` so the contact log keeps the real
+event time, and `--source-id email:<16-to-64 hex characters>` so retries do not create duplicates. Hash provider
+message/thread identifiers before using them; never put an email address or message text in the source id. Recurring
+mailbox reconciliation is defined by the `keeptrack-email` skill and keeps its last-run checkpoint outside `board/`.
+
 Person `links` are profile or reference pages about that person/company. Task `links` are supporting resources and
 references for that task: for example Drive/Dropbox files, issues, PRs, source pages or a local working path.
 `client_info[company].links` are company-wide working file/folder resources rather than task-specific ones. An agent

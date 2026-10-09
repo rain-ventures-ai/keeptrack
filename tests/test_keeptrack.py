@@ -124,6 +124,22 @@ class LocalBoard(unittest.TestCase):
         self.quiet(kt.cmd_client_link, Args(client="Acme", url="/srv/clients/acme", title="Local folder"))
         self.assertEqual(self.read()["client_info"]["Acme"]["links"], [{"title": "Local folder", "url": "/srv/clients/acme"}])
 
+    def test_email_touch_keeps_source_time_and_is_idempotent(self):
+        data = self.read(); data["contacts"] = [{"id": "p_casey", "name": "Casey", "company": "Acme", "stage": "New",
+            "email": "casey@example.test", "emails": [{"id": "e_work", "label": "Work", "value": "casey@example.test"}],
+            "phone": "", "phones": [], "linkedin": "", "links": [], "role": "", "value": "", "source": "",
+            "notes": "", "next": "", "next_due": "", "comments": [], "history": []}]; write(self.file, data)
+        source_id = "email:" + "a" * 64
+        args = Args(ref="p_casey", text="Email received: confirmed Friday's call.", channel="email", draft=False,
+                    at="2026-10-08T10:30:00+01:00", source_id=source_id, company=None, role=None, email=None,
+                    phone=None, linkedin=None, value=None, source=None, notes=None, next=None, stage=None, due=None)
+        self.quiet(kt.cmd_touch, args); self.quiet(kt.cmd_touch, args)
+        person = self.read()["contacts"][0]
+        self.assertEqual(1, len(person["comments"]))
+        self.assertEqual("2026-10-08T09:30:00Z", person["comments"][0]["at"])
+        self.assertEqual(source_id, person["comments"][0]["source_id"])
+        self.assertEqual("Contacted", person["stage"])
+
     def test_task_link_accepts_local_resource_path(self):
         self.quiet(kt.cmd_link, Args(id="t_live", url="/srv/tasks/live", title="Working folder"))
         task = next(x for x in self.read()["tasks"] if x["id"] == "t_live")
@@ -538,6 +554,12 @@ class PhaseOneSafety(unittest.TestCase):
         self.assertTrue(os.path.isfile(new))
         with open(new) as f:
             self.assertIn("name: onboard-keeptrack", f.read())
+        email_skill = os.path.join(self.temp.name, ".claude", "skills", "keeptrack-email", "SKILL.md")
+        email_routine = os.path.join(self.temp.name, ".claude", "skills", "keeptrack-email", "references", "routines.md")
+        self.assertTrue(os.path.isfile(email_skill))
+        self.assertTrue(os.path.isfile(email_routine))
+        with open(email_skill) as f:
+            self.assertIn("name: keeptrack-email", f.read())
         self.assertIn("removed: .claude/skills/keeptrack-onboard", out.getvalue())
 
     def test_bare_migrate_does_not_split(self):

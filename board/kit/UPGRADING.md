@@ -24,6 +24,19 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v16 (schema 4)
+Recurring contact-email reconciliation now has a dedicated `keeptrack-email` skill and scheduled-routine guide. It
+matches mailbox messages only to exact email addresses already stored on Keeptrack people, records a privacy-safe
+incremental checkpoint in `automation/contact-email-sync.json`, and keeps a bounded audit log including the last
+successful run. Email bodies and attachments never go into the checkpoint or board.
+- Run `kit-update` only. There is no board-data migration.
+- Give the email routine read access to one mailbox and write access to the private board repo. Keep it separate from
+  the comment-triggered `@claude` task routine.
+- Existing contact events can now be logged with their real timestamp and an idempotent hashed source key using
+  `keeptrack.py touch ... --at <ISO-time> --source-id email:<sha256>`.
+- Check: `.claude/skills/keeptrack-email/references/routines.md` exists, a repeated source id creates only one touch,
+  and the checkpoint records `last_successful_run_at` plus recent run summaries without message content.
+
 ### v15 (schema 4)
 CRM people can now keep multiple labelled email addresses and phone numbers. Existing single `email`, `phone` and
 `linkedin` fields remain as compatibility mirrors, so older people appear correctly and no data migration is needed.

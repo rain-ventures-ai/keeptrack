@@ -15,6 +15,10 @@ If the source is a meeting transcript, call notes, minutes or free-form notes, u
 skill. It matches attendees and actions against the existing board, asks about material ambiguity and avoids storing
 the transcript itself. Use `onboard-keeptrack` instead for a bulk migration from another CRM or task system.
 
+If the user asks to scan, sync or reconcile Gmail or Outlook with existing people, use the separate `keeptrack-email`
+skill. It exact-matches stored addresses, logs concise email contact facts and defines a safe recurring routine with a
+durable last-run checkpoint. Do not use it merely to draft one message.
+
 If the board shows errors, a save fails, or a migration has just run, use `$B doctor`. Run `$B doctor --fix` only after the user agrees.
 
 ## Find keeptrack.py
