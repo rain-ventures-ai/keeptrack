@@ -745,6 +745,9 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 dialog.help { max-width: 860px; }
 .help .hgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px 18px; }
 .help h3 { font-size: 14px; margin: 6px 0 2px; } .help p { margin: 0 0 6px; font-size: 13.5px; line-height: 1.45; } .help .hlinks { margin-top: 12px; }
+.help .hagent { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.help .hagentlinks { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0; }
+.help .hagentlinks a { font-weight: 600; }
 /* read-only: no add boxes or delete buttons; drawer fields are disabled by JS */
 .robar { background: color-mix(in srgb, #f59e0b 16%, var(--header)); font-weight: 500; }
 .robar .morelink { color: var(--accent); font-weight: 600; }

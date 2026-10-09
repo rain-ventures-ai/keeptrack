@@ -3219,6 +3219,7 @@ if (typeof window !== 'undefined') (() => {
   let lockQueued = false; const lockObs = new MutationObserver(() => { if (!ro || lockQueued) return; lockQueued = true; queueMicrotask(() => { lockQueued = false; lockDrawers(); }); });
   ['dlgCard', 'dlgContact'].forEach(id => lockObs.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] }));
   $('btnHelp').onclick = () => $('dlgHelp').showModal(); $('hClose').onclick = () => $('dlgHelp').close();
+  $('hAgentSetup').onclick = () => { $('dlgHelp').close(); $('btnSettings').click(); settingsTab('claude'); };
   $('dlgHelp').querySelectorAll('a[data-doc]').forEach(a => { a.href = HOME + '/docs/help/' + a.dataset.doc; a.target = '_blank'; a.rel = 'noopener noreferrer'; });
 
   $('sStyle').value = window.kbStyle ? window.kbStyle.get() : 'classic'; $('sStyle').onchange = e => { window.kbStyle && window.kbStyle.set(e.target.value); render(); };

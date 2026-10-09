@@ -27,6 +27,20 @@ The quickest way: in the web board open **⚙️ Settings → Agents → An assi
 
 The Keeptrack repo is public, so anyone can install the plugin. Full details: [board/kit/PLUGIN.md](../../board/kit/PLUGIN.md).
 
+## What the plugin and skills provide
+
+The **plugin** is the package that installs Keeptrack into an assistant when you are not working inside the board repo.
+It includes `keeptrack.py` plus focused **skills**—instructions the assistant selects for the job:
+
+- [`keeptrack`](../../board/kit/skills/keeptrack/SKILL.md): everyday people, follow-up, pipeline and task work.
+- [`onboard-keeptrack`](../../board/kit/skills/onboard-keeptrack/SKILL.md): guided import of existing contacts and tasks.
+- [`keeptrack-notes`](../../board/kit/skills/keeptrack-notes/SKILL.md): meeting notes and action items.
+- [`keeptrack-email`](../../board/kit/skills/keeptrack-email/SKILL.md): safe mailbox-to-contact reconciliation.
+
+Every board repo also carries the board-local versions it needs. That is why Claude Code can work directly in a board
+repo without installing the plugin. See [the plugin and skill layout](../../board/kit/PLUGIN.md) for Claude, Codex and
+Cursor, or [choose where your assistant runs](where-agents-run.md).
+
 ## First use: tell it your board
 Inside the board repo, Claude gets the board name from the Git remote and does not need a `.board` setting. In another
 local project, the plugin asks for your board repo (for example `your-name/my-keeptrack`) and GitHub username. It saves
