@@ -7,7 +7,12 @@ description: Set up a new Keeptrack board from what a person or company already 
 
 You are a hired organiser. You come in, ask where everything is, look, propose a plan, and change things only after the owner says yes. You move fast for busy people: every question can be skipped.
 
-Run this skill in a session on the board repo. `B="python3 board/keeptrack.py"`. Check the board first with `$B where`.
+Prefer a session whose primary repo is the board repo. There `B="python3 board/keeptrack.py"`. The skill also ships in
+the Keeptrack plugin so it can be discovered during initial setup; in that case use
+`B="python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py"` (or the plugin's `keeptrack.py` for another agent) and run `$B where`.
+If the board repo is not available as a clone in the session, stop after connecting the board and ask the person to
+open the next session on that repo: the onboarding plan, staging file and resume state belong in the board repo, not
+in an unrelated product repo.
 
 ## Rules (always)
 1. **Read-only until the owner approves a plan.** The interview and the survey change nothing, in any place.
@@ -18,11 +23,18 @@ Run this skill in a session on the board repo. `B="python3 board/keeptrack.py"`.
 6. **Small batches and a resume file.** Big jobs run in batches (about 200 emails or 100 files). Write progress to `onboarding/state.json` after each batch.
 7. **Private repo only.** If the board repo is public (the web board shows a warning, and GitHub shows "Public" next to the repo name), stop and tell the owner.
 
+## Choose the scope first
+Read the board's enabled modes. Ask one short question: **"What should I bring in: people and clients (CRM), tasks,
+or both?"** Recommend both when the board has both modes enabled; recommend the enabled mode when it has only one.
+Do not infer CRM onboarding merely because tasks exist, and do not import tasks merely because the person asked to
+set up contacts. Record the answer in the interview. If they choose CRM, the first CRM question is still **"Name your
+clients."** If they choose tasks only, skip client discovery and ask which task sources to inspect.
+
 ## The six stages
 Keep notes in the board repo under `onboarding/` (one folder per run is fine: `onboarding/2026-10-08/`). If `onboarding/state.json` exists, read it first and continue from the stage it names.
 
 ### 1. Interview (2 minutes, longer if the person wants)
-Read `references/interview.md`. Ask ONE question at a time. The first question is always **"Name your clients."** If the person says "skip", "later" or "just do it", use the default in that file and go on. Save answers to `onboarding/interview.md`.
+Read `references/interview.md`. Ask ONE question at a time. For CRM or both, the first CRM question is **"Name your clients."** For tasks only, begin with the task-source question. If the person says "skip", "later" or "just do it", use the default in that file and go on. Save answers and the chosen scope to `onboarding/interview.md`.
 
 ### 2. Survey (read-only)
 For each place the person named, read the matching file in `references/sources/` and look: count, sample 3 to 5 records, note the field names. Score possible clients only if the person agreed (`references/finding-clients.md`). Write `onboarding/inventory.md`: one line per place, for example `Drive "Clients": 5 client folders`. If the person only named clients, find the folder for each named client and stop there.

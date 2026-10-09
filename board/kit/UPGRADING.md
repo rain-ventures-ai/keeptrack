@@ -24,6 +24,15 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v10 (schema 4)
+Guided onboarding is now available from the Keeptrack plugin as well as from a board repo, and setup explicitly hands
+off to it instead of improvising an import. It asks whether to bring in people/clients (CRM), tasks, or both before it
+surveys anything; it still shows a dry-run plan and waits for approval before writing.
+- Run `kit-update` only. There is no data migration.
+- Start a fresh agent session after updating so it discovers `.claude/skills/keeptrack-onboard`.
+- Check: ask to "Onboard my existing work into Keeptrack". The first question must ask CRM, tasks or both. Nothing is
+  imported before `import --dry-run` has shown the plan and the person has approved it.
+
 ### v9 (schema 4)
 CLI workflow moves on split boards now give a card a fresh rank at the end of its destination column. This prevents `claim`, `done` and `release --column` from creating duplicate ranks when another card already has the same rank there.
 - Run `kit-update` only. There is no data migration.

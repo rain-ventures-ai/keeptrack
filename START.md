@@ -69,7 +69,6 @@ The web page makes the board. It is the easiest way, also for people who do not 
 2. The page has three steps: **what to track** (People, Tasks or both), **make a private repo** (it opens GitHub with the name `my-keeptrack` and Private already set), and **make a token** (it opens GitHub's token page with the right permission already set; the person picks the new repo, generates the token and pastes it into the page, not into the chat).
 3. The page checks the token and the repo and then makes the board. Wait until the person says the board is open.
 4. Ask for the repo name it made (for example `chris-smith/my-keeptrack`) and their GitHub username, then go to step 3b.
-
 If the person wants to try first, they can look at the demo: https://rain-ventures-ai.github.io/keeptrack/board/?demo=crm
 
 ### Step 3b. Connect this assistant to the board
@@ -96,6 +95,10 @@ $B today      # people to contact (if the board tracks people)
 $B list       # tasks (if the board tracks tasks)
 ```
 Both must run with no error. Then ask the person to look at the web board, and add a test with their OK, for example `$B add "Test from my assistant"`, and ask them to check that it shows on the web board. Delete or finish the test task after.
+
+Then offer the guided import once: **"Would you like me to bring in existing people and clients (CRM), tasks, or
+both?"** A yes hands over to `keeptrack-onboard`. If the skill is not available in this session, do not substitute
+your own import process; start a fresh session on the board repo after the plugin/kit is current.
 
 ### Step 5. Tell the person what they can ask now
 Give three examples, in their words:

@@ -390,6 +390,8 @@ dialog.settings [role="tabpanel"][hidden] { display: none; }
 
 /* ---- top bar v2: logo, views, client pills, quick people, filters ---------------------------------------- */
 header { flex-wrap: nowrap; gap: 10px; padding: 8px 14px; } .hbreak { display: none; }
+.hfilters, .hutils { display: contents; }
+.mobilemore { display: none; }
 header .logo { flex: 0 0 auto; width: 32px; height: 32px; font-size: 17px; border-radius: 9px; }
 .seg { flex: 0 0 auto; }
 .clientwrap { position: relative; flex: 1 1 0; min-width: 0; }
@@ -410,15 +412,47 @@ header .logo { flex: 0 0 auto; width: 32px; height: 32px; font-size: 17px; borde
 #status { flex: 0 0 auto; } #status.ok { display: none; } #status.err { color: var(--danger); font-weight: 600; }
 header .badge { top: -6px; right: -6px; }
 @media (max-width: 1100px) { .seg .vt { display: none; } .seg button { padding: 4px 9px; } #btnFilter .tx { display: none; } }
+@media (min-width: 761px) and (max-width: 1000px) {
+  header { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 9px; padding: 7px 10px; align-items: center; }
+  header .boardwrap { grid-column: 1; grid-row: 1; }
+  .viewnav { grid-column: 2; grid-row: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .viewnav::-webkit-scrollbar { display: none; }
+  .viewgroup { flex: 0 0 auto; }
+  .hfilters, .hutils { grid-column: 1 / -1; display: flex; align-items: center; min-width: 0; gap: 7px; }
+  .hfilters .clientwrap { flex: 1 1 220px; }
+  .mobilemore { display: block; }
+  .hutils { justify-content: flex-end; }
+  .hutils > button, .hutils .hbreak { display: none; }
+  .hutils:has(#status.ok) { display: none; }
+  .hutils #status { flex: 1 1 100%; font-size: 11.5px; padding: 1px 2px 0; }
+}
 @media (max-width: 760px) {
-  header { flex-wrap: wrap; gap: 6px 8px; padding: 6px 10px; }
-  header .logo { display: none; } .viewnav { order: 1; } #btnUnread { order: 2; margin-left: auto; } #btnAgent { order: 3; } #btnCopyMd { order: 3; } #btnRefresh { order: 4; } #btnSettings { order: 5; } #btnHelp { order: 5; } .hbreak { display: block; order: 6; flex-basis: 100%; height: 0; }
-  .clientwrap { order: 7; } .peopleq { display: none; } .attnbtn { order: 8; } .popwrap { order: 9; } #status { order: 12; flex-basis: 100%; font-size: 11.5px; }
-  header { gap: 6px; } .seg button { min-height: 40px; min-width: 38px; padding: 6px 8px; } header button { min-height: 40px; min-width: 40px; padding: 4px 6px; } header .seg button { min-width: 38px; }
+  header { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 8px; padding: 6px 8px; align-items: center; }
+  header .boardwrap { grid-column: 1; grid-row: 1; }
+  header #boardBtn.logo { min-width: 44px; min-height: 44px; padding: 0 7px; }
+  .viewnav { grid-column: 2; grid-row: 1; min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding-bottom: 2px; }
+  .viewnav::-webkit-scrollbar { display: none; }
+  .viewgroup { flex: 0 0 auto; }
+  .hfilters { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: center; min-width: 0; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+  .hfilters .clientwrap { flex: 1 1 auto; min-width: 72px; }
+  .hfilters .clientbar { width: 100%; }
+  .peopleq, .sortpick { display: none; }
+  .mobilemore { display: block; }
+  .hfilters #btnSearch { order: 0; }
+  .hutils { grid-column: 1 / -1; grid-row: 3; display: flex; min-width: 0; }
+  .hutils > button, .hutils .hbreak { display: none; }
+  .hutils:has(#status.ok) { display: none; }
+  .hutils #status { flex: 1 1 100%; font-size: 11.5px; padding: 1px 2px 0; }
+  .seg button { min-height: 40px; min-width: 38px; padding: 6px 8px; } header button { min-height: 40px; min-width: 40px; padding: 4px 6px; } header .seg button { min-width: 38px; }
   .popover { position: fixed; left: 8px; right: 8px; top: 120px; width: auto; max-width: none; } .clientpop { left: 8px !important; } .filterpop { right: 8px; width: auto; }
   .filterpop select, .filterpop input { min-height: 42px; font-size: 16px; } .filterpop label.chk { min-height: 40px; } .cmenu { min-height: 44px; }
   .cpill { padding: 7px 12px; }
 }
+.morepop { right: 0; top: calc(100% + 8px); width: 245px; padding: 8px; }
+.morepop label { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin: 2px 4px 8px; font-size: 12px; color: var(--muted); }
+.morepop button { width: 100%; display: flex; align-items: center; justify-content: flex-start; gap: 9px; border: 0; background: transparent; padding: 9px 10px; }
+.morepop button:hover { background: var(--panel); }
+.moreglyph { font-weight: 800; letter-spacing: .08em; line-height: 1; transform: translateY(-2px); }
 .filterpop label { align-items: stretch !important; text-align: left; } .filterpop label.chk { align-items: center !important; }
 .seg button.on .vt { display: inline; }
 @media (max-width: 760px) { .seg button.on .vt { display: none; } }
@@ -676,8 +710,10 @@ dialog.archview { max-width: 640px; } .archview pre.atext { white-space: pre-wra
 .wfoot { display: flex; align-items: center; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); } .wfoot .spacer { flex: 1; }
 .wfoot button[hidden] { display: none; } .wfoot .primary { padding: 9px 18px; } .wfoot .primary:disabled { opacity: .5; cursor: not-allowed; }
 @media (max-width: 760px) { .wiz { margin: 8px; padding: 16px; border-radius: 12px; } .wpick { grid-template-columns: 1fr; } }
-body.setup header > *:not(.boardwrap):not(#btnHelp):not(#btnSettings) { display: none !important; }
-body.setup header { justify-content: flex-start; } body.setup #btnHelp { margin-left: auto; }
+body.setup header > *:not(.boardwrap):not(.hutils) { display: none !important; }
+body.setup .hutils > *:not(#btnHelp):not(#btnSettings) { display: none !important; }
+body.setup header { justify-content: flex-start; } body.setup .hutils { margin-left: auto; } body.setup #btnHelp { margin-left: auto; }
+@media (max-width: 1000px) { body.setup header { display: flex; } body.setup .hutils { display: flex; padding: 0; border: 0; } body.setup .hutils > #btnHelp, body.setup .hutils > #btnSettings { display: inline-flex !important; } }
 
 /* Settings → Agents: one card per way of working with an agent, and the guided "Connect Claude" steps */
 .agcard { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 12px 14px; margin: 12px 0; }
