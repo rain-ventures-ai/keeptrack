@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -18,6 +18,8 @@
     ".claude/skills/board-upgrade/SKILL.md": "repo-skills/board-upgrade/SKILL.md",
     ".claude/skills/keeptrack-notes/SKILL.md": "skills/keeptrack-notes/SKILL.md",
     ".claude/skills/keeptrack-notes/references/routines.md": "skills/keeptrack-notes/references/routines.md",
+    ".claude/skills/keeptrack-email/SKILL.md": "skills/keeptrack-email/SKILL.md",
+    ".claude/skills/keeptrack-email/references/routines.md": "skills/keeptrack-email/references/routines.md",
     ".claude/skills/onboard-keeptrack/SKILL.md": "skills/onboard-keeptrack/SKILL.md",
     ".claude/skills/onboard-keeptrack/references/finding-clients.md": "skills/onboard-keeptrack/references/finding-clients.md",
     ".claude/skills/onboard-keeptrack/references/folders.md": "skills/onboard-keeptrack/references/folders.md",

@@ -44,3 +44,14 @@ Type **@claude** in a task comment and your own Claude routine starts work on th
 - It marks a message as sent only after you say that you sent it.
 - It does not copy contact details to other places.
 - It keeps large files out of GitHub and links them instead.
+
+## Keep contact history up to date from email
+
+Use a separate scheduled email routine to compare recent Gmail or Outlook messages with the exact email addresses on
+your Keeptrack people. It can add concise sent/received email facts to contact logs and update an explicit next step,
+but it never sends, drafts or deletes mail. The routine keeps its last successful run and recent run summaries in
+`automation/contact-email-sync.json`, without storing message bodies, subjects, attachments or email addresses there.
+
+Ask Claude Code in the board repo: **“Set up my Keeptrack contact email routine.”** It follows the
+`keeptrack-email` skill and asks which mailbox and schedule to use. Keep this routine separate from the task-comment
+routine so an untrusted board comment never has access to your mailbox.
