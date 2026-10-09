@@ -733,11 +733,22 @@ if (typeof window !== 'undefined') (() => {
     b.title = on ? `Remove ${c.name} from the filter` : `Add ${c.name} to the filter (${c.open} open)`; b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
     b.onclick = () => toggleClient(c.name); return b;
   }
+  const activeClaim = t => t.claim && t.claim.status !== 'done' ? t.claim : null;
+  const agentFilterValue = c => '__agent:' + encodeURIComponent(String(c.agent || '').toLowerCase()) + ':' + encodeURIComponent(String(c.on_behalf_of || '').toLowerCase());
+  const agentLabel = c => {
+    const agent = String(c.agent || 'agent'), name = agent.slice(0, 1).toUpperCase() + agent.slice(1);
+    return name + (c.on_behalf_of ? ' for @' + c.on_behalf_of : '');
+  };
+  function agentAssignments() {
+    const found = new Map();
+    state.tasks.forEach(t => { const claim = activeClaim(t); if (!claim) return; const value = agentFilterValue(claim), old = found.get(value); if (old) old.count++; else found.set(value, { value, agent: claim.agent || 'agent', owner: claim.on_behalf_of || '', label: agentLabel(claim), count: 1 }); });
+    return [...found.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }
   let topSig = '';
   function renderTopbar() {
     const box = $('clientBar'); if (!box || !state) return;
-    const total = state.tasks.filter(t => t.column !== doneColId()).length, sel = clientValues(), selected = new Set(sel), list = clientRank();
-    const sig = JSON.stringify([total, sel, box.clientWidth, list.map(c => [c.name, c.open, c.lvl]), state.people.map(p => p.github), $('fWho').value]);
+    const total = state.tasks.filter(t => t.column !== doneColId()).length, sel = clientValues(), selected = new Set(sel), list = clientRank(), agents = agentAssignments();
+    const sig = JSON.stringify([total, sel, box.clientWidth, list.map(c => [c.name, c.open, c.lvl]), state.people.map(p => p.github), agents.map(a => [a.value, a.count]), $('fWho').value]);
     if (sig === topSig && box.firstChild) return; topSig = sig; box.textContent = '';   // the pill fitting below forces layouts: skip it when nothing changed
     const all = el('button', 'cpill all' + (sel.length ? '' : ' on'), 'All'); all.type = 'button'; all.setAttribute('aria-pressed', String(!sel.length)); all.title = 'Clear client filters'; if (total) all.append(el('span', 'cn', String(total))); all.onclick = clearClients; box.append(all);
     let n = 0;                                                    // n = how many pills fit, in their natural order (append all, then read once: one layout, not one per pill)
@@ -762,6 +773,9 @@ if (typeof window !== 'undefined') (() => {
     const pq = $('peopleQ'); pq.textContent = ''; const w = $('fWho').value;
     state.people.forEach(p => { const on = w === p.github, b = el('button', 'pq' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Show everyone' : `Only @${p.github}'s tasks`;
       b.append(avatar(p.github)); b.onclick = () => { $('fWho').value = on ? '' : p.github; render(); }; pq.append(b); });
+    agents.forEach(a => { const on = w === a.value, b = el('button', 'pq agentq' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Show every assignee' : `Only tasks assigned to ${a.label}`;
+      b.append(svgIcon('bot'), el('span', 'agentname', a.agent.slice(0, 1).toUpperCase() + a.agent.slice(1))); if (a.owner) b.append(avatar(a.owner)); b.append(el('span', 'agentcount', String(a.count)));
+      b.onclick = () => { $('fWho').value = on ? '' : a.value; render(); }; pq.append(b); });
   }
   function closePops() { ['clientPop', 'filterPop', 'boardPop', 'morePop'].forEach(id => { $(id).hidden = true; }); $('btnFilter').setAttribute('aria-expanded', 'false'); $('boardBtn').setAttribute('aria-expanded', 'false'); $('btnMore').setAttribute('aria-expanded', 'false'); }
   function placePop(pop) { if (window.matchMedia('(max-width: 760px)').matches) pop.style.top = (document.querySelector('header').getBoundingClientRect().bottom + 6) + 'px'; else pop.style.top = ''; }
@@ -821,11 +835,13 @@ if (typeof window !== 'undefined') (() => {
 
   function filtered(t) {
     if (freshOnly && !isFresh(t)) return false;
-    const fc = clientValues(), fw = $('fWho').value, fl = $('fLabel').value, fp = $('fPrio').value;
+    const fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fp = $('fPrio').value;
     if (fc.length && !fc.includes(t.client)) return false;
     if (fw === '__none' && t.assignees.length) return false;
-    if (fw === '__agent' && !t.claim) return false;
-    if (fw && fw[0] !== '_' && !t.assignees.includes(fw)) return false;
+    if (fw === '__agent' && !activeClaim(t)) return false;
+    if (fw.startsWith('__agent:') && (!activeClaim(t) || agentFilterValue(activeClaim(t)) !== fw)) return false;
+    if (fw && !fw.startsWith('__') && !t.assignees.includes(fw)) return false;
+    if (fd) { const who = completionOf(t); if (!who || completionFilterValue(who) !== fd) return false; }
     if (fl && !t.labels.includes(fl)) return false;
     if (fp && t.priority !== fp) return false;
     if ($('fAttn').checked && !needsAttention(t)) return false;
@@ -891,7 +907,8 @@ if (typeof window !== 'undefined') (() => {
     const scroll = boardScrollPosition();
     document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
     fillClientSelect([...new Set([...state.clients, ...state.tasks.map(t => t.client)].filter(Boolean))].map(c => [c, c]));
-    fillSelect($('fWho'), [...state.people.map(p => [p.github, '@' + p.github]), ['__none', 'Unassigned'], ['__agent', 'Claimed by an agent']], 'Everyone');
+    fillSelect($('fWho'), [...state.people.map(p => [p.github, '@' + p.github]), ['__none', 'Unassigned'], ['__agent', 'Any active agent'], ...agentAssignments().map(a => [a.value, a.label])], 'Everyone');
+    fillSelect($('fDoneBy'), completionOptions().map(x => [completionFilterValue(x), x.label]), 'Anyone');
     fillSelect($('fLabel'), state.labels.map(l => [l.name, l.name]), 'All');
     if ($('dlgCard').open && editing) markSeen(editing);
     applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact();
@@ -1049,7 +1066,7 @@ if (typeof window !== 'undefined') (() => {
     bd.textContent = fresh > 99 ? '99+' : String(fresh); bd.hidden = !fresh; bell.classList.toggle('on', freshOnly);
     bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes${freshOnly ? ' (showing only these; click to show all)' : ' (click to show only these)'}` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
     document.title = (fresh ? `(${fresh}) ` : '') + (state.settings.title || 'Keeptrack');
-    const nf = ['fWho', 'fLabel', 'fPrio'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
+    const nf = ['fWho', 'fDoneBy', 'fLabel', 'fPrio'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
     fb.textContent = String(nf); fb.hidden = !nf; $('btnFilter').title = nf ? `Filters (${nf} on)` : 'Filters'; renderTopbar();
   }
 
@@ -1170,6 +1187,23 @@ if (typeof window !== 'undefined') (() => {
   const pad2 = n => String(n).padStart(2, '0'), isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`, todayIso = () => isoDay(new Date());
   const doneColId = () => (state.columns.find(c => c.id === 'done') || state.columns[state.columns.length - 1] || {}).id;
   const reopenColId = () => (state.columns.find(c => c.id === 'todo') || state.columns[0] || {}).id;
+  function completionOf(t) {
+    if (!t || t.column !== doneColId()) return null;
+    const event = t.history.slice().reverse().find(isDoneEntry), run = t.last_run || (t.claim && t.claim.status === 'done' ? t.claim : null);
+    let by = String(event && event.by || ''), at = event && event.at || '';
+    if (!by && run) { by = String(run.agent || ''); at = run.finished_at || run.heartbeat_at || run.claimed_at || ''; }
+    if (!by) return null;
+    let agent = '', owner = '';
+    if (by.includes('@')) { const bits = by.split('@'); agent = bits.shift(); owner = bits.join('@'); }
+    else if (/^(claude|codex|cli)$/i.test(by)) { agent = by; owner = run && String(run.agent || '').toLowerCase() === by.toLowerCase() ? String(run.on_behalf_of || '') : ''; }
+    if (agent) { const a = agent.toLowerCase(), o = owner.toLowerCase(); return { key: `agent|${a}|${o}`, label: agentLabel({ agent, on_behalf_of: owner }), agent, owner, at }; }
+    return { key: 'person|' + by.toLowerCase(), label: '@' + by, person: by, at };
+  }
+  const completionFilterValue = x => '__doneby:' + encodeURIComponent(x.key);
+  function completionOptions() {
+    const found = new Map(); state.tasks.forEach(t => { const x = completionOf(t); if (x && !found.has(x.key)) found.set(x.key, x); });
+    return [...found.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }
   const toggleDone = t => moveTo(t.id, t.column === doneColId() ? reopenColId() : doneColId());
   const DTF = {}, dfmt = (d, o) => { const k = JSON.stringify(o); return (DTF[k] || (DTF[k] = new Intl.DateTimeFormat('en-GB', o))).format(d); };   // one formatter per style: toLocaleDateString makes a new one on every call (slow on big boards)
   const dueMemo = new Map(), fmtDue = iso => { let v = dueMemo.get(iso); if (v === undefined) { v = dfmt(new Date(iso + 'T00:00:00'), { day: 'numeric', month: 'short' }); dueMemo.set(iso, v); } return v; };
@@ -1190,6 +1224,7 @@ if (typeof window !== 'undefined') (() => {
   function chipComments(t) { const n = t.comments.length; if (!n) return null; const fr = freshInfo(t); const b = elI('button', 'chip cmchip has' + (fr.unread ? ' unread' : ''), 'message-square', String(n)); if (fr.unread) b.append(newBadge(fr.unread)); b.title = `${n} comment${n > 1 ? 's' : ''}`; b.onclick = () => openCard(t.id, 'comments'); return b; }
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
+  function chipCompleted(t) { const x = completionOf(t); if (!x) return null; const c = elI('span', 'chip doneby ' + (x.agent ? 'agent' : 'person'), x.agent ? 'bot' : 'user', x.label); c.title = `Completed by ${x.label}${x.at ? ' · ' + fmtStamp(x.at) : ''}`; return c; }
   function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; out.push(a); }); return out; }
   const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { out.push(paintLabel(el('span', 'tag label', l), l)); }); if (max && t.labels.length > max) out.push(el('span', 'tag', '+' + (t.labels.length - max))); return out; };
 
@@ -1203,7 +1238,7 @@ if (typeof window !== 'undefined') (() => {
     if (t.due) mm.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
     if (t.priority) mm.append(el('span', 'pr ' + t.priority, cap(t.priority)));
     mm.append(...labelTags(t)); if (t.client) mm.append(el('span', 'tag client', t.client));
-    [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
+    [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t, false));
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
@@ -1211,7 +1246,7 @@ if (typeof window !== 'undefined') (() => {
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
     const due = el('div', 'c-due'); if (t.due) due.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
     const pr = el('div', 'c-prio'); if (t.priority) pr.append(el('span', 'pr ' + t.priority, cap(t.priority)));
-    const more = el('div', 'c-more'); [chipTodo(t), chipComments(t), chipAgent(t)].forEach(x => x && more.append(x));
+    const more = el('div', 'c-more'); [chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     row.append(c0, task, desc, ppl, lab, due, pr, more); return row;
@@ -1261,7 +1296,7 @@ if (typeof window !== 'undefined') (() => {
       const title = el('div', 'stitle'); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.append(d); } title.append(document.createTextNode(t.title));
       const sub = [t.client, ...t.labels].filter(Boolean).join(' · '); if (sub) title.append(el('span', 'ssub', sub));
       const avs = el('div', 'lavs'); t.assignees.forEach(a => avs.append(avatar(a)));
-      const extra = el('div', 'sx'); [chipTodo(t), chipComments(t), chipAgent(t)].forEach(x => x && extra.append(x));
+      const extra = el('div', 'sx'); [chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && extra.append(x));
       row.append(circ, el('div', 'stime', colName(t.column)), title, extra, avs); row.onclick = () => openCard(t.id); return row;
     };
     const day = (key, label, list, cls) => {
@@ -1359,7 +1394,7 @@ if (typeof window !== 'undefined') (() => {
     if (!a.cards.length) { wrap.append(el('div', 'emptycol', 'No activity in this range' + (filterDesc() ? ' with these filters.' : '.'))); board.append(wrap); return; }
     if (a.done.length) {
       const sec = el('section', 'actsec actdone'); sec.append(el('h3', null, `✓ Completed (${a.done.length})`));
-      a.done.forEach(t => { const r = el('button', 'actcard'); r.type = 'button'; r.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', t.client || '')); r.onclick = () => openCard(t.id); sec.append(r); });
+      a.done.forEach(t => { const r = el('button', 'actcard'), who = completionOf(t); r.type = 'button'; r.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', [t.client, who && 'Completed by ' + who.label].filter(Boolean).join(' · '))); r.onclick = () => openCard(t.id); sec.append(r); });
       wrap.append(sec);
     }
     a.days.forEach(d => {
@@ -1380,9 +1415,10 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- copy as Markdown: everything the current view shows (filters applied), with every detail of each card ----------
   function filterDesc() {
-    const out = [], fc = clientValues(), fw = $('fWho').value, fl = $('fLabel').value, fp = $('fPrio').value;
+    const out = [], fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fp = $('fPrio').value;
     if (fc.length) out.push((fc.length === 1 ? 'client ' : 'clients ') + fc.join(' + '));
-    if (fw) out.push(fw === '__none' ? 'unassigned' : fw === '__agent' ? 'claimed by an agent' : 'assigned to @' + fw);
+    if (fw) { const a = agentAssignments().find(x => x.value === fw); out.push(fw === '__none' ? 'unassigned' : fw === '__agent' ? 'assigned to any active agent' : a ? 'assigned to ' + a.label : 'assigned to @' + fw); }
+    if (fd) { const x = completionOptions().find(x => completionFilterValue(x) === fd); if (x) out.push('completed by ' + x.label); }
     if (fl) out.push('label ' + fl); if (fp) out.push('priority ' + fp);
     if ($('fAttn').checked) out.push('needs attention'); if (freshOnly) out.push('new for me');
     if ($('fHideDone').checked && view !== 'activity') out.push('done hidden');
@@ -1395,6 +1431,7 @@ if (typeof window !== 'undefined') (() => {
     const meta = [`**Status:** ${colName(t.column)}`, `**Priority:** ${t.priority || 'medium'}`, t.due && `**Due:** ${t.due}`, t.client && `**Client:** ${t.client}`].filter(Boolean);
     L.push('- ' + meta.join(' · '));
     if (t.assignees.length) L.push('- **Assigned:** ' + t.assignees.map(a => '@' + a).join(', '));
+    { const who = completionOf(t); if (who) L.push('- **Completed by:** ' + who.label + (who.at ? ' · ' + fmtStamp(who.at) : '')); }
     if (t.labels.length) L.push('- **Labels:** ' + t.labels.join(', '));
     const run = (k, lbl) => L.push(`- **${lbl}:** ` + [k.agent, k.on_behalf_of && 'for @' + k.on_behalf_of, claimState(k), k.note && '"' + mdLine(k.note) + '"', k.session_url].filter(Boolean).join(' · '));
     if (t.claim && t.claim.status !== 'done') run(t.claim, 'Agent'); else if (t.last_run || t.claim) run(t.last_run || t.claim, 'Last run');
@@ -1542,6 +1579,7 @@ if (typeof window !== 'undefined') (() => {
       const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; foot.append(a); });
     if (other.length) foot.append(elI('span', 'chip', 'link', String(other.length)));
     if (t.contacts.length) foot.append(elI('span', 'chip', 'user', String(t.contacts.length)));
+    { const dc = chipCompleted(t); if (dc) foot.append(dc); }
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
     c.append(foot);
@@ -1722,6 +1760,7 @@ if (typeof window !== 'undefined') (() => {
     if (force || $('cClient').options.length !== cl.length + 2) fillSelect($('cClient'), [['', '(none)'], ...cl.map(c => [c, c]), ['__new', '＋ New client…']]);
     if (force) { fillSelect($('cCol'), state.columns.map(c => [c.id, c.name])); }
     set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cClient'), t.client || ''); set($('cDue'), t.due || '');
+    { const who = completionOf(t), done = $('cCompletedBy'); done.hidden = !who; done.className = 'chip doneby' + (who && who.agent ? ' agent' : ' person'); done.textContent = who ? 'Completed by ' + who.label : ''; done.title = who && who.at ? fmtStamp(who.at) : ''; }
     $('cPrio').dataset.v = $('cPrio').value; $('cDueClear').hidden = !$('cDue').value;
     const ti = $('cTitle'); if (force || (document.activeElement !== ti && ti.value !== t.title)) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
@@ -2437,14 +2476,14 @@ if (typeof window !== 'undefined') (() => {
   $('filterPop').addEventListener('click', e => e.stopPropagation()); $('clientPop').addEventListener('click', e => e.stopPropagation()); $('morePop').addEventListener('click', e => e.stopPropagation());
   document.addEventListener('click', closePops); document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePops(); if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
-  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fLabel', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
+  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
   { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(() => { renderTopbar(); layoutCinemaCards(); }, 60); };
     window.addEventListener('resize', refit);
     const wrap = document.querySelector('.clientwrap');
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
-  ['fClient', 'fWho', 'fLabel', 'fPrio', 'fAttn', 'fHideDone'].forEach(i => $(i).addEventListener('change', render));
+  ['fClient', 'fWho', 'fDoneBy', 'fLabel', 'fPrio', 'fAttn', 'fHideDone'].forEach(i => $(i).addEventListener('change', render));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again

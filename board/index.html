@@ -32,7 +32,7 @@
       <div id="clientPop" class="popover clientpop" hidden></div>
     </div>
     <select id="fClient" multiple hidden aria-hidden="true"></select>
-    <div id="peopleQ" class="peopleq" role="group" aria-label="Filter by person"></div>
+    <div id="peopleQ" class="peopleq" role="group" aria-label="Filter by assignee"></div>
     <button id="btnAttn" class="attnbtn" hidden title="Cards that are overdue or have a stale, stuck or blocked agent: click to show only these" aria-label="Needs attention"><span class="ic"><i data-i="triangle-alert"></i></span><span id="attnN"></span><span id="attnT" class="atx"></span><span id="attnS" class="atx short"> attention</span></button>
     <button id="btnUnread" aria-label="Unread" title="Nothing new"><span class="ic"><i data-i="bell"></i></span><span id="unreadBadge" class="badge" hidden>0</span></button>
     <button id="btnSearch" aria-label="Search" title="Search everything (press /)"><span class="ic"><i data-i="search"></i></span><span class="tx"> Search</span></button>
@@ -41,6 +41,7 @@
       <div id="filterPop" class="popover filterpop" hidden>
         <label>Sort <select id="sortMenu" aria-label="Card order"><option value="smart">Smart</option><option value="manual">Manual</option><option value="due">Due date</option><option value="newest">Newest</option></select></label>
         <label>Assignee <select id="fWho"></select></label>
+        <label>Completed by <select id="fDoneBy"></select></label>
         <label>Label <select id="fLabel"></select></label>
         <label>Priority <select id="fPrio"><option value="">All</option><option>high</option><option>medium</option><option>low</option></select></label>
         <label class="chk"><input type="checkbox" id="fAttn"> Needs attention <span id="attnCount" class="muted"></span></label>
@@ -366,6 +367,7 @@
       <select id="cCol" class="pillsel" aria-label="Status"></select>
       <select id="cPrio" class="pillsel prio" aria-label="Priority"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
       <span class="duepill" title="Due date"><span aria-hidden="true"><i data-i="calendar"></i></span><input id="cDue" type="date" class="pillinput" aria-label="Due date"><button id="cDueClear" class="lx" type="button" aria-label="Clear due date" title="Clear" hidden>×</button></span>
+      <span id="cCompletedBy" class="chip doneby" hidden></span>
     </div>
     <div id="cClaimWrap" class="claimbanner" hidden>
       <div id="cClaim"></div>
