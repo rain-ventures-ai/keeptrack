@@ -123,6 +123,28 @@ let base;
     await multi.locator('.cmenu').filter({ hasText: 'Acme' }).click(); assert.deepEqual(await titles(), ['Third']);
     await multi.locator('.cpill.all').click(); assert.deepEqual((await titles()).sort(), ['First', 'Second', 'Third']); await multi.close();
 
+    // Active agent claims are first-class assignees. The agent and the person it acts for make one distinct
+    // filter, so (for example) Alex's Claude work does not get mixed with Jez's Claude or Codex work.
+    const claimsApi = new Github(true), claimsRoot = JSON.parse(claimsApi.files['tasks.json']); claimsRoot.people.push({ github: 'jez', name: 'Jez' }); claimsApi.files['tasks.json'] = text(claimsRoot);
+    { const one = JSON.parse(claimsApi.files['cards/t_one.json']); one.claim = { agent: 'claude', on_behalf_of: 'alex', status: 'running', claimed_at: new Date().toISOString(), heartbeat_at: new Date().toISOString() }; claimsApi.files['cards/t_one.json'] = text(one); }
+    { const two = JSON.parse(claimsApi.files['cards/t_two.json']); two.claim = { agent: 'codex', on_behalf_of: 'jez', status: 'blocked', claimed_at: new Date().toISOString(), heartbeat_at: new Date().toISOString() }; claimsApi.files['cards/t_two.json'] = text(two); }
+    const claimsPage = await openBoard(browser, claimsApi); const assigneeLabels = await claimsPage.locator('#fWho option').allTextContents(); assert(assigneeLabels.includes('Any active agent')); assert(assigneeLabels.includes('Claude for @alex')); assert(assigneeLabels.includes('Codex for @jez'));
+    assert.deepEqual(await claimsPage.locator('.pq.agentq').evaluateAll(xs => xs.map(x => ({ title: x.title, count: x.querySelector('.agentcount').textContent }))), [{ title: 'Only tasks assigned to Claude for @alex', count: '1' }, { title: 'Only tasks assigned to Codex for @jez', count: '1' }]);
+    await claimsPage.locator('#btnFilter').click(); await claimsPage.locator('#fWho').selectOption({ label: 'Claude for @alex' }); assert.deepEqual(await claimsPage.locator('.card .t').allTextContents(), ['First']); assert.equal(await claimsPage.locator('.pq.agentq.on').getAttribute('title'), 'Show every assignee');
+    await claimsPage.locator('#fWho').selectOption('__agent'); assert.deepEqual((await claimsPage.locator('.card .t').allTextContents()).sort(), ['First', 'Second']); await claimsPage.close();
+
+    // Completion attribution survives claim release because it comes from the durable completion event and
+    // last run. Human and agent completions can be displayed and filtered independently.
+    const completedApi = new Github(true), completedRoot = JSON.parse(completedApi.files['tasks.json']), finishedAt = new Date().toISOString(); completedRoot.people.push({ github: 'jez', name: 'Jez' }); completedApi.files['tasks.json'] = text(completedRoot);
+    { const one = JSON.parse(completedApi.files['cards/t_one.json']); one.column = 'done'; one.history = [{ at: finishedAt, by: 'alex', text: 'moved To do → Done' }]; completedApi.files['cards/t_one.json'] = text(one); }
+    { const two = JSON.parse(completedApi.files['cards/t_two.json']); two.column = 'done'; two.history = [{ at: finishedAt, by: 'claude@alex', text: 'done: shipped' }]; two.last_run = { agent: 'claude', on_behalf_of: 'alex', status: 'done', finished_at: finishedAt }; completedApi.files['cards/t_two.json'] = text(two); }
+    const completedPage = await openBoard(browser, completedApi); assert.deepEqual(await completedPage.locator('#fDoneBy option').allTextContents(), ['Anyone', '@alex', 'Claude for @alex']);
+    assert.deepEqual((await completedPage.locator('.col[data-col="done"] .doneby').allTextContents()).map(x => x.trim()).sort(), ['@alex', 'Claude for @alex']);
+    await completedPage.locator('.card', { hasText: 'Second' }).dblclick(); assert.equal(await completedPage.locator('#cCompletedBy').textContent(), 'Completed by Claude for @alex'); await completedPage.locator('#cClose').click();
+    await completedPage.locator('#btnFilter').click(); await completedPage.locator('#fDoneBy').selectOption({ label: 'Claude for @alex' }); assert.deepEqual(await completedPage.locator('.card .t').allTextContents(), ['Second']);
+    await completedPage.locator('#viewSw button[data-view="list"]').click(); assert.equal((await completedPage.locator('.trow:not(.thead) .c-more .doneby').textContent()).trim(), 'Claude for @alex');
+    await completedPage.locator('#viewSw button[data-view="activity"]').click(); assert.match(await completedPage.locator('.actdone .ssub').textContent(), /Completed by Claude for @alex/); await completedPage.close();
+
     const desktopView = await page.locator('#viewSw .seg button.on').boundingBox(), desktopFilter = await page.locator('#btnFilter').boundingBox();
     assert(Math.abs((desktopView.y + desktopView.height) - (desktopFilter.y + desktopFilter.height)) <= 2, 'desktop header controls must share a bottom edge');
 
