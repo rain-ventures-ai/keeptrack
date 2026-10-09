@@ -14,7 +14,7 @@ Every CLI and web-board write re-reads the latest board files and retries on a c
 2. Settings → check the file path is `board/tasks.json`, add your GitHub username and a **fine-grained token** limited to this repo with **Contents: Read and write**; the Settings dialog links to GitHub's token page with the name, expiry and permission pre-filled.
 3. Drag cards between columns, or use ◀ ▶. Double-click or **Edit** for the full card.
 
-Filters: client, assignee (including "Claimed by an agent"), label, priority, **Needs attention** (overdue, or an agent claim that is stale/stuck/blocked), hide done.
+Filters: client, **project**, assignee (including "Claimed by an agent"), label, priority, **Needs attention** (overdue, or an agent claim that is stale/stuck/blocked), hide done.
 
 ## Split storage (schema 4)
 
@@ -25,14 +25,15 @@ board/
   tasks.json
   cards/<task-id>.json
   people/<person-id>.json
+  projects/<project-id>.json
   archive/<year>.json
 ```
 
-`tasks.json` has `"version": 4` and `"layout": "split"`. It keeps board settings, columns, team members, agents, clients, labels, client links, `next_num`, and the archive index. It has no `tasks` or `contacts` array.
+`tasks.json` has `"version": 4` and `"layout": "split"`. It keeps board settings, columns, team members, agents, clients, labels, client links (and optional client north stars in `client_info`), `next_num`, and the archive index. It has no `tasks`, `contacts`, or `projects` array.
 
 A card file keeps all card fields. It also has `rank`. A person file keeps all CRM person fields. Each file name must match the item `id`.
 
-New task ids start with `t_`. New person ids start with `p_`. The suffix has 10 lower-case letters or digits. Old ids do not change. Task numbers still come from `next_num`.
+New task ids start with `t_`. New person ids start with `p_`. New project ids start with `pr_`. The suffix has 10 lower-case letters or digits. Old ids do not change. Task numbers still come from `next_num`.
 
 `rank` is a base-62 fractional index. It lets one card move without renumbering the other cards. The CLI orders cards in a column by priority, due date, rank, and task number.
 
@@ -84,7 +85,9 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
   "clients": ["Acme", "Rain Ventures", "General"],
   "labels":  [{ "name": "call", "color": "#0c66e4" }],
   "contacts": [ /* v3: people in the CRM, see "People (schema 3)" below */ ],
-  "client_info": { "Acme": { "links": [{ "title": "Drive or local folder", "url": "https://… or /local/path" }] } },   // v3: working file/folder resources per client
+  "client_info": { "Acme": { "north_star": "optional: what success looks like for this client", "links": [{ "title": "Drive or local folder", "url": "https://… or /local/path" }] } },   // v3: north star + working file/folder resources per client
+  "projects": [{ "id": "pr_ab12cd34", "client": "Acme", "name": "Phase one rollout", "north_star": "…", "status": "active | done | paused",
+                  "links": [], "people": ["name@example.com"], "created": "…", "updated": "…" }],   // optional; split v4 uses projects/<id>.json instead
   "archive": { "files": { "2025": { "tasks": 120, "contacts": 8 } }, "last_run": "…" },   // index of archive/<year>.json, written by `archive`
   "next_num": 13,                                 // next number to hand out; maintained by the web page and keeptrack.py
   "tasks": [{
@@ -93,6 +96,8 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
     "title": "…",
     "column": "todo",
     "client": "Acme",               // optional; empty for tasks not tied to a client
+    "project": "pr_ab12cd34",       // optional; links the task to a project id (empty = unchanged behaviour)
+    "contact": "p_ab12cd34",        // optional CRM person id
     "priority": "high | medium | low",
     "due": "2026-10-20",                           // due-by date, optional
     "labels": ["call", "reply"],
@@ -136,7 +141,7 @@ When the agent runs `done`, the claim is removed (no banner is left on the card)
 ## People (schema 3)
 Schema 3 (migration step 2 to 3) adds the Keeptrack CRM: `contacts` (default `[]`), `client_info` (default `{}`) and `settings.stages` (default New, Contacted, Talking, Proposal, Won, Lost). A person in `contacts`:
 ```jsonc
-{ "id": "p_ab12cd34", "name": "…", "company": "…", "role": "…",
+{ "id": "p_ab12cd34", "name": "…", "company": "…", "role": "…", "github": "optional-github-login",
   "emails": [{ "id": "e_…", "label": "Work", "value": "name@example.com" }],
   "phones": [{ "id": "ph_…", "label": "Mobile", "value": "+44 …" }],
   "email": "name@example.com", "phone": "+44 …", "linkedin": "https://linkedin.com/in/…", // first values, retained for older kits

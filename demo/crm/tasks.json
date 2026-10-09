@@ -60,6 +60,7 @@
       "title": "Write the Harbour Foods proposal (phase one)",
       "column": "in-progress",
       "client": "Harbour Foods",
+      "project": "pr_harbour_phase1",
       "contact": "p_1",
       "priority": "high",
       "due": "2026-10-08",
@@ -96,6 +97,7 @@
       "title": "Plan the Greenline workshop agenda",
       "column": "todo",
       "client": "Greenline Energy",
+      "project": "pr_greenline_workshop",
       "contact": "p_2",
       "priority": "medium",
       "due": "2026-10-11",
@@ -517,8 +519,58 @@
       "updated": "2026-10-07T10:00:00.000Z"
     }
   ],
+  "projects": [
+    {
+      "id": "pr_harbour_phase1",
+      "client": "Harbour Foods",
+      "name": "Phase one order hub",
+      "north_star": "Harbour can see stock and open orders in one place without re-keying spreadsheets.",
+      "status": "active",
+      "links": [
+        {
+          "title": "Proposal draft",
+          "url": "https://drive.google.com/"
+        }
+      ],
+      "people": [
+        "amira@example.com"
+      ],
+      "created": "2026-09-26T10:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "pr_greenline_workshop",
+      "client": "Greenline Energy",
+      "name": "Field team workshop",
+      "north_star": "Agree a half-day workshop scope the board will fund before a full build.",
+      "status": "active",
+      "links": [],
+      "people": [
+        "ben@example.com"
+      ],
+      "created": "2026-09-30T11:00:00.000Z",
+      "updated": "2026-10-07T10:00:00.000Z"
+    },
+    {
+      "id": "pr_studio_rebrand",
+      "client": "Studio Lumen",
+      "name": "Brand refresh (paused)",
+      "north_star": "New visual identity ready for their spring campaign.",
+      "status": "paused",
+      "links": [
+        {
+          "title": "Mood board",
+          "url": "https://www.dropbox.com/"
+        }
+      ],
+      "people": [],
+      "created": "2026-08-15T10:00:00.000Z",
+      "updated": "2026-09-20T10:00:00.000Z"
+    }
+  ],
   "client_info": {
     "Harbour Foods": {
+      "north_star": "Replace spreadsheet chaos with a single operational view for orders and stock.",
       "links": [
         {
           "title": "Google Drive",
@@ -531,6 +583,7 @@
       ]
     },
     "Studio Lumen": {
+      "north_star": "Support their rebrand without blocking day-to-day client work.",
       "links": [
         {
           "title": "OneDrive",

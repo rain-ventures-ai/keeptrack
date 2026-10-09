@@ -805,3 +805,66 @@ class DuplicateFiles(unittest.TestCase):
                 kt.cmd_comment(Args(id="t_second", text="hello", note=None))
         self.assertIn("same id", str(e.exception))
         self.assertEqual(before, tree_bytes(board_dir))
+
+
+class CrmProjects(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.dir.name, "board"))
+        self.file = os.path.join(self.dir.name, "board", "tasks.json")
+        d = board()
+        d["clients"] = ["Acme"]
+        d["client_info"] = {"Acme": {"links": []}}
+        d["projects"] = []
+        d["next_num"] = 3
+        d["contacts"] = [{"id": "p_1", "name": "Bea", "company": "Acme", "email": "bea@example.com", "stage": "New",
+                          "links": [], "comments": [], "history": []}]
+        write(self.file, d)
+        self.old = kt.FILE
+        kt.FILE = self.file
+
+    def tearDown(self):
+        kt.FILE = self.old
+        self.dir.cleanup()
+
+    def test_client_set_north_star_and_project_lifecycle(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_client_set(Args(client="Acme", north_star="One view of orders"))
+            kt.cmd_project_add(Args(name="Rollout", client="Acme", north_star="Go live in Q1", status="active"))
+        data = read_json(self.file)
+        self.assertEqual("One view of orders", data["client_info"]["Acme"]["north_star"])
+        pr = data["projects"][0]
+        self.assertTrue(pr["id"].startswith("pr_"))
+        self.assertEqual("Rollout", pr["name"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_add(Args(title="Wire stock feed", column="todo", client="Acme", project=pr["id"],
+                            priority="medium", due=None, assign=None, label=None, details=None, todo=None))
+            kt.cmd_task_set(Args(id="t_live", client=None, project=pr["id"], contact=None))
+        data = read_json(self.file)
+        live = next(t for t in data["tasks"] if t["id"] == "t_live")
+        self.assertEqual(pr["id"], live["project"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_list(Args(column=None, assignee=None, client=None, project=pr["id"], unclaimed=False,
+                             attention=False, q=None))
+        self.assertIn("Wire stock feed", out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_person(Args(ref=pr["id"], email="bea@example.com", remove=False))
+        with contextlib.redirect_stdout(out):
+            out.truncate(0); out.seek(0)
+            kt.cmd_project(Args(ref=pr["id"]))
+        text = out.getvalue()
+        self.assertIn("bea@example.com", text)
+        self.assertIn("Wire stock feed", text)
+
+    def test_doctor_warns_board_member_without_person(self):
+        data = read_json(self.file)
+        data["people"] = [{"github": "ghostuser", "name": "Ghost"}]
+        nums = [1, 2]
+        for i, task in enumerate(data.get("tasks", [])):
+            task["num"] = nums[i] if i < len(nums) else nums[-1] + i
+        data["next_num"] = max(t["num"] for t in data["tasks"]) + 1
+        write(self.file, data)
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual(0, code, "MEMBER_NO_PERSON is a warning only")
+        self.assertIn("MEMBER_NO_PERSON", {x["code"] for x in issues})

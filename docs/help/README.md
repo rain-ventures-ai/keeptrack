@@ -9,6 +9,7 @@ Keeptrack keeps your people, follow-ups, pipeline and tasks in a private GitHub 
 | See who to contact today, add people, log messages and calls | [People and follow-ups](people-and-follow-ups.md) |
 | Move people through your stages | [Pipeline](pipeline.md) |
 | Link a client's folders in Google Drive, Dropbox or OneDrive | [Client files](client-files.md) |
+| Set a client north star, projects, and link tasks to a project | [Projects and north star](projects-and-north-star.md) |
 | Use the task board | [Tasks](tasks.md) |
 | Find anything, and move old items out of the way | [Search and archive](search-and-archive.md) |
 | Ask Claude, Codex, Cursor or ChatGPT to help you | [AI assistants](ai-assistants.md) |

@@ -371,7 +371,7 @@ def new_id(prefix, existing=()):
 
 
 def new_board_id(data, prefix, folder):
-    used = {x.get("id") for x in data.get("tasks", []) + data.get("contacts", []) if x.get("id")}
+    used = {x.get("id") for x in data.get("tasks", []) + data.get("contacts", []) + data.get("projects", []) if x.get("id")}
     state = _BOARD_STATES.get(id(data), {})
     used.update(os.path.splitext(os.path.basename(path))[0] for path in state.get("files", {})
                 if path.startswith(folder + "/"))
@@ -574,7 +574,7 @@ def _api_blob(sha):
 
 
 def _wanted_rel(rel):
-    return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|archive)/[^/]+", rel) is not None
+    return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|projects|archive)/[^/]+", rel) is not None
 
 
 def _local_snapshot():
@@ -585,7 +585,7 @@ def _local_snapshot():
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 files[rel] = {"text": f.read(), "sha": None, "size": os.path.getsize(path)}
-    for folder in ("cards", "people", "archive"):
+    for folder in ("cards", "people", "projects", "archive"):
         path = os.path.join(board_dir, folder)
         if not os.path.isdir(path):
             continue
@@ -608,7 +608,7 @@ def _git_snapshot():
         sys.exit(f"cannot resolve {REPO}@{BRANCH}: {err}")
     base = os.path.dirname(PATH).strip("/")
     rc, names, err = git("ls-tree", "-r", "--name-only", head, "--", PATH,
-                         *[f"{base + '/' if base else ''}{x}" for x in ("cards", "people", "archive")])
+                         *[f"{base + '/' if base else ''}{x}" for x in ("cards", "people", "projects", "archive")])
     if rc:
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
@@ -701,16 +701,19 @@ def load_board():
     data = dict(root)
     layout = root.get("layout")
     if root.get("version") == 4 and layout == "split":
-        tasks, people = [], []
+        tasks, people, projects = [], [], []
         for rel, entry in sorted(files.items()):
             if rel.startswith("cards/") and rel.endswith(".json"):
                 tasks.append(_decode_json(rel, entry))
             elif rel.startswith("people/") and rel.endswith(".json"):
                 people.append(_decode_json(rel, entry))
-        data["tasks"], data["contacts"] = tasks, people
+            elif rel.startswith("projects/") and rel.endswith(".json"):
+                projects.append(_decode_json(rel, entry))
+        data["tasks"], data["contacts"], data["projects"] = tasks, people, projects
     else:
         data.setdefault("tasks", [])
         data.setdefault("contacts", [])
+        data.setdefault("projects", [])
     assign_nums(data)
     if layout == "split":
         sort_tasks(data)
@@ -729,13 +732,15 @@ def load():
 
 def _desired_files(data, state, extra=None):
     split = data.get("version") == 4 and data.get("layout") == "split"
-    root = {k: v for k, v in data.items() if not (split and k in ("tasks", "contacts"))}
+    root = {k: v for k, v in data.items() if not (split and k in ("tasks", "contacts", "projects"))}
     desired_obj = {"tasks.json": root}
     if split:
         for t in data.get("tasks", []):
             desired_obj[f"cards/{t['id']}.json"] = t
         for p in data.get("contacts", []):
             desired_obj[f"people/{p['id']}.json"] = p
+        for pr in data.get("projects", []):
+            desired_obj[f"projects/{pr['id']}.json"] = pr
     desired = {}
     for rel, obj in desired_obj.items():
         old = state.get("files", {}).get(rel)
@@ -749,7 +754,7 @@ def _duplicate_files(state):
     seen, dup = {}, []
     for rel, entry in sorted(state.get("files", {}).items()):
         obj = entry.get("obj")
-        if rel.startswith(("cards/", "people/")) and isinstance(obj, dict) and obj.get("id"):
+        if rel.startswith(("cards/", "people/", "projects/")) and isinstance(obj, dict) and obj.get("id"):
             if obj["id"] in seen:
                 dup.append(f"{obj['id']} ({seen[obj['id']]} and {rel})")
             else:
@@ -763,7 +768,7 @@ def _changes(data, state, extra=None):
         sys.exit("not saved: two board files have the same id: " + ", ".join(dup) + ". Run keeptrack.py doctor (the board-doctor skill).")
     desired = _desired_files(data, state, extra)
     managed = {p for p in state.get("files", {}) if p == "tasks.json" or
-               (p.startswith(("cards/", "people/")) and p.endswith(".json"))}
+               (p.startswith(("cards/", "people/", "projects/")) and p.endswith(".json"))}
     if extra:
         managed.update(extra)
     changes = {p: text for p, text in desired.items() if state.get("files", {}).get(p, {}).get("text") != text}
@@ -913,6 +918,7 @@ DEFAULT_STAGES = ["New", "Contacted", "Talking", "Proposal", "Won", "Lost"]
 
 def _to_v3(d):
     d.setdefault("contacts", [])
+    d.setdefault("projects", [])
     d.setdefault("client_info", {})
     st = d.setdefault("settings", {})
     st.setdefault("stages", list(DEFAULT_STAGES))
@@ -1016,6 +1022,15 @@ def cmd_list(a):
         if a.assignee and a.assignee.lower() not in [x.lower() for x in t.get("assignees", [])]: continue
         if a.unclaimed and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): continue
         if a.attention and claim_state(data, t.get("claim")) not in ("stale", "stuck", "blocked"): continue
+        if getattr(a, "project", None):
+            pref = a.project
+            try:
+                pref = find_project(data, pref)["id"]
+            except SystemExit:
+                pass
+            if t.get("project") != pref:
+                continue
+        if getattr(a, "client", None) and t.get("client") != a.client: continue
         print(line(data, t))
 
 
@@ -1316,10 +1331,12 @@ def cmd_add(a):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
         t = {"id": new_board_id(data, "t_", "cards"), "title": a.title, "column": column,
-             "client": a.client or "", "priority": a.priority, "due": a.due or "",
+             "client": a.client or "", "project": getattr(a, "project", None) or "", "priority": a.priority, "due": a.due or "",
              "labels": a.label or [], "assignees": a.assign or [], "details": a.details or "", "links": [],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": x, "done": False} for x in (a.todo or [])],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
+        if t["project"]:
+            find_project(data, t["project"], quiet=True)
         if data.get("layout") == "split":
             t["rank"] = key_between(max(ranks) if ranks else None, None)
         hist(t, "created")
@@ -1501,13 +1518,15 @@ def doctor_board(fix=False):
     if split:
         tasks = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("cards/") and rel.endswith(".json")]
         people = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("people/") and rel.endswith(".json")]
+        projects = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("projects/") and rel.endswith(".json")]
     else:
         tasks = data.setdefault("tasks", []) if isinstance(data.get("tasks", []), list) else []
         people = data.setdefault("contacts", []) if isinstance(data.get("contacts", []), list) else []
-    data["tasks"], data["contacts"] = tasks, people
+        projects = data.setdefault("projects", []) if isinstance(data.get("projects", []), list) else []
+    data["tasks"], data["contacts"], data["projects"] = tasks, people, projects
 
     ids, duplicate_ids = {}, False
-    for kind, items in (("task", tasks), ("person", people)):
+    for kind, items in (("task", tasks), ("person", people), ("project", projects)):
         for item in items:
             ident = item.get("id")
             if ident in ids:
@@ -1532,7 +1551,7 @@ def doctor_board(fix=False):
     rename_conflict = False
     if split:
         for rel, obj in parsed.items():
-            folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else None
+            folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else "projects" if rel.startswith("projects/") else None
             if folder and rel.endswith(".json") and obj.get("id") and rel != f"{folder}/{obj['id']}.json":
                 problem("FILE_NAME", rel, f"The file name does not match id {obj['id']}.")
                 if f"{folder}/{obj['id']}.json" in state["files"]:
@@ -1563,6 +1582,8 @@ def doctor_board(fix=False):
         for user in t.get("assignees", []):
             if user not in assignees:
                 problem("ASSIGNEE", path, f"Assignee {user!r} does not exist.")
+        if t.get("project") and t["project"] not in {x.get("id") for x in projects}:
+            problem("PROJECT", path, f"Project {t.get('project')!r} does not exist.")
         rank = t.get("rank")
         if split and not valid_rank(rank):
             problem("RANK", path, "The rank is missing or invalid."); bad_rank_columns.add(t.get("column"))
@@ -1589,6 +1610,19 @@ def doctor_board(fix=False):
     for p in people:
         if p.get("stage") not in valid_stages:
             problem("STAGE", f"person {p.get('id', '?')}", f"Stage {p.get('stage')!r} does not exist.")
+    project_ids = {x.get("id") for x in projects}
+    clients = set(data.get("clients", []))
+    for pr in projects:
+        ppath = f"project {pr.get('id', '?')}"
+        if pr.get("client") and pr["client"] not in clients:
+            problem("CLIENT", ppath, f"Client {pr.get('client')!r} is not on the board.")
+        st = pr.get("status", "active")
+        if st not in PROJECT_STATUSES:
+            problem("PROJECT_STATUS", ppath, f"Status {st!r} must be one of: {', '.join(PROJECT_STATUSES)}.")
+    for m in data.get("people", []):
+        gh_user = m.get("github")
+        if gh_user and not person_for_github(data, gh_user):
+            problem("MEMBER_NO_PERSON", "tasks.json", f"Board member @{gh_user} has no CRM person record (add a person with --github {gh_user}).")
     for item in tasks + people:
         for comment in item.get("comments", []):
             absent = [x for x in ("id", "at", "by") if not comment.get(x)]
@@ -1622,7 +1656,7 @@ def doctor_board(fix=False):
                     fixes.append(f"added a comment id on {item.get('id', '?')}")
         if split:
             for rel, obj in parsed.items():
-                folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else None
+                folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else "projects" if rel.startswith("projects/") else None
                 canonical = f"{folder}/{obj.get('id')}.json" if folder and obj.get("id") else rel
                 if folder and rel != canonical and canonical not in state["files"]:
                     fixes.append(f"renamed {rel} to {canonical}")
@@ -1638,7 +1672,8 @@ def doctor_board(fix=False):
                 return doctor_board(fix)
             if not saved:
                 return issues + [{"code": "BUSY", "path": "board", "message": "The board changed during repair."}], fixes, 2
-    return issues, fixes, 1 if issues else 0
+    hard = [x for x in issues if x.get("code") not in DOCTOR_WARNINGS]
+    return issues, fixes, 1 if hard else 0
 
 
 def cmd_doctor(a):
@@ -1648,7 +1683,9 @@ def cmd_doctor(a):
     else:
         issues, fixes, code = doctor_board(False)
     if a.json:
-        print(json.dumps({"healthy": not issues, "issues": issues, "fixes": fixes}, indent=2, ensure_ascii=False))
+        hard = [x for x in issues if x.get("code") not in DOCTOR_WARNINGS]
+        print(json.dumps({"healthy": not hard, "issues": issues, "warnings": [x for x in issues if x.get("code") in DOCTOR_WARNINGS],
+                          "fixes": fixes}, indent=2, ensure_ascii=False))
     else:
         for issue in issues:
             print(f"{issue['code']} {issue['path']}: {issue['message']}")
@@ -1680,6 +1717,7 @@ def load_v4_from_files(files):
     out = dict(root)
     out["tasks"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("cards/") and path.endswith(".json")]
     out["contacts"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("people/") and path.endswith(".json")]
+    out["projects"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("projects/") and path.endswith(".json")]
     return out
 
 
@@ -1693,6 +1731,7 @@ def migration_differences(before, after):
             t.pop("rank", None)
         d["tasks"] = sorted(d.get("tasks", []), key=lambda x: x.get("id", ""))
         d["contacts"] = sorted(d.get("contacts", []), key=lambda x: x.get("id", ""))
+        d["projects"] = sorted(d.get("projects", []), key=lambda x: x.get("id", ""))
         return d
     a, b = normal(before), normal(after)
     if a == b:
@@ -1823,7 +1862,7 @@ def verify_board(now, backup):
         return d
     a, b = normal(backup), normal(now)
     out = []
-    for kind, label in (("tasks", "card"), ("contacts", "person")):
+    for kind, label in (("tasks", "card"), ("contacts", "person"), ("projects", "project")):
         old = {x.get("id"): x for x in a.get(kind, [])}
         new = {x.get("id"): x for x in b.get(kind, [])}
         out += [f"{label} {i} is missing" for i in sorted(set(old) - set(new), key=str)]
@@ -1833,7 +1872,7 @@ def verify_board(now, backup):
             if fields:
                 out.append(f"{label} {i} differs: {', '.join(fields)}")
     for key in sorted(set(a) | set(b)):
-        if key not in ("tasks", "contacts") and a.get(key) != b.get(key):
+        if key not in ("tasks", "contacts", "projects") and a.get(key) != b.get(key):
             out.append(f"board setting {key} differs")
     return out
 
@@ -1955,6 +1994,55 @@ def cmd_where(a):
 # A person is a record in data["contacts"]. A touch (LinkedIn message, email, call, meeting, note) is a comment with a
 # "channel". A draft is never a contact: it counts only when it is marked sent (`sent`). Agents never send messages.
 CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
+PROJECT_STATUSES = ["active", "done", "paused"]
+DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON"})
+
+
+def person_for_github(data, github):
+    g = (github or "").lower()
+    if not g:
+        return None
+    for p in data.get("contacts", []):
+        if (p.get("github") or "").lower() == g:
+            return p
+    return None
+
+
+def person_for_email(data, email):
+    e = (email or "").strip().lower()
+    if not e:
+        return None
+    for p in data.get("contacts", []):
+        if any(x["value"].lower() == e for x in person_methods(p, "email")):
+            return p
+    return None
+
+
+def find_project(data, ref, quiet=False):
+    projects = data.setdefault("projects", [])
+    m = [p for p in projects if p["id"] == ref] or [p for p in projects if p["id"].startswith(ref)]
+    if not m:
+        r = ref.lower()
+        m = [p for p in projects if p.get("name", "").lower() == r]
+        m = m or [p for p in projects if r in (p.get("name", "") + " " + p.get("client", "")).lower()]
+    if len(m) != 1:
+        if quiet:
+            sys.exit(f"unknown project '{ref}'")
+        sys.exit(f"no project matches '{ref}'" if not m else f"'{ref}' matches several projects: " + "; ".join(f"{p['id']} {p['name']} ({p.get('client', '')})" for p in m))
+    return m[0]
+
+
+def check_project_status(s):
+    if s is None:
+        return None
+    for x in PROJECT_STATUSES:
+        if x.lower() == str(s).lower():
+            return x
+    sys.exit(f"unknown project status '{s}'; use: {', '.join(PROJECT_STATUSES)}")
+
+
+def project_line(pr):
+    return f"{pr['id']}  {pr.get('name', '')} ({pr.get('client', '')})  [{pr.get('status', 'active')}]"
 
 
 def stages(data):
@@ -2063,7 +2151,7 @@ def sync_person_methods(p):
 def set_fields(data, p, a):
     changed = []
     sync_person_methods(p)
-    for k in ("name", "company", "role", "value", "source", "notes", "next"):
+    for k in ("name", "company", "role", "value", "source", "notes", "next", "github"):
         v = getattr(a, k, None)
         if v is not None and v != p.get(k, ""):
             p[k] = v; changed.append(f"{k}: {v or 'cleared'}")
@@ -2158,7 +2246,7 @@ def cmd_person_add(a):
                or (a.email and any(x["value"].lower() == a.email.lower() for x in person_methods(p, "email")))]
         if dup and not a.force:
             print(f"already on the board: {person_line(dup[0])}  (nothing added; use person-set to change it, or --force)"); return
-        p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "",
+        p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "", "github": "",
              "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
              "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": who_am_i()}
         set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p)}")
@@ -2208,6 +2296,137 @@ def cmd_sent(a):
         for x in set_fields(data, p, a): hist(p, x)
         p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p)}")
     mutate(fn, f"Sent: {a.ref}")
+
+
+def cmd_client_set(a):
+    """Set a client's north star (what success looks like) or other client_info fields."""
+    def fn(data):
+        ci = data.setdefault("client_info", {}).setdefault(a.client, {})
+        if a.north_star is not None:
+            ci["north_star"] = a.north_star
+            print(f"north star for {a.client} updated")
+        if a.client not in data.setdefault("clients", []):
+            data["clients"].append(a.client)
+    mutate(fn, f"Client: {a.client}")
+
+
+def cmd_projects(a):
+    data, _ = load()
+    projects = data.get("projects", [])
+    if a.client:
+        projects = [p for p in projects if p.get("client") == a.client]
+    if a.status:
+        st = check_project_status(a.status)
+        projects = [p for p in projects if p.get("status") == st]
+    if a.q:
+        q = a.q.lower()
+        projects = [p for p in projects if q in json.dumps(p).casefold()]
+    for p in sorted(projects, key=lambda x: (x.get("client", ""), x.get("name", ""))):
+        print(project_line(p))
+    if not projects:
+        print("(no projects)")
+
+
+def cmd_project(a):
+    data, _ = load()
+    pr = find_project(data, a.ref)
+    print(json.dumps(pr, indent=2, ensure_ascii=False))
+    ns = (pr.get("north_star") or "").strip()
+    if ns:
+        print(f"\nnorth star: {ns}")
+    if pr.get("links"):
+        print("\nlinks:")
+        for l in pr["links"]:
+            print(f"  - {l.get('title') or l.get('url')}: {l.get('url')}")
+    if pr.get("people"):
+        print("\npeople:")
+        for em in pr["people"]:
+            person = person_for_email(data, em)
+            label = f"{person['name']} ({em})" if person else em
+            print(f"  - {label}")
+    open_tasks = [t for t in data.get("tasks", []) if t.get("project") == pr["id"] and t.get("column") != "done"]
+    if open_tasks:
+        print("\nopen tasks:")
+        for t in sorted(open_tasks, key=task_order_key):
+            print("  " + line(data, t))
+
+
+def cmd_project_add(a):
+    def fn(data):
+        client = a.client or ""
+        if client and client not in data.setdefault("clients", []):
+            data["clients"].append(client)
+        pr = {"id": new_board_id(data, "pr_", "projects"), "client": client, "name": a.name,
+              "north_star": a.north_star or "", "status": check_project_status(a.status or "active") or "active",
+              "links": [], "people": [], "created": now(), "updated": now()}
+        data.setdefault("projects", []).append(pr)
+        print(f"added {project_line(pr)}")
+    mutate(fn, f"Add project: {a.name}")
+
+
+def cmd_project_set(a):
+    def fn(data):
+        pr = find_project(data, a.ref)
+        if a.name is not None:
+            pr["name"] = a.name
+        if a.client is not None:
+            pr["client"] = a.client
+            if a.client and a.client not in data.setdefault("clients", []):
+                data["clients"].append(a.client)
+        if a.north_star is not None:
+            pr["north_star"] = a.north_star
+        if a.status is not None:
+            pr["status"] = check_project_status(a.status)
+        pr["updated"] = now()
+        print(project_line(pr))
+    mutate(fn, f"Update project: {a.ref}")
+
+
+def cmd_project_link(a):
+    if not (re.match(r"https?://", a.url) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", a.url)):
+        sys.exit("resource must be an http(s) cloud URL or a local path")
+    def fn(data):
+        pr = find_project(data, a.ref)
+        links = pr.setdefault("links", [])
+        if not any(l["url"] == a.url for l in links):
+            links.append({"title": a.title or a.url, "url": a.url})
+        pr["updated"] = now()
+        print(f"linked {pr['id']}: {a.title or a.url}")
+    mutate(fn, f"Project link: {a.ref}")
+
+
+def cmd_project_person(a):
+    def fn(data):
+        pr = find_project(data, a.ref)
+        em = a.email.strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", em):
+            sys.exit("email must look like name@example.com")
+        people = pr.setdefault("people", [])
+        if a.remove:
+            pr["people"] = [x for x in people if x.lower() != em]
+        elif em not in [x.lower() for x in people]:
+            people.append(em)
+        pr["updated"] = now()
+        print(f"{pr['id']} people: {', '.join(pr['people']) or '-'}")
+    mutate(fn, f"Project people: {a.ref}")
+
+
+def cmd_task_set(a):
+    def fn(data):
+        t = find(data, a.id)
+        if a.client is not None:
+            t["client"] = a.client
+            if a.client and a.client not in data.setdefault("clients", []):
+                data["clients"].append(a.client)
+        if a.project is not None:
+            if a.project:
+                find_project(data, a.project, quiet=True)
+            t["project"] = a.project
+        if a.contact is not None:
+            t["contact"] = a.contact
+        t["updated"] = now()
+        print(f"#{t['num']} updated")
+    mutate(fn, f"Update task: {a.id}")
 
 
 def cmd_client_link(a):
@@ -2710,7 +2929,9 @@ def main():
         sp.add_argument("--session-url"); sp.add_argument("--note"); sp.add_argument("--force", action="store_true")
 
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
-    s.add_argument("--unclaimed", action="store_true"); s.add_argument("--attention", action="store_true"); s.set_defaults(f=cmd_list)
+    s.add_argument("--unclaimed", action="store_true"); s.add_argument("--attention", action="store_true")
+    s.add_argument("--project", help="project id or name prefix"); s.add_argument("--client", help="client name")
+    s.set_defaults(f=cmd_list)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next"); cl(s); s.set_defaults(f=cmd_next)
@@ -2732,7 +2953,7 @@ def main():
     s = sub.add_parser("history"); s.add_argument("id"); s.set_defaults(f=cmd_history)
     s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
-    s = sub.add_parser("add"); s.add_argument("title"); s.add_argument("--column"); s.add_argument("--client")
+    s = sub.add_parser("add"); s.add_argument("title"); s.add_argument("--column"); s.add_argument("--client"); s.add_argument("--project")
     s.add_argument("--priority", default="medium", choices=["high", "medium", "low"]); s.add_argument("--due")
     s.add_argument("--assign", action="append"); s.add_argument("--label", action="append"); s.add_argument("--details")
     s.add_argument("--todo", action="append", help="initial checklist item (repeatable)")
@@ -2751,7 +2972,7 @@ def main():
     s.set_defaults(f=cmd_use)
     s = sub.add_parser("where", help="show which board this project uses and where each setting comes from"); s.set_defaults(f=cmd_where)
     def pf(sp):
-        for k in ("company", "role", "email", "phone", "linkedin", "value", "source", "notes", "next"):
+        for k in ("company", "role", "email", "phone", "linkedin", "github", "value", "source", "notes", "next"):
             sp.add_argument("--" + k)
         sp.add_argument("--stage"); sp.add_argument("--due", help="next step date: YYYY-MM-DD, today or +N days")
     s = sub.add_parser("people", help="list people (CRM)"); s.add_argument("--stage"); s.add_argument("-q", help="search text"); s.set_defaults(f=cmd_people)
@@ -2771,7 +2992,17 @@ def main():
     s = sub.add_parser("archived", help="list or search archived tasks and people"); s.add_argument("-q"); s.set_defaults(f=cmd_archived)
     s = sub.add_parser("archived-history", help="older history lines moved to the archive, for a task or person"); s.add_argument("ref"); s.set_defaults(f=cmd_archived_history)
     s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref"); s.set_defaults(f=cmd_unarchive)
+    s = sub.add_parser("client-set", help="set a client north star or other client_info"); s.add_argument("client"); s.add_argument("--north-star", dest="north_star"); s.set_defaults(f=cmd_client_set)
     s = sub.add_parser("client-link", help="link a client to a file store folder"); s.add_argument("client"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_client_link)
+    s = sub.add_parser("projects", help="list projects"); s.add_argument("--client"); s.add_argument("--status", choices=PROJECT_STATUSES); s.add_argument("-q"); s.set_defaults(f=cmd_projects)
+    s = sub.add_parser("project", help="show one project and its open tasks"); s.add_argument("ref"); s.set_defaults(f=cmd_project)
+    s = sub.add_parser("project-add", help="add a project under a client"); s.add_argument("name"); s.add_argument("--client"); s.add_argument("--north-star", dest="north_star")
+    s.add_argument("--status", choices=PROJECT_STATUSES, default="active"); s.set_defaults(f=cmd_project_add)
+    s = sub.add_parser("project-set", help="change a project"); s.add_argument("ref"); s.add_argument("--name"); s.add_argument("--client")
+    s.add_argument("--north-star", dest="north_star"); s.add_argument("--status", choices=PROJECT_STATUSES); s.set_defaults(f=cmd_project_set)
+    s = sub.add_parser("project-link", help="link a project to a file or folder"); s.add_argument("ref"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_project_link)
+    s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
+    s = sub.add_parser("task-set", help="change task client, project or contact"); s.add_argument("id"); s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     a = p.parse_args()
     FILE = a.file

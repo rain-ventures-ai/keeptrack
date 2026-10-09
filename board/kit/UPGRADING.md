@@ -24,6 +24,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v17 (schema 4)
+Lightweight CRM extensions: client **north star** text in `client_info`, **projects** under clients (one file per project in split layout), optional **project** on tasks, optional **github** on CRM person records, and `doctor` warnings when a board member has no matching person.
+- Run `kit-update` only. There is no required data migration: older boards keep working; new fields appear when you use them.
+- Split boards store projects as `projects/<pr_id>.json` (same conflict-retry pattern as cards and people). Monolithic v3 boards may keep a `projects` array in `tasks.json`.
+- Check: double-click a client pill to set a north star and open projects; filter tasks by project; `keeptrack.py project-add`, `project`, `list --project`, `client-set --north-star`, `doctor` for `MEMBER_NO_PERSON`.
+
 ### v16 (schema 4)
 Recurring contact-email reconciliation now has a dedicated `keeptrack-email` skill and scheduled-routine guide. It
 matches mailbox messages only to exact email addresses already stored on Keeptrack people, records a privacy-safe
