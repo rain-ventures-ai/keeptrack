@@ -2849,7 +2849,9 @@ if (typeof window !== 'undefined') (() => {
   function roToast() { toast((RO_TEXT[ro] || ['Read-only'])[0], true); }
   function applyRo() {
     document.body.classList.toggle('ro', !!ro); const bar = $('roBar'); bar.hidden = !ro; bar.textContent = ''; if (!ro) return;
-    const [msg, label, go] = RO_TEXT[ro], b = el('button', 'small', label); b.type = 'button'; b.onclick = go; bar.append(elI('span', null, 'lock', msg), b); lockDrawers();
+    const [msg, label, go] = RO_TEXT[ro], b = el('button', 'small', label); b.type = 'button'; b.onclick = go; bar.append(elI('span', null, 'lock', msg));
+    if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; bar.append(a); }
+    bar.append(b); lockDrawers();
   }
   const RO_KEEP = new Set(['cClose', 'pClose', 'cCopyMd', 'cAgent', 'pAgent', 'dLink']);   // buttons that only read or copy
   function lockDrawers() {
