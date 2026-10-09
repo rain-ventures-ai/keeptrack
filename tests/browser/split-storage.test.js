@@ -63,6 +63,9 @@ let base;
 
     const api = new Github(true), page = await openBoard(browser, api);
     assert.deepEqual(await page.locator('.card .t').allTextContents(), ['First', 'Second']);
+    assert.deepEqual(await page.locator('#viewSw > .viewgroup > .vgrp').allTextContents(), ['People views', 'Task views']);
+    assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="crm"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['today', 'people', 'pipeline']);
+    assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="tasks"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['board', 'list', 'cal', 'sched', 'activity']);
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');
     assert(api.calls.some(x => /git\/trees\/board-.*recursive/.test(x.path)), 'must read only the board subtree');
 
@@ -82,11 +85,12 @@ let base;
     const crmOff = modesPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await modesPage.locator('#sModeCrm').uncheck(); await crmOff;
     assert.deepEqual(JSON.parse(modesApi.files['tasks.json']).settings.modes, ['tasks']);
     assert.equal(await modesPage.locator('#viewSw button[data-view="people"]').isHidden(), true);
+    assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="crm"]').isHidden(), true); assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="tasks"]').isVisible(), true);
     assert('people/p_one.json' in modesApi.files, 'hiding CRM must keep person files'); assert('cards/t_one.json' in modesApi.files, 'hiding CRM must keep task files');
     await modesPage.locator('#sModeTasks').click(); assert.equal(await modesPage.locator('#sModeTasks').isChecked(), true, 'at least one section must stay on');
     assert.deepEqual(modesApi.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/tasks.json']);
     modesApi.calls = []; const crmOn = modesPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await modesPage.locator('#sModeCrm').check(); await crmOn;
-    assert.deepEqual(JSON.parse(modesApi.files['tasks.json']).settings.modes, ['tasks', 'crm']); assert.equal(await modesPage.locator('#viewSw button[data-view="people"]').isVisible(), true);
+    assert.deepEqual(JSON.parse(modesApi.files['tasks.json']).settings.modes, ['tasks', 'crm']); assert.equal(await modesPage.locator('#viewSw button[data-view="people"]').isVisible(), true); assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="crm"]').isVisible(), true);
     assert('people/p_one.json' in modesApi.files, 'restoring CRM must show the existing person file'); await modesPage.close();
 
     // Enabling CRM on a board with no people creates no placeholder. Adding the first person creates their own file.

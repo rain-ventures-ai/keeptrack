@@ -15,7 +15,16 @@
     <button id="boardBtn" class="logo boardbadge" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="boardPop" title="Board" aria-label="Board"><i data-i="square-kanban"></i></button>
     <div id="boardPop" class="popover boardpop" hidden></div>
   </div>
-  <div id="viewSw" class="seg" role="group" aria-label="View"><span class="vgrp" data-grp="crm" aria-hidden="true">People</span><button data-view="today" title="Today: who to contact now"><span class="vi"><i data-i="alarm-clock"></i></span><span class="vt"> Today</span></button><button data-view="people" title="People"><span class="vi"><i data-i="user"></i></span><span class="vt"> People</span></button><button data-view="pipeline" title="Pipeline: people by stage"><span class="vi"><i data-i="trending-up"></i></span><span class="vt"> Pipeline</span></button><span class="vgrp" data-grp="tasks" aria-hidden="true">Tasks</span><button data-view="board" title="Kanban: tasks in columns"><span class="vi"><i data-i="square-kanban"></i></span><span class="vt"> Kanban</span></button><button data-view="list" title="List"><span class="vi"><i data-i="list"></i></span><span class="vt"> List</span></button><button data-view="cal" title="Calendar"><span class="vi"><i data-i="calendar"></i></span><span class="vt"> Calendar</span></button><button data-view="sched" title="Schedule"><span class="vi"><i data-i="calendar-days"></i></span><span class="vt"> Schedule</span></button><button data-view="activity" title="Activity: what was done today, yesterday or on a day you pick"><span class="vi"><i data-i="history"></i></span><span class="vt"> Activity</span></button></div>
+  <nav id="viewSw" class="viewnav" aria-label="Views">
+    <div class="viewgroup" data-grp="crm" role="group" aria-labelledby="peopleViewsLabel">
+      <span id="peopleViewsLabel" class="vgrp">People views</span>
+      <div class="seg"><button data-view="today" title="Today: who to contact now"><span class="vi"><i data-i="alarm-clock"></i></span><span class="vt"> Today</span></button><button data-view="people" title="People"><span class="vi"><i data-i="user"></i></span><span class="vt"> People</span></button><button data-view="pipeline" title="Pipeline: people by stage"><span class="vi"><i data-i="trending-up"></i></span><span class="vt"> Pipeline</span></button></div>
+    </div>
+    <div class="viewgroup" data-grp="tasks" role="group" aria-labelledby="taskViewsLabel">
+      <span id="taskViewsLabel" class="vgrp">Task views</span>
+      <div class="seg"><button data-view="board" title="Kanban: tasks in columns"><span class="vi"><i data-i="square-kanban"></i></span><span class="vt"> Kanban</span></button><button data-view="list" title="List"><span class="vi"><i data-i="list"></i></span><span class="vt"> List</span></button><button data-view="cal" title="Calendar"><span class="vi"><i data-i="calendar"></i></span><span class="vt"> Calendar</span></button><button data-view="sched" title="Schedule"><span class="vi"><i data-i="calendar-days"></i></span><span class="vt"> Schedule</span></button><button data-view="activity" title="Activity: what was done today, yesterday or on a day you pick"><span class="vi"><i data-i="history"></i></span><span class="vt"> Activity</span></button></div>
+    </div>
+  </nav>
   <div class="clientwrap">
     <div id="clientBar" class="clientbar" role="group" aria-label="Filter by client"></div>
     <div id="clientPop" class="popover clientpop" hidden></div>

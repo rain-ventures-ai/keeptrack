@@ -1064,8 +1064,7 @@ if (typeof window !== 'undefined') (() => {
   let view = LS.get('kb_view', 'today'); if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity'].includes(view)) view = 'today';
   function applyModes() {   // settings.modes: 'crm' (Today, People, Pipeline) and/or 'tasks' (the task views); title from settings.title
     const m = modes(), ok = v => CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks');
-    document.querySelectorAll('#viewSw button').forEach(b => { b.hidden = !ok(b.dataset.view); });
-    document.querySelectorAll('#viewSw .vgrp').forEach(g => { g.hidden = m.length < 2 || !m.includes(g.dataset.grp); });   // group names only when a board has both
+    document.querySelectorAll('#viewSw .viewgroup').forEach(g => { g.hidden = !m.includes(g.dataset.grp); });
     if (!ok(view)) view = m.includes('crm') ? 'today' : 'board';
   }
   const setView = v => { view = v; if (!DEMO) LS.set('kb_view', v); render(); };

@@ -186,12 +186,14 @@ button.cmchip.has { color: var(--accent); background: var(--accent-soft); font-w
 @media (max-width: 760px) { .cmstream { max-height: none; flex: 1; } #dlgComments[open] { display: flex; } .cm { max-width: 96%; } }
 
 /* ---- view switcher ------------------------------------------------------- */
+.viewnav { display: flex; align-items: flex-end; gap: 8px; flex: 0 0 auto; }
+.viewgroup { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.viewgroup[hidden] { display: none !important; }
 .seg { display: inline-flex; background: var(--panel); border-radius: 8px; padding: 2px; gap: 2px; }
 .seg button { border: 0; background: transparent; padding: 4px 11px; font-size: 13px; border-radius: 6px; color: var(--muted); }
 .seg button.on { background: var(--card); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
-.seg button[hidden], .vgrp[hidden] { display: none !important; }   /* views that settings.modes turns off */
-.vgrp { align-self: center; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 4px 0 8px; opacity: .8; }
-.vgrp[data-grp="tasks"] { border-left: 1px solid var(--border); margin-left: 4px; padding-left: 10px; }
+.seg button[hidden] { display: none !important; }
+.vgrp { font-size: 9px; line-height: 1; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-left: 4px; opacity: .85; pointer-events: none; }
 .tprio[data-v="high"] { --h: 0; } .tprio[data-v="medium"] { --h: 35; } .tprio[data-v="low"] { --h: 140; } .tprio[data-v=""] { --h: 220; }
 body:not([data-view="board"]) #tabs { display: none !important; }
 #board.v-list, #board.v-cal, #board.v-sched, #board.v-activity { display: block; overflow-y: auto; padding: 16px 18px 60px; }
@@ -410,7 +412,7 @@ header .badge { top: -6px; right: -6px; }
 @media (max-width: 1100px) { .seg .vt { display: none; } .seg button { padding: 4px 9px; } #btnFilter .tx { display: none; } }
 @media (max-width: 760px) {
   header { flex-wrap: wrap; gap: 6px 8px; padding: 6px 10px; }
-  header .logo { display: none; } .seg { order: 1; } #btnUnread { order: 2; margin-left: auto; } #btnAgent { order: 3; } #btnCopyMd { order: 3; } #btnRefresh { order: 4; } #btnSettings { order: 5; } #btnHelp { order: 5; } .hbreak { display: block; order: 6; flex-basis: 100%; height: 0; }
+  header .logo { display: none; } .viewnav { order: 1; } #btnUnread { order: 2; margin-left: auto; } #btnAgent { order: 3; } #btnCopyMd { order: 3; } #btnRefresh { order: 4; } #btnSettings { order: 5; } #btnHelp { order: 5; } .hbreak { display: block; order: 6; flex-basis: 100%; height: 0; }
   .clientwrap { order: 7; } .peopleq { display: none; } .attnbtn { order: 8; } .popwrap { order: 9; } #status { order: 12; flex-basis: 100%; font-size: 11.5px; }
   header { gap: 6px; } .seg button { min-height: 40px; min-width: 38px; padding: 6px 8px; } header button { min-height: 40px; min-width: 40px; padding: 4px 6px; } header .seg button { min-width: 38px; }
   .popover { position: fixed; left: 8px; right: 8px; top: 120px; width: auto; max-width: none; } .clientpop { left: 8px !important; } .filterpop { right: 8px; width: auto; }
@@ -639,7 +641,7 @@ dialog.archview { max-width: 640px; } .archview pre.atext { white-space: pre-wra
 
 /* ---- view groups (People / Tasks): keep the header on one line ---- */
 @media (max-width: 1440px) { .seg button:not(.on) .vt { display: none; } .seg button:not(.on) { padding-left: 8px; padding-right: 8px; } }
-@media (max-width: 760px) { .vgrp { font-size: 0; padding: 0; } .vgrp[data-grp="crm"] { display: none; } .vgrp[data-grp="tasks"] { margin: 6px 2px; } .seg button.on .vt { display: none; } }
+@media (max-width: 760px) { .viewnav { gap: 6px; } .vgrp { font-size: 8px; padding-left: 2px; } .seg button.on .vt { display: none; } }
 
 /* ---- setup wizard ---- */
 .wiz { max-width: 600px; margin: 24px auto; padding: 24px 28px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
