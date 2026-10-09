@@ -82,7 +82,7 @@ Boards can be used from any project, and the kit is also a Claude Code plugin (`
 
 ### v2 (schema 2)
 New boards can be set up with one command, and the web board has Settings → Boards.
-- `keeptrack.py init --person user:Name` sets up a new board repo: the kit, starter `AGENTS.md`, `CLAUDE.md`, `.gitignore`, `.claude/settings.json` (only when missing) and an empty `tasks.json`. The starter files come from `templates/` in the kit and belong to the repo after that.
+- `keeptrack.py init --person user:Name` sets up a new board repo: the kit, starter root `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`, `.claude/settings.json` (only when missing) and an empty `tasks.json`. The starter files come from `templates/` in the kit and belong to the repo after that.
 - `NEW-BOARD.md` in the kit is the guide that the "new board" prompt in Settings → Boards points to.
 - Agent steps: run `kit-update` only. No data change.
 - Check: `python3 board/keeptrack.py kit-check` says v2 is current.
