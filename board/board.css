@@ -157,6 +157,25 @@ dialog input:not([type=checkbox]), dialog textarea, dialog select { width: 100%;
   #toast { bottom: 16px; }
 }
 
+/* ---- cinema mode: one lane, priority order flowing down then across -------------------- */
+body.cinema { height: 100dvh; overflow: hidden; }
+body.cinema > header,
+body.cinema > #kitBar,
+body.cinema > #roBar,
+body.cinema > #sizeBar,
+body.cinema > #legend,
+body.cinema > #tabs { display: none !important; }
+body.cinema #board { display: block; width: 100%; height: 100dvh; max-width: none; padding: 0; overflow: hidden; }
+body.cinema #board > .col { display: none !important; }
+body.cinema #board > .col.cinema-col { display: flex !important; width: 100%; min-width: 0; height: 100dvh; max-height: none; border: 0; border-radius: 0; background: var(--bg); }
+body.cinema .cinema-col h2 { display: flex; flex: 0 0 52px; margin: 0; padding: 10px 18px; background: var(--header); border-bottom: 1px solid var(--border); }
+body.cinema .cinemaorder { font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; white-space: nowrap; }
+body.cinema .cinema-col .cards { display: block; flex: none; width: 100%; height: calc(100dvh - 52px); padding: 14px 18px; overflow-x: auto; overflow-y: hidden; column-width: 300px; column-gap: 16px; column-fill: auto; }
+body.cinema .cinema-col .card { display: inline-block; width: 100%; margin: 0 0 12px; break-inside: avoid-column; }
+body.cinema .cinema-col .add, body.cinema .cinema-col .hadd { display: none; }
+body.cinema .cinema-col .hcinema { color: var(--accent); border-color: var(--accent); }
+@media (max-width: 560px) { body.cinema .cinemaorder { display: none; } body.cinema .cinema-col .cards { column-width: 260px; padding: 12px; } }
+
 /* ---- to-dos and history -------------------------------------------------- */
 .prog { margin-top: 9px; } .bar { height: 5px; border-radius: 999px; background: var(--panel); overflow: hidden; } .bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .25s; }
 .prog.full .bar i { background: var(--ok); }
@@ -496,6 +515,7 @@ header .badge { top: -6px; right: -6px; }
 
 /* ---- add-task discoverability ------------------------------------------------ */
 .col h2 .hadd { border: 0; background: var(--card); color: var(--accent); width: 24px; height: 24px; min-height: 0; padding: 0; border-radius: 50%; font-size: 16px; line-height: 1; cursor: pointer; display: inline-grid; place-items: center; font-weight: 700; } .col h2 .hadd:hover { background: var(--accent); color: var(--on-accent); }
+.col h2 .hcinema { display: inline-grid; place-items: center; width: 26px; height: 26px; min-width: 26px; min-height: 0; padding: 4px; border-radius: 7px; background: var(--card); color: var(--muted); } .col h2 .hcinema:hover { color: var(--accent); }
 .ladd { margin: 4px 14px 8px; } .ladd input { border: 1px dashed var(--border); border-radius: 10px; padding: 9px 12px; color: var(--accent); font-weight: 600; } .ladd input::placeholder { color: var(--accent); opacity: .9; } .ladd input:focus { border-style: solid; border-color: var(--accent); }
 .fab { display: none; position: fixed; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); z-index: 40; width: 54px; height: 54px; min-height: 0; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--on-accent); font-size: 30px; line-height: 1; box-shadow: 0 6px 18px rgba(0,0,0,.3); cursor: pointer; }
 @media (max-width: 760px) { body[data-view="board"] .fab, body[data-view="list"] .fab { display: grid; place-items: center; } body:has(dialog[open]) .fab { display: none !important; } }

@@ -126,6 +126,19 @@ let base;
     const desktopView = await page.locator('#viewSw .seg button.on').boundingBox(), desktopFilter = await page.locator('#btnFilter').boundingBox();
     assert(Math.abs((desktopView.y + desktopView.height) - (desktopFilter.y + desktopFilter.height)) <= 2, 'desktop header controls must share a bottom edge');
 
+    // Cinema mode focuses one lane, forces high-to-low priority order, and flows cards down before using
+    // the next screen column. Escape restores the complete board.
+    const cinemaApi = new Github(true), cinemaRoot = JSON.parse(cinemaApi.files['tasks.json']); cinemaRoot.next_num = 10; cinemaApi.files['tasks.json'] = text(cinemaRoot);
+    [['t_three', 3, 'Low three', 'low', 'a2'], ['t_four', 4, 'High four', 'high', 'a3'], ['t_five', 5, 'Medium five', 'medium', 'a4'], ['t_six', 6, 'Low six', 'low', 'a5'], ['t_seven', 7, 'High seven', 'high', 'a6'], ['t_eight', 8, 'Medium eight', 'medium', 'a7'], ['t_nine', 9, 'Low nine', 'low', 'a8']].forEach(([id, num, title, priority, rank]) => {
+      cinemaApi.files[`cards/${id}.json`] = text({ ...cards['cards/t_two.json'], id, num, title, priority, rank, created: `2026-10-0${num}T08:00:00.000Z`, updated: `2026-10-0${num}T08:00:00.000Z` });
+    });
+    const cinema = await openBoard(browser, cinemaApi); await cinema.setViewportSize({ width: 1200, height: 520 }); await cinema.locator('.col[data-col="todo"] .hcinema').click();
+    assert.equal(await cinema.locator('body').getAttribute('class'), 'cinema'); assert.equal(await cinema.locator('body > header').isHidden(), true); assert.equal(await cinema.locator('.col[data-col="done"]').isHidden(), true); assert.equal(await cinema.locator('.cinema-col .add').isHidden(), true); assert.equal(await cinema.locator('.cinema-col .hcinema').getAttribute('aria-label'), 'Exit cinema mode');
+    assert.deepEqual(await cinema.locator('.cinema-col .card .t').allTextContents(), ['First', 'High four', 'High seven', 'Second', 'Medium five', 'Medium eight', 'Low three', 'Low six', 'Low nine']);
+    const cinemaCards = cinema.locator('.cinema-col .card'), firstCinema = await cinemaCards.first().boundingBox(), secondCinema = await cinemaCards.nth(1).boundingBox(), lastCinema = await cinemaCards.last().boundingBox();
+    assert(secondCinema.y > firstCinema.y, 'cinema cards must flow downward first'); assert(lastCinema.x > firstCinema.x, 'later low-priority cards must continue in a column to the right');
+    await cinema.keyboard.press('Escape'); assert.equal(await cinema.locator('body').getAttribute('class'), ''); assert.equal(await cinema.locator('body > header').isVisible(), true); assert.equal(await cinema.locator('.col[data-col="done"]').isVisible(), true); await cinema.close();
+
     // The compact header has intentional rows: board + views, then board filters. Low-priority utilities move into
     // one More menu on phones instead of wrapping into loose buttons on a third line.
     const compactApi = new Github(true), compact = await browser.newPage({ viewport: { width: 700, height: 800 } }); compact.on('pageerror', e => console.error('page error:', e.message));
