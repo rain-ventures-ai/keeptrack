@@ -3,9 +3,39 @@
 Keeptrack has two parts:
 
 - **People use the web board.** You look at Today, People, the pipeline and tasks. You add people, assign tasks and move cards. You do not install anything.
-- **AI assistants use `keeptrack.py`.** This is a small tool in the Keeptrack plugin. Claude, Codex or Cursor runs it for you. It reads and changes the same file as the web board, `board/tasks.json` in your private repo.
+- **AI assistants use `keeptrack.py`.** Every board repo contains this small tool and its agent instructions. The
+  Keeptrack plugin supplies another copy for working from other local projects. Both read and change the same board.
 
 You do not run `keeptrack.py` yourself. You ask your assistant, for example "Who do I need to follow up with today?", and it runs the tool.
+
+## Claude Code: cloud and local
+
+If you already have a board at `<OWNER>/<BOARD-REPO>`, this is all you need:
+
+### In Claude Code cloud
+
+1. Open https://claude.ai/code or the Claude app's **Code** tab and start a cloud session.
+2. Select `<OWNER>/<BOARD-REPO>`. If you are working in a different code repo, add the board repo as the second repo.
+3. Say: **“Use Keeptrack from `<OWNER>/<BOARD-REPO>`. Show my tasks and anything needing attention.”**
+
+No plugin or PAT is needed. Cloud sessions do not load plugins; the board repo itself supplies `CLAUDE.md`, the board
+skill and `board/keeptrack.py`. The Claude GitHub connection lets the session clone and push the repo.
+
+### In Claude Code locally
+
+```bash
+gh auth status
+git clone git@github.com:<OWNER>/<BOARD-REPO>.git   # skip if already cloned
+cd <BOARD-REPO>
+git pull
+claude
+```
+
+Then use the same prompt. If `gh auth status` says you are not logged in, run `gh auth login`. No Keeptrack plugin or
+PAT is needed inside the board repo. Install the plugin only when you want Claude in a **different local project** to
+use the board.
+
+Ordinary Claude chat is not Claude Code and cannot update the board. Use the **Code** tab or the web board.
 
 ## Which set-up is best for me?
 
@@ -28,7 +58,7 @@ You do not run `keeptrack.py` yourself. You ask your assistant, for example "Who
 | Cursor | Your computer | Yes (Python 3) | `gh auth login` or a token | Works |
 | ChatGPT | Nowhere | - | ChatGPT cannot change the board yet | Use **🤖 Copy for AI** |
 
-To install the plugin in each tool, see [AI assistants](ai-assistants.md).
+To install the plugin when it is actually needed, see [AI assistants](ai-assistants.md).
 
 ## Claude Desktop (Cowork)
 

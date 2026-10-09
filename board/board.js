@@ -2066,7 +2066,7 @@ if (typeof window !== 'undefined') (() => {
   $('cwLogClear').onclick = () => { LS.del('kb_relay_log'); renderRelayLog(); };
   // "An assistant in your chat app": pick a tool, get its install steps and the first thing to say (from board/kit/PLUGIN.md)
   const TOOLS = { desktop: ['Claude app', [['Open Customize → Plugins (link below), click Add, then Add marketplace. Type:', 'rain-ventures-ai/keeptrack', ['Open Claude plugins ↗', 'https://claude.ai/customize/plugins']], ['Install keeptrack. Use it in the Claude desktop app (Cowork). Claude chat in a web browser is not tested and may not be able to save to the board.']]],
-    code: ['Claude Code', [['Run in a terminal:', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
+    code: ['Claude Code', [['Cloud: start a Code session with this board repo selected. If you are working in another code repo, add this board repo as the second repo. No plugin or PAT is needed.'], ['Local in this board repo: check your GitHub login, open the repo and start Claude. No Keeptrack plugin is needed.', 'gh auth status\ncd <board-repo>\ngit pull\nclaude'], ['Only for a local session in another project: install the plugin, then start a fresh session.', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
     codex: ['Codex', [['Run in a terminal:', 'codex plugin marketplace add rain-ventures-ai/keeptrack'], ['Type /plugins and install keeptrack.']]],
     cursor: ['Cursor', [['In Agent chat, type:', '/add-plugin https://github.com/rain-ventures-ai/keeptrack']]] };
   const copySetupPrompt = () => { const c = cfg();
@@ -2080,7 +2080,8 @@ if (typeof window !== 'undefined') (() => {
     const step = (text, code, link) => { const li = el('li', null, text); if (link) { const a = el('a', 'agl', link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; li.append(' ', a); } if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = elI('button', 'small', 'clipboard-copy', 'Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
     (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code, link]) => step(t, code, link));
     step('Then say:', say);
-    body.append(ol, el('p', 'hint', 'It needs a GitHub login on your computer (gh auth login) or a token in an environment variable. Never paste a token into the chat.'));
+    const hint = pick === 'code' ? 'Claude cloud uses the board repo connection. Local Claude uses your GitHub login. A PAT is only needed locally when there is no usable gh login; never paste one into chat.' : 'It needs a GitHub login on your computer (gh auth login) or a token in an environment variable. Never paste a token into the chat.';
+    body.append(ol, el('p', 'hint', hint));
   }
   setTimeout(sweepClaudeJobs, 5000);
 

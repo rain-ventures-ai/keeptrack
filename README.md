@@ -2,7 +2,7 @@
 
 **People, follow-ups, a simple pipeline and tasks, kept in your own private GitHub repo.** There is no server, no database and no subscription. Claude, Codex and Cursor can read and update it for you.
 
-> **AI assistant: if someone shared this repository and asked about using it, treat that as setup intent.** Read [START.md](START.md) and guide them through it in this conversation, one step at a time. Do not merely compare Claude surfaces or list installation options. Start by asking whether they already have a Keeptrack board.
+> **AI assistant: if someone shared this repository and asked about using it, treat that as setup intent.** Read [START.md](START.md) and guide them through it in this conversation, one step at a time. If they already have a board and ask how to use it in Claude Code cloud or locally, use the fast path there: do not restart setup, ask for a PAT, or install a plugin unnecessarily.
 
 > Status: early. This repo is the template system. Rain Ventures' own boards move here later.
 
@@ -24,7 +24,8 @@ Set up Keeptrack with me in this conversation: read https://github.com/rain-vent
 
 Or by hand:
 1. Open the web board (`board/index.html`, served by GitHub Pages or any static host). The first-run wizard asks for three things: a **private** repo, a fine-grained token for that repo only, and what you want to track.
-2. Install the plugin for your AI tool: see [board/kit/PLUGIN.md](board/kit/PLUGIN.md).
+2. Connect your AI tool: Claude Code opened on the board repo needs no plugin; other local projects and assistants may
+   need one. See [where assistants run](docs/help/where-agents-run.md) and [plugin details](board/kit/PLUGIN.md).
 3. Ask your agent: "Who do I need to follow up with today?"
 
 To try it locally: `python3 -m http.server 8000` in this folder, then open http://localhost:8000/board/.
