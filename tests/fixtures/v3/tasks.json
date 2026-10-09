@@ -114,6 +114,7 @@
     {
       "id": "p_acme",
       "name": "Casey Example",
+      "github": "alex",
       "company": "Acme",
       "role": "Buyer",
       "email": "casey@example.invalid",

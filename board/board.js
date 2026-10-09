@@ -119,7 +119,7 @@ if (typeof window !== 'undefined') (() => {
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
     columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }],
-    people: [], agents: ['claude', 'codex'], clients: ['General'], labels: [], tasks: [], contacts: [], client_info: {}
+    people: [], agents: ['claude', 'codex'], clients: ['General'], labels: [], tasks: [], contacts: [], projects: [], client_info: {}
   });
   // DEFAULT is also the compatibility shape used while reading legacy boards. New boards start on the current
   // split schema; their empty task/contact arrays are in-memory only and are removed from tasks.json when saved.
@@ -192,7 +192,8 @@ if (typeof window !== 'undefined') (() => {
       columns: Array.isArray(o.columns) && o.columns.length ? o.columns : d.columns, people,
       agents: Array.isArray(o.agents) ? o.agents : d.agents, clients: Array.isArray(o.clients) && o.clients.length ? o.clients : d.clients,
       labels: Array.isArray(o.labels) ? o.labels : [], tasks: Array.isArray(o.tasks) ? o.tasks : [], next_num: o.next_num,
-      contacts: Array.isArray(o.contacts) ? o.contacts : [], client_info: o.client_info && typeof o.client_info === 'object' && !Array.isArray(o.client_info) ? o.client_info : {}
+      contacts: Array.isArray(o.contacts) ? o.contacts : [], projects: Array.isArray(o.projects) ? o.projects : [],
+      client_info: o.client_info && typeof o.client_info === 'object' && !Array.isArray(o.client_info) ? o.client_info : {}
     };
     Object.keys(o).forEach(k => { if (!(k in n)) n[k] = o[k]; });   // keep keys this page does not know, so it never drops another tool's data
     n.contacts.forEach(p => { ['links', 'comments', 'history'].forEach(k => { if (!Array.isArray(p[k])) p[k] = []; }); if (!p.stage) p.stage = (n.settings.stages || [])[0] || 'New'; normaliseContact(p); });
@@ -201,7 +202,8 @@ if (typeof window !== 'undefined') (() => {
       if (!Array.isArray(t.labels)) t.labels = []; if (!Array.isArray(t.links)) t.links = []; if (!Array.isArray(t.contacts)) t.contacts = [];
       if (t.details == null) t.details = t.notes || '';
       if (t.claim === undefined) t.claim = null;
-      if (!Array.isArray(t.comments)) t.comments = []; if (!Array.isArray(t.todos)) t.todos = []; if (!Array.isArray(t.history)) t.history = [];
+      if (!Array.isArray(t.comments)) t.comments = []; if (!Array.isArray(t.todos)) t.todos = [];       if (!Array.isArray(t.history)) t.history = [];
+      if (t.project == null) t.project = '';
       // legacy same-repo numbers become ordinary links (links can point at any repo)
       const repo = cfg().repo;
       if (t.linked_issue && repo && !t.links.some(l => /\/issues\/\d+/.test(l.url))) t.links.push({ title: 'Issue #' + t.linked_issue, url: `https://github.com/${repo}/issues/${t.linked_issue}` });
@@ -261,7 +263,7 @@ if (typeof window !== 'undefined') (() => {
   }
   const isSplit = o => !!o && o.version === 4 && o.layout === 'split';
   const remotePath = rel => { const p = cfg().path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
-  const wantedRel = p => p === 'tasks.json' || /^(cards|people|archive)\/[^/]+$/.test(p);
+  const wantedRel = p => p === 'tasks.json' || /^(cards|people|projects|archive)\/[^/]+$/.test(p);
   const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
   async function mapLimit(items, limit, fn) {
     const out = new Array(items.length); let at = 0;
@@ -276,9 +278,9 @@ if (typeof window !== 'undefined') (() => {
   }
   function modelFromSplit(files) {
     const root = files.get('tasks.json'); if (!root) throw new Error(`cannot read ${cfg().path}`);
-    const raw = clone(root.obj), tasks = [], contacts = []; if (!isSplit(raw)) return raw;   // tasks.json is no longer split: it holds the whole board
-    [...files.entries()].sort().forEach(([p, x]) => { if (/^cards\/[^/]+\.json$/.test(p)) tasks.push(clone(x.obj)); else if (/^people\/[^/]+\.json$/.test(p)) contacts.push(clone(x.obj)); });
-    raw.tasks = tasks; raw.contacts = contacts; return raw;
+    const raw = clone(root.obj), tasks = [], contacts = [], projects = []; if (!isSplit(raw)) return raw;   // tasks.json is no longer split: it holds the whole board
+    [...files.entries()].sort().forEach(([p, x]) => { if (/^cards\/[^/]+\.json$/.test(p)) tasks.push(clone(x.obj)); else if (/^people\/[^/]+\.json$/.test(p)) contacts.push(clone(x.obj)); else if (/^projects\/[^/]+\.json$/.test(p)) projects.push(clone(x.obj)); });
+    raw.tasks = tasks; raw.contacts = contacts; raw.projects = projects; return raw;
   }
   async function splitSnapshot(force = false) {
     const c = cfg(), ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
@@ -299,7 +301,7 @@ if (typeof window !== 'undefined') (() => {
     old.forEach((v, k) => { const item = byPath.get(k); if (item && item.sha === v.sha) files.set(k, v); });
     await mapLimit(changed, 8, async item => { const text = await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
-    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files };
+    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true };
     return { unchanged: false, data: modelFromSplit(files), meta };
   }
   let boardSize = 0;   // bytes of the board file, or all split board files, from the last load
@@ -465,7 +467,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   function splitChanges(next, meta, extra = {}) {
-    let root = clone(next); delete root.tasks; delete root.contacts;
+    let root = clone(next); delete root.tasks; delete root.contacts; delete root.projects;
     const oldRoot = (meta.files.get('tasks.json') || {}).obj || {}, defaults = DEFAULT();
     if (root.settings && oldRoot.settings) Object.keys(defaults.settings).forEach(k => { if (!(k in oldRoot.settings) && JSON.stringify(root.settings[k]) === JSON.stringify(defaults.settings[k])) delete root.settings[k]; });
     if (root.settings && oldRoot.settings) { const ordered = clone(oldRoot.settings); Object.keys(ordered).forEach(k => { if (!(k in root.settings)) delete ordered[k]; }); Object.keys(root.settings).forEach(k => { ordered[k] = root.settings[k]; }); root.settings = ordered; }
@@ -475,16 +477,18 @@ if (typeof window !== 'undefined') (() => {
     const asRead = (p, o) => { const base = { settings: root.settings, people: root.people, columns: root.columns };   // what normalise makes of the file as read
       return p.startsWith('cards/') ? normalise(Object.assign(base, { tasks: [clone(o)] })).tasks[0] : p.startsWith('people/') ? normalise(Object.assign(base, { contacts: [clone(o)] })).contacts[0] : o; };
     const outText = (p, obj) => { const old = meta.files.get(p); return old && (same(old.obj, obj) || same(asRead(p, old.obj), obj)) ? old.text : jsonText(obj); };
-    const ids = [...next.tasks, ...(next.contacts || [])].map(x => x.id);
+    const ids = [...next.tasks, ...(next.contacts || []), ...(next.projects || [])].map(x => x.id);
     if (new Set(ids).size !== ids.length || ids.some(x => typeof x !== 'string' || !x || /[/\\]/.test(x) || x === '.' || x === '..')) throw new Error('two items share an id, or an id cannot be a file name');   // never let two items write one file
     const desired = new Map([['tasks.json', outText('tasks.json', root)]]);
     next.tasks.forEach(t => { const p = `cards/${t.id}.json`; desired.set(p, outText(p, t)); });
     (next.contacts || []).forEach(x => { const p = `people/${x.id}.json`; desired.set(p, outText(p, x)); });
+    (next.projects || []).forEach(x => { const p = `projects/${x.id}.json`; desired.set(p, outText(p, x)); });
     Object.entries(extra).forEach(([p, text]) => { if (text !== null) desired.set(p, text); });
-    const managed = new Set([...meta.files.keys()].filter(p => p === 'tasks.json' || /^(cards|people)\/[^/]+\.json$/.test(p)));
+    const managed = new Set([...meta.files.keys()].filter(p => p === 'tasks.json' || /^(cards|people|projects)\/[^/]+\.json$/.test(p)));
     Object.keys(extra).forEach(p => managed.add(p));
     const changes = new Map([...desired].filter(([p, text]) => !meta.files.has(p) || meta.files.get(p).text !== text));
-    const deletes = new Set([...managed].filter(p => !desired.has(p) || extra[p] === null));
+    let deletes = new Set([...managed].filter(p => !desired.has(p) || extra[p] === null));
+    if (!meta.projectsLoaded) { for (const p of deletes) if (p.startsWith('projects/')) deletes.delete(p); }
     deletes.forEach(p => changes.delete(p)); return { changes, deletes };
   }
   async function splitSave(next, message, meta, extra) {
@@ -518,7 +522,7 @@ if (typeof window !== 'undefined') (() => {
       // A new split board has no tree metadata yet. Its first commit contains only the root/index file; cards and
       // CRM people get their own files when they are added. Subsequent writes load the branch tree as usual.
       if (!expectedSha && !splitMeta) {
-        const root = clone(next); delete root.tasks; delete root.contacts;
+        const root = clone(next); delete root.tasks; delete root.contacts; delete root.projects;
         const res = await gh('PUT', { message, content: b64e(JSON.stringify(root, null, 2) + '\n'), branch: cfg().branch });
         if (res.ok) { sha = (await res.json()).content.sha; etag = null; state = next; return 'ok'; }
         return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
@@ -539,7 +543,7 @@ if (typeof window !== 'undefined') (() => {
   const norm = t => { if (!t) return null; const o = {}; Object.keys(t).sort().forEach(k => { if (!IGNORE.has(k)) o[k] = t[k]; });
     if (o.claim) { o.claim = Object.assign({}, o.claim); delete o.claim.heartbeat_at; } return JSON.stringify(o); }; // heartbeats alone are not a conflict
   const byId = (st, k = 'tasks') => new Map((st[k] || []).map(t => [t.id, t]));
-  const KINDS = ['tasks', 'contacts'];   // cards and people are both checked for conflicts
+  const KINDS = ['tasks', 'contacts', 'projects'];   // cards, people and projects are checked for conflicts
   const show = v => v == null ? '(none)' : typeof v === 'string' ? (v || '(empty)') : JSON.stringify(v);
   function findConflicts(base, pre, post) {
     const out = [];
@@ -562,8 +566,11 @@ if (typeof window !== 'undefined') (() => {
   function askConflict(list) {
     return new Promise(res => {
       const d = $('dlgConflict'), body = $('cfBody'); body.textContent = '';
-      const nP = list.filter(x => (x.b || x.p || x.a).name !== undefined && !(x.b || x.p || x.a).title).length, nT = list.length - nP;
-      const what = [nT && `${nT} card${nT > 1 ? 's' : ''}`, nP && `${nP} ${nP > 1 ? 'people' : 'person'}`].filter(Boolean).join(' and ');
+      const items = list.map(x => x.a || x.p || x.b);
+      const nT = items.filter(t => t.title).length;
+      const nPr = items.filter(t => !t.title && String(t.id || '').startsWith('pr_')).length;
+      const nP = items.filter(t => !t.title && !String(t.id || '').startsWith('pr_')).length;
+      const what = [nT && `${nT} card${nT > 1 ? 's' : ''}`, nP && `${nP} ${nP > 1 ? 'people' : 'person'}`, nPr && `${nPr} project${nPr > 1 ? 's' : ''}`].filter(Boolean).join(', ');
       $('cfIntro').textContent = `${what} you are changing ${list.length > 1 ? 'were' : 'was'} changed by someone else (or an agent) since you loaded the board.`;
       list.forEach(({ b, p, a }) => {
         const t = a || p || b, box = el('div', 'cfcard'); box.append(el('strong', null, t.title || t.name || t.id));
@@ -594,6 +601,7 @@ if (typeof window !== 'undefined') (() => {
       if ((p.due || '') !== (t.due || '')) add('due: ' + (t.due || 'cleared'));
       if (p.priority !== t.priority) add('priority: ' + t.priority);
       if ((p.client || '') !== (t.client || '')) add('client: ' + (t.client || 'none'));
+      if ((p.project || '') !== (t.project || '')) add('project: ' + (p.project || 'none'));
       if ((p.details || '') !== (t.details || '')) add('edited the description');
       JSON.stringify(p.labels) !== JSON.stringify(t.labels) && add('labels: ' + (t.labels.join(', ') || 'none'));
       t.links.filter(l => !p.links.some(x => x.url === l.url)).forEach(l => add('added link: ' + (l.title || l.url)));
@@ -699,8 +707,8 @@ if (typeof window !== 'undefined') (() => {
   }
 
   function boardId(prefix) {
-    const chars = '0123456789abcdefghijklmnopqrstuvwxyz', used = new Set([...state.tasks, ...(state.contacts || [])].map(x => x.id));
-    if (splitMeta) splitMeta.files.forEach((_, p) => { if (/^(cards|people)\/[^/]+\.json$/.test(p)) used.add(p.slice(p.indexOf('/') + 1, -5)); });
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyz', used = new Set([...state.tasks, ...(state.contacts || []), ...(state.projects || [])].map(x => x.id));
+    if (splitMeta) splitMeta.files.forEach((_, p) => { if (/^(cards|people|projects)\/[^/]+\.json$/.test(p)) used.add(p.slice(p.indexOf('/') + 1, -5)); });
     for (;;) { const a = new Uint8Array(10); crypto.getRandomValues(a); const id = prefix + [...a].map(x => chars[x % chars.length]).join(''); if (!used.has(id)) return id; }
   }
   const uid = () => boardId('t_');
@@ -738,6 +746,15 @@ if (typeof window !== 'undefined') (() => {
   function setClientValues(values) {
     const wanted = new Set(values); [...$('fClient').options].forEach(o => { o.selected = wanted.has(o.value); });
   }
+  function fillProjectSelect(items) {
+    const sel = $('fProject'); if (!sel) return;
+    const cur = sel.value; sel.textContent = '';
+    const all = el('option', null, 'All'); all.value = ''; sel.append(all);
+    items.forEach(([v, l]) => { const o = el('option', null, l); o.value = v; o.selected = v === cur; sel.append(o); });
+  }
+  const projectStatusOrder = st => ({ active: 0, paused: 1, done: 2 }[st || 'active'] ?? 0);
+  const projectPickerLabel = p => { const st = p.status || 'active', mark = st === 'done' ? ' · done' : st === 'paused' ? ' · paused' : ''; return `${p.name}${p.client ? ' · ' + p.client : ''}${mark}`; };
+  const sortedProjects = () => [...(state.projects || [])].sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || String(a.client || '').localeCompare(b.client || '') || String(a.name || '').localeCompare(b.name || ''));
   // ---- colour: a card's left edge is its client, its right edge is its urgency -------------------------------
   // Any text can become a colour: hash it (FNV-1a), take the hash modulo 360 as a hue. Known clients are spaced by the golden angle
   // (137.5 degrees) past the first six; the first six clients get hand-picked hues that avoid the urgency colours. Unknown text falls back to the hash.
@@ -776,8 +793,12 @@ if (typeof window !== 'undefined') (() => {
   };
   function clientPill(c) {
     const on = clientValues().includes(c.name), b = el('button', 'cpill' + (on ? ' on' : '')); b.type = 'button'; b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`); b.setAttribute('aria-pressed', String(on));
-    b.title = on ? `Remove ${c.name} from the filter` : `Add ${c.name} to the filter (${c.open} open)`; b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
-    b.onclick = () => toggleClient(c.name); return b;
+    b.title = on ? `Filter: click to remove ${c.name}` : `Filter: click to show only ${c.name} (${c.open} open) · use ▸ for client details`;
+    b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
+    const det = el('button', 'cpillgo'); det.type = 'button'; det.title = 'Client details'; det.setAttribute('aria-label', `Client details for ${c.name}`);
+    det.append(svgIcon('panel-right-open')); det.onclick = e => { e.stopPropagation(); openClient(c.name); };
+    b.append(det); b.onclick = () => toggleClient(c.name);
+    return b;
   }
   const activeClaim = t => t.claim && t.claim.status !== 'done' ? t.claim : null;
   const agentFilterValue = c => '__agent:' + encodeURIComponent(String(c.agent || '').toLowerCase()) + ':' + encodeURIComponent(String(c.on_behalf_of || '').toLowerCase());
@@ -812,8 +833,11 @@ if (typeof window !== 'undefined') (() => {
       const label = () => { more.textContent = `+${rest.length} ▾`; };
       label(); while (box.scrollWidth > box.clientWidth + 1 && shown.length) { shown.pop().remove(); rest = order.slice(shown.length); label(); }
       more.onclick = e => { e.stopPropagation(); const pop = $('clientPop'); if (!pop.hidden) { closePops(); return; } closePops();
-        pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
-          b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name); pop.append(b); });
+        pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), row = el('div', 'cmenurow');
+          const b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
+          b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name);
+          const det = el('button', 'cmenu detail', 'Details'); det.type = 'button'; det.title = 'Open client details'; det.onclick = () => { closePops(); openClient(c.name); };
+          row.append(b, det); pop.append(row); });
         pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; pop.hidden = false; };
     }
     const pq = $('peopleQ'); pq.textContent = ''; const w = $('fWho').value;
@@ -881,15 +905,16 @@ if (typeof window !== 'undefined') (() => {
 
   function filtered(t) {
     if (freshOnly && !isFresh(t)) return false;
-    const fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fp = $('fPrio').value;
+    const fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fprio = $('fPrio').value, fproj = $('fProject').value;
     if (fc.length && !fc.includes(t.client)) return false;
+    if (fproj && t.project !== fproj) return false;
     if (fw === '__none' && t.assignees.length) return false;
     if (fw === '__agent' && !activeClaim(t)) return false;
     if (fw.startsWith('__agent:') && (!activeClaim(t) || agentFilterValue(activeClaim(t)) !== fw)) return false;
     if (fw && !fw.startsWith('__') && !t.assignees.includes(fw)) return false;
     if (fd) { const who = completionOf(t); if (!who || completionFilterValue(who) !== fd) return false; }
     if (fl && !t.labels.includes(fl)) return false;
-    if (fp && t.priority !== fp) return false;
+    if (fprio && t.priority !== fprio) return false;
     if ($('fAttn').checked && !needsAttention(t)) return false;
     return true;
   }
@@ -956,6 +981,8 @@ if (typeof window !== 'undefined') (() => {
     fillSelect($('fWho'), [...state.people.map(p => [p.github, '@' + p.github]), ['__none', 'Unassigned'], ['__agent', 'Any active agent'], ...agentAssignments().map(a => [a.value, a.label])], 'Everyone');
     fillSelect($('fDoneBy'), completionOptions().map(x => [completionFilterValue(x), x.label]), 'Anyone');
     fillSelect($('fLabel'), state.labels.map(l => [l.name, l.name]), 'All');
+    fillProjectSelect(sortedProjects().map(p => [p.id, projectPickerLabel(p)]));
+    renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
     applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact();
     if (view !== 'board') {
@@ -1625,6 +1652,7 @@ if (typeof window !== 'undefined') (() => {
     const tags = el('div', 'tags');
     t.labels.forEach(l => { tags.append(paintLabel(el('span', 'tag label', l), l)); });
     if (t.client) tags.append(el('span', 'tag client', t.client));
+    if (t.project) { const pr = projectById(t.project); if (pr) tags.append(el('span', 'tag project' + (pr.status === 'done' ? ' done' : pr.status === 'paused' ? ' paused' : ''), pr.name)); }
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
     if (detailed) { const actions = taskQuickActions(t); actions.classList.add('cinemaactions'); c.append(actions); }
@@ -1749,7 +1777,26 @@ if (typeof window !== 'undefined') (() => {
       edit(editing, (t, n) => { if (!n.clients.some(c => c.toLowerCase() === v.toLowerCase())) n.clients.push(v); t.client = v; }, `New client: ${v}`);
       return;
     }
-    edit(editing, t => { t.client = v; }, `Client: ${titleOf(editing)}`);
+    edit(editing, t => { t.client = v; if (v && t.project) { const pr = projectById(t.project); if (pr && pr.client && pr.client !== v) t.project = ''; } }, `Client: ${titleOf(editing)}`);
+  };
+  $('cProjNewAdd').onclick = () => {
+    const name = $('cProjNewName').value.trim(), client = $('cProjNew').dataset.client || '';
+    if (!name) { toast('Enter a project name.', true); return; }
+    const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
+    edit(editing, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
+    $('cProjNew').hidden = true; $('cProjNewName').value = '';
+  };
+  $('cProject').onchange = e => {
+    let v = e.target.value;
+    const t0 = taskNow();
+    if (v === '__new') {
+      const client = (t0 && t0.client) || '';
+      $('cProjNew').hidden = false; $('cProjNewName').value = ''; $('cProjNewName').focus();
+      e.target.value = (t0 && t0.project) || '';
+      $('cProjNew').dataset.client = client;
+      return;
+    }
+    edit(editing, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(editing)}`);
   };
   $('cDue').onchange = e => { const v = e.target.value; $('cDueClear').hidden = !v; edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
   $('cDueClear').onclick = () => { $('cDue').value = ''; $('cDueClear').hidden = true; edit(editing, t => { t.due = ''; }, `Clear due: ${titleOf(editing)}`); };
@@ -1828,8 +1875,11 @@ if (typeof window !== 'undefined') (() => {
     const set = (x, v) => { if ((force || document.activeElement !== x) && x.value !== v) x.value = v; };
     const cl = [...new Set([...state.clients, t.client].filter(Boolean))];
     if (force || $('cClient').options.length !== cl.length + 2) fillSelect($('cClient'), [['', '(none)'], ...cl.map(c => [c, c]), ['__new', '＋ New client…']]);
+    const prOpts = [['', '(none)'], ...sortedProjects().filter(p => !t.client || p.client === t.client).map(p => [p.id, projectPickerLabel(p)]), ['__new', '＋ New project…']];
+    if (force || $('cProject').options.length !== prOpts.length) fillSelect($('cProject'), prOpts);
+    if (force) $('cProjNew').hidden = true;
     if (force) { fillSelect($('cCol'), state.columns.map(c => [c.id, c.name])); }
-    set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cClient'), t.client || ''); set($('cDue'), t.due || '');
+    set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cClient'), t.client || ''); set($('cProject'), t.project || ''); set($('cDue'), t.due || '');
     { const who = completionOf(t), done = $('cCompletedBy'); done.hidden = !who; done.className = 'chip doneby' + (who && who.agent ? ' agent' : ' person'); done.textContent = who ? 'Completed by ' + who.label : ''; done.title = who && who.at ? fmtStamp(who.at) : ''; }
     $('cPrio').dataset.v = $('cPrio').value; $('cDueClear').hidden = !$('cDue').value;
     const ti = $('cTitle'); if (force || (document.activeElement !== ti && ti.value !== t.title)) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
@@ -2405,14 +2455,17 @@ if (typeof window !== 'undefined') (() => {
   $('btnSettings').addEventListener('click', () => { $('patLink').href = patUrl(); });
   $('sCancel').onclick = () => $('dlgSettings').close();
   $('sForget').onclick = () => { if (!confirm('Forget this board token from this browser?\n\nThe board is not changed, but you will need to add a working token before you can save again.')) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
-  $('sSave').onclick = () => {
+  $('sSave').onclick = async () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
     if (!REPO_RE.test(nr)) { toast('The repository must look like owner/name', true); return; }
     if (moved) activateBoard(nr);   // another repo = another board, with its own token
     LS.set('kb_branch', $('sBranch').value.trim() || 'master'); LS.set('kb_path', $('sPath').value.trim() || 'board/tasks.json'); LS.set('kb_me', $('sMe').value.trim().replace(/^@/, ''));
-    if ($('sToken').value.trim()) { LS.set('kb_token', $('sToken').value.trim()); LS.del(roKey()); } stashBoard(); $('dlgSettings').close();
-    if (moved) { location.replace(boardUrl()); return; } load();
+    const newTok = $('sToken').value.trim();
+    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } stashBoard(); $('dlgSettings').close();
+    if (moved) { location.replace(boardUrl()); return; }
+    const ok = await load();
+    if (ok && newTok && (state.settings.modes || []).includes('crm') && cfg().me && !memberPerson()) setTimeout(() => offerSelfPerson(), 400);
   };
   // The logo is the board switcher: a badge with the repo's initials (rain-ventures-ai/consulting → RVAC) in a colour of its own.
   const boardInitials = repo => String(repo || '').split('/').flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s_.-]+/)).filter(Boolean).map(w => w[0].toUpperCase()).join('').slice(0, 4) || '▦';
@@ -2549,19 +2602,139 @@ if (typeof window !== 'undefined') (() => {
   $('filterPop').addEventListener('click', e => e.stopPropagation()); $('clientPop').addEventListener('click', e => e.stopPropagation()); $('morePop').addEventListener('click', e => e.stopPropagation());
   document.addEventListener('click', closePops); document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePops(); if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
-  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
+  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
   { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(() => { renderTopbar(); layoutCinemaCards(); }, 60); };
     window.addEventListener('resize', refit);
     const wrap = document.querySelector('.clientwrap');
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
-  ['fClient', 'fWho', 'fDoneBy', 'fLabel', 'fPrio', 'fAttn', 'fHideDone'].forEach(i => $(i).addEventListener('change', render));
+  ['fClient', 'fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fHideDone'].forEach(i => $(i).addEventListener('change', render));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again
   setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) render(); }, 60000); // refresh "ago" and stale flags
 
+
+  const projectsOf = () => state.projects || [];
+  const projectById = id => projectsOf().find(p => p.id === id);
+  const projectsForClient = client => projectsOf().filter(p => p.client === client);
+  const personByEmail = email => { const e = String(email || '').toLowerCase(); return state.contacts.find(p => (p.emails || []).some(x => String(x.value).toLowerCase() === e)); };
+  const personByGithub = gh => { const g = String(gh || '').toLowerCase(); return state.contacts.find(p => String(p.github || '').toLowerCase() === g); };
+  const memberPerson = () => { const meV = cfg().me; if (!meV) return null; return personByGithub(meV) || personByEmail(meV); };
+  const clientInfo = name => (state.client_info || {})[name] || { links: [] };
+  const doneCol = () => doneColId();
+
+  function renderMemberBar() {
+    const bar = $('memberBar'); if (!bar || ro === 'demo' || DEMO) { if (bar) bar.hidden = true; return; }
+    const meV = cfg().me; if (!meV || memberPerson() || LS.get('kb_member_nudge_off:' + cfg().repo)) { bar.hidden = true; return; }
+    bar.hidden = false; bar.textContent = '';
+    bar.append(document.createTextNode(`You are signed in as @${meV} but have no person record on this board. `));
+    const add = el('button', 'small primary', 'Add yourself as a person'); add.type = 'button'; add.onclick = () => offerSelfPerson();
+    const hide = el('button', 'small', 'Dismiss'); hide.type = 'button'; hide.onclick = () => { LS.set('kb_member_nudge_off:' + cfg().repo, '1'); bar.hidden = true; };
+    bar.append(add, hide);
+  }
+
+  async function offerSelfPerson(prefill) {
+    const meV = cfg().me; if (!meV || ro) return;
+    let name = prefill && prefill.name, email = prefill && prefill.email;
+    if (!name && cfg().token) {
+      try { const r = await fetch(`${cfg().api}/user`, { headers: { Authorization: 'Bearer ' + cfg().token, Accept: 'application/vnd.github+json' } }); if (r.ok) { const u = await r.json(); name = u.name || u.login; email = email || (u.email || ''); } } catch {}
+    }
+    if (!name) name = prompt('Your display name on the board:', meV) || meV;
+    const id = await addContact(name, { github: meV, email: email || '', company: '' });
+    if (id) toast('Added you as a person on this board.');
+  }
+
+  let editingClient = '';
+  function openClient(name) {
+    editingClient = name; fillClientDrawer(true);
+    $('dlgClient').showModal();
+  }
+  function fillClientDrawer(force) {
+    const co = editingClient; if (!co) return;
+    $('clName').textContent = co;
+    const info = clientInfo(co);
+    if (force || document.activeElement !== $('clNorth')) $('clNorth').value = info.north_star || '';
+    const box = $('clProjects'); box.textContent = '';
+    projectsForClient(co).sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => {
+      const row = el('button', 'prowbtn'); row.type = 'button';
+      row.append(el('b', null, pr.name), el('span', 'muted', ' · ' + (pr.status || 'active')));
+      row.onclick = () => { $('dlgClient').close(); openProject(pr.id); };
+      box.append(row);
+    });
+    if (!box.childNodes.length) box.append(el('div', 'muted small', 'No projects yet.'));
+    renderLinkBox($('clFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+  }
+  $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
+  $('clClose').onclick = () => $('dlgClient').close();
+  $('dlgClient').addEventListener('close', () => { editingClient = ''; render(); });
+  function addClientProject() {
+    const co = editingClient, name = ($('clProjName').value || '').trim(); if (!name || !co) { if (!name) toast('Enter a project name.', true); return; }
+    const pr = { id: boardId('pr_'), client: co, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
+    mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) { $('clProjName').value = ''; openProject(pr.id); } });
+  }
+  $('clProjAdd').onclick = addClientProject;
+  $('clProjName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addClientProject(); } });
+  function addClientFile(co, title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return; }
+    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
+  $('clFileAdd').onclick = () => { const co = editingClient; if (!co) return; addClientFile(co, $('clFileTitle').value, $('clFileNew').value); $('clFileTitle').value = ''; $('clFileNew').value = ''; };
+
+  let editingProject = '';
+  function openProject(id) { editingProject = id; fillProjectDrawer(true); $('dlgProject').showModal(); }
+  function fillProjectDrawer(force) {
+    const pr = projectById(editingProject); if (!pr) { $('dlgProject').close(); return; }
+    if (force || document.activeElement !== $('prName')) $('prName').value = pr.name || '';
+    $('prStatus').value = pr.status || 'active';
+    if (force || document.activeElement !== $('prNorth')) $('prNorth').value = pr.north_star || '';
+    const pbox = $('prPeople'); pbox.textContent = '';
+    (pr.people || []).forEach(em => {
+      const person = personByEmail(em), row = el('div', 'methodrow');
+      row.append(el('span', null, person ? `${person.name} (${em})` : em));
+      const x = el('button', 'lx', '×'); x.type = 'button'; x.onclick = () => projectEdit(pr.id, x => { x.people = (x.people || []).filter(e => e.toLowerCase() !== em.toLowerCase()); }, 'Project people');
+      row.append(x); pbox.append(row);
+    });
+    const sug = $('prSuggest'); sug.textContent = '';
+    if (pr.client) {
+      const on = new Set((pr.people || []).map(e => e.toLowerCase()));
+      state.contacts.filter(p => p.company === pr.client).forEach(p => {
+        (p.emails || []).forEach(em => { if (!em.value || on.has(em.value.toLowerCase())) return;
+          const b = el('button', 'small', `+ ${p.name}`); b.type = 'button'; b.title = em.value;
+          b.onclick = () => projectEdit(pr.id, x => { x.people = x.people || []; if (!x.people.some(e => e.toLowerCase() === em.value.toLowerCase())) x.people.push(em.value); }, `Add ${p.name} to project`);
+          sug.append(b); });
+      });
+    }
+    renderLinkBox($('prLinks'), pr.links || [], l => projectEdit(pr.id, x => { x.links = (x.links || []).filter(y => y.url !== l.url); }, `Project links`), true, 'project resource');
+    const tbox = $('prTasks'); tbox.textContent = '';
+    const dc = doneCol();
+    state.tasks.filter(t => t.project === pr.id && t.column !== dc).forEach(t => tbox.append(listRow(t)));
+    if (!tbox.childNodes.length) tbox.append(el('div', 'muted small', 'No open tasks linked to this project.'));
+    const doneBox = $('prDoneTasks'); doneBox.textContent = '';
+    state.tasks.filter(t => t.project === pr.id && t.column === dc).forEach(t => doneBox.append(listRow(t)));
+    if (!doneBox.childNodes.length) doneBox.append(el('div', 'muted small', 'No completed tasks linked to this project.'));
+    $('prDelete').hidden = !!ro;
+  }
+  const projectEdit = (id, fn, msg) => mutate(n => { const p = (n.projects || []).find(x => x.id === id); if (p) { fn(p); p.updated = nowIso(); } }, msg || 'Update project');
+  $('prName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) projectEdit(editingProject, p => { p.name = v; }); });
+  $('prStatus').onchange = e => projectEdit(editingProject, p => { p.status = e.target.value; });
+  $('prNorth').addEventListener('change', e => projectEdit(editingProject, p => { p.north_star = e.target.value; }));
+  $('prPersonAdd').onclick = () => { const em = $('prPersonEmail').value.trim(); if (!em) return; projectEdit(editingProject, p => { p.people = p.people || []; if (!p.people.some(x => x.toLowerCase() === em.toLowerCase())) p.people.push(em); }); $('prPersonEmail').value = ''; };
+  $('prLinkAdd').onclick = () => { const l = parseNamedLink($('prLinkTitle').value, $('prLinkNew').value, true); if (!l) { toast('Enter a cloud URL or local path.', true); return; }
+    projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); $('prLinkTitle').value = ''; $('prLinkNew').value = ''; };
+  $('prClose').onclick = () => $('dlgProject').close();
+  $('prDelete').onclick = () => {
+    const pr = projectById(editingProject); if (!pr || ro) return;
+    const linked = state.tasks.filter(t => t.project === pr.id);
+    let clear = false;
+    if (linked.length) clear = confirm(`Remove project "${pr.name}" and clear it from ${linked.length} task(s)?\n\nOK clears task.project. Cancel keeps the project.`);
+    else if (!confirm(`Remove project "${pr.name}"?`)) return;
+    if (linked.length && !clear) return;
+    mutate(n => {
+      n.projects = (n.projects || []).filter(p => p.id !== pr.id);
+      if (clear) n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });
+    }, `Remove project: ${pr.name}`).then(ok => { if (ok) $('dlgProject').close(); });
+  };
+  $('dlgProject').addEventListener('close', () => { editingProject = ''; render(); });
 
   // ==== Keeptrack CRM: people (contacts) with a stage and a next step; Today, People and Pipeline views ====
   // A person is one record in data.contacts. Touches (a LinkedIn message, an email, a call) are comments with a channel.
@@ -2602,7 +2775,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function normaliseContact(p) {
     ['links', 'comments', 'history'].forEach(k => { if (!Array.isArray(p[k])) p[k] = []; });
-    ['name', 'role', 'company', 'email', 'phone', 'linkedin', 'stage', 'value', 'next', 'next_due', 'source', 'notes'].forEach(k => { if (p[k] == null) p[k] = ''; });
+    ['name', 'role', 'company', 'email', 'phone', 'linkedin', 'github', 'stage', 'value', 'next', 'next_due', 'source', 'notes'].forEach(k => { if (p[k] == null) p[k] = ''; });
     p.emails = Array.isArray(p.emails) ? p.emails.map((x, i) => typeof x === 'string' ? { id: `email_${i}`, label: i ? 'Other' : 'Email', value: x } : x).filter(x => x && x.value) : [];
     p.phones = Array.isArray(p.phones) ? p.phones.map((x, i) => typeof x === 'string' ? { id: `phone_${i}`, label: i ? 'Other' : 'Phone', value: x } : x).filter(x => x && x.value) : [];
     if (p.email && !p.emails.some(x => String(x.value).toLowerCase() === String(p.email).toLowerCase())) p.emails.unshift({ id: 'email_legacy', label: 'Email', value: String(p.email) });
@@ -2648,7 +2821,7 @@ if (typeof window !== 'undefined') (() => {
   $('apForm').onsubmit = async e => {
     e.preventDefault(); if (!$('apForm').reportValidity()) return;
     const name = $('apName').value.trim(), extra = Object.assign({}, addPersonExtra, {
-      company: $('apCompany').value.trim(), role: $('apRole').value.trim(), email: $('apEmail').value.trim(), phone: $('apPhone').value.trim(), linkedin: $('apLinkedin').value.trim()
+      company: $('apCompany').value.trim(), role: $('apRole').value.trim(), email: $('apEmail').value.trim(), phone: $('apPhone').value.trim(), linkedin: $('apLinkedin').value.trim(), github: $('apGithub').value.trim()
     });
     $('apSave').disabled = true; const id = await addContact(name, extra); $('apSave').disabled = false;
     if (id && state.contacts.some(x => x.id === id)) { $('dlgAddPerson').close(); openContact(id); }
@@ -2680,7 +2853,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonBox(placeholder, extra) {
     const add = el('div', 'add padd'), inp = el('input'), btn = el('button', 'primary', 'Add…');
-    inp.placeholder = placeholder || 'Quick add: Name | Company | role | email';
+    inp.placeholder = placeholder || 'Quick add: Name | Client | role | email';
     const go = async () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; const [name, f] = parsePerson(v); const id = await addContact(name, Object.assign(f, extra || {})); if (id && state.contacts.some(x => x.id === id)) openContact(id); };
     btn.type = 'button'; btn.title = 'Open a form to add a person'; btn.onclick = () => openAddPersonForm(inp.value, extra); inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); add.append(inp, btn); return add;
   }
@@ -2752,14 +2925,14 @@ if (typeof window !== 'undefined') (() => {
       }, cards);
       if (!items.length) cards.append(el('div', 'emptycol', 'Drop a person here.'));
       c.append(cards);
-      if (s === stages()[0]) c.append(addPersonBox('Add: Name | Company', { stage: s }));
+      if (s === stages()[0]) c.append(addPersonBox('Add: Name | Client', { stage: s }));
       board.append(c);
     });
   }
 
   // ---- person drawer --------------------------------------------------------
   let editingContact = null, pSig = '';
-  const PF = [['pRole', 'role'], ['pCompany', 'company'], ['pValue', 'value'], ['pSource', 'source']];
+  const PF = [['pRole', 'role'], ['pCompany', 'company'], ['pValue', 'value'], ['pSource', 'source'], ['pGithub', 'github']];
   function openContact(id) {
     editingContact = id; pSig = ''; fillContact(true);
     const d = $('dlgContact'); if (!d.open) d.showModal();
@@ -2777,7 +2950,14 @@ if (typeof window !== 'undefined') (() => {
     renderContactMethods(p);
     // links: this person's own, and the files of their company (client)
     renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); syncContactLegacy(x); }, `Links: ${p.name}`), false, 'profile/reference link');
-    const co = p.company, info = co ? ((state.client_info || {})[co] || { links: [] }) : null;
+    const co = p.company, info = co ? clientInfo(co) : null;
+    $('pNorthSec').hidden = !co; $('pProjSec').hidden = !co; $('pClientOpen').hidden = !co;
+    if (co) {
+      if (!document.activeElement || document.activeElement.id !== 'pNorthStar') $('pNorthStar').value = info.north_star || '';
+      const pl = $('pProjList'); pl.textContent = '';
+      projectsForClient(co).forEach(pr => { const b = el('button', 'prowbtn'); b.type = 'button'; b.append(el('b', null, pr.name), el('span', 'muted', ' · ' + (pr.status || 'active'))); b.onclick = () => openProject(pr.id); pl.append(b); });
+      if (!pl.childNodes.length) pl.append(el('div', 'muted small', 'No projects for this client.'));
+    }
     $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files and folders for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource'); }
     renderTouches(p); renderPersonTasks(p);
     const ol = $('pHist'); ol.textContent = ''; $('pHistSum').textContent = `History (${p.history.length})`;
@@ -2872,6 +3052,8 @@ if (typeof window !== 'undefined') (() => {
   function addCompanyFile() { const p = contactNow(), l = parseNamedLink($('pFileTitle').value, $('pFileNew').value, true); if (!p || !p.company) return; if (!l) { toast('Enter a cloud URL or a local path.', true); return; } $('pFileTitle').value = ''; $('pFileNew').value = ''; const co = p.company;
     mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
   $('pLinkAdd').onclick = addPersonLink; $('pFileAdd').onclick = addCompanyFile;
+  $('pNorthStar').addEventListener('change', () => { const p = contactNow(), co = p && p.company, v = $('pNorthStar').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
+  $('pClientOpen').onclick = () => { const p = contactNow(); if (p && p.company) { $('dlgContact').close(); openClient(p.company); } };
   ['pLinkTitle', 'pLinkNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addPersonLink(); } }));
   ['pFileTitle', 'pFileNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCompanyFile(); } }));
   $('pTouchPost').onclick = logTouch;
@@ -2983,6 +3165,7 @@ if (typeof window !== 'undefined') (() => {
     if (out !== 'ok') { toast('Could not create the board file (' + out + ').', true); btn.disabled = false; btn.textContent = 'Create my board'; return; }
     view = WZ.crm ? 'today' : 'board'; LS.set('kb_view', view); Object.assign(WZ, { step: 0, tok: '', checks: null });
     endSetup(); await load();
+    if (modes().includes('crm') && meV && !memberPerson()) setTimeout(() => offerSelfPerson({ name: meV }), 300);
     setTimeout(() => { const i = document.querySelector('.padd input, .addbar input'); if (i) i.focus(); }, 80);
     toast(WZ.crm ? 'Your board is ready. Add the first person you want to keep track of.' : 'Your board is ready. Add your first task.');
   }

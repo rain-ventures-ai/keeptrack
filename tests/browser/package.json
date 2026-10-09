@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node split-storage.test.js"
+    "test": "node split-storage.test.js",
+    "screenshots": "node capture-demo-screenshots.js"
   },
   "keywords": [],
   "author": "",
