@@ -12,4 +12,6 @@ Open a person and type in **☑ Tasks**. The task is linked to that person and t
 AI agents can claim a task, report progress and finish it. While an agent works on a task, the card shows its status. See [AI assistants](ai-assistants.md).
 
 ## Turn tasks or people on or off
-The board shows only the views for what you track. To change this, ask your AI assistant to change `settings.modes` in your board to `["crm"]`, `["tasks"]` or `["crm", "tasks"]`.
+Open **Settings → General → Board sections** and switch **Tasks** or **People & pipeline (CRM)** on or off. Keep at least one section on.
+
+Turning a section off only hides its views. It does not delete any tasks, people or history, and turning it on again shows the same records. If you turn CRM on before there are any people, it opens as an empty CRM. The first person you add creates their record automatically.

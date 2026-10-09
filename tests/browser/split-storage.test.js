@@ -71,6 +71,30 @@ let base;
     const dragPuts = api.calls.filter(x => x.method === 'PUT'); assert.equal(dragPuts.length, 1); assert.equal(dragPuts[0].path, '/contents/board/cards/t_two.json');
     await page.close();
 
+    // Board sections can be hidden and restored after setup. The mode save changes only settings, never task or person files.
+    const modesApi = new Github(true), modesPage = await openBoard(browser, modesApi); await modesPage.locator('#btnSettings').click();
+    assert.equal(await modesPage.locator('#sModeTasks').isChecked(), true); assert.equal(await modesPage.locator('#sModeCrm').isChecked(), true); modesApi.calls = [];
+    const crmOff = modesPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await modesPage.locator('#sModeCrm').uncheck(); await crmOff;
+    assert.deepEqual(JSON.parse(modesApi.files['tasks.json']).settings.modes, ['tasks']);
+    assert.equal(await modesPage.locator('#viewSw button[data-view="people"]').isHidden(), true);
+    assert('people/p_one.json' in modesApi.files, 'hiding CRM must keep person files'); assert('cards/t_one.json' in modesApi.files, 'hiding CRM must keep task files');
+    await modesPage.locator('#sModeTasks').click(); assert.equal(await modesPage.locator('#sModeTasks').isChecked(), true, 'at least one section must stay on');
+    assert.deepEqual(modesApi.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/tasks.json']);
+    modesApi.calls = []; const crmOn = modesPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await modesPage.locator('#sModeCrm').check(); await crmOn;
+    assert.deepEqual(JSON.parse(modesApi.files['tasks.json']).settings.modes, ['tasks', 'crm']); assert.equal(await modesPage.locator('#viewSw button[data-view="people"]').isVisible(), true);
+    assert('people/p_one.json' in modesApi.files, 'restoring CRM must show the existing person file'); await modesPage.close();
+
+    // Enabling CRM on a board with no people creates no placeholder. Adding the first person creates their own file.
+    const emptyCrm = new Github(true); emptyCrm.files['tasks.json'] = text({ ...root, settings: { ...root.settings, modes: ['tasks'] } }); delete emptyCrm.files['people/p_one.json'];
+    const emptyPage = await openBoard(browser, emptyCrm); await emptyPage.locator('#btnSettings').click(); emptyCrm.calls = [];
+    const enabled = emptyPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await emptyPage.locator('#sModeCrm').check(); await enabled;
+    assert.equal(Object.keys(emptyCrm.files).some(x => x.startsWith('people/')), false, 'enabling an empty CRM must not create a placeholder person');
+    assert.deepEqual(emptyCrm.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/tasks.json']);
+    await emptyPage.locator('#sDone').click(); await emptyPage.locator('#viewSw button[data-view="people"]').click(); emptyCrm.calls = [];
+    await emptyPage.locator('.padd input').fill('Ada Example'); const firstPerson = emptyPage.waitForResponse(r => r.request().method() === 'PUT' && /\/contents\/board\/people\//.test(r.url())); await emptyPage.locator('.padd input').press('Enter'); await firstPerson;
+    const peopleFiles = Object.keys(emptyCrm.files).filter(x => x.startsWith('people/')); assert.equal(peopleFiles.length, 1); assert.equal(JSON.parse(emptyCrm.files[peopleFiles[0]]).name, 'Ada Example');
+    assert.deepEqual(emptyCrm.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/' + peopleFiles[0]]); await emptyPage.close();
+
     const racing = new Github(true); racing.failPatch = true; const retry = await openBoard(browser, racing); await retry.evaluate(() => { window.__statuses = []; new MutationObserver(() => window.__statuses.push(document.querySelector('#status').textContent)).observe(document.querySelector('#status'), { childList: true }); }); const input = retry.locator('.col[data-col="todo"] .add input'); await input.fill('Retry card'); const retried = retry.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/git/refs/heads/main') && r.status() === 200); await input.press('Enter'); await retried; assert.equal(racing.calls.filter(x => x.path === '/git/refs/heads/main' && x.method === 'PATCH').length, 2); assert((await retry.evaluate(() => window.__statuses)).some(x => x.includes('retrying')), 'the conflict retry must be shown'); await retry.close();
 
     const old = new Github(false), legacy = await openBoard(browser, old); old.calls = []; await legacy.locator('.card').first().dblclick(); await legacy.locator('#cTitle').fill('Legacy edit'); const legacySaved = legacy.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await legacy.locator('#cTitle').blur(); await legacySaved; const oldPuts = old.calls.filter(x => x.method === 'PUT'); assert.equal(oldPuts.length, 1); assert.equal(oldPuts[0].path, '/contents/board/tasks.json'); await legacy.close();

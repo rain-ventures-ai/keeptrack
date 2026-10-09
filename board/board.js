@@ -2101,7 +2101,8 @@ if (typeof window !== 'undefined') (() => {
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
     settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; renderArchiveBox(); $('dlgSettings').showModal(); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; syncModeSettings(); renderArchiveBox(); $('dlgSettings').showModal(); };
+  $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
     if (/^[\w.-]+$/.test(owner)) q.set('target_name', owner);
@@ -2273,6 +2274,18 @@ if (typeof window !== 'undefined') (() => {
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
   const CRM_VIEWS = ['today', 'people', 'pipeline'], TASK_VIEWS = ['board', 'list', 'cal', 'sched', 'activity'];
+  function syncModeSettings() {
+    const m = modes(), locked = !!ro || !!newerSchema || busy;
+    $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
+    $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
+  }
+  async function saveModeSettings() {
+    const selected = [$('sModeTasks').checked && 'tasks', $('sModeCrm').checked && 'crm'].filter(Boolean);
+    if (!selected.length) { toast('Keep at least one board section turned on.', true); syncModeSettings(); return; }
+    $('sModeTasks').disabled = true; $('sModeCrm').disabled = true;
+    await mutate(d => { d.settings = Object.assign({}, d.settings, { modes: selected }); }, 'Board sections: ' + selected.join(', '));
+    syncModeSettings();
+  }
   const contactNow = () => state.contacts.find(x => x.id === editingContact);
   const nameOf = id => (state.contacts.find(x => x.id === id) || {}).name || id;
   const cid = () => boardId('p_');
