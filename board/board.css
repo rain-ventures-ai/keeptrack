@@ -669,6 +669,7 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 .quickassignmenu { position: absolute; z-index: 12; top: calc(100% + 5px); right: 0; width: 220px; display: grid; gap: 3px; padding: 7px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: var(--shadow-hover); }
 .quickassignmenu button { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 4px 7px; border: 0; background: transparent; text-align: left; }
 .quickassignmenu .quickperson.on { background: var(--accent-soft); color: var(--accent); }
+.quickassignmenu .quickagent { border-top: 1px solid var(--border); border-radius: 0; margin-top: 3px; padding-top: 7px; color: var(--accent); } .quickassignmenu .quickagent.on { background: var(--accent-soft); font-weight: 600; } .quickassignmenu .quickagent:disabled { opacity: .7; cursor: default; }
 .quickassignmenu .quickunassign { color: var(--danger); border-top: 1px solid var(--border); border-radius: 0; margin-top: 3px; padding-top: 7px; }
 .card:has(.quickassign[open]), .ttoday:has(.quickassign[open]) { content-visibility: visible; contain: none; z-index: 20; }
 .ttoday:has(.quickassign[open]) { position: relative; }
@@ -694,6 +695,16 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 .nextdue { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
 .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 10px 0; }
 .pgrid label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; } .pgrid input { width: 100%; color: var(--text); }
+.contactmethods { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.contactmethods .dsech { grid-column: 1 / -1; margin-bottom: 0; }
+.methodgroup { min-width: 0; } .methodgroup > b { display: block; margin-bottom: 6px; font-size: 13px; }
+.methodrow { display: grid; grid-template-columns: minmax(76px, .45fr) minmax(120px, 1fr) auto auto; gap: 6px; align-items: center; padding: 5px 0; }
+.methodrow input { min-width: 0; width: 100%; padding: 7px 8px; }
+.methodrow .methodgo { display: inline-flex; color: var(--accent); padding: 5px; }
+.methodadd { display: grid; grid-template-columns: minmax(100px, .45fr) minmax(150px, 1fr) auto; gap: 6px; margin-top: 7px; }
+.methodadd input { min-width: 0; width: 100%; } .methodadd button { white-space: nowrap; }
+.resourcepath { min-width: 0; flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resourcevalue { display: block; overflow: hidden; text-overflow: ellipsis; }
 .inwrap { display: flex; gap: 6px; align-items: center; } .inwrap a { text-decoration: none; }
 .touch .tchan { font-weight: 600; } .touch.draft { border-style: dashed; }
 .draftpill { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); font-weight: 600; }
@@ -706,6 +717,8 @@ label.chk.big { font-size: 15px; font-weight: 600; }
   .prow { grid-template-columns: 1fr auto; } .prow .pnext { grid-column: 1 / -1; } .prow .plast { display: none; }
   .ttoday .todaytail { grid-column: 1 / -1; justify-items: stretch; } .ttoday .todayactions { justify-content: flex-start; opacity: 1; pointer-events: auto; } .quickstatus { flex: 1; width: auto; }
   .pgrid { grid-template-columns: 1fr; }
+  .contactmethods { grid-template-columns: 1fr; } .contactmethods .dsech { grid-column: auto; }
+  .methodadd { grid-template-columns: 1fr auto; } .methodadd input:first-child { grid-column: 1 / -1; }
   #board.pipe .col { display: block; margin-bottom: 14px; } #board.pipe .col h2 { display: flex; }
 }
 @media (hover: none) { .ttoday .todayactions { opacity: 1; pointer-events: auto; } .ttoday .todaytail > .plast { display: none; } }

@@ -338,12 +338,13 @@
     <div class="pgrid">
       <label><span><i data-i="building-2"></i> Company</span> <input id="pCompany" list="pCompanies" autocomplete="off"><datalist id="pCompanies"></datalist></label>
       <label><span><i data-i="briefcase"></i> Role</span> <input id="pRole"></label>
-      <label><span><i data-i="mail"></i> Email</span> <span class="inwrap"><input id="pEmail" type="email"><a id="pMailGo" class="small" title="Write an email" hidden>↗</a></span></label>
-      <label><span><i data-i="phone"></i> Phone</span> <input id="pPhone" type="tel"></label>
-      <label><span><i data-i="link"></i> LinkedIn</span> <span class="inwrap"><input id="pLinkedin" placeholder="https://linkedin.com/in/..."><a id="pLiGo" class="small" target="_blank" rel="noopener noreferrer" title="Open LinkedIn profile" hidden>↗</a></span></label>
       <label><span><i data-i="pound-sterling"></i> Value</span> <input id="pValue" placeholder="For example: 5000"></label>
       <label><span><i data-i="compass"></i> Source</span> <input id="pSource" placeholder="For example: weekly opportunity run"></label>
     </div>
+    <section class="dsec contactmethods"><div class="dsech"><h4><i data-i="user"></i> Contact details</h4></div>
+      <div class="methodgroup"><b><i data-i="mail"></i> Email addresses</b><div id="pEmails"></div><div class="methodadd"><input id="pEmailLabel" placeholder="Label (for example Work)"><input id="pEmailNew" type="email" placeholder="name@example.com"><button id="pEmailAdd" type="button">Add</button></div></div>
+      <div class="methodgroup"><b><i data-i="phone"></i> Phone numbers</b><div id="pPhones"></div><div class="methodadd"><input id="pPhoneLabel" placeholder="Label (for example Mobile)"><input id="pPhoneNew" type="tel" placeholder="Phone number"><button id="pPhoneAdd" type="button">Add</button></div></div>
+    </section>
     <section class="dsec"><div class="dsech"><h4><i data-i="message-square"></i> Contact log <span id="pTouchCount" class="muted"></span></h4></div>
       <div class="composer"><textarea id="pTouchText" rows="2" placeholder="What did you send or talk about? Paste a draft message here too." aria-label="Contact log entry"></textarea>
         <div class="cbtns"><select id="pChan" class="pillsel" aria-label="Channel"><option value="linkedin">LinkedIn</option><option value="email">Email</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="note">Note</option></select>
@@ -352,8 +353,8 @@
     </section>
     <section class="dsec"><div class="dsech"><h4><i data-i="notebook-pen"></i> Notes</h4></div><textarea id="pNotes" class="ddesc" placeholder="Anything to remember about this person." aria-label="Notes"></textarea></section>
     <section class="dsec" id="pTasksSec"><div class="dsech"><h4><i data-i="square-check"></i> Tasks</h4></div><div id="pTasks"></div><input id="pTaskNew" class="addinline wide" placeholder="＋ Add a task for this person"></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="link"></i> Links</h4></div><div id="pLinks"></div><input id="pLinkNew" class="addinline wide" placeholder="＋ Add a link (paste a URL, or Title | URL)"></section>
-    <section class="dsec" id="pFilesSec"><div class="dsech"><h4 id="pFilesH"><i data-i="folders"></i> Files</h4></div><div class="hint">Folders for this company in Google Drive, Dropbox, OneDrive or SharePoint. Keep large files there, not in GitHub.</div><div id="pFiles"></div><input id="pFileNew" class="addinline wide" placeholder="＋ Add a folder or file link (Title | URL)"></section>
+    <section class="dsec"><div class="dsech"><h4><i data-i="link"></i> Profile and reference links</h4></div><div class="hint">LinkedIn, company website, blog, portfolio, or another page about this person.</div><div id="pLinks"></div><div class="methodadd"><input id="pLinkTitle" placeholder="Label (for example LinkedIn)"><input id="pLinkNew" type="url" placeholder="https://…"><button id="pLinkAdd" type="button">Add</button></div></section>
+    <section class="dsec" id="pFilesSec"><div class="dsech"><h4 id="pFilesH"><i data-i="folders"></i> Files and folders</h4></div><div class="hint">Working material for this company in Drive, Dropbox, OneDrive, SharePoint, or a local folder. Agents need the matching connector/plugin/MCP for cloud links, or a session on the right computer for local paths. If they cannot access one, they should ask you.</div><div id="pFiles"></div><div class="methodadd"><input id="pFileTitle" placeholder="Label (for example Client Drive)"><input id="pFileNew" placeholder="Cloud URL or local path"><button id="pFileAdd" type="button">Add</button></div></section>
     <details class="dsec"><summary id="pHistSum">History</summary><ol id="pHist" class="hist"></ol></details>
     <div class="dfoot2"><span id="pCreated" class="dcreated"></span><button id="pDelete" type="button" class="danger">Delete person</button></div>
   </div>
@@ -400,7 +401,7 @@
     </section>
     <div class="addbar" id="addBar" role="group" aria-label="Add to this task"><button type="button" data-sec="todos"><i data-i="square-check"></i> Checklist</button><button type="button" data-sec="links"><i data-i="link"></i> Link</button><button type="button" data-sec="contacts"><i data-i="user"></i> Contact</button></div>
     <section class="dsec optsec" data-sec="todos"><div class="dsech"><h4><i data-i="square-check"></i> Checklist <span id="cTodoCount" class="muted"></span></h4></div><div id="cTodos"></div></section>
-    <section class="dsec optsec" data-sec="links"><div class="dsech"><h4><i data-i="link"></i> Links <span id="cLinkCount" class="muted"></span></h4></div><div id="cLinkList"></div><input id="cLinkNew" class="addinline wide" placeholder="＋ Add a link (paste a URL, or Title | URL)"></section>
+    <section class="dsec optsec" data-sec="links"><div class="dsech"><h4><i data-i="link"></i> Task resources and reference links <span id="cLinkCount" class="muted"></span></h4></div><div class="hint">Working Drive, Dropbox or local files/folders, issues, pull requests and other supporting pages for this task. Cloud access needs the matching connector/plugin/MCP and account; a local path needs an agent session on that computer. Profile links such as LinkedIn belong on the person.</div><div id="cLinkList"></div><input id="cLinkNew" class="addinline wide" placeholder="＋ Add a cloud URL or local path (optionally Title | location)"></section>
     <section class="dsec optsec" data-sec="contacts"><div class="dsech"><h4><i data-i="user"></i> Contacts</h4></div><div id="cContactList"></div><input id="cContactNew" class="addinline wide" placeholder="＋ Add a contact: Name | role | email | phone"></section>
 
     <details id="cHistWrap" class="dsec"><summary id="cHistSum">Activity</summary><ol id="cHist" class="hist"></ol></details>

@@ -151,6 +151,7 @@ if (typeof window !== 'undefined') (() => {
   const nowIso = () => new Date().toISOString();
   const setStatus = (m, k = '') => { const s = $('status'); s.textContent = m; s.className = k; const r = $('btnRefresh'); if (r) r.title = m + ' (click to reload)'; };
   const safeUrl = u => { try { const x = new URL(u); return (x.protocol === 'https:' || x.protocol === 'http:') ? x.href : null; } catch { return null; } };
+  const localResource = v => /^(?:file:\/\/|~?\/|\.\.?\/|[A-Za-z]:[\\/]|\\\\)/.test(String(v || '').trim());
 
   function linkify(parent, text) { // build DOM (no innerHTML): plain text plus safe http(s) links
     String(text || '').split(/(https?:\/\/[^\s<>"')]+)/g).forEach((part, i) => {
@@ -194,7 +195,7 @@ if (typeof window !== 'undefined') (() => {
       contacts: Array.isArray(o.contacts) ? o.contacts : [], client_info: o.client_info && typeof o.client_info === 'object' && !Array.isArray(o.client_info) ? o.client_info : {}
     };
     Object.keys(o).forEach(k => { if (!(k in n)) n[k] = o[k]; });   // keep keys this page does not know, so it never drops another tool's data
-    n.contacts.forEach(p => { ['links', 'comments', 'history'].forEach(k => { if (!Array.isArray(p[k])) p[k] = []; }); if (!p.stage) p.stage = (n.settings.stages || [])[0] || 'New'; });
+    n.contacts.forEach(p => { ['links', 'comments', 'history'].forEach(k => { if (!Array.isArray(p[k])) p[k] = []; }); if (!p.stage) p.stage = (n.settings.stages || [])[0] || 'New'; normaliseContact(p); });
     n.tasks.forEach(t => { // tolerate v1 cards
       if (!Array.isArray(t.assignees)) { const p = people.find(p => p.name === t.owner || p.github === t.owner); t.assignees = p ? [p.github] : []; }
       if (!Array.isArray(t.labels)) t.labels = []; if (!Array.isArray(t.links)) t.links = []; if (!Array.isArray(t.contacts)) t.contacts = [];
@@ -1033,7 +1034,7 @@ if (typeof window !== 'undefined') (() => {
       if (t.details) L.push('- details:', ...t.details.split('\n').map(x => '    ' + x));
       if (t.todos.length) L.push('- to-do list (tick these off as you finish them):', ...t.todos.map((d, i) => `    ${i + 1}. [${d.done ? 'x' : ' '}] ${d.text}`));
       if (t.comments.length) L.push('- comments (newest last):', ...t.comments.slice(-10).map(m => `    [${m.at.slice(0, 16)}] ${m.by}: ${String(m.text).replace(/\n/g, ' ')}`));
-      if (t.links.length) L.push('- links:', ...t.links.map(l => `    ${l.title}: ${l.url}`));
+      if (t.links.length) L.push('- task resources and reference links:', ...t.links.map(l => `    ${l.title}: ${l.url}`), '    Access note: cloud resources need the matching connector/plugin/MCP and signed-in account; local paths need a session on the computer that holds them. If access fails, ask the user.');
       if (t.contacts.length) L.push('- contacts:', ...t.contacts.map(k => `    ${[k.name, k.role, k.email, k.phone].filter(Boolean).join(' | ')}`));
       if (t.claim) L.push(`- NOTE: already claimed by ${t.claim.agent} (session ${t.claim.session_id || '?'}, ${claimState(t.claim)}). Do not take it over unless the user says so.`);
       if (agent === 'codex') L.push('', `You are Codex, asked by @${who}. Do what the newest comment mentioning @codex asks, and nothing beyond it. Pass --agent codex when you claim.`);
@@ -1142,6 +1143,21 @@ if (typeof window !== 'undefined') (() => {
     });
   }
   const openComments = id => openCard(id, 'comments');
+  const pendingClaudeClaim = who => ({ agent: 'claude', on_behalf_of: who, session_id: 'pending-' + Date.now().toString(36), session_url: '', host: 'cron-job.org relay', status: 'running', note: `Assigned to Claude by @${who}; waiting for the routine to start (about 1 to 2 minutes)`, claimed_at: nowIso(), heartbeat_at: nowIso() });
+  async function triggerClaude(t, who, cid) {
+    try { const j = await sendToClaude(t, who, cid); toast('Assigned to Claude. It should start within about two minutes.'); watchClaudeJob(j.jobId, t.id, who, cid); return true; }
+    catch (e) { toast('Not sent: ' + e.message, true); edit(t.id, x => { if (x.claim && String(x.claim.session_id || '').indexOf('pending-') === 0) { x.claim.status = 'stuck'; x.claim.note = 'Send to Claude failed: ' + e.message; } }, 'Send to Claude failed'); return false; }
+  }
+  async function assignMyClaude(id) {
+    const t = state.tasks.find(x => x.id === id), who = cfg().me; if (!t) return;
+    if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents first.', true); return; }
+    if (!claudeReady()) { toast('Finish your Claude routine setup in Settings → Agents first.', true); return; }
+    if (!who) { toast('Set your GitHub username in Settings first.', true); return; }
+    const live = activeClaim(t); if (live) { toast(`${agentLabel(live)} already has this task. Release that claim before assigning another agent.`, true); return; }
+    const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
+    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); card.claim = pendingClaudeClaim(who); stamp(card); }, `Assign #${t.num} to Claude`, [id]);
+    const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) await triggerClaude(current, who, cid);
+  }
   async function postComment() {
     const ta = $('cmText'), text = ta.value.trim(), id = commentsFor; if (!text || !id) return;
     if (busy) { toast('Busy, try again in a moment', true); return; }
@@ -1156,15 +1172,14 @@ if (typeof window !== 'undefined') (() => {
     }
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
     await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return; t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text });
-      if (send) t.claim = { agent: 'claude', on_behalf_of: who, session_id: 'pending-' + Date.now().toString(36), session_url: '', host: 'cron-job.org relay', status: 'running', note: `Sent to Claude by @${who}; waiting for the routine to start (about 1 to 2 minutes)`, claimed_at: nowIso(), heartbeat_at: nowIso() };
+      if (send) t.claim = pendingClaudeClaim(who);
       stamp(t); }, `Comment: ${titleOf(id)}`, [id]);
     $('cmPost').disabled = false;
     { const t2 = state.tasks.find(x => x.id === id); if (t2) syncAgentBtn(t2);
       if (mentionsCodex(text) && myAgents().includes('codex')) toast('Codex can’t be started from the board. Press Copy for Codex at the top of the card, then paste it into Codex.'); }
     if (send && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
       const t1 = state.tasks.find(x => x.id === id);
-      try { const j = await sendToClaude(t1, who, cid); toast('Sent to Claude. It should start within about two minutes.'); watchClaudeJob(j.jobId, id, who, cid); }
-      catch (e) { toast('Not sent: ' + e.message, true); edit(id, t => { if (t.claim && String(t.claim.session_id || '').indexOf('pending-') === 0) { t.claim.status = 'stuck'; t.claim.note = 'Send to Claude failed: ' + e.message; } }, 'Send to Claude failed'); }
+      await triggerClaude(t1, who, cid);
     }
     if ((state.tasks.find(x => x.id === id) || { comments: [] }).comments.length <= n0) { ta.value = text; autosize(ta); toast('Comment not saved. Your text is still in the box.', true); }
     cmSig = ''; renderComments(); ta.focus();
@@ -1438,7 +1453,7 @@ if (typeof window !== 'undefined') (() => {
     L.push('- **Created:** ' + [fmtStamp(t.created), t.createdBy && 'by ' + t.createdBy].filter(Boolean).join(' ') + ' · **Updated:** ' + [fmtStamp(t.updated), t.updatedBy && 'by ' + t.updatedBy].filter(Boolean).join(' '));
     if ((t.details || '').trim()) L.push('', t.details.trim());
     if (t.todos.length) { L.push('', `**Checklist (${t.todos.filter(d => d.done).length}/${t.todos.length})**`); t.todos.forEach(d => L.push(`- [${d.done ? 'x' : ' '}] ${mdLine(d.text)}`)); }
-    if (t.links.length) { L.push('', '**Links**'); t.links.forEach(l => L.push(`- [${mdLine(l.title || l.url)}](${l.url})`)); }
+    if (t.links.length) { L.push('', '**Task resources and reference links**'); t.links.forEach(l => L.push(safeUrl(l.url) ? `- [${mdLine(l.title || l.url)}](${l.url})` : `- ${mdLine(l.title || l.url)}: ${l.url}`)); }
     if (t.contacts.length) { L.push('', '**Contacts**'); t.contacts.forEach(k => L.push('- ' + [k.name, k.role, k.email, k.phone].filter(Boolean).join(' | '))); }
     if (t.comments.length) { L.push('', `**Comments (${t.comments.length})**`); t.comments.forEach(c => L.push(`- ${fmtStamp(c.at)} · ${c.by || '?'}: ${mdIndent(c.text)}`)); }
     if (t.history.length) { L.push('', `**History (${t.history.length})**`); t.history.forEach(h => L.push(`- ${fmtStamp(h.at)} · ${h.by || '?'}: ${mdLine(h.text)}`)); }
@@ -1531,6 +1546,8 @@ if (typeof window !== 'undefined') (() => {
     const assign = el('details', 'quickassign'), summary = elI('summary', null, 'user', t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign'); summary.title = `Assign task #${t.num}`; assign.append(summary);
     const menu = el('div', 'quickassignmenu'); state.people.forEach(p => { const on = t.assignees.includes(p.github), b = el('button', 'quickperson' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.append(avatar(p.github), document.createTextNode(p.name || '@' + p.github));
       b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); menu.append(b); });
+    if (myAgents().includes('claude')) { const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === cfg().me, b = el('button', 'quickagent' + (mine ? ' on' : '')); b.type = 'button'; b.disabled = !!claim || !claudeReady() || !cfg().me; b.setAttribute('aria-pressed', String(!!mine)); b.append(svgIcon('bot'), el('span', null, mine ? `Claude for @${cfg().me} · assigned` : claudeReady() && cfg().me ? `Assign to Claude for @${cfg().me}` : 'Claude · finish setup first'));
+      b.title = mine ? 'This task is already assigned to your Claude routine' : claim ? `${agentLabel(claim)} already has this task` : 'Assign this card to your Claude routine; it starts automatically'; b.onclick = () => { assign.open = false; assignMyClaude(t.id); }; menu.append(b); }
     if (t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
     if (!state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); actions.append(status, assign); return actions;
   }
@@ -1707,18 +1724,19 @@ if (typeof window !== 'undefined') (() => {
   }
   $('cLabelNew').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addLabel(); } }); $('cLabelNew').addEventListener('change', addLabel);
 
-  const parseLine = txt => { const p = txt.split('|').map(x => x.trim()); const url = p.length > 1 ? p.slice(1).join('|').trim() : p[0]; return safeUrl(url) ? { title: p.length > 1 && p[0] ? p[0] : url, url } : null; };
+  const parseLine = txt => { const p = txt.split('|').map(x => x.trim()); const url = p.length > 1 ? p.slice(1).join('|').trim() : p[0]; return safeUrl(url) || localResource(url) ? { title: p.length > 1 && p[0] ? p[0] : url, url } : null; };
   function renderLinkList(t) {
     const box = $('cLinkList'); box.textContent = ''; $('cLinkCount').textContent = t.links.length ? `(${t.links.length})` : '';
     t.links.forEach(l => {
-      const row = el('div', 'linkrow'), g = ghLink(l.url), a = el('a', null, g ? g.label : (l.title || l.url)); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer';
-      let host = ''; try { host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
+      const row = el('div', 'linkrow'), g = ghLink(l.url), href = safeUrl(l.url), local = localResource(l.url), main = href ? el('a', null, g ? g.label : (l.title || l.url)) : el('span', 'resourcepath', l.title || l.url); if (href) { main.href = href; main.target = '_blank'; main.rel = 'noopener noreferrer'; }
+      let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {} if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
+      const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.onclick = () => copyText(l.url, 'Path copied.'); }
       const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove link'; x.setAttribute('aria-label', 'Remove link');
       x.onclick = () => edit(editing, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(editing)}`);
-      row.append(elI('span', 'li', g ? 'github' : 'link'), a, el('span', 'host', g && l.title && l.title !== l.url ? l.title : host), x); box.append(row);
+      row.append(elI('span', 'li', g ? 'github' : local ? 'laptop' : 'link'), main, el('span', 'host', g && l.title && l.title !== l.url ? l.title : host)); if (cp) row.append(cp); row.append(x); box.append(row);
     });
   }
-  $('cLinkNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = parseLine($('cLinkNew').value); if (!v) { toast('Paste an http(s) link, or use: Title | https://url', true); return; }
+  $('cLinkNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = parseLine($('cLinkNew').value); if (!v) { toast('Paste an http(s) cloud link or local path, optionally as: Title | location', true); return; }
     $('cLinkNew').value = ''; edit(editing, t => { if (!t.links.some(y => y.url === v.url)) t.links.push(v); }, `Links: ${titleOf(editing)}`); });
   function renderContactList(t) {
     const box = $('cContactList'); box.textContent = '';
@@ -1816,7 +1834,7 @@ if (typeof window !== 'undefined') (() => {
     L.push(`**Board task ${ref}**: ${t.title}`, '', [t.client && `Client: ${t.client}`, `Priority: ${t.priority || 'medium'}`, t.due && `Due: ${t.due}`, t.assignees.length && `Assigned: ${t.assignees.map(a => '@' + a).join(' ')}`].filter(Boolean).join(' · '), '');
     if (t.details) L.push('### Details', t.details, '');
     if (t.todos.length) L.push('### Checklist', ...t.todos.map(d => `- [${d.done ? 'x' : ' '}] ${d.text}`), '');
-    const ext = t.links.filter(l => !issueLinkOf({ links: [l] }) ); if (ext.length) L.push('### Links', ...ext.map(l => `- [${l.title || l.url}](${l.url})`), '');
+    const ext = t.links.filter(l => !issueLinkOf({ links: [l] }) ); if (ext.length) L.push('### Task resources and reference links', ...ext.map(l => safeUrl(l.url) ? `- [${l.title || l.url}](${l.url})` : `- ${l.title || l.url}: ${l.url}`), '');
     if (t.comments.length) L.push('### Recent board comments', ...t.comments.slice(-5).map(m => `- **${m.by}**: ${String(m.text).replace(/\n/g, ' ')}`), '');
     L.push('---', `<!-- board-task: id=${t.id} num=${t.num} -->`, '### Reporting back to the board',
       `This issue mirrors task ${ref} on the Keeptrack board (${web}). Automation working it: read ${agents} and ${skill} first, then report with \`python3 board/keeptrack.py\` (set BOARD_USER and BOARD_AGENT; with no \`gh\` login set BOARD_TOKEN):`, '```',
@@ -2520,11 +2538,25 @@ if (typeof window !== 'undefined') (() => {
   const daysSince = iso => iso ? Math.floor((Date.now() - Date.parse(iso)) / 86400000) : null;
   const plusDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d); };
 
+  function syncContactLegacy(p) {
+    p.email = (p.emails[0] || {}).value || '';
+    p.phone = (p.phones[0] || {}).value || '';
+    const li = p.links.find(l => /linkedin/i.test((l.title || '') + ' ' + (l.url || '')));
+    p.linkedin = li ? li.url : '';
+    return p;
+  }
   function normaliseContact(p) {
     ['links', 'comments', 'history'].forEach(k => { if (!Array.isArray(p[k])) p[k] = []; });
     ['name', 'role', 'company', 'email', 'phone', 'linkedin', 'stage', 'value', 'next', 'next_due', 'source', 'notes'].forEach(k => { if (p[k] == null) p[k] = ''; });
+    p.emails = Array.isArray(p.emails) ? p.emails.map((x, i) => typeof x === 'string' ? { id: `email_${i}`, label: i ? 'Other' : 'Email', value: x } : x).filter(x => x && x.value) : [];
+    p.phones = Array.isArray(p.phones) ? p.phones.map((x, i) => typeof x === 'string' ? { id: `phone_${i}`, label: i ? 'Other' : 'Phone', value: x } : x).filter(x => x && x.value) : [];
+    if (p.email && !p.emails.some(x => String(x.value).toLowerCase() === String(p.email).toLowerCase())) p.emails.unshift({ id: 'email_legacy', label: 'Email', value: String(p.email) });
+    if (p.phone && !p.phones.some(x => x.value === p.phone)) p.phones.unshift({ id: 'phone_legacy', label: 'Phone', value: p.phone });
+    if (p.linkedin && !p.links.some(x => String(x.url || '').replace(/\/$/, '') === String(p.linkedin).replace(/\/$/, ''))) p.links.unshift({ title: 'LinkedIn', url: String(p.linkedin) });
+    p.emails.forEach((x, i) => { if (!x.id) x.id = `email_${i}`; if (!x.label) x.label = i ? 'Other' : 'Email'; });
+    p.phones.forEach((x, i) => { if (!x.id) x.id = `phone_${i}`; if (!x.label) x.label = i ? 'Other' : 'Phone'; });
     if (!p.stage) p.stage = stages()[0];
-    return p;
+    return syncContactLegacy(p);
   }
   function contactLog(pre, post) {   // history for people, like autoLog does for tasks
     const P = new Map((pre.contacts || []).map(p => [p.id, p])), who = cfg().me || 'someone';
@@ -2534,6 +2566,8 @@ if (typeof window !== 'undefined') (() => {
       if (o.stage !== p.stage) add(`stage ${o.stage || 'none'} → ${p.stage}`);
       if ((o.next || '') !== (p.next || '') || (o.next_due || '') !== (p.next_due || '')) add('next step: ' + (p.next || 'none') + (p.next_due ? ' (' + p.next_due + ')' : ''));
       ['name', 'company', 'role', 'email', 'phone', 'linkedin', 'value', 'source'].forEach(k => { if ((o[k] || '') !== (p[k] || '')) add(`${k}: ${p[k] || 'cleared'}`); });
+      if (JSON.stringify(o.emails || []) !== JSON.stringify(p.emails || [])) add('edited email addresses');
+      if (JSON.stringify(o.phones || []) !== JSON.stringify(p.phones || [])) add('edited phone numbers');
       if ((o.notes || '') !== (p.notes || '')) add('edited the notes');
       p.links.filter(l => !o.links.some(x => x.url === l.url)).forEach(l => add('added link: ' + (l.title || l.url)));
       p.comments.filter(c => c.draft === false && (o.comments.find(x => x.id === c.id) || {}).draft).forEach(c => add(`marked sent (${chan(c.channel)[2]})`));
@@ -2632,7 +2666,7 @@ if (typeof window !== 'undefined') (() => {
     const st = el('select', 'pillsel'); [['', 'All stages'], ...stages().map(s => [s, s])].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; st.append(o); }); st.value = peopleStage; st.onchange = () => { peopleStage = st.value; render(); };
     bar.append(q, st); wrap.append(bar);
     const ql = peopleQ.toLowerCase();
-    const items = state.contacts.filter(p => crmFilter(p) && (!peopleStage || p.stage === peopleStage) && (!ql || [p.name, p.company, p.role, p.email, p.notes, p.next].join(' ').toLowerCase().includes(ql)))
+    const items = state.contacts.filter(p => crmFilter(p) && (!peopleStage || p.stage === peopleStage) && (!ql || [p.name, p.company, p.role, p.notes, p.next, ...p.emails.map(x => x.value), ...p.phones.map(x => x.value), ...p.links.flatMap(x => [x.title, x.url])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => a.name.localeCompare(b.name));
     capList('people', items, personRow, wrap);
     if (!items.length) wrap.append(el('div', 'emptycol', state.contacts.length ? 'Nobody matches.' : 'No people yet.'));
@@ -2670,7 +2704,7 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- person drawer --------------------------------------------------------
   let editingContact = null, pSig = '';
-  const PF = [['pRole', 'role'], ['pCompany', 'company'], ['pEmail', 'email'], ['pPhone', 'phone'], ['pLinkedin', 'linkedin'], ['pValue', 'value'], ['pSource', 'source']];
+  const PF = [['pRole', 'role'], ['pCompany', 'company'], ['pValue', 'value'], ['pSource', 'source']];
   function openContact(id) {
     editingContact = id; pSig = ''; fillContact(true);
     const d = $('dlgContact'); if (!d.open) d.showModal();
@@ -2685,26 +2719,46 @@ if (typeof window !== 'undefined') (() => {
     PF.forEach(([fid, k]) => { if (!keep(fid)) $(fid).value = p[k] || ''; });
     $('pCompanies').textContent = ''; [...new Set([...state.clients, ...state.contacts.map(x => x.company)].filter(Boolean))].forEach(c => { const o = el('option'); o.value = c; $('pCompanies').append(o); });
     if (!keep('pNotes')) { $('pNotes').value = p.notes; autosize($('pNotes')); }
-    const mail = $('pMailGo'), li = $('pLiGo'); mail.hidden = !p.email; mail.href = p.email ? 'mailto:' + p.email : '#'; li.hidden = !safeUrl(p.linkedin); li.href = safeUrl(p.linkedin) || '#';
+    renderContactMethods(p);
     // links: this person's own, and the files of their company (client)
-    renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); }, `Links: ${p.name}`));
+    renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); syncContactLegacy(x); }, `Links: ${p.name}`));
     const co = p.company, info = co ? ((state.client_info || {})[co] || { links: [] }) : null;
-    $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`)); }
+    $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files and folders for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true); }
     renderTouches(p); renderPersonTasks(p);
     const ol = $('pHist'); ol.textContent = ''; $('pHistSum').textContent = `History (${p.history.length})`;
     p.history.slice().reverse().forEach(h => { const li2 = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li2.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li2); });
     $('pCreated').textContent = p.created ? `Added ${new Date(p.created).toLocaleDateString('en-GB')}${p.createdBy ? ' by ' + p.createdBy : ''}` : '';
   }
-  function renderLinkBox(box, links, onRemove) {
+  function renderContactMethods(p) {
+    const draw = (box, items, kind) => {
+      box.textContent = '';
+      items.forEach(item => {
+        const row = el('div', 'methodrow'), label = el('input', 'methodlabel'), value = el('input', 'methodvalue'), go = el('a', 'methodgo'), x = el('button', 'lx', '×');
+        label.value = item.label || ''; label.placeholder = 'Label'; label.setAttribute('aria-label', `${kind} label`);
+        value.value = item.value || ''; value.type = kind === 'email' ? 'email' : 'tel'; value.setAttribute('aria-label', kind === 'email' ? 'Email address' : 'Phone number');
+        go.href = kind === 'email' ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = kind === 'email' ? 'Write email' : 'Call'; go.append(svgIcon(kind === 'email' ? 'mail' : 'phone'));
+        const save = () => { const lab = label.value.trim(), val = value.value.trim(); pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || (kind === 'email' ? 'Email' : 'Phone'); found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
+        label.addEventListener('change', save); value.addEventListener('change', save);
+        x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = () => pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`);
+        row.append(label, value, go, x); box.append(row);
+      });
+      if (!items.length) box.append(el('div', 'muted small', kind === 'email' ? 'No email addresses yet.' : 'No phone numbers yet.'));
+    };
+    draw($('pEmails'), p.emails, 'email'); draw($('pPhones'), p.phones, 'phone');
+  }
+  function renderLinkBox(box, links, onRemove, resources) {
     box.textContent = '';
-    links.forEach(l => { const row = el('div', 'linkrow'), a = el('a', null, l.title || l.url); a.href = safeUrl(l.url) || '#'; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      const host = (() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+    links.forEach(l => { const row = el('div', 'linkrow'), href = safeUrl(l.url), local = resources && localResource(l.url), main = href ? el('a', null, l.title || l.url) : el('span', 'resourcepath', l.title || l.url);
+      if (href) { main.href = href; main.target = '_blank'; main.rel = 'noopener noreferrer'; } else if (local) { main.title = l.url; }
+      const host = local ? 'Local path' : (() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+      if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
+      const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.setAttribute('aria-label', 'Copy local path'); cp.onclick = () => copyText(l.url, 'Path copied.'); }
       const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = () => onRemove(l);
-      row.append(elI('span', 'li', storeIcon(host)), a, el('span', 'muted small', ' ' + host), x); box.append(row); });
+      row.append(elI('span', 'li', local ? 'laptop' : storeIcon(host)), main, el('span', 'host', host)); if (cp) row.append(cp); row.append(x); box.append(row); });
     if (!links.length) box.append(el('div', 'muted small', 'No links yet.'));
   }
   const storeIcon = h => /drive\.google|docs\.google|dropbox|sharepoint|onedrive|office|live\.com/.test(h) ? 'folder' : /github/.test(h) ? 'github' : /notion/.test(h) ? 'file-text' : 'link';
-  const parseLink = v => { const i = v.indexOf('|'), url = (i >= 0 ? v.slice(i + 1) : v).trim(), title = i >= 0 ? v.slice(0, i).trim() : ''; return safeUrl(url) ? { title: title || url, url } : null; };
+  const parseNamedLink = (title, value, resources) => { const url = String(value || '').trim(); if (!(safeUrl(url) || (resources && localResource(url)))) return null; let fallback = url; try { fallback = new URL(url).hostname.replace(/^www\./, ''); } catch { fallback = url.split(/[\\/]/).filter(Boolean).pop() || url; } return { title: String(title || '').trim() || fallback, url }; };
 
   function renderTouches(p) {
     const box = $('pTouches'); box.textContent = ''; $('pTouchCount').textContent = p.comments.length ? `(${p.comments.length})` : '';
@@ -2752,9 +2806,16 @@ if (typeof window !== 'undefined') (() => {
   PF.forEach(([fid, k]) => $(fid).addEventListener('change', e => { const v = e.target.value.trim(); pedit(editingContact, (x, n) => { x[k] = v; if (k === 'company' && v && !n.clients.includes(v)) n.clients.push(v); }); }));
   $('pNotes').addEventListener('input', () => autosize($('pNotes')));
   $('pNotes').addEventListener('change', e => { const v = e.target.value; pedit(editingContact, x => { x.notes = v; }); });
-  $('pLinkNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; const l = parseLink(e.target.value.trim()); if (!l) { toast('Paste a URL, or Title | URL', true); return; } e.target.value = ''; pedit(editingContact, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); }); });
-  $('pFileNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; const p = contactNow(), l = parseLink(e.target.value.trim()); if (!p || !p.company) return; if (!l) { toast('Paste a URL, or Title | URL', true); return; } e.target.value = ''; const co = p.company;
-    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); });
+  function addContactMethod(kind) { const p = contactNow(), value = $(kind === 'email' ? 'pEmailNew' : 'pPhoneNew'), label = $(kind === 'email' ? 'pEmailLabel' : 'pPhoneLabel'), v = value.value.trim(), lab = label.value.trim() || (kind === 'email' ? 'Email' : 'Phone'); if (!p || !v) return; if (kind === 'email' && !value.checkValidity()) { value.reportValidity(); return; }
+    const id = boardId(kind === 'email' ? 'e_' : 'ph_'); pedit(p.id, x => { const list = kind === 'email' ? x.emails : x.phones; if (!list.some(y => y.value.toLowerCase() === v.toLowerCase())) list.push({ id, label: lab, value: v }); syncContactLegacy(x); }, `Contact details: ${p.name}`); value.value = ''; label.value = ''; }
+  $('pEmailAdd').onclick = () => addContactMethod('email'); $('pPhoneAdd').onclick = () => addContactMethod('phone');
+  [['pEmailLabel', 'email'], ['pEmailNew', 'email'], ['pPhoneLabel', 'phone'], ['pPhoneNew', 'phone']].forEach(([id, kind]) => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addContactMethod(kind); } }));
+  function addPersonLink() { const p = contactNow(), l = parseNamedLink($('pLinkTitle').value, $('pLinkNew').value, false); if (!p) return; if (!l) { toast('Enter an http:// or https:// link.', true); return; } $('pLinkTitle').value = ''; $('pLinkNew').value = ''; pedit(p.id, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); syncContactLegacy(x); }, `Links: ${p.name}`); }
+  function addCompanyFile() { const p = contactNow(), l = parseNamedLink($('pFileTitle').value, $('pFileNew').value, true); if (!p || !p.company) return; if (!l) { toast('Enter a cloud URL or a local path.', true); return; } $('pFileTitle').value = ''; $('pFileNew').value = ''; const co = p.company;
+    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
+  $('pLinkAdd').onclick = addPersonLink; $('pFileAdd').onclick = addCompanyFile;
+  ['pLinkTitle', 'pLinkNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addPersonLink(); } }));
+  ['pFileTitle', 'pFileNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCompanyFile(); } }));
   $('pTouchPost').onclick = logTouch;
   $('pTouchText').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); logTouch(); } });
   $('pTouchText').addEventListener('input', () => autosize($('pTouchText')));
@@ -2766,7 +2827,12 @@ if (typeof window !== 'undefined') (() => {
   $('pAgent').onclick = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
   function personPrompt(p) {
     const c = cfg(), lines = [`Help me with my contact ${p.name}${p.role ? ', ' + p.role : ''}${p.company ? ' at ' + p.company : ''}. Stage: ${p.stage}. Next step: ${p.next || 'none'}${p.next_due ? ' (due ' + p.next_due + ')' : ''}.`];
-    if (p.linkedin) lines.push('LinkedIn: ' + p.linkedin); if (p.notes) lines.push('Notes: ' + p.notes);
+    if (p.emails.length) lines.push('Email addresses: ' + p.emails.map(x => `${x.label}: ${x.value}`).join('; '));
+    if (p.phones.length) lines.push('Phone numbers: ' + p.phones.map(x => `${x.label}: ${x.value}`).join('; '));
+    if (p.links.length) { lines.push('', 'Profile and reference links (pages about this person/company, not working files):'); p.links.forEach(l => lines.push(`- ${l.title || l.url}: ${l.url}`)); }
+    const resources = ((state.client_info || {})[p.company] || {}).links || [];
+    if (resources.length) { lines.push('', `Files and folders for ${p.company} (working material):`); resources.forEach(l => lines.push(`- ${l.title || l.url}: ${l.url}`)); lines.push('Access note: cloud links require the matching connector, plugin, MCP server and signed-in account. Local paths require a session on the computer that holds them. If you cannot access a resource, say so and ask me; do not pretend you opened it.'); }
+    if (p.notes) lines.push('Notes: ' + p.notes);
     const recent = p.comments.slice(-5); if (recent.length) { lines.push('', 'Recent contact:'); recent.forEach(cm => lines.push(`- ${cm.at.slice(0, 10)} ${chan(cm.channel)[2]}${cm.draft ? ' (draft, not sent)' : ''}: ${cm.text.replace(/\s+/g, ' ').slice(0, 300)}`)); }
     lines.push('', `This person is on my Keeptrack board (repo ${c.repo}, file ${c.path}, record id ${p.id}). If you can use the Keeptrack skill or keeptrack.py, log any message you write as a draft touch, and never send anything yourself. I will send it and mark it sent.`);
     return lines.join('\n');

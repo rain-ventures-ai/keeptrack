@@ -94,6 +94,41 @@ class LocalBoard(unittest.TestCase):
         self.assertIn("t_old", [t["id"] for t in d["tasks"]])
         self.assertEqual(d["archive"]["files"]["2025"], {"tasks": 0, "contacts": 0})
 
+    def test_contact_methods_keep_legacy_first_values(self):
+        p = {"id": "p_casey", "name": "Casey", "company": "Acme", "email": "work@example.test", "phone": "+44 20",
+             "linkedin": "https://linkedin.com/in/casey", "links": [], "emails": [], "phones": []}
+        kt.sync_person_methods(p)
+        p["emails"].append({"id": "e_home", "label": "Personal", "value": "home@example.test"})
+        p["phones"].append({"id": "ph_mobile", "label": "Mobile", "value": "+44 77"})
+        args = Args(name=None, company=None, role=None, email="new-work@example.test", phone=None, linkedin=None,
+                    value=None, source=None, notes=None, next=None, stage=None, due=None)
+        kt.set_fields(board(), p, args)
+        self.assertEqual([(x["label"], x["value"]) for x in p["emails"]],
+                         [("Email", "new-work@example.test"), ("Personal", "home@example.test")])
+        self.assertEqual(p["email"], "new-work@example.test")
+        self.assertEqual([x["value"] for x in p["phones"]], ["+44 20", "+44 77"])
+        self.assertEqual(p["linkedin"], "https://linkedin.com/in/casey")
+
+    def test_person_output_distinguishes_references_and_resources(self):
+        data = self.read(); data["clients"] = ["Acme"]; data["contacts"] = [{"id": "p_casey", "name": "Casey", "company": "Acme", "role": "",
+            "email": "work@example.test", "phone": "+44 20", "linkedin": "https://linkedin.com/in/casey", "emails": [{"id": "e_work", "label": "Work", "value": "work@example.test"}, {"id": "e_home", "label": "Personal", "value": "home@example.test"}],
+            "phones": [{"id": "ph_mobile", "label": "Mobile", "value": "+44 20"}], "links": [{"title": "LinkedIn", "url": "https://linkedin.com/in/casey"}, {"title": "Blog", "url": "https://casey.example"}],
+            "stage": "New", "value": "", "source": "", "notes": "", "next": "", "next_due": "", "comments": [], "history": []}]; data["client_info"] = {"Acme": {"links": [{"title": "Drive", "url": "https://drive.google.com/x"}, {"title": "Local", "url": "/srv/acme"}]}}; write(self.file, data)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): kt.cmd_person(Args(ref="Casey"))
+        text = out.getvalue(); self.assertIn("email (Work): work@example.test", text); self.assertIn("email (Personal): home@example.test", text)
+        self.assertIn("profile/reference link: Blog", text); self.assertIn("file/folder resource (Acme): Local  /srv/acme", text)
+        self.assertIn("cloud resources need the matching connector/plugin/MCP", text)
+
+    def test_client_link_accepts_local_resource_path(self):
+        self.quiet(kt.cmd_client_link, Args(client="Acme", url="/srv/clients/acme", title="Local folder"))
+        self.assertEqual(self.read()["client_info"]["Acme"]["links"], [{"title": "Local folder", "url": "/srv/clients/acme"}])
+
+    def test_task_link_accepts_local_resource_path(self):
+        self.quiet(kt.cmd_link, Args(id="t_live", url="/srv/tasks/live", title="Working folder"))
+        task = next(x for x in self.read()["tasks"] if x["id"] == "t_live")
+        self.assertEqual(task["links"], [{"title": "Working folder", "url": "/srv/tasks/live"}])
+
 
 if __name__ == "__main__":
     unittest.main()

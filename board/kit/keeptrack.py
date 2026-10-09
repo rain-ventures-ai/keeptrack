@@ -1025,6 +1025,8 @@ def cmd_show(a):
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
     hs = t.pop("history", []); cms = t.pop("comments", [])
     print(json.dumps(t, indent=2, ensure_ascii=False))
+    if t.get("links"):
+        print("\nresource access: cloud links need the matching connector/plugin/MCP and signed-in account; local paths need a session on the computer that holds them. Ask the user if access fails.")
     if t.get("todos"):
         print("\nto-dos:")
         for i, d in enumerate(t["todos"], 1): print(f"  {i}. [{'x' if d.get('done') else ' '}] {d['text']}")
@@ -1210,7 +1212,7 @@ def cmd_assign(a):
 def cmd_link(a):
     def fn(data):
         t = find(data, a.id)
-        if not a.url.startswith(("http://", "https://")): sys.exit("url must be http(s)")
+        if not (a.url.startswith(("http://", "https://")) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", a.url)): sys.exit("resource must be an http(s) cloud URL or a local path")
         links = t.setdefault("links", [])
         if not any(l.get("url") == a.url for l in links): links.append({"title": a.title or a.url, "url": a.url})
         hist(t, f"linked {a.title or a.url}"); t["updated"] = now(); print(f"#{t['num']} linked {a.url}")
@@ -2004,12 +2006,65 @@ def person_line(p):
     return f"{p['id']}  {p['name']}{' (' + who + ')' if who else ''}  [{p.get('stage', '')}]  next: {p.get('next') or '-'}{' ' + due if due else ''}{flag}"
 
 
+def person_methods(p, kind):
+    """Return labelled email/phone entries while still reading pre-v15 single fields."""
+    plural = kind + "s"
+    out = []
+    for i, x in enumerate(p.get(plural) or []):
+        x = {"label": kind.title() if i == 0 else "Other", "value": x} if isinstance(x, str) else x
+        if isinstance(x, dict) and _s(x.get("value")):
+            out.append({"id": x.get("id") or f"{kind}_{i}", "label": _s(x.get("label")) or kind.title(), "value": _s(x["value"])})
+    legacy = _s(p.get(kind))
+    if legacy and not any(x["value"].lower() == legacy.lower() for x in out):
+        out.insert(0, {"id": f"{kind}_legacy", "label": kind.title(), "value": legacy})
+    return out
+
+
+def person_links(p):
+    out = [x for x in (p.get("links") or []) if isinstance(x, dict) and _s(x.get("url"))]
+    legacy = _s(p.get("linkedin"))
+    if legacy and not any(_norm_url(x.get("url")) == _norm_url(legacy) for x in out):
+        out.insert(0, {"title": "LinkedIn", "url": legacy})
+    return out
+
+
+def sync_person_methods(p):
+    p["emails"] = person_methods(p, "email")
+    p["phones"] = person_methods(p, "phone")
+    p["links"] = person_links(p)
+    p["email"] = p["emails"][0]["value"] if p["emails"] else ""
+    p["phone"] = p["phones"][0]["value"] if p["phones"] else ""
+    li = next((x for x in p["links"] if "linkedin" in (_s(x.get("title")) + " " + _s(x.get("url"))).lower()), None)
+    p["linkedin"] = li["url"] if li else ""
+    return p
+
+
 def set_fields(data, p, a):
     changed = []
-    for k in ("name", "company", "role", "email", "phone", "linkedin", "value", "source", "notes", "next"):
+    sync_person_methods(p)
+    for k in ("name", "company", "role", "value", "source", "notes", "next"):
         v = getattr(a, k, None)
         if v is not None and v != p.get(k, ""):
             p[k] = v; changed.append(f"{k}: {v or 'cleared'}")
+    for kind in ("email", "phone"):
+        v = getattr(a, kind, None)
+        if v is None or v == p.get(kind, ""):
+            continue
+        items = p[kind + "s"]
+        if items and v: items[0]["value"] = v
+        elif v: items.append({"id": f"{kind}_legacy", "label": kind.title(), "value": v})
+        elif items: items.pop(0)
+        p[kind] = v
+        changed.append(f"{kind}: {v or 'cleared'}")
+    v = getattr(a, "linkedin", None)
+    if v is not None and v != p.get("linkedin", ""):
+        links = p["links"]; old = next((x for x in links if "linkedin" in (_s(x.get("title")) + " " + _s(x.get("url"))).lower()), None)
+        if old and v: old.update(title="LinkedIn", url=v)
+        elif v: links.insert(0, {"title": "LinkedIn", "url": v})
+        elif old: links.remove(old)
+        p["linkedin"] = v
+        changed.append(f"linkedin: {v or 'cleared'}")
+    sync_person_methods(p)
     st = check_stage(data, getattr(a, "stage", None))
     if st and st != p.get("stage"):
         changed.append(f"stage {p.get('stage') or 'none'} -> {st}"); p["stage"] = st
@@ -2056,13 +2111,17 @@ def cmd_today(a):
 def cmd_person(a):
     data, _ = load(); p = find_person(data, a.ref)
     print(person_line(p))
-    for k in ("role", "company", "email", "phone", "linkedin", "value", "source"):
+    for k in ("role", "company", "value", "source"):
         if p.get(k): print(f"  {k}: {p[k]}")
+    for x in person_methods(p, "email"): print(f"  email ({x['label']}): {x['value']}")
+    for x in person_methods(p, "phone"): print(f"  phone ({x['label']}): {x['value']}")
     if p.get("notes"): print("  notes:", p["notes"])
     lt = last_touch(p); print(f"  last contact: {lt[:10] if lt else 'never'}")
-    for l in p.get("links", []): print(f"  link: {l.get('title') or l['url']}  {l['url']}")
+    for l in person_links(p): print(f"  profile/reference link: {l.get('title') or l['url']}  {l['url']}")
     info = (data.get("client_info") or {}).get(p.get("company") or "", {})
-    for l in info.get("links", []): print(f"  files ({p['company']}): {l.get('title') or l['url']}  {l['url']}")
+    resources = info.get("links", [])
+    for l in resources: print(f"  file/folder resource ({p['company']}): {l.get('title') or l['url']}  {l['url']}")
+    if resources: print("  access: cloud resources need the matching connector/plugin/MCP and account; local paths need a session on that computer. Ask the user if access fails.")
     for c in p.get("comments", []):
         print(f"  [{c['at'][:16]}] {c.get('channel', 'note')}{' DRAFT (not sent) ' + c['id'] if c.get('draft') else ''} {c.get('by', '?')}: {c['text']}")
     tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
@@ -2074,12 +2133,12 @@ def cmd_person_add(a):
         people = data.setdefault("contacts", [])
         key = (a.name.strip().lower(), (a.company or "").strip().lower())
         dup = [p for p in people if (p.get("name", "").strip().lower(), p.get("company", "").strip().lower()) == key
-               or (a.linkedin and p.get("linkedin") and p["linkedin"].rstrip("/") == a.linkedin.rstrip("/"))
-               or (a.email and p.get("email") and p["email"].lower() == a.email.lower())]
+               or (a.linkedin and any(_norm_url(x.get("url")) == _norm_url(a.linkedin) for x in person_links(p)))
+               or (a.email and any(x["value"].lower() == a.email.lower() for x in person_methods(p, "email")))]
         if dup and not a.force:
             print(f"already on the board: {person_line(dup[0])}  (nothing added; use person-set to change it, or --force)"); return
         p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "",
-             "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
+             "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
              "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": who_am_i()}
         set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p)}")
     mutate(fn, f"Add person: {a.name}")
@@ -2126,8 +2185,8 @@ def cmd_sent(a):
 
 def cmd_client_link(a):
     """Link a client (company) to a file store folder: Google Drive, Dropbox, OneDrive, SharePoint..."""
-    if not re.match(r"https?://", a.url):
-        sys.exit("url must start with https://")
+    if not (re.match(r"https?://", a.url) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", a.url)):
+        sys.exit("resource must be an http(s) cloud URL or a local path")
     def fn(data):
         ci = data.setdefault("client_info", {}).setdefault(a.client, {})
         links = ci.setdefault("links", [])
@@ -2242,8 +2301,8 @@ def _match_person(people, p):
     email, li = _s(p.get("email")).lower(), _norm_url(p.get("linkedin"))
     key = (_s(p.get("name")).lower(), _s(p.get("company")).lower())
     for q in people:
-        if email and _s(q.get("email")).lower() == email: return q
-        if li and _norm_url(q.get("linkedin")) == li: return q
+        if email and any(x["value"].lower() == email for x in person_methods(q, "email")): return q
+        if li and any(_norm_url(x.get("url")) == li for x in person_links(q)): return q
     for q in people:
         if (_s(q.get("name")).lower(), _s(q.get("company")).lower()) == key: return q
     return None
@@ -2272,6 +2331,7 @@ def apply_staging(data, st, label):
                  "links": [], "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": by}
             for k in IMPORT_PERSON_FIELDS:
                 if _s(p.get(k)): q[k] = _s(p[k])
+            sync_person_methods(q)
             if _s(p.get("stage")): q["stage"] = check_stage(data, _s(p["stage"]))
             if _s(p.get("due")): q["next_due"] = _s(p["due"])
             hist(q, f"imported ({ev})", by); people.append(q); add_client(q["company"])
@@ -2279,6 +2339,7 @@ def apply_staging(data, st, label):
             continue
         filled = [k for k in IMPORT_PERSON_FIELDS if _s(p.get(k)) and not _s(q.get(k))]
         for k in filled: q[k] = _s(p[k])
+        if any(k in filled for k in ("email", "phone", "linkedin")): sync_person_methods(q)
         if _s(p.get("due")) and not q.get("next_due") and "next" in filled:
             q["next_due"] = _s(p["due"]); filled.append("next_due")
         if filled:

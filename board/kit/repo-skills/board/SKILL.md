@@ -18,6 +18,12 @@ python3 board/keeptrack.py show <id>        # read details, links and contacts b
 ```
 If the human named a task, use that one. Do not pick tasks assigned to someone else.
 
+Task links are supporting resources and references for that task (Drive/Dropbox files, issues, PRs, source pages or a
+local working path). A person's profile/reference links instead describe that person or company. Their company's
+file/folder resources are company-wide working material. Cloud access requires the matching connector/plugin/MCP and
+signed-in account; local paths require a session on the computer that holds them. If a resource cannot be opened, say
+so and ask the user. Never imply that you read it.
+
 ## 3. Claim, work, heartbeat
 ```bash
 python3 board/keeptrack.py claim <id> --note "starting: <one-line plan>"
@@ -76,7 +82,7 @@ Read [references/status-audits.md](references/status-audits.md) and follow it.
 
 ## People and follow-ups (Keeptrack CRM)
 If the board has CRM people, use:
-`keeptrack.py today` (who to contact), `people`, `person "<name>"`, `person-add` (refuses duplicates), `person-set`, `touch "<name>" "<text>" --channel linkedin|email|call|meeting|note [--draft]`, `sent "<name>"` and `client-link "<company>" <url>`. To set up a board from a spreadsheet, email, Trello or folders, use the `onboard-keeptrack` skill (it ends with `import`).
+`keeptrack.py today` (who to contact), `people`, `person "<name>"`, `person-add` (refuses duplicates), `person-set`, `touch "<name>" "<text>" --channel linkedin|email|call|meeting|note [--draft]`, `sent "<name>"` and `client-link "<company>" <cloud-url-or-local-path>`. `person` lists every labelled email and phone number, profile/reference link, and company file/folder resource. To set up a board from a spreadsheet, email, Trello or folders, use the `onboard-keeptrack` skill (it ends with `import`).
 When you write a message for someone, log it with `--draft`. Never send it yourself. Run `sent` only after the human says it is sent.
 
 ## Never
@@ -95,8 +101,8 @@ Issues created with the board's "Create issue" button carry `<!-- board-task: id
 3. Need a person (decision, access, review)? `assign '#N' <github-user> --note "why"` and comment with `@username`; then stop and wait.
 4. Finish with `done '#N' --note "<result, PR link>"`. Set BOARD_USER and BOARD_AGENT; without a `gh` login set BOARD_TOKEN (or GH_TOKEN in GitHub Actions).
 
-## Fired from the board (a person typed `@claude` in a comment)
-A routine run starts with a `routine-fire-payload` naming a task number (`#N`) and the person (`@user`). The page has already put a claim on the card for this run, so:
+## Fired from the board (a person assigned their Claude or typed `@claude`)
+A routine run starts with a `routine-fire-payload` naming a task number (`#N`) and the person (`@user`). The quick assign action writes a visible `@claude` request first, so both entry paths use the same protocol. The page has already put a claim on the card for this run, so:
 1. `export BOARD_USER=<user> BOARD_AGENT=claude BOARD_SESSION=<short id>`; `BOARD_TOKEN` is set in the routine's environment.
 2. `python3 board/keeptrack.py claim '#N' --for <user> --agent claude --session "$BOARD_SESSION" --force --note "working"` (`--force` is expected here: it replaces the page's placeholder claim).
 3. `keeptrack.py show '#N'` and `keeptrack.py comments '#N'`; do what the newest `@claude` comment from that user asks, and nothing beyond it.
