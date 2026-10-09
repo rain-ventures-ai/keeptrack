@@ -476,6 +476,23 @@ class PhaseOneSafety(unittest.TestCase):
             known = int(re.search(r"const KNOWN_SCHEMA = (\d+)", f.read()).group(1))
         self.assertLessEqual(schema, known)
 
+    def test_kit_update_replaces_the_renamed_onboarding_skill(self):
+        kt.ROOT = self.temp.name
+        kt.need_repo_clone = lambda: None
+        old = os.path.join(self.temp.name, ".claude", "skills", "keeptrack-onboard")
+        os.makedirs(old)
+        with open(os.path.join(old, "SKILL.md"), "w") as f:
+            f.write("old skill")
+        source = os.path.join(HERE, "..", "board", "kit")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            kt.cmd_kit_update(Args(source=source, quiet=True))
+        new = os.path.join(self.temp.name, ".claude", "skills", "onboard-keeptrack", "SKILL.md")
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.isfile(new))
+        with open(new) as f:
+            self.assertIn("name: onboard-keeptrack", f.read())
+        self.assertIn("removed: .claude/skills/keeptrack-onboard", out.getvalue())
+
     def test_bare_migrate_does_not_split(self):
         board_dir = os.path.join(self.temp.name, "board")
         shutil.copytree(os.path.join(FIXTURES, "v3"), board_dir)

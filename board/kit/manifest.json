@@ -1,6 +1,9 @@
 {
-  "version": 10,
+  "version": 11,
   "schema": 4,
+  "remove": [
+    ".claude/skills/keeptrack-onboard"
+  ],
   "files": {
     "board/keeptrack.py": "keeptrack.py",
     "board/README.md": "README.md",
@@ -12,22 +15,22 @@
     ".claude/skills/board-doctor/SKILL.md": "repo-skills/board-doctor/SKILL.md",
     ".claude/skills/board-routine-setup/SKILL.md": "repo-skills/board-routine-setup/SKILL.md",
     ".claude/skills/board-upgrade/SKILL.md": "repo-skills/board-upgrade/SKILL.md",
-    ".claude/skills/keeptrack-onboard/SKILL.md": "skills/keeptrack-onboard/SKILL.md",
-    ".claude/skills/keeptrack-onboard/references/finding-clients.md": "skills/keeptrack-onboard/references/finding-clients.md",
-    ".claude/skills/keeptrack-onboard/references/folders.md": "skills/keeptrack-onboard/references/folders.md",
-    ".claude/skills/keeptrack-onboard/references/interview.md": "skills/keeptrack-onboard/references/interview.md",
-    ".claude/skills/keeptrack-onboard/references/staging-format.md": "skills/keeptrack-onboard/references/staging-format.md",
-    ".claude/skills/keeptrack-onboard/references/tasks.md": "skills/keeptrack-onboard/references/tasks.md",
-    ".claude/skills/keeptrack-onboard/references/sources/calendar.md": "skills/keeptrack-onboard/references/sources/calendar.md",
-    ".claude/skills/keeptrack-onboard/references/sources/email.md": "skills/keeptrack-onboard/references/sources/email.md",
-    ".claude/skills/keeptrack-onboard/references/sources/file-stores.md": "skills/keeptrack-onboard/references/sources/file-stores.md",
-    ".claude/skills/keeptrack-onboard/references/sources/google-tasks.md": "skills/keeptrack-onboard/references/sources/google-tasks.md",
-    ".claude/skills/keeptrack-onboard/references/sources/invoices.md": "skills/keeptrack-onboard/references/sources/invoices.md",
-    ".claude/skills/keeptrack-onboard/references/sources/linkedin.md": "skills/keeptrack-onboard/references/sources/linkedin.md",
-    ".claude/skills/keeptrack-onboard/references/sources/local-folders.md": "skills/keeptrack-onboard/references/sources/local-folders.md",
-    ".claude/skills/keeptrack-onboard/references/sources/old-crm.md": "skills/keeptrack-onboard/references/sources/old-crm.md",
-    ".claude/skills/keeptrack-onboard/references/sources/other-task-tools.md": "skills/keeptrack-onboard/references/sources/other-task-tools.md",
-    ".claude/skills/keeptrack-onboard/references/sources/spreadsheet.md": "skills/keeptrack-onboard/references/sources/spreadsheet.md",
-    ".claude/skills/keeptrack-onboard/references/sources/trello.md": "skills/keeptrack-onboard/references/sources/trello.md"
+    ".claude/skills/onboard-keeptrack/SKILL.md": "skills/onboard-keeptrack/SKILL.md",
+    ".claude/skills/onboard-keeptrack/references/finding-clients.md": "skills/onboard-keeptrack/references/finding-clients.md",
+    ".claude/skills/onboard-keeptrack/references/folders.md": "skills/onboard-keeptrack/references/folders.md",
+    ".claude/skills/onboard-keeptrack/references/interview.md": "skills/onboard-keeptrack/references/interview.md",
+    ".claude/skills/onboard-keeptrack/references/staging-format.md": "skills/onboard-keeptrack/references/staging-format.md",
+    ".claude/skills/onboard-keeptrack/references/tasks.md": "skills/onboard-keeptrack/references/tasks.md",
+    ".claude/skills/onboard-keeptrack/references/sources/calendar.md": "skills/onboard-keeptrack/references/sources/calendar.md",
+    ".claude/skills/onboard-keeptrack/references/sources/email.md": "skills/onboard-keeptrack/references/sources/email.md",
+    ".claude/skills/onboard-keeptrack/references/sources/file-stores.md": "skills/onboard-keeptrack/references/sources/file-stores.md",
+    ".claude/skills/onboard-keeptrack/references/sources/google-tasks.md": "skills/onboard-keeptrack/references/sources/google-tasks.md",
+    ".claude/skills/onboard-keeptrack/references/sources/invoices.md": "skills/onboard-keeptrack/references/sources/invoices.md",
+    ".claude/skills/onboard-keeptrack/references/sources/linkedin.md": "skills/onboard-keeptrack/references/sources/linkedin.md",
+    ".claude/skills/onboard-keeptrack/references/sources/local-folders.md": "skills/onboard-keeptrack/references/sources/local-folders.md",
+    ".claude/skills/onboard-keeptrack/references/sources/old-crm.md": "skills/onboard-keeptrack/references/sources/old-crm.md",
+    ".claude/skills/onboard-keeptrack/references/sources/other-task-tools.md": "skills/onboard-keeptrack/references/sources/other-task-tools.md",
+    ".claude/skills/onboard-keeptrack/references/sources/spreadsheet.md": "skills/onboard-keeptrack/references/sources/spreadsheet.md",
+    ".claude/skills/onboard-keeptrack/references/sources/trello.md": "skills/onboard-keeptrack/references/sources/trello.md"
   }
 }

@@ -1,6 +1,6 @@
 # Keeptrack plugins: Claude, Codex, Cursor (and ChatGPT)
 
-One plugin folder serves every tool: `board/kit/` in `rain-ventures-ai/keeptrack`. It holds `keeptrack.py` (the command-line tool), `skills/keeptrack/SKILL.md` (daily use), `skills/keeptrack-onboard/SKILL.md` (guided CRM/task import) and one small manifest for each tool. The onboarding skill is also copied into every board repo by the kit, so setup can discover it before or after opening the board repo.
+One plugin folder serves every tool: `board/kit/` in `rain-ventures-ai/keeptrack`. It holds `keeptrack.py` (the command-line tool), `skills/keeptrack/SKILL.md` (daily use), `skills/onboard-keeptrack/SKILL.md` (guided CRM/task import) and one small manifest for each tool. The onboarding skill is also copied into every board repo by the kit, so setup can discover it before or after opening the board repo.
 
 ## Claude Code: first choose where the session runs
 

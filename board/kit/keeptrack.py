@@ -1418,6 +1418,15 @@ def cmd_kit_update(a):
     try:
         m = json.loads(kit_fetch("manifest.json", a.source))
         files = {dest: kit_fetch(src, a.source) for dest, src in m["files"].items()}  # fetch everything before writing anything
+        root = os.path.abspath(ROOT)
+        removals = []
+        for dest in m.get("remove", []):
+            if not isinstance(dest, str) or os.path.isabs(dest):
+                raise ValueError(f"unsafe removal path in manifest: {dest}")
+            path = os.path.abspath(os.path.join(root, dest))
+            if os.path.commonpath([root, path]) != root or path == root:
+                raise ValueError(f"unsafe removal path in manifest: {dest}")
+            removals.append((dest, path))
     except (KitError, ValueError) as e:
         sys.exit(f"kit-update stopped, nothing changed: {e}")
     have = kit_local()
@@ -1428,8 +1437,17 @@ def cmd_kit_update(a):
         if old != new:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             open(path, "wb").write(new); changed.append(dest)
+    removed = []
+    for dest, path in removals:
+        if os.path.islink(path) or os.path.isfile(path):
+            os.remove(path); removed.append(dest)
+        elif os.path.isdir(path):
+            shutil.rmtree(path); removed.append(dest)
     open(os.path.join(ROOT, "board", "KIT_VERSION"), "w").write(f"{m['version']}\n")
-    print(f"board kit v{have} -> v{m['version']}; changed: " + (", ".join(changed) or "nothing"))
+    summary = "changed: " + (", ".join(changed) or "nothing")
+    if removed:
+        summary += "; removed: " + ", ".join(removed)
+    print(f"board kit v{have} -> v{m['version']}; {summary}")
     if not getattr(a, "quiet", False):
         print("Next: read board/UPGRADING.md for every version after v%d. Follow its migration steps, check this repo's own files, "
               "and commit on a branch." % have)
