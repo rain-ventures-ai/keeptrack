@@ -24,6 +24,18 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v15 (schema 4)
+CRM people can now keep multiple labelled email addresses and phone numbers. Existing single `email`, `phone` and
+`linkedin` fields remain as compatibility mirrors, so older people appear correctly and no data migration is needed.
+Profile/reference links are now explicitly separate from company file/folder resources; resources may be cloud URLs or
+local paths, task links may also hold task-specific cloud or local resources, and the agent instructions explain what
+access each kind needs.
+- Run `kit-update` only. There is no board-data migration; compatible arrays are added lazily when a person is edited.
+- Check: `person "<name>"` lists every labelled email/phone, profile/reference link and file/folder resource, followed by
+  the access warning when resources exist.
+- Check: the web person drawer can add two email addresses, two phone numbers, a profile link, a cloud folder and a
+  local path without losing the legacy first values.
+
 ### v14 (schema 4)
 The default meeting-notes routine can now recover a verified legacy import without rewriting its cards, handles named
 owners who are not board users, stores note URLs as task links, and distinguishes explicit completion from `Possibly

@@ -84,7 +84,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
   "clients": ["Acme", "Rain Ventures", "General"],
   "labels":  [{ "name": "call", "color": "#0c66e4" }],
   "contacts": [ /* v3: people in the CRM, see "People (schema 3)" below */ ],
-  "client_info": { "Acme": { "links": [{ "title": "Drive folder", "url": "https://…" }] } },   // v3: file store folders per client
+  "client_info": { "Acme": { "links": [{ "title": "Drive or local folder", "url": "https://… or /local/path" }] } },   // v3: working file/folder resources per client
   "archive": { "files": { "2025": { "tasks": 120, "contacts": 8 } }, "last_run": "…" },   // index of archive/<year>.json, written by `archive`
   "next_num": 13,                                 // next number to hand out; maintained by the web page and keeptrack.py
   "tasks": [{
@@ -103,7 +103,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
     // a comment can carry "session_url" (the Claude session that works on it). type "activity" is a one-line event that the web board adds, for example
     // { "type": "activity", "by": "claude", "text": "Claude started a session for @JezHub: https://claude.ai/code/session_…", "session_url": "…", "reply_to": "c_ab12cd" }
     "history": [{ "at": "…", "by": "claude@osouthgate", "text": "✓ step one" }],               // automatic log, newest last, capped at 200
-    "links":    [{ "title": "Drive folder", "url": "https://…" }],   // any URL; GitHub issue/PR/repo links (any repo) show as chips on the card, so use them to group related work
+    "links":    [{ "title": "Drive folder or PR", "url": "https://… or /local/path" }],   // task resources/references; GitHub issue/PR/repo URLs show as chips
     "contacts": [{ "name": "…", "role": "…", "email": "…", "phone": "…" }],
     "claim": null,                                 // see below
     "last_run": null,                              // set by `done`: the finished claim, shown as one "Last run" line
@@ -136,16 +136,25 @@ When the agent runs `done`, the claim is removed (no banner is left on the card)
 ## People (schema 3)
 Schema 3 (migration step 2 to 3) adds the Keeptrack CRM: `contacts` (default `[]`), `client_info` (default `{}`) and `settings.stages` (default New, Contacted, Talking, Proposal, Won, Lost). A person in `contacts`:
 ```jsonc
-{ "id": "p_ab12cd34", "name": "…", "company": "…", "role": "…", "email": "…", "phone": "…", "linkedin": "…",
+{ "id": "p_ab12cd34", "name": "…", "company": "…", "role": "…",
+  "emails": [{ "id": "e_…", "label": "Work", "value": "name@example.com" }],
+  "phones": [{ "id": "ph_…", "label": "Mobile", "value": "+44 …" }],
+  "email": "name@example.com", "phone": "+44 …", "linkedin": "https://linkedin.com/in/…", // first values, retained for older kits
   "stage": "New",                       // one of settings.stages
   "value": "…", "source": "…", "notes": "…",
   "next": "what happens next", "next_due": "2026-10-20",     // next step and its date
-  "links": [{ "title": "…", "url": "https://…" }],
+  "links": [{ "title": "LinkedIn | company | blog | portfolio | …", "url": "https://…" }], // profile/reference pages, not working files
   "comments": [{ "id": "c_ab12cd", "at": "…", "by": "…", "channel": "linkedin | email | call | meeting | note",
                  "text": "…", "draft": false, "sent_at": "…" }],   // a draft is not a contact until marked sent; sent_at is when it was sent
   "history": [{ "at": "…", "by": "…", "text": "…" }], "created": "…", "updated": "…", "createdBy": "…" }
 ```
 A task can point at a person with `"contact": "<person id>"`. Last contact is the newest `sent_at` (else `at`) of a comment that has a channel other than `note` and is not a draft.
+
+Person `links` are profile or reference pages about that person/company. Task `links` are supporting resources and
+references for that task: for example Drive/Dropbox files, issues, PRs, source pages or a local working path.
+`client_info[company].links` are company-wide working file/folder resources rather than task-specific ones. An agent
+needs the matching connector/plugin/MCP and signed-in account for a cloud resource, or a session on the computer that
+holds a local path. If it cannot access one, it must say so and ask the user rather than implying it read the resource.
 
 ## Archive files (schema 3)
 Old items move out of the active card and person files so that the current board stays small. Legacy v3 boards keep their active items in `tasks.json` (the GitHub contents API sends no content above 1 MB; the web board and `keeptrack.py` can read it raw up to 100 MB, but legacy boards are fastest below about 600 KB).
@@ -199,11 +208,11 @@ Issues created with the board's "Create issue" button carry `<!-- board-task: id
 ## Which agents each person uses (Settings → Agents)
 Each person ticks the agents they use: **Claude**, **Codex** or both. The choice is kept in their browser (`kb_agents`) and moves with "Copy settings code". Typing `@` in the web page only offers the agents you have ticked; people are always offered. Before you choose, Claude counts as ticked if your routine is set up. The `agents` list in `tasks.json` is the shared set of names agents may claim under; it does not change per person.
 
-- **Claude:** `@claude` can start your own routine (below).
+- **Claude:** `@claude` can start your own routine (below). In Today and a cinema lane, open a task's **Assign** menu and choose **Assign to Claude for @you** to create the visible request, claim it for your Claude and start that same routine immediately.
 - **Codex:** `@codex` cannot start Codex by itself: OpenAI only starts Codex cloud tasks from an `@codex` comment on a GitHub pull request and offers no trigger a web page can call. Instead, when a card's newest request is for `@codex` (and no Codex comment or running Codex claim has answered it), the card's **Copy for agent** button turns into a highlighted **Copy for Codex**. It copies instructions that tell Codex to do what the newest `@codex` comment asks, with `BOARD_AGENT=codex`. Paste them into Codex; it claims the card and reports back with `keeptrack.py`. The button only changes for people who ticked Codex.
 
-## `@claude` in a comment: your own routine
-Each person can connect their own Claude routine so that a comment containing `@claude` starts it (web page, Settings → **Agents**, tick Claude). The values live only in that person's browser and move with "Copy settings code".
+## Assign to Claude or write `@claude`: your own routine
+Each person can connect their own Claude routine so that either the **Assign to Claude for @you** quick action or a comment containing `@claude` starts it (web page, Settings → **Agents**, tick Claude). Only that person's configured routine is offered. The values live only in that person's browser and move with "Copy settings code".
 
 **How it works.** Browsers can't call a routine's trigger URL directly (Anthropic's endpoint sends no CORS headers), so the page creates a one-off job on the person's free cron-job.org account (its API does allow browsers) which POSTs to the routine's `/fire` URL. The page then reads the result, records the session link on the card (an agent claim by `claude`, working for that person) and deletes the job. cron-job.org only ever sees the routine token and the task *number* and requester, never the task's text; the routine reads the real content from the board. Starting takes one to two minutes.
 

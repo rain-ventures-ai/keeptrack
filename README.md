@@ -11,7 +11,7 @@
 - **People:** everyone you track, with company, role, email, phone, LinkedIn, a stage and a next step with a date.
 - **Pipeline:** people by stage (New, Contacted, Talking, Proposal, Won, Lost). Drag a card to move it. You can change the stages.
 - **Contact log:** each LinkedIn message, email, call or meeting. A **draft** does not count as contact until you mark it **sent**.
-- **Client files:** each company links to one or more folders in Google Drive, Dropbox, OneDrive or SharePoint. Large files stay there, not in GitHub.
+- **Contact details and resources:** each person can have multiple labelled emails, phone numbers and profile/reference links. Each company can link to working folders in Google Drive, Dropbox, OneDrive, SharePoint or on a local computer. Large files stay there, not in GitHub.
 - **Tasks (optional):** the board, list, calendar, schedule and activity views, linked to people and companies.
 - **AI helpers:** a plugin for Claude (Code, Desktop, Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
 

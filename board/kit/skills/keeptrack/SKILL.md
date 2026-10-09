@@ -43,14 +43,20 @@ A person has a stage (by default New, Contacted, Talking, Proposal, Won, Lost), 
 ```bash
 $B today                                  # who to contact: overdue, today, next 7 days, no next step
 $B people [--stage talking] [-q acme]     # list or search
-$B person "<name or id>"                  # details, contact log, drafts, tasks, client file links
+$B person "<name or id>"                  # all emails/phones, reference links, log, tasks and file/folder resources
 $B person-add "Name" --company "Co" --role CEO --linkedin <url> --email <e> --source "weekly run" --next "Send intro" --due +2
 $B person-set "<name>" --stage talking --next "Send proposal" --due 2026-10-20
 $B touch "<name>" "summary of the call" --channel call --next "Send notes" --due +1
-$B client-link "<company>" <folder url> --title "Drive folder"   # client files stay in Drive, Dropbox, OneDrive...
+$B client-link "<company>" <cloud-url-or-local-path> --title "Drive folder"   # working material stays outside the board
 $B import <staging.json> --dry-run         # many people, folders or tasks at once; then without --dry-run
 ```
 Dates: `YYYY-MM-DD`, `today` or `+N` (days from today). `person-add` refuses a duplicate (same name and company, same LinkedIn URL or same email) and prints the person who is already there. Use that to keep the weekly opportunity run from adding the same lead twice.
+
+A person's profile/reference links (LinkedIn, company site, blog, portfolio) describe the contact. Company
+file/folder resources are company-wide working material. Task links are resources and references for one task: cloud
+or local files/folders, issues, PRs and source pages. Cloud resources require the matching connector/plugin/MCP and
+signed-in account; local paths require a session on the computer that holds them. If you cannot open a resource, say so
+and ask the user. Never imply that you read it.
 
 ### "Help me write a message to <person>"
 1. `$B person "<name>"` (or `person-add` if the person is new; ask for the company and LinkedIn URL if you do not know them).
@@ -74,6 +80,10 @@ $B done '#12' --note "<result, link>"            # or: release '#12' --column to
 $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "<text>"
 ```
 Only work on tasks assigned to the user you act for.
+
+The web board's Today rows and cinema cards can assign a task to the signed-in person's own Claude. That quick action
+writes a visible `@claude` request and starts the same configured routine as an `@claude` comment; it does not dispatch
+somebody else's agent.
 
 ## 4. Archive and search old items
 ```bash
