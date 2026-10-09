@@ -49,4 +49,4 @@ A draft is a message that you have not sent yet. It does **not** count as contac
 **People** lists everyone. Search by name, company, notes or next step, or select a stage.
 
 ## Delete a person
-Click **Delete person** at the bottom of the card. See [Privacy and security](privacy-and-security.md) for what stays in the repo history.
+Click **Delete person** at the bottom of the card and confirm the warning. Use the **Undo** button, **Ctrl+Z** on Windows/Linux, or **⌘Z** on a Mac if you change your mind during the same board session. See [Privacy and security](privacy-and-security.md) for what stays in the repo history.
