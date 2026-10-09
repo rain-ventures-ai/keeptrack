@@ -43,6 +43,20 @@ Web board: https://rain-ventures-ai.github.io/keeptrack/board/?repo={repo}&path=
 
 Full schema and details: `board/README.md`.
 
+## When the owner asks how to use Keeptrack in Claude Code
+
+Give a direct answer; do not send them back to the Keeptrack maintainer and do not restart board setup.
+
+- **Claude Code cloud:** start a Code session with `{repo}` selected. When working in another code repo, add `{repo}`
+  as the second repo. Cloud sessions do not load plugins; this repo already has the skill and `board/keeptrack.py`.
+  Claude's GitHub repo access is enough, so do not ask for a PAT.
+- **Claude Code locally:** clone or pull `{repo}`, run `gh auth status`, and start `claude` inside the repo. When `gh`
+  can access the repo, no Keeptrack plugin or PAT is needed.
+- Install the Keeptrack plugin only for a **local session in another project**. Ordinary Claude chat is not Claude
+  Code; use the Code tab or the web board.
+
+After explaining, verify with `python3 board/keeptrack.py where` and `list` or `today`. Ask before creating a test task.
+
 **Board kit:** `board/keeptrack.py`, the other files in `board/` (except `tasks.json`) and `.claude/skills/board*` are the shared board kit from `rain-ventures-ai/keeptrack` (`board/kit/`). Do not edit them here; change the kit there. `board/KIT_VERSION` is this repo's version. Upgrades: `board/UPGRADING.md` and the `board-upgrade` skill.
 
 ## Task numbers and mentions

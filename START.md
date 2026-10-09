@@ -18,16 +18,43 @@ Keeptrack keeps people, follow-ups, a pipeline and tasks in `board/tasks.json` i
 
 ### Rules
 - If the person shared the Keeptrack repository link or asked “How about using this?”, treat that as a request to begin setup. Start step 1 in the current conversation instead of replying with a compatibility report. Only ask them to start a new session when a newly installed plugin must be loaded.
+- If the person already has a board and asks how to use it in **Claude Code cloud and locally**, follow the fast path below. Do not send them through new-board setup.
 - **Never type, paste, read back or store a secret** (GitHub token, routine token, cron-job.org key). At each secret step, tell the person where to click and what to paste, then wait until they say it is done. If the person pastes a secret into the chat, tell them to revoke it and make a new one.
 - Do one step at a time. Say what the step is for in one sentence, then what to click or run. Wait for the person after each step. Check each step before you go to the next one.
 - Keep the board repo **private**: it holds names, emails and phone numbers.
 - Never send a message, email or quote for the person. Keeptrack agents write drafts only.
 - Use simple words. Many people who do this setup are not developers.
 
-### Always give the pre-filled token link
-As soon as you know the board's `owner/repo`, give the person a **clickable link with that owner and the required
-permissions pre-filled**. Do not send them to the generic token list and do not merely describe the permission fields.
-Replace `<OWNER>` and `<REPO>` in this template and URL-encode their values:
+### Fast path: an existing board in Claude Code cloud and locally
+When the person already has `<OWNER>/<BOARD-REPO>`, give them these instructions directly:
+
+1. **Claude Code cloud** (claude.ai/code, or the Claude app's **Code** tab): start a new cloud session with the board
+   repo selected. If working in a different code repo, add the board repo as the session's second repo. Say:
+   **“Use Keeptrack from `<OWNER>/<BOARD-REPO>`. Show my tasks and anything needing attention.”** Nothing needs to
+   be installed: cloud sessions do not load plugins, and the board repo already has `CLAUDE.md`, the board skill and
+   `board/keeptrack.py`. The Claude GitHub connection supplies repo access; do not ask for a PAT.
+2. **Claude Code locally, inside the board repo:** clone or pull the board repo, run `gh auth status`, `cd` into the
+   repo and start `claude`. Use the same prompt. Do not install the plugin and do not ask for a PAT when `gh` is logged
+   in and can access the repo.
+3. **Claude Code locally, from another project:** install the Keeptrack plugin, start a fresh session, and ask Claude
+   to use `<OWNER>/<BOARD-REPO>` for that project. The plugin is for this cross-project case.
+4. **Ordinary Claude chat is not Claude Code.** A chat at claude.ai that is not in the **Code** tab cannot update the
+   board. Use Claude Code or the web board.
+
+Then verify read access with `where` and `list` or `today`. Ask permission before adding a small test task, verify it
+appears on the web board, then finish or delete it. Do not merely explain the four cases and stop.
+
+Claude's current documentation confirms that cloud sessions can include multiple repositories and do not load
+plugins declared by a repository: https://code.claude.com/docs/en/desktop#install-plugins
+
+### Give a token link only when a token is needed
+A PAT is required by the **web board in the browser**. A local agent needs one only when there is no usable `gh` login.
+Claude Code cloud working from the board repo does not need one. Never lead a cloud or already-authenticated local user
+through token creation.
+
+When a token is needed and you know the board's `owner/repo`, give the person a **clickable link with that owner and
+the required permissions pre-filled**. Do not send them only to the generic token list. Replace `<OWNER>` and `<REPO>`
+in this template and URL-encode their values:
 
 ```
 https://github.com/settings/personal-access-tokens/new?name=Keeptrack%20<REPO>&description=Keeptrack%3A%20read%20and%20write%20board%2Ftasks.json%20and%20create%20issues&target_name=<OWNER>&expires_in=90&contents=write&issues=write
@@ -44,23 +71,34 @@ Ask the person two questions (one line each, with your recommendation):
 1. **Do you already have a Keeptrack board?** If yes, which repo (for example `rain-ventures-ai/consulting`) and what is your GitHub username?
 2. Find out yourself which tool you are (Claude Code, Claude desktop app or Cowork, Codex, Cursor). Ask only if you cannot tell.
 
-Then go to step 2.
+If they already have a board and asked about Claude Code cloud or local use, take the fast path above and then go to
+step 4. Otherwise go to step 2.
 
-### Step 2. Install the keeptrack plugin
-The plugin gives you the Keeptrack skill and `keeptrack.py`.
+### Step 2. Make Keeptrack available in this session
+First check whether the assistant is already running in the board repo (look for `board/keeptrack.py`). A board repo
+contains its own instructions, skill and CLI, so it does **not** need the plugin. Claude Code cloud cannot load plugins;
+start its session on the board repo, or add the board repo as a second repo.
+
+Install the plugin only when the assistant is local and working from a different project, or when the tool needs the
+general Keeptrack integration:
 
 | Tool | What to do |
 |---|---|
-| Claude Code | Run `claude plugin marketplace add rain-ventures-ai/keeptrack` then `claude plugin install keeptrack@keeptrack`. Tell the person to start a new session so the skill loads. |
-| Claude desktop app or Cowork | The person does this: open https://claude.ai/customize/plugins (or **Customize → Plugins** in the app), click **Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. Then start a new chat and paste the prompt again. If it says "Failed to add marketplace", try once more with `https://github.com/rain-ventures-ai/keeptrack`; if that also fails, use Claude Code instead (see the next row), where the same plugin installs from the terminal. |
+| Claude Code locally, from another project | Run `claude plugin marketplace add rain-ventures-ai/keeptrack` then `claude plugin install keeptrack@keeptrack`. Tell the person to start a new session so the skill loads. |
+| Claude Code cloud | Do not install a plugin. Select the board repo for the session, or add it as a second repo. |
+| Claude desktop app or Cowork | The person does this: open https://claude.ai/customize/plugins (or **Customize → Plugins** in the app), click **Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. Then start a new chat and paste the prompt again. If it says "Failed to add marketplace", try once more with `https://github.com/rain-ventures-ai/keeptrack`; if that also fails, use the Claude Code fast path above. |
 | Codex | Run `codex plugin marketplace add rain-ventures-ai/keeptrack`, then the person types `/plugins` and installs **keeptrack**. |
 | Cursor | The person types `/add-plugin https://github.com/rain-ventures-ai/keeptrack` in Agent chat. |
 
-If the plugin is already installed, say so and go on. Details: [board/kit/PLUGIN.md](board/kit/PLUGIN.md).
+If this is the board repo or the plugin is already installed, say so and go on. Details: [board/kit/PLUGIN.md](board/kit/PLUGIN.md).
 
 Useful links for the person: Claude plugins https://claude.ai/customize/plugins · make a private repo https://github.com/new?name=my-keeptrack&visibility=private · edit an existing GitHub token https://github.com/settings/personal-access-tokens (for a new token, use the pre-filled template above) · the web board https://rain-ventures-ai.github.io/keeptrack/board/
 
-Find `keeptrack.py` as the skill says (Claude Code: `python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py`). Below, `$B` means that command.
+Choose the command once. Below, `$B` means it:
+- In the board repo: `python3 board/keeptrack.py`.
+- In Claude cloud with the board as a second repo: `python3 <board-repo-folder>/board/keeptrack.py`.
+- From an installed plugin: find `keeptrack.py` as the plugin skill says (in Claude Code it is under
+  `${CLAUDE_PLUGIN_ROOT}`).
 
 ### Step 3a. The person has no board yet
 The web page makes the board. It is the easiest way, also for people who do not use a terminal.
@@ -72,20 +110,36 @@ The web page makes the board. It is the easiest way, also for people who do not 
 If the person wants to try first, they can look at the demo: https://rain-ventures-ai.github.io/keeptrack/board/?demo=crm
 
 ### Step 3b. Connect this assistant to the board
+If `$B` is the copy inside the board repo, it gets the repo and branch from that clone. Do not run `use`; just verify:
+
+```bash
+$B where
+```
+
+If `$B` is the plugin copy in another local project, connect that project once:
+
 ```bash
 $B use <owner/repo> --user <github-username>
 $B where
 ```
 `use` writes `.board/config.json` (git ignores it, and it holds no token). `keeptrack.py` looks for that file in the current folder and each folder above it. So **to use the board in every project**, run `use` in the person's home folder (outside any git repo). To use another board in one project, run `use` inside that project. `where` shows which board is in use.
 
-The assistant also needs access to the repo. Pick the first that works:
-1. **A GitHub login on this computer:** run `gh auth status`. If it says logged in, nothing more to do. If `gh` is installed but not logged in, ask the person to run `gh auth login` themselves.
-2. **A token in an environment variable:** give the person the pre-filled token link above for this `owner/repo`. They still select **Only select repositories → this repo**, generate it, and put it in an environment variable such as `KEEPTRACK_TOKEN` in their shell profile or the tool's settings. Then run `$B use <owner/repo> --user <github-username> --token-env KEEPTRACK_TOKEN`. You only ever learn the variable's **name**.
-3. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, set the person up with Claude Code on the web (next section) instead.
+The assistant also needs access to the repo. Pick the first that applies:
+1. **Claude Code cloud with the board repo in the session:** use its GitHub repo access. No PAT.
+2. **A GitHub login on this computer:** run `gh auth status`. If it says logged in and can see the repo, nothing more
+   is needed. Otherwise ask the person to run `gh auth login` themselves.
+3. **A token in an environment variable:** use this only when there is no usable GitHub login. Give the person the
+   pre-filled token link above. They put it in an environment variable such as `KEEPTRACK_TOKEN`; you only learn the
+   variable's **name**. Then run `$B use <owner/repo> --user <github-username> --token-env KEEPTRACK_TOKEN` when using
+   the plugin copy.
+4. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, set
+   the person up with Claude Code cloud instead.
 
 ### Claude Code on the web and in the Claude app: the easiest way, with no token
 For people who do not use a terminal, this is the main way. It works in a browser (https://claude.ai/code), in the desktop app and in the phone app (the **Code** tab), and it needs **no GitHub token**.
-- **Claude Code on the web**, in a session on the board repo: nothing to install. The repo has the board skill and `keeptrack.py`. The cloud blocks GitHub API writes, so `keeptrack.py` saves with `git push` from the clone by itself.
+- **Claude Code on the web**, in a session on the board repo: nothing to install. Plugins are unavailable in cloud
+  sessions, but none is needed: the repo has `CLAUDE.md`, the board skill and `keeptrack.py`. The cloud blocks GitHub
+  API writes, so `keeptrack.py` saves with `git push` from the clone by itself.
 - **Claude Code on the web**, in a session on another repo: the person adds the board repo as a second repo of the session (or of its environment). Then use `python3 <board clone>/board/keeptrack.py`. A plugin copy cannot save there, because it is not in a clone of the board repo.
 - **Claude chat** (claude.ai or the phone app, not the Code tab) is not supported. Use Claude Code or the web board.
 

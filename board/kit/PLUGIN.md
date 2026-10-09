@@ -2,7 +2,23 @@
 
 One plugin folder serves every tool: `board/kit/` in `rain-ventures-ai/keeptrack`. It holds `keeptrack.py` (the command-line tool), `skills/keeptrack/SKILL.md` (daily use), `skills/keeptrack-onboard/SKILL.md` (guided CRM/task import) and one small manifest for each tool. The onboarding skill is also copied into every board repo by the kit, so setup can discover it before or after opening the board repo.
 
-## Claude Code
+## Claude Code: first choose where the session runs
+
+**Inside a board repo, no plugin is needed.** The repo already contains `CLAUDE.md`, `.claude/skills/board/` and
+`board/keeptrack.py`.
+
+- **Claude Code cloud** (claude.ai/code or the Claude app's Code tab): select the board repo when starting the session.
+  If the work is in another code repo, add the board repo as the second repo. Plugins are not available in cloud
+  sessions, so always use the copy of `keeptrack.py` in the board clone. The Claude GitHub connection is the
+  authentication; do not create a PAT for Claude cloud.
+- **Claude Code locally in the board repo:** run `gh auth status`, start `claude` from the repo, and use
+  `python3 board/keeptrack.py`. No plugin or PAT is needed when `gh` can access the repo.
+- **Claude Code locally in another project:** install the plugin below, then connect that project to the board once.
+
+Official Claude documentation: cloud sessions can have multiple repos, but do not load installed or repo-declared
+plugins: https://code.claude.com/docs/en/desktop#install-plugins
+
+### Install for another local project
 ```bash
 claude plugin marketplace add rain-ventures-ai/keeptrack
 claude plugin install keeptrack@keeptrack
@@ -57,5 +73,6 @@ python3 <plugin>/keeptrack.py where
 
 ## Limits
 - From another project there is no clone of the board repo, so the git-push fallback is not available. In Claude's cloud sandbox (which blocks GitHub API writes) writes fail there.
+- Claude Code cloud does not load plugins. Add the board repo to the cloud session and use its repo-local skill and CLI.
 - `kit-check`, `kit-update` and `init` work only inside a board repo.
 - Codex and Cursor manifest fields come from their current documentation (October 2026). Check them against `codex` and Cursor's plugin validator before the public launch.

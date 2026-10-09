@@ -12,13 +12,15 @@ Not sure which assistant to use, or whether you need Python? See [Where your ass
 - "Add the leads from this week's opportunity run." It refuses leads that are already on the board.
 - "Move Tom to Proposal." / "What is in my pipeline?"
 
-## Install
-The quickest way: in the web board open **⚙️ Settings → Agents → An assistant in your chat app**, select your tool, and copy the steps.
+## Connect the assistant
+The quickest way: in the web board open **⚙️ Settings → Agents → An assistant in your chat app**, select your tool, and copy the steps. Claude Code does not always need a plugin:
 
 | Tool | How |
 |---|---|
 | Claude Desktop or Cowork | **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. |
-| Claude Code | `claude plugin marketplace add rain-ventures-ai/keeptrack` then `claude plugin install keeptrack@keeptrack` |
+| Claude Code cloud | Start the session on the board repo, or add the board repo as a second repo. No plugin or PAT. |
+| Claude Code locally in the board repo | Start `claude` in the repo. No plugin; use your existing `gh` login. |
+| Claude Code locally in another project | `claude plugin marketplace add rain-ventures-ai/keeptrack` then `claude plugin install keeptrack@keeptrack` |
 | Codex | `codex plugin marketplace add rain-ventures-ai/keeptrack`, then install **keeptrack** from `/plugins`. |
 | Cursor | In Agent chat: `/add-plugin https://github.com/rain-ventures-ai/keeptrack` |
 | ChatGPT | ChatGPT cannot update the board yet. Use **🤖 Copy for AI** on a person, paste it into ChatGPT, then log the draft on the board yourself. |
@@ -26,9 +28,11 @@ The quickest way: in the web board open **⚙️ Settings → Agents → An assi
 The Keeptrack repo is public, so anyone can install the plugin. Full details: [board/kit/PLUGIN.md](../../board/kit/PLUGIN.md).
 
 ## First use: tell it your board
-The first time, the assistant asks for your board repo (for example `your-name/my-keeptrack`) and your GitHub username. It saves them in a hidden `.board` folder in your project. It never saves your token.
+Inside the board repo, Claude gets the board name from the Git remote and does not need a `.board` setting. In another
+local project, the plugin asks for your board repo (for example `your-name/my-keeptrack`) and GitHub username. It saves
+them in a hidden `.board` folder in that project. It never saves your token.
 
-It needs access to your repo in one of these ways:
+Locally, it needs access to your repo in one of these ways:
 - a GitHub login on your computer (`gh auth login`), or
 - a token in an environment variable. Tell the assistant the **name** of the variable, never the token itself.
 
