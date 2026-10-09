@@ -878,6 +878,13 @@ if (typeof window !== 'undefined') (() => {
       cards.scrollTop = at.top; cards.scrollLeft = at.left;
     });
   }
+  function layoutCinemaCards() {
+    const cards = document.querySelector('.cinema-col .cards'); if (!cards) return;
+    const count = cards.querySelectorAll(':scope > .card').length;
+    const maxColumns = Math.max(1, Math.min(count || 1, Math.floor((cards.clientWidth + 16) / 316)));
+    const rows = Math.max(1, Math.ceil(count / maxColumns)), columns = Math.max(1, Math.ceil(count / rows));
+    cards.style.setProperty('--cinema-cols', columns); cards.style.setProperty('--cinema-rows', rows);
+  }
 
   function render() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
@@ -908,13 +915,13 @@ if (typeof window !== 'undefined') (() => {
       cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
       cards.addEventListener('dragleave', () => c.classList.remove('over'));
       cards.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); dropOn(e, col.id, null); });
-      capList('b:' + col.id, items, t => cardEl(t, ci), cards); if (!items.length) cards.append(el('div', 'emptycol', 'Nothing here. Drop a card or add one below.')); c.append(cards);
+      capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(el('div', 'emptycol', 'Nothing here. Drop a card or add one below.')); c.append(cards);
       const add = el('div', 'add'), inp = el('input'), btn = el('button', 'primary', 'Add'); inp.placeholder = 'Add a task…';
       const go = () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; addTask(v, col.id); };
       btn.onclick = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
       add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = () => { inp.scrollIntoView({ block: 'nearest' }); inp.focus(); }; board.append(c);
     });
-    renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); restoreBoardScroll(scroll);
+    renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
@@ -1482,8 +1489,8 @@ if (typeof window !== 'undefined') (() => {
 
   function numChip(t) { const b = el('button', 'numchip', '#' + t.num); b.type = 'button'; b.title = `Task #${t.num}: click to copy the reference`; b.setAttribute('aria-label', `Task number ${t.num}, copy`);
     b.onclick = e => { e.stopPropagation(); copyText('#' + t.num, `Copied #${t.num}`); }; return b; }
-  function cardEl(t, ci) {
-    const c = el('div', 'card' + (t.priority ? ' p-' + t.priority : '')); c.draggable = !phone(); paint(c, t);   // phones use hold-to-move instead: the browser's own drag would swallow the touch
+  function cardEl(t, ci, detailed = false) {
+    const c = el('div', 'card' + (t.priority ? ' p-' + t.priority : '') + (detailed ? ' detailed' : '')); c.draggable = !phone(); paint(c, t);   // phones use hold-to-move instead: the browser's own drag would swallow the touch
     c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); c.classList.add('dragging'); });
     c.addEventListener('dragend', () => c.classList.remove('dragging'));
     c.addEventListener('dragover', e => e.preventDefault());
@@ -1504,6 +1511,14 @@ if (typeof window !== 'undefined') (() => {
     if (t.client) tags.append(el('span', 'tag client', t.client));
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
+    if (detailed) {
+      const context = el('div', 'cardcontext');
+      const addContext = (icon, label, meta, text) => { const row = el('div', 'ctxrow'), head = el('div', 'ctxhead'); head.append(svgIcon(icon), el('strong', null, label)); if (meta) head.append(document.createTextNode(' · ' + meta)); row.append(head, el('div', 'ctxtext', text)); context.append(row); };
+      const next = t.todos.find(x => !x.done); if (next) addContext('square-check', 'Next step', '', next.text);
+      t.comments.filter(x => x.type !== 'activity' && x.text).slice(-2).reverse().forEach(x => addContext('message-square', 'Comment', `${x.by || 'someone'} · ${ago(x.at)}`, x.text));
+      const activity = t.history[t.history.length - 1]; if (activity) addContext('history', 'Latest activity', `${activity.by || 'someone'} · ${ago(activity.at)}`, activity.text);
+      if (context.childNodes.length) c.append(context);
+    }
     const foot = el('div', 'foot'); { const mc = chipMention(t); if (mc) foot.append(mc); }
     { const tc = todoCount(t), chip = elI('button', 'chip todochip' + (tc.all && tc.done === tc.all ? ' full' : ''), 'square-check', tc.all ? `${tc.done}/${tc.all}` : '+');
       chip.title = tc.all ? 'Show or hide the checklist' : 'Add a checklist'; chip.setAttribute('aria-expanded', String(openLists.has(t.id)));
@@ -2412,7 +2427,7 @@ if (typeof window !== 'undefined') (() => {
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
   $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fLabel', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
-  { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(renderTopbar, 60); };
+  { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(() => { renderTopbar(); layoutCinemaCards(); }, 60); };
     window.addEventListener('resize', refit);
     const wrap = document.querySelector('.clientwrap');
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
