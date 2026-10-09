@@ -24,6 +24,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v14 (schema 4)
+The default meeting-notes routine can now recover a verified legacy import without rewriting its cards, handles named
+owners who are not board users, stores note URLs as task links, and distinguishes explicit completion from `Possibly
+done` evidence.
+- Run `kit-update` only. There is no board-data migration.
+- Never seed a missing ingestion log from a card range or labels alone. Verify each task against its source document and
+  revision; leave unverifiable mappings out.
+- Check: the recurring prompt reports verified legacy matches, completed tasks and possibly-done tasks, and requires
+  `keeptrack.py link` for meeting sources.
+
 ### v13 (schema 4)
 Recurring meeting-note imports now default to a rolling seven-day lookback, retain a durable ingestion log and ignore
 unchanged logged documents. The log also has a meeting-independent work index so actions are matched across different

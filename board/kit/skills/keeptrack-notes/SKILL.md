@@ -58,11 +58,18 @@ Propose the smallest useful set of changes:
 - **Meeting log:** one concise factual summary for each relevant existing person, using `touch --channel meeting`.
 - **Follow-ups:** a promise to contact or reply to a person becomes that person's `next` step and `due` date.
 - **Tasks:** explicit work with an outcome becomes a task, or an update to a matching existing task.
+- **Task status:** an explicit statement that the same tracked outcome is finished can complete its existing task after
+  adding a concise source-backed comment. If completion is only implied, propose a comment and mark it `Possibly done`
+  for review instead of completing it.
 - **Checklist items:** concrete steps within existing work become todos rather than duplicate tasks.
 - **Decisions and blockers:** add them as concise comments on the relevant task when they affect future work.
 - **New people:** add an attendee only when their identity is clear and they are useful to track; name is mandatory and
   other fields are optional.
 - **Source:** retain a link to the original notes or recording when one exists. Keep the source file where it already is.
+
+Assign work only to matching board users. When a named owner is not a board user, leave the task unassigned and put the
+owner's name in concise details; do not create a board user or guess an assignee. If People mode is enabled and that
+person already exists, use their record for relevant meeting logs or follow-ups, not as a task assignee.
 
 A conversational idea, background detail, speculation, or completed action is not automatically a new task. A
 follow-up with a person is normally a CRM next step, not a duplicate task. Search before proposing anything new:
