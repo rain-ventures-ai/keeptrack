@@ -607,13 +607,58 @@ if (typeof window !== 'undefined') (() => {
     });
   }
 
+  // Undo restores only the fields touched by a saved operation. Unrelated newer work is left alone, and mutate's
+  // normal conflict screen still protects a field if somebody else changed that same field after our save.
+  const undoStack = [], UNDO_LIMIT = 20;
+  const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function syncUndo() {
+    const top = undoStack[undoStack.length - 1];
+    ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { const b = $(id); if (!b) return; b.disabled = !top || busy || ro; b.title = top ? `Undo: ${top.message} (Ctrl/Cmd+Z)` : 'Nothing to undo'; });
+  }
+  function rememberUndo(before, after, message) {
+    if (sameJson(before, after)) return;
+    undoStack.push({ before: clone(before), after: clone(after), message, board: [cfg().repo, cfg().branch, cfg().path].join('|') });
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo();
+  }
+  function applyInverse(target, entry) {
+    const { before, after } = entry;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (key === 'tasks' || key === 'contacts') continue;
+      if (sameJson(before[key], after[key])) continue;
+      // Do not roll back newer top-level board settings changed by another browser or agent.
+      if (!sameJson(target[key], after[key])) continue;
+      if (before[key] === undefined) delete target[key]; else target[key] = clone(before[key]);
+    }
+    for (const kind of KINDS) {
+      const old = byId(before, kind), saved = byId(after, kind), live = byId(target, kind), changed = new Set([...old.keys(), ...saved.keys()].filter(id => !sameJson(old.get(id), saved.get(id))));
+      changed.forEach(id => {
+        const a = old.get(id), b = saved.get(id), cur = live.get(id);
+        if (!a && b) { target[kind] = target[kind].filter(x => x.id !== id); return; }
+        if (a && !b) { if (!cur) target[kind].push(clone(a)); return; }
+        if (!a || !b || !cur) return;
+        for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+          if (sameJson(a[key], b[key])) continue;
+          if (a[key] === undefined) delete cur[key]; else cur[key] = clone(a[key]);
+        }
+      });
+    }
+  }
+  async function undoLast() {
+    const entry = undoStack[undoStack.length - 1]; if (!entry) { toast('Nothing to undo.'); return; }
+    if (entry.board !== [cfg().repo, cfg().branch, cfg().path].join('|')) { undoStack.length = 0; syncUndo(); toast('Nothing to undo on this board.'); return; }
+    const ids = KINDS.flatMap(k => [...new Set([...byId(entry.before, k).keys(), ...byId(entry.after, k).keys()])].filter(id => !sameJson(byId(entry.before, k).get(id), byId(entry.after, k).get(id))));
+    const ok = await mutate(n => applyInverse(n, entry), `Undo: ${entry.message}`, ids, entry.after, { remember: false });
+    if (ok) { undoStack.pop(); syncUndo(); toast(`Undid: ${entry.message}`); }
+  }
+  const confirmRemoval = what => confirm(`Remove ${what}?\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`);
+
   // Apply an edit to the LATEST file on GitHub (never overwrite with stale state); retry on a SHA conflict.
   // Returns true only when the change is saved on GitHub.
-  async function mutate(fn, message, targetIds = [], baseState = null) {
+  async function mutate(fn, message, targetIds = [], baseState = null, options = {}) {
     if (ro) { roToast(); return false; }
     if (busy) { setStatus('Busy, try again', 'err'); return false; }
     if (fromSnap) { setStatus('Still loading the latest board, try again in a moment', 'err'); return false; }
-    busy = true; loadGen++; const before = clone(state); let base = baseState || before;
+    busy = true; syncUndo(); loadGen++; const before = clone(state); let base = baseState || before;
     try {
       const o = clone(state); fn(o); ensureRanks(o); assignNums(o); state = o; render(); // optimistic
       for (let i = 0; i < 4; i++) {
@@ -645,12 +690,12 @@ if (typeof window !== 'undefined') (() => {
         base = pre;   // from here on, "what you saw" is this revision
         autoLog(pre, latest); contactLog(pre, latest);
         const out = await save(latest, message, readSha);
-        if (out === 'ok') { snapSave(cfg(), latest); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
+        if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
         if (out !== 'conflict') { setStatus('Save failed (' + out + ')', 'err'); state = before; render(); return false; }
         setStatus('Someone else changed the board, retrying…', 'err');
       }
       setStatus('Could not save after retries', 'err'); state = before; render(); busy = false; await load(true); return false;
-    } catch (e) { console.error(e); setStatus('Save failed', 'err'); state = before; render(); return false; } finally { busy = false; }
+    } catch (e) { console.error(e); setStatus('Save failed', 'err'); state = before; render(); return false; } finally { busy = false; syncUndo(); }
   }
 
   function boardId(prefix) {
@@ -1102,7 +1147,7 @@ if (typeof window !== 'undefined') (() => {
       const row = el('label', 'todo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
       cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); if (inDialog) renderDlgTodos(); };
       row.append(cb, el('span', null, d.text));
-      if (inDialog) { const x = el('button', 'x', '×'); x.type = 'button'; x.title = 'Remove'; x.onclick = async e => { e.preventDefault(); await removeTodo(t.id, d.id); renderDlgTodos(); }; row.append(x); }
+      if (inDialog) { const x = el('button', 'x', '×'); x.type = 'button'; x.title = 'Remove'; x.onclick = async e => { e.preventDefault(); if (!confirmRemoval(`the checklist item “${d.text}”`)) return; await removeTodo(t.id, d.id); renderDlgTodos(); }; row.append(x); }
       box.append(row);
     });
     const add = el('input', 'todonew'); add.placeholder = 'Add a to-do and press Enter';
@@ -1539,17 +1584,23 @@ if (typeof window !== 'undefined') (() => {
     const a = el('span', 'av', name.slice(0, 2).toUpperCase()); a.style.setProperty('--h', h); a.title = '@' + login + (p && p.name ? ' (' + p.name + ')' : ''); return a;
   }
 
+  function taskAssignControl(t, agentOnly = false) {
+    const claim = activeClaim(t), assign = el('details', 'quickassign' + (agentOnly ? ' drawerassign' : ''));
+    const summary = elI('summary', null, agentOnly ? 'bot' : 'user', agentOnly ? (claim ? agentLabel(claim) : 'Agent') : (t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign'));
+    summary.title = agentOnly ? `Assign task #${t.num} to your agent` : `Assign task #${t.num}`; assign.append(summary);
+    const menu = el('div', 'quickassignmenu'); state.people.forEach(p => { const on = t.assignees.includes(p.github), b = el('button', 'quickperson' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.append(avatar(p.github), document.createTextNode(p.name || '@' + p.github));
+      b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); if (!agentOnly) menu.append(b); });
+    if (myAgents().includes('claude')) { const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === cfg().me, b = el('button', 'quickagent' + (mine ? ' on' : '')); b.type = 'button'; b.disabled = !!claim || !claudeReady() || !cfg().me; b.setAttribute('aria-pressed', String(!!mine)); b.append(svgIcon('bot'), el('span', null, mine ? `Claude for @${cfg().me} · assigned` : claudeReady() && cfg().me ? `Assign to Claude for @${cfg().me}` : 'Claude · finish setup first'));
+      b.title = mine ? 'This task is already assigned to your Claude routine' : claim ? `${agentLabel(claim)} already has this task` : 'Assign this card to your Claude routine; it starts automatically'; b.onclick = () => { assign.open = false; assignMyClaude(t.id); }; menu.append(b); }
+    else { const setup = elI('button', 'quickagent setup', 'settings', 'Set up your Claude agent…'); setup.type = 'button'; setup.onclick = () => { assign.open = false; if ($('dlgCard').open) $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); }; menu.append(setup); }
+    if (!agentOnly && t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
+    if (!agentOnly && !state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); return assign;
+  }
   function taskQuickActions(t) {
     const actions = el('div', 'taskactions'); actions.addEventListener('click', e => e.stopPropagation()); actions.addEventListener('dblclick', e => e.stopPropagation());
     const status = el('select', 'quickstatus'); status.setAttribute('aria-label', `Status for task #${t.num}`); state.columns.forEach(c => { const o = el('option', null, c.name); o.value = c.id; status.append(o); }); status.value = t.column;
     status.onchange = () => { if (status.value !== t.column) moveTo(t.id, status.value); };
-    const assign = el('details', 'quickassign'), summary = elI('summary', null, 'user', t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign'); summary.title = `Assign task #${t.num}`; assign.append(summary);
-    const menu = el('div', 'quickassignmenu'); state.people.forEach(p => { const on = t.assignees.includes(p.github), b = el('button', 'quickperson' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.append(avatar(p.github), document.createTextNode(p.name || '@' + p.github));
-      b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); menu.append(b); });
-    if (myAgents().includes('claude')) { const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === cfg().me, b = el('button', 'quickagent' + (mine ? ' on' : '')); b.type = 'button'; b.disabled = !!claim || !claudeReady() || !cfg().me; b.setAttribute('aria-pressed', String(!!mine)); b.append(svgIcon('bot'), el('span', null, mine ? `Claude for @${cfg().me} · assigned` : claudeReady() && cfg().me ? `Assign to Claude for @${cfg().me}` : 'Claude · finish setup first'));
-      b.title = mine ? 'This task is already assigned to your Claude routine' : claim ? `${agentLabel(claim)} already has this task` : 'Assign this card to your Claude routine; it starts automatically'; b.onclick = () => { assign.open = false; assignMyClaude(t.id); }; menu.append(b); }
-    if (t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
-    if (!state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); actions.append(status, assign); return actions;
+    actions.append(status, taskAssignControl(t)); return actions;
   }
 
   function numChip(t) { const b = el('button', 'numchip', '#' + t.num); b.type = 'button'; b.title = `Task #${t.num}: click to copy the reference`; b.setAttribute('aria-label', `Task number ${t.num}, copy`);
@@ -1710,11 +1761,12 @@ if (typeof window !== 'undefined') (() => {
       b.append(avatar(p.github), document.createTextNode(p.name));
       b.onclick = () => edit(editing, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(editing)}`); box.append(b);
     });
+    box.append(taskAssignControl(t, true));
   }
   function renderLabelChips(t) {
     const box = $('cLabelChips'); box.textContent = ''; $('labelList').textContent = ''; state.labels.forEach(l => { const o = el('option'); o.value = l.name; $('labelList').append(o); });
     t.labels.forEach(l => { const s = paintLabel(el('span', 'tag label lchip', l), l); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove label'; x.setAttribute('aria-label', 'Remove label ' + l);
-      x.onclick = () => edit(editing, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(editing)}`); s.append(x); box.append(s); });
+      x.onclick = () => { if (!confirmRemoval(`the “${l}” label`)) return; edit(editing, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(editing)}`); }; s.append(x); box.append(s); });
   }
   $('cLabelAdd').onclick = () => { $('cLabelAdd').hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); };
   $('cLabelNew').addEventListener('blur', () => setTimeout(() => { if (!$('cLabelNew').value.trim()) { $('cLabelNew').hidden = true; $('cLabelAdd').hidden = false; } }, 150));
@@ -1732,7 +1784,7 @@ if (typeof window !== 'undefined') (() => {
       let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {} if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
       const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.onclick = () => copyText(l.url, 'Path copied.'); }
       const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove link'; x.setAttribute('aria-label', 'Remove link');
-      x.onclick = () => edit(editing, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(editing)}`);
+      x.onclick = () => { if (!confirmRemoval(`the task resource “${l.title || l.url}”`)) return; edit(editing, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(editing)}`); };
       row.append(elI('span', 'li', g ? 'github' : local ? 'laptop' : 'link'), main, el('span', 'host', g && l.title && l.title !== l.url ? l.title : host)); if (cp) row.append(cp); row.append(x); box.append(row);
     });
   }
@@ -1744,7 +1796,7 @@ if (typeof window !== 'undefined') (() => {
       const row = el('div', 'contact'), main = el('div', 'cmain'); main.append(el('b', null, k.name || '(no name)')); if (k.role) main.append(el('span', 'host', ' · ' + k.role));
       const det = el('div', 'cdet'); if (k.email) { const a = el('a', null, k.email); a.href = 'mailto:' + k.email; det.append(a); } if (k.phone) { const a = el('a', null, k.phone); a.href = 'tel:' + k.phone.replace(/\s+/g, ''); det.append(a); }
       main.append(det); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove contact'; x.setAttribute('aria-label', 'Remove contact');
-      x.onclick = () => edit(editing, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(editing)}`);
+      x.onclick = () => { if (!confirmRemoval(`the task contact “${k.name}”`)) return; edit(editing, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(editing)}`); };
       row.append(el('span', 'avc', (k.name || '?').slice(0, 1).toUpperCase()), main, x); box.append(row);
     });
   }
@@ -1861,7 +1913,7 @@ if (typeof window !== 'undefined') (() => {
   };
   $('cAgent').onclick = () => { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); };
   $('dlgCard').addEventListener('close', () => { if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; });   // closing never loses typed text
-  $('cDelete').onclick = () => { const id = editing; if (!confirm(`Delete "${titleOf(id)}"?`)) return; const title = titleOf(id); editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]); };
+  $('cDelete').onclick = () => { const id = editing, title = titleOf(id); if (!confirm(`Delete the task “${title}”?\n\nThis removes its details, checklist, comments and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) return; editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]); };
 
   $('xCode').onclick = () => copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.');
   $('xLink').onclick = () => copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.');
@@ -2349,7 +2401,7 @@ if (typeof window !== 'undefined') (() => {
   $('sRepo').addEventListener('input', () => { $('patLink').href = patUrl(); });
   $('btnSettings').addEventListener('click', () => { $('patLink').href = patUrl(); });
   $('sCancel').onclick = () => $('dlgSettings').close();
-  $('sForget').onclick = () => { loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
+  $('sForget').onclick = () => { if (!confirm('Forget this board token from this browser?\n\nThe board is not changed, but you will need to add a working token before you can save again.')) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
   $('sSave').onclick = () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
@@ -2721,9 +2773,9 @@ if (typeof window !== 'undefined') (() => {
     if (!keep('pNotes')) { $('pNotes').value = p.notes; autosize($('pNotes')); }
     renderContactMethods(p);
     // links: this person's own, and the files of their company (client)
-    renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); syncContactLegacy(x); }, `Links: ${p.name}`));
+    renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); syncContactLegacy(x); }, `Links: ${p.name}`), false, 'profile/reference link');
     const co = p.company, info = co ? ((state.client_info || {})[co] || { links: [] }) : null;
-    $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files and folders for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true); }
+    $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files and folders for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource'); }
     renderTouches(p); renderPersonTasks(p);
     const ol = $('pHist'); ol.textContent = ''; $('pHistSum').textContent = `History (${p.history.length})`;
     p.history.slice().reverse().forEach(h => { const li2 = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li2.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li2); });
@@ -2737,23 +2789,26 @@ if (typeof window !== 'undefined') (() => {
         label.value = item.label || ''; label.placeholder = 'Label'; label.setAttribute('aria-label', `${kind} label`);
         value.value = item.value || ''; value.type = kind === 'email' ? 'email' : 'tel'; value.setAttribute('aria-label', kind === 'email' ? 'Email address' : 'Phone number');
         go.href = kind === 'email' ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = kind === 'email' ? 'Write email' : 'Call'; go.append(svgIcon(kind === 'email' ? 'mail' : 'phone'));
-        const save = () => { const lab = label.value.trim(), val = value.value.trim(); pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || (kind === 'email' ? 'Email' : 'Phone'); found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
+        const save = () => { const lab = label.value.trim(), val = value.value.trim(), fallback = kind === 'email' ? 'Email' : 'Phone';
+          if (!val) { if (!confirmRemoval(`the ${item.label || fallback} ${kind} “${item.value}”`)) { label.value = item.label || ''; value.value = item.value || ''; return; } }
+          else if (val !== item.value && !confirm(`Change ${p.name}'s ${item.label || fallback} ${kind}?\n\nFrom: ${item.value}\nTo: ${val}\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) { label.value = item.label || ''; value.value = item.value || ''; return; }
+          pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || fallback; found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
         label.addEventListener('change', save); value.addEventListener('change', save);
-        x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = () => pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`);
+        x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = () => { if (!confirmRemoval(`the ${item.label || (kind === 'email' ? 'Email' : 'Phone')} ${kind} “${item.value}”`)) return; pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
         row.append(label, value, go, x); box.append(row);
       });
       if (!items.length) box.append(el('div', 'muted small', kind === 'email' ? 'No email addresses yet.' : 'No phone numbers yet.'));
     };
     draw($('pEmails'), p.emails, 'email'); draw($('pPhones'), p.phones, 'phone');
   }
-  function renderLinkBox(box, links, onRemove, resources) {
+  function renderLinkBox(box, links, onRemove, resources, kind = 'link') {
     box.textContent = '';
     links.forEach(l => { const row = el('div', 'linkrow'), href = safeUrl(l.url), local = resources && localResource(l.url), main = href ? el('a', null, l.title || l.url) : el('span', 'resourcepath', l.title || l.url);
       if (href) { main.href = href; main.target = '_blank'; main.rel = 'noopener noreferrer'; } else if (local) { main.title = l.url; }
       const host = local ? 'Local path' : (() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
       if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
       const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.setAttribute('aria-label', 'Copy local path'); cp.onclick = () => copyText(l.url, 'Path copied.'); }
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = () => onRemove(l);
+      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = () => { if (confirmRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); };
       row.append(elI('span', 'li', local ? 'laptop' : storeIcon(host)), main, el('span', 'host', host)); if (cp) row.append(cp); row.append(x); box.append(row); });
     if (!links.length) box.append(el('div', 'muted small', 'No links yet.'));
   }
@@ -2822,7 +2877,7 @@ if (typeof window !== 'undefined') (() => {
   $('pChan').onchange = () => { $('pDraftWrap').hidden = $('pChan').value === 'note'; };
   $('pClose').onclick = () => $('dlgContact').close();
   $('dlgContact').addEventListener('close', () => { editingContact = null; render(); });
-  $('pDelete').onclick = () => { const p = contactNow(); if (!p || !confirm(`Delete ${p.name}? Their touches and history go too. (Git history still holds old versions of the file.)`)) return; const id = p.id; $('dlgContact').close();
+  $('pDelete').onclick = () => { const p = contactNow(); if (!p || !confirm(`Delete the person “${p.name}”?\n\nThis removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.`)) return; const id = p.id; $('dlgContact').close();
     mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`); };
   $('pAgent').onclick = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
   function personPrompt(p) {
@@ -3132,6 +3187,11 @@ if (typeof window !== 'undefined') (() => {
   $('qQ').addEventListener('keydown', e => { if (e.key === 'Enter') { const f = $('qRes').querySelector('.qhit'); if (f) f.click(); } else if (e.key === 'ArrowDown') { const f = $('qRes').querySelector('.qhit'); if (f) { e.preventDefault(); f.focus(); } } });
   $('qRes').addEventListener('keydown', e => { const b = document.activeElement; if (e.key === 'ArrowDown' && b.nextElementSibling) { e.preventDefault(); b.nextElementSibling.focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); (b.previousElementSibling || $('qQ')).focus(); } });
   $('qArch').onchange = runSearch; $('qClose').onclick = () => $('dlgSearch').close(); $('btnSearch').onclick = openSearch;
+  ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { $(id).onclick = undoLast; }); syncUndo();
+  document.addEventListener('keydown', e => {
+    const t = e.target, typing = t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
+    if (!typing && !e.altKey && e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); undoLast(); }
+  });
   document.addEventListener('keydown', e => { const t = e.target, typing = t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
     if ((e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) || (e.key.toLowerCase() === 'k' && (e.ctrlKey || e.metaKey))) { if (document.querySelector('dialog[open]:not(#dlgSearch)')) return; e.preventDefault(); openSearch(); } });
 
@@ -3143,7 +3203,7 @@ if (typeof window !== 'undefined') (() => {
   };
   function roToast() { toast((RO_TEXT[ro] || ['Read-only'])[0], true); }
   function applyRo() {
-    document.body.classList.toggle('ro', !!ro); const bar = $('roBar'); bar.hidden = !ro; bar.textContent = ''; if (!ro) return;
+    document.body.classList.toggle('ro', !!ro); syncUndo(); const bar = $('roBar'); bar.hidden = !ro; bar.textContent = ''; if (!ro) return;
     const [msg, label, go] = RO_TEXT[ro], b = el('button', 'small', label); b.type = 'button'; b.onclick = go; bar.append(elI('span', null, 'lock', msg));
     if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; bar.append(a); }
     bar.append(b); lockDrawers();

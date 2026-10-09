@@ -49,6 +49,7 @@
         <div class="popfoot"><button id="fClear" type="button">Clear filters</button></div>
       </div>
     </div>
+    <button id="btnUndo" type="button" aria-label="Undo last board change" title="Nothing to undo" disabled><span class="ic"><i data-i="undo-2"></i></span><span class="tx"> Undo</span></button>
     <div class="popwrap mobilemore">
       <button id="btnMore" aria-haspopup="true" aria-expanded="false" aria-controls="morePop" aria-label="More board actions" title="More board actions"><span class="moreglyph" aria-hidden="true">•••</span></button>
       <div id="morePop" class="popover morepop" hidden>
@@ -126,6 +127,7 @@
     <section><h3><i data-i="square-kanban"></i> Tasks</h3><p>Board, List, Calendar and Schedule show the same tasks. Double-click a card to open it. A task can be linked to a person.</p></section>
     <section><h3><i data-i="bot"></i> AI assistants</h3><p><b>Copy for AI</b> copies a card for any chat. With the Keeptrack plugin, Claude, Codex or Cursor can read and update the board. AI drafts messages; it never sends them.</p></section>
     <section><h3><i data-i="search"></i> Search and archive</h3><p>Press <b>/</b> or click <i data-i="search"></i> to search everything. Old done tasks and Lost people can be moved to the archive (Settings → General). Search finds them, and you can put them back.</p></section>
+    <section><h3><i data-i="undo-2"></i> Undo and safe removal</h3><p>Use the <b>Undo</b> button, <b>Ctrl+Z</b> on Windows/Linux, or <b>⌘Z</b> on a Mac to reverse recent saved board changes. Keeptrack asks before deleting people, tasks, contact details and other important items.</p></section>
     <section><h3><i data-i="lock"></i> Read-only</h3><p>The demo board, a public board with no token, and a token without write access are read-only. A banner at the top tells you why.</p></section>
   </div>
   <p class="hlinks"><a class="mainRepoLink" href="https://github.com/rain-ventures-ai/keeptrack" target="_blank" rel="noopener noreferrer"><i data-i="github"></i> Keeptrack repository</a> · Full help: <a data-doc="README.md">all topics</a> · <a data-doc="getting-started.md">getting started</a> · <a data-doc="people-and-follow-ups.md">people</a> · <a data-doc="ai-assistants.md">AI assistants</a> · <a data-doc="privacy-and-security.md">privacy</a> · <a data-doc="faq.md">problems</a> · demo boards: <a href="?demo=crm">people</a>, <a href="?demo=board">tasks</a></p>
@@ -324,7 +326,7 @@
 </dialog>
 
 <dialog id="dlgContact" class="drawer" aria-label="Person details">
-  <div class="dhead"><span class="numchip big" aria-hidden="true"><i data-i="user"></i></span><span class="spacer"></span><button id="pAgent" type="button" class="small agentcopy" title="Copy this person and their recent contact for Claude, Codex or ChatGPT, for example to write a message" aria-label="Copy for AI"><span aria-hidden="true"><i data-i="bot"></i></span><span class="atxt"> Copy for AI</span></button><button id="pClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
+  <div class="dhead"><span class="numchip big" aria-hidden="true"><i data-i="user"></i></span><span class="spacer"></span><button id="pUndo" type="button" class="ico undodrawer" aria-label="Undo last board change" title="Nothing to undo" disabled><i data-i="undo-2"></i></button><button id="pAgent" type="button" class="small agentcopy" title="Copy this person and their recent contact for Claude, Codex or ChatGPT, for example to write a message" aria-label="Copy for AI"><span aria-hidden="true"><i data-i="bot"></i></span><span class="atxt"> Copy for AI</span></button><button id="pClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
   <div class="dbody">
     <textarea id="pName" class="dtitle" rows="1" aria-label="Name" placeholder="Name"></textarea>
     <div class="dchips">
@@ -342,8 +344,8 @@
       <label><span><i data-i="compass"></i> Source</span> <input id="pSource" placeholder="For example: weekly opportunity run"></label>
     </div>
     <section class="dsec contactmethods"><div class="dsech"><h4><i data-i="user"></i> Contact details</h4></div>
-      <div class="methodgroup"><b><i data-i="mail"></i> Email addresses</b><div id="pEmails"></div><div class="methodadd"><input id="pEmailLabel" placeholder="Label (for example Work)"><input id="pEmailNew" type="email" placeholder="name@example.com"><button id="pEmailAdd" type="button">Add</button></div></div>
-      <div class="methodgroup"><b><i data-i="phone"></i> Phone numbers</b><div id="pPhones"></div><div class="methodadd"><input id="pPhoneLabel" placeholder="Label (for example Mobile)"><input id="pPhoneNew" type="tel" placeholder="Phone number"><button id="pPhoneAdd" type="button">Add</button></div></div>
+      <div class="methodgroup"><b><i data-i="mail"></i> Email addresses</b><div id="pEmails" class="methodlist"></div><div class="methodadd"><input id="pEmailLabel" aria-label="New email label" placeholder="Label, e.g. Work"><input id="pEmailNew" type="email" aria-label="New email address" placeholder="name@example.com"><button id="pEmailAdd" type="button" class="primary"><i data-i="plus"></i> Add email</button></div></div>
+      <div class="methodgroup"><b><i data-i="phone"></i> Phone numbers</b><div id="pPhones" class="methodlist"></div><div class="methodadd"><input id="pPhoneLabel" aria-label="New phone label" placeholder="Label, e.g. Mobile"><input id="pPhoneNew" type="tel" aria-label="New phone number" placeholder="Phone number"><button id="pPhoneAdd" type="button" class="primary"><i data-i="plus"></i> Add phone</button></div></div>
     </section>
     <section class="dsec"><div class="dsech"><h4><i data-i="message-square"></i> Contact log <span id="pTouchCount" class="muted"></span></h4></div>
       <div class="composer"><textarea id="pTouchText" rows="2" placeholder="What did you send or talk about? Paste a draft message here too." aria-label="Contact log entry"></textarea>
@@ -361,7 +363,7 @@
 </dialog>
 
 <dialog id="dlgCard" class="drawer" aria-label="Task details">
-  <div class="dhead"><button id="dNum" type="button" class="numchip big" title="Copy the task reference"></button><button id="dLink" type="button" class="small" title="Copy a link to this task" aria-label="Copy link to this task"><i data-i="link"></i></button><span class="spacer"></span><span id="dSaved" class="dsaved" role="status"></span><button id="cIssue" type="button" class="small agentcopy" title="Create a GitHub issue for this task" aria-label="Create GitHub issue"><span aria-hidden="true"><i data-i="github"></i></span><span class="atxt"> Create issue</span></button><button id="cCopyMd" type="button" class="small agentcopy" title="Copy this card as Markdown, with all details, comments and history" aria-label="Copy card as Markdown"><span aria-hidden="true"><i data-i="clipboard-copy"></i></span><span class="atxt"> Markdown</span></button><button id="cAgent" type="button" class="small agentcopy" title="Copy instructions for an AI agent to work on this task: the card, how to claim it, and the skill link" aria-label="Copy for agent"><span aria-hidden="true"><i data-i="bot"></i></span><span class="atxt"> Copy for agent</span></button><button id="cClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
+  <div class="dhead"><button id="dNum" type="button" class="numchip big" title="Copy the task reference"></button><button id="dLink" type="button" class="small" title="Copy a link to this task" aria-label="Copy link to this task"><i data-i="link"></i></button><span class="spacer"></span><span id="dSaved" class="dsaved" role="status"></span><button id="cUndo" type="button" class="ico undodrawer" aria-label="Undo last board change" title="Nothing to undo" disabled><i data-i="undo-2"></i></button><button id="cIssue" type="button" class="small agentcopy" title="Create a GitHub issue for this task" aria-label="Create GitHub issue"><span aria-hidden="true"><i data-i="github"></i></span><span class="atxt"> Create issue</span></button><button id="cCopyMd" type="button" class="small agentcopy" title="Copy this card as Markdown, with all details, comments and history" aria-label="Copy card as Markdown"><span aria-hidden="true"><i data-i="clipboard-copy"></i></span><span class="atxt"> Markdown</span></button><button id="cAgent" type="button" class="small agentcopy" title="Copy instructions for an AI agent to work on this task: the card, how to claim it, and the skill link" aria-label="Copy for agent"><span aria-hidden="true"><i data-i="bot"></i></span><span class="atxt"> Copy for agent</span></button><button id="cClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
   <div class="dbody" id="cBody">
     <textarea id="cTitle" class="dtitle" rows="1" aria-label="Title" placeholder="Task title"></textarea>
     <div class="dchips">

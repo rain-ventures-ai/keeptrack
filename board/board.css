@@ -31,6 +31,7 @@
 
 /* ---- base ---------------------------------------------------------------- */
 * { box-sizing: border-box; }
+html, body { max-width: 100%; overflow-x: hidden; }
 body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; }
 select, input, textarea, button { font: inherit; color: inherit; }
 select, input, textarea { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; }
@@ -337,7 +338,7 @@ button.small { padding: 2px 10px; font-size: 12px; }
 #cHistWrap summary { cursor: pointer; font-size: 14px; font-weight: 700; }
 .dfoot2 { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--border); } .dfoot2 .danger { border-color: transparent; background: transparent; font-size: 13px; }
 @media (max-width: 760px) {
-  dialog.drawer { width: 100vw; border-radius: 0; border: 0; }
+  dialog.drawer { inset: 0; margin: 0; width: 100vw; max-width: 100vw; border-radius: 0; border: 0; }
   .dbody { padding: 14px 14px 40px; } .dtitle { font-size: 21px; }
   .prop { grid-template-columns: 1fr; gap: 2px; padding: 8px 0; } .pk { font-size: 12px; }
   .pchip { padding: 6px 14px 6px 6px; } .pchip .av { width: 26px; height: 26px; }
@@ -473,13 +474,14 @@ header .badge { top: -6px; right: -6px; }
   .viewnav { grid-column: 2; grid-row: 1; min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding-bottom: 2px; }
   .viewnav::-webkit-scrollbar { display: none; }
   .viewgroup { flex: 0 0 auto; }
-  .hfilters { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: center; min-width: 0; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+  .hfilters { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: minmax(72px, 1fr) repeat(6, 40px); align-items: center; min-width: 0; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
   header .boardwrap, header .viewnav { align-self: end; }
-  .hfilters .clientwrap { flex: 1 1 auto; min-width: 72px; }
+  .hfilters .clientwrap { min-width: 0; }
   .hfilters .clientbar { width: 100%; }
   .peopleq { display: none; }
   .mobilemore { display: block; }
-  .hfilters #btnSearch { order: 0; }
+  .hfilters > button, .hfilters > .popwrap { width: 40px; min-width: 40px; }
+  .hfilters > .popwrap > button { width: 100%; }
   .hutils { grid-column: 1 / -1; grid-row: 3; display: flex; min-width: 0; }
   .hutils > button, .hutils .hbreak { display: none; }
   .hutils:has(#status.ok) { display: none; }
@@ -487,7 +489,7 @@ header .badge { top: -6px; right: -6px; }
   .seg button { min-height: 40px; min-width: 38px; padding: 6px 8px; } header button { min-height: 40px; min-width: 40px; padding: 4px 6px; } header .seg button { min-width: 38px; }
   .popover { position: fixed; left: 8px; right: 8px; top: 120px; width: auto; max-width: none; } .clientpop { left: 8px !important; } .filterpop { right: 8px; width: auto; }
   .filterpop select, .filterpop input { min-height: 42px; font-size: 16px; } .filterpop label.chk { min-height: 40px; } .cmenu { min-height: 44px; }
-  .cpill { padding: 7px 12px; }
+  .cpill { padding: 7px 10px; }
 }
 .morepop { right: 0; top: calc(100% + 8px); width: 245px; padding: 8px; }
 .morepop label { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin: 2px 4px 8px; font-size: 12px; color: var(--muted); }
@@ -504,7 +506,8 @@ header .badge { top: -6px; right: -6px; }
 /* ---- drawer: tighter property layout ------------------------------------- */
 .duepill { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: var(--panel); padding: 0 6px 0 10px; font-size: 13px; } .duepill .pillinput { background: transparent; padding: 3px 4px; border: 0; min-width: 0; }
 .proprow { display: grid; grid-template-columns: 1fr auto; gap: 8px 22px; align-items: start; }
-.prop.stack { display: block; padding: 6px 0 4px; min-height: 0; } .prop.stack .pk { display: block; margin-bottom: 5px; padding: 0; font-size: 12px; } .prop.stack .pv { display: flex; }
+.prop.stack { display: block; padding: 6px 0 4px; min-height: 0; } .prop.stack .pk { display: block; margin-bottom: 5px; padding: 0; font-size: 12px; } .prop.stack .pv { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.drawerassign { margin-left: 2px; } .drawerassign summary { color: var(--accent); border-style: dashed; } .drawerassign .quickassignmenu { left: 0; right: auto; width: min(280px, calc(100vw - 42px)); }
 @media (max-width: 760px) { .proprow { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; } .prop.stack .pk { margin-bottom: 4px; } }
 
 /* needs-attention toggle: crossed out and grey when off, normal amber when on */
@@ -680,8 +683,8 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 .stagepill.closed { opacity: .7; }
 .pdue { font-size: 12px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
 .pdue.today { border-color: var(--warn); color: var(--warn); font-weight: 600; } .pdue.late { border-color: var(--danger); color: var(--danger); font-weight: 600; } .pdue.none:empty { display: none; }
-.pbar { display: flex; gap: 8px; margin-bottom: 8px; } .psearch { flex: 1; min-width: 0; }
-.padd { margin-top: 14px; display: flex; gap: 8px; } .padd input { flex: 1; min-width: 0; }
+.pbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 8px; max-width: 100%; } .psearch { min-width: 0; width: 100%; }
+.padd { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; max-width: 100%; } .padd input { min-width: 0; width: 100%; }
 .personform { max-width: 620px; }
 .personform .formhead { display: flex; align-items: flex-start; gap: 12px; }
 .personform .formhead > div { flex: 1; }
@@ -695,14 +698,17 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 .nextdue { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
 .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 10px 0; }
 .pgrid label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; } .pgrid input { width: 100%; color: var(--text); }
-.contactmethods { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.contactmethods .dsech { grid-column: 1 / -1; margin-bottom: 0; }
-.methodgroup { min-width: 0; } .methodgroup > b { display: block; margin-bottom: 6px; font-size: 13px; }
-.methodrow { display: grid; grid-template-columns: minmax(76px, .45fr) minmax(120px, 1fr) auto auto; gap: 6px; align-items: center; padding: 5px 0; }
+.contactmethods { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.contactmethods .dsech { margin-bottom: 0; }
+.methodgroup { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--panel) 44%, var(--card)); }
+.methodgroup > b { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 13px; }
+.methodlist > .muted { padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--card); }
+.methodrow { display: grid; grid-template-columns: minmax(90px, .38fr) minmax(0, 1fr) 34px 34px; gap: 6px; align-items: center; padding: 5px 0; }
 .methodrow input { min-width: 0; width: 100%; padding: 7px 8px; }
-.methodrow .methodgo { display: inline-flex; color: var(--accent); padding: 5px; }
-.methodadd { display: grid; grid-template-columns: minmax(100px, .45fr) minmax(150px, 1fr) auto; gap: 6px; margin-top: 7px; }
-.methodadd input { min-width: 0; width: 100%; } .methodadd button { white-space: nowrap; }
+.methodrow .methodgo { display: inline-grid; place-items: center; color: var(--accent); min-width: 34px; min-height: 34px; padding: 5px; border-radius: 6px; } .methodrow .methodgo:hover { background: var(--accent-soft); }
+.methodrow .lx { min-width: 34px; min-height: 34px; color: var(--danger); }
+.methodadd { display: grid; grid-template-columns: minmax(110px, .38fr) minmax(0, 1fr) auto; gap: 6px; margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border); }
+.methodadd input { min-width: 0; width: 100%; } .methodadd button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
 .resourcepath { min-width: 0; flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resourcevalue { display: block; overflow: hidden; text-overflow: ellipsis; }
 .inwrap { display: flex; gap: 6px; align-items: center; } .inwrap a { text-decoration: none; }
@@ -717,9 +723,18 @@ label.chk.big { font-size: 15px; font-weight: 600; }
   .prow { grid-template-columns: 1fr auto; } .prow .pnext { grid-column: 1 / -1; } .prow .plast { display: none; }
   .ttoday .todaytail { grid-column: 1 / -1; justify-items: stretch; } .ttoday .todayactions { justify-content: flex-start; opacity: 1; pointer-events: auto; } .quickstatus { flex: 1; width: auto; }
   .pgrid { grid-template-columns: 1fr; }
-  .contactmethods { grid-template-columns: 1fr; } .contactmethods .dsech { grid-column: auto; }
-  .methodadd { grid-template-columns: 1fr auto; } .methodadd input:first-child { grid-column: 1 / -1; }
+  .methodrow { grid-template-columns: minmax(0, 1fr) 40px 40px; } .methodrow .methodlabel { grid-column: 1 / -1; }
+  .methodadd { grid-template-columns: minmax(0, 1fr) auto; } .methodadd input:first-child { grid-column: 1 / -1; }
   #board.pipe .col { display: block; margin-bottom: 14px; } #board.pipe .col h2 { display: flex; }
+}
+@media (max-width: 480px) {
+  .pbar { grid-template-columns: minmax(0, 1fr); } .pbar select { width: 100%; }
+  .methodgroup { padding: 10px; }
+  .methodadd { grid-template-columns: minmax(0, 1fr); } .methodadd input:first-child { grid-column: auto; } .methodadd button { width: 100%; }
+}
+@media (max-width: 420px) {
+  .hfilters { grid-template-columns: minmax(60px, 1fr) repeat(6, 36px); gap: 4px; }
+  .hfilters > button, .hfilters > .popwrap { width: 36px; min-width: 36px; }
 }
 @media (hover: none) { .ttoday .todayactions { opacity: 1; pointer-events: auto; } .ttoday .todaytail > .plast { display: none; } }
 
