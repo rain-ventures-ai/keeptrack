@@ -24,6 +24,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v9 (schema 4)
+CLI workflow moves on split boards now give a card a fresh rank at the end of its destination column. This prevents `claim`, `done` and `release --column` from creating duplicate ranks when another card already has the same rank there.
+- Run `kit-update` only. There is no data migration.
+- Check: claim, finish and release a test card between populated columns, then run `python3 board/keeptrack.py doctor`. It must say the board is healthy.
+
 ### v8 (schema 4)
 Cards and CRM people use split storage. Install the v8 web page before anyone migrates a board.
 

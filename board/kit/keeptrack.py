@@ -1061,7 +1061,7 @@ def do_claim(a, tid, data):
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
     if t["column"] != "in-progress":
-        t["column"] = "in-progress"
+        move_task_to_column(data, t, "in-progress")
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
     hist(t, "claimed" + (f": {a.note}" if a.note else ""), f"{agent}@{user}")
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
@@ -1114,10 +1114,23 @@ def drop_claim_file():
         pass
 
 
+def move_task_to_column(data, task, column):
+    """Move a task and, on split boards, put it at the end without reusing a rank."""
+    old = task.get("column")
+    if old == column:
+        return old
+    if data.get("layout") == "split":
+        ranks = [x.get("rank") for x in data.get("tasks", [])
+                 if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
+        task["rank"] = key_between(max(ranks) if ranks else None, None)
+    task["column"] = column
+    return old
+
+
 def cmd_release(a):
     def fn(data):
         t = find(data, a.id); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file()
-        if a.column: t["column"] = a.column
+        if a.column: move_task_to_column(data, t, a.column)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
 
@@ -1132,7 +1145,7 @@ def cmd_done(a):
                              "note": a.note or c.get("note", "")}
             t["claim"] = None
         link = (c or {}).get("session_url", "")
-        hist(t, "done" + (f": {a.note}" if a.note else "") + (f" (session {link})" if link else "")); t["column"] = "done"; t["updated"] = now(); drop_claim_file(); print(f"done {t['id']}: {t['title']}")
+        hist(t, "done" + (f": {a.note}" if a.note else "") + (f" (session {link})" if link else "")); move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(); print(f"done {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
 
 

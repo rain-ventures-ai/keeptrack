@@ -172,6 +172,33 @@ class SplitStorage(unittest.TestCase):
             self.quiet(fn, args)
             self.assertEqual({"cards/t_first.json"}, self.changed(before))
 
+    def test_done_gives_a_card_a_unique_rank_in_its_new_column(self):
+        second_path = os.path.join(self.board_dir, "cards", "t_second.json")
+        second = read_json(second_path); second["column"] = "done"; second["rank"] = "a0"; write(second_path, second)
+        self.quiet(kt.cmd_done, Args(id="t_first", note="Complete"))
+        first = read_json(os.path.join(self.board_dir, "cards", "t_first.json"))
+        self.assertEqual(first["column"], "done")
+        self.assertGreater(first["rank"], second["rank"])
+
+    def test_release_gives_a_card_a_unique_rank_in_its_new_column(self):
+        second_path = os.path.join(self.board_dir, "cards", "t_second.json")
+        second = read_json(second_path); second["column"] = "done"; second["rank"] = "a0"; write(second_path, second)
+        self.quiet(kt.cmd_release, Args(id="t_first", column="done"))
+        first = read_json(os.path.join(self.board_dir, "cards", "t_first.json"))
+        self.assertEqual(first["column"], "done")
+        self.assertGreater(first["rank"], second["rank"])
+
+    def test_claim_gives_a_card_a_unique_rank_in_its_new_column(self):
+        root = read_json(kt.FILE); root["columns"].append({"id": "in-progress", "name": "In progress"}); write(kt.FILE, root)
+        second_path = os.path.join(self.board_dir, "cards", "t_second.json")
+        second = read_json(second_path); second["column"] = "in-progress"; second["rank"] = "a0"; write(second_path, second)
+        args = Args(id="t_first", for_user="alex", agent="codex", session="rank-test", force=False,
+                    note="Test", session_url=None)
+        self.quiet(kt.cmd_claim, args)
+        first = read_json(os.path.join(self.board_dir, "cards", "t_first.json"))
+        self.assertEqual(first["column"], "in-progress")
+        self.assertGreater(first["rank"], second["rank"])
+
     def test_archive_and_unarchive_update_split_files_together(self):
         card_path = os.path.join(self.board_dir, "cards", "t_first.json")
         card = read_json(card_path); card["column"] = "done"; write(card_path, card)
