@@ -1,0 +1,41 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python unit tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install browser test dependencies
+        working-directory: tests/browser
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: tests/browser
+        run: npx playwright install chromium
+      - name: Playwright split-storage tests
+        working-directory: tests/browser
+        run: npm test
+      - name: Mixed kit / board.js version tests
+        working-directory: tests/browser
+        run: node mixed-versions.test.js
