@@ -14,7 +14,11 @@ The web board has the same prompt with your board and username filled in: **Sett
 ---
 
 ## For the assistant: how to run this setup
-Keeptrack keeps people, follow-ups, a pipeline and tasks in `board/tasks.json` in the person's own **private** GitHub repo. People use the web board at https://rain-ventures-ai.github.io/keeptrack/board/. Agents use `keeptrack.py`, which comes with the **keeptrack** plugin.
+Keeptrack keeps one board in the `board/` folder of the person's own **private** GitHub repo. `board/tasks.json` is
+the board's entry point and settings file; current boards keep individual tasks in `board/cards/` and CRM people in
+`board/people/`. Tasks and CRM are optional modes of the same board, not separate databases. People use the web board
+at https://rain-ventures-ai.github.io/keeptrack/board/. Agents use `keeptrack.py`, which comes with the **keeptrack**
+plugin.
 
 ### Rules
 - If the person shared the Keeptrack repository link or asked “How about using this?”, treat that as a request to begin setup. Start step 1 in the current conversation instead of replying with a compatibility report. Only ask them to start a new session when a newly installed plugin must be loaded.
@@ -123,6 +127,11 @@ $B use <owner/repo> --user <github-username>
 $B where
 ```
 `use` writes `.board/config.json` (git ignores it, and it holds no token). `keeptrack.py` looks for that file in the current folder and each folder above it. So **to use the board in every project**, run `use` in the person's home folder (outside any git repo). To use another board in one project, run `use` inside that project. `where` shows which board is in use.
+
+`AGENTS.md` is not part of the data format and the web board does not need it. A board repo that agents work inside
+should have it: `keeptrack.py init` creates `AGENTS.md` plus `CLAUDE.md`, and they tell repo-local agents to use the CLI
+instead of editing board files. When the assistant uses the installed plugin from another project, the plugin skill
+provides those operating rules instead.
 
 The assistant also needs access to the repo. Pick the first that applies:
 1. **Claude Code cloud with the board repo in the session:** use its GitHub repo access. No PAT.

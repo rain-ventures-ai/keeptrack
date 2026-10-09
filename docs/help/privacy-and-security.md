@@ -1,7 +1,7 @@
 # Privacy and security
 
 ## Where your data is
-- All your data is one file, `board/tasks.json`, in **your** GitHub repo.
+- All your data is in the `board/` folder of **your** GitHub repo. `board/tasks.json` holds settings and indexes; tasks and CRM people have individual files under `board/cards/` and `board/people/`.
 - There is no Keeptrack server and no Keeptrack database. Nobody at Keeptrack can see your data.
 - The web page talks only to `api.github.com`.
 
@@ -17,7 +17,7 @@ Contacts are personal data (UK GDPR). If the repo is **public**, everybody can r
 - If a token leaks, delete it on GitHub: **Settings → Developer settings → Personal access tokens**.
 
 ## Deleting a person
-**Delete person** removes them from the current file. Git keeps old versions of the file, so the person stays in the repo **history**. To remove them completely (for example after a GDPR request), the history must be rewritten. Ask a developer, or ask your AI assistant for the steps, and do it with care.
+**Delete person** removes their current file. Git keeps old versions, so the person stays in the repo **history**. To remove them completely (for example after a GDPR request), the history must be rewritten. Ask a developer, or ask your AI assistant for the steps, and do it with care.
 
 ## AI assistants
 An assistant can read the people on your board when you ask it to help. Use assistants that you trust with that data. The Keeptrack skill tells the assistant not to send messages and not to copy contact details elsewhere.

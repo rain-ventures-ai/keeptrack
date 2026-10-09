@@ -6,7 +6,7 @@ Works against GitHub using your existing `gh` login (no token handling here), or
 local file with --file for testing. Every write re-reads the latest file and retries on a
 SHA conflict, so a human editing the board in the browser never gets overwritten.
 
-  keeptrack.py list [--column todo] [--assignee osouthgate] [--unclaimed] [--attention]
+  keeptrack.py list [-q "text"] [--column todo] [--assignee osouthgate] [--unclaimed] [--attention]
   keeptrack.py show ID
   keeptrack.py next --for osouthgate --agent claude --session ABC     # claim the first claimable todo task
   keeptrack.py claim ID --for osouthgate --agent claude --session ABC [--note ...] [--force]
@@ -33,8 +33,8 @@ calls the GitHub API directly with a fine-grained token from BOARD_TOKEN, GH_TOK
 (Contents: Read and write on this repo).
 
 Claude's cloud sandbox (routines, Claude Code on the web) lets the GitHub API read but blocks its writes. When a
-write is refused that way, keeptrack.py saves instead by committing tasks.json and running `git push` from the clone it
-lives in (the sandbox allows git pushes). BOARD_WRITE=git forces that; BOARD_WRITE=api turns it off.
+write is refused that way, keeptrack.py saves instead by committing the changed board files and running `git push`
+from the clone it lives in (the sandbox allows git pushes). BOARD_WRITE=git forces that; BOARD_WRITE=api turns it off.
 
 From any other project (Claude plugin "board"): name the board once, then use the same commands.
   keeptrack.py use osouthgate/private-tasks [--user osouthgate] [--token-env BOARD_TOKEN_PRIVATE]   # writes .board/config.json (gitignored)
@@ -1009,7 +1009,9 @@ def line(data, t):
 def cmd_list(a):
     data, _ = load()
     ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
+    query = (getattr(a, "q", None) or "").casefold()
     for t in ordered:
+        if query and query not in json.dumps(t, ensure_ascii=False).casefold(): continue
         if a.column and t["column"] != a.column: continue
         if a.assignee and a.assignee.lower() not in [x.lower() for x in t.get("assignees", [])]: continue
         if a.unclaimed and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): continue
@@ -1894,14 +1896,14 @@ def cmd_init(a):
     if os.path.exists(tj):
         print(f"kept existing {PATH}")
     else:
-        # New boards stay v3. Splitting storage is an explicit migration with a backup.
-        data = {"version": 3, "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
+        # Existing v3 boards migrate explicitly with a backup; brand-new boards need no legacy layout.
+        data = {"version": 4, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
                 "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"},
                             {"id": "in-progress", "name": "In progress"}, {"id": "done", "name": "Done"}],
                 "people": people, "agents": ["claude", "codex"], "clients": a.client or ["General"],
                 "labels": [{"name": "follow-up", "color": "#b38600"}, {"name": "decision", "color": "#e56910"},
                            {"name": "admin", "color": "#6b778c"}, {"name": "board", "color": "#5e4db2"}],
-                "tasks": [], "next_num": 1}
+                "next_num": 1}
         os.makedirs(os.path.dirname(tj), exist_ok=True)
         open(tj, "w").write(json.dumps(data, indent=2, ensure_ascii=False) + "\n"); print(f"wrote {PATH} (empty board, upgrade owner @{people[0]['github']})")
     print("Next: commit and push to the default branch, then add the board in the web board: Settings → Boards → Add an existing board.")
@@ -2619,7 +2621,7 @@ def main():
         sp.add_argument("--for", dest="for_user"); sp.add_argument("--agent"); sp.add_argument("--session")
         sp.add_argument("--session-url"); sp.add_argument("--note"); sp.add_argument("--force", action="store_true")
 
-    s = sub.add_parser("list"); s.add_argument("--column"); s.add_argument("--assignee")
+    s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
     s.add_argument("--unclaimed", action="store_true"); s.add_argument("--attention", action="store_true"); s.set_defaults(f=cmd_list)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)

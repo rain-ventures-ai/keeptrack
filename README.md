@@ -40,7 +40,7 @@ The demo data is in [demo/](demo/README.md). To set up your own board, open http
 Help for users: [docs/help](docs/help/README.md). In the web board, click **❓ Help**.
 
 ## How it works
-- The data is one file, `board/tasks.json`, in **your** private repo. Schema and rules: [board/kit/README.md](board/kit/README.md).
+- The data is one `board/` folder in **your** private repo. `board/tasks.json` holds settings and indexes; current boards keep each task in `board/cards/` and each CRM person in `board/people/`. Schema and rules: [board/kit/README.md](board/kit/README.md).
 - The web page is static. Your token stays in your browser and goes only to api.github.com.
 - Agents use `board/kit/keeptrack.py` (Python 3, no packages). It re-reads the latest file and retries on a conflict, so people and agents never overwrite each other.
 

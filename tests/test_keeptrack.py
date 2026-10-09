@@ -72,6 +72,18 @@ class LocalBoard(unittest.TestCase):
         todos = {x["text"]: x["done"] for x in self.read()["tasks"][1]["todos"]}
         self.assertEqual(todos, {"Z": False, "A": False, "B": True})
 
+    def test_list_searches_all_current_task_fields(self):
+        data = self.read()
+        data["tasks"][1]["details"] = "Merged but not published"
+        data["tasks"][1]["labels"] = ["Release-Candidate"]
+        write(self.file, data)
+        for query in ("PUBLISHED", "release-candidate"):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                kt.cmd_list(Args(q=query, column=None, assignee=None, unclaimed=False, attention=False))
+            self.assertIn("t_live", out.getvalue())
+            self.assertNotIn("t_old", out.getvalue())
+
     def test_archive_then_unarchive_updates_both_files(self):
         self.quiet(kt.cmd_archive, Args(done_days=None, lost_days=None, keep_history=None, dry_run=False))
         arch = os.path.join(self.dir.name, "board", "archive", "2025.json")
@@ -506,7 +518,7 @@ class PhaseOneSafety(unittest.TestCase):
         self.assertEqual(2, len(data["tasks"]))
         self.assertFalse(os.path.exists(os.path.join(board_dir, "cards")))
 
-    def test_init_writes_a_v3_board(self):
+    def test_init_writes_a_v4_split_board(self):
         kt.ROOT, kt.REPO = self.temp.name, "acme/board"
         kt.need_repo_clone = lambda: None
         kt.cmd_kit_update = lambda a: None
@@ -517,9 +529,14 @@ class PhaseOneSafety(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_init(Args(person=["alex:Alex"], client=None, source=None))
         data = read_json(os.path.join(self.temp.name, kt.PATH))
-        self.assertEqual(3, data["version"])
-        self.assertNotIn("layout", data)
-        self.assertEqual([], data["tasks"])
+        self.assertEqual(4, data["version"])
+        self.assertEqual("split", data["layout"])
+        self.assertNotIn("tasks", data)
+        self.assertNotIn("contacts", data)
+        kt.FILE = os.path.join(self.temp.name, kt.PATH)
+        loaded = kt.load_board()
+        self.assertEqual([], loaded["tasks"])
+        self.assertEqual([], loaded["contacts"])
         with open(os.path.join(self.temp.name, "README.md"), encoding="utf-8") as f:
             readme = f.read()
         self.assertIn("This board is powered by [Keeptrack]", readme)

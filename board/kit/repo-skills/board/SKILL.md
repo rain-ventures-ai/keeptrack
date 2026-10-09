@@ -1,11 +1,11 @@
 ---
 name: board
-description: Work from the team task board (board/tasks.json) via board/keeptrack.py. Use when asked what to work on, to pick up, claim, update, finish or add a task, or to check for stuck agent work.
+description: Work from the team board in board/ via board/keeptrack.py. Use for task work and stuck agents, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
 ---
 
 # Team board
 
-The board lives in `board/tasks.json` and is managed only through `python3 board/keeptrack.py`. Read `AGENTS.md` for the rules; this is the procedure.
+The board lives in the `board/` folder; `board/tasks.json` is its entry point. Current boards keep tasks in `board/cards/` and CRM people in `board/people/`. Manage all of it only through `python3 board/keeptrack.py`. Read `AGENTS.md` for the rules; this is the procedure.
 
 ## 1. Identify who you act for
 Use `BOARD_USER` (or `gh api user --jq .login`). Valid users: the `people` in `board/tasks.json`. Set `BOARD_AGENT=claude` and `BOARD_SESSION` to a short id for this session.
@@ -13,6 +13,7 @@ Use `BOARD_USER` (or `gh api user --jq .login`). Valid users: the `people` in `b
 ## 2. Find work
 ```bash
 python3 board/keeptrack.py list --assignee "$BOARD_USER" --column todo --unclaimed
+python3 board/keeptrack.py list -q "not published"   # search all current task fields
 python3 board/keeptrack.py show <id>        # read details, links and contacts before starting
 ```
 If the human named a task, use that one. Do not pick tasks assigned to someone else.
@@ -68,13 +69,18 @@ python3 board/keeptrack.py add "Title" --assign <user> --label <label> --due YYY
 ## Check the board
 Run `python3 board/keeptrack.py doctor` after a migration or when the board shows an error. Use the `board-doctor` skill before you run `doctor --fix`.
 
+## Board status and truth audits
+Natural requests such as “is my board accurate?”, “these say merged but not published”, “make the statuses truthful” or
+“check the board against the repos” belong to this skill. Do not ask the user to name Keeptrack or repeat this repo.
+Read [references/status-audits.md](references/status-audits.md) and follow it.
+
 ## People and follow-ups (Keeptrack CRM)
-If the board has people (`contacts` in `board/tasks.json`), use:
+If the board has CRM people, use:
 `keeptrack.py today` (who to contact), `people`, `person "<name>"`, `person-add` (refuses duplicates), `person-set`, `touch "<name>" "<text>" --channel linkedin|email|call|meeting|note [--draft]`, `sent "<name>"` and `client-link "<company>" <url>`. To set up a board from a spreadsheet, email, Trello or folders, use the `onboard-keeptrack` skill (it ends with `import`).
 When you write a message for someone, log it with `--draft`. Never send it yourself. Run `sent` only after the human says it is sent.
 
 ## Never
-- Edit `board/tasks.json` directly.
+- Edit any board JSON file directly.
 - Put client-confidential content in card text.
 - Contact anyone outside the repo or share prices without the human's explicit approval.
 
@@ -99,7 +105,7 @@ A routine run starts with a `routine-fire-payload` naming a task number (`#N`) a
 6. Finish: `comment` the outcome, `assign '#N' <user>`, `done '#N' --note "<result>"`.
 
 ### Command cheat sheet
-`list`, `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. People: the `people` in `board/tasks.json`.
+`list`, `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members remain in the `people` list in `board/tasks.json`; CRM people are separate records.
 
 ## Archive (old items)
 Old done tasks, Lost people and long histories move to `board/archive/<year>.json` with `python3 board/keeptrack.py archive` (`--dry-run` first). Search them with `archived -q "<words>"`, and bring one back with `unarchive '#N'`. The board file keeps an index in `archive.files`; do not edit archive files by hand.
