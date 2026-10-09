@@ -121,6 +121,9 @@ if (typeof window !== 'undefined') (() => {
     columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }],
     people: [], agents: ['claude', 'codex'], clients: ['General'], labels: [], tasks: [], contacts: [], client_info: {}
   });
+  // DEFAULT is also the compatibility shape used while reading legacy boards. New boards start on the current
+  // split schema; their empty task/contact arrays are in-memory only and are removed from tasks.json when saved.
+  const NEW_BOARD = () => Object.assign(DEFAULT(), { version: 4, layout: 'split' });
 
   const HOME = 'https://github.com/rain-ventures-ai/keeptrack/blob/main';   // where Keeptrack itself lives (docs, kit, plugins)
   let state = DEFAULT(), sha = null, etag = null, busy = false, lastSyncOk = false, fromSnap = false, splitMeta = null;
@@ -405,7 +408,7 @@ if (typeof window !== 'undefined') (() => {
       setStatus(`${c.path} not found`, 'err'); lastProblem = `"${c.path}" not found on branch "${c.branch}"`;
       box.append(el('p', null, `The repo is reachable, but "${c.path}" does not exist on branch "${c.branch}".`), el('p', null, 'Check the file path and branch in Settings (the usual path is board/tasks.json).'));
       const b = el('button', null, 'Create a new empty board at this path…');
-      b.onclick = async () => { if (!confirm(`Create ${c.path} on ${c.branch} in ${c.repo}?`)) return; state = DEFAULT(); sha = null; await save(clone(state), 'Create board file'); render(); };
+      b.onclick = async () => { if (!confirm(`Create ${c.path} on ${c.branch} in ${c.repo}?`)) return; state = NEW_BOARD(); sha = null; await save(clone(state), 'Create board file'); render(); };
       box.append(b);
     }
     const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); }; box.append(ck);
@@ -425,7 +428,7 @@ if (typeof window !== 'undefined') (() => {
     const board = $('board'); board.textContent = ''; const box = el('div', 'empty');
     box.append(el('p', null, `${cfg().path} does not exist on ${cfg().branch} yet.`));
     const b = el('button', 'primary', 'Create it with an empty board');
-    b.onclick = async () => { state = DEFAULT(); sha = null; await save(clone(state), 'Create tasks.json for board'); render(); };
+    b.onclick = async () => { state = NEW_BOARD(); sha = null; await save(clone(state), 'Create tasks.json for board'); render(); };
     box.append(b); board.append(box);
   }
 
@@ -480,6 +483,14 @@ if (typeof window !== 'undefined') (() => {
     if (ro) { roToast(); return 'error:readonly'; }
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return 'error:schema'; }
     if (isSplit(next)) {
+      // A new split board has no tree metadata yet. Its first commit contains only the root/index file; cards and
+      // CRM people get their own files when they are added. Subsequent writes load the branch tree as usual.
+      if (!expectedSha && !splitMeta) {
+        const root = clone(next); delete root.tasks; delete root.contacts;
+        const res = await gh('PUT', { message, content: b64e(JSON.stringify(root, null, 2) + '\n'), branch: cfg().branch });
+        if (res.ok) { sha = (await res.json()).content.sha; etag = null; state = next; return 'ok'; }
+        return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
+      }
       try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra); }
       catch (e) { console.error(e); return 'error:network'; }
     }
@@ -642,6 +653,14 @@ if (typeof window !== 'undefined') (() => {
     items.forEach(([v, l]) => { const o = el('option', null, l); o.value = v; sel.append(o); });
     if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
   }
+  function clientValues() { return [...$('fClient').selectedOptions].map(o => o.value).filter(Boolean); }
+  function fillClientSelect(items) {
+    const cur = new Set(clientValues()); $('fClient').textContent = '';
+    items.forEach(([v, l]) => { const o = el('option', null, l); o.value = v; o.selected = cur.has(v); $('fClient').append(o); });
+  }
+  function setClientValues(values) {
+    const wanted = new Set(values); [...$('fClient').options].forEach(o => { o.selected = wanted.has(o.value); });
+  }
   // ---- colour: a card's left edge is its client, its right edge is its urgency -------------------------------
   // Any text can become a colour: hash it (FNV-1a), take the hash modulo 360 as a hue. Known clients are spaced by the golden angle
   // (137.5 degrees) past the first six; the first six clients get hand-picked hues that avoid the urgency colours. Unknown text falls back to the hash.
@@ -660,7 +679,6 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderLegend() {
     const box = $('legend'); box.textContent = ''; if (document.documentElement.dataset.style !== 'colorful') return;
-    const used = [...new Set(state.tasks.map(t => t.client).filter(Boolean))]; const sel = $('fClient').value;
     box.append(el('span', 'lgl', 'Card edges: client on the left, urgency on the right'));
     box.append(el('span', 'lgsep'));
     URG.slice().reverse().forEach(u => { const s = el('span', 'lgchip static', u.label); s.style.setProperty('--cc', u.color); box.append(s); });
@@ -673,25 +691,29 @@ if (typeof window !== 'undefined') (() => {
       return { name: n, open: open.length, lvl: open.reduce((m, t) => Math.max(m, urgency(t).lvl), -1), rec: ts.reduce((m, t) => (t.updated > m ? t.updated : m), '') }; })
       .sort((a, b) => b.lvl - a.lvl || ((state.clients.indexOf(a.name) + 1 || 999) - (state.clients.indexOf(b.name) + 1 || 999)) || a.name.localeCompare(b.name));   // stable: only a change in urgency reorders
   }
-  const setClient = v => { $('fClient').value = v; closePops(); render(); };
+  const clearClients = () => { setClientValues([]); closePops(); render(); };
+  const toggleClient = v => {
+    const selected = new Set(clientValues()); if (selected.has(v)) selected.delete(v); else selected.add(v);
+    setClientValues(selected); render();
+    document.querySelectorAll('#clientPop [data-client]').forEach(b => { const on = selected.has(b.dataset.client); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  };
   function clientPill(c) {
-    const on = $('fClient').value === c.name, b = el('button', 'cpill' + (on ? ' on' : '')); b.type = 'button'; b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`); b.setAttribute('aria-pressed', String(on));
-    b.title = on ? 'Show all clients' : `Show only ${c.name} (${c.open} open)`; b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
-    b.onclick = () => setClient(on ? '' : c.name); return b;
+    const on = clientValues().includes(c.name), b = el('button', 'cpill' + (on ? ' on' : '')); b.type = 'button'; b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`); b.setAttribute('aria-pressed', String(on));
+    b.title = on ? `Remove ${c.name} from the filter` : `Add ${c.name} to the filter (${c.open} open)`; b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
+    b.onclick = () => toggleClient(c.name); return b;
   }
   let topSig = '';
   function renderTopbar() {
     const box = $('clientBar'); if (!box || !state) return;
-    const total = state.tasks.filter(t => t.column !== doneColId()).length, sel = $('fClient').value, list = clientRank();
+    const total = state.tasks.filter(t => t.column !== doneColId()).length, sel = clientValues(), selected = new Set(sel), list = clientRank();
     const sig = JSON.stringify([total, sel, box.clientWidth, list.map(c => [c.name, c.open, c.lvl]), state.people.map(p => p.github), $('fWho').value]);
     if (sig === topSig && box.firstChild) return; topSig = sig; box.textContent = '';   // the pill fitting below forces layouts: skip it when nothing changed
-    const all = el('button', 'cpill all' + (sel ? '' : ' on'), 'All'); all.type = 'button'; all.setAttribute('aria-pressed', String(!sel)); all.title = 'Show all clients'; if (total) all.append(el('span', 'cn', String(total))); all.onclick = () => setClient(''); box.append(all);
+    const all = el('button', 'cpill all' + (sel.length ? '' : ' on'), 'All'); all.type = 'button'; all.setAttribute('aria-pressed', String(!sel.length)); all.title = 'Clear client filters'; if (total) all.append(el('span', 'cn', String(total))); all.onclick = clearClients; box.append(all);
     let n = 0;                                                    // n = how many pills fit, in their natural order (append all, then read once: one layout, not one per pill)
     const probe = list.map(c => { const b = clientPill(c); box.append(b); return b; }), left = box.getBoundingClientRect().left, lim = box.clientWidth + 1;
     for (const b of probe) { if (b.getBoundingClientRect().right - left > lim) break; n++; }
-    // the selected client must stay visible, but it takes the LAST visible slot instead of jumping to the front
-    let order = list.slice(); const si = list.findIndex(c => c.name === sel);
-    if (si >= n && n > 0) { order = list.filter(c => c.name !== sel); order.splice(n - 1, 0, list[si]); }
+    // Active filters stay at the front so the current multi-client scope remains visible.
+    const order = list.filter(c => selected.has(c.name)).concat(list.filter(c => !selected.has(c.name)));
     const fits = () => box.scrollWidth <= box.clientWidth + 1;
     box.querySelectorAll('.cpill:not(.all)').forEach(b => b.remove()); const shown = [];
     for (let i = 0; i < n; i++) { const b = clientPill(order[i]); box.append(b); shown.push(b); }
@@ -702,8 +724,8 @@ if (typeof window !== 'undefined') (() => {
       const label = () => { more.textContent = `+${rest.length} ▾`; };
       label(); while (box.scrollWidth > box.clientWidth + 1 && shown.length) { shown.pop().remove(); rest = order.slice(shown.length); label(); }
       more.onclick = e => { e.stopPropagation(); const pop = $('clientPop'); if (!pop.hidden) { closePops(); return; } closePops();
-        pop.textContent = ''; rest.forEach(c => { const b = el('button', 'cmenu' + ($('fClient').value === c.name ? ' on' : '')); b.type = 'button'; b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
-          b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => setClient(c.name); pop.append(b); });
+        pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
+          b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name); pop.append(b); });
         pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; pop.hidden = false; };
     }
     const pq = $('peopleQ'); pq.textContent = ''; const w = $('fWho').value;
@@ -768,8 +790,8 @@ if (typeof window !== 'undefined') (() => {
 
   function filtered(t) {
     if (freshOnly && !isFresh(t)) return false;
-    const fc = $('fClient').value, fw = $('fWho').value, fl = $('fLabel').value, fp = $('fPrio').value;
-    if (fc && t.client !== fc) return false;
+    const fc = clientValues(), fw = $('fWho').value, fl = $('fLabel').value, fp = $('fPrio').value;
+    if (fc.length && !fc.includes(t.client)) return false;
     if (fw === '__none' && t.assignees.length) return false;
     if (fw === '__agent' && !t.claim) return false;
     if (fw && fw[0] !== '_' && !t.assignees.includes(fw)) return false;
@@ -798,7 +820,7 @@ if (typeof window !== 'undefined') (() => {
   function render() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
     document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
-    fillSelect($('fClient'), [...new Set([...state.clients, ...state.tasks.map(t => t.client)].filter(Boolean))].map(c => [c, c]), 'All');
+    fillClientSelect([...new Set([...state.clients, ...state.tasks.map(t => t.client)].filter(Boolean))].map(c => [c, c]));
     fillSelect($('fWho'), [...state.people.map(p => [p.github, '@' + p.github]), ['__none', 'Unassigned'], ['__agent', 'Claimed by an agent']], 'Everyone');
     fillSelect($('fLabel'), state.labels.map(l => [l.name, l.name]), 'All');
     if ($('dlgCard').open && editing) markSeen(editing);
@@ -1282,8 +1304,8 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- copy as Markdown: everything the current view shows (filters applied), with every detail of each card ----------
   function filterDesc() {
-    const out = [], fc = $('fClient').value, fw = $('fWho').value, fl = $('fLabel').value, fp = $('fPrio').value;
-    if (fc) out.push('client ' + fc);
+    const out = [], fc = clientValues(), fw = $('fWho').value, fl = $('fLabel').value, fp = $('fPrio').value;
+    if (fc.length) out.push((fc.length === 1 ? 'client ' : 'clients ') + fc.join(' + '));
     if (fw) out.push(fw === '__none' ? 'unassigned' : fw === '__agent' ? 'claimed by an agent' : 'assigned to @' + fw);
     if (fl) out.push('label ' + fl); if (fp) out.push('priority ' + fp);
     if ($('fAttn').checked) out.push('needs attention'); if (freshOnly) out.push('new for me');
@@ -1460,7 +1482,7 @@ if (typeof window !== 'undefined') (() => {
   const moveTo = (id, col) => mutate(n => place(n, id, col, null), `Move "${titleOf(id)}" to ${col}`, [id]);
   function dropOn(e, col, beforeId) { const id = e.dataTransfer.getData('text/plain'); if (!id || id === beforeId) return; mutate(n => place(n, id, col, beforeId), `Move "${titleOf(id)}" to ${col}`, [id]); if (isSplit(state) && ['due', 'newest'].includes(sortMode())) toast('Use Manual or Smart to change card order.'); }
   function addTask(title, col, due) {
-    const fc = $('fClient').value, w = $('fWho').value;
+    const clients = clientValues(), fc = clients.length === 1 ? clients[0] : '', w = $('fWho').value;
     const mine = me() && state.people.some(p => p.github.toLowerCase() === me().toLowerCase()) ? [state.people.find(p => p.github.toLowerCase() === me().toLowerCase()).github] : [];
     const as = w && w[0] !== '_' ? [w] : (w === '__none' ? [] : mine);
     const t = { id: uid(), title, column: col, client: fc || '', priority: 'medium', due: due || '', labels: [], assignees: as, details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
@@ -2316,7 +2338,7 @@ if (typeof window !== 'undefined') (() => {
   $('filterPop').addEventListener('click', e => e.stopPropagation()); $('clientPop').addEventListener('click', e => e.stopPropagation()); $('morePop').addEventListener('click', e => e.stopPropagation());
   document.addEventListener('click', closePops); document.addEventListener('keydown', e => { if (e.key === 'Escape') closePops(); });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
-  $('fClear').onclick = () => { ['fClient', 'fWho', 'fLabel', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
+  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fLabel', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
   { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(renderTopbar, 60); };
     window.addEventListener('resize', refit);
@@ -2434,7 +2456,7 @@ if (typeof window !== 'undefined') (() => {
     const go = async () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; const [name, f] = parsePerson(v); const id = await addContact(name, Object.assign(f, extra || {})); if (id && state.contacts.some(x => x.id === id)) openContact(id); };
     btn.type = 'button'; btn.title = 'Open a form to add a person'; btn.onclick = () => openAddPersonForm(inp.value, extra); inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); add.append(inp, btn); return add;
   }
-  const crmFilter = p => { const fc = $('fClient').value; return !fc || p.company === fc; };
+  const crmFilter = p => { const fc = clientValues(); return !fc.length || fc.includes(p.company); };
 
   function renderToday() {
     const board = $('board'), t = todayIso(), week = plusDays(7), m = modes(), hasCrm = m.includes('crm'), hasTasks = m.includes('tasks');
@@ -2692,7 +2714,7 @@ if (typeof window !== 'undefined') (() => {
     const ex = await gh('GET');
     if (ex.ok) { endSetup(); toast('This repo already has a board. Opening it.'); await load(); return; }
     if (ex.status !== 404) { toast(`GitHub error ${ex.status}.`, true); btn.disabled = false; btn.textContent = 'Create my board'; return; }
-    state = DEFAULT(); state.settings.title = title; state.settings.modes = [...(WZ.crm ? ['crm'] : []), ...(WZ.tasks ? ['tasks'] : [])];
+    state = NEW_BOARD(); state.settings.title = title; state.settings.modes = [...(WZ.crm ? ['crm'] : []), ...(WZ.tasks ? ['tasks'] : [])];
     if (meV) state.people = [{ github: meV, name: meV }];
     sha = null; const out = await save(clone(state), 'Create Keeptrack board');
     if (out !== 'ok') { toast('Could not create the board file (' + out + ').', true); btn.disabled = false; btn.textContent = 'Create my board'; return; }

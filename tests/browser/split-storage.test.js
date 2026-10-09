@@ -32,7 +32,10 @@ class Github {
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
     if (p.startsWith('/user/repos') && method === 'GET') return json(this.visibleRepos);
     if (p === '' && method === 'GET') return this.denyRepo ? json({ message: 'Not Found' }, 404) : json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
-    if (p.startsWith('/contents/board/tasks.json') && method === 'GET') return json({ sha: this.sha('tasks.json'), size: Buffer.byteLength(this.files['tasks.json']), encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') }, 200, { ETag: '"tasks"' });
+    if (p.startsWith('/contents/board/tasks.json') && method === 'GET') {
+      if (!this.files['tasks.json']) return json({ message: 'Not Found' }, 404);
+      return json({ sha: this.sha('tasks.json'), size: Buffer.byteLength(this.files['tasks.json']), encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') }, 200, { ETag: '"tasks"' });
+    }
     if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON(); this.files[rel] = Buffer.from(b.content, 'base64').toString(); this.head = 'head-' + ++this.n; return json({ content: { sha: this.sha(rel) }, commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
     if (p.startsWith('/contents/board/') && method === 'DELETE') { const rel = p.slice('/contents/board/'.length); delete this.files[rel]; this.head = 'head-' + ++this.n; return json({ commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
     if (p === '/git/ref/heads/main' && method === 'GET') return json({ object: { sha: this.head } }, 200, { ETag: '"' + this.head + '"' });
@@ -63,6 +66,17 @@ let base;
       const details = demo.locator('#roBar a.morelink'); assert.equal(await details.textContent(), 'View the repository for more details'); assert.equal(await details.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await details.getAttribute('target'), '_blank'); await demo.close();
     }
 
+    // Every browser creation path starts on split schema v4. The empty board writes only its root/index; the first
+    // task then gets its own card file without a legacy v3 round trip.
+    const freshApi = new Github(true); freshApi.files = {};
+    const fresh = await browser.newPage(); fresh.on('dialog', d => d.accept());
+    await fresh.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_view', 'board'); });
+    await fresh.route('https://api.test/**', r => freshApi.route(r)); await fresh.goto(base + '/board/index.html');
+    const create = fresh.locator('button', { hasText: 'Create a new empty board' }); await create.waitFor(); const created = fresh.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await create.click(); await created;
+    const freshRoot = JSON.parse(freshApi.files['tasks.json']); assert.equal(freshRoot.version, 4); assert.equal(freshRoot.layout, 'split'); assert(!('tasks' in freshRoot)); assert(!('contacts' in freshRoot));
+    const freshAdd = fresh.locator('.col[data-col="todo"] .add input'); await freshAdd.fill('First v4 task'); const freshSaved = fresh.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/git/refs/heads/main')); await freshAdd.press('Enter'); await freshSaved;
+    assert.equal(Object.keys(freshApi.files).filter(p => p.startsWith('cards/')).length, 1); assert(!('tasks' in JSON.parse(freshApi.files['tasks.json']))); await fresh.close();
+
     const api = new Github(true), page = await openBoard(browser, api);
     assert.deepEqual(await page.locator('.card .t').allTextContents(), ['First', 'Second']);
     assert.deepEqual(await page.locator('#viewSw > .viewgroup > .vgrp').allTextContents(), ['Today', 'People views', 'Task views']);
@@ -77,13 +91,27 @@ let base;
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');
     assert(api.calls.some(x => /git\/trees\/board-.*recursive/.test(x.path)), 'must read only the board subtree');
 
+    // Client pills are additive filters: several clients can be selected at once, an active pill removes only
+    // that client, and All clears the complete selection.
+    const multiApi = new Github(true), multiRoot = JSON.parse(multiApi.files['tasks.json']); multiRoot.clients = ['Acme', 'Beta']; multiRoot.next_num = 4; multiApi.files['tasks.json'] = text(multiRoot);
+    multiApi.files['cards/t_three.json'] = text({ ...cards['cards/t_two.json'], id: 't_three', num: 3, title: 'Third', client: 'Beta', created: '2026-10-03T08:00:00.000Z', updated: '2026-10-03T08:00:00.000Z', rank: 'a2' });
+    const multi = await openBoard(browser, multiApi); await multi.setViewportSize({ width: 1600, height: 720 }); await multi.waitForTimeout(100); const titles = () => multi.locator('.card .t').allTextContents();
+    await multi.locator('.cpill.more').click(); await multi.locator('.cmenu').filter({ hasText: 'Acme' }).click(); await multi.locator('.cmenu').filter({ hasText: 'Beta' }).click();
+    assert.deepEqual((await titles()).sort(), ['First', 'Third']); assert.deepEqual(await multi.locator('#fClient option:checked').evaluateAll(xs => xs.map(x => x.value).sort()), ['Acme', 'Beta']); assert.equal(await multi.locator('.cpill.all').getAttribute('aria-pressed'), 'false');
+    await multi.locator('.cmenu').filter({ hasText: 'Acme' }).click(); assert.deepEqual(await titles(), ['Third']);
+    await multi.locator('.cpill.all').click(); assert.deepEqual((await titles()).sort(), ['First', 'Second', 'Third']); await multi.close();
+
+    const desktopView = await page.locator('#viewSw .seg button.on').boundingBox(), desktopFilter = await page.locator('#btnFilter').boundingBox();
+    assert(Math.abs((desktopView.y + desktopView.height) - (desktopFilter.y + desktopFilter.height)) <= 2, 'desktop header controls must share a bottom edge');
+
     // The compact header has intentional rows: board + views, then board filters. Low-priority utilities move into
     // one More menu on phones instead of wrapping into loose buttons on a third line.
     const compactApi = new Github(true), compact = await browser.newPage({ viewport: { width: 700, height: 800 } }); compact.on('pageerror', e => console.error('page error:', e.message));
     await compact.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_view', 'board'); });
     await compact.route('https://api.test/**', r => compactApi.route(r)); await compact.goto(base + '/board/index.html'); await compact.waitForSelector('#viewSw');
     const compactBoard = await compact.locator('#boardBtn').boundingBox(), compactViews = await compact.locator('#viewSw').boundingBox(), compactFilters = await compact.locator('.hfilters').boundingBox();
-    assert(Math.abs(compactBoard.y - compactViews.y) < 8, 'board switcher and views must share the first row'); assert(compactFilters.y > compactViews.y + 20, 'filters must form the second row');
+    assert(Math.abs((compactBoard.y + compactBoard.height) - (compactViews.y + compactViews.height)) <= 2, 'board switcher and views must share a bottom edge in the first row'); assert(compactFilters.y > compactViews.y + 20, 'filters must form the second row');
+    const compactAll = await compact.locator('.cpill.all').boundingBox(), compactSearch = await compact.locator('#btnSearch').boundingBox(); assert(Math.abs((compactAll.y + compactAll.height / 2) - (compactSearch.y + compactSearch.height / 2)) <= 3, 'compact filter controls must share a centre line');
     assert.equal(await compact.locator('#btnMore').isVisible(), true); assert.equal(await compact.locator('.hutils #btnSettings').isHidden(), true); assert.equal(await compact.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'compact header must not widen the page');
     await compact.locator('#btnMore').click(); assert.equal(await compact.locator('#morePop').isVisible(), true); await compact.locator('#sortMenuMobile').selectOption('due'); assert.equal(await compact.locator('#sortMenu').inputValue(), 'due'); assert.equal(await compact.locator('#morePop').isHidden(), true);
     await compact.locator('#btnMore').click(); await compact.locator('[data-head-action="btnSettings"]').click(); assert.equal(await compact.locator('#dlgSettings').getAttribute('open'), ''); await compact.locator('#sClose').click(); await compact.close();

@@ -392,6 +392,7 @@ dialog.settings [role="tabpanel"][hidden] { display: none; }
 header { flex-wrap: nowrap; gap: 10px; padding: 8px 14px; } .hbreak { display: none; }
 .hfilters, .hutils { display: contents; }
 .mobilemore { display: none; }
+@media (min-width: 1001px) { header { align-items: flex-end; } }
 header .logo { flex: 0 0 auto; width: 32px; height: 32px; font-size: 17px; border-radius: 9px; }
 .seg { flex: 0 0 auto; }
 .clientwrap { position: relative; flex: 1 1 0; min-width: 0; }
@@ -404,6 +405,7 @@ header .logo { flex: 0 0 auto; width: 32px; height: 32px; font-size: 17px; borde
 .popover[hidden] { display: none; }
 .clientpop { top: calc(100% + 6px); max-height: 60vh; overflow-y: auto; }
 .cmenu { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; padding: 7px 10px; border-radius: 8px; } .cmenu:hover, .cmenu.on { background: color-mix(in srgb, var(--cc) 14%, transparent); } .cmenu .nm { flex: 1; } .cmenu .cn { font-size: 11px; color: var(--muted); }
+.cmenu.on::after { content: "✓"; color: var(--cc, var(--accent)); font-weight: 800; }
 .peopleq { display: flex; flex: 0 0 auto; } .pq { border: 2px solid transparent; background: transparent; padding: 0; border-radius: 50%; margin-left: -4px; opacity: .65; } .pq .av { margin: 0; border: 2px solid var(--header); width: 28px; height: 28px; font-size: 10.5px; } .pq:hover { opacity: 1; z-index: 1; } .pq.on { opacity: 1; border-color: var(--accent); z-index: 2; }
 .attnbtn { flex: 0 0 auto; display: inline-flex; gap: 4px; align-items: center; color: var(--warn); font-weight: 700; background: color-mix(in srgb, var(--warn) 14%, var(--card)); } .attnbtn.on { border-color: var(--warn); }
 .popwrap { position: relative; flex: 0 0 auto; } #btnFilter { position: relative; } #btnFilter .tx { display: inline; }
@@ -419,6 +421,7 @@ header .badge { top: -6px; right: -6px; }
   .viewnav::-webkit-scrollbar { display: none; }
   .viewgroup { flex: 0 0 auto; }
   .hfilters, .hutils { grid-column: 1 / -1; display: flex; align-items: center; min-width: 0; gap: 7px; }
+  header .boardwrap, header .viewnav { align-self: end; }
   .hfilters .clientwrap { flex: 1 1 220px; }
   .mobilemore { display: block; }
   .hutils { justify-content: flex-end; }
@@ -434,6 +437,7 @@ header .badge { top: -6px; right: -6px; }
   .viewnav::-webkit-scrollbar { display: none; }
   .viewgroup { flex: 0 0 auto; }
   .hfilters { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: center; min-width: 0; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+  header .boardwrap, header .viewnav { align-self: end; }
   .hfilters .clientwrap { flex: 1 1 auto; min-width: 72px; }
   .hfilters .clientbar { width: 100%; }
   .peopleq, .sortpick { display: none; }
