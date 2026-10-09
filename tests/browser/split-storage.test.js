@@ -23,7 +23,7 @@ const person = { id: 'p_one', name: 'Casey Example', company: 'Acme', role: '', 
 const text = x => JSON.stringify(x, null, 2) + '\n';
 
 class Github {
-  constructor(v4 = true) { this.v4 = v4; this.files = v4 ? { 'tasks.json': text(root), ...Object.fromEntries(Object.entries(cards).map(([k, v]) => [k, text(v)])), 'people/p_one.json': text(person) } : { 'tasks.json': text({ ...root, version: 3, layout: undefined, tasks: Object.values(cards), contacts: [person] }) }; this.head = 'head-1'; this.n = 1; this.calls = []; this.blobs = {}; this.pending = null; this.failPatch = false; this.denyRepo = false; this.visibleRepos = [{ full_name: 'acme/another-board', permissions: { push: true } }]; }
+  constructor(v4 = true) { this.v4 = v4; this.files = v4 ? { 'tasks.json': text(root), ...Object.fromEntries(Object.entries(cards).map(([k, v]) => [k, text(v)])), 'people/p_one.json': text(person) } : { 'tasks.json': text({ ...root, version: 3, layout: undefined, tasks: Object.values(cards), contacts: [person] }) }; this.readme = null; this.head = 'head-1'; this.n = 1; this.calls = []; this.blobs = {}; this.pending = null; this.failPatch = false; this.denyRepo = false; this.visibleRepos = [{ full_name: 'acme/another-board', permissions: { push: true } }]; }
   sha(p) { return require('node:crypto').createHash('sha1').update(this.files[p] || '').digest('hex'); }   // content-addressed, like git
   tree() { return Object.entries(this.files).map(([p, content]) => ({ path: p, type: 'blob', sha: this.sha(p), size: Buffer.byteLength(content) })); }
   async route(route) {
@@ -32,6 +32,11 @@ class Github {
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
     if (p.startsWith('/user/repos') && method === 'GET') return json(this.visibleRepos);
     if (p === '' && method === 'GET') return this.denyRepo ? json({ message: 'Not Found' }, 404) : json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
+    if (p.startsWith('/contents/README.md') && method === 'GET') {
+      if (this.readme == null) return json({ message: 'Not Found' }, 404);
+      return json({ sha: 'readme-sha', size: Buffer.byteLength(this.readme), encoding: 'base64', content: Buffer.from(this.readme).toString('base64') });
+    }
+    if (p.startsWith('/contents/README.md') && method === 'PUT') { const b = req.postDataJSON(); this.readme = Buffer.from(b.content, 'base64').toString(); return json({ content: { sha: 'readme-sha' }, commit: { sha: 'readme-commit' } }); }
     if (p.startsWith('/contents/board/tasks.json') && method === 'GET') {
       if (!this.files['tasks.json']) return json({ message: 'Not Found' }, 404);
       return json({ sha: this.sha('tasks.json'), size: Buffer.byteLength(this.files['tasks.json']), encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') }, 200, { ETag: '"tasks"' });
@@ -66,16 +71,24 @@ let base;
       const details = demo.locator('#roBar a.morelink'); assert.equal(await details.textContent(), 'View the repository for more details'); assert.equal(await details.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await details.getAttribute('target'), '_blank'); await demo.close();
     }
 
-    // Every browser creation path starts on split schema v4. The empty board writes only its root/index; the first
-    // task then gets its own card file without a legacy v3 round trip.
+    // Every browser creation path starts on split schema v4 and adds a root README that links back to Keeptrack.
+    // The empty board writes only its board root/index; the first task then gets its own card file without a legacy v3 round trip.
     const freshApi = new Github(true); freshApi.files = {};
     const fresh = await browser.newPage(); fresh.on('dialog', d => d.accept());
     await fresh.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_view', 'board'); });
     await fresh.route('https://api.test/**', r => freshApi.route(r)); await fresh.goto(base + '/board/index.html');
-    const create = fresh.locator('button', { hasText: 'Create a new empty board' }); await create.waitFor(); const created = fresh.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await create.click(); await created;
+    const create = fresh.locator('button', { hasText: 'Create a new empty board' }); await create.waitFor(); const created = fresh.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); const readmeCreated = fresh.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/README.md')); await create.click(); await Promise.all([created, readmeCreated]);
     const freshRoot = JSON.parse(freshApi.files['tasks.json']); assert.equal(freshRoot.version, 4); assert.equal(freshRoot.layout, 'split'); assert(!('tasks' in freshRoot)); assert(!('contacts' in freshRoot));
+    assert.match(freshApi.readme, /powered by \[Keeptrack\]/); assert.match(freshApi.readme, /repo=acme%2Fboard/); assert.match(freshApi.readme, /path=board%2Ftasks\.json/);
     const freshAdd = fresh.locator('.col[data-col="todo"] .add input'); await freshAdd.fill('First v4 task'); const freshSaved = fresh.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/git/refs/heads/main')); await freshAdd.press('Enter'); await freshSaved;
     assert.equal(Object.keys(freshApi.files).filter(p => p.startsWith('cards/')).length, 1); assert(!('tasks' in JSON.parse(freshApi.files['tasks.json']))); await fresh.close();
+
+    // Creating a board in an existing project never replaces that project's README.
+    const documentedApi = new Github(true); documentedApi.files = {}; documentedApi.readme = '# Existing project\n';
+    const documented = await browser.newPage(); documented.on('dialog', d => d.accept());
+    await documented.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_view', 'board'); });
+    await documented.route('https://api.test/**', r => documentedApi.route(r)); await documented.goto(base + '/board/index.html'); const documentedCreate = documented.locator('button', { hasText: 'Create a new empty board' }); await documentedCreate.waitFor(); const documentedBoard = documented.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); const readmeChecked = documented.waitForResponse(r => r.request().method() === 'GET' && r.url().includes('/contents/README.md')); await documentedCreate.click(); await Promise.all([documentedBoard, readmeChecked]);
+    assert.equal(documentedApi.readme, '# Existing project\n'); assert(!documentedApi.calls.some(x => x.method === 'PUT' && x.path.startsWith('/contents/README.md'))); await documented.close();
 
     const api = new Github(true), page = await openBoard(browser, api);
     assert.deepEqual(await page.locator('.card .t').allTextContents(), ['First', 'Second']);

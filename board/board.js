@@ -221,6 +221,35 @@ if (typeof window !== 'undefined') (() => {
         ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
   }
 
+  function repoReadme() {
+    const c = cfg(), query = new URLSearchParams({ repo: c.repo, branch: c.branch, path: c.path });
+    return [
+      '# Keeptrack board', '',
+      `This repository stores the Keeptrack board for \`${c.repo}\`.`, '',
+      `[Open the web board](https://rain-ventures-ai.github.io/keeptrack/board/?${query})`, '',
+      'This board is powered by [Keeptrack](https://github.com/rain-ventures-ai/keeptrack).', '',
+      `Board data is stored at \`${c.path}\`. Use the web board to make changes. If this repository has the Keeptrack CLI kit,`,
+      'you can also use `python3 board/keeptrack.py`. Do not edit the board JSON files directly.', '',
+      'Never put GitHub tokens or other credentials in this repository.', ''
+    ].join('\n');
+  }
+  async function ensureRepoReadme() {
+    try {
+      const current = await gh('GET', null, false, { path: 'README.md' });
+      if (current.ok) return 'kept';
+      if (current.status !== 404) return 'error:' + current.status;
+      const made = await gh('PUT', { message: 'Add Keeptrack README', content: b64e(repoReadme()), branch: cfg().branch }, false, { path: 'README.md' });
+      return made.ok ? 'created' : 'error:' + made.status;
+    } catch (e) { console.error(e); return 'error:network'; }
+  }
+  async function saveNewBoard(next, message) {
+    const out = await save(next, message);
+    if (out !== 'ok') return out;
+    const readme = await ensureRepoReadme();
+    if (readme.startsWith('error:')) toast(`Board created, but its README could not be added (${readme}).`, true);
+    return out;
+  }
+
   // The contents API sends no content for a file over 1 MB (encoding "none"); then read the same file raw (up to 100 MB).
   async function fileJson(res, path) {
     const d = await res.json();
@@ -408,7 +437,7 @@ if (typeof window !== 'undefined') (() => {
       setStatus(`${c.path} not found`, 'err'); lastProblem = `"${c.path}" not found on branch "${c.branch}"`;
       box.append(el('p', null, `The repo is reachable, but "${c.path}" does not exist on branch "${c.branch}".`), el('p', null, 'Check the file path and branch in Settings (the usual path is board/tasks.json).'));
       const b = el('button', null, 'Create a new empty board at this path…');
-      b.onclick = async () => { if (!confirm(`Create ${c.path} on ${c.branch} in ${c.repo}?`)) return; state = NEW_BOARD(); sha = null; await save(clone(state), 'Create board file'); render(); };
+      b.onclick = async () => { if (!confirm(`Create ${c.path} on ${c.branch} in ${c.repo}?`)) return; state = NEW_BOARD(); sha = null; await saveNewBoard(clone(state), 'Create board file'); render(); };
       box.append(b);
     }
     const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); }; box.append(ck);
@@ -428,7 +457,7 @@ if (typeof window !== 'undefined') (() => {
     const board = $('board'); board.textContent = ''; const box = el('div', 'empty');
     box.append(el('p', null, `${cfg().path} does not exist on ${cfg().branch} yet.`));
     const b = el('button', 'primary', 'Create it with an empty board');
-    b.onclick = async () => { state = NEW_BOARD(); sha = null; await save(clone(state), 'Create tasks.json for board'); render(); };
+    b.onclick = async () => { state = NEW_BOARD(); sha = null; await saveNewBoard(clone(state), 'Create tasks.json for board'); render(); };
     box.append(b); board.append(box);
   }
 
@@ -2726,7 +2755,7 @@ if (typeof window !== 'undefined') (() => {
     if (ex.status !== 404) { toast(`GitHub error ${ex.status}.`, true); btn.disabled = false; btn.textContent = 'Create my board'; return; }
     state = NEW_BOARD(); state.settings.title = title; state.settings.modes = [...(WZ.crm ? ['crm'] : []), ...(WZ.tasks ? ['tasks'] : [])];
     if (meV) state.people = [{ github: meV, name: meV }];
-    sha = null; const out = await save(clone(state), 'Create Keeptrack board');
+    sha = null; const out = await saveNewBoard(clone(state), 'Create Keeptrack board');
     if (out !== 'ok') { toast('Could not create the board file (' + out + ').', true); btn.disabled = false; btn.textContent = 'Create my board'; return; }
     view = WZ.crm ? 'today' : 'board'; LS.set('kb_view', view); Object.assign(WZ, { step: 0, tok: '', checks: null });
     endSetup(); await load();

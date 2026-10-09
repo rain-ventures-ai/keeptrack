@@ -17,8 +17,9 @@ Claude that helps them. It is the target of the "Copy new-board prompt for Claud
 - Optional: the client or area names for the `client` field (default: `General`).
 
 ## 2. Create the repo (the person, or Claude if it has a tool that can)
-Create an **empty, private** repo with no README: `https://github.com/new?name=<name>&visibility=private`
-(for an organisation, choose it as the owner). Claude often cannot create repos in a person's account; then the person
+Create an **empty, private** repo: `https://github.com/new?name=<name>&visibility=private`. It is simplest to leave
+the README option off because Keeptrack creates one, but an existing README is preserved.
+For an organisation, choose it as the owner. Claude often cannot create repos in a person's account; then the person
 does it and says when it is done.
 
 ## 3. Add the board kit (Claude, in a clone of the new repo)
@@ -32,7 +33,7 @@ python3 board/keeptrack.py --file board/tasks.json list   # empty board, no erro
 python3 board/keeptrack.py kit-check                      # says the kit is current
 git add -A && git commit -m "Set up task board (board kit)" && git push -u origin master
 ```
-`init` first runs the kit update, which **overwrites** every kit file whose content differs from the published kit (`board/keeptrack.py`, `board/README.md`, `board/UPGRADING.md`, the routine files and `.claude/skills/board*`). It then writes the repo-owned starter files, `AGENTS.md`, `CLAUDE.md`, `.gitignore` and `.claude/settings.json`, and an empty `board/tasks.json`, **only when they do not exist yet**; existing ones are kept. Add the repo's own rules to `AGENTS.md` if it has other work.
+`init` first runs the kit update, which **overwrites** every kit file whose content differs from the published kit (`board/keeptrack.py`, `board/README.md`, `board/UPGRADING.md`, the routine files and `.claude/skills/board*`). It then writes the repo-owned starter files, root `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore` and `.claude/settings.json`, and an empty `board/tasks.json`, **only when they do not exist yet**; existing ones are kept. The root README explains that the repo uses Keeptrack and links directly to its web board. Add the repo's own rules to `AGENTS.md` if it has other work.
 If the repo's default branch is `main`, either make `master` the default branch in GitHub (Settings → General) or set the
 branch to `main` in the web board and `BOARD_BRANCH=main` for agents.
 

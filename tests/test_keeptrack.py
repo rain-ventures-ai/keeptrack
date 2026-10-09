@@ -493,13 +493,29 @@ class PhaseOneSafety(unittest.TestCase):
         kt.ROOT, kt.REPO = self.temp.name, "acme/board"
         kt.need_repo_clone = lambda: None
         kt.cmd_kit_update = lambda a: None
-        kt.kit_fetch = lambda src, source=None: b""
+        template = os.path.join(HERE, "..", "board", "kit", "templates", "README.md")
+        with open(template, "rb") as f:
+            readme_template = f.read()
+        kt.kit_fetch = lambda src, source=None: readme_template if src == "templates/README.md" else b""
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_init(Args(person=["alex:Alex"], client=None, source=None))
         data = read_json(os.path.join(self.temp.name, kt.PATH))
         self.assertEqual(3, data["version"])
         self.assertNotIn("layout", data)
         self.assertEqual([], data["tasks"])
+        with open(os.path.join(self.temp.name, "README.md"), encoding="utf-8") as f:
+            readme = f.read()
+        self.assertIn("This board is powered by [Keeptrack]", readme)
+        self.assertIn("repo=acme%2Fboard", readme)
+        self.assertIn("path=board%2Ftasks.json", readme)
+
+        # A project may already have its own README. init is safe to rerun and must never replace it.
+        with open(os.path.join(self.temp.name, "README.md"), "w", encoding="utf-8") as f:
+            f.write("Existing project README\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_init(Args(person=["alex:Alex"], client=None, source=None))
+        with open(os.path.join(self.temp.name, "README.md"), encoding="utf-8") as f:
+            self.assertEqual("Existing project README\n", f.read())
 
     def test_git_load_reads_every_board_file_in_one_batch(self):
         remote, work = os.path.join(self.temp.name, "remote.git"), os.path.join(self.temp.name, "work")

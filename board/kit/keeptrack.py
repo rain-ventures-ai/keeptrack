@@ -50,7 +50,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
   keeptrack.py verify --against REF        # compare the board with a backup (tag, branch, commit or tasks.json file)
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
-  keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, AGENTS.md, CLAUDE.md, empty tasks.json
+  keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, README.md, AGENTS.md, CLAUDE.md, empty tasks.json
 """
 import argparse, base64, contextlib, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 try:
@@ -1856,8 +1856,13 @@ def cmd_init(a):
         people.append({"github": gh_user, "name": name or gh_user})
     a.quiet = True
     cmd_kit_update(a)
-    fill = lambda t: t.replace("{repo}", REPO).replace("{people}", ", ".join("`" + p["github"] + "`" for p in people))
-    for dest, src in [("AGENTS.md", "templates/AGENTS.md"), ("CLAUDE.md", "templates/CLAUDE.md"),
+    board_url = "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(
+        {"repo": REPO, "branch": BRANCH, "path": PATH})
+    fill = lambda t: (t.replace("{repo}", REPO).replace("{branch}", BRANCH).replace("{path}", PATH)
+                      .replace("{board_url}", board_url)
+                      .replace("{people}", ", ".join("`" + p["github"] + "`" for p in people)))
+    for dest, src in [("README.md", "templates/README.md"), ("AGENTS.md", "templates/AGENTS.md"),
+                      ("CLAUDE.md", "templates/CLAUDE.md"),
                       (".gitignore", "templates/gitignore"), (".claude/settings.json", "templates/settings.json")]:
         path = os.path.join(ROOT, dest)
         if os.path.exists(path):
