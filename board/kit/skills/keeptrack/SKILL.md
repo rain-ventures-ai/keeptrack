@@ -7,6 +7,10 @@ description: Use a Keeptrack board (people, follow-ups, pipeline and tasks in bo
 
 A Keeptrack board is `board/tasks.json` in the user's private GitHub repo. People use the web board. Agents use `keeptrack.py`. Never edit `tasks.json` by hand.
 
+If the user asks to set up, onboard, migrate or import existing people, clients or tasks, use the separate
+`keeptrack-onboard` skill. Do not improvise an import: that skill asks whether they want CRM, tasks or both, shows a
+dry-run plan and waits for approval before it writes anything.
+
 If the board shows errors, a save fails, or a migration has just run, use `$B doctor`. Run `$B doctor --fix` only after the user agrees.
 
 ## Find keeptrack.py

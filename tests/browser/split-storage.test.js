@@ -77,6 +77,21 @@ let base;
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');
     assert(api.calls.some(x => /git\/trees\/board-.*recursive/.test(x.path)), 'must read only the board subtree');
 
+    // The compact header has intentional rows: board + views, then board filters. Low-priority utilities move into
+    // one More menu on phones instead of wrapping into loose buttons on a third line.
+    const compactApi = new Github(true), compact = await browser.newPage({ viewport: { width: 700, height: 800 } }); compact.on('pageerror', e => console.error('page error:', e.message));
+    await compact.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_view', 'board'); });
+    await compact.route('https://api.test/**', r => compactApi.route(r)); await compact.goto(base + '/board/index.html'); await compact.waitForSelector('#viewSw');
+    const compactBoard = await compact.locator('#boardBtn').boundingBox(), compactViews = await compact.locator('#viewSw').boundingBox(), compactFilters = await compact.locator('.hfilters').boundingBox();
+    assert(Math.abs(compactBoard.y - compactViews.y) < 8, 'board switcher and views must share the first row'); assert(compactFilters.y > compactViews.y + 20, 'filters must form the second row');
+    assert.equal(await compact.locator('#btnMore').isVisible(), true); assert.equal(await compact.locator('.hutils #btnSettings').isHidden(), true); assert.equal(await compact.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'compact header must not widen the page');
+    await compact.locator('#btnMore').click(); assert.equal(await compact.locator('#morePop').isVisible(), true); await compact.locator('#sortMenuMobile').selectOption('due'); assert.equal(await compact.locator('#sortMenu').inputValue(), 'due'); assert.equal(await compact.locator('#morePop').isHidden(), true);
+    await compact.locator('#btnMore').click(); await compact.locator('[data-head-action="btnSettings"]').click(); assert.equal(await compact.locator('#dlgSettings').getAttribute('open'), ''); await compact.locator('#sClose').click(); await compact.close();
+
+    const tabletApi = new Github(true), tablet = await browser.newPage({ viewport: { width: 900, height: 700 } }); tablet.on('pageerror', e => console.error('page error:', e.message));
+    await tablet.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); }); await tablet.route('https://api.test/**', r => tabletApi.route(r)); await tablet.goto(base + '/board/index.html'); await tablet.waitForSelector('#viewSw');
+    assert.equal(await tablet.locator('#btnMore').isVisible(), true); assert.equal(await tablet.locator('.hutils #btnSettings').isHidden(), true); assert.equal(await tablet.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'tablet header must not widen the page'); await tablet.close();
+
     // Token controls distinguish browser storage from an unsaved/password-manager value. A token saved for
     // another board is silently tested against this repo and reused only after the repo and board file are readable.
     const noToken = new Github(true), reuse = await browser.newPage(); reuse.on('pageerror', e => console.error('page error:', e.message));

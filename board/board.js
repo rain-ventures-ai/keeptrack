@@ -710,7 +710,7 @@ if (typeof window !== 'undefined') (() => {
     state.people.forEach(p => { const on = w === p.github, b = el('button', 'pq' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Show everyone' : `Only @${p.github}'s tasks`;
       b.append(avatar(p.github)); b.onclick = () => { $('fWho').value = on ? '' : p.github; render(); }; pq.append(b); });
   }
-  function closePops() { ['clientPop', 'filterPop', 'boardPop'].forEach(id => { $(id).hidden = true; }); $('btnFilter').setAttribute('aria-expanded', 'false'); $('boardBtn').setAttribute('aria-expanded', 'false'); }
+  function closePops() { ['clientPop', 'filterPop', 'boardPop', 'morePop'].forEach(id => { $(id).hidden = true; }); $('btnFilter').setAttribute('aria-expanded', 'false'); $('boardBtn').setAttribute('aria-expanded', 'false'); $('btnMore').setAttribute('aria-expanded', 'false'); }
   function placePop(pop) { if (window.matchMedia('(max-width: 760px)').matches) pop.style.top = (document.querySelector('header').getBoundingClientRect().bottom + 6) + 'px'; else pop.style.top = ''; }
 
   // ---- keeping the app itself fresh -----------------------------------------------------------------------
@@ -2302,14 +2302,18 @@ if (typeof window !== 'undefined') (() => {
       'New-board prompt copied. Paste it into your current chat with Claude.'); };
   document.querySelectorAll('#viewSw button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
   $('btnUnread').onclick = () => { freshOnly = !freshOnly; render(); };
-  $('sortMenu').value = sortMode(); $('sortMenu').onchange = e => { LS.set(sortKey(), e.target.value); render(); };
+  $('sortMenu').value = $('sortMenuMobile').value = sortMode();
+  const setSort = v => { LS.set(sortKey(), v); $('sortMenu').value = $('sortMenuMobile').value = v; render(); };
+  $('sortMenu').onchange = e => setSort(e.target.value); $('sortMenuMobile').onchange = e => { setSort(e.target.value); closePops(); };
   $('sMarkAll').onclick = () => { markAllSeen(); render(); toast('All cards marked as read'); };
   $('btnRefresh').onclick = () => load();
   $('btnAgent').onclick = () => copyText(agentPrompt(null), 'Board instructions copied for an agent');
   $('btnCopyMd').onclick = () => copyMarkdown(); $('fCopyMd').onclick = () => { closePops(); copyMarkdown(); };
   $('cCopyMd').onclick = () => { const t = taskNow(); if (t) copyText(taskMarkdown(t), 'Card copied as Markdown'); };
   $('btnFilter').onclick = e => { e.stopPropagation(); const pop = $('filterPop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnFilter').setAttribute('aria-expanded', 'true'); } };
-  $('filterPop').addEventListener('click', e => e.stopPropagation()); $('clientPop').addEventListener('click', e => e.stopPropagation());
+  $('btnMore').onclick = e => { e.stopPropagation(); const pop = $('morePop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnMore').setAttribute('aria-expanded', 'true'); } };
+  document.querySelectorAll('[data-head-action]').forEach(b => { b.onclick = () => { const target = $(b.dataset.headAction); closePops(); if (target) target.click(); }; });
+  $('filterPop').addEventListener('click', e => e.stopPropagation()); $('clientPop').addEventListener('click', e => e.stopPropagation()); $('morePop').addEventListener('click', e => e.stopPropagation());
   document.addEventListener('click', closePops); document.addEventListener('keydown', e => { if (e.key === 'Escape') closePops(); });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
   $('fClear').onclick = () => { ['fClient', 'fWho', 'fLabel', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
