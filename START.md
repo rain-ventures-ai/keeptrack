@@ -24,6 +24,21 @@ Keeptrack keeps people, follow-ups, a pipeline and tasks in `board/tasks.json` i
 - Never send a message, email or quote for the person. Keeptrack agents write drafts only.
 - Use simple words. Many people who do this setup are not developers.
 
+### Always give the pre-filled token link
+As soon as you know the board's `owner/repo`, give the person a **clickable link with that owner and the required
+permissions pre-filled**. Do not send them to the generic token list and do not merely describe the permission fields.
+Replace `<OWNER>` and `<REPO>` in this template and URL-encode their values:
+
+```
+https://github.com/settings/personal-access-tokens/new?name=Keeptrack%20<REPO>&description=Keeptrack%3A%20read%20and%20write%20board%2Ftasks.json%20and%20create%20issues&target_name=<OWNER>&expires_in=90&contents=write&issues=write
+```
+
+Say this immediately below the link: **"GitHub has pre-filled the resource owner and Contents/Issues: Read and write.
+GitHub cannot preselect a private repo from a link, so under Repository access choose Only select repositories, then
+select `<OWNER>/<REPO>`."** The person generates and copies the token; you never see it. If they already made a PAT,
+offer the pre-filled new-token link as the simplest fix and also link to
+https://github.com/settings/personal-access-tokens so they can edit the existing one themselves.
+
 ### Step 1. Find out where you are
 Ask the person two questions (one line each, with your recommendation):
 1. **Do you already have a Keeptrack board?** If yes, which repo (for example `rain-ventures-ai/consulting`) and what is your GitHub username?
@@ -43,7 +58,7 @@ The plugin gives you the Keeptrack skill and `keeptrack.py`.
 
 If the plugin is already installed, say so and go on. Details: [board/kit/PLUGIN.md](board/kit/PLUGIN.md).
 
-Useful links for the person: Claude plugins https://claude.ai/customize/plugins · make a private repo https://github.com/new?name=my-keeptrack&visibility=private · GitHub tokens https://github.com/settings/personal-access-tokens · the web board https://rain-ventures-ai.github.io/keeptrack/board/
+Useful links for the person: Claude plugins https://claude.ai/customize/plugins · make a private repo https://github.com/new?name=my-keeptrack&visibility=private · edit an existing GitHub token https://github.com/settings/personal-access-tokens (for a new token, use the pre-filled template above) · the web board https://rain-ventures-ai.github.io/keeptrack/board/
 
 Find `keeptrack.py` as the skill says (Claude Code: `python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py`). Below, `$B` means that command.
 
@@ -66,7 +81,7 @@ $B where
 
 The assistant also needs access to the repo. Pick the first that works:
 1. **A GitHub login on this computer:** run `gh auth status`. If it says logged in, nothing more to do. If `gh` is installed but not logged in, ask the person to run `gh auth login` themselves.
-2. **A token in an environment variable:** the person makes a fine-grained token (only this repo, **Contents: Read and write**) and puts it in an environment variable, for example `KEEPTRACK_TOKEN`, in their shell profile or the tool's settings. Then run `$B use <owner/repo> --user <github-username> --token-env KEEPTRACK_TOKEN`. You only ever learn the variable's **name**.
+2. **A token in an environment variable:** give the person the pre-filled token link above for this `owner/repo`. They still select **Only select repositories → this repo**, generate it, and put it in an environment variable such as `KEEPTRACK_TOKEN` in their shell profile or the tool's settings. Then run `$B use <owner/repo> --user <github-username> --token-env KEEPTRACK_TOKEN`. You only ever learn the variable's **name**.
 3. **Claude desktop app or Cowork:** try `$B where` and `$B today`. If `keeptrack.py` cannot reach GitHub there, set the person up with Claude Code on the web (next section) instead.
 
 ### Claude Code on the web and in the Claude app: the easiest way, with no token

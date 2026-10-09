@@ -23,13 +23,15 @@ const person = { id: 'p_one', name: 'Casey Example', company: 'Acme', role: '', 
 const text = x => JSON.stringify(x, null, 2) + '\n';
 
 class Github {
-  constructor(v4 = true) { this.v4 = v4; this.files = v4 ? { 'tasks.json': text(root), ...Object.fromEntries(Object.entries(cards).map(([k, v]) => [k, text(v)])), 'people/p_one.json': text(person) } : { 'tasks.json': text({ ...root, version: 3, layout: undefined, tasks: Object.values(cards), contacts: [person] }) }; this.head = 'head-1'; this.n = 1; this.calls = []; this.blobs = {}; this.pending = null; this.failPatch = false; }
+  constructor(v4 = true) { this.v4 = v4; this.files = v4 ? { 'tasks.json': text(root), ...Object.fromEntries(Object.entries(cards).map(([k, v]) => [k, text(v)])), 'people/p_one.json': text(person) } : { 'tasks.json': text({ ...root, version: 3, layout: undefined, tasks: Object.values(cards), contacts: [person] }) }; this.head = 'head-1'; this.n = 1; this.calls = []; this.blobs = {}; this.pending = null; this.failPatch = false; this.denyRepo = false; this.visibleRepos = [{ full_name: 'acme/another-board', permissions: { push: true } }]; }
   sha(p) { return require('node:crypto').createHash('sha1').update(this.files[p] || '').digest('hex'); }   // content-addressed, like git
   tree() { return Object.entries(this.files).map(([p, content]) => ({ path: p, type: 'blob', sha: this.sha(p), size: Buffer.byteLength(content) })); }
   async route(route) {
-    const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', ''); this.calls.push({ method, path: p + u.search, body: req.postDataJSON?.() });
+    const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', ''); this.calls.push({ method, path: p + u.search, body: req.postDataJSON?.(), auth: req.headers()['authorization'] || '' });
     const json = (body, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
-    if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
+    if (p === '/user' && method === 'GET') return json({ login: 'alex' });
+    if (p.startsWith('/user/repos') && method === 'GET') return json(this.visibleRepos);
+    if (p === '' && method === 'GET') return this.denyRepo ? json({ message: 'Not Found' }, 404) : json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
     if (p.startsWith('/contents/board/tasks.json') && method === 'GET') return json({ sha: this.sha('tasks.json'), size: Buffer.byteLength(this.files['tasks.json']), encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') }, 200, { ETag: '"tasks"' });
     if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON(); this.files[rel] = Buffer.from(b.content, 'base64').toString(); this.head = 'head-' + ++this.n; return json({ content: { sha: this.sha(rel) }, commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
     if (p.startsWith('/contents/board/') && method === 'DELETE') { const rel = p.slice('/contents/board/'.length); delete this.files[rel]; this.head = 'head-' + ++this.n; return json({ commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
@@ -70,9 +72,35 @@ let base;
     const taskGroupX = (await page.locator('#viewSw .viewgroup[data-grp="tasks"]').boundingBox()).x; await page.locator('#viewSw button[data-view="people"]').click(); assert.equal((await page.locator('#viewSw .viewgroup[data-grp="tasks"]').boundingBox()).x, taskGroupX, 'selecting a People view must not move the Task views group'); await page.locator('#viewSw button[data-view="board"]').click();
     await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copied = text; } } }); });
     await page.locator('#btnHelp').click(); const helpRepo = page.locator('#dlgHelp .mainRepoLink'); assert.equal(await helpRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await helpRepo.getAttribute('target'), '_blank'); await page.locator('#hSetupPrompt').click(); assert.match(await page.evaluate(() => window.__copied), /in this conversation.*Do not just explain the options/); await page.locator('#hClose').click();
-    await page.locator('#btnSettings').click(); const settingsRepo = page.locator('#dlgSettings .mainRepoLink'); assert.equal(await settingsRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await settingsRepo.getAttribute('target'), '_blank'); assert.equal(await page.locator('#sSetupPrompt').isVisible(), true); await page.locator('#sClose').click();
+    await page.locator('#btnSettings').click(); const settingsRepo = page.locator('#dlgSettings .mainRepoLink'); assert.equal(await settingsRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await settingsRepo.getAttribute('target'), '_blank'); assert.equal(await page.locator('#sSetupPrompt').isVisible(), true);
+    await page.locator('#tabBoards').click(); await page.locator('#bEditBtn').click(); assert.equal(await page.locator('#sTokenState').textContent(), 'Saved for this board'); assert.equal(await page.locator('#sTokenBtns').isVisible(), true); await page.locator('#sClose').click();
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');
     assert(api.calls.some(x => /git\/trees\/board-.*recursive/.test(x.path)), 'must read only the board subtree');
+
+    // Token controls distinguish browser storage from an unsaved/password-manager value. A token saved for
+    // another board is silently tested against this repo and reused only after the repo and board file are readable.
+    const noToken = new Github(true), reuse = await browser.newPage(); reuse.on('pageerror', e => console.error('page error:', e.message));
+    await reuse.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_boards', JSON.stringify({ 'other/board': { branch: 'main', path: 'board/tasks.json', token: 'reusable-token' }, 'acme/board': { branch: 'main', path: 'board/tasks.json' } })); });
+    await reuse.route('https://api.test/**', r => noToken.route(r)); await reuse.goto(base + '/board/index.html'); await reuse.locator('#sTokenReuse').filter({ hasText: 'Reused a token' }).waitFor();
+    assert.equal(await reuse.evaluate(() => localStorage.getItem('kb_token')), 'reusable-token'); assert.equal(await reuse.evaluate(() => JSON.parse(localStorage.getItem('kb_boards'))['acme/board'].token), 'reusable-token');
+    assert.equal(await reuse.locator('#sTokenState').textContent(), 'Saved for this board'); assert.equal(await reuse.locator('#sTokenBtns').isVisible(), true);
+    assert(noToken.calls.some(x => x.path === '' && x.auth === 'Bearer reusable-token'), 'the saved candidate must be tested against the target repo'); await reuse.close();
+
+    const blankApi = new Github(true), blank = await browser.newPage(); blank.on('pageerror', e => console.error('page error:', e.message));
+    await blank.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); });
+    await blank.route('https://api.test/**', r => blankApi.route(r)); await blank.goto(base + '/board/index.html'); await blank.locator('#dlgSettings').waitFor();
+    assert.equal(await blank.locator('#sTokenState').textContent(), 'No token saved'); assert.equal(await blank.locator('#sTokenBtns').isHidden(), true);
+    await blank.locator('#sToken').evaluate(el => { el.value = 'password-manager-value'; }); await blank.waitForTimeout(1300);
+    assert.equal(await blank.locator('#sTokenState').textContent(), 'Value present · not saved'); assert.equal(await blank.locator('#sTokenBtns').isVisible(), true); await blank.close();
+
+    // A repository-access failure leads with the exact next action; visible repos are supporting evidence only.
+    const deniedApi = new Github(true), denied = await openBoard(browser, deniedApi); deniedApi.denyRepo = true; deniedApi.calls = [];
+    await denied.locator('#btnSettings').click(); await denied.locator('#tabChecks').click(); await denied.locator('#ckRun').click(); const next = denied.locator('.cknext'); await next.waitFor();
+    assert.match(await next.textContent(), /Do this next.*acme\/board.*Contents.*Run checks/s); assert.equal(await next.locator('a.btnlink').textContent(), 'Make a correctly configured PAT'); const patHref = await next.locator('a.btnlink').getAttribute('href'); assert.match(patHref, /github\.com\/settings\/personal-access-tokens\/new/); assert.match(patHref, /target_name=acme/); assert.match(patHref, /contents=write/); await denied.close();
+
+    const missingPermApi = new Github(true), missingPerm = await openBoard(browser, missingPermApi); missingPermApi.calls = [];
+    await missingPerm.locator('#btnSettings').click(); await missingPerm.locator('#tabChecks').click(); await missingPerm.locator('#ckRun').click(); const permFix = missingPerm.locator('.cknext'); await permFix.waitFor();
+    assert.match(await missingPerm.locator('.ck.bad').last().textContent(), /PAT permissions.*cannot read its default branch/s); const permHref = await permFix.locator('a.btnlink').getAttribute('href'); assert.match(permHref, /target_name=acme/); assert.match(permHref, /contents=write/); await missingPerm.close();
 
     api.calls = []; await page.locator('.card').first().dblclick(); await page.locator('#cTitle').fill('First edited'); const edited = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/')); await page.locator('#cTitle').blur(); await edited;
     const puts = api.calls.filter(x => x.method === 'PUT'); assert.equal(puts.length, 1, JSON.stringify(api.calls, null, 2)); assert.equal(puts[0].path, '/contents/board/cards/t_one.json');

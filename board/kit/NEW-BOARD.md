@@ -37,9 +37,12 @@ If the repo's default branch is `main`, either make `master` the default branch 
 branch to `main` in the web board and `BOARD_BRANCH=main` for agents.
 
 ## 4. Connect the web board (the person)
-1. Make a fine-grained token: owner = the repo's owner, **Only select repositories** = this repo, **Contents: Read and
-   write**, and **Issues: Read and write** for the Create issue button. The token link in Settings → Boards fills
-   most of this in.
+1. Claude gives the person this link after replacing `<OWNER>` and `<REPO>` with the new repo's URL-encoded owner and
+   name (do not give only the generic token-settings link):
+   `https://github.com/settings/personal-access-tokens/new?name=Keeptrack%20<REPO>&description=Keeptrack%3A%20read%20and%20write%20board%2Ftasks.json%20and%20create%20issues&target_name=<OWNER>&expires_in=90&contents=write&issues=write`.
+   It pre-fills the resource owner, expiry, **Contents: Read and write** and **Issues: Read and write**. GitHub cannot
+   preselect a private repo from the link, so the person must still choose **Only select repositories → this repo**,
+   then generate and copy the token. Claude never sees it.
 2. On the web board: Settings → **Boards** → **Add a board** → **Connect a board I have**. Paste the token and pick the repo.
 3. The header's board menu now switches between your boards. Each board keeps its own token in this browser.
 
