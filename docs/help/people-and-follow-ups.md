@@ -13,6 +13,11 @@ People at the stages **Won** and **Lost** are not shown on Today.
 
 Click a person to open their card.
 
+## Add a person
+Click **Add…** to open the form. **Name** is required; company, role, email, phone and LinkedIn are optional. After the person is added, their card opens so you can add a stage, next step, notes or anything else.
+
+For a one-line shortcut, type **Name | Company | Role | Email** in the add box and press Enter.
+
 ## A person's card
 - **Name** and **stage** at the top.
 - **Next step** and its **date**. Use **Today**, **Tomorrow** or **+1 week** to set the date quickly. Always give a date: Today uses it.

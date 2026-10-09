@@ -88,7 +88,7 @@
   <h2 id="hTitle">Help</h2>
   <div class="hgrid">
     <section><h3><i data-i="alarm-clock"></i> Today</h3><p>The people you must contact today or before today. Click a person to open their card.</p></section>
-    <section><h3><i data-i="user"></i> People</h3><p>Everyone you keep track of. Type <b>Name | Company | Role</b> in the add box to add a person.</p></section>
+    <section><h3><i data-i="user"></i> People</h3><p>Everyone you keep track of. Press <b>Add…</b> for a simple form, or type <b>Name | Company | Role</b> and press Enter for a quick add.</p></section>
     <section><h3><i data-i="trending-up"></i> Pipeline</h3><p>People by stage. Drag a card to change the stage. Logging a sent message moves a new person to the second stage.</p></section>
     <section><h3><i data-i="mail"></i> Messages and calls</h3><p>In a person's card, write what you sent or said, pick the channel, then <b>Log</b>. Tick <b>Draft</b> to keep a message you have not sent yet. <b>Mark sent</b> when you send it.</p></section>
     <section><h3><i data-i="folder"></i> Client files</h3><p>Keep big files in Google Drive, Dropbox or OneDrive. Add the folder links in the <b>Files</b> part of a person's card.</p></section>
@@ -271,6 +271,21 @@
     </section>
     <div id="sClaudeMsg" class="hint" role="status"></div>
   </div>
+</dialog>
+
+<dialog id="dlgAddPerson" class="personform" aria-labelledby="apTitle">
+  <form id="apForm">
+    <div class="formhead"><div><h3 id="apTitle">Add a person</h3><p class="hint">Only their name is required. You can add more details now or later.</p></div><button id="apX" type="button" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
+    <label for="apName">Name <span class="required">Required</span></label><input id="apName" name="name" autocomplete="name" required aria-required="true">
+    <div class="pgrid">
+      <label for="apCompany"><span><i data-i="building-2"></i> Company <span class="optional">Optional</span></span><input id="apCompany" name="company" list="apCompanies" autocomplete="organization"><datalist id="apCompanies"></datalist></label>
+      <label for="apRole"><span><i data-i="briefcase"></i> Role <span class="optional">Optional</span></span><input id="apRole" name="role" autocomplete="organization-title"></label>
+      <label for="apEmail"><span><i data-i="mail"></i> Email <span class="optional">Optional</span></span><input id="apEmail" name="email" type="email" autocomplete="email"></label>
+      <label for="apPhone"><span><i data-i="phone"></i> Phone <span class="optional">Optional</span></span><input id="apPhone" name="phone" type="tel" autocomplete="tel"></label>
+      <label for="apLinkedin"><span><i data-i="link"></i> LinkedIn <span class="optional">Optional</span></span><input id="apLinkedin" name="linkedin" type="url" placeholder="https://linkedin.com/in/…" autocomplete="url"></label>
+    </div>
+    <div class="actions"><button id="apCancel" type="button">Cancel</button><button id="apSave" type="submit" class="primary">Add person</button></div>
+  </form>
 </dialog>
 
 <dialog id="dlgContact" class="drawer" aria-label="Person details">

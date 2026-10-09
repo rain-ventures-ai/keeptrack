@@ -2318,9 +2318,27 @@ if (typeof window !== 'undefined') (() => {
   function addContact(name, extra) {
     const p = normaliseContact(Object.assign({ id: cid(), name, created: nowIso(), updated: nowIso() }, extra || {}));
     if (me()) { p.createdBy = me(); p.updatedBy = me(); }
-    return mutate(n => { n.contacts.push(p); if (p.company && !n.clients.includes(p.company)) n.clients.push(p.company); }, `Add person: ${name}`).then(() => p.id);
+    return mutate(n => { n.contacts.push(p); if (p.company && !n.clients.includes(p.company)) n.clients.push(p.company); }, `Add person: ${name}`).then(ok => ok ? p.id : null);
   }
   const parsePerson = s => { const x = s.split('|').map(v => v.trim()); return [x[0], { company: x[1] || '', role: x[2] || '', email: x[3] || '' }]; };
+
+  let addPersonExtra = {};
+  function openAddPersonForm(seed, extra) {
+    const [name, parsed] = parsePerson(seed || ''), d = $('dlgAddPerson'); addPersonExtra = Object.assign({}, extra || {}); $('apForm').reset();
+    $('apName').value = name; $('apCompany').value = parsed.company; $('apRole').value = parsed.role; $('apEmail').value = parsed.email;
+    $('apCompanies').textContent = ''; [...new Set([...state.clients, ...state.contacts.map(x => x.company)].filter(Boolean))].forEach(c => { const o = el('option'); o.value = c; $('apCompanies').append(o); });
+    d.showModal(); setTimeout(() => $('apName').focus(), 0);
+  }
+  $('apForm').onsubmit = async e => {
+    e.preventDefault(); if (!$('apForm').reportValidity()) return;
+    const name = $('apName').value.trim(), extra = Object.assign({}, addPersonExtra, {
+      company: $('apCompany').value.trim(), role: $('apRole').value.trim(), email: $('apEmail').value.trim(), phone: $('apPhone').value.trim(), linkedin: $('apLinkedin').value.trim()
+    });
+    $('apSave').disabled = true; const id = await addContact(name, extra); $('apSave').disabled = false;
+    if (id && state.contacts.some(x => x.id === id)) { $('dlgAddPerson').close(); openContact(id); }
+  };
+  $('apCancel').onclick = $('apX').onclick = () => $('dlgAddPerson').close();
+  $('dlgAddPerson').addEventListener('close', () => { addPersonExtra = {}; $('apSave').disabled = false; });
 
   function stagePill(s) { const b = el('span', 'stagepill' + (closedStage(s) ? ' closed' : ''), s || '—'); b.style.setProperty('--h', hashHue(s || '')); return b; }
   function dueBadge(p) {
@@ -2344,10 +2362,10 @@ if (typeof window !== 'undefined') (() => {
     row.append(who, pr, nx, el('span', 'plast muted', t.assignees.length ? t.assignees.map(a => '@' + a).join(', ') : 'nobody assigned')); return row;
   }
   function addPersonBox(placeholder, extra) {
-    const add = el('div', 'add padd'), inp = el('input'), btn = el('button', 'primary', 'Add');
-    inp.placeholder = placeholder || 'Add a person: Name | Company | role | email';
+    const add = el('div', 'add padd'), inp = el('input'), btn = el('button', 'primary', 'Add…');
+    inp.placeholder = placeholder || 'Quick add: Name | Company | role | email';
     const go = async () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; const [name, f] = parsePerson(v); const id = await addContact(name, Object.assign(f, extra || {})); if (id && state.contacts.some(x => x.id === id)) openContact(id); };
-    btn.onclick = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); add.append(inp, btn); return add;
+    btn.type = 'button'; btn.title = 'Open a form to add a person'; btn.onclick = () => openAddPersonForm(inp.value, extra); inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); add.append(inp, btn); return add;
   }
   const crmFilter = p => { const fc = $('fClient').value; return !fc || p.company === fc; };
 
