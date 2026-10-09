@@ -5,7 +5,8 @@ Each person on the board sets up **their own** routine, one for each board repo.
 This guide is for the comment-triggered board assistant. Keep its connectors disabled. For a scheduled import from
 Google Drive or another meeting-notes source, create a separate least-privilege routine and follow
 `.claude/skills/keeptrack-notes/references/routines.md`. That guide includes a copyable prompt and an incremental log
-of source document revisions and resulting task numbers, without storing transcript text.
+of source document revisions and resulting task numbers, without storing transcript text. It defaults to a rolling
+seven-day lookback, skips documents already logged at the same revision, and matches repeated actions across meetings.
 
 If you would like an agent to walk you through this, ask Claude Code in this repo: **"set up my board routine"**. It uses the `board-routine-setup` skill, checks each step, and tells you when it needs you to paste a secret. An agent can guide, check and verify, but it cannot create the API trigger or paste secrets for you (see "What only you can do").
 
