@@ -1062,10 +1062,10 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
   let view = LS.get('kb_view', 'today'); if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity'].includes(view)) view = 'today';
-  function applyModes() {   // settings.modes: 'crm' (Today, People, Pipeline) and/or 'tasks' (the task views); title from settings.title
-    const m = modes(), ok = v => CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks');
-    document.querySelectorAll('#viewSw .viewgroup').forEach(g => { g.hidden = !m.includes(g.dataset.grp); });
-    if (!ok(view)) view = m.includes('crm') ? 'today' : 'board';
+  function applyModes() {   // Today combines every enabled section; settings.modes controls People and task-specific views
+    const m = modes(), ok = v => v === 'today' || (CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks'));
+    document.querySelectorAll('#viewSw .viewgroup').forEach(g => { g.hidden = g.dataset.grp !== 'today' && !m.includes(g.dataset.grp); });
+    if (!ok(view)) view = 'today';
   }
   const setView = v => { view = v; if (!DEMO) LS.set('kb_view', v); render(); };
   const syncViewSw = () => document.querySelectorAll('#viewSw button').forEach(b => { const on = b.dataset.view === view; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
@@ -1966,9 +1966,10 @@ if (typeof window !== 'undefined') (() => {
     code: ['Claude Code', [['Run in a terminal:', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
     codex: ['Codex', [['Run in a terminal:', 'codex plugin marketplace add rain-ventures-ai/keeptrack'], ['Type /plugins and install keeptrack.']]],
     cursor: ['Cursor', [['In Agent chat, type:', '/add-plugin https://github.com/rain-ventures-ai/keeptrack']]] };
-  $('agSetupPrompt').onclick = () => { const c = cfg();
-    copyText(`Set up Keeptrack for me: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it. Walk me through it one step at a time.` +
-      (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into a new chat with your assistant.'); };
+  const copySetupPrompt = () => { const c = cfg();
+    copyText(`Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.` +
+      (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into your current chat with Claude or another assistant.'); };
+  ['agSetupPrompt', 'hSetupPrompt', 'sSetupPrompt'].forEach(id => { $(id).onclick = copySetupPrompt; });
   function renderTools() {
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg(); bar.textContent = body.textContent = '';
     Object.entries(TOOLS).forEach(([k, [name]]) => { const b = el('button', 'agpill' + (k === pick ? ' on' : ''), name); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(k === pick)); b.onclick = () => { LS.set('kb_tool', k); renderTools(); }; bar.append(b); });
@@ -2235,7 +2236,7 @@ if (typeof window !== 'undefined') (() => {
       `My GitHub username is ${who}.`, 'Read this guide first and follow it step by step: ' + HOME + '/board/kit/NEW-BOARD.md', '',
       'Start by asking me the basics from step 1 (repo owner and name, the people on the board, client or area names).',
       'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
-      'New-board prompt copied. Paste it into a new chat with Claude.'); };
+      'New-board prompt copied. Paste it into your current chat with Claude.'); };
   document.querySelectorAll('#viewSw button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
   $('btnUnread').onclick = () => { freshOnly = !freshOnly; render(); };
   $('sortMenu').value = sortMode(); $('sortMenu').onchange = e => { LS.set(sortKey(), e.target.value); render(); };
@@ -2272,7 +2273,7 @@ if (typeof window !== 'undefined') (() => {
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
-  const CRM_VIEWS = ['today', 'people', 'pipeline'], TASK_VIEWS = ['board', 'list', 'cal', 'sched', 'activity'];
+  const CRM_VIEWS = ['people', 'pipeline'], TASK_VIEWS = ['board', 'list', 'cal', 'sched', 'activity'];
   function syncModeSettings() {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
@@ -2369,29 +2370,30 @@ if (typeof window !== 'undefined') (() => {
   const crmFilter = p => { const fc = $('fClient').value; return !fc || p.company === fc; };
 
   function renderToday() {
-    const board = $('board'), t = todayIso(), week = plusDays(7);
-    const open = state.contacts.filter(p => !closedStage(p.stage) && crmFilter(p));
-    const groups = [
-      [['alarm-clock', 'Overdue'], open.filter(p => p.next_due && p.next_due < t)],
-      [['pin', 'Today'], open.filter(p => p.next_due === t)],
-      [['calendar-days', 'Next 7 days'], open.filter(p => p.next_due > t && p.next_due <= week)],
-      [['circle-help', 'No next step'], open.filter(p => !p.next_due)],
-      [['moon', 'Gone quiet (no contact for 30 days)'], open.filter(p => p.next_due && p.next_due > week && (daysSince(lastTouch(p)) ?? 999) >= 30)]
-    ];
+    const board = $('board'), t = todayIso(), week = plusDays(7), m = modes(), hasCrm = m.includes('crm'), hasTasks = m.includes('tasks');
+    const open = hasCrm ? state.contacts.filter(p => !closedStage(p.stage) && crmFilter(p)) : [];
+    const groups = hasCrm ? [
+      [['alarm-clock', 'People overdue'], open.filter(p => p.next_due && p.next_due < t)],
+      [['pin', 'People today'], open.filter(p => p.next_due === t)],
+      [['calendar-days', 'People in the next 7 days'], open.filter(p => p.next_due > t && p.next_due <= week)],
+      [['circle-help', 'People with no next step'], open.filter(p => !p.next_due)],
+      [['moon', 'People gone quiet (no contact for 30 days)'], open.filter(p => p.next_due && p.next_due > week && (daysSince(lastTouch(p)) ?? 999) >= 30)]
+    ] : [];
+    const dueTasks = hasTasks ? state.tasks.filter(x => x.due && x.due <= t && x.column !== doneColId() && filtered(x)) : [];
     const wrap = el('div', 'today'), head = el('div', 'todayhead');
-    const n = groups[0][1].length + groups[1][1].length;
-    head.append(el('h2', null, n ? `${n} ${n === 1 ? 'person' : 'people'} to contact today` : 'Nothing due today'), el('span', 'muted', new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })));
+    const peopleDue = groups.slice(0, 2).reduce((n, x) => n + x[1].length, 0), due = [];
+    if (peopleDue) due.push(`${peopleDue} ${peopleDue === 1 ? 'person' : 'people'} to contact`); if (dueTasks.length) due.push(`${dueTasks.length} ${dueTasks.length === 1 ? 'task' : 'tasks'}`);
+    head.append(el('h2', null, due.length ? due.join(' · ') : 'Nothing due today'), el('span', 'muted', new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })));
     wrap.append(head);
-    groups.forEach(([[ic, title], items]) => {
+    const addGroups = list => list.forEach(([[ic, title], items]) => {
       if (!items.length) return; const sec = el('section', 'tsec'); sec.append(elI('h3', null, ic, `${title} (${items.length})`));
       items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec); wrap.append(sec);
     });
-    if (modes().includes('tasks')) {
-      const due = state.tasks.filter(x => x.due && x.due <= t && x.column !== doneColId() && filtered(x));
-      if (due.length) { const sec = el('section', 'tsec'); sec.append(elI('h3', null, 'square-check', `Tasks due (${due.length})`)); due.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', due, taskTodayRow, sec); wrap.append(sec); }
-    }
-    if (!state.contacts.length) { const e = el('div', 'empty'); e.append(el('p', null, 'No people yet. Add the first person you want to keep track of.')); wrap.append(e); }
-    wrap.append(addPersonBox()); board.append(wrap);
+    addGroups(groups.slice(0, 2));
+    if (dueTasks.length) { const sec = el('section', 'tsec'); sec.append(elI('h3', null, 'square-check', `Tasks due (${dueTasks.length})`)); dueTasks.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', dueTasks, taskTodayRow, sec); wrap.append(sec); }
+    addGroups(groups.slice(2));
+    if (hasCrm && !state.contacts.length) { const e = el('div', 'empty'); e.append(el('p', null, 'No people yet. Add the first person you want to keep track of.')); wrap.append(e); }
+    if (hasCrm) wrap.append(addPersonBox()); board.append(wrap);
   }
 
   let peopleQ = '', peopleStage = '';

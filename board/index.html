@@ -16,9 +16,13 @@
     <div id="boardPop" class="popover boardpop" hidden></div>
   </div>
   <nav id="viewSw" class="viewnav" aria-label="Views">
+    <div class="viewgroup" data-grp="today" role="group" aria-labelledby="todayViewLabel">
+      <span id="todayViewLabel" class="vgrp">Today</span>
+      <div class="seg"><button data-view="today" title="Today: people to contact and tasks due"><span class="vi"><i data-i="alarm-clock"></i></span><span class="vt"> Today</span></button></div>
+    </div>
     <div class="viewgroup" data-grp="crm" role="group" aria-labelledby="peopleViewsLabel">
       <span id="peopleViewsLabel" class="vgrp">People views</span>
-      <div class="seg"><button data-view="today" title="Today: who to contact now"><span class="vi"><i data-i="alarm-clock"></i></span><span class="vt"> Today</span></button><button data-view="people" title="People"><span class="vi"><i data-i="user"></i></span><span class="vt"> People</span></button><button data-view="pipeline" title="Pipeline: people by stage"><span class="vi"><i data-i="trending-up"></i></span><span class="vt"> Pipeline</span></button></div>
+      <div class="seg"><button data-view="people" title="People"><span class="vi"><i data-i="user"></i></span><span class="vt"> People</span></button><button data-view="pipeline" title="Pipeline: people by stage"><span class="vi"><i data-i="trending-up"></i></span><span class="vt"> Pipeline</span></button></div>
     </div>
     <div class="viewgroup" data-grp="tasks" role="group" aria-labelledby="taskViewsLabel">
       <span id="taskViewsLabel" class="vgrp">Task views</span>
@@ -96,7 +100,7 @@
 <dialog id="dlgHelp" class="settings help" aria-labelledby="hTitle">
   <h2 id="hTitle">Help</h2>
   <div class="hgrid">
-    <section><h3><i data-i="alarm-clock"></i> Today</h3><p>The people you must contact today or before today. Click a person to open their card.</p></section>
+    <section><h3><i data-i="alarm-clock"></i> Today</h3><p>One place for people to contact and tasks that are overdue or due today. It shows whichever board sections you have enabled.</p></section>
     <section><h3><i data-i="user"></i> People</h3><p>Everyone you keep track of. Press <b>Add…</b> for a simple form, or type <b>Name | Company | Role</b> and press Enter for a quick add.</p></section>
     <section><h3><i data-i="trending-up"></i> Pipeline</h3><p>People by stage. Drag a card to change the stage. Logging a sent message moves a new person to the second stage.</p></section>
     <section><h3><i data-i="mail"></i> Messages and calls</h3><p>In a person's card, write what you sent or said, pick the channel, then <b>Log</b>. Tick <b>Draft</b> to keep a message you have not sent yet. <b>Mark sent</b> when you send it.</p></section>
@@ -107,7 +111,7 @@
     <section><h3><i data-i="lock"></i> Read-only</h3><p>The demo board, a public board with no token, and a token without write access are read-only. A banner at the top tells you why.</p></section>
   </div>
   <p class="hlinks"><a class="mainRepoLink" href="https://github.com/rain-ventures-ai/keeptrack" target="_blank" rel="noopener noreferrer"><i data-i="github"></i> Keeptrack repository</a> · Full help: <a data-doc="README.md">all topics</a> · <a data-doc="getting-started.md">getting started</a> · <a data-doc="people-and-follow-ups.md">people</a> · <a data-doc="ai-assistants.md">AI assistants</a> · <a data-doc="privacy-and-security.md">privacy</a> · <a data-doc="faq.md">problems</a> · demo boards: <a href="?demo=crm">people</a>, <a href="?demo=board">tasks</a></p>
-  <div class="cbtns"><button id="hClose" type="button" class="primary">Close</button></div>
+  <div class="cbtns"><button id="hSetupPrompt" type="button"><i data-i="bot"></i> Copy Claude setup prompt</button><span class="spacer"></span><button id="hClose" type="button" class="primary">Close</button></div>
 </dialog>
 <dialog id="dlgSettings" class="settings">
   <div class="sethead"><h3>Settings</h3><button id="sClose" class="ico" aria-label="Close settings"><i data-i="x"></i></button></div>
@@ -125,13 +129,13 @@
       <legend>Board sections</legend>
       <label class="chk big"><input id="sModeTasks" type="checkbox"> Tasks</label>
       <label class="chk big"><input id="sModeCrm" type="checkbox"> People &amp; pipeline (CRM)</label>
-      <div class="hint">These switches are saved to the shared board. Turning a section off only hides its views: nothing is deleted. Turn it on again to see the same tasks or people. If CRM has no people yet, it opens empty; adding the first person creates their record automatically.</div>
+      <div class="hint">These switches are saved to the shared board. Turning a section off only hides its dedicated views: nothing is deleted. Today stays available and combines the sections that are on. Turn a section on again to see the same tasks or people. If CRM has no people yet, it opens empty; adding the first person creates their record automatically.</div>
     </fieldset>
     <div><label for="sStyle">Card style</label><select id="sStyle"><option value="classic">Classic</option><option value="colorful">Colourful (client and urgency colours)</option></select></div>
     <div><label for="sTheme">Theme</label><select id="sTheme"><option value="auto">Auto (follows your device)</option><optgroup label="Classic"><option value="light">Light</option><option value="dark">Dark</option><option value="midnight">Midnight</option><option value="sand">Sand</option></optgroup><optgroup label="3 colours: paper, ink, accent"><option value="paper">Paper</option><option value="mono">Mono</option><option value="iris">Iris</option><option value="forest">Forest</option><option value="ember">Ember (dark)</option><option value="ink">Ink (dark)</option></optgroup><optgroup label="5 colours: + cards, borders"><option value="studio">Studio</option><option value="newsprint">Newsprint</option><option value="blueprint">Blueprint</option><option value="graphite">Graphite (dark)</option></optgroup><option value="custom" id="sThemeCustom" hidden>Your DESIGN.md</option></select></div>
     <div class="themeio"><span class="hint">Use your own colours: import a <a href="https://github.com/google-labs-code/design.md" target="_blank" rel="noopener noreferrer">DESIGN.md</a> file. Keeptrack reads its colours only.</span><div class="cbtns"><button id="sThemeImport" type="button"><i data-i="upload"></i> Import DESIGN.md</button><button id="sThemeExport" type="button"><i data-i="clipboard-copy"></i> Copy theme as DESIGN.md</button></div><input id="sThemeFile" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden><div id="sThemeMsg" class="hint" role="status"></div></div>
     <div><label>Unread markers</label><button id="sMarkAll" type="button">Mark all cards as read</button></div>
-    <div><label>App version</label><button id="sUpdate" type="button">Update to latest version</button><div class="hint">Version <code id="sVer">…</code>. The board checks for a new version about every 10 minutes and whenever you come back to the tab. This button forces a full refresh of the page, styles and scripts, skipping every cache.</div><div class="hint"><a class="mainRepoLink" href="https://github.com/rain-ventures-ai/keeptrack" target="_blank" rel="noopener noreferrer"><i data-i="github"></i> Open the main Keeptrack repository on GitHub</a></div></div>
+    <div><label>App version</label><button id="sUpdate" type="button">Update to latest version</button><div class="hint">Version <code id="sVer">…</code>. The board checks for a new version about every 10 minutes and whenever you come back to the tab. This button forces a full refresh of the page, styles and scripts, skipping every cache.</div><div class="cbtns"><button id="sSetupPrompt" type="button"><i data-i="bot"></i> Copy Claude setup prompt</button><a class="mainRepoLink" href="https://github.com/rain-ventures-ai/keeptrack" target="_blank" rel="noopener noreferrer"><i data-i="github"></i> Open the main repository</a></div><div class="hint">Paste the setup prompt into your current Claude chat. Claude should begin the guided onboarding instead of only explaining the options.</div></div>
     <div><label>Move settings to another device</label>
       <div class="cbtns"><button id="xCode" type="button"><i data-i="clipboard-copy"></i> Copy settings code</button><button id="xLink" type="button"><i data-i="link"></i> Copy setup link</button></div>
       <div class="hint">Copies everything configured in this browser: repository, username, theme, card style and view, and <b>all your secrets</b>: the GitHub token of <b>every saved board</b>, the Claude routine URL and token, and the cron-job.org key. The code is not encrypted, so anyone who has it can use them. Open the setup link, or paste the code below, on your other browser or phone, then delete the message you sent it in. Treat both like a password.</div>

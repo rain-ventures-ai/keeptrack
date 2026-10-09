@@ -3,10 +3,10 @@
 This page is for **your AI assistant** (Claude, Codex or Cursor). You give it one short prompt, and it walks you through the setup.
 
 ## The prompt (for the person)
-Copy this into a new chat with your assistant:
+Copy this into your current or a new chat with your assistant:
 
 ```
-Set up Keeptrack for me: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it. Walk me through it one step at a time.
+Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.
 ```
 
 The web board has the same prompt with your board and username filled in: **Settings → Agents → An assistant in your chat app → Copy setup prompt**.
@@ -17,6 +17,7 @@ The web board has the same prompt with your board and username filled in: **Sett
 Keeptrack keeps people, follow-ups, a pipeline and tasks in `board/tasks.json` in the person's own **private** GitHub repo. People use the web board at https://rain-ventures-ai.github.io/keeptrack/board/. Agents use `keeptrack.py`, which comes with the **keeptrack** plugin.
 
 ### Rules
+- If the person shared the Keeptrack repository link or asked “How about using this?”, treat that as a request to begin setup. Start step 1 in the current conversation instead of replying with a compatibility report. Only ask them to start a new session when a newly installed plugin must be loaded.
 - **Never type, paste, read back or store a secret** (GitHub token, routine token, cron-job.org key). At each secret step, tell the person where to click and what to paste, then wait until they say it is done. If the person pastes a secret into the chat, tell them to revoke it and make a new one.
 - Do one step at a time. Say what the step is for in one sentence, then what to click or run. Wait for the person after each step. Check each step before you go to the next one.
 - Keep the board repo **private**: it holds names, emails and phone numbers.

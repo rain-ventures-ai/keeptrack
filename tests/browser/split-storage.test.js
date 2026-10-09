@@ -49,7 +49,7 @@ class Github {
 
 async function openBoard(browser, api) {
   const page = await browser.newPage(); page.on('pageerror', e => console.error('page error:', e.message)); await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_view', 'board'); });
-  await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); try { await page.waitForSelector('.card'); } catch (e) { console.error('status:', await page.locator('#status').textContent().catch(() => '?'), 'calls:', api.calls); throw e; } return page;
+  await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); try { await page.waitForSelector('.card, .todayhead'); } catch (e) { console.error('status:', await page.locator('#status').textContent().catch(() => '?'), 'calls:', api.calls); throw e; } return page;
 }
 
 let base;
@@ -63,11 +63,14 @@ let base;
 
     const api = new Github(true), page = await openBoard(browser, api);
     assert.deepEqual(await page.locator('.card .t').allTextContents(), ['First', 'Second']);
-    assert.deepEqual(await page.locator('#viewSw > .viewgroup > .vgrp').allTextContents(), ['People views', 'Task views']);
-    assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="crm"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['today', 'people', 'pipeline']);
+    assert.deepEqual(await page.locator('#viewSw > .viewgroup > .vgrp').allTextContents(), ['Today', 'People views', 'Task views']);
+    assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="today"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['today']);
+    assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="crm"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['people', 'pipeline']);
     assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="tasks"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['board', 'list', 'cal', 'sched', 'activity']);
-    await page.locator('#btnHelp').click(); const helpRepo = page.locator('#dlgHelp .mainRepoLink'); assert.equal(await helpRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await helpRepo.getAttribute('target'), '_blank'); await page.locator('#hClose').click();
-    await page.locator('#btnSettings').click(); const settingsRepo = page.locator('#dlgSettings .mainRepoLink'); assert.equal(await settingsRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await settingsRepo.getAttribute('target'), '_blank'); await page.locator('#sClose').click();
+    const taskGroupX = (await page.locator('#viewSw .viewgroup[data-grp="tasks"]').boundingBox()).x; await page.locator('#viewSw button[data-view="people"]').click(); assert.equal((await page.locator('#viewSw .viewgroup[data-grp="tasks"]').boundingBox()).x, taskGroupX, 'selecting a People view must not move the Task views group'); await page.locator('#viewSw button[data-view="board"]').click();
+    await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copied = text; } } }); });
+    await page.locator('#btnHelp').click(); const helpRepo = page.locator('#dlgHelp .mainRepoLink'); assert.equal(await helpRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await helpRepo.getAttribute('target'), '_blank'); await page.locator('#hSetupPrompt').click(); assert.match(await page.evaluate(() => window.__copied), /in this conversation.*Do not just explain the options/); await page.locator('#hClose').click();
+    await page.locator('#btnSettings').click(); const settingsRepo = page.locator('#dlgSettings .mainRepoLink'); assert.equal(await settingsRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await settingsRepo.getAttribute('target'), '_blank'); assert.equal(await page.locator('#sSetupPrompt').isVisible(), true); await page.locator('#sClose').click();
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');
     assert(api.calls.some(x => /git\/trees\/board-.*recursive/.test(x.path)), 'must read only the board subtree');
 
@@ -81,13 +84,22 @@ let base;
     const dragPuts = api.calls.filter(x => x.method === 'PUT'); assert.equal(dragPuts.length, 1); assert.equal(dragPuts[0].path, '/contents/board/cards/t_two.json');
     await page.close();
 
+    // Today is a permanent cross-board view: it combines due people and tasks, then respects either mode being disabled.
+    const day = new Date(), today = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+    const todayApi = new Github(true), dueCard = JSON.parse(todayApi.files['cards/t_one.json']), duePerson = JSON.parse(todayApi.files['people/p_one.json']); dueCard.due = today; duePerson.next = 'Call Casey'; duePerson.next_due = today; todayApi.files['cards/t_one.json'] = text(dueCard); todayApi.files['people/p_one.json'] = text(duePerson);
+    const todayPage = await openBoard(browser, todayApi); await todayPage.locator('#viewSw button[data-view="today"]').click(); assert.match(await todayPage.locator('.todayhead h2').textContent(), /1 person to contact · 1 task/); assert.equal(await todayPage.locator('.prow').filter({ hasText: 'Casey Example' }).count(), 1); assert.equal(await todayPage.locator('.ttoday').filter({ hasText: 'First' }).count(), 1); await todayPage.close();
+    const tasksTodayApi = new Github(true), tasksRoot = JSON.parse(tasksTodayApi.files['tasks.json']), taskDue = JSON.parse(tasksTodayApi.files['cards/t_one.json']), hiddenPerson = JSON.parse(tasksTodayApi.files['people/p_one.json']); tasksRoot.settings.modes = ['tasks']; taskDue.due = today; hiddenPerson.next_due = today; tasksTodayApi.files['tasks.json'] = text(tasksRoot); tasksTodayApi.files['cards/t_one.json'] = text(taskDue); tasksTodayApi.files['people/p_one.json'] = text(hiddenPerson);
+    const tasksTodayPage = await openBoard(browser, tasksTodayApi); await tasksTodayPage.locator('#viewSw button[data-view="today"]').click(); assert.equal(await tasksTodayPage.locator('#viewSw .viewgroup[data-grp="today"]').isVisible(), true); assert.equal(await tasksTodayPage.locator('#viewSw .viewgroup[data-grp="crm"]').isHidden(), true); assert.equal(await tasksTodayPage.locator('.ttoday').filter({ hasText: 'First' }).count(), 1); assert.equal(await tasksTodayPage.locator('.prow').filter({ hasText: 'Casey Example' }).count(), 0); assert.equal(await tasksTodayPage.locator('.padd').count(), 0); await tasksTodayPage.close();
+    const crmTodayApi = new Github(true), crmRoot = JSON.parse(crmTodayApi.files['tasks.json']), crmPerson = JSON.parse(crmTodayApi.files['people/p_one.json']), hiddenTask = JSON.parse(crmTodayApi.files['cards/t_one.json']); crmRoot.settings.modes = ['crm']; crmPerson.next_due = today; hiddenTask.due = today; crmTodayApi.files['tasks.json'] = text(crmRoot); crmTodayApi.files['people/p_one.json'] = text(crmPerson); crmTodayApi.files['cards/t_one.json'] = text(hiddenTask);
+    const crmTodayPage = await openBoard(browser, crmTodayApi); await crmTodayPage.locator('#viewSw button[data-view="today"]').click(); assert.equal(await crmTodayPage.locator('#viewSw .viewgroup[data-grp="today"]').isVisible(), true); assert.equal(await crmTodayPage.locator('#viewSw .viewgroup[data-grp="tasks"]').isHidden(), true); assert.equal(await crmTodayPage.locator('.prow').filter({ hasText: 'Casey Example' }).count(), 1); assert.equal(await crmTodayPage.locator('.ttoday').count(), 0); await crmTodayPage.close();
+
     // Board sections can be hidden and restored after setup. The mode save changes only settings, never task or person files.
     const modesApi = new Github(true), modesPage = await openBoard(browser, modesApi); await modesPage.locator('#btnSettings').click();
     assert.equal(await modesPage.locator('#sModeTasks').isChecked(), true); assert.equal(await modesPage.locator('#sModeCrm').isChecked(), true); modesApi.calls = [];
     const crmOff = modesPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await modesPage.locator('#sModeCrm').uncheck(); await crmOff;
     assert.deepEqual(JSON.parse(modesApi.files['tasks.json']).settings.modes, ['tasks']);
     assert.equal(await modesPage.locator('#viewSw button[data-view="people"]').isHidden(), true);
-    assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="crm"]').isHidden(), true); assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="tasks"]').isVisible(), true);
+    assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="today"]').isVisible(), true); assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="crm"]').isHidden(), true); assert.equal(await modesPage.locator('#viewSw .viewgroup[data-grp="tasks"]').isVisible(), true);
     assert('people/p_one.json' in modesApi.files, 'hiding CRM must keep person files'); assert('cards/t_one.json' in modesApi.files, 'hiding CRM must keep task files');
     await modesPage.locator('#sModeTasks').click(); assert.equal(await modesPage.locator('#sModeTasks').isChecked(), true, 'at least one section must stay on');
     assert.deepEqual(modesApi.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/tasks.json']);
