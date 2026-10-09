@@ -24,6 +24,15 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v13 (schema 4)
+Recurring meeting-note imports now default to a rolling seven-day lookback, retain a durable ingestion log and ignore
+unchanged logged documents. The log also has a meeting-independent work index so actions are matched across different
+meetings instead of being recreated because their wording or source changed.
+- Run `kit-update` only. There is no board-data migration.
+- Existing version-1 ingestion logs are preserved and enriched lazily; do not delete them or re-import their documents.
+- Check: `.claude/skills/keeptrack-notes/references/routines.md` requires the seven-day default, unchanged-document skip
+  and cross-meeting duplicate matching.
+
 ### v12 (schema 4)
 Recurring meeting-notes imports now have a dedicated routine guide and copyable prompt. The guide keeps a privacy-safe
 incremental checkpoint in `automation/meeting-notes-ingestion.json`, distinguishes assignees and clients from labels,
