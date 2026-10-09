@@ -794,6 +794,16 @@ if (typeof window !== 'undefined') (() => {
   }
   const COLOR_RE = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d\s.,%/-]+\))$/i;   // a colour from the file goes into style: no url() or other CSS
   const labelColor = n => { const c = (state.labels.find(l => l.name === n) || {}).color; return typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : '#6b778c'; };
+  const labelInkCache = new Map();
+  function labelInk(background) {
+    if (labelInkCache.has(background)) return labelInkCache.get(background);
+    const probe = el('span'); probe.style.color = background; document.body.append(probe);
+    const channels = (getComputedStyle(probe).color.match(/[\d.]+/g) || []).slice(0, 3).map(Number); probe.remove();
+    const linear = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+    const lum = channels.length === 3 ? .2126 * linear(channels[0]) + .7152 * linear(channels[1]) + .0722 * linear(channels[2]) : 0;
+    const ink = (lum + .05) / .05 >= 1.05 / (lum + .05) ? '#000' : '#fff'; labelInkCache.set(background, ink); return ink;
+  }
+  function paintLabel(node, name) { const background = labelColor(name); node.style.background = background; node.style.color = labelInk(background); return node; }
 
   function render() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
@@ -1093,7 +1103,7 @@ if (typeof window !== 'undefined') (() => {
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
   function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; out.push(a); }); return out; }
-  const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { const s = el('span', 'tag label', l); s.style.background = labelColor(l); out.push(s); }); if (max && t.labels.length > max) out.push(el('span', 'tag', '+' + (t.labels.length - max))); return out; };
+  const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { out.push(paintLabel(el('span', 'tag label', l), l)); }); if (max && t.labels.length > max) out.push(el('span', 'tag', '+' + (t.labels.length - max))); return out; };
 
   function listRow(t) {
     const isDone = t.column === doneColId(), row = paint(el('div', 'trow' + (isDone ? ' done' : '')), t);
@@ -1409,7 +1419,7 @@ if (typeof window !== 'undefined') (() => {
     c.append(el('div', 't', t.title));
     if (t.details) c.append(el('div', 'n', t.details));
     const tags = el('div', 'tags');
-    t.labels.forEach(l => { const s = el('span', 'tag label', l); s.style.background = labelColor(l); tags.append(s); });
+    t.labels.forEach(l => { tags.append(paintLabel(el('span', 'tag label', l), l)); });
     if (t.client) tags.append(el('span', 'tag client', t.client));
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
@@ -1540,7 +1550,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderLabelChips(t) {
     const box = $('cLabelChips'); box.textContent = ''; $('labelList').textContent = ''; state.labels.forEach(l => { const o = el('option'); o.value = l.name; $('labelList').append(o); });
-    t.labels.forEach(l => { const s = el('span', 'tag label lchip', l); s.style.background = labelColor(l); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove label'; x.setAttribute('aria-label', 'Remove label ' + l);
+    t.labels.forEach(l => { const s = paintLabel(el('span', 'tag label lchip', l), l); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove label'; x.setAttribute('aria-label', 'Remove label ' + l);
       x.onclick = () => edit(editing, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(editing)}`); s.append(x); box.append(s); });
   }
   $('cLabelAdd').onclick = () => { $('cLabelAdd').hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); };
