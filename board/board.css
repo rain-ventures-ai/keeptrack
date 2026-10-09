@@ -641,6 +641,8 @@ dialog.archview { max-width: 640px; } .archview pre.atext { white-space: pre-wra
 
 /* ---- view groups (People / Tasks): keep the header on one line ---- */
 @media (max-width: 1440px) { .seg button:not(.on) .vt { display: none; } .seg button:not(.on) { padding-left: 8px; padding-right: 8px; } }
+@media (min-width: 1001px) and (max-width: 1440px) { #viewSw .viewgroup[data-grp="today"] { flex: 0 0 70px; } #viewSw .viewgroup[data-grp="crm"] { flex: 0 0 120px; } #viewSw .viewgroup[data-grp="tasks"] { flex: 0 0 235px; } #viewSw .viewgroup > .seg { justify-content: space-around; } }
+@media (min-width: 761px) and (max-width: 1000px) { #viewSw .seg button.on .vt { display: none; } }
 @media (max-width: 760px) { .viewnav { gap: 6px; } .vgrp { font-size: 8px; padding-left: 2px; } .seg button.on .vt { display: none; } }
 
 /* ---- setup wizard ---- */

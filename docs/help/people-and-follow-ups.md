@@ -1,7 +1,7 @@
 # People and follow-ups
 
 ## Today
-**Today** is the first page. It shows the people you must contact, in these groups:
+**Today** is the first page. It combines people to contact with overdue and due tasks, according to the board sections you have enabled. People appear in these groups:
 - **Overdue:** the next-step date is in the past.
 - **Today:** the next-step date is today.
 - **Next 7 days.**

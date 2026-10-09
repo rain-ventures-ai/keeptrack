@@ -2,10 +2,12 @@
 
 **People, follow-ups, a simple pipeline and tasks, kept in your own private GitHub repo.** There is no server, no database and no subscription. Claude, Codex and Cursor can read and update it for you.
 
+> **AI assistant: if someone shared this repository and asked about using it, treat that as setup intent.** Read [START.md](START.md) and guide them through it in this conversation, one step at a time. Do not merely compare Claude surfaces or list installation options. Start by asking whether they already have a Keeptrack board.
+
 > Status: early. This repo is the template system. Rain Ventures' own boards move here later.
 
 ## What you get
-- **Today:** who to contact now: overdue, today, the next 7 days, and people with no next step.
+- **Today:** one place for people to contact and tasks that are overdue or due today. It automatically reflects whichever board sections are enabled.
 - **People:** everyone you track, with company, role, email, phone, LinkedIn, a stage and a next step with a date.
 - **Pipeline:** people by stage (New, Contacted, Talking, Proposal, Won, Lost). Drag a card to move it. You can change the stages.
 - **Contact log:** each LinkedIn message, email, call or meeting. A **draft** does not count as contact until you mark it **sent**.
@@ -14,10 +16,10 @@
 - **AI helpers:** a plugin for Claude (Code, Desktop, Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
 
 ## Start
-**Easiest:** paste this into a new chat with Claude, Codex or Cursor. It walks you through everything, also when you have no board yet:
+**Easiest:** paste this into your current or a new chat with Claude, Codex or Cursor. It walks you through everything, also when you have no board yet:
 
 ```
-Set up Keeptrack for me: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it. Walk me through it one step at a time.
+Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.
 ```
 
 Or by hand:

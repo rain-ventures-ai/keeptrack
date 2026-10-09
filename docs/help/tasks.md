@@ -14,4 +14,4 @@ AI agents can claim a task, report progress and finish it. While an agent works 
 ## Turn tasks or people on or off
 Open **Settings → General → Board sections** and switch **Tasks** or **People & pipeline (CRM)** on or off. Keep at least one section on.
 
-Turning a section off only hides its views. It does not delete any tasks, people or history, and turning it on again shows the same records. If you turn CRM on before there are any people, it opens as an empty CRM. The first person you add creates their record automatically.
+Turning a section off only hides its dedicated views. **Today** remains available and combines whichever sections are enabled. Nothing deletes tasks, people or history, and turning a section on again shows the same records. If you turn CRM on before there are any people, it opens as an empty CRM. The first person you add creates their record automatically.
