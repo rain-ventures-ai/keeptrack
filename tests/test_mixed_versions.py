@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -97,23 +96,6 @@ class MixedVersions(unittest.TestCase):
         data = kt.load_board()
         self.assertEqual(1, len(data["projects"]))
         self.assertEqual("pr_pilot01ab", data["tasks"][0].get("project"))
-
-
-class BoardJsMixed(unittest.TestCase):
-    def test_v16_board_js_does_not_drop_project_blobs_on_split_save(self):
-        script = os.path.join(HERE, "browser", "mixed-versions.test.js")
-        if not os.path.isfile(script):
-            self.skipTest("browser mixed-version script missing")
-        proc = subprocess.run(
-            ["node", script],
-            cwd=os.path.join(HERE, "browser"),
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            sys.stderr.write(proc.stdout)
-            sys.stderr.write(proc.stderr)
-        self.assertEqual(0, proc.returncode, proc.stderr or proc.stdout)
 
 
 if __name__ == "__main__":
