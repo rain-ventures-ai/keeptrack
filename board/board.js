@@ -414,7 +414,7 @@ if (typeof window !== 'undefined') (() => {
   function noTokenBox() {   // e.g. a ?repo= link to a board this browser has no token for
     const c = cfg(); if (!c.repo) return; const board = $('board'); board.textContent = ''; board.className = ''; const box = el('div', 'empty');
     lastProblem = `No token saved for "${c.repo}" in this browser`;
-    box.append(el('p', null, `This browser has no token for "${c.repo}".`), el('p', null, 'Each board needs its own token. If the name is wrong, open one of your boards below.'));
+    box.append(el('p', null, `This browser has no token saved for "${c.repo}".`), el('p', null, 'Each board needs a saved token, but one PAT can cover several boards. Open Settings and Keeptrack will try tokens already saved for your other boards first.'));
     const others = Object.keys(boardsMap()).filter(r => r !== c.repo && boardsMap()[r].token);
     if (others.length) { const p = el('p'); others.forEach(r => { const x = el('button', 'small', r); x.onclick = () => switchRepo(r); p.append(x, document.createTextNode(' ')); }); box.append(p); }
     const add = el('button', 'primary', 'Add a token for ' + c.repo); add.onclick = () => { $('btnSettings').click(); settingsTab('conn'); };
@@ -1825,8 +1825,50 @@ if (typeof window !== 'undefined') (() => {
   const SAVED = { sToken: 'kb_token', sClaudeTok: 'kb_claude_token', sCronKey: 'kb_cron_key' };   // the saved value, for fields that are left blank on purpose
   const secretOf = id => $(id).value || LS.get(SAVED[id]);
   document.querySelectorAll('[data-copy]').forEach(b => { b.onclick = () => { const v = secretOf(b.dataset.copy); if (!v) { toast('Nothing to copy: no value saved yet', true); return; } copyText(v, 'Copied. Treat it like a password.'); }; });
-  document.querySelectorAll('[data-show]').forEach(b => { b.onclick = () => { const id = b.dataset.show, i = $(id), on = i.type === 'password'; if (on && !i.value) i.value = LS.get(SAVED[id]); i.type = on ? 'text' : 'password'; setI(b, on ? 'eye-off' : 'eye', on ? 'Hide' : 'Show'); b.setAttribute('aria-pressed', String(on)); }; });
+  document.querySelectorAll('[data-show]').forEach(b => { b.onclick = () => { const id = b.dataset.show, i = $(id), on = i.type === 'password'; if (on && !i.value) i.value = LS.get(SAVED[id]); i.type = on ? 'text' : 'password'; setI(b, on ? 'eye-off' : 'eye', on ? 'Hide' : 'Show'); b.setAttribute('aria-pressed', String(on)); if (id === 'sToken') syncTokenUi(); }; });
   $('dlgSettings').addEventListener('close', () => document.querySelectorAll('[data-show]').forEach(b => { $(b.dataset.show).type = 'password'; setI(b, 'eye', 'Show'); b.setAttribute('aria-pressed', 'false'); }));
+
+  // Password managers may fill this box even though Keeptrack deliberately leaves saved secrets blank.
+  // Keep the browser's stored state and the field's unsaved state visibly distinct.
+  let tokenTyped = false, tokenReuseRun = 0;
+  function syncTokenUi() {
+    const saved = cfg().token, entered = $('sToken').value.trim(), chip = $('sTokenState');
+    let text, kind;
+    if (entered && entered !== saved) { text = tokenTyped ? 'Entered · not saved' : 'Value present · not saved'; kind = 'warn'; }
+    else if (saved) { text = 'Saved for this board'; kind = 'ok'; }
+    else { text = 'No token saved'; kind = 'warn'; }
+    chip.textContent = text; chip.className = 'agchip ' + kind; $('sTokenBtns').hidden = !(saved || entered);
+  }
+  $('sToken').addEventListener('input', () => { tokenTyped = true; $('sTokenReuse').textContent = ''; syncTokenUi(); });
+  $('sToken').addEventListener('change', syncTokenUi);
+
+  // A PAT is not inherently tied to one board. Before asking for another one, test the distinct PATs already
+  // saved for other boards. A read of the board file plus repository push permission is the strongest safe,
+  // non-mutating check GitHub offers; the first save still proves the PAT's Contents: write permission.
+  async function reuseSavedToken() {
+    const c = cfg(), run = ++tokenReuseRun, msg = $('sTokenReuse');
+    if (c.token || !REPO_RE.test(c.repo) || $('sToken').value.trim()) { msg.textContent = ''; syncTokenUi(); return false; }
+    const tokens = [...new Set(Object.entries(boardsMap()).filter(([r]) => r !== c.repo).map(([, b]) => b && b.token).filter(Boolean))];
+    if (!tokens.length) { msg.textContent = 'No token from another saved board is available to try.'; syncTokenUi(); return false; }
+    msg.textContent = `Checking ${tokens.length} token${tokens.length === 1 ? '' : 's'} already saved in this browser…`;
+    for (const token of tokens) {
+      const over = { ...c, token };
+      try {
+        const rr = await ghGet(`/repos/${c.repo}`, null, over); if (run !== tokenReuseRun || cfg().token || $('sToken').value.trim()) return false;
+        if (!rr.ok) continue; const repo = await rr.json(); if (!(repo.permissions && repo.permissions.push)) continue;
+        const path = c.path.split('/').map(encodeURIComponent).join('/');
+        const fr = await ghGet(`/repos/${c.repo}/contents/${path}?ref=${encodeURIComponent(c.branch)}`, null, over);
+        if (run !== tokenReuseRun || cfg().token || $('sToken').value.trim()) return false;
+        if (!fr.ok) continue;
+        LS.set('kb_token', token); LS.del(roKey()); stashBoard();
+        $('sToken').value = ''; $('sToken').placeholder = '(token saved — leave blank to keep)';
+        msg.textContent = '✓ Reused a token already saved for another board. It can access this board, so you do not need to make a new PAT. The first save confirms its Contents: write permission.';
+        syncTokenUi(); renderBoards(); load(); return true;
+      } catch { /* try the next saved token */ }
+    }
+    if (run === tokenReuseRun) { msg.textContent = 'None of the tokens already saved in this browser can access this board. Paste a PAT below or make a new one.'; syncTokenUi(); }
+    return false;
+  }
   $('sClaudePrompt').onclick = () => {
     const c = cfg(), base = `https://github.com/${c.repo}/blob/${c.branch}`, who = c.me || '<your-github-username>';
     copyText([`Please set up my Claude routine for the task board in ${c.repo}, so that typing @claude in a task comment starts it.`, '',
@@ -2007,15 +2049,36 @@ if (typeof window !== 'undefined') (() => {
         else add(false, 'Token works', r.status === 401 ? 'GitHub rejected the token (401). It is wrong, revoked or expired. Make a new one in Settings → Boards.' : `GitHub said ${r.status}.`); } catch (e) { add(false, 'Reach GitHub', 'No connection to api.github.com: ' + (e.message || e)); return; }
       const rr = await ghGet(`/repos/${c.repo}`, null, c);
       if (!rr.ok) {
-        const near = await nearRepos(c.repo, c), fix = el('div', 'ckfix');
-        if (near.length) { fix.append(document.createTextNode('This token can see: ')); near.forEach(r => { const x = el('button', 'small', r); x.type = 'button'; x.onclick = () => switchRepo(r); fix.append(x, document.createTextNode(' ')); }); }
-        add(false, 'Repository access', `The token cannot see "${c.repo}" (GitHub said ${rr.status}). Check the spelling, or edit the token on GitHub and add this repo under "Only select repositories".` + (near.length ? ` It can see: ${near.join(', ')}. A fine-grained token covers one owner only; a board under another owner needs its own token with that Resource owner.` : ' The token can see no repositories at all.'), near.length ? fix : null);
+        const near = await nearRepos(c.repo, c), fix = el('div', 'cknext'), owner = c.repo.split('/')[0];
+        const sameOwner = near.some(r => r.split('/')[0].toLowerCase() === owner.toLowerCase());
+        fix.append(el('b', null, 'Do this next'));
+        const ol = el('ol');
+        if (sameOwner) {
+          ol.append(el('li', null, 'Open your GitHub token settings and edit this token.'), el('li', null, `Under Repository access, add “${c.repo}”.`), el('li', null, 'Confirm Contents is set to Read and write, then save the token.'), el('li', null, 'Come back here and select Run checks.'));
+        } else {
+          ol.append(el('li', null, `Make a PAT with Resource owner “${owner}”.`), el('li', null, `Under Repository access, select “${c.repo}”.`), el('li', null, 'Set Contents to Read and write and generate the token.'), el('li', null, 'Return to Settings → Boards, paste it under Change connection, then select Save & connect.'));
+        }
+        fix.append(ol); const acts = el('div', 'ckactions');
+        const make = el('a', 'btnlink', 'Make a correctly configured PAT'); make.href = patUrl(); make.target = '_blank'; make.rel = 'noopener noreferrer';
+        const edit = el('a', 'small', 'Edit an existing PAT'); edit.href = 'https://github.com/settings/personal-access-tokens'; edit.target = '_blank'; edit.rel = 'noopener noreferrer';
+        const change = el('button', null, 'Paste a different token'); change.type = 'button'; change.onclick = () => settingsTab('conn'); acts.append(make, edit, change); fix.append(acts, el('div', 'cknote', `The new-token link pre-fills Resource owner “${owner}” and Contents/Issues: Read and write. GitHub still requires you to select “${c.repo}” yourself. GitHub does not expose an existing PAT’s edit link to Keeptrack.`));
+        if (near.length) { const d = el('details', 'ckseen'), s = el('summary', null, `Why? This token can see ${near.length} other repo${near.length === 1 ? '' : 's'}`), p = el('div');
+          near.forEach(r => { const x = el('button', 'small', r); x.type = 'button'; x.onclick = () => switchRepo(r); p.append(x, document.createTextNode(' ')); }); d.append(s, p); fix.append(d); }
+        add(false, 'Repository access — action needed', `GitHub accepted the token, but it cannot open “${c.repo}” (${rr.status}). ${sameOwner ? 'The repo probably is not selected on this PAT.' : `The PAT probably belongs to a different Resource owner; fine-grained PATs cover one owner at a time.`}`, fix);
         return;
       }
       const repo = await rr.json(); add(true, 'Repository access', `${repo.full_name} · ${repo.private ? 'private' : 'public'} · default branch ${repo.default_branch}`);
       if (repo.private === false) add(false, 'Repository is PUBLIC', 'Anyone can read every card. Make the repo private: GitHub → Settings → General → Change visibility.');
       const br = await ghGet(`/repos/${c.repo}/branches/${encodeURIComponent(c.branch)}`, null, c);
-      if (!br.ok) { add(false, 'Branch', `Branch "${c.branch}" does not exist. The default branch is "${repo.default_branch}".`); return; } add(true, 'Branch', c.branch);
+      if (!br.ok) {
+        if (c.branch === repo.default_branch) {   // GitHub just told us this branch exists, so this is a PAT scope problem rather than a spelling problem
+          const fix = el('div', 'cknext'), owner = c.repo.split('/')[0]; fix.append(el('b', null, 'Do this next'));
+          const ol = el('ol'); ol.append(el('li', null, 'Open this PAT on GitHub, or make a correctly configured one below.'), el('li', null, 'Under Repository permissions, set Contents to Read and write, then save or generate the PAT.'), el('li', null, 'If you made a new PAT, paste it in Settings → Boards → Change connection and select Save & connect.'), el('li', null, 'Come back here and select Run checks.')); fix.append(ol);
+          const acts = el('div', 'ckactions'), make = el('a', 'btnlink', 'Make a PAT with permissions prefilled'), edit = el('a', 'small', 'Edit an existing PAT'); make.href = patUrl(); edit.href = 'https://github.com/settings/personal-access-tokens'; [make, edit].forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; }); acts.append(make, edit); fix.append(acts, el('div', 'cknote', `The link pre-fills Resource owner “${owner}” and Contents/Issues: Read and write. GitHub still requires you to select “${c.repo}” yourself.`));
+          add(false, 'PAT permissions — action needed', `The token can see “${c.repo}”, but it cannot read its default branch. It is missing Contents permission (GitHub said ${br.status}).`, fix);
+        } else add(false, 'Branch', `Branch "${c.branch}" could not be read (GitHub said ${br.status}). The repo's default branch is "${repo.default_branch}". Check the branch name; if it is correct, give the PAT Contents: Read and write.`);
+        return;
+      } add(true, 'Branch', c.branch);
       const fr = await ghGet(`/repos/${c.repo}/contents/${c.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(c.branch)}`, null, c);
       if (!fr.ok) { add(false, 'Board file', `"${c.path}" is not on ${c.branch} (GitHub said ${fr.status}).`); return; }
       try { const { d, raw } = await fileJson(fr); const kb = Math.round((d.size || 0) / 1024);
@@ -2101,7 +2164,7 @@ if (typeof window !== 'undefined') (() => {
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
     settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; syncModeSettings(); renderArchiveBox(); $('dlgSettings').showModal(); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderArchiveBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });

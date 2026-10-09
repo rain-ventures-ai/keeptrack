@@ -499,7 +499,10 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 @media (max-width: 760px) { .sug { min-height: 44px; align-items: center; } }
 .hint.ok { color: var(--ok); } .hint.bad { color: var(--danger); }
 .sesslink { display: inline-block; margin-top: 4px; color: var(--accent); font-weight: 600; font-size: 13px; }
-.fldbtns { display: flex; gap: 6px; margin-top: 4px; }
+.fldbtns { display: flex; gap: 6px; margin-top: 4px; } .fldbtns[hidden] { display: none; }
+.tokenlabel { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+.tokenlabel label { margin: 0; }
+.tokenreuse:empty { display: none; }
 
 /* Settings → Agents: per-person agent switches */
 .lastrun { font-size: 12.5px; color: var(--muted); margin: -2px 0 10px; } .lastrun .sesslink { font-weight: 600; }
@@ -545,7 +548,18 @@ header .boardwrap { order: 0; }
 .ck { padding: 8px 10px; border-radius: 8px; background: var(--panel); font-size: 13px; } .ck b { margin-left: 6px; }
 .ckic { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 700; color: #fff; background: var(--muted); }
 .ck.ok .ckic { background: #2f9e44; } .ck.bad .ckic { background: var(--danger); } .ck.warn .ckic { background: #e8a200; }
-.ckd { color: var(--muted); margin: 3px 0 0 24px; overflow-wrap: anywhere; } .ckfix { margin: 6px 0 0 24px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ckd { color: var(--muted); margin: 3px 0 0 24px; overflow-wrap: anywhere; }
+.ckfix { margin: 6px 0 0 24px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cknext { margin: 10px 0 2px 24px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--card); border-radius: 0 8px 8px 0; }
+.cknext > b { display: block; margin: 0 0 5px; color: var(--text); }
+.cknext ol { margin: 0 0 9px; padding-left: 20px; color: var(--text); line-height: 1.5; }
+.ckactions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.ckactions .btnlink { padding: 6px 10px; }
+.ckactions a.small { display: inline-flex; align-items: center; text-decoration: none; }
+.cknote { margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.ckseen { margin-top: 9px; color: var(--muted); }
+.ckseen summary { cursor: pointer; }
+.ckseen > div { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 
 /* public board warning */
 .pubwarn { max-width: 560px; border: 4px solid var(--danger); border-radius: 14px; padding: 24px 26px; text-align: left; }
