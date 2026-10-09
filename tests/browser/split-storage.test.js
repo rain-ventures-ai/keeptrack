@@ -56,6 +56,11 @@ let base;
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`; const browser = await chromium.launch({ headless: true });
   try {
+    for (const kind of ['crm', 'board']) {
+      const demo = await browser.newPage(); await demo.goto(base + '/board/index.html?demo=' + kind); await demo.locator('#roBar').waitFor({ state: 'visible' });
+      const details = demo.locator('#roBar a.morelink'); assert.equal(await details.textContent(), 'View the repository for more details'); assert.equal(await details.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await details.getAttribute('target'), '_blank'); await demo.close();
+    }
+
     const api = new Github(true), page = await openBoard(browser, api);
     assert.deepEqual(await page.locator('.card .t').allTextContents(), ['First', 'Second']);
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');

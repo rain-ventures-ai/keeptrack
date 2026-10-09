@@ -610,6 +610,7 @@ dialog.help { max-width: 860px; }
 .help h3 { font-size: 14px; margin: 6px 0 2px; } .help p { margin: 0 0 6px; font-size: 13.5px; line-height: 1.45; } .help .hlinks { margin-top: 12px; }
 /* read-only: no add boxes or delete buttons; drawer fields are disabled by JS */
 .robar { background: color-mix(in srgb, #f59e0b 16%, var(--header)); font-weight: 500; }
+.robar .morelink { color: var(--accent); font-weight: 600; }
 .robar[hidden] { display: none; }
 body.ro .add, body.ro .ladd, body.ro .hadd, body.ro .padd, body.ro .fab, body.ro #cDelete, body.ro #pDelete, body.ro .addbar, body.ro #addBar { display: none !important; }
 body.ro .card, body.ro .pcard { cursor: pointer; }
