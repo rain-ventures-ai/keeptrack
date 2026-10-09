@@ -66,6 +66,8 @@ let base;
     assert.deepEqual(await page.locator('#viewSw > .viewgroup > .vgrp').allTextContents(), ['People views', 'Task views']);
     assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="crm"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['today', 'people', 'pipeline']);
     assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="tasks"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['board', 'list', 'cal', 'sched', 'activity']);
+    await page.locator('#btnHelp').click(); const helpRepo = page.locator('#dlgHelp .mainRepoLink'); assert.equal(await helpRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await helpRepo.getAttribute('target'), '_blank'); await page.locator('#hClose').click();
+    await page.locator('#btnSettings').click(); const settingsRepo = page.locator('#dlgSettings .mainRepoLink'); assert.equal(await settingsRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await settingsRepo.getAttribute('target'), '_blank'); await page.locator('#sClose').click();
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');
     assert(api.calls.some(x => /git\/trees\/board-.*recursive/.test(x.path)), 'must read only the board subtree');
 
