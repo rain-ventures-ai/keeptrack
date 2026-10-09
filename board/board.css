@@ -651,6 +651,24 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 .prow:hover, .prow:focus-visible { background: color-mix(in srgb, var(--panel) 60%, transparent); outline: none; }
 .pwho { display: flex; flex-direction: column; min-width: 0; } .pwho .muted { font-size: 12px; }
 .pnext { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; } .plast { font-size: 12px; white-space: nowrap; }
+.todaytail { display: grid; justify-items: end; align-items: center; min-width: 0; }
+.todaytail > * { grid-area: 1 / 1; }
+.taskactions { display: flex; align-items: center; gap: 5px; }
+.todayactions { justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.ttoday:hover .todayactions, .ttoday:focus-within .todayactions { opacity: 1; pointer-events: auto; }
+.ttoday:hover .todaytail > .plast, .ttoday:focus-within .todaytail > .plast { opacity: 0; }
+.quickstatus { width: 112px; min-height: 32px; padding: 4px 24px 4px 7px; font-size: 12px; }
+.quickassign { position: relative; }
+.quickassign summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.quickassign summary::-webkit-details-marker { display: none; }
+.quickassign[open] summary { border-color: var(--accent); color: var(--accent); }
+.quickassignmenu { position: absolute; z-index: 12; top: calc(100% + 5px); right: 0; width: 220px; display: grid; gap: 3px; padding: 7px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: var(--shadow-hover); }
+.quickassignmenu button { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 4px 7px; border: 0; background: transparent; text-align: left; }
+.quickassignmenu .quickperson.on { background: var(--accent-soft); color: var(--accent); }
+.quickassignmenu .quickunassign { color: var(--danger); border-top: 1px solid var(--border); border-radius: 0; margin-top: 3px; padding-top: 7px; }
+.card:has(.quickassign[open]), .ttoday:has(.quickassign[open]) { content-visibility: visible; contain: none; z-index: 20; }
+.ttoday:has(.quickassign[open]) { position: relative; }
+.cinemaactions { justify-content: flex-start; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
 .stagepill { --h: 210; display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
   background: hsl(var(--h) 70% 50% / .16); color: hsl(var(--h) 55% 38%); }
 [data-theme="dark"] .stagepill, [data-theme="midnight"] .stagepill { color: hsl(var(--h) 70% 72%); }
@@ -682,9 +700,11 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 @media (max-width: 700px) {
   #board.v-today, #board.v-people, #board.v-welcome { padding: 8px 12px 90px; }
   .prow { grid-template-columns: 1fr auto; } .prow .pnext { grid-column: 1 / -1; } .prow .plast { display: none; }
+  .ttoday .todaytail { grid-column: 1 / -1; justify-items: stretch; } .ttoday .todayactions { justify-content: flex-start; opacity: 1; pointer-events: auto; } .quickstatus { flex: 1; width: auto; }
   .pgrid { grid-template-columns: 1fr; }
   #board.pipe .col { display: block; margin-bottom: 14px; } #board.pipe .col h2 { display: flex; }
 }
+@media (hover: none) { .ttoday .todayactions { opacity: 1; pointer-events: auto; } .ttoday .todaytail > .plast { display: none; } }
 
 /* speed: the browser skips layout and paint for rows and cards that are off screen (big boards) */
 .card, .trow, .prow, .pcard { content-visibility: auto; contain-intrinsic-size: auto 64px; }

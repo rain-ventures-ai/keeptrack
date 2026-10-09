@@ -1487,6 +1487,17 @@ if (typeof window !== 'undefined') (() => {
     const a = el('span', 'av', name.slice(0, 2).toUpperCase()); a.style.setProperty('--h', h); a.title = '@' + login + (p && p.name ? ' (' + p.name + ')' : ''); return a;
   }
 
+  function taskQuickActions(t) {
+    const actions = el('div', 'taskactions'); actions.addEventListener('click', e => e.stopPropagation()); actions.addEventListener('dblclick', e => e.stopPropagation());
+    const status = el('select', 'quickstatus'); status.setAttribute('aria-label', `Status for task #${t.num}`); state.columns.forEach(c => { const o = el('option', null, c.name); o.value = c.id; status.append(o); }); status.value = t.column;
+    status.onchange = () => { if (status.value !== t.column) moveTo(t.id, status.value); };
+    const assign = el('details', 'quickassign'), summary = elI('summary', null, 'user', t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign'); summary.title = `Assign task #${t.num}`; assign.append(summary);
+    const menu = el('div', 'quickassignmenu'); state.people.forEach(p => { const on = t.assignees.includes(p.github), b = el('button', 'quickperson' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.append(avatar(p.github), document.createTextNode(p.name || '@' + p.github));
+      b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); menu.append(b); });
+    if (t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
+    if (!state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); actions.append(status, assign); return actions;
+  }
+
   function numChip(t) { const b = el('button', 'numchip', '#' + t.num); b.type = 'button'; b.title = `Task #${t.num}: click to copy the reference`; b.setAttribute('aria-label', `Task number ${t.num}, copy`);
     b.onclick = e => { e.stopPropagation(); copyText('#' + t.num, `Copied #${t.num}`); }; return b; }
   function cardEl(t, ci, detailed = false) {
@@ -1496,7 +1507,7 @@ if (typeof window !== 'undefined') (() => {
     c.addEventListener('dragover', e => e.preventDefault());
     c.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); dropOn(e, t.column, t.id); });
     c.addEventListener('dblclick', () => openCard(t.id));
-    c.addEventListener('click', e => { if (phone() && !lift.justLifted && !e.target.closest('button, a, input, select, textarea')) openCard(t.id); });   // phones: tap a card to open it (and change its status there)
+    c.addEventListener('click', e => { if (phone() && !lift.justLifted && !e.target.closest('button, a, input, select, textarea, .taskactions')) openCard(t.id); });   // phones: tap a card to open it (and change its status there)
     c.addEventListener('touchstart', e => liftStart(e, t, c), { passive: true });   // phones: hold to pick it up and drop it on another lane   // phones: tap a card to open it (and change its status there)
     const fr = freshInfo(t);
     const top = el('div', 'top'); top.append(numChip(t)); if (fr.changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; top.append(d); } if (t.priority) top.append(el('span', 'prio ' + t.priority, t.priority)); top.append(el('span', 'spacer'));
@@ -1511,6 +1522,7 @@ if (typeof window !== 'undefined') (() => {
     if (t.client) tags.append(el('span', 'tag client', t.client));
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
+    if (detailed) { const actions = taskQuickActions(t); actions.classList.add('cinemaactions'); c.append(actions); }
     if (detailed) {
       const context = el('div', 'cardcontext');
       const addContext = (icon, label, meta, text) => { const row = el('div', 'ctxrow'), head = el('div', 'ctxhead'); head.append(svgIcon(icon), el('strong', null, label)); if (meta) head.append(document.createTextNode(' · ' + meta)); row.append(head, el('div', 'ctxtext', text)); context.append(row); };
@@ -2530,12 +2542,13 @@ if (typeof window !== 'undefined') (() => {
     row.append(who, stagePill(p.stage), nx, ago); return row;
   }
   function taskTodayRow(t) {   // a task on Today, in the same layout as a person row
-    const row = el('div', 'prow ttoday'); row.tabIndex = 0; row.onclick = () => openCard(t.id); row.onkeydown = e => { if (e.key === 'Enter') openCard(t.id); };
+    const row = el('div', 'prow ttoday'); row.tabIndex = 0; row.onclick = e => { if (!e.target.closest('.todayactions')) openCard(t.id); }; row.onkeydown = e => { if (e.key === 'Enter' && e.target === row) openCard(t.id); };
     const who = el('div', 'pwho'); who.append(el('b', null, (t.num ? '#' + t.num + ' ' : '') + t.title), el('span', 'muted', [t.client, colName(t.column)].filter(Boolean).join(' · ')));
     const pr = el('span', 'stagepill tprio', t.priority ? t.priority[0].toUpperCase() + t.priority.slice(1) : 'Task'); pr.dataset.v = t.priority || '';
     const done = t.todos.filter(d => d.done).length, nx = el('div', 'pnext');
     nx.append(el('span', null, t.todos.length ? `Checklist ${done}/${t.todos.length}` : 'Task'), dueBadge({ next_due: t.due, next: 'x' }));
-    row.append(who, pr, nx, el('span', 'plast muted', t.assignees.length ? t.assignees.map(a => '@' + a).join(', ') : 'nobody assigned')); return row;
+    const tail = el('div', 'todaytail'), assigned = el('span', 'plast muted', t.assignees.length ? t.assignees.map(a => '@' + a).join(', ') : 'nobody assigned'), actions = taskQuickActions(t); actions.classList.add('todayactions');
+    tail.append(assigned, actions); row.append(who, pr, nx, tail); return row;
   }
   function addPersonBox(placeholder, extra) {
     const add = el('div', 'add padd'), inp = el('input'), btn = el('button', 'primary', 'Add…');
