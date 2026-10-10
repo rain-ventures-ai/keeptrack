@@ -3480,6 +3480,7 @@ def cmd_client_unlink(a):
 # ---- links: every resource linked around a client, project, card or person, classified for searching ------------
 # The keeptrack-search skill reads this and searches each link with whatever connectors the session has.
 LINK_KINDS = [   # (kind, pattern, group holding the id, if any); first match wins
+    ("email", r"mailto:([^?\s]+)", 1),
     ("drive-folder", r"https?://drive\.google\.com/drive/(?:u/\d+/)?folders/([\w-]+)", 1),
     ("drive-file", r"https?://docs\.google\.com/(?:document|spreadsheets|presentation|forms)/d/([\w-]+)", 1),
     ("drive-file", r"https?://drive\.google\.com/(?:file/d/|open\?id=)([\w-]+)", 1),
@@ -3528,6 +3529,12 @@ def collect_links(data, client=None, project=None, card=None, person=None):
             out.append({"url": l["url"], "title": _s(l.get("title")) or l["url"], "kind": kind, "id": ident, "source": source})
 
     tasks, projects, people = data.get("tasks", []), data.get("projects", []), data.get("contacts", [])
+
+    def add_person(p, source):
+        # the person's own links, then their addresses as mailto: links, so a search can look through their mail
+        add(person_links(p), source)
+        add([{"url": "mailto:" + e["value"], "title": f"{p.get('name')} ({e['label']})"} for e in person_methods(p, "email")], source)
+
     info = data.get("client_info") or {}
     if card:
         t = find(data, card)
@@ -3536,11 +3543,17 @@ def collect_links(data, client=None, project=None, card=None, person=None):
         client = client or t.get("client") or None
     if person:
         p = find_person(data, person)
-        add(person_links(p), f"person {p.get('name')}")
+        add_person(p, f"person {p.get('name')}")
         client = client or p.get("company") or None
     if project:
         pr = find_project(data, project)
         add(pr.get("links"), f"project {pr.get('name')}")
+        for em in pr.get("people") or []:
+            known = next((p for p in people if any(e["value"].lower() == str(em).lower() for e in person_methods(p, "email"))), None)
+            if known:
+                add_person(known, f"project {pr.get('name')}")
+            else:
+                add([{"url": f"mailto:{em}", "title": str(em)}], f"project {pr.get('name')}")
         for t in tasks:
             if t.get("project") == pr["id"]:
                 add(t.get("links"), f"card #{t.get('num')}" + (" (done)" if t.get("column") == "done" else ""))
@@ -3557,7 +3570,7 @@ def collect_links(data, client=None, project=None, card=None, person=None):
                 add(t.get("links"), f"card #{t.get('num')}" + (" (done)" if t.get("column") == "done" else ""))
         for p in people:
             if p.get("company") == client:
-                add(person_links(p), f"person {p.get('name')}")
+                add_person(p, f"person {p.get('name')}")
     return out
 
 

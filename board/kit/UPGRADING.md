@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v23 (schema 4)
+Search reaches email and copes with vague questions.
+- `links` now lists each in-scope person's email addresses as `email` links (`mailto:`), including a project's people. The `keeptrack-search` skill searches mail with them when a Gmail or Outlook connector is loaded, and handles vague questions ("is anything at risk?") by listing every file in the scope's folders and choosing by title and date, not by keyword alone.
+- The skill copy in board repos (`.claude/skills/keeptrack-search/SKILL.md`) is updated by `kit-update`. There is no board-data migration.
+- Check: `python3 board/keeptrack.py links --client "<a client with contacts>"` lists `email` links.
+
 ### v22 (schema 4)
 Keeptrack becomes repo-aware, so it helps where you use it and stays out of the way where you don't (for example a shared code repo a colleague works in without keeptrack).
 - **Personal config is `.keeptrack/config.json`.** `use <owner/repo> [--project <name>]` writes it in the current folder with a `.gitignore` of `*`, so it never reaches git. The old `.board/config.json` is still read; rerun `use` to move to the new name. Environment variables (`BOARD_REPO`, `BOARD_PROJECT`, ...) still win.
