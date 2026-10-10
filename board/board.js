@@ -1058,7 +1058,7 @@ if (typeof window !== 'undefined') (() => {
     if (fw && !fw.startsWith('__') && !t.assignees.includes(fw)) return false;
     if (fd) { const who = completionOf(t); if (!who || completionFilterValue(who) !== fd) return false; }
     if (fl && !t.labels.includes(fl)) return false;
-    if (fprio && t.priority !== fprio) return false;
+    if (fprio && (t.priority || 'medium') !== fprio) return false;   // no priority shows (and filters) as Medium, as keeptrack.py treats it
     if ($('fAttn').checked && !needsAttention(t)) return false;
     return true;
   }
@@ -2628,6 +2628,7 @@ if (typeof window !== 'undefined') (() => {
     'Email-routine setup prompt copied. Paste it into Claude Code in your board repo.'); };
   function renderTools() {
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg();
+    bar.removeAttribute('role'); bar.removeAttribute('aria-label');   // an older cached index.html marks the holder as a tablist; ui.tabs inside is the tablist
     const refocus = bar.contains(document.activeElement); bar.textContent = body.textContent = '';   // arrow keys rebuild the strip: keep the focus on it
     bar.append(ui.tabs({ items: Object.entries(TOOLS).map(([value, [label]]) => ({ value, label })), value: pick, label: 'Your AI tool', onChange: k => { LS.set('kb_tool', k); renderTools(); } }));
     if (refocus) bar.querySelector('[aria-selected="true"]').focus();

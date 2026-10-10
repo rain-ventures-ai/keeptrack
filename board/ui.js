@@ -92,6 +92,7 @@
   function dueInfo(due, { done = false } = {}) {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(due || '')); if (!m) return null;
     const d = new Date(+m[1], +m[2] - 1, +m[3]), t = new Date(); t.setHours(0, 0, 0, 0);
+    if (d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]) return null;   // 2026-13-45 is not a date; don't roll it over to a real one
     const days = Math.round((d - t) / 86400000), nice = (dueFmt || (dueFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' }))).format(d);
     const word = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : nice;
     if (done) return { state: 'done', tone: 'neutral', text: word, days };
