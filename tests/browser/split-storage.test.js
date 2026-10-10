@@ -418,6 +418,26 @@ let base;
     const vp = await openBoard(browser, v2); await vp.locator('.card').first().dblclick(); await vp.locator('#cTitle').fill('v2 edit'); const v2Saved = vp.waitForResponse(r => r.request().method() === 'PUT'); await vp.locator('#cTitle').blur(); await v2Saved;
     assert.equal(JSON.parse(v2.files['tasks.json']).version, 3); await vp.close();
     }
+    // Settings → Labels: rename, recolour, add and delete are each one save, touch only the cards that use the label, and Undo reverts them.
+    {
+    const lb = new Github(true), lp = await openBoard(browser, lb); lp.on('dialog', d => d.accept());
+    await lp.locator('#btnSettings').click(); await lp.locator('#labelBox .lbrow').first().waitFor();
+    assert.deepEqual(await lp.locator('#labelBox .lbcnt').allTextContents(), ['1 task', '1 task']);
+    lb.calls = []; const renamed = lp.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()));
+    await lp.locator('#labelBox input[aria-label="Rename label pale"]').fill('soft'); await lp.locator('#labelBox input[aria-label="Rename label pale"]').blur(); await renamed;
+    assert.deepEqual(JSON.parse(lb.files['cards/t_one.json']).labels, ['soft', 'dark']); assert.deepEqual(JSON.parse(lb.files['tasks.json']).labels.map(l => l.name), ['soft', 'dark']);
+    assert.deepEqual(JSON.parse(lb.files['tasks.json']).labels[0], { name: 'soft', color: '#dce1e7' }); assert.equal(JSON.parse(lb.files['cards/t_two.json']).updated, '2026-10-02T08:00:00.000Z', 'unrelated cards are untouched');
+    await lp.locator('#labelBox input[aria-label="Colour for dark"]').fill('#ff0000'); await lp.waitForTimeout(500);
+    assert.equal(JSON.parse(lb.files['tasks.json']).labels[1].color, '#ff0000');
+    await lp.locator('#labelBox .lbnew input:not([type=color])').fill('urgent'); await lp.locator('#labelBox .lbnew input[type=color]').fill('#00aa00'); await lp.locator('#labelBox .lbnew button').click(); await lp.waitForTimeout(400);
+    assert.deepEqual(JSON.parse(lb.files['tasks.json']).labels[2], { name: 'urgent', color: '#00aa00' });
+    await lp.locator('#labelBox .lbrow', { has: lp.locator('input[aria-label="Rename label soft"]') }).locator('.lbdel').click(); await lp.waitForTimeout(400);
+    assert.deepEqual(JSON.parse(lb.files['cards/t_one.json']).labels, ['dark']); assert.deepEqual(JSON.parse(lb.files['tasks.json']).labels.map(l => l.name), ['dark', 'urgent']);
+    await lp.locator('#labelBox .lbnew input:not([type=color])').fill('DARK'); await lp.locator('#labelBox .lbnew button').click(); await lp.waitForTimeout(300);
+    assert.equal(JSON.parse(lb.files['tasks.json']).labels.length, 2, 'a duplicate name (any case) is refused');
+    await lp.keyboard.press('Control+z'); await lp.waitForTimeout(600); assert.deepEqual(JSON.parse(lb.files['cards/t_one.json']).labels, ['soft', 'dark'], 'Undo reverts the delete in one step'); await lp.close();
+    }
+
     console.log('split storage browser tests passed');
   } finally { await browser.close(); server.close(); }
 })().catch(err => { console.error(err); server.close(); process.exitCode = 1; });

@@ -1020,3 +1020,11 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .tourinvite .ti { flex: 1 1 200px; font-weight: 600; }
 .tourinvite .tix { border: 0; background: transparent; color: var(--muted); padding: 4px; display: inline-grid; place-items: center; }
 .htour { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; color: var(--muted); }
+
+/* Settings → Labels editor */
+.lbled { margin-top: 6px; } .lbrows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.lbrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } .lbrow input:not([type=color]) { flex: 1 1 120px; min-width: 0; }
+.lbrow input[type=color] { width: 36px; min-width: 36px; height: 32px; padding: 2px; flex: 0 0 auto; border: 1px solid var(--border); border-radius: 8px; background: var(--card); cursor: pointer; }
+.lbprev { flex: 0 0 auto; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .lbcnt { font-size: 12px; white-space: nowrap; }
+.lbdel { margin-left: auto; color: var(--danger, #c9372c); } .lbnew { padding-top: 4px; border-top: 1px dashed var(--border); }
+@media (max-width: 520px) { .lbprev { display: none; } }
