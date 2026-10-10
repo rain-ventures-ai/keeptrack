@@ -3441,6 +3441,7 @@ if (typeof window !== 'undefined') (() => {
   }
   buildPersonDrawer();
   function openContact(id) {
+    if (editingContact !== id) { const ta = $('pTouchText'); ta.value = ''; autosize(ta); $('pDraft').checked = false; $('pChan').value = CHANNELS[0][0]; }   // a half-written log entry never carries over to another person
     editingContact = id; pSig = ''; resetCrmRows('p'); $('pHistSec').toggle(false);
     fillContact(true);
     const d = $('dlgContact'); if (!d.open) { d.showModal(); $('pBody').scrollTop = 0; }
@@ -3503,7 +3504,13 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderContactMethods(p) {
     [['pEmails', 'pEmailSec', 'pEmailCount', p.emails, 'email'], ['pPhones', 'pPhoneSec', 'pPhoneCount', p.phones, 'phone']].forEach(([box, sec, count, items, kind]) => {
-      $(box).textContent = ''; items.forEach(item => $(box).append(methodRow(p, item, kind))); setCount(count, items.length); $(sec).classList.toggle('is-empty', !items.length);
+      setCount(count, items.length); $(sec).classList.toggle('is-empty', !items.length);
+      const b = $(box);
+      if (b.contains(document.activeElement)) {   // the user is typing in a row: keep it, and redraw once focus leaves the list
+        if (!b.dataset.redraw) { b.dataset.redraw = '1'; b.addEventListener('focusout', () => setTimeout(() => { if (b.contains(document.activeElement)) return; delete b.dataset.redraw; const q = contactNow(); if (q) renderContactMethods(q); }), { once: true }); }
+        return;
+      }
+      b.textContent = ''; items.forEach(item => b.append(methodRow(p, item, kind)));
     });
   }
   // one list design for every drawer's links (task resources, profile links, client files, project links):

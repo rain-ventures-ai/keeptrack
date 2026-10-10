@@ -266,7 +266,7 @@ a.ui-listrow__main { color: var(--accent); }
 a.ui-listrow__main:hover .ui-listrow__text { text-decoration: underline; }
 .ui-listrow__main .ui-i { width: 16px; height: 16px; color: var(--muted); }
 .ui-listrow__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ui-listrow__meta { flex: none; color: var(--muted); font-size: var(--fs-sm, 12px); }
+.ui-listrow__meta { flex: 0 1 auto; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--fs-sm, 12px); }   /* long emails or titles shrink, never push the row off screen */
 
 /* ---- task row ----------------------------------------------------------------------------------------------- */
 .ui-task {

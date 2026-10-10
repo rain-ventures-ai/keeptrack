@@ -206,6 +206,7 @@
   demo('listRow', 'ui.listRow({text, meta, href, onRemove, removeLabel})', s => {
     const st = h('div', 'cat-stack');
     st.append(ui.listRow({ text: 'casey@example.com', meta: 'email', icon: 'mail', onRemove: e => e.currentTarget.closest('.ui-listrow').remove() }),
+      ui.listRow({ text: 'Alexandra Montgomery-Smith', meta: 'alexandra.montgomery-smith@example-consulting.co.uk', icon: 'user', onRemove: e => e.currentTarget.closest('.ui-listrow').remove() }),   // long meta must shrink, not overflow
       ui.listRow({ text: 'Proposal draft (Drive)', href: 'https://drive.google.com/', icon: 'file-text', onRemove: noop, removeLabel: 'Remove link' }),
       ui.listRow({ text: 'A very long row text that should truncate with an ellipsis when it does not fit the available width', meta: 'meta' }),
       ui.listRow({ text: 'Plain row' }));

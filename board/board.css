@@ -842,7 +842,7 @@ dialog.help { max-width: 860px; }
 @media (max-width: 760px) { .kbbar { padding: var(--sp-2) var(--sp-3) 0; } }
 .kb-ask .ui-sheet__text { white-space: pre-line; }   /* "From: …\nTo: …" keeps its line break */
 /* read-only: no add boxes or delete buttons; drawer fields are disabled by JS */
-body.ro .add, body.ro .ladd, body.ro .hadd, body.ro .padd, body.ro .fab, body.ro #pDelete { display: none !important; }
+body.ro .add, body.ro .ladd, body.ro .hadd, body.ro .padd, body.ro .fab { display: none !important; }
 body.ro .card, body.ro .pcard { cursor: pointer; }
 
 /* search */
