@@ -116,6 +116,13 @@ class ConfigAndClaimFiles(unittest.TestCase):
         os.chmod(config(os.path.join(folder, ".keeptrack"), {"repo": "o/mine"}), 0o666)
         self.assertEqual((None, {}), kt.project_config()[:2], "a world-writable config is not trusted either")
 
+    def test_a_trusted_config_changed_after_use_is_ignored(self):
+        path = config(os.path.join(self.tmp.name, ".keeptrack"), {"repo": "o/mine"})
+        os.chdir(self.tmp.name)
+        self.assertEqual("o/mine", kt.project_config()[1].get("repo"))
+        write(path, {"repo": "evil/board"})   # same path, new content (a re-unpacked folder, a swapped file)
+        self.assertEqual((None, {}), kt.project_config()[:2])
+
     def test_personal_files_are_never_written_through_a_symlink_or_into_committed_folders(self):
         repo = git_repo(os.path.join(self.tmp.name, "r"))
         target = os.path.join(self.tmp.name, "victim"); os.makedirs(target)

@@ -93,20 +93,35 @@ def _trust_file():
     return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "keeptrack", "trusted")
 
 
+def _digest(path):
+    import hashlib
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def _trusted_configs():
+    """{real path: sha256 of the content `use` wrote}. A changed file is no longer the one `use` wrote."""
+    out = {}
     try:
-        return {l.strip() for l in open(_trust_file(), encoding="utf-8") if l.strip()}
+        for l in open(_trust_file(), encoding="utf-8"):
+            h, _, path = l.strip().partition("  ")
+            if path:
+                out[path] = h
     except OSError:
-        return set()
+        pass
+    return out
 
 
 def trust_config(path):
-    """Record a config `use` wrote, so only configs made on this computer by this person are ever read."""
+    """Record a config `use` wrote (its path and a hash of its content), so only configs made on this computer by
+    this person, and unchanged since, are ever read."""
     f = _trust_file()
     if os.path.islink(os.path.dirname(f)) or os.path.islink(f):
         raise OSError(f"{f} or its folder is a symlink")
     os.makedirs(os.path.dirname(f), exist_ok=True)
-    write_private(f, "".join(sorted(x + "\n" for x in _trusted_configs() | {os.path.realpath(path)})))
+    known = _trusted_configs()
+    known[os.path.realpath(path)] = _digest(path)
+    write_private(f, "".join(f"{h}  {p}\n" for p, h in sorted(known.items())))
 
 
 UNTRUSTED_CONFIG = None   # a config found but not trusted, so commands can say why it was ignored
@@ -114,8 +129,9 @@ UNTRUSTED_CONFIG = None   # a config found but not trusted, so commands can say 
 
 def _untrusted(d, name):
     """True unless d/name/config.json was written by `use` on this computer: listed in ~/.config/keeptrack/trusted,
-    owned by this user, not a symlink and not committed to git. Anything else (a config shipped in a cloned repo or
-    an unpacked archive) could point Keeptrack, and the session-start hook's output, at a board of its choosing."""
+    unchanged since, owned by this user, not a symlink and not committed to git. Anything else (a config shipped in a
+    cloned repo or an unpacked archive) could point Keeptrack, and the session-start hook's output, at a board of its
+    choosing."""
     folder = os.path.join(d, name)
     p = os.path.join(folder, "config.json")
     if os.path.islink(folder) or os.path.islink(p):
@@ -128,7 +144,10 @@ def _untrusted(d, name):
             return True
     except OSError:
         return True
-    if os.path.realpath(p) not in _trusted_configs():
+    try:
+        if _trusted_configs().get(os.path.realpath(p)) != _digest(p):
+            return True   # never written by `use`, or changed since
+    except OSError:
         return True
     try:
         r = subprocess.run(["git", "-C", d, "ls-files", "--error-unmatch", "--", os.path.join(name, "config.json")],
