@@ -25,6 +25,7 @@ python3 board/keeptrack.py release <id> --column todo                           
 python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM-DD --client "<client>" --details "<text>"
 python3 board/keeptrack.py todo-done <id> <N>                                      # tick checklist item N (numbers come from `show`)
 python3 board/keeptrack.py todo-add <id> "new step"                                # add a checklist item you discovered
+python3 board/keeptrack.py todo-edit <id> <N> "reworded step"                      # fix an item's wording in place
 python3 board/keeptrack.py comment <id> "text"                                     # talk to the team on the card
 python3 board/keeptrack.py comments <id>                                           # read the comment stream
 python3 board/keeptrack.py history <id>                                            # who did what on the card

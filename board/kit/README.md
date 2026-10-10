@@ -200,8 +200,8 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 | :-- | :-- |
 | Task fields | `task-set ID [--title] [--details] [--priority] [--due YYYY-MM-DD\|today\|+N\|""] [--label X]... [--unlabel X]... [--client] [--project] [--contact]`, `unlink ID URL` |
 | Labels | `labels`, `label-add NAME [--color #hex]`, `label-set NAME [--rename NEW] [--color #hex]`, `label-rm NAME [--force]`. `add --label` and `task-set --label` create a missing label in grey, as the web board does |
-| Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link` |
-| Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links and open tasks), `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL`, `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
+| Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |
+| Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links and open tasks), `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL [--title]`, `project-unlink REF URL` (URL or title, as `unlink`), `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
 | Board members | `members`, `member-add USER [--name]`, `member-set USER --name`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
 | Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW]` |
 
