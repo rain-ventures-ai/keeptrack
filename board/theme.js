@@ -23,6 +23,17 @@
   try { style = localStorage.getItem('kb_style') || 'classic'; } catch (e) {}
   if (STYLES.indexOf(style) < 0) style = 'classic';
   root.setAttribute('data-style', style);
+  // Layout packs: how the navigation is arranged. Each pack is a [data-layout="..."] block in board.css over the same
+  // buttons, so board.js never forks per layout. To add one: add its name here, an option in Settings, and its CSS block.
+  var LAYOUTS = ['dock', 'classic'], layout = 'dock';
+  try { layout = localStorage.getItem('kb_layout') || 'dock'; } catch (e) {}
+  if (LAYOUTS.indexOf(layout) < 0) layout = 'dock';
+  root.setAttribute('data-layout', layout);
+  window.kbLayout = {
+    list: LAYOUTS,
+    set: function (l) { if (LAYOUTS.indexOf(l) < 0) return; root.setAttribute('data-layout', l); try { localStorage.setItem('kb_layout', l); } catch (e) {} },
+    get: function () { return root.getAttribute('data-layout'); }
+  };
   window.kbStyle = {
     set: function (s) { if (STYLES.indexOf(s) < 0) return; root.setAttribute('data-style', s); try { localStorage.setItem('kb_style', s); } catch (e) {} },
     get: function () { return root.getAttribute('data-style'); }
