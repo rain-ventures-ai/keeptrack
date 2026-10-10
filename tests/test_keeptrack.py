@@ -944,3 +944,211 @@ class SplitProjects(unittest.TestCase):
         loaded = kt.load_board()
         self.assertEqual(1, len(loaded["projects"]))
         self.assertEqual(pr_id, loaded["projects"][0]["id"])
+
+
+def run_quiet(f, **kw):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        f(Args(**kw))
+    return out.getvalue()
+
+
+def refused(test, f, **kw):
+    with test.assertRaises(SystemExit) as cm, contextlib.redirect_stdout(io.StringIO()):
+        f(Args(**kw))
+    return str(cm.exception.code)
+
+
+class AdminRemoveAndAgents(unittest.TestCase):
+    """task-rm, person-rm and the agents commands (issue #51), on a single-file and a split board."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.old = kt.FILE
+        # single-file board
+        self.one = os.path.join(self.temp.name, "one", "board")
+        os.makedirs(self.one)
+        d = board()
+        d["agents"] = ["claude", "codex"]
+        d["contacts"] = [{"id": "p_1", "name": "Cat", "company": "", "stage": "New", "links": [], "comments": [], "history": []}]
+        d["tasks"][1]["contact"] = "p_1"; d["tasks"][1]["assignees"] = ["codex"]
+        write(os.path.join(self.one, "tasks.json"), d)
+        # split board
+        self.split = os.path.join(self.temp.name, "split", "board")
+        copy_board_fixture("v4", self.split)
+        card = os.path.join(self.split, "cards", "t_second.json")
+        c = read_json(card); c["contact"] = "p_acme"; write(card, c)
+
+    def tearDown(self):
+        kt.FILE = self.old
+        self.temp.cleanup()
+
+    def use(self, d):
+        kt.FILE = os.path.join(d, "tasks.json")
+
+    def test_task_rm_single_file(self):
+        self.use(self.one)
+        before = read_json(kt.FILE)
+        self.assertIn("--yes", refused(self, kt.cmd_task_rm, id="t_live", yes=False))
+        self.assertEqual(before, read_json(kt.FILE))
+        self.assertIn("deleted", run_quiet(kt.cmd_task_rm, id="t_live", yes=True))
+        self.assertEqual(["t_old"], [t["id"] for t in read_json(kt.FILE)["tasks"]])
+
+    def test_task_rm_refuses_an_active_claim(self):
+        self.use(self.one)
+        d = read_json(kt.FILE); d["tasks"][1]["claim"] = {"agent": "claude", "status": "running"}; write(kt.FILE, d)
+        self.assertIn("active claim", refused(self, kt.cmd_task_rm, id="t_live", yes=True))
+        self.assertEqual(2, len(read_json(kt.FILE)["tasks"]))
+
+    def test_task_rm_split_deletes_the_card_file(self):
+        self.use(self.split)
+        before = tree_bytes(self.split)
+        refused(self, kt.cmd_task_rm, id="t_first", yes=False)
+        self.assertEqual(before, tree_bytes(self.split))
+        run_quiet(kt.cmd_task_rm, id="#1", yes=True)
+        after = tree_bytes(self.split)
+        self.assertNotIn("cards/t_first.json", after)
+        self.assertIn("cards/t_second.json", after)
+        self.assertEqual({"cards/t_first.json"}, {p for p in set(before) | set(after) if before.get(p) != after.get(p)})
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual(0, code, issues)
+
+    def test_person_rm_single_file_clears_task_contact(self):
+        self.use(self.one)
+        self.assertIn("--yes", refused(self, kt.cmd_person_rm, ref="Cat", yes=False))
+        self.assertEqual(1, len(read_json(kt.FILE)["contacts"]))
+        self.assertIn("cleared as contact on 1 tasks", run_quiet(kt.cmd_person_rm, ref="p_1", yes=True))
+        d = read_json(kt.FILE)
+        self.assertEqual([], d["contacts"])
+        self.assertNotIn("contact", d["tasks"][1])
+        self.assertIn("person deleted", d["tasks"][1]["history"][-1]["text"])
+
+    def test_person_rm_split_deletes_the_person_file(self):
+        self.use(self.split)
+        refused(self, kt.cmd_person_rm, ref="p_acme", yes=False)
+        self.assertTrue(os.path.exists(os.path.join(self.split, "people", "p_acme.json")))
+        before = tree_bytes(self.split)
+        run_quiet(kt.cmd_person_rm, ref="p_acme", yes=True)
+        after = tree_bytes(self.split)
+        self.assertNotIn("people/p_acme.json", after)
+        self.assertEqual({"people/p_acme.json", "cards/t_second.json"}, {p for p in set(before) | set(after) if before.get(p) != after.get(p)})
+        self.assertNotIn("contact", read_json(os.path.join(self.split, "cards", "t_second.json")))
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual(0, code, issues)
+
+    def test_agents_add_list_remove(self):
+        for d in (self.one, self.split):
+            self.use(d)
+            self.assertIn("added agent gemini", run_quiet(kt.cmd_agent_add, name="gemini"))
+            self.assertIn("already an agent", refused(self, kt.cmd_agent_add, name="Gemini"))
+            self.assertIn("not an agent name", refused(self, kt.cmd_agent_add, name="bad name"))
+            self.assertIn("gemini", run_quiet(kt.cmd_agents))
+            self.assertIn("is not an agent", refused(self, kt.cmd_agent_rm, name="nobody", unassign=False))
+            run_quiet(kt.cmd_agent_rm, name="gemini", unassign=False)
+            self.assertNotIn("gemini", read_json(kt.FILE)["agents"])
+
+    def test_agent_rm_refuses_open_tasks_unless_unassign(self):
+        self.use(self.one)
+        self.assertIn("open task", refused(self, kt.cmd_agent_rm, name="codex", unassign=False))
+        self.assertIn("codex", read_json(kt.FILE)["agents"])
+        run_quiet(kt.cmd_agent_rm, name="codex", unassign=True)
+        d = read_json(kt.FILE)
+        self.assertEqual(["claude"], d["agents"])
+        self.assertEqual([], d["tasks"][1]["assignees"])
+
+
+class RenamesReachArchives(unittest.TestCase):
+    """label-set --rename, client-rename and settings-set --rename-stage rewrite archive/<year>.json in the same save."""
+    def archive(self):
+        return {"version": 3, "archive": True, "year": "2025", "history": {}, "tasks": [
+            {"id": "t_a", "num": 7, "title": "Old", "column": "done", "labels": ["call", "x"], "client": "Acme", "history": [], "updated": "2025-02-01T00:00:00Z"}],
+            "contacts": [{"id": "p_a", "name": "Lo", "company": "Acme", "stage": "Contacted", "history": [], "updated": "2025-02-01T00:00:00Z"}]}
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.old = kt.FILE
+        index = {"files": {"2025": {"tasks": 1, "contacts": 1}}}
+        self.one = os.path.join(self.temp.name, "one", "board")
+        os.makedirs(os.path.join(self.one, "archive"))
+        d = board()
+        d.update(labels=[{"name": "call", "color": "#0c66e4"}], clients=["Acme"], client_info={},
+                 settings={"stages": ["New", "Contacted", "Won", "Lost"]}, archive=index)
+        write(os.path.join(self.one, "tasks.json"), d)
+        write(os.path.join(self.one, "archive", "2025.json"), self.archive())
+        self.split = os.path.join(self.temp.name, "split", "board")
+        copy_board_fixture("v4", self.split)
+        os.makedirs(os.path.join(self.split, "archive"))
+        write(os.path.join(self.split, "archive", "2025.json"), self.archive())
+        root = read_json(os.path.join(self.split, "tasks.json")); root["archive"] = index
+        write(os.path.join(self.split, "tasks.json"), root)
+
+    def tearDown(self):
+        kt.FILE = self.old
+        self.temp.cleanup()
+
+    def check(self, d):
+        kt.FILE = os.path.join(d, "tasks.json")
+        arch = lambda: read_json(os.path.join(d, "archive", "2025.json"))
+        out = run_quiet(kt.cmd_label_set, name="call", rename="phone", color=None)
+        self.assertIn("and 1 archived", out); self.assertNotIn("note:", out)
+        self.assertEqual(["phone", "x"], arch()["tasks"][0]["labels"])
+        self.assertIn("label call renamed to phone", arch()["tasks"][0]["history"][-1]["text"])
+        out = run_quiet(kt.cmd_client_rename, client="Acme", new="Acme Ltd")
+        self.assertIn("2 archived items", out); self.assertNotIn("note:", out)
+        self.assertEqual("Acme Ltd", arch()["tasks"][0]["client"])
+        self.assertEqual("Acme Ltd", arch()["contacts"][0]["company"])
+        out = run_quiet(kt.cmd_settings_set, title=None, stale_minutes=None, stages=None, rename_stage=["Contacted=Talking"])
+        self.assertIn("and 1 archived", out); self.assertNotIn("note:", out)
+        self.assertEqual("Talking", arch()["contacts"][0]["stage"])
+        run_quiet(kt.cmd_unarchive, ref="p_a")
+        back = next(c for c in kt.load_board()["contacts"] if c["id"] == "p_a")
+        self.assertEqual(("Talking", "Acme Ltd"), (back["stage"], back["company"]))
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual(0, code, issues)
+
+    def test_single_file_board(self):
+        self.check(self.one)
+
+    def test_split_board(self):
+        self.check(self.split)
+
+    def test_an_archive_with_no_match_is_not_rewritten(self):
+        kt.FILE = os.path.join(self.one, "tasks.json")
+        path = os.path.join(self.one, "archive", "2025.json")
+        os.utime(path, (1, 1))
+        run_quiet(kt.cmd_label_add, name="other", color=None)
+        run_quiet(kt.cmd_label_set, name="other", rename="other2", color=None)
+        self.assertEqual(1, os.stat(path).st_mtime)
+
+
+class VerifyLargeBackup(unittest.TestCase):
+    """A tasks.json over 1 MB comes back from the contents API with no content; the raw re-read must use the backup ref."""
+    NAMES = ("FILE", "WRITE", "gh", "http", "use_http", "REPO", "BRANCH", "PATH")
+
+    def setUp(self):
+        self.saved = {n: getattr(kt, n) for n in self.NAMES}
+        self.urls = []
+        kt.FILE, kt.WRITE, kt.REPO, kt.BRANCH, kt.PATH = None, "api", "o/r", "main", "board/tasks.json"
+        kt.use_http = lambda: True
+        backup = {"version": 3, "settings": {}, "tasks": [{"id": "t_backup"}], "contacts": []}
+        live = {"version": 3, "settings": {}, "tasks": [{"id": "t_live"}], "contacts": []}
+
+        def fake_http(method, path, body=None, accept=None):
+            self.urls.append(path)
+            return 0, json.dumps(backup if "ref=backup%2Fkit18" in path else live), ""
+
+        kt.http = fake_http
+        kt.gh = lambda *a, body=None: (0, json.dumps({"encoding": "none", "content": "", "sha": "s"}), "")
+
+    def tearDown(self):
+        for n, v in self.saved.items():
+            setattr(kt, n, v)
+
+    def test_raw_read_uses_the_backup_ref(self):
+        data = kt._read_backup("backup/kit18")
+        self.assertEqual("t_backup", data["tasks"][0]["id"])
+        self.assertTrue(all("ref=backup%2Fkit18" in u for u in self.urls), self.urls)
+
+    def test_without_a_ref_it_reads_the_board_branch(self):
+        text = kt.content_text("board/tasks.json", {"encoding": "none", "content": ""})
+        self.assertEqual("t_live", json.loads(text)["tasks"][0]["id"])
+        self.assertIn("ref=main", self.urls[0])

@@ -76,9 +76,9 @@ class OneFile(unittest.TestCase):
         self.assertIn("spaced", self.live()["labels"])
         self.assertIn("spaced", [x["name"] for x in self.data()["labels"]])
 
-    def test_rename_notes_that_archives_keep_old_names(self):
+    def test_rename_no_longer_warns_about_archives(self):
         d = self.data(); d["archive"] = {"files": {"2025": {"tasks": 1}}}; write(self.file, d)
-        self.assertIn("archived items keep the old label name", run(kt.cmd_label_set, name="call", rename="phone", color=None))
+        self.assertNotIn("archived items keep", run(kt.cmd_label_set, name="call", rename="phone", color=None))
         out = run(kt.cmd_settings_set, title=None, stale_minutes=None, stages=None, rename_stage=["Contacted=Talking"])
         self.assertIn("moved 1 people", out)
 
