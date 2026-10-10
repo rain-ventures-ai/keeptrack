@@ -135,7 +135,7 @@ class Github {
       localStorage.setItem('kb_token', 'test');
       localStorage.setItem('kb_me', 'alex');
       localStorage.setItem('kb_api', 'https://api.test');
-      localStorage.setItem('kb_view', 'board');
+      sessionStorage.setItem('kb_view', 'board');   // the current page starts on Today unless this tab chose a view
     });
     await current.route('https://api.test/**', r => api.route(r));
     await current.goto(base + '/board/index.html');
