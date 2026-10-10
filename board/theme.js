@@ -7,16 +7,21 @@
   var root = document.documentElement, saved = 'auto';
   try { saved = localStorage.getItem('kb_theme') || 'auto'; } catch (e) {}
   if (THEMES.indexOf(saved) < 0) saved = 'auto';
-  function applyCustom() {   // same variables as kbDesignMd.apply, kept here so there is no flash before designmd.js loads
+  // Paint a custom theme's colours on <html>. Only the 3-5 picked colours, --on-hero and data-mode are set here;
+  // lift, status colours (danger/ok/warn) and color-scheme come from board.css ([data-theme="custom"][data-mode="dark"]).
+  // designmd.js calls this too (kbTheme.paintCustom), so there is one copy.
+  function paintCustom(t) {
+    var s = root.style;
+    ['paper', 'surface', 'line', 'ink', 'hero'].forEach(function (k) { if (t[k]) s.setProperty('--' + k, t[k]); else s.removeProperty('--' + k); });
+    s.setProperty('--on-hero', t.onHero || '#ffffff');
+    root.setAttribute('data-mode', t.mode === 'dark' ? 'dark' : 'light');
+  }
+  function applyCustom() {
     var t = null; try { t = JSON.parse(localStorage.getItem('kb_custom') || 'null'); } catch (e) {}
     if (!t || !t.paper || !t.ink || !t.hero) return false;
-    var s = root.style, dark = t.mode === 'dark';
-    ['paper', 'surface', 'line', 'ink', 'hero'].forEach(function (k) { if (t[k]) s.setProperty('--' + k, t[k]); });
-    s.setProperty('--on-hero', t.onHero || '#ffffff'); s.setProperty('--lift', dark ? t.ink : '#ffffff'); s.setProperty('--lift-pct', dark ? '7%' : '70%');
-    s.setProperty('--danger', dark ? '#ff7a70' : '#c8312b'); s.setProperty('--ok', dark ? '#4fd49c' : '#1d7f4e'); s.setProperty('--warn', dark ? '#e8b33a' : '#a96a00');
-    s.colorScheme = dark ? 'dark' : 'light'; return true;
+    paintCustom(t); return true;
   }
-  function clearCustom() { ['--paper', '--surface', '--line', '--ink', '--hero', '--on-hero', '--lift', '--lift-pct', '--danger', '--ok', '--warn'].forEach(function (k) { root.style.removeProperty(k); }); root.style.colorScheme = ''; }
+  function clearCustom() { ['--paper', '--surface', '--line', '--ink', '--hero', '--on-hero'].forEach(function (k) { root.style.removeProperty(k); }); root.removeAttribute('data-mode'); }
   if (saved === 'custom' && !applyCustom()) saved = 'auto';
   root.setAttribute('data-theme', saved);
   var STYLES = ['classic', 'colorful'], style = 'classic';
@@ -40,6 +45,7 @@
   };
   window.kbTheme = {
     list: THEMES,
+    paintCustom: paintCustom,
     set: function (t) {
       if (THEMES.indexOf(t) < 0) return;
       if (t === 'custom') { if (!applyCustom()) return; } else clearCustom();

@@ -99,8 +99,8 @@
 </nav>
 
 <dialog id="dlgConflict">
-  <h3 style="margin-top:0">This board changed while you were working</h3>
-  <p id="cfIntro" style="color:var(--muted);font-size:13px;margin-top:0"></p>
+  <h3 class="mt-0">This board changed while you were working</h3>
+  <p id="cfIntro" class="muted fs-base mt-0"></p>
   <div id="cfBody"></div>
   <div class="actions"><button id="cfDiscard">Discard my change</button><button id="cfApply" class="primary">Save with my choices</button></div>
 </dialog>
@@ -166,7 +166,7 @@
   </div>
 
   <div id="panelGeneral" role="tabpanel" aria-labelledby="tabGeneral">
-    <p class="hint" style="margin-top:0">Appearance changes apply straight away and are remembered in this browser.</p>
+    <p class="hint mt-0">Appearance changes apply straight away and are remembered in this browser.</p>
     <fieldset class="modeset">
       <legend>Board sections</legend>
       <label class="chk big"><input id="sModeTasks" type="checkbox"> Tasks</label>
@@ -188,7 +188,7 @@
     <div><label>Move settings to another device</label>
       <div class="cbtns"><button id="xCode" type="button"><i data-i="clipboard-copy"></i> Copy settings code</button><button id="xLink" type="button"><i data-i="link"></i> Copy setup link</button></div>
       <div class="hint">Copies everything configured in this browser: repository, username, theme, card style and view, and <b>all your secrets</b>: the GitHub token of <b>every saved board</b>, the Claude routine URL and token, and the cron-job.org key. The code is not encrypted, so anyone who has it can use them. Open the setup link, or paste the code below, on your other browser or phone, then delete the message you sent it in. Treat both like a password.</div>
-      <textarea id="xPaste" rows="2" placeholder="Paste a settings code or setup link here" aria-label="Settings code to import" style="width:100%;margin-top:8px"></textarea>
+      <textarea id="xPaste" rows="2" placeholder="Paste a settings code or setup link here" aria-label="Settings code to import" class="w-full mt-3"></textarea>
       <div class="cbtns"><button id="xImport" type="button"><i data-i="download"></i> Import settings</button></div></div>
     <div id="labelSec"><label>Labels</label><div class="hint">Rename a label, change its colour or delete it. A rename or delete updates every task that uses the label.</div><div id="labelBox" class="lbled"></div></div>
     <div><label>Archive</label><div id="archBox"></div></div>
@@ -226,7 +226,7 @@
     </details>
   </div>
   <div id="panelAlerts" role="tabpanel" aria-labelledby="tabAlerts" hidden>
-    <p class="hint" style="margin-top:0">Desktop notifications when someone else changes the board. They work while the board is open in a tab (a background or pinned tab is fine). Your own changes never alert you; your agents' changes do if you tick "Updates from my agents". Kept in this browser only.</p>
+    <p class="hint mt-0">Desktop notifications when someone else changes the board. They work while the board is open in a tab (a background or pinned tab is fine). Your own changes never alert you; your agents' changes do if you tick "Updates from my agents". Kept in this browser only.</p>
     <label class="chk big"><input type="checkbox" id="alOn"> Alerts on</label>
     <div id="alPerm" class="hint"></div>
     <div><label for="alPreset">Alert me about</label><select id="alPreset"><option value="tagged">Only when I am tagged or assigned</option><option value="me">Me: tags, my cards and my agents</option><option value="all">Everything</option><option value="custom">Custom (ticks below)</option><option value="off">Nothing</option></select></div>
@@ -235,13 +235,13 @@
     <div class="hint">"My cards" are cards assigned to you. Your agents are entries by <code>claude@you</code> or <code>codex@you</code>. The page checks for changes about every 30 seconds.</div>
   </div>
   <div id="panelChecks" role="tabpanel" aria-labelledby="tabChecks" hidden>
-    <p class="hint" style="margin-top:0">Tests each step for the board that is open now (or, from Boards → Change connection → Test connection, the values you typed): settings, token, repository, branch, board file, write access, board tools and the GitHub rate limit. It tells you which step fails and what to do.</p>
+    <p class="hint mt-0">Tests each step for the board that is open now (or, from Boards → Change connection → Test connection, the values you typed): settings, token, repository, branch, board file, write access, board tools and the GitHub rate limit. It tells you which step fails and what to do.</p>
     <div class="cbtns"><button id="ckRun" type="button" class="primary"><i data-i="stethoscope"></i> Run checks</button><button id="ckCopy" type="button" hidden><i data-i="clipboard-copy"></i> Copy report</button></div>
     <ol id="ckList" class="cklist"></ol>
     <div class="hint">The report never contains your token. Paste it to Claude or a teammate if you need help.</div>
   </div>
   <div id="panelClaude" role="tabpanel" aria-labelledby="tabClaude" hidden>
-    <p class="hint" style="margin-top:0">AI agents can read and update this board for you. They write drafts and never send messages for you. Your choices and keys stay in this browser, like the GitHub token.</p>
+    <p class="hint mt-0">AI agents can read and update this board for you. They write drafts and never send messages for you. Your choices and keys stay in this browser, like the GitHub token.</p>
 
     <section class="agcard" id="agClaude">
       <div class="aghead"><span class="agic" aria-hidden="true"><i data-i="bot"></i></span><div class="agt"><b>@claude on the board</b><span class="muted">Type <b>@claude</b> in a task comment, and your own Claude routine starts work on that task.</span></div><span id="agClaudeChip" class="agchip"></span></div>
@@ -332,7 +332,7 @@
       <div class="aghead"><span class="agic" aria-hidden="true"><i data-i="laptop"></i></span><div class="agt"><b>An assistant in your chat app</b><span class="muted">Claude, Codex or Cursor can read and update the board while you chat with it.</span></div></div>
       <p class="hint">The easiest way: copy this prompt into a new chat with your assistant. It detects whether the board repo already contains everything, installs only what is needed, and checks each step with you.</p>
       <div class="cwfoot left"><button type="button" class="primary" id="agSetupPrompt">Copy setup prompt</button></div>
-      <p class="hint" style="margin-top:12px">Or do it by hand:</p>
+      <p class="hint mt-5">Or do it by hand:</p>
       <div class="agtools" id="agTools" role="tablist" aria-label="Your AI tool"></div>
       <div id="agToolBody"></div>
     </section>
