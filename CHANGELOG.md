@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### [23] — 2026-10-10
 
-- `links` lists people's email addresses; `keeptrack-search` searches their mail and handles vague questions with a file inventory.
+- `links` lists people's email addresses; `keeptrack-search` searches their mail and handles vague questions with a file inventory. Configs are read only if `use` wrote them on this computer (`~/.config/keeptrack/trusted`); rerun `use` once.
 
 ### [22] — 2026-10-10
 

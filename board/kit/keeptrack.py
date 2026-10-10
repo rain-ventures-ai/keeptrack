@@ -89,20 +89,53 @@ def repo_from_git():
 CONFIG_DIRS = (".keeptrack", ".board")   # .board/ is the pre-v22 name, still read
 
 
+def _trust_file():
+    return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "keeptrack", "trusted")
+
+
+def _trusted_configs():
+    try:
+        return {l.strip() for l in open(_trust_file(), encoding="utf-8") if l.strip()}
+    except OSError:
+        return set()
+
+
+def trust_config(path):
+    """Record a config `use` wrote, so only configs made on this computer by this person are ever read."""
+    f = _trust_file()
+    if os.path.islink(os.path.dirname(f)) or os.path.islink(f):
+        raise OSError(f"{f} or its folder is a symlink")
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    write_private(f, "".join(sorted(x + "\n" for x in _trusted_configs() | {os.path.realpath(path)})))
+
+
+UNTRUSTED_CONFIG = None   # a config found but not trusted, so commands can say why it was ignored
+
+
 def _untrusted(d, name):
-    """True unless d/name/config.json is a plain file that came from `use`, not from someone else's repo. A config
-    git tracks (or reaches through a symlink a repo could commit) would let a cloned repo point Keeptrack, and the
-    session-start hook's output, at a board of its choosing. Fails closed: if git can't answer, don't trust it."""
+    """True unless d/name/config.json was written by `use` on this computer: listed in ~/.config/keeptrack/trusted,
+    owned by this user, not a symlink and not committed to git. Anything else (a config shipped in a cloned repo or
+    an unpacked archive) could point Keeptrack, and the session-start hook's output, at a board of its choosing."""
     folder = os.path.join(d, name)
-    if os.path.islink(folder) or os.path.islink(os.path.join(folder, "config.json")):
+    p = os.path.join(folder, "config.json")
+    if os.path.islink(folder) or os.path.islink(p):
         return True
     try:
-        r = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True, timeout=10)
-        if r.returncode != 0:
-            return "not a git repository" not in r.stderr   # outside any repo (a home folder): nothing could have shipped it
+        st = os.stat(p)
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            return True
+        if st.st_mode & 0o022:   # group- or world-writable: someone else could change it
+            return True
+    except OSError:
+        return True
+    if os.path.realpath(p) not in _trusted_configs():
+        return True
+    try:
         r = subprocess.run(["git", "-C", d, "ls-files", "--error-unmatch", "--", os.path.join(name, "config.json")],
-                           capture_output=True, timeout=10)
-        return r.returncode != 1   # 1: untracked, made here. 0: committed. Anything else: unknown
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return True   # committed: it travels with the repo
+        return r.returncode != 1 and "not a git repository" not in r.stderr   # 1: untracked; outside git: fine
     except (OSError, subprocess.SubprocessError):
         return True
 
@@ -112,11 +145,15 @@ def project_config():
     (`keeptrack.py use` writes it, with a .gitignore of its own). Found by walking up from the current folder; the
     pre-v22 .board/config.json is still read. Environment variables still win over it.
     Returns (project folder, settings, config folder name)."""
+    global UNTRUSTED_CONFIG
     d = os.getcwd()
     while True:
         for name in CONFIG_DIRS:
             p = os.path.join(d, name, "config.json")
-            if os.path.isfile(p) and not _untrusted(d, name):
+            if os.path.isfile(p) and _untrusted(d, name):
+                UNTRUSTED_CONFIG = UNTRUSTED_CONFIG or p
+                continue
+            if os.path.isfile(p):
                 try:
                     return d, json.load(open(p)), name
                 except (OSError, ValueError) as e:
@@ -2300,6 +2337,7 @@ def cmd_use(a):
     try:
         ensure_local_dir(cfg_path)
         write_private(cfg_path, json.dumps(cfg, indent=2) + "\n")
+        trust_config(cfg_path)
     except OSError as e:
         sys.exit(f"cannot write {cfg_path}: {e}")
     print(f"this project now uses the board {a.repo}" + (f", project {a.project}" if cfg.get("project") else "")
@@ -4213,6 +4251,10 @@ def main():
             sub._choices_actions.append(sub._ChoicesPseudoAction(name, (), COMMAND_HELP[name]))
     a = p.parse_args()
     FILE = a.file
+    if UNTRUSTED_CONFIG and not getattr(a, "hook", False) and a.f is not cmd_use:
+        print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
+              "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",
+              file=sys.stderr)
     return a.f(a) or 0
 
 
