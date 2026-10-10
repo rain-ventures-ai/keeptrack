@@ -69,6 +69,20 @@ class ConfigAndClaimFiles(unittest.TestCase):
         r = subprocess.run(["sh", os.path.join(KIT, "hooks", "session-start.sh")], cwd=repo, env=env, capture_output=True, text=True)
         self.assertEqual((0, "", ""), (r.returncode, r.stdout, r.stderr))
 
+    def test_a_config_reached_through_a_committed_symlink_is_ignored(self):
+        repo = git_repo(os.path.join(self.tmp.name, "cloned"))
+        os.makedirs(os.path.join(repo, "sub")); write(os.path.join(repo, "sub", "config.json"), {"repo": "evil/board"})
+        os.symlink("sub", os.path.join(repo, ".keeptrack"))
+        subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
+        os.chdir(repo)
+        self.assertEqual((None, {}), kt.project_config()[:2])
+
+    def test_a_home_folder_config_outside_git_is_trusted(self):
+        write_dir = os.path.join(self.tmp.name, ".keeptrack"); os.makedirs(write_dir)
+        write(os.path.join(write_dir, "config.json"), {"repo": "o/mine"})
+        os.chdir(self.tmp.name)
+        self.assertEqual("o/mine", kt.project_config()[1].get("repo"))
+
     def test_personal_files_are_never_written_through_a_symlink_or_into_committed_folders(self):
         repo = git_repo(os.path.join(self.tmp.name, "r"))
         target = os.path.join(self.tmp.name, "victim"); os.makedirs(target)

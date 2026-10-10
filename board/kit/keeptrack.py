@@ -89,14 +89,22 @@ def repo_from_git():
 CONFIG_DIRS = (".keeptrack", ".board")   # .board/ is the pre-v22 name, still read
 
 
-def _committed(d, rel):
-    """True if git tracks d/rel. A committed config came with someone else's repo, not from `use`: trusting it would
-    let a cloned repo point Keeptrack (and the session-start hook's output) at a board of its choosing."""
+def _untrusted(d, name):
+    """True unless d/name/config.json is a plain file that came from `use`, not from someone else's repo. A config
+    git tracks (or reaches through a symlink a repo could commit) would let a cloned repo point Keeptrack, and the
+    session-start hook's output, at a board of its choosing. Fails closed: if git can't answer, don't trust it."""
+    folder = os.path.join(d, name)
+    if os.path.islink(folder) or os.path.islink(os.path.join(folder, "config.json")):
+        return True
     try:
-        return subprocess.run(["git", "-C", d, "ls-files", "--error-unmatch", "--", rel], capture_output=True,
-                              timeout=10).returncode == 0
+        r = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return "not a git repository" not in r.stderr   # outside any repo (a home folder): nothing could have shipped it
+        r = subprocess.run(["git", "-C", d, "ls-files", "--error-unmatch", "--", os.path.join(name, "config.json")],
+                           capture_output=True, timeout=10)
+        return r.returncode != 1   # 1: untracked, made here. 0: committed. Anything else: unknown
     except (OSError, subprocess.SubprocessError):
-        return False
+        return True
 
 
 def project_config():
@@ -108,7 +116,7 @@ def project_config():
     while True:
         for name in CONFIG_DIRS:
             p = os.path.join(d, name, "config.json")
-            if os.path.isfile(p) and not _committed(d, os.path.join(name, "config.json")):
+            if os.path.isfile(p) and not _untrusted(d, name):
                 try:
                     return d, json.load(open(p)), name
                 except (OSError, ValueError) as e:
@@ -2324,6 +2332,14 @@ def _here(a):
         print("Keeptrack: no board for this repo. Connect one with `keeptrack.py use <owner/board-repo> --project <name>`.")
         return
     where = os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, "config.json") if PROJECT_DIR else "environment"
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    inside = lambda p, d: os.path.realpath(p) == os.path.realpath(d) or os.path.realpath(p).startswith(os.path.realpath(d) + os.sep)
+    if top and PROJECT_DIR and not inside(PROJECT_DIR, top) and not DEFAULT_PROJECT:
+        # a board set once in a parent folder (usually home): available here, but this repo is not connected to it
+        print(f"Keeptrack: your board {REPO} is available here (set in {where}). This repo is not connected to a "
+              "board project; tasks you add go on the board unscoped. Keep board details out of this repo's commits, "
+              "PRs and docs.")
+        return
     data, _ = load()
     user = os.environ.get("BOARD_USER") or default_user()
     pr = find_project(data, DEFAULT_PROJECT, allow_missing=True) if DEFAULT_PROJECT else None
