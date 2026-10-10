@@ -743,11 +743,16 @@ if (typeof window !== 'undefined') (() => {
     }
   }
   async function undoLast() {
-    hideUndo(); const entry = undoStack[undoStack.length - 1]; if (!entry) { toast('Nothing to undo.'); return; }
+    hideUndo();
+    // A save still in flight is the newest change: let it finish and record its own entry, then take back the newest one.
+    // (Reading the stack first would undo the change before it, and the pop below would then drop the wrong entry.)
+    while (saving) await saving;
+    const entry = undoStack.pop(); if (!entry) { toast('Nothing to undo.'); return; }   // taken off now, so a second Ctrl+Z undoes the one before
     if (entry.board !== [cfg().repo, cfg().branch, cfg().path].join('|')) { undoStack.length = 0; syncUndo(); toast('Nothing to undo on this board.'); return; }
+    syncUndo();
     const ids = KINDS.flatMap(k => [...new Set([...byId(entry.before, k).keys(), ...byId(entry.after, k).keys()])].filter(id => !sameJson(byId(entry.before, k).get(id), byId(entry.after, k).get(id))));
     const ok = await mutate(n => applyInverse(n, entry), `Undo: ${entry.message}`, ids, entry.after, { remember: false });
-    if (ok) { undoStack.pop(); syncUndo(); toast(`Undid: ${entry.message}`); }
+    if (ok) toast(`Undid: ${entry.message}`); else { undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); }   // not saved: it can still be undone
   }
   // In-page confirmations (ui.confirm; never the browser's blocking confirm()). body: a string or a list of paragraphs.
   const UNDO_HINT = 'This saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.';
@@ -760,7 +765,17 @@ if (typeof window !== 'undefined') (() => {
 
   // Apply an edit to the LATEST file on GitHub (never overwrite with stale state); retry on a SHA conflict.
   // Returns true only when the change is saved on GitHub.
-  async function mutate(fn, message, targetIds = [], baseState = null, options = {}) {
+  // Saves run one at a time, in the order they were asked for. A change asked for while another save is still in
+  // flight (a background save such as the Claude relay recording its session link, or a second edit made before
+  // the first one's commit returned) waits its turn. It used to be dropped with only "Busy, try again" in the status
+  // line, so a quick second edit (a label added just after a recolour, an assignment while the relay saved) was lost.
+  let saving = null;   // settles when the save in flight, and every save queued behind it, has finished
+  function mutate(...args) {
+    const run = saving ? saving.then(() => mutateNow(...args)) : mutateNow(...args);   // idle: start now, so the optimistic render stays synchronous
+    const tail = run.then(() => {}, () => {}); saving = tail; tail.then(() => { if (saving === tail) saving = null; });
+    return run;
+  }
+  async function mutateNow(fn, message, targetIds = [], baseState = null, options = {}) {
     if (ro) { roToast(); return false; }
     if (busy) { setStatus('Busy, try again', 'err'); return false; }
     if (fromSnap) { setStatus('Still loading the latest board, try again in a moment', 'err'); return false; }
@@ -1120,7 +1135,12 @@ if (typeof window !== 'undefined') (() => {
       ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, today: renderToday, people: renderPeopleView, pipeline: renderPipeline })[view](); board.scrollTop = st; renderLegend(); renderStats();
       if ($('dlgCard').open) refreshDrawer(); return;
     }
-    const board = $('board'); board.className = ''; board.textContent = ''; const hideDone = $('fHideDone').checked;
+    const board = $('board');
+    // The lanes are rebuilt on every render (a save returning, a poll finding a change, the minute tick). Carry each lane's
+    // half-typed "Add a task…" text, focus and caret over to the new input, or a render mid-typing throws the text away.
+    const drafts = new Map([...board.querySelectorAll('.col .add input')].map(i => [i.closest('.col').dataset.col, { value: i.value, focus: i === document.activeElement, start: i.selectionStart, end: i.selectionEnd }]));
+    let refocus = null;
+    board.className = ''; board.textContent = ''; const hideDone = $('fHideDone').checked;
     if (cinemaCol && !state.columns.some(c => c.id === cinemaCol && !(hideDone && c.id === 'done'))) cinemaCol = '';
     document.body.classList.toggle('cinema', !!cinemaCol);
     state.columns.forEach((col, ci) => {
@@ -1136,10 +1156,12 @@ if (typeof window !== 'undefined') (() => {
       cards.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); dropOn(e, col.id, null); });
       capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(emptyNote('Nothing here. Drop a card or add one below.', 'square-kanban')); c.append(cards);
       const add = el('div', 'add'), inp = el('input'), btn = el('button', 'primary', 'Add'); inp.placeholder = 'Add a task…';
+      const draft = drafts.get(col.id); if (draft) { inp.value = draft.value; if (draft.focus) refocus = [inp, draft]; }
       const go = () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; addTask(v, col.id); };
       btn.onclick = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
       add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = () => { inp.scrollIntoView({ block: 'nearest' }); inp.focus(); }; board.append(c);
     });
+    if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
     renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
   }
 
@@ -2373,7 +2395,7 @@ if (typeof window !== 'undefined') (() => {
       }
     } catch (e) { err = 'could not read the result from cron-job.org'; }
     rlog(num, session ? 'Claude started' : 'Failed', session ? session.url : (err || 'no response from the routine after 6 minutes'), !!session);
-    await edit(taskId, t => {
+    await mutate(n => { const t = n.tasks.find(x => x.id === taskId); if (!t) return; stamp(t);   // a background save: not edit()/saveField, which report into whichever card's drawer is open
       // an activity line in the comments (shown smaller than a comment), and the session link on the comment that asked
       if (!t.comments.some(m => m.type === 'activity' && m.job === jobId)) {
         const ask = cid && t.comments.find(m => m.id === cid); if (ask && session && session.url && session.id !== 'started') { ask.session_url = session.url; ask.session_id = session.id; }
@@ -2388,7 +2410,7 @@ if (typeof window !== 'undefined') (() => {
         return; }
       if (session) { t.claim.session_id = session.id; t.claim.session_url = session.url; t.claim.note = `Claude is working for @${who}`; t.claim.heartbeat_at = nowIso(); }
       else { t.claim.status = 'stuck'; t.claim.note = `Send to Claude failed: ${err || 'no response from the routine'}`; }
-    }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed');   // save the result before the job (and its reply) is deleted
+    }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed', [taskId]);   // save the result before the job (and its reply) is deleted
     try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there
     if (!session) toast('Send to Claude failed: ' + (err || 'no response'), true); else { toast('Claude is working on it'); if (!claudeWorks()) markWorks(); }
   }
@@ -3229,7 +3251,7 @@ if (typeof window !== 'undefined') (() => {
   $('colAdd').onclick = async () => {
     const v = $('colNew').value.trim(); if (!v) { $('colNew').focus(); return; }
     if (state.columns.some(c => c.name.toLowerCase() === v.toLowerCase())) { toast(`A column called “${v}” already exists.`, true); return; }
-    const ok = await mutate(d => { const at = d.columns.length && d.columns[d.columns.length - 1].id === (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1]).id ? d.columns.length - 1 : d.columns.length;
+    const ok = await mutate(d => { if (d.columns.some(c => c.name.toLowerCase() === v.toLowerCase())) return; const at = d.columns.length && d.columns[d.columns.length - 1].id === (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1]).id ? d.columns.length - 1 : d.columns.length;
       d.columns.splice(at, 0, { id: colSlug(v, new Set(d.columns.map(c => c.id))), name: v }); }, `Add column: ${v}`);
     if (ok) $('colNew').value = ''; renderColumnsBox();
   };
