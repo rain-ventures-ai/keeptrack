@@ -1,5 +1,5 @@
 {
-  "version": 17,
+  "version": 18,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -14,6 +14,7 @@
     ".claude/skills/board/SKILL.md": "repo-skills/board/SKILL.md",
     ".claude/skills/board/references/status-audits.md": "skills/keeptrack/references/status-audits.md",
     ".claude/skills/board-doctor/SKILL.md": "repo-skills/board-doctor/SKILL.md",
+    ".claude/skills/board-admin/SKILL.md": "repo-skills/board-admin/SKILL.md",
     ".claude/skills/board-routine-setup/SKILL.md": "repo-skills/board-routine-setup/SKILL.md",
     ".claude/skills/board-upgrade/SKILL.md": "repo-skills/board-upgrade/SKILL.md",
     ".claude/skills/keeptrack-notes/SKILL.md": "skills/keeptrack-notes/SKILL.md",

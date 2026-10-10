@@ -69,6 +69,9 @@ python3 board/keeptrack.py add "Title" --assign <user> --label <label> --due YYY
 ```
 `--client` is optional; leave it out for tasks that are not about a client.
 
+To change a task after it exists (title, details, priority, due, labels, client, project, links) use `task-set` and
+`unlink`. To change the board's labels, clients, members or settings, use the `board-admin` skill. Never edit JSON.
+
 ## Checking on others
 `python3 board/keeptrack.py list --attention` lists stale, stuck and blocked claims.
 
@@ -114,7 +117,7 @@ A routine run starts with a `routine-fire-payload` naming a task number (`#N`) a
 6. Finish: `comment` the outcome, `assign '#N' <user>`, `done '#N' --note "<result>"`.
 
 ### Command cheat sheet
-`list`, `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members remain in the `people` list in `board/tasks.json`; CRM people are separate records.
+`list`, `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members remain in the `people` list in `board/tasks.json`; CRM people are separate records.
 
 ## Archive (old items)
 Old done tasks, Lost people and long histories move to `board/archive/<year>.json` with `python3 board/keeptrack.py archive` (`--dry-run` first). Search them with `archived -q "<words>"`, and bring one back with `unarchive '#N'`. The board file keeps an index in `archive.files`; do not edit archive files by hand.
