@@ -153,10 +153,21 @@
     d.append(head, b);
     let f = null; if (footer) { f = h('footer', 'ui-sheet__foot'); append(f, footer); d.append(f); }
     d.addEventListener('click', e => { if (e.target === d) api.close(); });   // a click on the backdrop
-    d.addEventListener('close', () => { closeMenu(); if (onClose) onClose(d.returnValue); if (removeOnClose) d.remove(); });
+    let settled = true, watch = null;
+    const finish = () => {   // every way out of an open sheet ends here once: close(), Escape, backdrop, or the dialog being removed
+      if (settled) return; settled = true; if (watch) { watch.disconnect(); watch = null; }
+      closeMenu(); if (toastRegion && d.contains(toastRegion)) region();   // a toast shown inside this dialog moves back out before it goes
+      if (onClose) onClose(d.returnValue); if (removeOnClose && d.isConnected) d.remove();
+    };
+    d.addEventListener('close', finish);
     const api = {
       el: d, body: b, footer: f,
-      open() { if (!d.isConnected) document.body.append(d); if (!d.open) d.showModal(); return api; },
+      open() {
+        if (!d.isConnected) document.body.append(d);
+        if (!d.open) { d.showModal(); settled = false; }
+        if (!watch && d.parentNode) { watch = new MutationObserver(() => { if (!d.isConnected) finish(); }); watch.observe(d.parentNode, { childList: true }); }
+        return api;
+      },
       close(v) { if (d.open) d.close(v == null ? '' : v); return api; }
     };
     d.uiSheet = api;
@@ -276,6 +287,7 @@
     return toastRegion;
   }
   function pumpToast() {
+    if (toastCur && !toastCur.el.isConnected) { clearTimeout(toastCur.timer); toastCur.done = true; toastCur = null; }   // its dialog was removed with it
     if (toastCur || !toastQ.length) return;
     const t = toastQ.shift(), r = region(); toastCur = t;
     r.append(t.el); requestAnimationFrame(() => t.el.classList.add('ui-toast--in'));
@@ -317,6 +329,7 @@
       const bodyEl = body == null ? null : (body instanceof Node ? body : h('p', 'ui-sheet__text', body));
       const s = sheet({ title, body: bodyEl, footer: [cancel, ok], side: 'center', removeOnClose: true, onClose: () => resolve(result) });
       s.el.classList.add('ui-sheet--alert'); s.el.setAttribute('role', 'alertdialog');
+      if (bodyEl) { bodyEl.id = bodyEl.id || nextId('confirm'); s.el.setAttribute('aria-describedby', bodyEl.id); }
       s.open(); (danger ? cancel : ok).focus();
     });
   }

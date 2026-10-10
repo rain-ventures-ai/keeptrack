@@ -136,7 +136,15 @@ if (typeof window !== 'undefined') (() => {
   let newerSchema = 0;
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-  // Line icons live in icons.js (loaded first): ICONS, svgIcon, setI, fillIcons.
+  // Line icons live in icons.js and components in ui.js, both loaded before this file. A page cached from before they
+  // existed (GitHub Pages keeps index.html ~10 minutes) loads only board.css and board.js: fetch the missing files here,
+  // synchronously, so the board still starts. Normal loads skip this.
+  (() => {
+    const base = ((document.currentScript && document.currentScript.src) || location.href).replace(/[^/]*([?#].*)?$/, '');
+    const need = [['kbIcons', 'icons.js'], ['ui', 'ui.js']].filter(([g]) => !window[g]);
+    if (need.length && !document.querySelector('link[href*="ui.css"], style[data-kb="ui.css"]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = base + 'ui.css'; document.head.append(l); }
+    need.forEach(([, f]) => { try { const x = new XMLHttpRequest(); x.open('GET', base + f + '?t=' + Date.now(), false); x.send(); if (x.status === 200) { const sc = document.createElement('script'); sc.textContent = x.responseText; document.head.append(sc); } } catch (e) {} });
+  })();
   const { svgIcon, setI, fillIcons } = window.kbIcons;
   const elI = (tag, cls, icon, text) => { const e = el(tag, cls); if (icon) e.append(svgIcon(icon)); if (text != null && text !== '') e.append((icon ? ' ' : '') + text); return e; };   // el() with a leading icon
   fillIcons(document);
