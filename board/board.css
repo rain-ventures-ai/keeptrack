@@ -978,3 +978,23 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 }
 header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone tap size is for the pill, not the details icon inside it */
 @media (max-width: 380px) { #dock .dtab { min-width: 54px; padding: 3px 7px; } }
+
+/* ---- "Show me around" tour: a dimmed screen with one highlighted part and a tip next to it ---------------- */
+.tour { position: fixed; inset: 0; z-index: 60; }
+.tour[hidden], .tourring[hidden] { display: none; }
+.tour.dim { background: rgba(10, 15, 25, .55); }
+.tourring { position: fixed; pointer-events: none; box-shadow: 0 0 0 3px var(--accent), 0 0 0 9999px rgba(10, 15, 25, .55); transition: left .2s, top .2s, width .2s, height .2s; }
+.tourtip { position: fixed; display: grid; gap: 8px; padding: 16px; border-radius: 14px; border: 1px solid var(--border); background: var(--card); color: var(--text); box-shadow: 0 18px 44px rgba(0, 0, 0, .35); }
+.tourtip.center { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(380px, calc(100vw - 24px)); }
+.tourtip h3 { margin: 0; font-size: 16px; text-wrap: balance; }
+.tourtip p { margin: 0; color: var(--muted); line-height: 1.5; }
+.tourfoot { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.tourfoot span { flex: 1; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tourfoot button[hidden] { display: none; }
+#tourSkip { border: 0; background: transparent; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .tourring { transition: none; } }
+.tourinvite { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 2px 0 12px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); }
+.tourinvite > svg { color: var(--accent); width: 20px; height: 20px; flex: 0 0 auto; }
+.tourinvite .ti { flex: 1 1 200px; font-weight: 600; }
+.tourinvite .tix { border: 0; background: transparent; color: var(--muted); padding: 4px; display: inline-grid; place-items: center; }
+.htour { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; color: var(--muted); }

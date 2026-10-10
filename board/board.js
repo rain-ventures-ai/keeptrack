@@ -1306,6 +1306,47 @@ if (typeof window !== 'undefined') (() => {
     });
     pop.hidden = false;
   }
+
+  // ---- "Show me around": a short tour that highlights one part of the real board at a time -------------------
+  // Steps adapt to the layout and to the board sections that are on. Finishing or skipping is remembered in
+  // this browser (kb_tour), so Today stops offering it; Menu and Help can always start it again.
+  let tour = null;
+  const docked = () => document.documentElement.dataset.layout === 'dock';
+  const shown = sel => { const n = document.querySelector(sel); if (!n) return null; const r = n.getBoundingClientRect(); return r.width && r.height && getComputedStyle(n).visibility !== 'hidden' ? n : null; };
+  function tourSteps() {
+    const m = modes(), crm = m.includes('crm'), tasks = m.includes('tasks'), dock = docked();
+    return [
+      { title: 'Welcome to Keeptrack', text: `Keeptrack keeps ${tasks && crm ? 'your tasks and the people you work with' : tasks ? 'your tasks' : 'the people you work with'} in one place. Today is the home page: everything that needs you now.`, view: 'today' },
+      tasks && { title: 'Kanban: your tasks', text: 'Each card is a task. It moves through the columns from To do to Done: drag it, or change its status inside the card. This card opens the board.', view: 'today', at: ['.tgo[data-go="board"]'] },
+      crm && { title: 'People: your CRM', text: 'Everyone you work with, each with a next step and a date. Log messages and calls in a person\'s card. Pipeline shows people by stage.', view: 'today', at: ['.tgo[data-go="people"]'] },
+      dock ? { title: 'The bar at the bottom', text: 'It goes everywhere: Today, Kanban and People. Tap the highlighted tab again for its other views, such as List, Calendar or Pipeline.', at: ['#dock'] }
+        : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
+      { title: 'Find anything', text: 'Search people, tasks, notes and messages. On a computer, press / from anywhere.', at: [dock ? '#dock [data-head-action="btnSearch"]' : '#btnSearch'] },
+      { title: 'Filters', text: 'Show one client, one person, or only what needs attention. The number shows how many filters are on.', at: ['#btnFilter'] },
+      { title: 'Undo', text: 'After every change, a message with Undo appears for a few seconds. Ctrl+Z (\u2318Z on a Mac) works too.', at: dock ? [] : ['#btnUndo'] },
+      $('boardBtn').dataset.status === 'err' && { title: 'Not saving yet', text: 'A red dot here means changes are not saving to GitHub. Open Settings \u2192 Boards to connect, and Settings \u2192 Checks to see what is wrong.', at: ['#boardBtn'] },
+      { title: 'Menu', text: 'Settings, help, refresh and this tour. That\'s it: you\'re ready.', at: dock ? ['#dockMenu'] : ['#btnMore', '#btnSettings'] }
+    ].filter(Boolean);
+  }
+  function startTour() { closePops(); document.querySelectorAll('dialog[open]').forEach(d => d.close()); tour = { steps: tourSteps(), i: 0, back: document.activeElement }; $('tour').hidden = false; showTourStep(); }
+  function endTour() { if (!tour) return; const back = tour.back; tour = null; $('tour').hidden = true; LS.set('kb_tour', 'done'); if (view === 'today') render(); if (back && back.isConnected) back.focus(); }
+  function showTourStep() {
+    const st = tour.steps[tour.i], last = tour.i === tour.steps.length - 1; if (st.view && view !== st.view) setView(st.view);
+    $('tourTitle').textContent = st.title; $('tourText').textContent = st.text; $('tourStep').textContent = `${tour.i + 1} of ${tour.steps.length}`;
+    $('tourBack').hidden = tour.i === 0; $('tourSkip').hidden = last; $('tourNext').textContent = last ? 'Done' : 'Next';
+    placeTour(true); $('tourNext').focus();
+  }
+  function placeTour(scroll) {
+    if (!tour) return; const st = tour.steps[tour.i], ring = $('tourRing'), tip = $('tourTip'), box = $('tour');
+    let n = null; for (const sel of st.at || []) if ((n = shown(sel))) break;
+    if (n && scroll) n.scrollIntoView({ block: 'nearest' });
+    tip.classList.toggle('center', !n); box.classList.toggle('dim', !n); ring.hidden = !n;
+    if (!n) { tip.style.top = tip.style.left = tip.style.width = ''; return; }
+    const r = n.getBoundingClientRect(), pad = 6, w = Math.min(340, innerWidth - 24), x0 = Math.max(3, r.left - pad), x1 = Math.min(innerWidth - 3, r.right + pad);   // keep the ring on screen for wide strips
+    Object.assign(ring.style, { left: x0 + 'px', top: r.top - pad + 'px', width: x1 - x0 + 'px', height: r.height + pad * 2 + 'px', borderRadius: (parseFloat(getComputedStyle(n).borderTopLeftRadius) || 0) + pad + 'px' });
+    tip.style.width = w + 'px'; const h = tip.offsetHeight; let top = r.bottom + pad + 12; if (top + h > innerHeight - 12) top = Math.max(12, r.top - pad - 12 - h);
+    Object.assign(tip.style, { top: top + 'px', left: Math.min(Math.max(12, r.left + r.width / 2 - w / 2), innerWidth - w - 12) + 'px' });
+  }
   const pad2 = n => String(n).padStart(2, '0'), isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`, todayIso = () => isoDay(new Date());
   const doneColId = () => (state.columns.find(c => c.id === 'done') || state.columns[state.columns.length - 1] || {}).id;
   const reopenColId = () => (state.columns.find(c => c.id === 'todo') || state.columns[0] || {}).id;
@@ -2625,6 +2666,11 @@ if (typeof window !== 'undefined') (() => {
   $('dockMenu').onclick = e => { e.stopPropagation(); const pop = $('dockPop'), open = pop.hidden; closePops(); if (open) { pop.hidden = false; $('dockMenu').setAttribute('aria-expanded', 'true'); } };
   $('dockPop').addEventListener('click', e => e.stopPropagation());
   $('undoGo').onclick = () => undoLast();
+  document.querySelectorAll('[data-tour-start]').forEach(b => { b.onclick = e => { e.stopPropagation(); startTour(); }; });
+  $('tourNext').onclick = () => { if (tour.i === tour.steps.length - 1) endTour(); else { tour.i++; showTourStep(); } };
+  $('tourBack').onclick = () => { if (tour.i > 0) { tour.i--; showTourStep(); } }; $('tourSkip').onclick = endTour;
+  document.addEventListener('keydown', e => { if (!tour) return; if (e.key === 'Escape') { e.preventDefault(); endTour(); } else if (e.key === 'ArrowRight') $('tourNext').click(); else if (e.key === 'ArrowLeft') $('tourBack').click(); }, true);
+  window.addEventListener('resize', () => placeTour(false));
   $('btnUnread').onclick = () => { freshOnly = !freshOnly; render(); };
   $('sortMenu').value = sortMode();
   const setSort = v => { LS.set(sortKey(), v); $('sortMenu').value = v; render(); };
@@ -2916,10 +2962,15 @@ if (typeof window !== 'undefined') (() => {
     head.append(el('h2', null, due.length ? due.join(' · ') : 'Nothing due today'), el('span', 'muted', new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })));
     wrap.append(head);
     // Shortcuts to the two halves of the board, so Today works as the home page
-    const go = el('div', 'todaygo'), goCard = (ic, title, sub, v) => { const b = el('button', 'tgo'); b.type = 'button'; b.append(svgIcon(ic), el('span', 'tgt', title), el('span', 'tgs', sub), svgIcon('chevron-right')); b.onclick = () => setView(v); return b; };
+    const go = el('div', 'todaygo'), goCard = (ic, title, sub, v) => { const b = el('button', 'tgo'); b.type = 'button'; b.append(svgIcon(ic), el('span', 'tgt', title), el('span', 'tgs', sub), svgIcon('chevron-right')); b.dataset.go = v; b.onclick = () => setView(v); return b; };
     if (hasTasks) { const live = state.tasks.filter(x => x.column !== doneColId()), doing = live.filter(x => x.column === 'in-progress').length;
       go.append(goCard('square-kanban', 'Tasks · Kanban', `${live.length} open` + (doing ? ` · ${doing} in progress` : ''), 'board')); }
     if (hasCrm) go.append(goCard('user', 'People · CRM', peopleDue ? `${peopleDue} to contact today` : `${state.contacts.length} ${state.contacts.length === 1 ? 'person' : 'people'}`, 'people'));
+    if (!LS.get('kb_tour', '') && go.childElementCount) {   // offered until the tour is finished, skipped or dismissed
+      const inv = el('div', 'tourinvite'), start = el('button', 'primary', 'Show me around'), x = el('button', 'tix'); start.type = x.type = 'button';
+      x.setAttribute('aria-label', 'Dismiss the tour'); x.title = 'Dismiss'; x.append(svgIcon('x')); start.onclick = startTour; x.onclick = () => { LS.set('kb_tour', 'dismissed'); render(); };
+      inv.append(svgIcon('compass'), el('span', 'ti', 'New here? Take a one-minute tour of Today, Kanban and People.'), start, x); wrap.append(inv);
+    }
     if (go.childElementCount) wrap.append(go);
     const addGroups = list => list.forEach(([[ic, title], items]) => {
       if (!items.length) return; const sec = el('section', 'tsec'); sec.append(elI('h3', null, ic, `${title} (${items.length})`));

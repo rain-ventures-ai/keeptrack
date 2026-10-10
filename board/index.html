@@ -57,6 +57,7 @@
         <button type="button" data-head-action="btnRefresh"><i data-i="refresh-cw"></i> Refresh board</button>
         <button type="button" data-head-action="btnCopy"><i data-i="copy"></i> Copy board</button>
         <button type="button" data-head-action="btnHelp"><i data-i="circle-help"></i> Help</button>
+        <button type="button" data-tour-start><i data-i="compass"></i> Show me around</button>
         <button type="button" data-head-action="btnSettings"><i data-i="settings"></i> Settings</button>
       </div>
     </div>
@@ -79,6 +80,7 @@
 <div id="board"></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <div id="undoSnack" class="undosnack" role="status" aria-live="polite" hidden><span id="undoMsg" class="umsg"></span><button id="undoGo" type="button">Undo</button></div>
+<div id="tour" class="tour" hidden><div id="tourRing" class="tourring"></div><div id="tourTip" class="tourtip" role="dialog" aria-modal="true" aria-labelledby="tourTitle"><h3 id="tourTitle"></h3><p id="tourText"></p><div class="tourfoot"><span id="tourStep"></span><button type="button" id="tourSkip">Skip</button><button type="button" id="tourBack">Back</button><button type="button" id="tourNext" class="primary">Next</button></div></div></div>
 <nav id="dock" class="dock" aria-label="Main">
   <button type="button" class="dtab" data-grp="today" aria-label="Today"><i data-i="alarm-clock"></i><span class="dl">Today</span></button>
   <button type="button" class="dtab" data-grp="tasks" aria-label="Tasks"><i data-i="square-kanban"></i><span class="dl">Kanban</span></button>
@@ -90,6 +92,7 @@
     <button type="button" data-head-action="btnRefresh"><i data-i="refresh-cw"></i> Refresh board</button>
     <button type="button" data-head-action="btnCopy"><i data-i="copy"></i> Copy board</button>
     <button type="button" data-head-action="btnHelp"><i data-i="circle-help"></i> Help</button>
+    <button type="button" data-tour-start><i data-i="compass"></i> Show me around</button>
     <button type="button" data-head-action="btnSettings"><i data-i="settings"></i> Settings</button>
     <div id="dockStatus" class="dockstatus"></div>
   </div>
@@ -136,6 +139,7 @@
 </dialog>
 <dialog id="dlgHelp" class="settings help" aria-labelledby="hTitle">
   <h2 id="hTitle">Help</h2>
+  <p class="htour"><button type="button" class="primary" data-tour-start><i data-i="compass"></i> Show me around</button> A one-minute tour of Today, Kanban, People and the menus.</p>
   <div class="hgrid">
     <section><h3><i data-i="alarm-clock"></i> Today</h3><p>One place for people to contact and tasks that are overdue or due today. It shows whichever board sections you have enabled.</p></section>
     <section><h3><i data-i="user"></i> People</h3><p>Everyone you keep track of. Press <b>Add…</b> for a simple form, or type <b>Name | Client | Role</b> and press Enter for a quick add.</p></section>
