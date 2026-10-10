@@ -920,3 +920,61 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 .wck.wait { color: var(--muted); }
 @media (max-width: 520px) { .bwiz .wpick { grid-template-columns: 1fr; } }
 .wadv { margin-top: 12px; font-size: 13px; } .wadv summary { cursor: pointer; color: var(--muted); } .wme { display: flex; gap: 6px; align-items: flex-start; margin-top: 8px; font-size: 13.5px; }
+
+/* ---- layout packs --------------------------------------------------------------------------------------
+   theme.js sets <html data-layout="dock|classic">. A pack only rearranges the same elements with CSS: board.js
+   always renders one header, one #dock and one #undoSnack. To add a pack: add its name to LAYOUTS in theme.js,
+   an option to #sLayout in index.html, and a :root[data-layout="name"] block below. */
+
+/* Shared by every layout: Today's shortcut cards and the Undo message shown after each saved change */
+.todaygo { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 2px 0 18px; }
+.tgo { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; align-items: center; text-align: left; padding: 12px 14px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.tgo:hover:not(:disabled) { box-shadow: var(--shadow-hover); }
+.tgo > svg:first-child { grid-row: 1 / 3; width: 22px; height: 22px; color: var(--accent); }
+.tgo > svg:last-child { grid-row: 1 / 3; grid-column: 3; width: 18px; height: 18px; color: var(--muted); }
+.tgo .tgt { grid-column: 2; font-weight: 700; font-size: 14px; } .tgo .tgs { grid-column: 2; font-size: 12.5px; color: var(--muted); }
+.undosnack { position: fixed; left: 50%; transform: translateX(-50%); bottom: 64px; z-index: 45; display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 16px); padding: 5px 5px 5px 18px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 13px; box-shadow: var(--shadow-hover); }
+.undosnack[hidden] { display: none; }
+.undosnack .umsg { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.undosnack button { flex: 0 0 auto; border: 0; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-weight: 700; padding: 8px 16px; }
+#dock { display: none; }
+
+/* Dock: a one-row header (board, clients, attention, filters, bell) and a floating tab bar at the bottom with
+   Today, Kanban, People, Find and Menu. Tapping the active tab again lists that group's other views. */
+:root[data-layout="dock"] { --dock-h: 58px; --dock-gap: 10px; --dock-top: calc(var(--dock-h) + var(--dock-gap) + env(safe-area-inset-bottom, 0px)); --dock-clear: calc(var(--dock-top) + 18px); }
+:root[data-layout="dock"] #viewSw, :root[data-layout="dock"] #btnSearch, :root[data-layout="dock"] #btnUndo,
+:root[data-layout="dock"] .mobilemore, :root[data-layout="dock"] .hutils { display: none !important; }
+:root[data-layout="dock"] header { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+:root[data-layout="dock"] .hfilters { display: flex; flex: 1 1 auto; align-items: center; gap: 8px; min-width: 0; padding-top: 0; border-top: 0; }
+:root[data-layout="dock"] .hfilters .clientwrap { flex: 1 1 auto; min-width: 0; }
+:root[data-layout="dock"] #boardBtn { position: relative; }
+:root[data-layout="dock"] #boardBtn[data-status="err"]::after { content: ""; position: absolute; top: -4px; right: -4px; width: 12px; height: 12px; border-radius: 50%; background: var(--danger); border: 2px solid var(--header); }
+:root[data-layout="dock"] #board { padding-bottom: var(--dock-clear); }
+:root[data-layout="dock"] body.cinema #board { padding-bottom: 0; }
+:root[data-layout="dock"] body.cinema .cinema-col .cards { padding-bottom: var(--dock-clear); }
+:root[data-layout="dock"] #toast { bottom: calc(var(--dock-top) + 10px); }
+:root[data-layout="dock"] .fab { bottom: calc(var(--dock-top) + 12px); }   /* "Add a task" sits above the dock, not on it */
+:root[data-layout="dock"] #dock { display: flex; position: fixed; z-index: 40; left: 50%; transform: translateX(-50%); bottom: calc(var(--dock-gap) + env(safe-area-inset-bottom, 0px)); height: var(--dock-h); max-width: calc(100vw - 16px); gap: 2px; padding: 4px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in srgb, var(--card) 94%, transparent); box-shadow: 0 10px 30px rgba(0,0,0,.22); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+:root[data-layout="dock"] body:has(#board.v-welcome) #dock { display: none; }
+:root[data-layout="dock"] body:has(#undoSnack:not([hidden])) #dock { visibility: hidden; }
+:root[data-layout="dock"] .undosnack { bottom: calc(var(--dock-gap) + env(safe-area-inset-bottom, 0px)); height: var(--dock-h); min-width: min(340px, calc(100vw - 16px)); padding: 4px 4px 4px 22px; font-size: 13.5px; }
+:root[data-layout="dock"] .undosnack button { align-self: stretch; padding: 0 20px; }
+#dock .dtab { display: grid; justify-items: center; align-content: center; gap: 2px; min-width: 62px; padding: 3px 10px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+#dock .dtab[hidden] { display: none; }
+#dock .dtab svg { width: 20px; height: 20px; }
+#dock .dtab:hover:not(.on) { color: var(--text); background: var(--panel); }
+#dock .dtab.on { background: var(--accent-soft); color: var(--accent); }
+#dock .dtab.more .dl::after { content: " ▴"; font-size: 9px; }
+#dock .dockpop { position: absolute; top: auto; right: auto; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: 240px; max-width: calc(100vw - 16px); padding: 6px; }
+#dock .dockpop button { width: 100%; display: flex; align-items: center; justify-content: flex-start; gap: 9px; border: 0; border-radius: 8px; background: transparent; padding: 10px; color: var(--text); }
+#dock .dockpop button:hover { background: var(--panel); } #dock .dockpop button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+#dock .dockpop svg { width: 17px; height: 17px; }
+.dockstatus { margin-top: 4px; padding: 8px 10px 4px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.dockstatus.err { color: var(--danger); font-weight: 600; }
+@media (max-width: 760px) {
+  :root[data-layout="dock"] .popover { top: 64px; }
+  :root[data-layout="dock"] body[data-view="board"] #board, :root[data-layout="dock"] body[data-view="list"] #board { padding-bottom: calc(var(--dock-top) + 84px); }   /* clear of the dock and the "Add a task" button */
+  :root[data-layout="dock"] #dock .dockpop { top: auto; }
+}
+header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone tap size is for the pill, not the details icon inside it */
+@media (max-width: 380px) { #dock .dtab { min-width: 54px; padding: 3px 7px; } }

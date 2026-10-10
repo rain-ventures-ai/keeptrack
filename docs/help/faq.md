@@ -1,7 +1,7 @@
 # Questions and problems
 
-**The board says "Not connected".**
-Open **⚙️ Settings → Boards**. Check the repo name (`owner/name`) and paste the token again. Then open **Settings → Checks** and click **Run checks**. It tells you what is wrong. **Copy report** gives a report without your token.
+**The board says "Not connected", or there is a red dot on the board button.**
+The red dot means changes are not saving. **Menu** at the bottom shows the message. Open **⚙️ Settings → Boards**. Check the repo name (`owner/name`) and paste the token again. Then open **Settings → Checks** and click **Run checks**. It tells you what is wrong. **Copy report** gives a report without your token.
 
 **"Cannot see repository" or a 404 error.**
 - The repo name has a typing error, or

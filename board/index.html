@@ -78,6 +78,22 @@
 <nav id="tabs" aria-label="Columns"></nav>
 <div id="board"></div>
 <div id="toast" role="status" aria-live="polite"></div>
+<div id="undoSnack" class="undosnack" role="status" aria-live="polite" hidden><span id="undoMsg" class="umsg"></span><button id="undoGo" type="button">Undo</button></div>
+<nav id="dock" class="dock" aria-label="Main">
+  <button type="button" class="dtab" data-grp="today" aria-label="Today"><i data-i="alarm-clock"></i><span class="dl">Today</span></button>
+  <button type="button" class="dtab" data-grp="tasks" aria-label="Tasks"><i data-i="square-kanban"></i><span class="dl">Kanban</span></button>
+  <button type="button" class="dtab" data-grp="crm" aria-label="People"><i data-i="user"></i><span class="dl">People</span></button>
+  <button type="button" class="dtab" data-head-action="btnSearch" aria-label="Search" title="Search everything (press /)"><i data-i="search"></i><span class="dl">Find</span></button>
+  <button type="button" class="dtab" id="dockMenu" aria-haspopup="true" aria-expanded="false" aria-controls="dockPop" aria-label="Menu"><i data-i="menu"></i><span class="dl">Menu</span></button>
+  <div id="dockViews" class="popover dockpop" role="menu" hidden></div>
+  <div id="dockPop" class="popover dockpop morepop" hidden>
+    <button type="button" data-head-action="btnRefresh"><i data-i="refresh-cw"></i> Refresh board</button>
+    <button type="button" data-head-action="btnCopy"><i data-i="copy"></i> Copy board</button>
+    <button type="button" data-head-action="btnHelp"><i data-i="circle-help"></i> Help</button>
+    <button type="button" data-head-action="btnSettings"><i data-i="settings"></i> Settings</button>
+    <div id="dockStatus" class="dockstatus"></div>
+  </div>
+</nav>
 
 <dialog id="dlgConflict">
   <h3 style="margin-top:0">This board changed while you were working</h3>
@@ -129,7 +145,7 @@
     <section><h3><i data-i="square-kanban"></i> Tasks</h3><p>Board, List, Calendar and Schedule show the same tasks. Double-click a card to open it. A task can be linked to a person.</p></section>
     <section class="hagent"><h3><i data-i="bot"></i> Set up an AI assistant</h3><p><b>Claude Code in this board repo:</b> the repo already contains Keeptrack's skills and tool, so no plugin is needed. <b>On a phone or at claude.ai:</b> use the <b>Code</b> tab of the Claude app (or claude.ai/code) in a session on this board repo; ordinary chat cannot update the board. <b>Claude or Codex in another project, Cowork, or Cursor:</b> install the Keeptrack plugin so the same skills and tool are available there.</p><p class="hagentlinks"><button id="hAgentSetup" type="button" class="small"><i data-i="settings"></i> Open agent setup</button><a data-doc="where-agents-run.md">Which setup should I use?</a><a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/PLUGIN.md" target="_blank" rel="noopener noreferrer">Plugin guide</a><a href="https://github.com/rain-ventures-ai/keeptrack/tree/main/board/kit/skills" target="_blank" rel="noopener noreferrer">Keeptrack skills</a></p><p><b>Copy for AI</b> still works with any ordinary chat. Assistants draft messages; they never send them.</p></section>
     <section><h3><i data-i="search"></i> Search and archive</h3><p>Press <b>/</b> or click <i data-i="search"></i> to search everything. Old done tasks and Lost people can be moved to the archive (Settings → General). Search finds them, and you can put them back.</p></section>
-    <section><h3><i data-i="undo-2"></i> Undo and safe removal</h3><p>Use the <b>Undo</b> button, <b>Ctrl+Z</b> on Windows/Linux, or <b>⌘Z</b> on a Mac to reverse recent saved board changes. Keeptrack asks before deleting people, tasks, contact details and other important items.</p></section>
+    <section><h3><i data-i="undo-2"></i> Undo and safe removal</h3><p>Tap <b>Undo</b> in the message that appears after each change, or use <b>Ctrl+Z</b> on Windows/Linux, or <b>⌘Z</b> on a Mac to reverse recent saved board changes. Keeptrack asks before deleting people, tasks, contact details and other important items.</p></section>
     <section><h3><i data-i="lock"></i> Read-only</h3><p>The demo board, a public board with no token, and a token without write access are read-only. A banner at the top tells you why.</p></section>
   </div>
   <p class="hlinks"><a class="mainRepoLink" href="https://github.com/rain-ventures-ai/keeptrack" target="_blank" rel="noopener noreferrer"><i data-i="github"></i> Keeptrack repository</a> · Full help: <a data-doc="README.md">all topics</a> · <a data-doc="getting-started.md">getting started</a> · <a data-doc="people-and-follow-ups.md">people</a> · <a data-doc="ai-assistants.md">AI assistants</a> · <a data-doc="privacy-and-security.md">privacy</a> · <a data-doc="faq.md">problems</a> · demo boards: <a href="?demo=crm">people</a>, <a href="?demo=board">tasks</a></p>
@@ -153,6 +169,7 @@
       <label class="chk big"><input id="sModeCrm" type="checkbox"> People &amp; pipeline (CRM)</label>
       <div class="hint">These switches are saved to the shared board. Turning a section off only hides its dedicated views: nothing is deleted. Today stays available and combines the sections that are on. Turn a section on again to see the same tasks or people. If CRM has no people yet, it opens empty; adding the first person creates their record automatically.</div>
     </fieldset>
+    <div><label for="sLayout">Layout</label><select id="sLayout"><option value="dock">Dock: one-row header, menu bar at the bottom</option><option value="classic">Classic: everything in the top bar</option></select><div class="hint">Saved in this browser only.</div></div>
     <div><label for="sStyle">Card style</label><select id="sStyle"><option value="classic">Classic</option><option value="colorful">Colourful (client and urgency colours)</option></select></div>
     <div><label for="sTheme">Theme</label><select id="sTheme"><option value="auto">Auto (follows your device)</option><optgroup label="Classic"><option value="light">Light</option><option value="dark">Dark</option><option value="midnight">Midnight</option><option value="sand">Sand</option></optgroup><optgroup label="3 colours: paper, ink, accent"><option value="paper">Paper</option><option value="mono">Mono</option><option value="iris">Iris</option><option value="forest">Forest</option><option value="ember">Ember (dark)</option><option value="ink">Ink (dark)</option></optgroup><optgroup label="5 colours: + cards, borders"><option value="studio">Studio</option><option value="newsprint">Newsprint</option><option value="blueprint">Blueprint</option><option value="graphite">Graphite (dark)</option></optgroup><option value="custom" id="sThemeCustom" hidden>Your DESIGN.md</option></select></div>
     <div class="themeio"><span class="hint">Use your own colours: import a <a href="https://github.com/google-labs-code/design.md" target="_blank" rel="noopener noreferrer">DESIGN.md</a> file. Keeptrack reads its colours only.</span><div class="cbtns"><button id="sThemeImport" type="button"><i data-i="upload"></i> Import DESIGN.md</button><button id="sThemeExport" type="button"><i data-i="clipboard-copy"></i> Copy theme as DESIGN.md</button></div><input id="sThemeFile" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden><div id="sThemeMsg" class="hint" role="status"></div></div>
