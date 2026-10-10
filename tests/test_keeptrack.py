@@ -704,6 +704,79 @@ class PhaseOneSafety(unittest.TestCase):
         self.assertEqual(([], [], 0), kt.doctor_board(False))
 
 
+class VisibilityAlarm(unittest.TestCase):
+    """The optional visibility-alarm workflow: off by default, on with the flag, refreshed by kit-update once installed."""
+    KIT = os.path.join(HERE, "..", "board", "kit")
+    WORKFLOW = os.path.join(".github", "workflows", "visibility-alarm.yml")
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.saved = {k: getattr(kt, k) for k in ("ROOT", "REPO", "BRANCH", "need_repo_clone", "kit_fetch")}
+        self.addCleanup(lambda: [setattr(kt, k, v) for k, v in self.saved.items()])
+        kt.ROOT, kt.REPO, kt.BRANCH = self.temp.name, "acme/board", "main"
+        kt.need_repo_clone = lambda: None
+
+    def workflow(self):
+        return os.path.join(self.temp.name, self.WORKFLOW)
+
+    def template_bytes(self, kit=None):
+        with open(os.path.join(kit or self.KIT, "templates", "visibility-alarm.yml"), "rb") as f:
+            return f.read()
+
+    def test_not_installed_by_default(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=self.KIT, quiet=True))
+        self.assertFalse(os.path.exists(self.workflow()))
+        self.assertFalse(os.path.exists(os.path.join(self.temp.name, ".github")))
+
+    def test_installed_with_the_flag(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=self.KIT, quiet=True, visibility_alarm=True))
+        with open(self.workflow(), "rb") as f:
+            self.assertEqual(self.template_bytes(), f.read())
+
+    def test_kit_update_refreshes_it_when_present(self):
+        # Installed earlier, then the kit ships a new version of the workflow: a plain kit-update must carry it over.
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=self.KIT, quiet=True, visibility_alarm=True))
+        newer = os.path.join(self.temp.name, "kit")
+        shutil.copytree(self.KIT, newer)
+        with open(os.path.join(newer, "templates", "visibility-alarm.yml"), "ab") as f:
+            f.write(b"# newer kit\n")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            kt.cmd_kit_update(Args(source=newer, quiet=True))
+        with open(self.workflow(), "rb") as f:
+            self.assertEqual(self.template_bytes(newer), f.read())
+        self.assertIn(".github/workflows/visibility-alarm.yml", out.getvalue())
+
+    def test_init_installs_it_only_with_the_flag(self):
+        def fetch(name, source=None):
+            with open(os.path.join(self.KIT, name), "rb") as f:
+                return f.read()
+        kt.kit_fetch = fetch
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_init(Args(person=["alex:Alex"], client=None, source=None))
+        self.assertFalse(os.path.exists(self.workflow()))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_init(Args(person=["alex:Alex"], client=None, source=None, visibility_alarm=True))
+        with open(self.workflow(), "rb") as f:
+            self.assertEqual(self.template_bytes(), f.read())
+
+    def test_workflow_is_valid_yaml_with_the_expected_triggers_and_permissions(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("pyyaml is not installed")
+        with open(os.path.join(self.KIT, "templates", "visibility-alarm.yml"), encoding="utf-8") as f:
+            wf = yaml.safe_load(f)
+        triggers = wf[True] if True in wf else wf["on"]  # YAML 1.1 reads the key `on` as a boolean
+        self.assertIn("public", triggers)
+        self.assertIn("schedule", triggers)
+        self.assertIn("workflow_dispatch", triggers)
+        self.assertEqual({"contents": "read", "issues": "write"}, wf["permissions"])
+
+
 class MoveInPlace(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

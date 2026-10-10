@@ -38,5 +38,12 @@
     ".claude/skills/onboard-keeptrack/references/sources/other-task-tools.md": "skills/onboard-keeptrack/references/sources/other-task-tools.md",
     ".claude/skills/onboard-keeptrack/references/sources/spreadsheet.md": "skills/onboard-keeptrack/references/sources/spreadsheet.md",
     ".claude/skills/onboard-keeptrack/references/sources/trello.md": "skills/onboard-keeptrack/references/sources/trello.md"
+  },
+  "optional": {
+    "visibility-alarm": {
+      "files": {
+        ".github/workflows/visibility-alarm.yml": "templates/visibility-alarm.yml"
+      }
+    }
   }
 }

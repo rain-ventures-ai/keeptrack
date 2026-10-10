@@ -1450,6 +1450,12 @@ def cmd_kit_update(a):
     try:
         m = json.loads(kit_fetch("manifest.json", a.source))
         files = {dest: kit_fetch(src, a.source) for dest, src in m["files"].items()}  # fetch everything before writing anything
+        # Optional files (manifest "optional"): installed only with their flag, then kept current wherever they exist.
+        for name, opt in m.get("optional", {}).items():
+            wanted = getattr(a, name.replace("-", "_"), False)
+            for dest, src in opt["files"].items():
+                if wanted or os.path.exists(os.path.join(ROOT, dest)):
+                    files[dest] = kit_fetch(src, a.source)
         root = os.path.abspath(ROOT)
         removals = []
         for dest in m.get("remove", []):
@@ -1985,6 +1991,8 @@ def cmd_init(a):
         people.append({"github": gh_user, "name": name or gh_user})
     a.quiet = True
     cmd_kit_update(a)
+    if not getattr(a, "visibility_alarm", False) and not os.path.exists(os.path.join(ROOT, ".github", "workflows", "visibility-alarm.yml")):
+        print("optional: visibility alarm not installed (init --visibility-alarm adds a daily check that the repo stays private)")
     board_url = "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(
         {"repo": REPO, "branch": BRANCH, "path": PATH})
     fill = lambda t: (t.replace("{repo}", REPO).replace("{branch}", BRANCH).replace("{path}", PATH)
@@ -3387,13 +3395,16 @@ def main():
     s.set_defaults(f=cmd_add)
     s = sub.add_parser("kit-check"); s.add_argument("--card", action="store_true"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_kit_check)
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
+    s.add_argument("--visibility-alarm", action="store_true", help="install the optional visibility alarm workflow (kept current once installed)")
     s.set_defaults(f=cmd_kit_update)
     s = sub.add_parser("migrate"); s.add_argument("--to", type=int, help="4 = split storage; without --to the board goes up to v3 only"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
     s = sub.add_parser("verify"); s.add_argument("--against", required=True, help="backup tag, branch or commit, or a tasks.json file"); s.set_defaults(f=cmd_verify)
     s = sub.add_parser("doctor"); s.add_argument("--fix", action="store_true"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_doctor)
     s = sub.add_parser("kit-owner"); s.add_argument("user", nargs="?"); s.set_defaults(f=cmd_kit_owner)
     s = sub.add_parser("init"); s.add_argument("--person", action="append", required=True, help="github-user:Display Name (repeatable; the first is the upgrade owner)")
-    s.add_argument("--client", action="append"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_init)
+    s.add_argument("--client", action="append"); s.add_argument("--from", dest="source")
+    s.add_argument("--visibility-alarm", action="store_true", help="also install the optional visibility alarm workflow (.github/workflows/visibility-alarm.yml)")
+    s.set_defaults(f=cmd_init)
     s = sub.add_parser("use", help="name this project's board in .board/config.json (gitignored)"); s.add_argument("repo")
     s.add_argument("--user"); s.add_argument("--branch"); s.add_argument("--path"); s.add_argument("--token-env", help="NAME of the env variable that holds this board's token")
     s.set_defaults(f=cmd_use)

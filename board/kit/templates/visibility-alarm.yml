@@ -1,0 +1,56 @@
+# Keeptrack safety check (optional). A board repo should stay private: contacts are personal data.
+# Installed by: python3 board/keeptrack.py init --visibility-alarm  (kit-update keeps it current once installed).
+# Runs when the repo is made public, once a day, and on demand. If the repo is not private it opens one
+# P0 issue for the board owner (unless one is already open) and fails the run.
+name: visibility-alarm
+
+on:
+  public:
+  schedule:
+    - cron: "37 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that the repo is private
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          TITLE="P0: board repo is not private"
+          private=$(gh api "repos/$REPO" --jq .private) || { echo "::error::could not read the repo visibility"; exit 1; }
+          if [ "$private" = "true" ]; then
+            echo "$REPO is private. OK."
+            exit 0
+          fi
+          if [ "$private" != "false" ]; then
+            echo "::error::unexpected visibility value: $private"
+            exit 1
+          fi
+
+          existing=$(gh issue list --state open --limit 500 --json number,title \
+            --jq '.[] | select(.title == "P0: board repo is not private") | .number' | head -n 1)
+          if [ -n "$existing" ]; then
+            echo "Open alarm issue #$existing already exists; not opening another."
+          else
+            body=$(mktemp)
+            cat > "$body" <<'BODY'
+          This board repo is **public**. Anyone on the internet can read its contacts and tasks.
+
+          To fix it: open the repo on GitHub, then **Settings** → **Danger Zone** → **Change visibility** → **Private**.
+
+          Then close this issue. The check runs again every day and whenever the repo is made public.
+          BODY
+            gh issue create --title "$TITLE" --body-file "$body" --assignee "$OWNER" \
+              || gh issue create --title "$TITLE" --body-file "$body"
+          fi
+          echo "::error::$REPO is not private. Make it private (Settings → Danger Zone → Change visibility)."
+          exit 1
