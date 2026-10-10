@@ -69,9 +69,40 @@
     if (color) root.style.setProperty('--ui-pill-c', color);
     return root;
   }
-  function pill({ text, tone: t = 'neutral', outline = false, color, onRemove, removeLabel, onClick, pressed, icon: ic } = {}) {
+  function pill({ text, tone: t = 'neutral', outline = false, color, onRemove, removeLabel, onClick, pressed, icon: ic, size } = {}) {
     const content = []; if (ic) content.push(icon(ic)); content.push(h('span', 'ui-pill__text', text));
-    return chip('ui-pill', { content, label: text, tone: t, outline, color, onRemove, removeLabel, onClick, pressed });
+    return chip('ui-pill' + (size === 'sm' ? ' ui-pill--sm' : ''), { content, label: text, tone: t, outline, color, onRemove, removeLabel, onClick, pressed });
+  }
+
+  // ---- priority and due date: the one rendering of each, used by every view -------------------------------------
+  // Priority: high = danger, medium = warn, low = ok; no priority counts as medium. compact: a coloured dot with the word for screen readers.
+  const PRIO_TONE = { high: 'danger', medium: 'warn', low: 'ok' };
+  const prioOf = p => (PRIO_TONE[p] ? p : 'medium');
+  const priorityTone = p => PRIO_TONE[prioOf(p)];
+  function priority(p, { compact = false, size } = {}) {
+    const v = prioOf(p), word = v[0].toUpperCase() + v.slice(1);
+    const e = compact ? h('span', `ui-pill ui-pill--${PRIO_TONE[v]} ui-prio ui-prio--dot`) : pill({ text: word, tone: PRIO_TONE[v], size });
+    if (compact) e.append(srOnly(`${word} priority`)); else { e.classList.add('ui-prio'); e.title = `${word} priority`; }
+    e.dataset.prio = v; return e;
+  }
+  // Due date: overdue = danger, today = warn, the next three days = accent, later = neutral. A finished task is never late.
+  let dueFmt = null;
+  function dueInfo(due, { done = false } = {}) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(due || '')); if (!m) return null;
+    const d = new Date(+m[1], +m[2] - 1, +m[3]), t = new Date(); t.setHours(0, 0, 0, 0);
+    const days = Math.round((d - t) / 86400000), nice = (dueFmt || (dueFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' }))).format(d);
+    const word = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : nice;
+    if (done) return { state: 'done', tone: 'neutral', text: word, days };
+    if (days < 0) return { state: 'overdue', tone: 'danger', text: `${nice} · overdue`, days };
+    if (days === 0) return { state: 'today', tone: 'warn', text: word, days };
+    if (days <= 3) return { state: 'soon', tone: 'accent', text: word, days };
+    return { state: 'later', tone: 'neutral', text: word, days };
+  }
+  function due(date, { done = false, size, empty } = {}) {
+    const i = dueInfo(date, { done });
+    if (!i) { if (!empty) return null; const e = pill({ text: empty, tone: 'neutral', outline: true, size }); e.classList.add('ui-due'); e.dataset.due = 'none'; return e; }
+    const e = pill({ text: i.text, tone: i.tone, icon: 'calendar', size }); e.classList.add('ui-due'); e.dataset.due = i.state; e.title = 'Due ' + String(date).slice(0, 10);
+    return e;
   }
   function avatar(name, { size = 'md', title } = {}) {
     const a = h('span', `ui-avatar ui-avatar--${['sm', 'md', 'lg'].includes(size) ? size : 'md'}`, initials(name));
@@ -370,27 +401,17 @@
   }
 
   // ---- task row (pure display) --------------------------------------------------------------------------------
-  const PRIO = { high: 'danger', medium: 'warn', low: 'neutral' };
-  function dueInfo(due) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(due || '')); if (!m) return null;
-    const d = new Date(+m[1], +m[2] - 1, +m[3]), t = new Date(); t.setHours(0, 0, 0, 0);
-    const days = Math.round((d - t) / 86400000), nice = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-    if (days < 0) return { text: `Overdue · ${nice}`, tone: 'danger' };
-    if (days === 0) return { text: 'Today', tone: 'warn' };
-    if (days === 1) return { text: 'Tomorrow', tone: 'accent' };
-    return { text: nice, tone: 'neutral' };
-  }
   function taskRow(task = {}, { density = 'row', onOpen } = {}) {
     const dn = ['card', 'row', 'compact'].includes(density) ? density : 'row';
     const root = onOpen ? btn(`ui-task ui-task--${dn} ui-task--button`, () => onOpen(task)) : h('div', `ui-task ui-task--${dn}`);
-    const prio = PRIO[task.priority] ? task.priority : '';
+    const prio = PRIO_TONE[task.priority] ? task.priority : '';
     if (prio) root.classList.add(`ui-task--${prio}`);
     const top = h('span', 'ui-task__top');
     if (task.num != null) top.append(h('span', 'ui-task__num', '#' + task.num));
-    if (prio) { const p = h('span', `ui-task__prio ui-task__prio--${prio}`); p.append(h('span', 'ui-task__dot'), dn === 'compact' ? srOnly(`${prio} priority`) : h('span', null, prio)); top.append(p); }
+    if (prio) { const p = priority(prio, { compact: dn === 'compact', size: 'sm' }); p.classList.add('ui-task__prio'); top.append(p); }
     const title = h('span', 'ui-task__title', task.title || 'Untitled');
-    const meta = h('span', 'ui-task__meta'), due = dueInfo(task.due);
-    if (due) { const d = h('span', `ui-pill ui-pill--${due.tone} ui-task__due`); d.append(icon('calendar'), h('span', null, due.text)); meta.append(d); }
+    const meta = h('span', 'ui-task__meta'), dueEl = due(task.due, { done: !!task.done });
+    if (dueEl) { dueEl.classList.add('ui-task__due'); meta.append(dueEl); }
     if (task.client) meta.append(h('span', 'ui-pill ui-pill--accent', task.client));
     (task.labels || []).forEach(l => {
       const name = typeof l === 'string' ? l : l.name, color = typeof l === 'object' && l ? l.color : null;
@@ -428,6 +449,6 @@
 
   window.ui = Object.freeze({
     button, iconButton, pill, select, avatar, person, colourFor, initials, props, addRow, sheet, menu, closeMenu,
-    section, tabs, toast, banner, confirm, promptText, listRow, taskRow, check, empty, icon
+    section, tabs, toast, banner, confirm, promptText, listRow, taskRow, check, empty, icon, priority, priorityTone, due, dueInfo
   });
 })();

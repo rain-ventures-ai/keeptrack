@@ -1460,7 +1460,11 @@ if (typeof window !== 'undefined') (() => {
   const toggleDone = t => moveTo(t.id, t.column === doneColId() ? reopenColId() : doneColId());
   const DTF = {}, dfmt = (d, o) => { const k = JSON.stringify(o); return (DTF[k] || (DTF[k] = new Intl.DateTimeFormat('en-GB', o))).format(d); };   // one formatter per style: toLocaleDateString makes a new one on every call (slow on big boards)
   const dueMemo = new Map(), fmtDue = iso => { let v = dueMemo.get(iso); if (v === undefined) { v = dfmt(new Date(iso + 'T00:00:00'), { day: 'numeric', month: 'short' }); dueMemo.set(iso, v); } return v; };
-  const dueState = t => !t.due || t.column === doneColId() ? '' : t.due < todayIso() ? ' late' : t.due === todayIso() ? ' today' : '';
+  // One priority and one due-date rendering everywhere (ui.priority / ui.due); a task in the done column is never late.
+  const isDoneTask = t => t.column === doneColId();
+  const prioPill = (t, o) => ui.priority(t.priority, { size: 'sm', ...o });
+  const duePill = (t, o) => ui.due(t.due, { done: isDoneTask(t), size: 'sm', ...o });
+  const personDue = p => ui.due(p.next_due, { size: 'sm', empty: p.next ? 'No date' : '' }) || '';
 
   // floating ＋ (phones, board and list views): jump to the add box for the column you are looking at
   const fab = el('button', 'fab', '＋'); fab.type = 'button'; fab.id = 'fab'; fab.title = 'Add a task'; fab.setAttribute('aria-label', 'Add a task'); document.body.append(fab);
@@ -1483,13 +1487,13 @@ if (typeof window !== 'undefined') (() => {
 
   function listRow(t) {
     const isDone = t.column === doneColId(), row = paint(el('div', 'trow' + (isDone ? ' done' : '')), t);
-    const circ = el('button', 'circ p-' + (t.priority || 'medium'), isDone ? '✓' : ''); circ.title = isDone ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title);
+    const circ = el('button', 'circ', isDone ? '✓' : ''); circ.title = isDone ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title);
     circ.onclick = e => { e.stopPropagation(); toggleDone(t); };
     const c0 = el('div', 'c-check'); c0.append(circ);
     const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.prepend(d); } task.append(title);
     const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title
-    if (t.due) mm.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
-    if (t.priority) mm.append(el('span', 'pr ' + t.priority, cap(t.priority)));
+    if (t.due) mm.append(duePill(t));
+    mm.append(prioPill(t));
     mm.append(...labelTags(t)); if (t.client) mm.append(el('span', 'tag client', t.client));
     [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
@@ -1497,8 +1501,8 @@ if (typeof window !== 'undefined') (() => {
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
     const ppl = el('div', 'c-people'); t.assignees.forEach(a => ppl.append(avatar(a)));
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
-    const due = el('div', 'c-due'); if (t.due) due.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
-    const pr = el('div', 'c-prio'); if (t.priority) pr.append(el('span', 'pr ' + t.priority, cap(t.priority)));
+    const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
+    const pr = el('div', 'c-prio'); pr.append(prioPill(t));
     const more = el('div', 'c-more'); [chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
@@ -1543,20 +1547,20 @@ if (typeof window !== 'undefined') (() => {
     const todayBtn = el('button', 'calnav', 'Today'); todayBtn.onclick = () => { const x = wrap.querySelector('.sday.today'); if (x) x.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
     bar.append(todayBtn, el('h2', 'caltitle', 'Schedule'), el('span', 'spacer')); wrap.append(bar);
 
-    const item = t => {
-      const done = t.column === dc, row = paint(el('div', 'sitem' + (done ? ' done' : '') + dueState(t)), t);
-      const circ = el('button', 'circ sm p-' + (t.priority || 'medium'), done ? '✓' : ''); circ.title = done ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title); circ.onclick = e => { e.stopPropagation(); toggleDone(t); };
+    const item = (t, showDue) => {
+      const done = t.column === dc, row = paint(el('div', 'sitem' + (done ? ' done' : '')), t);
+      const circ = el('button', 'circ sm', done ? '✓' : ''); circ.title = done ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title); circ.onclick = e => { e.stopPropagation(); toggleDone(t); };
       const title = el('div', 'stitle'); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.append(d); } title.append(document.createTextNode(t.title));
       const sub = [t.client, ...t.labels].filter(Boolean).join(' · '); if (sub) title.append(el('span', 'ssub', sub));
       const avs = el('div', 'lavs'); t.assignees.forEach(a => avs.append(avatar(a)));
-      const extra = el('div', 'sx'); [chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && extra.append(x));
+      const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && extra.append(x));
       row.append(circ, el('div', 'stime', colName(t.column)), title, extra, avs); row.onclick = () => openCard(t.id); return row;
     };
     const day = (key, label, list, cls) => {
       const d = new Date(key + 'T00:00:00'), sec = el('section', 'sday' + (cls || ''));
       const dl = el('div', 'sdate');
       if (label) dl.append(el('span', 'sdn lbl', label)); else dl.append(el('span', 'sdn', String(d.getDate())), el('span', 'sdl', d.toLocaleDateString('en-GB', { month: 'short', weekday: 'short' }).replace(' ', ', ')));
-      const items = el('div', 'sitems'); capList('s:' + (key || label), list, item, items); if (!list.length) items.append(el('div', 'snone', 'Nothing due'));
+      const items = el('div', 'sitems'); capList('s:' + (key || label), list, t => item(t, !key), items); if (!list.length) items.append(el('div', 'snone', 'Nothing due'));
       sec.append(dl, items); return sec;
     };
     if (overdue.length) wrap.append(day('', 'Overdue', overdue, ' overdue'));
@@ -1748,13 +1752,15 @@ if (typeof window !== 'undefined') (() => {
       cell.append(el('span', 'dn', String(d.getDate())));
       const pills = el('div', 'pills');
       list.slice(0, 3).forEach(t => {
-        const p = paint(el('button', 'pill p-' + (t.priority || 'medium') + (t.column === doneColId() ? ' done' : '') + dueState(t) + (isFresh(t) ? ' fresh' : ''), t.title), t); p.title = t.title; p.draggable = true;
+        const p = paint(el('button', 'pill' + (isDoneTask(t) ? ' done' : '') + (isFresh(t) ? ' fresh' : '')), t); p.title = t.title; p.draggable = true;
+        const st = (ui.dueInfo(t.due, { done: isDoneTask(t) }) || {}).state; if (st === 'overdue' || st === 'today') p.dataset.due = st;
+        p.append(prioPill(t, { compact: true }), el('span', 'ptext', t.title));
         p.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); });
         p.onclick = e => { e.stopPropagation(); openCard(t.id); }; pills.append(p);
       });
       if (list.length > 3) pills.append(el('span', 'more', `+${list.length - 3} more`));
       cell.append(pills);
-      const dots = el('div', 'dots'); list.slice(0, 5).forEach(t => dots.append(el('i', 'p-' + (t.priority || 'medium') + (t.column === doneColId() ? ' done' : '')))); cell.append(dots);
+      const dots = el('div', 'dots'); list.slice(0, 5).forEach(t => { const d = prioPill(t, { compact: true }); d.classList.toggle('done', isDoneTask(t)); dots.append(d); }); cell.append(dots);
       cell.onclick = () => { calSel = key; render(); };
       cell.addEventListener('dragover', e => { e.preventDefault(); cell.classList.add('over'); }); cell.addEventListener('dragleave', () => cell.classList.remove('over'));
       cell.addEventListener('drop', e => { e.preventDefault(); cell.classList.remove('over'); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
@@ -1798,7 +1804,7 @@ if (typeof window !== 'undefined') (() => {
   function numChip(t) { const b = el('button', 'numchip', '#' + t.num); b.type = 'button'; b.title = `Task #${t.num}: click to copy the reference`; b.setAttribute('aria-label', `Task number ${t.num}, copy`);
     b.onclick = e => { e.stopPropagation(); copyText('#' + t.num, `Copied #${t.num}`); }; return b; }
   function cardEl(t, ci, detailed = false) {
-    const c = el('div', 'card' + (t.priority ? ' p-' + t.priority : '') + (detailed ? ' detailed' : '')); c.draggable = !phone(); paint(c, t);   // phones use hold-to-move instead: the browser's own drag would swallow the touch
+    const c = el('div', 'card' + (detailed ? ' detailed' : '')); c.draggable = !phone(); paint(c, t);   // phones use hold-to-move instead: the browser's own drag would swallow the touch
     c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); c.classList.add('dragging'); });
     c.addEventListener('dragend', () => c.classList.remove('dragging'));
     c.addEventListener('dragover', e => e.preventDefault());
@@ -1807,7 +1813,7 @@ if (typeof window !== 'undefined') (() => {
     c.addEventListener('click', e => { if (phone() && !lift.justLifted && !e.target.closest('button, a, input, select, textarea, .taskactions')) openCard(t.id); });   // phones: tap a card to open it (and change its status there)
     c.addEventListener('touchstart', e => liftStart(e, t, c), { passive: true });   // phones: hold to pick it up and drop it on another lane   // phones: tap a card to open it (and change its status there)
     const fr = freshInfo(t);
-    const top = el('div', 'top'); top.append(numChip(t)); if (fr.changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; top.append(d); } if (t.priority) top.append(el('span', 'prio ' + t.priority, t.priority)); top.append(el('span', 'spacer'));
+    const top = el('div', 'top'); top.append(numChip(t)); if (fr.changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; top.append(d); } top.append(prioPill(t), el('span', 'spacer'));
     const edit = elI('button', 'ico', 'pencil'), bot = elI('button', 'ico', 'bot');
     edit.title = 'Edit task'; edit.setAttribute('aria-label', 'Edit task'); edit.onclick = () => openCard(t.id);
     bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent');
@@ -1834,7 +1840,7 @@ if (typeof window !== 'undefined') (() => {
       chip.title = tc.all ? 'Show or hide the checklist' : 'Add a checklist'; chip.setAttribute('aria-expanded', String(openLists.has(t.id)));
       chip.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; foot.append(chip); }
     { const n = t.comments.length, cm = elI('button', 'chip cmchip' + (n ? ' has' : ''), 'message-square', n ? String(n) : ''); cm.title = n ? `${n} comment${n > 1 ? 's' : ''}${fr.unread ? ', ' + fr.unread + ' unread' : ''}` : 'Add a comment'; if (fr.unread) { cm.classList.add('unread'); cm.append(newBadge(fr.unread)); } cm.setAttribute('aria-label', cm.title); cm.onclick = () => openComments(t.id); foot.append(cm); }
-    if (t.due) { const late = t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); foot.append(elI('span', 'chip' + (late ? ' late' : ''), 'calendar', t.due)); }
+    if (t.due) foot.append(duePill(t));
     const other = [];
     t.links.forEach(l => { const g = ghLink(l.url); if (!g) { other.push(l); return; }
       const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; foot.append(a); });
@@ -1995,8 +2001,7 @@ if (typeof window !== 'undefined') (() => {
   $('cTitle').addEventListener('input', () => autosize($('cTitle'))); $('cTitle').addEventListener('blur', commitTitle);
 
   $('cCol').onchange = e => { const id = editing, v = e.target.value; saveField(n => { place(n, id, v, null); }, `Move: ${titleOf(id)}`); };
-  const PRIO_TONE = { high: 'danger', medium: 'warn', low: 'ok' };
-  function syncPrio(v) { const w = $('cPrio').parentElement; ['danger', 'warn', 'ok'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + (PRIO_TONE[v] || 'warn')); }
+  function syncPrio(v) { const w = $('cPrio').parentElement; ['danger', 'warn', 'ok'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + ui.priorityTone(v)); }
   $('cPrio').onchange = e => { const v = e.target.value; syncPrio(v); edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
   $('cClient').onchange = async e => {
     const sel = e.target, id = editing; let v = sel.value;
@@ -2024,8 +2029,8 @@ if (typeof window !== 'undefined') (() => {
     edit(id, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(id)}`);
   };
   function syncDue(v, t) {   // overdue is red, today amber; a done task is never late
-    const st = dueState({ due: v, column: t ? t.column : '' }), p = $('cDuePill');
-    p.classList.toggle('ui-pill--danger', st === ' late'); p.classList.toggle('ui-pill--warn', st === ' today'); p.classList.toggle('ui-pill--neutral', !st);
+    const tone = (ui.dueInfo(v, { done: !!t && isDoneTask(t) }) || {}).tone, late = tone === 'danger', today = tone === 'warn', p = $('cDuePill');
+    p.classList.toggle('ui-pill--danger', late); p.classList.toggle('ui-pill--warn', today); p.classList.toggle('ui-pill--neutral', !late && !today);
     p.classList.toggle('ddue--empty', !v); $('cDueClear').hidden = !v;
   }
   $('cDue').onchange = e => { const v = e.target.value; syncDue(v, taskNow()); edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
@@ -3286,24 +3291,19 @@ if (typeof window !== 'undefined') (() => {
   $('dlgAddPerson').addEventListener('close', () => { addPersonExtra = {}; $('apSave').disabled = false; });
 
   function stagePill(s) { const b = el('span', 'stagepill' + (closedStage(s) ? ' closed' : ''), s || '—'); b.style.setProperty('--h', hashHue(s || '')); return b; }
-  function dueBadge(p) {
-    if (!p.next_due) return el('span', 'pdue none', p.next ? 'no date' : '');
-    const t = todayIso(), cls = p.next_due < t ? ' late' : p.next_due === t ? ' today' : '';
-    return el('span', 'pdue' + cls, p.next_due < t ? `${fmtDue(p.next_due)} · overdue` : p.next_due === t ? 'today' : fmtDue(p.next_due));
-  }
   function personRow(p) {
     const row = el('div', 'prow'); row.tabIndex = 0; row.onclick = () => openContact(p.id); row.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
     const who = el('div', 'pwho'); who.append(el('b', null, p.name || '(no name)'), el('span', 'muted', [p.role, p.company].filter(Boolean).join(' · ')));
-    const nx = el('div', 'pnext'); nx.append(el('span', null, p.next || (closedStage(p.stage) ? '' : 'No next step')), dueBadge(p));
+    const nx = el('div', 'pnext'); nx.append(el('span', null, p.next || (closedStage(p.stage) ? '' : 'No next step')), personDue(p));
     const lt = lastTouch(p), ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
     row.append(who, stagePill(p.stage), nx, ago); return row;
   }
   function taskTodayRow(t) {   // a task on Today, in the same layout as a person row
     const row = el('div', 'prow ttoday'); row.tabIndex = 0; row.onclick = e => { if (!e.target.closest('.todayactions')) openCard(t.id); }; row.onkeydown = e => { if (e.key === 'Enter' && e.target === row) openCard(t.id); };
     const who = el('div', 'pwho'); who.append(el('b', null, (t.num ? '#' + t.num + ' ' : '') + t.title), el('span', 'muted', [t.client, colName(t.column)].filter(Boolean).join(' · ')));
-    const pr = el('span', 'stagepill tprio', t.priority ? t.priority[0].toUpperCase() + t.priority.slice(1) : 'Task'); pr.dataset.v = t.priority || '';
+    const pr = prioPill(t);
     const done = t.todos.filter(d => d.done).length, nx = el('div', 'pnext');
-    nx.append(el('span', null, t.todos.length ? `Checklist ${done}/${t.todos.length}` : 'Task'), dueBadge({ next_due: t.due, next: 'x' }));
+    nx.append(el('span', null, t.todos.length ? `Checklist ${done}/${t.todos.length}` : 'Task'), duePill(t) || '');
     const tail = el('div', 'todaytail'), assigned = el('span', 'plast muted', t.assignees.length ? t.assignees.map(a => '@' + a).join(', ') : 'nobody assigned'), actions = taskQuickActions(t); actions.classList.add('todayactions');
     tail.append(assigned, actions); row.append(who, pr, nx, tail); return row;
   }
@@ -3386,7 +3386,7 @@ if (typeof window !== 'undefined') (() => {
         k.onclick = () => openContact(p.id); k.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
         k.append(el('div', 'ctitle', p.name || '(no name)'));
         if (p.company || p.role) k.append(el('div', 'muted small', [p.role, p.company].filter(Boolean).join(' · ')));
-        if (p.next || p.next_due) { const nx = el('div', 'pnext small'); nx.append(el('span', null, p.next || ''), dueBadge(p)); k.append(nx); }
+        if (p.next || p.next_due) { const nx = el('div', 'pnext small'); nx.append(el('span', null, p.next || ''), personDue(p)); k.append(nx); }
         if (p.value) k.append(el('div', 'pval', p.value));
         return k;
       }, cards);

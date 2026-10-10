@@ -91,6 +91,13 @@ button.ui-pill__main:hover:not(:disabled) { border: 0; text-decoration: underlin
 .ui-pill__remove .ui-i { width: 12px; height: 12px; }
 .ui-pill__remove:hover:not(:disabled) { opacity: 1; background: color-mix(in srgb, currentColor 15%, transparent); border: 0; }
 
+/* small pills for dense rows (cards, list rows, schedule) */
+.ui-pill--sm { min-height: 20px; padding: 0 var(--sp-3, 8px); font-size: var(--fs-xs, 11px); }
+.ui-pill--sm .ui-i { width: 12px; height: 12px; }
+/* priority: the compact form is a dot in the tone's colour (calendar cells) */
+.ui-prio--dot { width: 8px; height: 8px; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: var(--ui-pill-fg); flex: none; }
+.ui-due[data-due="overdue"], .ui-due[data-due="today"] { font-weight: 600; }
+
 /* ---- avatar and person -------------------------------------------------------------------------------------- */
 .ui-avatar {
   display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%;
@@ -275,14 +282,11 @@ a.ui-listrow__main:hover .ui-listrow__text { text-decoration: underline; }
   border: 1px solid var(--border); border-radius: var(--r-lg, 10px); background: var(--card); color: var(--text);
   font: inherit; font-size: var(--fs-md, 14px); text-align: left; line-height: 1.35;
 }
-.ui-task--high { --ui-prio-c: var(--danger); } .ui-task--medium { --ui-prio-c: var(--warn); } .ui-task--low { --ui-prio-c: var(--muted); }
+.ui-task--high { --ui-prio-c: var(--danger); } .ui-task--medium { --ui-prio-c: var(--warn); } .ui-task--low { --ui-prio-c: var(--ok); }
 .ui-task--button { cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s; }
 button.ui-task--button:hover:not(:disabled) { background: var(--card-hover); border-color: var(--border-strong, color-mix(in srgb, var(--muted) 55%, var(--border))); }
 .ui-task__top { display: flex; align-items: center; gap: var(--sp-3, 8px); min-width: 0; color: var(--muted); font-size: var(--fs-sm, 12px); }
 .ui-task__num { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--muted); }
-.ui-task__prio { display: inline-flex; align-items: center; gap: var(--sp-1, 4px); text-transform: capitalize; }
-.ui-task__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ui-prio-c); flex: none; }
-.ui-task__prio--low .ui-task__dot { background: transparent; border: 1.5px solid var(--muted); }
 .ui-task__title { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .ui-task__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2, 6px); min-width: 0; }
 .ui-task__meta .ui-pill { min-height: 22px; padding: 0 var(--sp-3, 8px); font-size: var(--fs-xs, 11px); }
