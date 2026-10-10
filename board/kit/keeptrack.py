@@ -30,6 +30,8 @@ Board structure (labels, clients, members, settings) lives in tasks.json; change
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
   keeptrack.py clients | client-rename OLD NEW | client-rm NAME | client-set NAME --north-star ..
   keeptrack.py members | member-add USER [--name ..] | member-set USER --name .. | member-rm USER [--unassign]
+  keeptrack.py agents | agent-add NAME | agent-rm NAME [--unassign]
+  keeptrack.py task-rm ID --yes | person-rm REF --yes     # delete something created by mistake
   keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--stages "A,B,C" | --rename-stage OLD=NEW]
   keeptrack.py projects [--client ..] [--status active|done|paused] [-q ..] | project REF   # project REF: its goal, people, links and OPEN tasks
   keeptrack.py project-add NAME --client .. [--north-star ..] | project-set REF [--name ..] [--client ..] [--north-star ..] [--status ..] | project-remove REF [--clear-project]
@@ -528,18 +530,21 @@ def cached_read(path):
     return text, d["sha"]
 
 
-def content_text(path, d):
-    """The text of a contents-API answer. Files over 1 MB come back with no content (encoding "none"): read them raw."""
+def content_text(path, d, ref=None):
+    """The text of a contents-API answer. Files over 1 MB come back with no content (encoding "none"): read them raw.
+    The raw read uses ref (a backup tag, branch or commit) when given, else the board branch: it must be the same
+    version the answer d came from."""
     if d.get("content") or d.get("encoding") != "none":
         return base64.b64decode(d.get("content") or "").decode()
-    url = f"repos/{REPO}/contents/{path}?ref={BRANCH}"
+    at = urllib.parse.quote(ref, safe="") if ref else BRANCH
+    url = f"repos/{REPO}/contents/{path}?ref={at}"
     if use_http():
         rc, out, err = http("GET", url, accept="application/vnd.github.raw+json")
     else:
         p = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw+json", url], capture_output=True, text=True)
         rc, out, err = p.returncode, p.stdout, p.stderr
     if rc:
-        sys.exit(f"cannot read {path} (over 1 MB) from {REPO}@{BRANCH}: {err.strip() or out.strip()}")
+        sys.exit(f"cannot read {path} (over 1 MB) from {REPO}@{ref or BRANCH}: {err.strip() or out.strip()}")
     return out
 
 
@@ -880,6 +885,21 @@ class UseGit(Exception):
     """The API refused the write because of the sandbox proxy: switch to the git transport and retry."""
 
 
+_MUT = {"base": None, "extra": {}}   # while fn runs inside mutate: the board state it reads and the extra files it wants saved with it
+
+
+def rewrite_archives(data, edit):
+    """Rewrite archive/<year>.json files in the same save as the board. edit(archive data) changes it in place and
+    returns how many entries it touched. Only call this from a mutate() fn. Returns the total."""
+    n = 0
+    for y in archive_years(data):
+        cur, _ = read_archive(y, _MUT["base"])
+        k = edit(cur) if cur else 0
+        if k:
+            _MUT["extra"][f"archive/{y}.json"] = _json_text(cur); n += k
+    return n
+
+
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
@@ -895,11 +915,13 @@ def _mutate(fn, message):
         # migration because it creates many files and first makes a backup tag.
         migrate_data(data, min(SCHEMA, 3))
         out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
+        _MUT["base"], _MUT["extra"] = sha, {}
         with contextlib.redirect_stdout(out):
             result = fn(data)
         assign_nums(data)
+        extra = _MUT["extra"]
         try:
-            ok = save(data, sha, message)
+            ok = save_changes(data, sha, message, extra=extra) if extra else save(data, sha, message)
         except UseGit:
             WRITE = "git"  # re-read through git and apply the change again
             continue
@@ -1913,7 +1935,7 @@ def _read_backup(ref):
     rc, out, err = gh(f"repos/{REPO}/contents/{PATH}?ref={urllib.parse.quote(ref, safe='')}")
     if rc:
         sys.exit(f"cannot read {PATH} at backup {ref}: {err.strip() or out.strip()}")
-    raw = content_text(PATH, json.loads(out))
+    raw = content_text(PATH, json.loads(out), ref)
     root = json.loads(raw)
     if root.get("layout") != "split":
         return root
@@ -2357,6 +2379,22 @@ def cmd_person_set(a):
     mutate(fn, f"Update person: {a.ref}")
 
 
+def cmd_person_rm(a):
+    """Delete a CRM person added by mistake (not Lost: wrong). Needs --yes. Tasks that named them as contact lose that link
+    (as in the web board). Projects list people by email address, not by id, so they are left alone."""
+    def fn(data):
+        p = find_person(data, a.ref)
+        tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
+        if not a.yes:
+            sys.exit(f"this deletes {person_line(p)} for good (notes and history included); rerun with --yes to confirm. "
+                     f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
+        for t in tasks:
+            t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
+        data["contacts"] = [x for x in data["contacts"] if x is not p]
+        print(f"deleted {p['id']} {p['name']}" + (f"; cleared as contact on {len(tasks)} tasks" if tasks else ""))
+    mutate(fn, f"Delete person: {a.ref}")
+
+
 def cmd_touch(a):
     """Log a contact. --draft records a message that is not sent yet (it does not count as contact)."""
     event_at, source_id = check_event_time(getattr(a, "at", None)), check_source_id(getattr(a, "source_id", None))
@@ -2579,6 +2617,22 @@ def cmd_task_set(a):
     mutate(fn, f"Update task: {a.id}")
 
 
+def cmd_task_rm(a):
+    """Delete a task that was created by mistake (the only other way out is done -> archive). Needs --yes.
+    Nothing else points at a task, so only the card goes; its number is not reused."""
+    def fn(data):
+        t = find(data, a.id)
+        c = t.get("claim") or {}
+        if c and c.get("status") not in (None, "done"):
+            sys.exit(f"#{t['num']} has an active claim ({c.get('agent') or c.get('on_behalf_of') or 'someone'}); release it first")
+        if not a.yes:
+            sys.exit(f"this deletes #{t['num']} '{t['title']}' for good (history included); rerun with --yes to confirm. "
+                     "A finished task should go done -> archive instead")
+        data["tasks"] = [x for x in data["tasks"] if x is not t]
+        print(f"deleted #{t['num']} {t['title']}")
+    mutate(fn, f"Delete task: {a.id}")
+
+
 def cmd_unlink(a):
     """Remove a link from a task by URL (or by title)."""
     def fn(data):
@@ -2635,12 +2689,6 @@ def find_label(data, name):
     sys.exit(f"no label '{name}'. Labels: {', '.join(x.get('name', '') for x in data['labels']) or '(none)'}")
 
 
-def _archive_note(data, what):
-    """Renames change the live board only; archive/<year>.json files keep the old name."""
-    if (data.get("archive") or {}).get("files"):
-        print(f"note: archived items keep the old {what}; after unarchive, fix them with task-set or person-set")
-
-
 def cmd_labels(a):
     data, _ = load()
     use = {}
@@ -2688,8 +2736,15 @@ def cmd_label_set(a):
                 if old in t.get("labels", []):
                     t["labels"] = list(dict.fromkeys(new if x == old else x for x in t["labels"]))
                     hist(t, f"label {old} renamed to {new}"); t["updated"] = now(); n += 1
-            print(f"renamed label {old} -> {new} on {n} cards")
-            _archive_note(data, "label name")
+            def edit(cur):
+                k = 0
+                for t in cur.get("tasks", []):
+                    if old in t.get("labels", []):
+                        t["labels"] = list(dict.fromkeys(new if x == old else x for x in t["labels"]))
+                        hist(t, f"label {old} renamed to {new}"); k += 1
+                return k
+            arch = rewrite_archives(data, edit)
+            print(f"renamed label {old} -> {new} on {n} cards" + (f" and {arch} archived" if arch else ""))
         print(f"label {lab['name']} {lab.get('color', '')}")
     mutate(fn, f"Update label: {a.name}")
 
@@ -2750,8 +2805,18 @@ def cmd_client_rename(a):
             pr["client"] = new; pr["updated"] = now()
         for c in people:
             c["company"] = new; hist(c, f"company renamed {a.client} -> {new}"); c["updated"] = now()
-        print(f"renamed client {a.client} -> {new} ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)")
-        _archive_note(data, "client name")
+        def edit(cur):
+            k = 0
+            for t in cur.get("tasks", []):
+                if t.get("client") == a.client:
+                    t["client"] = new; hist(t, f"client renamed {a.client} -> {new}"); k += 1
+            for c in cur.get("contacts", []):
+                if c.get("company") == a.client:
+                    c["company"] = new; hist(c, f"company renamed {a.client} -> {new}"); k += 1
+            return k
+        arch = rewrite_archives(data, edit)
+        print(f"renamed client {a.client} -> {new} ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people"
+              + (f", {arch} archived items" if arch else "") + ")")
     mutate(fn, f"Rename client: {a.client}")
 
 
@@ -2768,7 +2833,6 @@ def cmd_client_rm(a):
         data["clients"] = [c for c in clients if c != a.client]
         data.setdefault("client_info", {}).pop(a.client, None)
         print(f"removed client {a.client}")
-        _archive_note(data, "client name")
     mutate(fn, f"Remove client: {a.client}")
 
 
@@ -2842,6 +2906,57 @@ def cmd_member_rm(a):
     mutate(fn, f"Remove member: {a.user}")
 
 
+def check_agent_name(name):
+    name = (name or "").strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}", name):
+        sys.exit(f"'{name}' is not an agent name: use 1-40 letters, digits, '.', '_' or '-' (for example claude)")
+    return name
+
+
+def cmd_agents(a):
+    data, _ = load()
+    for g in data.get("agents", []):
+        n = sum(1 for t in data.get("tasks", []) if g in t.get("assignees", []) and t.get("column") != "done")
+        print(f"{g}  ({n} open tasks)")
+    if not data.get("agents"):
+        print("(no agents)")
+
+
+def cmd_agent_add(a):
+    """Add an agent name (used by the web board's filters and for assignment, like a member but not a GitHub user)."""
+    def fn(data):
+        g = check_agent_name(a.name)
+        agents = data.setdefault("agents", [])
+        if any(str(x).lower() == g.lower() for x in agents):
+            sys.exit(f"{g} is already an agent")
+        agents.append(g)
+        print(f"added agent {g}")
+    mutate(fn, f"Add agent: {a.name}")
+
+
+def cmd_agent_rm(a):
+    """Remove an agent name. Refuses while it is assigned open tasks or has an active claim, unless --unassign (open tasks only)."""
+    def fn(data):
+        g = a.name.strip().lstrip("@")
+        agents = data.setdefault("agents", [])
+        hit = next((x for x in agents if str(x).lower() == g.lower()), None)
+        if hit is None:
+            sys.exit(f"{g} is not an agent. Agents: {', '.join(agents) or '(none)'}")
+        claimed = [t for t in data.get("tasks", []) if (t.get("claim") or {}).get("agent") == hit
+                   and (t.get("claim") or {}).get("status") not in (None, "done")]
+        if claimed:
+            sys.exit(f"{hit} has active claims on " + ", ".join(f"#{t.get('num')}" for t in claimed) + "; release them first")
+        open_tasks = [t for t in data.get("tasks", []) if hit in t.get("assignees", []) and t.get("column") != "done"]
+        if open_tasks and not a.unassign:
+            sys.exit(f"{hit} is assigned {len(open_tasks)} open task(s) (" + ", ".join(f"#{t.get('num')}" for t in open_tasks[:10])
+                     + "); reassign them or use --unassign")
+        for t in open_tasks:
+            t["assignees"] = [x for x in t["assignees"] if x != hit]; hist(t, f"unassigned @{hit} (agent removed)"); t["updated"] = now()
+        data["agents"] = [x for x in agents if x != hit]
+        print(f"removed agent {hit}" + (f"; unassigned from {len(open_tasks)} open tasks" if open_tasks else ""))
+    mutate(fn, f"Remove agent: {a.name}")
+
+
 def cmd_settings(a):
     data, _ = load()
     st = data.get("settings") or {}
@@ -2851,6 +2966,7 @@ def cmd_settings(a):
     print(f"modes: {', '.join(st.get('modes', [])) or '-'}")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
+    print(f"agents: {', '.join(data.get('agents', [])) or '-'}")
     print(f"labels: {len(data.get('labels', []))}  clients: {len(data.get('clients', []))}  members: {len(data.get('people', []))}")
 
 
@@ -2889,8 +3005,14 @@ def cmd_settings_set(a):
                          "use --rename-stage OLD=NEW or move them with person-set --stage first")
             st["stages"] = new_stages; print("stages: " + ", ".join(new_stages))
             if renames:
-                print(f"moved {moved} people to the renamed stage(s)")
-                _archive_note(data, "stage")
+                def edit(cur):
+                    k = 0
+                    for c in cur.get("contacts", []):
+                        if c.get("stage") in renames:
+                            hist(c, f"stage {c['stage']} renamed to {renames[c['stage']]}"); c["stage"] = renames[c["stage"]]; k += 1
+                    return k
+                arch = rewrite_archives(data, edit)
+                print(f"moved {moved} people to the renamed stage(s)" + (f" and {arch} archived" if arch else ""))
     mutate(fn, "Board settings")
 
 
@@ -3463,6 +3585,7 @@ def main():
     s = sub.add_parser("person", help="show one person (id prefix or name)"); s.add_argument("ref"); s.set_defaults(f=cmd_person)
     s = sub.add_parser("person-add", help="add a person (refuses duplicates)"); s.add_argument("name"); pf(s); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_person_add)
     s = sub.add_parser("person-set", help="change a person's fields, stage or next step"); s.add_argument("ref"); s.add_argument("--name"); pf(s); s.set_defaults(f=cmd_person_set)
+    s = sub.add_parser("person-rm", help="delete a person added by mistake (needs --yes)"); s.add_argument("ref"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_person_rm)
     s = sub.add_parser("touch", help="log a contact; --draft for a message that is not sent yet"); s.add_argument("ref"); s.add_argument("text")
     s.add_argument("--channel", choices=CHANNELS, default="note"); s.add_argument("--draft", action="store_true")
     s.add_argument("--at", help="actual contact time as an ISO timestamp with timezone")
@@ -3493,6 +3616,7 @@ def main():
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
     s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s = sub.add_parser("task-rm", help="delete a task created by mistake (needs --yes)"); s.add_argument("id"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_task_rm)
     s = sub.add_parser("unlink", help="remove a link from a task"); s.add_argument("id"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_unlink)
     s = sub.add_parser("labels", help="list labels and how many cards use each"); s.set_defaults(f=cmd_labels)
     s = sub.add_parser("label-add", help="create a label"); s.add_argument("name"); s.add_argument("--color", help="hex colour, e.g. #0c66e4"); s.set_defaults(f=cmd_label_add)
@@ -3505,6 +3629,9 @@ def main():
     s = sub.add_parser("member-add", help="add a board member"); s.add_argument("user", help="GitHub username"); s.add_argument("--name"); s.set_defaults(f=cmd_member_add)
     s = sub.add_parser("member-set", help="change a board member's display name"); s.add_argument("user"); s.add_argument("--name"); s.set_defaults(f=cmd_member_set)
     s = sub.add_parser("member-rm", help="remove a board member"); s.add_argument("user"); s.add_argument("--unassign", action="store_true", help="take them off their open tasks"); s.set_defaults(f=cmd_member_rm)
+    s = sub.add_parser("agents", help="list the board's agents (names used in filters and assignment)"); s.set_defaults(f=cmd_agents)
+    s = sub.add_parser("agent-add", help="add an agent name"); s.add_argument("name"); s.set_defaults(f=cmd_agent_add)
+    s = sub.add_parser("agent-rm", help="remove an agent name"); s.add_argument("name"); s.add_argument("--unassign", action="store_true", help="take it off its open tasks"); s.set_defaults(f=cmd_agent_rm)
     s = sub.add_parser("settings", help="show board settings"); s.set_defaults(f=cmd_settings)
     s = sub.add_parser("settings-set", help="change title, stale minutes or pipeline stages"); s.add_argument("--title")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")

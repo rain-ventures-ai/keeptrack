@@ -92,6 +92,8 @@ $B task-set '#12' --title ".." --priority high --due +3 --label relay --unlabel 
 $B labels | label-add NAME --color "#hex" | label-set NAME --rename NEW | label-rm NAME [--force]
 $B clients | client-rename OLD NEW | client-rm NAME | client-unlink CLIENT URL
 $B members | member-add USER --name ".." | member-rm USER [--unassign]
+$B agents | agent-add NAME | agent-rm NAME [--unassign]
+$B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)
 $B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW
 ```
 Ask the user before a rename, a delete, removing a member or `--force`; the commands print what they will touch.

@@ -38,18 +38,19 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | What is left on a project | `project "Rollout"` (goal, people, links, open tasks); `projects --client "Acme"` lists them |
 | Add / rename a board member | `member-add sam --name "Sam"`, `member-set sam --name "Sam K"` |
 | Remove a board member | `member-rm sam` (refuses with open tasks; `--unassign` takes them off). Never the upgrade owner |
+| List / add / remove an agent name | `agents`, `agent-add codex`, `agent-rm codex` (refuses with open tasks or a claim; `--unassign` takes it off open tasks) |
+| Delete a card or CRM person made by mistake | `task-rm '#12' --yes`, `person-rm "Cat" --yes` (refuse without `--yes`; ask first, it cannot be undone from the CLI). A finished task goes done and archive instead; a person who is not a fit goes to Lost |
 | Board title, stale minutes | `settings-set --title "Ops" --stale-minutes 45` |
 | Pipeline stages | `settings-set --rename-stage Talking=Meeting` (moves people), or `--stages "New,Contacted,Won,Lost"` (refuses if people would be left in a dropped stage) |
 
 `ID` may be a task number such as `'#12'` (quote the `#`).
 
 ## 3. Rules
-- **Ask before anything wide or lossy:** renaming or deleting a label, client or stage, removing a member, or `--force`.
+- **Ask before anything wide or lossy:** renaming or deleting a label, client or stage, removing a member or agent, `task-rm`, `person-rm`, or `--force`.
   Say what it touches (the commands print counts) and wait for a yes. Adding a label or retitling one card needs no ask.
 - A refusal is information, not an obstacle: it names what still depends on the thing. Fix that, or ask. Do not work
   round it by editing JSON.
 - Board members are GitHub users who can be assigned work. CRM people (`person-add`) are separate records.
-- Renames reach the live board only. Archived items keep the old name; after `unarchive`, fix them with `task-set`
-  or `person-set`. A client's working folder (for example `clients/<name>/` in the repo) is not renamed either: say so.
+- Renames reach archived items too (`archive/<year>.json` is rewritten in the same save). A client's working folder (for example `clients/<name>/` in the repo) is not renamed: say so.
 - Columns can't be changed from the CLI yet; tell the person and leave them as they are.
 - After a structural change, run `python3 board/keeptrack.py doctor` and report anything it finds.

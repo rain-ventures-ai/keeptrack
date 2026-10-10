@@ -203,9 +203,11 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 | Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |
 | Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links and open tasks), `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL [--title]`, `project-unlink REF URL` (URL or title, as `unlink`), `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
 | Board members | `members`, `member-add USER [--name]`, `member-set USER --name`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
+| Agents | `agents`, `agent-add NAME`, `agent-rm NAME [--unassign]` (the names the web board uses in filters and assignment; never one with an active claim) |
+| Delete by mistake | `task-rm ID --yes` (a card made by mistake; a finished one should go done and archive), `person-rm REF --yes` (a CRM person added by mistake, not a Lost one). Both refuse without `--yes`; `task-rm` also refuses an active claim. `person-rm` clears the person as a task contact |
 | Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW]` |
 
-Renames change the live board only: items in `archive/<year>.json` keep the old label, client or stage name (the command says so); after `unarchive`, fix them with `task-set` or `person-set`. Columns are not editable from the CLI yet. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
+Renames (`label-set --rename`, `client-rename`, `settings-set --rename-stage`) also rewrite matching items in `archive/<year>.json` in the same save, so `unarchive` never brings back an old name. Columns are not editable from the CLI yet. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
 
 Useful environment variables: `BOARD_USER`, `BOARD_AGENT`, `BOARD_SESSION` (also `CLAUDE_SESSION_ID` / `CODEX_SESSION_ID`), `BOARD_REPO`, `BOARD_BRANCH`, `BOARD_PATH` (default `board/tasks.json`). Test safely with `--file some-copy.json`.
 
