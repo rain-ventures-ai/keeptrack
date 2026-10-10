@@ -1261,17 +1261,16 @@ if (typeof window !== 'undefined') (() => {
   function removeTodo(tid, did) {
     return mutate(n => { const t = n.tasks.find(x => x.id === tid); if (!t) return; t.todos = t.todos.filter(x => x.id !== did); stamp(t); }, `Remove to-do: ${titleOf(tid)}`, [tid]);
   }
-  function todoList(t, inDialog) {   // shared by the card (expanded) and the edit dialog
+  function todoList(t) {   // a card's expanded checklist (the drawer has its own, renderDlgTodos)
     const box = el('div', 'todos');
     t.todos.forEach(d => {
       const row = el('label', 'todo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
-      cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); if (inDialog) renderDlgTodos(); };
+      cb.onchange = () => toggleTodo(t.id, d.id, cb.checked);
       row.append(cb, el('span', null, d.text));
-      if (inDialog) { const x = el('button', 'x', '×'); x.type = 'button'; x.title = 'Remove'; x.onclick = async e => { e.preventDefault(); if (!confirmRemoval(`the checklist item “${d.text}”`)) return; await removeTodo(t.id, d.id); renderDlgTodos(); }; row.append(x); }
       box.append(row);
     });
     const add = el('input', 'todonew'); add.placeholder = 'Add a to-do and press Enter';
-    add.addEventListener('keydown', async e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = add.value; add.value = ''; await addTodo(t.id, v); if (inDialog) { renderDlgTodos(); const n = $('cTodos').querySelector('.todonew'); if (n) n.focus(); } });
+    add.addEventListener('keydown', async e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = add.value; add.value = ''; await addTodo(t.id, v); });
     box.append(add); return box;
   }
   function renderDlgTodos(force) {   // the drawer's checklist; adding goes through the section's add row
@@ -1337,7 +1336,7 @@ if (typeof window !== 'undefined') (() => {
       else if (!claudeReady()) toast('To make @claude start your routine, set it up in Settings → Agents. Posting as a normal comment.');
       else if (!cfg().me) toast('Set your GitHub username in Settings first. Posting as a normal comment.', true);
       else { const t0 = state.tasks.find(x => x.id === id), other = t0 && t0.claim && claimState(t0.claim) === 'running' && String(t0.claim.session_id || '').indexOf('pending-') !== 0;
-        if (other && !confirm(`${t0.claim.agent} already has a running session on this task. Send to Claude anyway?`)) { /* post only */ }
+        if (other && !(await ui.confirm({ title: 'Send to Claude anyway?', body: `${t0.claim.agent} already has a running session on this task. Cancel posts the comment without starting Claude.`, confirmLabel: 'Send to Claude' }))) { /* post only */ }
         else { const a = await askSend(t0 ? t0.num : '?'); if (a === 'cancel') return; send = a === 'send'; } }
     }
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
@@ -1484,7 +1483,7 @@ if (typeof window !== 'undefined') (() => {
     mm.append(...labelTags(t)); if (t.client) mm.append(el('span', 'tag client', t.client));
     [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
-    if (openLists.has(t.id)) task.append(todoList(t, false));
+    if (openLists.has(t.id)) task.append(todoList(t));
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
     const ppl = el('div', 'c-people'); t.assignees.forEach(a => ppl.append(avatar(a)));
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
@@ -1836,7 +1835,7 @@ if (typeof window !== 'undefined') (() => {
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
     c.append(foot);
-    if (openLists.has(t.id)) c.append(todoList(t, false));
+    if (openLists.has(t.id)) c.append(todoList(t));
     if (t.claim) {
       const st = claimState(t.claim), k = t.claim;
       const b = el('div', 'claim ' + st); b.append(el('span', 'pulse'), el('strong', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`));
