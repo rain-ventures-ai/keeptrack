@@ -347,87 +347,26 @@
   </div>
 </dialog>
 
-<dialog id="dlgAddPerson" class="personform" aria-labelledby="apTitle">
-  <form id="apForm">
-    <div class="formhead"><div><h3 id="apTitle">Add a person</h3><p class="hint">Only their name is required. You can add more details now or later.</p></div><button id="apX" type="button" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
-    <label for="apName">Name <span class="required">Required</span></label><input id="apName" name="name" autocomplete="name" required aria-required="true">
-    <div class="pgrid">
-      <label for="apCompany"><span><i data-i="building-2"></i> Client <span class="optional">Optional</span></span><input id="apCompany" name="company" list="apCompanies" autocomplete="organization" aria-label="Client"><datalist id="apCompanies"></datalist></label>
-      <label for="apRole"><span><i data-i="briefcase"></i> Role <span class="optional">Optional</span></span><input id="apRole" name="role" autocomplete="organization-title"></label>
-      <label for="apEmail"><span><i data-i="mail"></i> Email <span class="optional">Optional</span></span><input id="apEmail" name="email" type="email" autocomplete="email"></label>
-      <label for="apPhone"><span><i data-i="phone"></i> Phone <span class="optional">Optional</span></span><input id="apPhone" name="phone" type="tel" autocomplete="tel"></label>
-      <label for="apLinkedin"><span><i data-i="link"></i> LinkedIn <span class="optional">Optional</span></span><input id="apLinkedin" name="linkedin" type="url" placeholder="https://linkedin.com/in/…" autocomplete="url"></label>
-      <label for="apGithub"><span><i data-i="github"></i> GitHub <span class="optional">Optional</span></span><input id="apGithub" name="github" placeholder="github-username" autocomplete="username"></label>
-    </div>
-    <div class="actions"><button id="apCancel" type="button">Cancel</button><button id="apSave" type="submit" class="primary">Add person</button></div>
-  </form>
+<!-- The add-person form, the person, client and project drawers are built by board.js with ui.js (buildCrmDrawers), on the same
+     pattern as the task drawer: a header (identity, undo, copy, the more-actions menu, close), one property list, then sections. -->
+<dialog id="dlgAddPerson" class="ui-sheet ui-sheet--center personform" aria-labelledby="apTitle"><form id="apForm"></form></dialog>
+
+<dialog id="dlgContact" class="drawer uidrawer crmdrawer" aria-label="Person details">
+  <div class="dhead" id="pHead"></div>
+  <div class="dbody" id="pBody"></div>
 </dialog>
 
-<dialog id="dlgContact" class="drawer" aria-label="Person details">
-  <div class="dhead"><span class="numchip big" aria-hidden="true"><i data-i="user"></i></span><span class="spacer"></span><button id="pUndo" type="button" class="ico undodrawer" aria-label="Undo last board change" title="Nothing to undo" disabled><i data-i="undo-2"></i></button><button id="pAgent" type="button" class="small agentcopy" title="Copy this person and their recent contact for Claude, Codex or ChatGPT, for example to write a message" aria-label="Copy for AI"><span aria-hidden="true"><i data-i="bot"></i></span><span class="atxt"> Copy for AI</span></button><button id="pClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
-  <div class="dbody">
-    <textarea id="pName" class="dtitle" rows="1" aria-label="Name" placeholder="Name"></textarea>
-    <div class="dchips">
-      <select id="pStage" class="pillsel" aria-label="Stage"></select>
-    </div>
-    <div class="nextbox">
-      <label for="pNext"><i data-i="arrow-right"></i> Next step</label>
-      <input id="pNext" placeholder="For example: send a LinkedIn message">
-      <div class="nextdue"><input id="pNextDue" type="date" aria-label="Next step date"><button type="button" class="small" data-due="0">Today</button><button type="button" class="small" data-due="1">Tomorrow</button><button type="button" class="small" data-due="7">+1 week</button><button type="button" class="small" data-due="">No date</button></div>
-    </div>
-    <div class="pgrid">
-      <label><span><i data-i="building-2"></i> Client</span> <input id="pCompany" list="pCompanies" autocomplete="off" aria-label="Client"><datalist id="pCompanies"></datalist></label>
-      <label><span><i data-i="briefcase"></i> Role</span> <input id="pRole"></label>
-      <label><span><i data-i="pound-sterling"></i> Value</span> <input id="pValue" placeholder="For example: 5000"></label>
-      <label><span><i data-i="compass"></i> Source</span> <input id="pSource" placeholder="For example: weekly opportunity run"></label>
-      <label><span><i data-i="github"></i> GitHub</span> <input id="pGithub" placeholder="github-username" autocomplete="username"></label>
-    </div>
-    <section class="dsec contactmethods"><div class="dsech"><h4><i data-i="user"></i> Contact details</h4></div>
-      <div class="methodgroup"><b><i data-i="mail"></i> Email addresses</b><div id="pEmails" class="methodlist"></div><div class="methodadd"><input id="pEmailLabel" aria-label="New email label" placeholder="Label, e.g. Work"><input id="pEmailNew" type="email" aria-label="New email address" placeholder="name@example.com"><button id="pEmailAdd" type="button" class="primary"><i data-i="plus"></i> Add email</button></div></div>
-      <div class="methodgroup"><b><i data-i="phone"></i> Phone numbers</b><div id="pPhones" class="methodlist"></div><div class="methodadd"><input id="pPhoneLabel" aria-label="New phone label" placeholder="Label, e.g. Mobile"><input id="pPhoneNew" type="tel" aria-label="New phone number" placeholder="Phone number"><button id="pPhoneAdd" type="button" class="primary"><i data-i="plus"></i> Add phone</button></div></div>
-    </section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="message-square"></i> Contact log <span id="pTouchCount" class="muted"></span></h4></div>
-      <div class="composer"><textarea id="pTouchText" rows="2" placeholder="What did you send or talk about? Paste a draft message here too." aria-label="Contact log entry"></textarea>
-        <div class="cbtns"><select id="pChan" class="pillsel" aria-label="Channel"><option value="linkedin">LinkedIn</option><option value="email">Email</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="note">Note</option></select>
-          <label class="chk" id="pDraftWrap"><input type="checkbox" id="pDraft"> Draft (not sent yet)</label><button id="pTouchPost" type="button" class="primary">Log it</button></div></div>
-      <div id="pTouches" class="cmlist" aria-live="polite"></div>
-    </section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="notebook-pen"></i> Notes</h4></div><textarea id="pNotes" class="ddesc" placeholder="Anything to remember about this person." aria-label="Notes"></textarea></section>
-    <section class="dsec" id="pTasksSec"><div class="dsech"><h4><i data-i="square-check"></i> Tasks</h4></div><div id="pTasks"></div><input id="pTaskNew" class="addinline wide" placeholder="＋ Add a task for this person"></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="link"></i> Profile and reference links</h4></div><div class="hint">LinkedIn, company website, blog, portfolio, or another page about this person.</div><div id="pLinks"></div><div class="methodadd"><input id="pLinkTitle" placeholder="Label (for example LinkedIn)"><input id="pLinkNew" type="url" placeholder="https://…"><button id="pLinkAdd" type="button">Add</button></div></section>
-    <section class="dsec" id="pNorthSec"><div class="dsech"><h4><i data-i="compass"></i> Client north star</h4><button id="pClientOpen" type="button" class="small" hidden>Open client</button></div><textarea id="pNorthStar" class="ddesc" rows="3" placeholder="What we are trying to solve for this client and what success looks like." aria-label="Client north star"></textarea></section>
-    <section class="dsec" id="pProjSec"><div class="dsech"><h4><i data-i="flag"></i> Projects</h4></div><div id="pProjList"></div></section>
-    <section class="dsec" id="pFilesSec"><div class="dsech"><h4 id="pFilesH"><i data-i="folders"></i> Files and folders</h4></div><div class="hint">Working material for this client in Drive, Dropbox, OneDrive, SharePoint, or a local folder. Agents need the matching connector/plugin/MCP for cloud links, or a session on the right computer for local paths. If they cannot access one, they should ask you.</div><div id="pFiles"></div><div class="methodadd"><input id="pFileTitle" placeholder="Label (for example Client Drive)"><input id="pFileNew" placeholder="Cloud URL or local path"><button id="pFileAdd" type="button">Add</button></div></section>
-    <details class="dsec"><summary id="pHistSum">History</summary><ol id="pHist" class="hist"></ol></details>
-    <div class="dfoot2"><span id="pCreated" class="dcreated"></span><button id="pDelete" type="button" class="danger">Delete person</button></div>
-  </div>
+<dialog id="dlgClient" class="drawer uidrawer crmdrawer" aria-label="Client details">
+  <div class="dhead" id="clHead"></div>
+  <div class="dbody" id="clBody"></div>
 </dialog>
 
-<dialog id="dlgClient" class="drawer" aria-label="Client details">
-  <div class="dhead"><span class="numchip big" aria-hidden="true"><i data-i="building-2"></i></span><span class="spacer"></span><button id="clClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
-  <div class="dbody">
-    <h3 id="clName" class="dtitleplain"></h3>
-    <section class="dsec"><div class="dsech"><h4><i data-i="compass"></i> North star</h4></div><textarea id="clNorth" class="ddesc" rows="4" placeholder="What we are trying to solve and what success looks like." aria-label="North star"></textarea></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="flag"></i> Projects</h4></div><div id="clProjects"></div><div class="methodadd"><input id="clProjName" placeholder="New project name" aria-label="New project name"><button id="clProjAdd" type="button">Add</button></div></section>
-    <section class="dsec"><div class="dsech"><h4 id="clFilesH"><i data-i="folders"></i> Files and folders</h4></div><div id="clFiles"></div><div class="methodadd"><input id="clFileTitle" placeholder="Label"><input id="clFileNew" placeholder="Cloud URL or local path"><button id="clFileAdd" type="button">Add</button></div></section>
-  </div>
+<dialog id="dlgProject" class="drawer uidrawer crmdrawer" aria-label="Project details">
+  <div class="dhead" id="prHead"></div>
+  <div class="dbody" id="prBody"></div>
 </dialog>
 
-<dialog id="dlgProject" class="drawer" aria-label="Project details">
-  <div class="dhead"><span class="numchip big" aria-hidden="true"><i data-i="flag"></i></span><span class="spacer"></span><button id="prClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
-  <div class="dbody">
-    <input id="prName" class="dtitle" aria-label="Project name" placeholder="Project name">
-    <div class="dchips"><select id="prStatus" class="pillsel" aria-label="Status"><option value="active">Active</option><option value="paused">Paused</option><option value="done">Done</option></select></div>
-    <section class="dsec"><div class="dsech"><h4><i data-i="compass"></i> Goal</h4></div><textarea id="prNorth" class="ddesc" rows="3" placeholder="What this project should achieve." aria-label="Project goal"></textarea></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="users"></i> People</h4></div><div id="prPeople"></div><div id="prSuggest" class="suggestrow"></div><div class="methodadd"><input id="prPersonEmail" type="email" placeholder="email@example.com" aria-label="Person email"><button id="prPersonAdd" type="button">Add</button></div></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="link"></i> Links</h4></div><div id="prLinks"></div><div class="methodadd"><input id="prLinkTitle" placeholder="Label"><input id="prLinkNew" placeholder="Cloud URL or local path"><button id="prLinkAdd" type="button">Add</button></div></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="square-check"></i> Open tasks</h4></div><div id="prTasks"></div></section>
-    <section class="dsec"><div class="dsech"><h4><i data-i="circle-check"></i> Completed tasks</h4></div><div id="prDoneTasks"></div></section>
-    <div class="dfoot2"><button id="prDelete" type="button" class="danger">Delete project</button></div>
-  </div>
-</dialog>
-
-<dialog id="dlgCard" class="drawer taskdrawer" aria-label="Task details">
+<dialog id="dlgCard" class="drawer uidrawer taskdrawer" aria-label="Task details">
   <!-- The header buttons, the property list and the section frames are built by board.js with ui.js (buildDrawer); the static parts below are moved into them. -->
   <div class="dhead" id="cHead"><span id="dSaved" class="dsaved" role="status"></span></div>
   <div class="dbody" id="cBody">

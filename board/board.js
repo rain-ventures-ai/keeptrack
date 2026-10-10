@@ -1284,11 +1284,13 @@ if (typeof window !== 'undefined') (() => {
     $('cTodoCount').textContent = t.todos.length ? `${t.todos.filter(d => d.done).length}/${t.todos.length}` : '';
   }
   const ago2 = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
-  function renderDlgHistory(t) {
-    const ol = $('cHist'); ol.textContent = ''; $('cHistCount').textContent = t.history.length || '';
-    t.history.slice().reverse().forEach(h => { const li = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li); });
-    if (!t.history.length) ol.append(el('li', null, 'No history yet.'));
+  // a history list (tasks and people): newest first, relative time, who, what
+  function renderHistory(ol, count, history) {
+    ol.textContent = ''; count.textContent = history.length || '';
+    history.slice().reverse().forEach(h => { const li = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li); });
+    if (!history.length) ol.append(el('li', null, 'No history yet.'));
   }
+  const renderDlgHistory = t => renderHistory($('cHist'), $('cHistCount'), t.history);
 
   // ---- comments: an append-only stream per card, shown in its own dialog -------------------------
   let commentsFor = null, cmSig = '', todoSig = '';
@@ -2063,16 +2065,9 @@ if (typeof window !== 'undefined') (() => {
     const v = parseLine(txt); if (!v) { toast('Paste an http(s) cloud link or local path, optionally as: Title | location', true); return false; }
     edit(editing, t => { if (!t.links.some(y => y.url === v.url)) t.links.push(v); }, `Links: ${titleOf(editing)}`);
   }
-  function renderLinkList(t) {
-    const box = $('cLinkList'); box.textContent = ''; $('cLinkCount').textContent = t.links.length || '';
-    t.links.forEach(l => {
-      const g = ghLink(l.url), local = localResource(l.url); let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
-      const row = ui.listRow({ text: g ? g.label : (l.title || l.url), meta: g && l.title && l.title !== l.url ? l.title : host, href: safeUrl(l.url) || undefined, icon: g ? 'github' : local ? 'laptop' : 'link', removeLabel: `Remove link ${l.title || l.url}`,
-        onRemove: async () => { const id = editing; if (!(await confirmDrawerRemoval(`the task resource “${l.title || l.url}”`)) || editing !== id) return; edit(id, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(id)}`); } });
-      row.title = l.url;
-      if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
-      box.append(row);
-    });
+  function renderLinkList(t) {   // the same list as the person, client and project drawers (renderLinkBox)
+    const id = editing; $('cLinkCount').textContent = t.links.length || '';
+    renderLinkBox($('cLinkList'), t.links, l => { if (editing === id) edit(id, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(id)}`); }, true, 'task resource');
   }
   function addContactLine(txt) {
     const p = txt.split('|').map(x => x.trim()); if (!p[0]) return false;
@@ -2908,83 +2903,188 @@ if (typeof window !== 'undefined') (() => {
     if (id) toast('Added you as a person on this board.');
   }
 
-  let editingClient = '';
+  // ==== person, client and project drawers: built once with ui.js on the task drawer's pattern ====
+  // a header (identity, undo, copy, the ⋯ menu, close), one property list, then sections whose empty state is one ghost "+ Add" row
+  const crmRows = { p: [], cl: [], pr: [] };
+  function resetCrmRows(k) { crmRows[k].forEach(r => { r.input.value = ''; if (r.label) r.label.value = ''; r.collapse(); }); }
+  function crmAddRow(k, id, opts) { const r = ui.addRow({ collapsed: true, buttonLabel: 'Add', ...opts }); r.input.id = id; crmRows[k].push(r); return r; }
+  // the two-field add row (a label, then the address or link) for emails, phones, links and files
+  function pairAddRow(k, { id, labelId, addId, labelPlaceholder, labelAria, type, onAdd, ...opts }) {
+    const lab = el('input', 'ui-input ui-addrow__label'); lab.id = labelId; lab.placeholder = labelPlaceholder; lab.setAttribute('aria-label', labelAria); lab.enterKeyHint = 'next';
+    const r = crmAddRow(k, id, { ...opts, onAdd: v => { const res = onAdd(lab.value.trim(), v, r.input); if (res !== false) lab.value = ''; return res; } });
+    if (type) r.input.type = type;
+    r.input.before(lab); r.label = lab; r.classList.add('dpair'); r.querySelector('button[type=submit]').id = addId;
+    const esc = e => { if (e.key !== 'Escape') return; e.preventDefault(); e.stopPropagation(); lab.value = ''; r.input.value = ''; r.collapse(); const g = r.querySelector('.ui-addrow__ghost'); if (g) g.focus(); };
+    lab.addEventListener('keydown', esc); r.input.addEventListener('keydown', e => { if (e.key === 'Escape') lab.value = ''; });
+    return r;
+  }
+  function iconTile(icon) { const t = el('span', 'dtile'); t.setAttribute('aria-hidden', 'true'); t.append(ui.icon(icon)); return t; }
+  function drawerHead(k, { kind, tile, more, extra = [] }) {
+    const who = el('span', 'didentity'); who.append(tile, el('span', 'didentity__kind', kind));
+    const moreBtn = ui.iconButton({ icon: 'ellipsis', label: 'More actions' }); moreBtn.id = k + 'More'; moreBtn.onclick = () => more(moreBtn); roKeep(moreBtn);
+    const close = ui.iconButton({ icon: 'x', label: 'Close' }); close.id = k + 'Close'; roKeep(close);
+    $(k + 'Head').append(who, el('span', 'spacer'), ...extra, moreBtn, close);
+  }
+  function dfield(id, label, { placeholder = '', type = 'text', list, autocomplete } = {}) {
+    const i = el('input', 'ui-input dfield'); i.id = id; i.type = type; i.placeholder = placeholder; i.setAttribute('aria-label', label);
+    if (list) i.setAttribute('list', list); if (autocomplete) i.autocomplete = autocomplete; return i;
+  }
+  function dnote(id, label, placeholder, rows = 3) { const t = el('textarea', 'ddesc'); t.id = id; t.rows = rows; t.placeholder = placeholder; t.setAttribute('aria-label', label); return t; }
+  function dtitle(id, label, placeholder) { const t = el('textarea', 'dtitle'); t.id = id; t.rows = 1; t.setAttribute('aria-label', label); t.placeholder = placeholder; t.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); t.blur(); } }); t.addEventListener('input', () => autosize(t)); return t; }
+  function crmSection(id, opts, countId, optional) {
+    const s = drawerSection(id, { ...opts, count: countId ? '' : undefined }); if (countId) s.querySelector('.ui-count').id = countId;
+    if (optional) s.classList.add('optsec'); if (opts.collapsible) roKeep(s.querySelector('.ui-section__toggle')); return s;
+  }
+  const dempty = text => el('p', 'dempty', text);
+  const dlist = id => { const d = el('div', 'dlist'); d.id = id; return d; };
+  const dhint = text => el('p', 'hint dhint', text);
+  const setCount = (id, n) => { $(id).textContent = n || ''; };
+  const FILES_HINT = 'Working material for this client in Drive, Dropbox, OneDrive, SharePoint, or a local folder. Agents need the matching connector/plugin/MCP for cloud links, or a session on the right computer for local paths. If they cannot access one, they should ask you.';
+  // a project in a list: the whole row opens it (navigation stays usable on read-only boards)
+  function projectNavRow(pr, onOpen) {
+    const b = el('button', 'ui-listrow dnav'); b.type = 'button'; b.append(ui.icon('flag'), el('span', 'ui-listrow__text', pr.name), el('span', 'ui-listrow__meta', pr.status || 'active'), ui.icon('chevron-right'));
+    b.setAttribute('aria-label', `Open project ${pr.name} (${pr.status || 'active'})`); b.onclick = onOpen; return roKeep(b);
+  }
+  // a task in a person or project drawer: tick it done (or reopen it), or open it
+  function drawerTaskRow(t) {
+    const isDone = t.column === doneColId(), row = el('div', 'dtask' + (isDone ? ' is-done' : ''));
+    const tick = ui.iconButton({ icon: isDone ? 'square-check' : 'square', label: isDone ? `Reopen #${t.num}` : `Mark #${t.num} done`, size: 'sm', onClick: () => toggleDone(t) });
+    const open = ui.taskRow({ num: t.num, title: t.title, priority: t.priority, due: isDone ? '' : t.due, labels: t.labels.map(l => ({ name: l, color: labelColor(l) })), todoTotal: t.todos.length, todoDone: t.todos.filter(d => d.done).length }, { density: 'compact', onOpen: () => openCard(t.id) });
+    roKeep(open); row.append(tick, open); return row;
+  }
+
+  // ---- client drawer ----
+  let editingClient = '', clSig = '';
+  function buildClientDrawer() {
+    const tile = iconTile('building-2'); tile.id = 'clTile';
+    drawerHead('cl', { kind: 'Client', tile, more: openClientMenu });
+    const name = el('h2', 'dtitle dtitle--static'); name.id = 'clName';
+    const people = el('span', 'dval'); people.id = 'clPeople';
+    const tasks = el('span', 'dval dmuted'); tasks.id = 'clTaskSum';
+    const props = el('div', 'dprops'); props.append(ui.props([{ label: 'People', icon: 'users', value: people }, { label: 'Tasks', icon: 'square-check', value: tasks }]));
+    const projAdd = crmAddRow('cl', 'clProjName', { placeholder: 'New project name', ghostLabel: 'Add project', label: 'New project name', onAdd: addClientProject });
+    projAdd.querySelector('button[type=submit]').id = 'clProjAdd';
+    const fileAdd = pairAddRow('cl', { id: 'clFileNew', labelId: 'clFileTitle', addId: 'clFileAdd', labelPlaceholder: 'Label', labelAria: 'New file label', placeholder: 'Cloud URL or local path', label: 'New file or folder: a cloud URL or local path', ghostLabel: 'Add file or folder',
+      onAdd: (title, url) => addClientFile(editingClient, title, url) });
+    const files = crmSection('clFilesSec', { title: 'Files and folders', body: [dlist('clFiles'), fileAdd, dhint(FILES_HINT)] }, 'clFileCount', true);
+    files.querySelector('.ui-section__text').id = 'clFilesH';
+    $('clBody').append(name, props,
+      crmSection('clNorthSec', { title: 'North star', body: dnote('clNorth', 'North star', 'What we are trying to solve and what success looks like.', 4) }),
+      crmSection('clProjSec', { title: 'Projects', body: [dlist('clProjects'), projAdd] }, 'clProjCount', true),
+      files);
+  }
+  buildClientDrawer();
   function openClient(name) {
-    editingClient = name; fillClientDrawer(true);
-    $('dlgClient').showModal();
+    editingClient = name; clSig = ''; resetCrmRows('cl'); fillClientDrawer(true);
+    $('dlgClient').showModal(); $('clBody').scrollTop = 0;
   }
   function fillClientDrawer(force) {
     const co = editingClient; if (!co) return;
-    $('clName').textContent = co;
-    const info = clientInfo(co);
+    const info = clientInfo(co), prs = projectsForClient(co), people = state.contacts.filter(p => p.company === co), tasks = state.tasks.filter(t => t.client === co);
+    const sig = JSON.stringify([co, info, prs, people.map(p => [p.id, p.name]), tasks.map(t => t.column === doneColId())]); if (!force && sig === clSig) return; clSig = sig;
+    $('clName').textContent = co; $('clTile').style.setProperty('--dtile-c', `hsl(${clientHue(co)} 72% 52%)`);
+    const pbox = $('clPeople'); pbox.textContent = '';
+    people.sort((a, b) => a.name.localeCompare(b.name)).forEach(p => pbox.append(roKeep(ui.person({ name: p.name || '(no name)', onClick: () => { $('dlgClient').close(); openContact(p.id); } }))));
+    if (!people.length) pbox.append(el('span', 'dmuted', 'Nobody yet'));
+    const open = tasks.filter(t => t.column !== doneColId()).length; $('clTaskSum').textContent = tasks.length ? `${open} open · ${tasks.length - open} done` : 'No tasks yet';
     if (force || document.activeElement !== $('clNorth')) $('clNorth').value = info.north_star || '';
     const box = $('clProjects'); box.textContent = '';
-    projectsForClient(co).sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => {
-      const row = el('button', 'prowbtn'); row.type = 'button';
-      row.append(el('b', null, pr.name), el('span', 'muted', ' · ' + (pr.status || 'active')));
-      row.onclick = () => { $('dlgClient').close(); openProject(pr.id); };
-      box.append(row);
-    });
-    if (!box.childNodes.length) box.append(el('div', 'muted small', 'No projects yet.'));
-    renderLinkBox($('clFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+    prs.sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => box.append(projectNavRow(pr, () => { $('dlgClient').close(); openProject(pr.id); })));
+    setCount('clProjCount', prs.length); $('clProjSec').classList.toggle('is-empty', !prs.length);
+    const links = info.links || [];
+    renderLinkBox($('clFiles'), links, l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+    setCount('clFileCount', links.length); $('clFilesSec').classList.toggle('is-empty', !links.length);
+  }
+  function openClientMenu(anchor) {
+    const co = editingClient; if (!co) return;
+    ui.menu(anchor, [
+      { label: 'Show only this client', icon: 'eye', onSelect: () => { setClientValues([co]); $('dlgClient').close(); } },
+      { label: 'Copy client name', icon: 'copy', onSelect: () => copyText(co, 'Client name copied') }
+    ], { label: `Actions for ${co}` });
   }
   $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
   $('clClose').onclick = () => $('dlgClient').close();
   $('dlgClient').addEventListener('close', () => { editingClient = ''; render(); });
-  function addClientProject() {
-    const co = editingClient, name = ($('clProjName').value || '').trim(); if (!name || !co) { if (!name) toast('Enter a project name.', true); return; }
+  function addClientProject(name) {
+    const co = editingClient; if (!co) return false;
     const pr = { id: boardId('pr_'), client: co, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
-    mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) { $('clProjName').value = ''; openProject(pr.id); } });
+    mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) openProject(pr.id); });
   }
-  $('clProjAdd').onclick = addClientProject;
-  $('clProjName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addClientProject(); } });
-  function addClientFile(co, title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return; }
-    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
-  $('clFileAdd').onclick = () => { const co = editingClient; if (!co) return; addClientFile(co, $('clFileTitle').value, $('clFileNew').value); $('clFileTitle').value = ''; $('clFileNew').value = ''; };
+  function addClientFile(co, title, url) {
+    if (!co) return false; const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return false; }
+    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`);
+  }
 
-  let editingProject = '';
-  function openProject(id) { editingProject = id; fillProjectDrawer(true); $('dlgProject').showModal(); }
+  // ---- project drawer ----
+  let editingProject = '', prSig = '';
+  const PROJECT_TONE = { active: 'ok', paused: 'warn', done: 'neutral' };
+  function buildProjectDrawer() {
+    drawerHead('pr', { kind: 'Project', tile: iconTile('flag'), more: openProjectMenu });
+    const status = drawerSelect('prStatus', 'Status', [{ value: 'active', label: 'Active' }, { value: 'paused', label: 'Paused' }, { value: 'done', label: 'Done' }]);
+    const client = el('span', 'dval'); client.id = 'prClient';
+    const tasks = el('span', 'dval dmuted'); tasks.id = 'prTaskSum';
+    const props = el('div', 'dprops'); props.append(ui.props([{ label: 'Status', icon: 'circle-check', value: status }, { label: 'Client', icon: 'building-2', value: client }, { label: 'Tasks', icon: 'square-check', value: tasks }]));
+    const sug = el('div', 'dsuggest'); sug.id = 'prSuggest';
+    const personAdd = crmAddRow('pr', 'prPersonEmail', { placeholder: 'email@example.com', ghostLabel: 'Add by email', label: 'Person email', onAdd: addProjectPerson });
+    personAdd.input.type = 'email'; personAdd.querySelector('button[type=submit]').id = 'prPersonAdd';
+    const linkAdd = pairAddRow('pr', { id: 'prLinkNew', labelId: 'prLinkTitle', addId: 'prLinkAdd', labelPlaceholder: 'Label', labelAria: 'New link label', placeholder: 'Cloud URL or local path', label: 'New link: a cloud URL or local path', ghostLabel: 'Add link', onAdd: addProjectLink });
+    const foot = el('div', 'dfoot2'); const created = el('span', 'dcreated'); created.id = 'prCreated'; foot.append(created);
+    $('prBody').append(dtitle('prName', 'Project name', 'Project name'), props,
+      crmSection('prGoalSec', { title: 'Goal', body: dnote('prNorth', 'Project goal', 'What this project should achieve.') }),
+      crmSection('prPeopleSec', { title: 'People', body: [dlist('prPeople'), sug, personAdd] }, 'prPeopleCount', true),
+      crmSection('prLinkSec', { title: 'Links', body: [dlist('prLinks'), linkAdd] }, 'prLinkCount', true),
+      crmSection('prTaskSec', { title: 'Open tasks', body: dlist('prTasks') }, 'prTaskCount'),
+      crmSection('prDoneSec', { title: 'Completed tasks', collapsible: true, open: false, body: dlist('prDoneTasks') }, 'prDoneCount'),
+      foot);
+  }
+  buildProjectDrawer();
+  function syncProjectStatus(v) { const w = $('prStatus').parentElement; ['ok', 'warn', 'neutral'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + (PROJECT_TONE[v] || 'neutral')); }
+  function openProject(id) {
+    editingProject = id; prSig = ''; resetCrmRows('pr'); $('prDoneSec').toggle(false); fillProjectDrawer(true);
+    $('dlgProject').showModal(); $('prBody').scrollTop = 0; autosize($('prName'));
+  }
   function fillProjectDrawer(force) {
     const pr = projectById(editingProject); if (!pr) { $('dlgProject').close(); return; }
-    if (force || document.activeElement !== $('prName')) $('prName').value = pr.name || '';
-    $('prStatus').value = pr.status || 'active';
+    const linked = state.tasks.filter(t => t.project === pr.id), mates = pr.client ? state.contacts.filter(p => p.company === pr.client) : [];
+    const sig = JSON.stringify([pr, linked, mates.map(p => [p.name, p.emails])]); if (!force && sig === prSig) return; prSig = sig;
+    if (force || document.activeElement !== $('prName')) $('prName').value = pr.name || ''; autosize($('prName'));
+    $('prStatus').value = pr.status || 'active'; syncProjectStatus($('prStatus').value);
+    const cbox = $('prClient'); cbox.textContent = '';
+    if (pr.client) { const c = ui.pill({ text: pr.client, icon: 'building-2', tone: 'accent', onClick: () => { $('dlgProject').close(); openClient(pr.client); } }); c.title = `Open client ${pr.client}`; cbox.append(roKeep(c)); }
+    else cbox.append(el('span', 'dmuted', 'No client'));
     if (force || document.activeElement !== $('prNorth')) $('prNorth').value = pr.north_star || '';
     const pbox = $('prPeople'); pbox.textContent = '';
     (pr.people || []).forEach(em => {
-      const person = personByEmail(em), row = el('div', 'methodrow');
-      row.append(el('span', null, person ? `${person.name} (${em})` : em));
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.onclick = () => projectEdit(pr.id, x => { x.people = (x.people || []).filter(e => e.toLowerCase() !== em.toLowerCase()); }, 'Project people');
-      row.append(x); pbox.append(row);
+      const person = personByEmail(em), who = person ? person.name : em;
+      pbox.append(ui.listRow({ text: who, meta: person ? em : '', icon: 'user', removeLabel: `Remove ${who} from the project`,
+        onRemove: async () => { const id = pr.id; if (!(await confirmDrawerRemoval(`${who} from the project`)) || editingProject !== id) return; projectEdit(id, x => { x.people = (x.people || []).filter(e => e.toLowerCase() !== em.toLowerCase()); }, 'Project people'); } }));
     });
     const sug = $('prSuggest'); sug.textContent = '';
-    if (pr.client) {
-      const on = new Set((pr.people || []).map(e => e.toLowerCase()));
-      state.contacts.filter(p => p.company === pr.client).forEach(p => {
-        (p.emails || []).forEach(em => { if (!em.value || on.has(em.value.toLowerCase())) return;
-          const b = el('button', 'small', `+ ${p.name}`); b.type = 'button'; b.title = em.value;
-          b.onclick = () => projectEdit(pr.id, x => { x.people = x.people || []; if (!x.people.some(e => e.toLowerCase() === em.value.toLowerCase())) x.people.push(em.value); }, `Add ${p.name} to project`);
-          sug.append(b); });
-      });
-    }
-    renderLinkBox($('prLinks'), pr.links || [], l => projectEdit(pr.id, x => { x.links = (x.links || []).filter(y => y.url !== l.url); }, `Project links`), true, 'project resource');
-    const tbox = $('prTasks'); tbox.textContent = '';
-    const dc = doneCol();
-    state.tasks.filter(t => t.project === pr.id && t.column !== dc).forEach(t => tbox.append(listRow(t)));
-    if (!tbox.childNodes.length) tbox.append(el('div', 'muted small', 'No open tasks linked to this project.'));
-    const doneBox = $('prDoneTasks'); doneBox.textContent = '';
-    state.tasks.filter(t => t.project === pr.id && t.column === dc).forEach(t => doneBox.append(listRow(t)));
-    if (!doneBox.childNodes.length) doneBox.append(el('div', 'muted small', 'No completed tasks linked to this project.'));
-    $('prDelete').hidden = !!ro;
+    const on = new Set((pr.people || []).map(e => e.toLowerCase()));
+    mates.forEach(p => (p.emails || []).forEach(em => {
+      if (!em.value || on.has(em.value.toLowerCase())) return;
+      const b = ui.pill({ text: p.name, icon: 'plus', outline: true, onClick: () => projectEdit(pr.id, x => { x.people = x.people || []; if (!x.people.some(e => e.toLowerCase() === em.value.toLowerCase())) x.people.push(em.value); }, `Add ${p.name} to project`) });
+      b.title = `Add ${p.name} (${em.value})`; sug.append(b);
+    }));
+    setCount('prPeopleCount', (pr.people || []).length); $('prPeopleSec').classList.toggle('is-empty', !(pr.people || []).length && !sug.childNodes.length);
+    renderLinkBox($('prLinks'), pr.links || [], l => projectEdit(pr.id, x => { x.links = (x.links || []).filter(y => y.url !== l.url); }, 'Project links'), true, 'project resource');
+    setCount('prLinkCount', (pr.links || []).length); $('prLinkSec').classList.toggle('is-empty', !(pr.links || []).length);
+    const dc = doneCol(), open = linked.filter(t => t.column !== dc), done = linked.filter(t => t.column === dc);
+    const tbox = $('prTasks'); tbox.textContent = ''; open.forEach(t => tbox.append(drawerTaskRow(t))); if (!open.length) tbox.append(dempty('No open tasks linked to this project.'));
+    const dbox = $('prDoneTasks'); dbox.textContent = ''; done.forEach(t => dbox.append(drawerTaskRow(t))); if (!done.length) dbox.append(dempty('No completed tasks linked to this project.'));
+    setCount('prTaskCount', open.length); setCount('prDoneCount', done.length);
+    $('prTaskSum').textContent = linked.length ? `${open.length} open · ${done.length} done` : 'No tasks yet';
+    $('prCreated').textContent = pr.created ? 'Created ' + new Date(pr.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   }
   const projectEdit = (id, fn, msg) => mutate(n => { const p = (n.projects || []).find(x => x.id === id); if (p) { fn(p); p.updated = nowIso(); } }, msg || 'Update project');
   $('prName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) projectEdit(editingProject, p => { p.name = v; }); });
-  $('prStatus').onchange = e => projectEdit(editingProject, p => { p.status = e.target.value; });
+  $('prStatus').onchange = e => { syncProjectStatus(e.target.value); projectEdit(editingProject, p => { p.status = e.target.value; }); };
   $('prNorth').addEventListener('change', e => projectEdit(editingProject, p => { p.north_star = e.target.value; }));
-  $('prPersonAdd').onclick = () => { const em = $('prPersonEmail').value.trim(); if (!em) return; projectEdit(editingProject, p => { p.people = p.people || []; if (!p.people.some(x => x.toLowerCase() === em.toLowerCase())) p.people.push(em); }); $('prPersonEmail').value = ''; };
-  $('prLinkAdd').onclick = () => { const l = parseNamedLink($('prLinkTitle').value, $('prLinkNew').value, true); if (!l) { toast('Enter a cloud URL or local path.', true); return; }
-    projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); $('prLinkTitle').value = ''; $('prLinkNew').value = ''; };
+  function addProjectPerson(em) { if (!editingProject) return false; projectEdit(editingProject, p => { p.people = p.people || []; if (!p.people.some(x => x.toLowerCase() === em.toLowerCase())) p.people.push(em); }); }
+  function addProjectLink(title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or local path.', true); return false; }
+    projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); }
   $('prClose').onclick = () => $('dlgProject').close();
-  $('prDelete').onclick = async () => {
+  async function deleteProject() {
     const pr = projectById(editingProject); if (!pr || ro) return;
     const linked = state.tasks.filter(t => t.project === pr.id);
     if (linked.length) { if (!(await ask('Remove project?', [`Remove project "${pr.name}" and clear it from ${linked.length} task(s)?`, 'Remove clears task.project. Cancel keeps the project.'], 'Remove', true))) return; }
@@ -2993,7 +3093,14 @@ if (typeof window !== 'undefined') (() => {
       n.projects = (n.projects || []).filter(p => p.id !== pr.id);
       n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });   // also tasks linked while the dialog was open
     }, `Remove project: ${pr.name}`).then(ok => { if (ok) $('dlgProject').close(); });
-  };
+  }
+  function openProjectMenu(anchor) {
+    const pr = projectById(editingProject); if (!pr) return; const items = [];
+    if (pr.client) items.push({ label: `Open client ${pr.client}`, icon: 'building-2', onSelect: () => { $('dlgProject').close(); openClient(pr.client); } });
+    items.push({ label: 'Copy project name', icon: 'copy', onSelect: () => copyText(pr.name, 'Project name copied') });
+    if (!ro) items.push({ separator: true }, { label: 'Delete project', icon: 'trash-2', danger: true, onSelect: deleteProject });
+    ui.menu(anchor, items, { label: `Actions for ${pr.name}` });
+  }
   $('dlgProject').addEventListener('close', () => { editingProject = ''; render(); });
 
   // ==== Keeptrack CRM: people (contacts) with a stage and a next step; Today, People and Pipeline views ====
@@ -3126,6 +3233,27 @@ if (typeof window !== 'undefined') (() => {
   }
   const parsePerson = s => { const x = s.split('|').map(v => v.trim()); return [x[0], { company: x[1] || '', role: x[2] || '', email: x[3] || '' }]; };
 
+  // ---- the add-person form: a centred sheet with the name, then the optional details as one property list ----
+  function buildAddPersonForm() {
+    const head = el('header', 'ui-sheet__head'), title = el('h2', 'ui-sheet__title', 'Add a person'); title.id = 'apTitle';
+    const x = ui.iconButton({ icon: 'x', label: 'Close' }); x.id = 'apX'; head.append(title, x);
+    const body = el('div', 'ui-sheet__body'), nameLab = el('label', 'ui-field__label', 'Name'); nameLab.htmlFor = 'apName'; nameLab.append(el('span', 'required', 'Required'));
+    const name = el('input', 'ui-input apname'); name.id = 'apName'; name.name = 'name'; name.autocomplete = 'name'; name.required = true; name.setAttribute('aria-required', 'true');
+    const f = (id, nm, label, opts) => { const i = dfield(id, label, opts); i.name = nm; return i; };
+    const companies = el('datalist'); companies.id = 'apCompanies';
+    body.append(el('p', 'ui-sheet__text', 'Only their name is required. You can add more details now or later.'), nameLab, name, el('h3', 'apopt', 'Optional details'), ui.props([
+      { label: 'Client', icon: 'building-2', value: [f('apCompany', 'company', 'Client', { list: 'apCompanies', autocomplete: 'organization' }), companies] },
+      { label: 'Role', icon: 'briefcase', value: f('apRole', 'role', 'Role', { autocomplete: 'organization-title' }) },
+      { label: 'Email', icon: 'mail', value: f('apEmail', 'email', 'Email', { type: 'email', autocomplete: 'email' }) },
+      { label: 'Phone', icon: 'phone', value: f('apPhone', 'phone', 'Phone', { type: 'tel', autocomplete: 'tel' }) },
+      { label: 'LinkedIn', icon: 'link', value: f('apLinkedin', 'linkedin', 'LinkedIn', { type: 'url', placeholder: 'https://linkedin.com/in/…', autocomplete: 'url' }) },
+      { label: 'GitHub', icon: 'github', value: f('apGithub', 'github', 'GitHub', { placeholder: 'github-username', autocomplete: 'username' }) }
+    ]));
+    const foot = el('footer', 'ui-sheet__foot'), cancel = ui.button({ label: 'Cancel' }), save = ui.button({ label: 'Add person', variant: 'primary', type: 'submit' });
+    cancel.id = 'apCancel'; save.id = 'apSave'; foot.append(cancel, save);
+    $('apForm').append(head, body, foot);
+  }
+  buildAddPersonForm();
   let addPersonExtra = {};
   function openAddPersonForm(seed, extra) {
     const [name, parsed] = parsePerson(seed || ''), d = $('dlgAddPerson'); addPersonExtra = Object.assign({}, extra || {}); $('apForm').reset();
@@ -3259,80 +3387,151 @@ if (typeof window !== 'undefined') (() => {
   // ---- person drawer --------------------------------------------------------
   let editingContact = null, pSig = '';
   const PF = [['pRole', 'role'], ['pCompany', 'company'], ['pValue', 'value'], ['pSource', 'source'], ['pGithub', 'github']];
+  function buildPersonDrawer() {
+    const av = ui.avatar('', { size: 'lg' }); av.id = 'pAvatar';
+    const undo = ui.iconButton({ icon: 'undo-2', label: 'Undo last board change' }); undo.id = 'pUndo'; undo.disabled = true;
+    const agent = ui.iconButton({ icon: 'bot', label: 'Copy for AI' }); agent.id = 'pAgent'; agent.title = 'Copy this person and their recent contact for Claude, Codex or ChatGPT, for example to write a message'; roKeep(agent);
+    drawerHead('p', { kind: 'Person', tile: av, more: openPersonMenu, extra: [undo, agent] });
+    // properties: stage, next step and its date, then the person's details
+    const due = el('span', 'ui-pill ui-pill--neutral ddue'); due.id = 'pNextDuePill'; due.title = 'Next step date';
+    const dueIn = el('input', 'ddue__input'); dueIn.type = 'date'; dueIn.id = 'pNextDue'; dueIn.setAttribute('aria-label', 'Next step date');
+    const dueX = el('button', 'ui-pill__remove'); dueX.type = 'button'; dueX.id = 'pNextDueClear'; dueX.dataset.due = ''; dueX.setAttribute('aria-label', 'No date'); dueX.title = 'No date'; dueX.append(ui.icon('x'));
+    due.append(ui.icon('calendar'), dueIn, dueX);
+    const quick = [['0', 'Today'], ['1', 'Tomorrow'], ['7', '+1 week']].map(([d, l]) => { const b = ui.button({ label: l, size: 'sm', variant: 'ghost' }); b.dataset.due = d; b.classList.add('dquick'); return b; });
+    const companies = el('datalist'); companies.id = 'pCompanies';
+    const props = el('div', 'dprops'); props.id = 'pProps';
+    props.append(ui.props([
+      { label: 'Stage', icon: 'trending-up', value: drawerSelect('pStage', 'Stage') },
+      { label: 'Next step', icon: 'arrow-right', value: dfield('pNext', 'Next step', { placeholder: 'For example: send a LinkedIn message' }) },
+      { label: 'Next date', icon: 'calendar', value: [due, ...quick] },
+      { label: 'Client', icon: 'building-2', value: [dfield('pCompany', 'Client', { list: 'pCompanies', autocomplete: 'off' }), companies] },
+      { label: 'Role', icon: 'briefcase', value: dfield('pRole', 'Role') },
+      { label: 'Value', icon: 'pound-sterling', value: dfield('pValue', 'Value', { placeholder: 'For example: 5000' }) },
+      { label: 'Source', icon: 'compass', value: dfield('pSource', 'Source', { placeholder: 'For example: weekly opportunity run' }) },
+      { label: 'GitHub', icon: 'github', value: dfield('pGithub', 'GitHub username', { placeholder: 'github-username', autocomplete: 'username' }) }
+    ]));
+    // sections
+    const emailAdd = pairAddRow('p', { id: 'pEmailNew', labelId: 'pEmailLabel', addId: 'pEmailAdd', type: 'email', labelPlaceholder: 'Label, e.g. Work', labelAria: 'New email label', placeholder: 'name@example.com', label: 'New email address', ghostLabel: 'Add email', onAdd: (lab, v, input) => addContactMethod('email', lab, v, input) });
+    const phoneAdd = pairAddRow('p', { id: 'pPhoneNew', labelId: 'pPhoneLabel', addId: 'pPhoneAdd', type: 'tel', labelPlaceholder: 'Label, e.g. Mobile', labelAria: 'New phone label', placeholder: 'Phone number', label: 'New phone number', ghostLabel: 'Add phone', onAdd: (lab, v, input) => addContactMethod('phone', lab, v, input) });
+    const methods = el('div', 'contactmethods');
+    methods.append(crmSection('pEmailSec', { title: 'Emails', body: [dlist('pEmails'), emailAdd] }, 'pEmailCount', true), crmSection('pPhoneSec', { title: 'Phones', body: [dlist('pPhones'), phoneAdd] }, 'pPhoneCount', true));
+    const touchText = el('textarea'); touchText.id = 'pTouchText'; touchText.rows = 2; touchText.placeholder = 'What did you send or talk about? Paste a draft message here too.'; touchText.setAttribute('aria-label', 'Contact log entry');
+    const draftWrap = el('label', 'chk ddraft'); draftWrap.id = 'pDraftWrap'; const draft = el('input'); draft.type = 'checkbox'; draft.id = 'pDraft'; draftWrap.append(draft, document.createTextNode(' Draft (not sent yet)'));
+    const post = ui.button({ label: 'Log it', variant: 'primary', size: 'sm' }); post.id = 'pTouchPost';
+    const composer = el('div', 'composer'), cbtns = el('div', 'cbtns'); cbtns.append(drawerSelect('pChan', 'Channel', CHANNELS.map(([value, , label]) => ({ value, label }))), draftWrap, post); composer.append(touchText, cbtns);
+    const touches = dlist('pTouches'); touches.classList.add('cmlist'); touches.setAttribute('aria-live', 'polite');
+    const taskAdd = crmAddRow('p', 'pTaskNew', { placeholder: 'Task title', ghostLabel: 'Add task', label: 'New task for this person', onAdd: addPersonTask });
+    const linkAdd = pairAddRow('p', { id: 'pLinkNew', labelId: 'pLinkTitle', addId: 'pLinkAdd', type: 'url', labelPlaceholder: 'Label (for example LinkedIn)', labelAria: 'New link label', placeholder: 'https://…', label: 'New link: an http(s) address', ghostLabel: 'Add link', onAdd: addPersonLink });
+    const fileAdd = pairAddRow('p', { id: 'pFileNew', labelId: 'pFileTitle', addId: 'pFileAdd', labelPlaceholder: 'Label (for example Client Drive)', labelAria: 'New file label', placeholder: 'Cloud URL or local path', label: 'New file or folder: a cloud URL or local path', ghostLabel: 'Add file or folder', onAdd: addCompanyFile });
+    const clientOpen = ui.button({ label: 'Open client', icon: 'arrow-right', variant: 'ghost', size: 'sm' }); clientOpen.id = 'pClientOpen'; roKeep(clientOpen);
+    const files = crmSection('pFilesSec', { title: 'Files and folders', body: [dlist('pFiles'), fileAdd, dhint(FILES_HINT)] }, 'pFileCount', true);
+    files.querySelector('.ui-section__text').id = 'pFilesH';
+    const hist = el('ol', 'hist'); hist.id = 'pHist';
+    const foot = el('div', 'dfoot2'), created = el('span', 'dcreated'); created.id = 'pCreated'; foot.append(created);
+    $('pBody').append(dtitle('pName', 'Name', 'Name'), props, methods,
+      crmSection('pTouchSec', { title: 'Contact log', body: [composer, touches] }, 'pTouchCount'),
+      crmSection('pNotesSec', { title: 'Notes', body: dnote('pNotes', 'Notes', 'Anything to remember about this person.') }),
+      crmSection('pTasksSec', { title: 'Tasks', body: [dlist('pTasks'), taskAdd] }, 'pTaskCount', true),
+      crmSection('pLinkSec', { title: 'Links', body: [dlist('pLinks'), linkAdd, dhint('LinkedIn, company website, blog, portfolio, or another page about this person.')] }, 'pLinkCount', true),
+      crmSection('pNorthSec', { title: 'Client north star', action: clientOpen, body: dnote('pNorthStar', 'Client north star', 'What we are trying to solve for this client and what success looks like.') }),
+      crmSection('pProjSec', { title: 'Projects', body: dlist('pProjList') }, 'pProjCount'),
+      files,
+      crmSection('pHistSec', { title: 'History', collapsible: true, open: false, body: hist }, 'pHistCount'),
+      foot);
+  }
+  buildPersonDrawer();
   function openContact(id) {
-    editingContact = id; pSig = ''; fillContact(true);
-    const d = $('dlgContact'); if (!d.open) d.showModal();
+    editingContact = id; pSig = ''; resetCrmRows('p'); $('pHistSec').toggle(false);
+    fillContact(true);
+    const d = $('dlgContact'); if (!d.open) { d.showModal(); $('pBody').scrollTop = 0; }
+    autosize($('pName')); autosize($('pNotes'));
+  }
+  const STAGE_TONE = s => /^won$/i.test(s) ? 'ok' : /^lost$/i.test(s) ? 'neutral' : s === stages()[0] ? 'neutral' : 'info';
+  function syncStage(v) { const w = $('pStage').parentElement; ['ok', 'neutral', 'info'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + STAGE_TONE(v)); }
+  function syncNextDue(v) {   // overdue is red, today amber, like a task's due date
+    const t = todayIso(), p = $('pNextDuePill');
+    p.classList.toggle('ui-pill--danger', !!v && v < t); p.classList.toggle('ui-pill--warn', v === t); p.classList.toggle('ui-pill--neutral', !v || v > t);
+    p.classList.toggle('ddue--empty', !v); $('pNextDueClear').hidden = !v;
   }
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
-    const sig = JSON.stringify([p, p.company && (state.client_info || {})[p.company], state.tasks.filter(t => t.contact === p.id)]); if (!force && sig === pSig) return; pSig = sig;
+    const sig = JSON.stringify([p, p.company && (state.client_info || {})[p.company], p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), modes()]); if (!force && sig === pSig) return; pSig = sig;
     const keep = id => document.activeElement === $(id);
-    if (!keep('pName')) $('pName').value = p.name;
-    const st = $('pStage'); st.textContent = ''; [...new Set([...stages(), p.stage])].forEach(s => { const o = el('option', null, s); o.value = s; st.append(o); }); st.value = p.stage;
-    if (!keep('pNext')) $('pNext').value = p.next; if (!keep('pNextDue')) $('pNextDue').value = p.next_due;
+    { const a = ui.avatar(p.name || '?', { size: 'lg' }); a.id = 'pAvatar'; $('pAvatar').replaceWith(a); }
+    if (!keep('pName')) $('pName').value = p.name; autosize($('pName'));
+    const st = $('pStage'); st.textContent = ''; [...new Set([...stages(), p.stage])].forEach(s => { const o = el('option', null, s); o.value = s; st.append(o); }); st.value = p.stage; syncStage(p.stage);
+    if (!keep('pNext')) $('pNext').value = p.next; if (!keep('pNextDue')) $('pNextDue').value = p.next_due; syncNextDue(p.next_due);
     PF.forEach(([fid, k]) => { if (!keep(fid)) $(fid).value = p[k] || ''; });
     $('pCompanies').textContent = ''; [...new Set([...state.clients, ...state.contacts.map(x => x.company)].filter(Boolean))].forEach(c => { const o = el('option'); o.value = c; $('pCompanies').append(o); });
-    if (!keep('pNotes')) { $('pNotes').value = p.notes; autosize($('pNotes')); }
+    if (!keep('pNotes')) $('pNotes').value = p.notes; autosize($('pNotes'));
     renderContactMethods(p);
     // links: this person's own, and the files of their company (client)
     renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); syncContactLegacy(x); }, `Links: ${p.name}`), false, 'profile/reference link');
+    setCount('pLinkCount', p.links.length); $('pLinkSec').classList.toggle('is-empty', !p.links.length);
     const co = p.company, info = co ? clientInfo(co) : null;
-    $('pNorthSec').hidden = !co; $('pProjSec').hidden = !co; $('pClientOpen').hidden = !co;
+    $('pNorthSec').hidden = !co; $('pProjSec').hidden = !co; $('pClientOpen').hidden = !co; $('pFilesSec').hidden = !co;
     if (co) {
-      if (!document.activeElement || document.activeElement.id !== 'pNorthStar') $('pNorthStar').value = info.north_star || '';
-      const pl = $('pProjList'); pl.textContent = '';
-      projectsForClient(co).forEach(pr => { const b = el('button', 'prowbtn'); b.type = 'button'; b.append(el('b', null, pr.name), el('span', 'muted', ' · ' + (pr.status || 'active'))); b.onclick = () => openProject(pr.id); pl.append(b); });
-      if (!pl.childNodes.length) pl.append(el('div', 'muted small', 'No projects for this client.'));
+      if (!keep('pNorthStar')) $('pNorthStar').value = info.north_star || '';
+      const pl = $('pProjList'), prs = projectsForClient(co); pl.textContent = '';
+      prs.forEach(pr => pl.append(projectNavRow(pr, () => openProject(pr.id)))); if (!prs.length) pl.append(dempty('No projects for this client.')); setCount('pProjCount', prs.length);
+      const files = info.links || []; $('pFilesH').textContent = `Files and folders for ${co}`;
+      renderLinkBox($('pFiles'), files, l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+      setCount('pFileCount', files.length); $('pFilesSec').classList.toggle('is-empty', !files.length);
     }
-    $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files and folders for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource'); }
     renderTouches(p); renderPersonTasks(p);
-    const ol = $('pHist'); ol.textContent = ''; $('pHistSum').textContent = `History (${p.history.length})`;
-    p.history.slice().reverse().forEach(h => { const li2 = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li2.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li2); });
+    renderHistory($('pHist'), $('pHistCount'), p.history);
     $('pCreated').textContent = p.created ? `Added ${new Date(p.created).toLocaleDateString('en-GB')}${p.createdBy ? ' by ' + p.createdBy : ''}` : '';
   }
-  function renderContactMethods(p) {
-    const draw = (box, items, kind) => {
-      box.textContent = '';
-      items.forEach(item => {
-        const row = el('div', 'methodrow'), label = el('input', 'methodlabel'), value = el('input', 'methodvalue'), go = el('a', 'methodgo'), x = el('button', 'lx', '×');
-        label.value = item.label || ''; label.placeholder = 'Label'; label.setAttribute('aria-label', `${kind} label`);
-        value.value = item.value || ''; value.type = kind === 'email' ? 'email' : 'tel'; value.setAttribute('aria-label', kind === 'email' ? 'Email address' : 'Phone number');
-        go.href = kind === 'email' ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = kind === 'email' ? 'Write email' : 'Call'; go.append(svgIcon(kind === 'email' ? 'mail' : 'phone'));
-        const save = async () => { const lab = label.value.trim(), val = value.value.trim(), fallback = kind === 'email' ? 'Email' : 'Phone';
-          if (!val) { if (!(await askRemoval(`the ${item.label || fallback} ${kind} “${item.value}”`, kind === 'email' ? 'Remove email?' : 'Remove phone?'))) { label.value = item.label || ''; value.value = item.value || ''; return; } }
-          else if (val !== item.value && !(await ask(kind === 'email' ? 'Change email?' : 'Change phone?', [`Change ${p.name}'s ${item.label || fallback} ${kind}?`, `From: ${item.value}`, `To: ${val}`, UNDO_HINT], 'Change'))) { label.value = item.label || ''; value.value = item.value || ''; return; }
-          pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || fallback; found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
-        label.addEventListener('change', save); value.addEventListener('change', save);
-        x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = async () => { if (!(await askRemoval(`the ${item.label || (kind === 'email' ? 'Email' : 'Phone')} ${kind} “${item.value}”`, kind === 'email' ? 'Remove email?' : 'Remove phone?'))) return; pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
-        row.append(label, value, go, x); box.append(row);
-      });
-      if (!items.length) box.append(el('div', 'muted small', kind === 'email' ? 'No email addresses yet.' : 'No phone numbers yet.'));
-    };
-    draw($('pEmails'), p.emails, 'email'); draw($('pPhones'), p.phones, 'phone');
+  // one row per email or phone: label and value edit in place (a change asks first), mail/call, remove
+  function methodRow(p, item, kind) {
+    const email = kind === 'email', fallback = email ? 'Email' : 'Phone', row = el('div', 'ui-listrow dmethod');
+    const label = el('input', 'ui-input dfield methodlabel'), value = el('input', 'ui-input dfield methodvalue');
+    label.value = item.label || ''; label.placeholder = 'Label'; label.setAttribute('aria-label', `${kind} label`);
+    value.value = item.value || ''; value.type = email ? 'email' : 'tel'; value.setAttribute('aria-label', email ? 'Email address' : 'Phone number');
+    const go = el('a', 'ui-iconbtn ui-iconbtn--ghost ui-iconbtn--sm'); go.href = email ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = email ? 'Write email' : 'Call';
+    go.setAttribute('aria-label', `${go.title}: ${item.value}`); go.append(ui.icon(email ? 'mail' : 'phone'));
+    const reset = () => { label.value = item.label || ''; value.value = item.value || ''; };
+    const what = `the ${item.label || fallback} ${kind} “${item.value}”`, title = email ? 'Remove email?' : 'Remove phone?';
+    const save = async () => { const lab = label.value.trim(), val = value.value.trim();
+      if (!val) { if (!(await askRemoval(what, title))) { reset(); return; } }
+      else if (val !== item.value && !(await ask(email ? 'Change email?' : 'Change phone?', [`Change ${p.name}'s ${item.label || fallback} ${kind}?`, `From: ${item.value}`, `To: ${val}`, UNDO_HINT], 'Change'))) { reset(); return; }
+      pedit(p.id, q => { const list = email ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || fallback; found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
+    label.addEventListener('change', save); value.addEventListener('change', save);
+    const x = ui.iconButton({ icon: 'x', label: email ? 'Remove email' : 'Remove phone', size: 'sm', onClick: async () => { if (!(await askRemoval(what, title))) return;
+      pedit(p.id, q => { const list = email ? q.emails : q.phones, i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); } });
+    row.append(label, value, go, x); return row;
   }
+  function renderContactMethods(p) {
+    [['pEmails', 'pEmailSec', 'pEmailCount', p.emails, 'email'], ['pPhones', 'pPhoneSec', 'pPhoneCount', p.phones, 'phone']].forEach(([box, sec, count, items, kind]) => {
+      $(box).textContent = ''; items.forEach(item => $(box).append(methodRow(p, item, kind))); setCount(count, items.length); $(sec).classList.toggle('is-empty', !items.length);
+    });
+  }
+  // one list design for every drawer's links (task resources, profile links, client files, project links):
+  // icon, title (a GitHub issue or pull request by its number), host or "Local path", copy for local paths, remove (asks first)
   function renderLinkBox(box, links, onRemove, resources, kind = 'link') {
     box.textContent = '';
-    links.forEach(l => { const row = el('div', 'linkrow'), href = safeUrl(l.url), local = resources && localResource(l.url), main = href ? el('a', null, l.title || l.url) : el('span', 'resourcepath', l.title || l.url);
-      if (href) { main.href = href; main.target = '_blank'; main.rel = 'noopener noreferrer'; } else if (local) { main.title = l.url; }
-      const host = local ? 'Local path' : (() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
-      if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
-      const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.setAttribute('aria-label', 'Copy local path'); cp.onclick = () => copyText(l.url, 'Path copied.'); }
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = async () => { if (await askRemoval(`the ${kind} “${l.title || l.url}”`, 'Remove link?')) onRemove(l); };
-      row.append(elI('span', 'li', local ? 'laptop' : storeIcon(host)), main, el('span', 'host', host)); if (cp) row.append(cp); row.append(x); box.append(row); });
-    if (!links.length) box.append(el('div', 'muted small', 'No links yet.'));
+    links.forEach(l => {
+      const g = ghLink(l.url), local = resources && localResource(l.url); let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
+      const row = ui.listRow({ text: g ? g.label : (l.title || l.url), meta: g && l.title && l.title !== l.url ? l.title : host, href: safeUrl(l.url) || undefined, icon: g ? 'github' : local ? 'laptop' : storeIcon(host), removeLabel: `Remove link ${l.title || l.url}`,
+        onRemove: async () => { if (await confirmDrawerRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); } });
+      row.title = l.url;
+      if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
+      box.append(row);
+    });
   }
   const storeIcon = h => /drive\.google|docs\.google|dropbox|sharepoint|onedrive|office|live\.com/.test(h) ? 'folder' : /github/.test(h) ? 'github' : /notion/.test(h) ? 'file-text' : 'link';
   const parseNamedLink = (title, value, resources) => { const url = String(value || '').trim(); if (!(safeUrl(url) || (resources && localResource(url)))) return null; let fallback = url; try { fallback = new URL(url).hostname.replace(/^www\./, ''); } catch { fallback = url.split(/[\\/]/).filter(Boolean).pop() || url; } return { title: String(title || '').trim() || fallback, url }; };
 
   function renderTouches(p) {
-    const box = $('pTouches'); box.textContent = ''; $('pTouchCount').textContent = p.comments.length ? `(${p.comments.length})` : '';
+    const box = $('pTouches'); box.textContent = ''; setCount('pTouchCount', p.comments.length);
     p.comments.slice().reverse().forEach(cm => {
       const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
       head.append(elI('span', 'tchan', ic, label), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at;
-      if (cm.draft) { head.append(el('span', 'draftpill', 'Draft, not sent'));
-        const s = el('button', 'small primary', 'Mark sent'); s.type = 'button'; s.onclick = () => markSent(p.id, cm.id); head.append(s);
-        const cp = elI('button', 'small', 'clipboard-copy', 'Copy'); cp.type = 'button'; cp.onclick = () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.'); head.append(cp); }
+      if (cm.draft) { head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
+        const s = ui.button({ label: 'Mark sent', variant: 'primary', size: 'sm', onClick: () => markSent(p.id, cm.id) });
+        const cp = roKeep(ui.button({ label: 'Copy', icon: 'clipboard-copy', variant: 'ghost', size: 'sm', onClick: () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.') }));
+        const acts = el('div', 'cmacts'); acts.append(s, cp); head.append(acts); }
       const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
     });
   }
@@ -3353,44 +3552,54 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderPersonTasks(p) {
     const sec = $('pTasksSec'); sec.hidden = !modes().includes('tasks'); if (sec.hidden) return;
-    const box = $('pTasks'); box.textContent = '';
-    state.tasks.filter(t => t.contact === p.id).forEach(t => box.append(listRow(t)));
-    if (!box.childNodes.length) box.append(el('div', 'muted small', 'No tasks for this person.'));
+    const box = $('pTasks'), list = state.tasks.filter(t => t.contact === p.id); box.textContent = '';
+    list.forEach(t => box.append(drawerTaskRow(t))); setCount('pTaskCount', list.length); sec.classList.toggle('is-empty', !list.length);
   }
-  $('pTaskNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; const v = e.target.value.trim(), p = contactNow(); if (!v || !p) return; e.target.value = '';
+  function addPersonTask(v) {
+    const p = contactNow(); if (!p) return false;
     const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
-    mutate(n => { n.tasks.push(t); }, `Add task: ${v}`); });
+    mutate(n => { n.tasks.push(t); }, `Add task: ${v}`);
+  }
 
   $('pName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) pedit(editingContact, x => { x.name = v; }); });
-  $('pName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
-  $('pStage').onchange = e => { const v = e.target.value; pedit(editingContact, x => { x.stage = v; }, `Stage ${v}: ${nameOf(editingContact)}`); };
+  $('pStage').onchange = e => { const v = e.target.value; syncStage(v); pedit(editingContact, x => { x.stage = v; }, `Stage ${v}: ${nameOf(editingContact)}`); };
   $('pNext').addEventListener('change', e => { const v = e.target.value.trim(); pedit(editingContact, x => { x.next = v; }); });
-  $('pNextDue').addEventListener('change', e => { const v = e.target.value; pedit(editingContact, x => { x.next_due = v; }); });
-  document.querySelectorAll('#dlgContact [data-due]').forEach(b => { b.onclick = () => { const v = b.dataset.due === '' ? '' : plusDays(+b.dataset.due); $('pNextDue').value = v; pedit(editingContact, x => { x.next_due = v; }); }; });
+  $('pNextDue').addEventListener('change', e => { const v = e.target.value; syncNextDue(v); pedit(editingContact, x => { x.next_due = v; }); });
+  document.querySelectorAll('#dlgContact [data-due]').forEach(b => { b.onclick = () => { const v = b.dataset.due === '' ? '' : plusDays(+b.dataset.due); $('pNextDue').value = v; syncNextDue(v); pedit(editingContact, x => { x.next_due = v; }); }; });
   PF.forEach(([fid, k]) => $(fid).addEventListener('change', e => { const v = e.target.value.trim(); pedit(editingContact, (x, n) => { x[k] = v; if (k === 'company' && v && !n.clients.includes(v)) n.clients.push(v); }); }));
   $('pNotes').addEventListener('input', () => autosize($('pNotes')));
   $('pNotes').addEventListener('change', e => { const v = e.target.value; pedit(editingContact, x => { x.notes = v; }); });
-  function addContactMethod(kind) { const p = contactNow(), value = $(kind === 'email' ? 'pEmailNew' : 'pPhoneNew'), label = $(kind === 'email' ? 'pEmailLabel' : 'pPhoneLabel'), v = value.value.trim(), lab = label.value.trim() || (kind === 'email' ? 'Email' : 'Phone'); if (!p || !v) return; if (kind === 'email' && !value.checkValidity()) { value.reportValidity(); return; }
-    const id = boardId(kind === 'email' ? 'e_' : 'ph_'); pedit(p.id, x => { const list = kind === 'email' ? x.emails : x.phones; if (!list.some(y => y.value.toLowerCase() === v.toLowerCase())) list.push({ id, label: lab, value: v }); syncContactLegacy(x); }, `Contact details: ${p.name}`); value.value = ''; label.value = ''; }
-  $('pEmailAdd').onclick = () => addContactMethod('email'); $('pPhoneAdd').onclick = () => addContactMethod('phone');
-  [['pEmailLabel', 'email'], ['pEmailNew', 'email'], ['pPhoneLabel', 'phone'], ['pPhoneNew', 'phone']].forEach(([id, kind]) => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addContactMethod(kind); } }));
-  function addPersonLink() { const p = contactNow(), l = parseNamedLink($('pLinkTitle').value, $('pLinkNew').value, false); if (!p) return; if (!l) { toast('Enter an http:// or https:// link.', true); return; } $('pLinkTitle').value = ''; $('pLinkNew').value = ''; pedit(p.id, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); syncContactLegacy(x); }, `Links: ${p.name}`); }
-  function addCompanyFile() { const p = contactNow(), l = parseNamedLink($('pFileTitle').value, $('pFileNew').value, true); if (!p || !p.company) return; if (!l) { toast('Enter a cloud URL or a local path.', true); return; } $('pFileTitle').value = ''; $('pFileNew').value = ''; const co = p.company;
-    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
-  $('pLinkAdd').onclick = addPersonLink; $('pFileAdd').onclick = addCompanyFile;
+  function addContactMethod(kind, lab, v, input) {
+    const p = contactNow(); if (!p || !v) return false; if (kind === 'email' && !input.checkValidity()) { input.reportValidity(); return false; }
+    const label = lab || (kind === 'email' ? 'Email' : 'Phone'), id = boardId(kind === 'email' ? 'e_' : 'ph_');
+    pedit(p.id, x => { const list = kind === 'email' ? x.emails : x.phones; if (!list.some(y => y.value.toLowerCase() === v.toLowerCase())) list.push({ id, label, value: v }); syncContactLegacy(x); }, `Contact details: ${p.name}`);
+  }
+  function addPersonLink(title, url) { const p = contactNow(), l = parseNamedLink(title, url, false); if (!p) return false; if (!l) { toast('Enter an http:// or https:// link.', true); return false; } pedit(p.id, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); syncContactLegacy(x); }, `Links: ${p.name}`); }
+  function addCompanyFile(title, url) { const p = contactNow(); if (!p || !p.company) return false; return addClientFile(p.company, title, url); }
   $('pNorthStar').addEventListener('change', () => { const p = contactNow(), co = p && p.company, v = $('pNorthStar').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
-  $('pClientOpen').onclick = () => { const p = contactNow(); if (p && p.company) { $('dlgContact').close(); openClient(p.company); } };
-  ['pLinkTitle', 'pLinkNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addPersonLink(); } }));
-  ['pFileTitle', 'pFileNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCompanyFile(); } }));
+  const openPersonClient = () => { const p = contactNow(); if (p && p.company) { $('dlgContact').close(); openClient(p.company); } };
+  $('pClientOpen').onclick = openPersonClient;
   $('pTouchPost').onclick = logTouch;
   $('pTouchText').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); logTouch(); } });
   $('pTouchText').addEventListener('input', () => autosize($('pTouchText')));
   $('pChan').onchange = () => { $('pDraftWrap').hidden = $('pChan').value === 'note'; };
   $('pClose').onclick = () => $('dlgContact').close();
   $('dlgContact').addEventListener('close', () => { editingContact = null; render(); });
-  $('pDelete').onclick = async () => { const p = contactNow(); if (!p || !(await ask('Delete person?', [`Delete the person “${p.name}”?`, 'This removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.'], 'Delete', true))) return; const id = p.id; $('dlgContact').close();
-    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`); };
-  $('pAgent').onclick = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
+  async function deletePerson() {
+    const p = contactNow(); if (!p || ro || !(await ask('Delete person?', [`Delete the person “${p.name}”?`, 'This removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.'], 'Delete', true))) return;
+    const id = p.id; $('dlgContact').close();
+    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`);
+  }
+  const copyPerson = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
+  $('pAgent').onclick = copyPerson;
+  // the ⋯ menu: copy for AI, open the client, delete
+  function openPersonMenu(anchor) {
+    const p = contactNow(); if (!p) return;
+    const items = [{ label: 'Copy for AI', icon: 'bot', onSelect: copyPerson }];
+    if (p.company) items.push({ label: `Open client ${p.company}`, icon: 'building-2', onSelect: openPersonClient });
+    if (!ro) items.push({ separator: true }, { label: 'Delete person', icon: 'trash-2', danger: true, onSelect: deletePerson });
+    ui.menu(anchor, items, { label: `Actions for ${p.name || 'this person'}` });
+  }
   function personPrompt(p) {
     const c = cfg(), lines = [`Help me with my contact ${p.name}${p.role ? ', ' + p.role : ''}${p.company ? ' at ' + p.company : ''}. Stage: ${p.stage}. Next step: ${p.next || 'none'}${p.next_due ? ' (due ' + p.next_due + ')' : ''}.`];
     if (p.emails.length) lines.push('Email addresses: ' + p.emails.map(x => `${x.label}: ${x.value}`).join('; '));
@@ -3403,7 +3612,7 @@ if (typeof window !== 'undefined') (() => {
     lines.push('', `This person is on my Keeptrack board (repo ${c.repo}, file ${c.path}, record id ${p.id}). If you can use the Keeptrack skill or keeptrack.py, log any message you write as a draft touch, and never send anything yourself. I will send it and mark it sent.`);
     return lines.join('\n');
   }
-  const refreshContact = () => { if ($('dlgContact').open) fillContact(false); };
+  const refreshContact = () => { if ($('dlgContact').open) fillContact(false); if ($('dlgClient').open) fillClientDrawer(false); if ($('dlgProject').open) fillProjectDrawer(false); };   // board data changed underneath an open drawer
 
   // ---- first-run wizard: no repo or no token in this browser ----------------
   // ---- first-run wizard: one step per screen; the token tells us the username and the repos, so nothing else is typed ----
@@ -3771,13 +3980,13 @@ if (typeof window !== 'undefined') (() => {
     if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; text.push(' ', a); }
     showBar('roBar', { tone: 'warn', icon: 'lock', text, action: { label, onClick: go } }).setAttribute('role', 'status'); lockDrawers();   // shown on every load: polite, not an alert
   }
-  const RO_KEEP = new Set(['pClose', 'pAgent']);   // buttons that only read or copy (task drawer buttons say so with data-ro-keep)
-  function lockDrawers() {
+  const DRAWERS = ['dlgCard', 'dlgContact', 'dlgClient', 'dlgProject'];
+  function lockDrawers() {   // buttons that only read, copy or navigate say so with data-ro-keep (roKeep) and stay usable
     if (!ro) return;
-    document.querySelectorAll('#dlgCard, #dlgContact').forEach(d => d.querySelectorAll('input, select, textarea, button').forEach(x => { if (!RO_KEEP.has(x.id) && !x.dataset.roKeep && !x.closest('.ui-menu') && !x.disabled) { x.disabled = true; x.dataset.ro = '1'; } }));
+    DRAWERS.forEach(id => $(id).querySelectorAll('input, select, textarea, button').forEach(x => { if (!x.dataset.roKeep && !x.closest('.ui-menu') && !x.disabled) { x.disabled = true; x.dataset.ro = '1'; } }));
   }
   let lockQueued = false; const lockObs = new MutationObserver(() => { if (!ro || lockQueued) return; lockQueued = true; queueMicrotask(() => { lockQueued = false; lockDrawers(); }); });
-  ['dlgCard', 'dlgContact'].forEach(id => lockObs.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] }));
+  DRAWERS.forEach(id => lockObs.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] }));
   $('btnHelp').onclick = () => $('dlgHelp').showModal(); $('hClose').onclick = () => $('dlgHelp').close();
   $('hAgentSetup').onclick = () => { $('dlgHelp').close(); $('btnSettings').click(); settingsTab('claude'); };
   $('dlgHelp').querySelectorAll('a[data-doc]').forEach(a => { a.href = HOME + '/docs/help/' + a.dataset.doc; a.target = '_blank'; a.rel = 'noopener noreferrer'; });

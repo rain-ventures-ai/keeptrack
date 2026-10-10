@@ -327,33 +327,24 @@ dialog.drawer[open] { display: flex; animation: slidein .22s ease; }
 .dhead { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-3) var(--sp-5) var(--sp-3) 18px; border-bottom: 1px solid var(--border); min-height: 48px; } .dcreated { font-size: var(--fs-base); color: var(--muted); }
 .dsaved { font-size: var(--fs-sm); color: var(--muted); } .dsaved.ok { color: var(--ok); } .dsaved.bad { color: var(--danger); font-weight: 600; }
 .dbody { flex: 1; overflow-y: auto; padding: var(--sp-6) var(--sp-7) 28px; }
-.dchips { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-4); }
 .pillsel { width: auto !important; border-radius: var(--r-pill); padding: var(--sp-1) 26px var(--sp-1) var(--sp-5); font-size: var(--fs-base); font-weight: 600; background-color: var(--panel); border-color: transparent; cursor: pointer; }
 .pillsel:hover { border-color: var(--accent); }
 .dtitle { width: 100%; font-size: var(--fs-2xl); line-height: 1.25; font-weight: 700; letter-spacing: -.01em; border: 0 !important; border-radius: var(--r-md) !important; background: transparent !important; padding: var(--sp-1) var(--sp-3) !important; margin: 0 -8px var(--sp-2); resize: none; overflow: hidden; display: block; }
 .dtitle:hover { background: var(--panel) !important; } .dtitle:focus { background: var(--card) !important; box-shadow: inset 0 0 0 2px var(--accent); outline: 0; }
-.lx { border: 0; background: transparent; color: inherit; opacity: .6; padding: 0 var(--sp-1); margin-left: 2px; font-size: var(--fs-lg); line-height: 1; border-radius: var(--r-xs); cursor: pointer; } .lx:hover { opacity: 1; background: rgba(0,0,0,.12); }
-.addinline { border: 1px dashed var(--border); background: transparent; border-radius: var(--r-pill); padding: 3px var(--sp-5); font-size: var(--fs-base); width: 130px; } .addinline:focus { border-style: solid; border-color: var(--accent); background: var(--card); outline: 0; }
-.addinline.wide { width: 100%; border-radius: var(--r-md); margin-top: var(--sp-2); padding: 7px var(--sp-4); }
-.dsec { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
-.dsech { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-3); } .dsech h4 { margin: 0; font-size: var(--fs-md); } .muted { color: var(--muted); font-weight: 400; }
+.muted { color: var(--muted); font-weight: 400; }
 button.small { padding: 2px var(--sp-4); font-size: var(--fs-sm); }
 .descview { min-height: 52px; padding: var(--sp-4) var(--sp-5); border-radius: var(--r-lg); background: var(--panel); white-space: pre-wrap; word-break: break-word; font-size: var(--fs-md); cursor: default; } .descview:hover { background: color-mix(in srgb, var(--panel) 70%, var(--card)); } .descview a { color: var(--accent); } .descview .ph { color: var(--muted); }
 .ddesc { width: 100%; min-height: 110px; border-radius: var(--r-lg); resize: none; } .cbtns { display: flex; gap: var(--sp-3); align-items: center; margin-top: var(--sp-3); flex-wrap: wrap; }
-.linkrow { display: flex; align-items: center; gap: var(--sp-4); padding: 7px var(--sp-4); border-radius: var(--r-md); background: var(--panel); margin-bottom: var(--sp-2); min-width: 0; }
-.linkrow a { color: var(--accent); text-decoration: none; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .linkrow a:hover { text-decoration: underline; } .linkrow .host { color: var(--muted); font-size: var(--fs-sm); margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .composer textarea { width: 100%; resize: none; border-radius: var(--r-lg); min-height: 40px; padding: 9px var(--sp-5); overflow: hidden; }
 .cmlist { margin-top: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
 .cmcard { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--card); }
 .cmcard .cmhead { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--border); font-size: var(--fs-base); background: color-mix(in srgb, var(--panel) 50%, var(--card)); } .cmcard .cmhead .av { margin: 0; border: 0; width: 24px; height: 24px; } .cmcard .cmhead time { margin-left: auto; color: var(--muted); font-size: var(--fs-sm); }
 .cmcard .cmbody { padding: var(--sp-4) var(--sp-5); font-size: var(--fs-md); white-space: pre-wrap; word-break: break-word; } .cmcard .cmbody a { color: var(--accent); }
-.dfoot2 { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--border); } .dfoot2 .danger { border-color: transparent; background: transparent; font-size: var(--fs-base); }
+.dfoot2 { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--border); }
 @media (max-width: 760px) {
   dialog.drawer { inset: 0; margin: 0; width: 100vw; max-width: 100vw; border-radius: 0; border: 0; }
   .dbody { padding: 14px 14px 40px; } .dtitle { font-size: 21px; }
-  .addinline { padding: var(--sp-3) var(--sp-5); width: 150px; } .addinline.wide { padding: 11px var(--sp-5); }
   .pillsel { min-height: 38px; } .cbtns button { min-height: 42px; } .composer textarea { min-height: 46px; }
-  .linkrow .lx { padding: var(--sp-2) var(--sp-4); } .linkrow .host { display: none; }
 }
 /* ---- unread markers ------------------------------------------------------ */
 #btnUnread { position: relative; } #btnUnread.on { background: var(--accent-soft); border-color: var(--accent); }
@@ -525,7 +516,6 @@ header .badge { top: -6px; right: -6px; }
 
 /* ---- update banner ------------------------------------------------------- */
 
-.agentcopy { border-radius: var(--r-pill); padding: 3px var(--sp-5); } @media (max-width: 760px) { .agentcopy .atxt { display: none; } .agentcopy { min-width: 40px; min-height: 36px; } }
 @keyframes hotpulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 
 /* ---- add-task discoverability ------------------------------------------------ */
@@ -539,19 +529,20 @@ header .badge { top: -6px; right: -6px; }
 .dbody .dtitle { margin-top: 2px; } .dchips { margin-top: var(--sp-2); }
 .dfoot2 { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); } .dfoot2 .dcreated { font-size: var(--fs-sm); }
 
-/* ---- task drawer (#dlgCard): ui.js header, one property list, sections (built in board.js buildDrawer) ---- */
-.taskdrawer .dhead { gap: var(--sp-1); min-height: 56px; padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-6); }
-.taskdrawer .dhead .spacer { flex: 1 1 auto; }
+/* ---- drawers (task #dlgCard, person #dlgContact, client #dlgClient, project #dlgProject): ui.js header, one property list,
+   sections (built in board.js buildDrawer / buildPersonDrawer / buildClientDrawer / buildProjectDrawer) ---- */
+.uidrawer .dhead { gap: var(--sp-1); min-height: 56px; padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-6); }
+.uidrawer .dhead .spacer { flex: 1 1 auto; }
 .taskdrawer .dnum { flex: none; font-family: var(--font-mono); font-weight: 600; color: var(--muted); }
 .taskdrawer .dnum .ui-i { opacity: .75; }
 .taskdrawer .dsaved { white-space: nowrap; margin-right: var(--sp-2); } .taskdrawer .dsaved:empty { display: none; }
 .taskdrawer .dhead .ui-iconbtn.hot { width: auto; gap: var(--sp-1); padding: 0 var(--sp-4); grid-auto-flow: column; background: var(--accent); color: var(--on-accent); animation: hotpulse 1.8s 3; }
 .taskdrawer .dhead .ui-iconbtn.hot::after { content: "Codex"; font-size: var(--fs-sm); font-weight: 600; }
-.taskdrawer .dtitle { min-height: 0; }   /* one line until it grows (dialog textareas default to 80px) */
-.taskdrawer .ui-props { margin: var(--sp-3) 0 var(--sp-2); }
-.taskdrawer .ui-props__row { grid-template-columns: 112px minmax(0, 1fr); }
-.taskdrawer .dval { display: contents; }
-.taskdrawer .ui-props__value .ui-select { max-width: 100%; }
+.uidrawer .dtitle { min-height: 0; }   /* one line until it grows (dialog textareas default to 80px) */
+.uidrawer .ui-props { margin: var(--sp-3) 0 var(--sp-2); }
+.uidrawer .ui-props__row { grid-template-columns: 112px minmax(0, 1fr); }
+.uidrawer .dval { display: contents; }
+.uidrawer .ui-props__value .ui-select { max-width: 100%; }
 .ddue { gap: var(--sp-1); min-height: 32px; padding: 0 2px 0 var(--sp-4); font-size: var(--fs-base); font-weight: 600; }
 .ddue .ddue__input { width: auto; min-width: 0; height: 30px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; }
 .ddue .ddue__input:focus { outline: none; } .ddue:focus-within { box-shadow: 0 0 0 2px var(--accent); }
@@ -559,40 +550,112 @@ header .badge { top: -6px; right: -6px; }
 .ddue:not(:has(.ui-pill__remove:not([hidden]))) { padding-right: var(--sp-4); }
 .ddue.ddue--empty { --ui-pill-bg: transparent; --ui-pill-bd: var(--border); --ui-pill-fg: var(--muted); font-weight: 500; }
 .taskdrawer .dlabelnew { width: 160px; height: 30px; }
-.taskdrawer .dsec2 { margin-top: var(--sp-6); padding-top: var(--sp-4); border-top: 1px solid var(--border); }
-.taskdrawer .ui-count:empty { display: none; }
-.taskdrawer .ui-section__body { min-width: 0; }
-.taskdrawer .ui-addrow { margin-top: var(--sp-1); }
-.taskdrawer .dlist:empty, .taskdrawer .dtodos:empty { display: none; }
+.uidrawer .dsec2 { margin-top: var(--sp-6); padding-top: var(--sp-4); border-top: 1px solid var(--border); }
+.uidrawer .ui-count:empty { display: none; }
+.uidrawer .ui-section__body { min-width: 0; }
+.uidrawer .ui-addrow { margin-top: var(--sp-1); }
+.uidrawer .dlist:empty, .taskdrawer .dtodos:empty { display: none; }
 .taskdrawer .dtodo { align-items: center; min-height: 36px; padding: 0 2px; }
 .taskdrawer .dtodo input { margin-top: 0; }
 .taskdrawer .dtodo .ui-iconbtn { opacity: .55; } .taskdrawer .dtodo:hover .ui-iconbtn, .taskdrawer .dtodo .ui-iconbtn:focus-visible { opacity: 1; }
-.taskdrawer .ui-listrow a.ui-iconbtn { color: var(--muted); }
-.taskdrawer .dhint { display: none; margin: var(--sp-2) 0 0; }
-.taskdrawer .ui-addrow:has(> form:not([hidden])) + .dhint { display: block; }
+.uidrawer .ui-listrow a.ui-iconbtn { color: var(--muted); }
+.uidrawer .dhint { display: none; margin: var(--sp-2) 0 0; }
+.uidrawer .ui-addrow:has(> form:not([hidden])) + .dhint { display: block; }
 .taskdrawer .dclaim { margin: 0 0 var(--sp-4); }
 .taskdrawer .dclaim .ui-banner { align-items: flex-start; }
 .taskdrawer .dclaim .ui-banner > .ui-i { margin-top: 1px; }
 .taskdrawer .dclaim .cnote, .taskdrawer .dclaim .host { margin-top: 2px; color: var(--muted); font-size: var(--fs-sm); }
 .taskdrawer .dclaim .sesslink { font-size: var(--fs-sm); }
 .taskdrawer .dclaim__acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
-.taskdrawer .dfoot2 { margin-top: var(--sp-7); }
+.uidrawer .dfoot2 { margin-top: var(--sp-7); }
 @media (max-width: 760px) {
-  .taskdrawer .dhead { gap: 0; padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4); }
-  .taskdrawer .ui-props__row { grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-3); }
-  .taskdrawer .ui-props__label { font-size: var(--fs-sm); }
+  .uidrawer .dhead { gap: 0; padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4); }
+  .uidrawer .ui-props__row { grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-3); }
+  .uidrawer .ui-props__label { font-size: var(--fs-sm); }
   .ddue { min-height: var(--touch); padding-left: var(--sp-5); font-size: var(--fs-md); }
   .ddue .ddue__input { height: 40px; }
   .taskdrawer .dlabelnew { height: var(--touch); width: 100%; }
   .taskdrawer .dtodo { min-height: var(--touch); }
   .taskdrawer .dtodo .ui-iconbtn { opacity: 1; }
-  .taskdrawer .dsec2 { margin-top: var(--sp-5); }
+  .uidrawer .dsec2 { margin-top: var(--sp-5); }
 }
 /* read-only boards: edit controls are disabled by lockDrawers() in board.js; the add rows, remove buttons and empty optional sections go */
-body.ro .taskdrawer .ui-addrow, body.ro #cWhoAdd, body.ro #cLabelAdd, body.ro #cDescBtn, body.ro .taskdrawer .ui-pill__remove,
-body.ro .taskdrawer .ui-listrow > button.ui-iconbtn:not([data-ro-keep]), body.ro .taskdrawer .dtodo .ui-iconbtn, body.ro .taskdrawer .optsec.is-empty { display: none !important; }
-body.ro .taskdrawer .ui-pill--removable { padding-right: var(--sp-4); }
-@media (max-width: 760px) { .dsec { margin-top: 14px; padding-top: var(--sp-5); } .dtitle { font-size: var(--fs-xl); } }
+body.ro .uidrawer .ui-addrow, body.ro #cWhoAdd, body.ro #cLabelAdd, body.ro #cDescBtn, body.ro .uidrawer .ui-pill__remove,
+body.ro .uidrawer .ui-listrow > button.ui-iconbtn:not([data-ro-keep]), body.ro .taskdrawer .dtodo .ui-iconbtn, body.ro .uidrawer .optsec.is-empty { display: none !important; }
+body.ro .uidrawer .ui-pill--removable { padding-right: var(--sp-4); }
+/* person, client and project drawers: identity in the header, fields that look like text until touched, one list-row design */
+.didentity { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; color: var(--muted); font-size: var(--fs-sm); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.dtile { --dtile-c: var(--muted); flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-md); background: color-mix(in srgb, var(--dtile-c) 16%, var(--card)); color: var(--dtile-c); }
+.dtile .ui-i { width: 18px; height: 18px; }
+.didentity .ui-avatar { flex: none; }
+.uidrawer .dtitle--static { margin: 2px 0 var(--sp-2); padding: var(--sp-1) 0 !important; overflow-wrap: anywhere; }
+.uidrawer .dtitle--static:hover { background: transparent !important; }
+:is(.uidrawer, .personform) .dfield { flex: 1 1 auto; width: 100%; min-width: 0; height: 34px; margin: 0 0 0 calc(-1 * var(--sp-3)); padding: 0 var(--sp-3); border-color: transparent; background: transparent; color: var(--text); font-size: var(--fs-md); }
+:is(.uidrawer, .personform) .dfield:hover:not(:disabled):not(:focus) { background: var(--panel); }
+:is(.uidrawer, .personform) .dfield:focus { background: var(--card); }
+.uidrawer .dfield:disabled { opacity: 1; cursor: default; }
+.uidrawer .dfield:disabled::placeholder, .uidrawer textarea:disabled::placeholder { color: transparent; }   /* read-only: an empty field reads as empty, not as an example value */
+.ui-props__value > .dfield + datalist { display: none; }
+.dmuted { color: var(--muted); font-size: var(--fs-base); }
+.uidrawer .ui-props__value .dquick { min-height: 30px; padding: 0 var(--sp-3); color: var(--muted); }
+.uidrawer .ui-props__value .dquick:hover:not(:disabled) { color: var(--accent); }
+.uidrawer .dempty { margin: 0; padding: var(--sp-2) 0; color: var(--muted); font-size: var(--fs-base); }
+.contactmethods { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+/* an email or phone row: label and value edit in place, then mail/call and remove */
+.uidrawer .dmethod { gap: var(--sp-1); padding: 0; }
+.uidrawer .dmethod .methodlabel { flex: 0 0 104px; width: 104px; margin: 0; color: var(--muted); font-size: var(--fs-base); }
+.uidrawer .dmethod .methodvalue { margin: 0; }
+.dmethod > .ui-iconbtn { flex: none; }
+.dmethod > a.ui-iconbtn { color: var(--accent); }
+/* the two-field add row: label, then the address or link, then Add */
+.ui-addrow.dpair .ui-addrow__form { flex-wrap: wrap; }
+.ui-addrow.dpair .ui-addrow__label { flex: 0 1 150px; min-width: 0; width: auto; }
+.ui-addrow.dpair .ui-addrow__input { flex: 1 1 180px; min-width: 0; width: auto; }
+.ui-addrow .ui-addrow__input { width: auto; min-width: 0; }
+/* a row that opens a project; a task row in a drawer (tick + the ui.js task row) */
+.uidrawer .dnav { width: 100%; min-height: 40px; margin: 0; padding: 0 var(--sp-1); border: 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); border-radius: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.uidrawer .dnav:last-child { border-bottom: 0; }
+.uidrawer .dnav:hover { background: var(--panel); } .dnav:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dnav > .ui-i { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.dnav > .ui-listrow__text { flex: 1 1 auto; font-weight: 600; }
+.dtask { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.dtask:last-child { border-bottom: 0; }
+.dtask > .ui-iconbtn { flex: none; color: var(--muted); }
+.dtask > .ui-task { flex: 1 1 auto; min-width: 0; align-content: center; }
+.dtask.is-done .ui-task__title { text-decoration: line-through; color: var(--muted); }
+.dsuggest { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.dsuggest:empty { display: none; }
+/* contact log: the composer on top, then the touches (newest first) */
+.crmdrawer .composer textarea { margin: 0; }
+.crmdrawer .composer .cbtns { gap: var(--sp-3); }
+.crmdrawer .composer .ddraft { display: inline-flex; align-items: center; gap: var(--sp-2); margin: 0; color: var(--text); font-size: var(--fs-base); font-weight: 500; }
+.crmdrawer .composer .ddraft[hidden] { display: none; }
+.crmdrawer .composer #pTouchPost { margin-left: auto; }
+.crmdrawer .cmlist:empty { display: none; }
+.crmdrawer .cmlist { margin-top: var(--sp-4); }
+.touch .tchan { display: inline-flex; align-items: center; gap: var(--sp-1); font-weight: 600; } .touch.draft { border-style: dashed; }
+.touch .cmhead { flex-wrap: wrap; } .touch .cmacts { display: flex; gap: var(--sp-2); width: 100%; }
+.crmdrawer .ddesc { min-height: 88px; margin: 0; }
+.crmdrawer .ui-section__action .ui-btn { color: var(--accent); }
+@media (max-width: 760px) {
+  .uidrawer .dfield { height: var(--touch); }
+  .uidrawer .dmethod .methodlabel { flex-basis: 76px; width: 76px; }
+  .ui-addrow.dpair .ui-addrow__label { flex: 1 1 100%; }
+  .uidrawer .ui-props__value .dquick { min-height: 36px; }
+  .uidrawer .dnav { min-height: var(--touch); }
+}
+body.ro .uidrawer .dsuggest, body.ro .crmdrawer .composer, body.ro .ui-props__value .dquick { display: none !important; }
+body.ro .dtask > .ui-iconbtn { visibility: hidden; }
+/* the add-person form: a centred sheet (a bottom sheet on phones) with the name, then the optional details as a property list */
+.personform > form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin: 0; }
+dialog.personform { width: min(520px, calc(100vw - 32px)); max-width: calc(100vw - 32px); }
+.personform .ui-sheet__body .ui-field__label { display: flex; align-items: baseline; margin: var(--sp-5) 0 var(--sp-2); color: var(--text); font-size: var(--fs-base); font-weight: 600; }
+.personform .apname { width: 100%; }
+.personform .apopt { margin: var(--sp-6) 0 var(--sp-1); color: var(--muted); font-size: var(--fs-sm); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.personform .ui-props__row { grid-template-columns: 104px minmax(0, 1fr); }
+.personform .dfield { margin-left: 0; border-color: var(--border); background: var(--card); }
+@media (max-width: 760px) { dialog.personform { width: 100vw; max-width: 100vw; } .personform .ui-props__row { grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-3); } }
+@media (max-width: 760px) { .dtitle { font-size: var(--fs-xl); } }
 .cbtns[hidden] { display: none !important; }
 
 
@@ -600,7 +663,7 @@ body.ro .taskdrawer .ui-pill--removable { padding-right: var(--sp-4); }
 html, body { max-width: 100%; overflow-x: hidden; } @supports (overflow: clip) { html, body { overflow-x: clip; } }
 body > * { min-width: 0; max-width: 100%; }
 header { max-width: 100%; } header > * { min-width: 0; }
-.card, .card .t, .card .n, .tags, .foot, .lrow, .sitem, .pill, .dtitle, .descview, .linkrow, .cmlist, .cm { min-width: 0; overflow-wrap: anywhere; }
+.card, .card .t, .card .n, .tags, .foot, .lrow, .sitem, .pill, .dtitle, .descview, .cmlist, .cm { min-width: 0; overflow-wrap: anywhere; }
 .card .t, .card .n { overflow-wrap: anywhere; word-break: normal; }
 .foot, .tags, .mm, .c-more, .c-labels { flex-wrap: wrap; max-width: 100%; }
 .chip, .tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -613,7 +676,7 @@ dialog input, dialog select, dialog textarea { max-width: 100%; box-sizing: bord
 
 /* ---- task numbers, @mentions, suggestions ------------------------------------------------ */
 .numchip { border: 0; background: var(--panel); color: var(--muted); font: 600 var(--fs-xs)/1 var(--font-mono); padding: var(--sp-1) 7px; border-radius: var(--r-sm); cursor: pointer; min-height: 0; flex: 0 0 auto; } .numchip:hover { color: var(--accent); background: var(--accent-soft); }
-.card .top .numchip { margin-right: var(--sp-2); } .numchip.big { font-size: var(--fs-base); padding: var(--sp-2) var(--sp-4); }
+.card .top .numchip { margin-right: var(--sp-2); }
 .numtag { color: var(--muted); font: 600 var(--fs-xs) var(--font-mono); margin-right: 7px; }
 .mention { color: var(--accent); background: var(--accent-soft); border-radius: var(--r-sm); padding: 0 var(--sp-1); font-weight: 600; } .mention.me { background: var(--accent); color: var(--on-accent); }
 a.mref { color: var(--accent); font-weight: 600; text-decoration: none; background: var(--accent-soft); border-radius: var(--r-sm); padding: 0 var(--sp-1); font-family: var(--font-mono); font-size: .92em; } a.mref:hover { text-decoration: underline; }
@@ -650,10 +713,6 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .cmenurow .cmenu { min-width: 0; justify-content: flex-start; }   /* "width: 100%" from .cmenu made Details squeeze the name */
 .tag.project { background: var(--panel); border: 1px solid var(--border); }
 .tag.project.done, .tag.project.paused { opacity: .72; font-style: italic; }
-.prowbtn { display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left; padding: var(--sp-3) var(--sp-4); margin: var(--sp-1) 0; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel); color: inherit; font: inherit; cursor: pointer; }
-.prowbtn:hover { border-color: var(--accent); background: var(--accent-soft); }
-.suggestrow { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-2) 0; }
-.dtitleplain { font-size: 1.1rem; font-weight: 700; margin: 0 0 var(--sp-3); }
 .blist { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-3) 0; } .brow { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); } .brow .bname { flex: 1; font-weight: 600; overflow-wrap: anywhere; } .brow .bcur { font-size: var(--fs-sm); color: var(--muted); }
 header #boardBtn.logo { display: inline-grid; width: auto; min-width: 32px; padding: 0 var(--sp-2); border: 0; color: var(--on-fill); font-size: var(--fs-sm); font-weight: 800; letter-spacing: .04em; cursor: pointer; }
 .bbadge { display: inline-grid; place-items: center; min-width: 30px; height: 22px; padding: 0 5px; border-radius: var(--r-sm); color: var(--on-fill); font-size: 10.5px; font-weight: 800; letter-spacing: .04em; flex: 0 0 auto; }
@@ -743,35 +802,11 @@ label.chk.big { font-size: 15px; font-weight: 600; }
 .pdue.today { border-color: var(--warn); color: var(--warn); font-weight: 600; } .pdue.late { border-color: var(--danger); color: var(--danger); font-weight: 600; } .pdue.none:empty { display: none; }
 .pbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); margin-bottom: var(--sp-3); max-width: 100%; } .psearch { min-width: 0; width: 100%; }
 .padd { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); max-width: 100%; } .padd input { min-width: 0; width: 100%; }
-.personform { max-width: 620px; }
-.personform .formhead { display: flex; align-items: flex-start; gap: var(--sp-5); }
-.personform .formhead > div { flex: 1; }
-.personform .formhead .hint { margin: 0; }
 .personform .required { color: var(--danger); font-size: 10px; margin-left: 5px; text-transform: uppercase; letter-spacing: .04em; }
-.personform .optional { color: var(--muted); font-size: 10px; margin-left: 3px; font-weight: 400; }
 #board.pipe .col h2 .psum { margin-left: auto; font-size: var(--fs-sm); color: var(--muted); font-weight: 600; }
 .pcard { cursor: grab; } .pcard .ctitle { font-weight: 600; } .pcard .small { font-size: var(--fs-sm); margin-top: 3px; } .pcard .pval { font-size: var(--fs-sm); margin-top: var(--sp-1); font-weight: 600; }
-.nextbox { margin: var(--sp-4) 0 var(--sp-2); padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel); }
-.nextbox label { font-weight: 600; font-size: var(--fs-base); display: block; margin-bottom: var(--sp-1); } .nextbox > input { width: 100%; }
-.nextdue { display: flex; gap: var(--sp-2); flex-wrap: wrap; align-items: center; margin-top: var(--sp-2); }
-.pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3) var(--sp-5); margin: var(--sp-4) 0; }
-.pgrid label { display: flex; flex-direction: column; font-size: var(--fs-sm); color: var(--muted); gap: 3px; } .pgrid input { width: 100%; color: var(--text); }
-.contactmethods { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); }
-.contactmethods .dsech { margin-bottom: 0; }
-.methodgroup { min-width: 0; padding: var(--sp-5); border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--panel) 44%, var(--card)); }
-.methodgroup > b { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); font-size: var(--fs-base); }
-.methodlist > .muted { padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--border); border-radius: var(--r-md); background: var(--card); }
-.methodrow { display: grid; grid-template-columns: minmax(90px, .38fr) minmax(0, 1fr) 34px 34px; gap: var(--sp-2); align-items: center; padding: 5px 0; }
-.methodrow input { min-width: 0; width: 100%; padding: 7px var(--sp-3); }
-.methodrow .methodgo { display: inline-grid; place-items: center; color: var(--accent); min-width: 34px; min-height: 34px; padding: 5px; border-radius: var(--r-sm); } .methodrow .methodgo:hover { background: var(--accent-soft); }
-.methodrow .lx { min-width: 34px; min-height: 34px; color: var(--danger); }
-.methodadd { display: grid; grid-template-columns: minmax(110px, .38fr) minmax(0, 1fr) auto; gap: var(--sp-2); margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border); }
-.methodadd input { min-width: 0; width: 100%; } .methodadd button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
-.resourcepath { min-width: 0; flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.resourcevalue { display: block; overflow: hidden; text-overflow: ellipsis; }
 .inwrap { display: flex; gap: var(--sp-2); align-items: center; } .inwrap a { text-decoration: none; }
 .touch .tchan { font-weight: 600; } .touch.draft { border-style: dashed; }
-.draftpill { font-size: var(--fs-xs); padding: 1px 7px; border-radius: var(--r-pill); background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); font-weight: 600; }
 .welcome { max-width: 640px; margin: var(--sp-4) auto; line-height: 1.5; } .welcome h2 { margin-top: 0; }
 .wsteps { padding-left: var(--sp-7); } .wsteps > li { margin: var(--sp-5) 0; }
 .wform { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); } .wform label { display: flex; flex-direction: column; font-size: var(--fs-base); gap: 3px; }
@@ -780,15 +815,10 @@ label.chk.big { font-size: 15px; font-weight: 600; }
   #board.v-today, #board.v-people, #board.v-welcome { padding: var(--sp-3) var(--sp-5) 90px; }
   .prow { grid-template-columns: 1fr auto; } .prow .pnext { grid-column: 1 / -1; } .prow .plast { display: none; }
   .ttoday .todaytail { grid-column: 1 / -1; justify-items: stretch; } .ttoday .todayactions { justify-content: flex-start; opacity: 1; pointer-events: auto; } .quickstatus { flex: 1; width: auto; }
-  .pgrid { grid-template-columns: 1fr; }
-  .methodrow { grid-template-columns: minmax(0, 1fr) 40px 40px; } .methodrow .methodlabel { grid-column: 1 / -1; }
-  .methodadd { grid-template-columns: minmax(0, 1fr) auto; } .methodadd input:first-child { grid-column: 1 / -1; }
   #board.pipe .col { display: block; margin-bottom: 14px; } #board.pipe .col h2 { display: flex; }
 }
 @media (max-width: 520px) {
   .pbar { grid-template-columns: minmax(0, 1fr); } .pbar select { width: 100%; }
-  .methodgroup { padding: var(--sp-4); }
-  .methodadd { grid-template-columns: minmax(0, 1fr); } .methodadd input:first-child { grid-column: auto; } .methodadd button { width: 100%; }
 }
 @media (max-width: 420px) {
   .hfilters { grid-template-columns: minmax(60px, 1fr) repeat(6, 36px); gap: var(--sp-1); }

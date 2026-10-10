@@ -81,7 +81,7 @@ let base;
       await page.locator('#viewSw button[data-view="people"]').click(); await page.locator('.prow', { hasText: 'Casey Example' }).click();
       await page.locator('#dlgContact').waitFor({ state: 'visible' });
       const before = writes(api);
-      await page.locator('#pDelete').click();
+      await page.locator('#pMore').click(); await page.getByRole('menuitem', { name: 'Delete person' }).click();
       const ask = page.getByRole('alertdialog'); await ask.waitFor();
       assert.match(await ask.textContent(), /Delete person\?.*Delete the person “Casey Example”\?.*Undo button/s);
       assert.equal(await ask.getByRole('button', { name: 'Cancel' }).evaluate(b => b === document.activeElement), true, 'a destructive confirm focuses Cancel');
@@ -92,11 +92,11 @@ let base;
       assert.equal(await page.locator('#dlgContact').getAttribute('open'), '', 'the person drawer stays open after Cancel');
 
       // Escape also cancels.
-      await page.locator('#pDelete').click(); await ask.waitFor(); await page.keyboard.press('Escape'); await ask.waitFor({ state: 'detached' });
+      await page.locator('#pMore').click(); await page.getByRole('menuitem', { name: 'Delete person' }).click(); await ask.waitFor(); await page.keyboard.press('Escape'); await ask.waitFor({ state: 'detached' });
       assert.ok(api.files['people/p_one.json'], 'Escape keeps the person');
 
       // 2. Confirm removes them; the change is saved, then an Undo toast appears and puts them back.
-      await page.locator('#pDelete').click(); await ask.waitFor(); await ask.getByRole('button', { name: 'Delete' }).click();
+      await page.locator('#pMore').click(); await page.getByRole('menuitem', { name: 'Delete person' }).click(); await ask.waitFor(); await ask.getByRole('button', { name: 'Delete' }).click();
       await waitFor(page, () => !api.files['people/p_one.json'], 'Delete removes the person file');
       const undo = page.locator('.ui-toast.kb-undo'); await undo.waitFor();
       assert.match(await undo.textContent(), /Delete person: Casey Example/);

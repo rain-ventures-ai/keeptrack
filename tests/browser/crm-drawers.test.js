@@ -1,0 +1,283 @@
+'use strict';
+// The person (#dlgContact), client (#dlgClient) and project (#dlgProject) drawers on a phone-width writable board with a
+// faked GitHub API: edits save, removals and Delete ask in-page first, the layout never scrolls sideways at 390px, the
+// header stays one row, no native dialog is used, and a read-only demo board locks all three.
+// Run: node crm-drawers.test.js   (SHOTS=<dir> also saves screenshots: 390px and 1280px, light and dark, writable and read-only)
+
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { chromium } = require('playwright');
+
+const ROOT = path.resolve(__dirname, '../..');
+const SHOTS = process.env.SHOTS || '';
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
+const server = http.createServer((req, res) => {
+  const rel = decodeURIComponent(new URL(req.url, 'http://local').pathname).replace(/^\/+/, '') || 'board/index.html';
+  const file = path.resolve(ROOT, rel); if (!file.startsWith(ROOT + path.sep)) { res.writeHead(403).end(); return; }
+  fs.readFile(file, (err, data) => { if (err) res.writeHead(404).end(); else { res.setHeader('Content-Type', mime[path.extname(file)] || 'application/octet-stream'); res.end(data); } });
+});
+
+const text = x => JSON.stringify(x, null, 2) + '\n';
+const stamp = '2026-10-01T08:00:00.000Z';
+const root = { version: 4, layout: 'split', settings: { title: 'CRM drawer test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }], agents: [], clients: ['Acme'], labels: [],
+  client_info: { Acme: { north_star: '', links: [] } }, next_num: 2, archive: { files: {} } };
+const project = { id: 'pr_one', client: 'Acme', name: 'Launch', north_star: '', status: 'active', links: [], people: [], created: stamp, updated: stamp };
+const card = { id: 't_one', num: 1, title: 'Kick-off', column: 'todo', client: 'Acme', project: 'pr_one', priority: 'medium', due: '', labels: [], assignees: [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: stamp, updated: stamp, rank: 'a1' };
+const person = { id: 'p_one', name: 'Casey Example', company: 'Acme', role: 'Buyer', stage: 'New', value: '', source: '', notes: '', next: '', next_due: '', emails: [{ id: 'e1', label: 'Work', value: 'casey@acme.test' }], phones: [], links: [], comments: [], history: [], created: stamp, updated: stamp };
+
+// A small GitHub: contents API for reads and single-file writes, git data API for multi-file commits (as in task-drawer.test.js).
+class Github {
+  constructor() { this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card), 'people/p_one.json': text(person), 'projects/pr_one.json': text(project) }; this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; }
+  sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
+  async route(route) {
+    const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
+    const json = (body, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    if (p === '/user' && method === 'GET') return json({ login: 'alex' });
+    if (p.startsWith('/user/repos')) return json([]);
+    if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
+    if (p.startsWith('/contents/README.md')) return json({ message: 'Not Found' }, 404);
+    if (p.startsWith('/contents/board/tasks.json') && method === 'GET') return json({ sha: this.sha('tasks.json'), size: Buffer.byteLength(this.files['tasks.json']), encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') });
+    if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON(); this.files[rel] = Buffer.from(b.content, 'base64').toString(); this.head = 'head-' + ++this.n; return json({ content: { sha: this.sha(rel) }, commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
+    if (p.startsWith('/contents/board/') && method === 'DELETE') { delete this.files[p.slice('/contents/board/'.length)]; this.head = 'head-' + ++this.n; return json({ commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
+    if (p === '/git/ref/heads/main' && method === 'GET') return json({ object: { sha: this.head } });
+    if (p.startsWith('/git/commits/') && method === 'GET') return json({ tree: { sha: 'root-' + this.n } });
+    if (p.startsWith('/git/trees/root-') && method === 'GET') return json({ tree: [{ path: 'board', type: 'tree', sha: 'board-' + this.n }] });
+    if (p.startsWith('/git/trees/board-') && method === 'GET') return json({ truncated: false, tree: Object.entries(this.files).map(([f, c]) => ({ path: f, type: 'blob', sha: this.sha(f), size: Buffer.byteLength(c) })) });
+    if (p.startsWith('/git/blobs/') && method === 'GET') { const sha = p.split('/').pop(), rel = Object.keys(this.files).find(x => this.sha(x) === sha); return json({ encoding: 'base64', content: Buffer.from(this.files[rel]).toString('base64') }); }
+    if (p === '/git/blobs' && method === 'POST') { const sha = 'new-blob-' + ++this.n; this.blobs[sha] = req.postDataJSON().content; return json({ sha }); }
+    if (p === '/git/trees' && method === 'POST') { this.pending = req.postDataJSON().tree; return json({ sha: 'new-tree-' + ++this.n }); }
+    if (p === '/git/commits' && method === 'POST') return json({ sha: 'new-commit-' + ++this.n });
+    if (p === '/git/refs/heads/main' && method === 'PATCH') { for (const e of this.pending || []) { const rel = e.path.replace(/^board\//, ''); if (e.sha === null) delete this.files[rel]; else this.files[rel] = this.blobs[e.sha]; } this.head = req.postDataJSON().sha; return json({ object: { sha: this.head } }); }
+    return json({ message: 'not mocked: ' + method + ' ' + p }, 404);
+  }
+  person() { return this.files['people/p_one.json'] ? JSON.parse(this.files['people/p_one.json']) : null; }
+  root() { return JSON.parse(this.files['tasks.json']); }
+  projects() { return [...(this.root().projects || []), ...Object.keys(this.files).filter(f => f.startsWith('projects/')).map(f => JSON.parse(this.files[f]))]; }   // split boards keep one file per project
+  project(id = 'pr_one') { return this.projects().find(p => p.id === id) || null; }
+}
+
+let base;
+const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.waitForTimeout(250); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); } };
+// the page never scrolls sideways, the drawer body neither, and every header control sits inside the drawer on one row
+async function assertFits(page, dlg, where) {
+  const m = await page.evaluate(id => {
+    const d = document.getElementById(id), r = d.getBoundingClientRect(), head = d.querySelector('.dhead'), body = d.querySelector('.dbody');
+    const kids = [...head.children].filter(x => x.offsetParent !== null).map(x => { const b = x.getBoundingClientRect(); return { id: x.id || x.className, left: b.left, right: b.right, top: b.top, bottom: b.bottom }; });
+    const hr = head.getBoundingClientRect();
+    const wide = [...body.querySelectorAll('*')].filter(x => x.offsetParent !== null && x.getBoundingClientRect().right > r.right + 0.5).map(x => x.id || x.className).slice(0, 5);
+    return { vw: window.innerWidth, docW: document.documentElement.scrollWidth, bodyScroll: body.scrollWidth - body.clientWidth, dRight: r.right, headH: hr.height, headTop: hr.top, kids, wide };
+  }, dlg);
+  assert(m.docW <= m.vw, `${where}: the page scrolls sideways (${m.docW} > ${m.vw})`);
+  assert(m.bodyScroll <= 0, `${where}: the drawer body scrolls sideways by ${m.bodyScroll}px`);
+  assert.deepEqual(m.wide, [], `${where}: these stick out of the drawer`);
+  for (const k of m.kids) { assert(k.left >= 0 && k.right <= m.dRight + 0.5, `${where}: header item ${k.id} sticks out (${k.left}-${k.right})`); assert(k.top >= m.headTop - 0.5 && k.bottom <= m.headTop + m.headH + 0.5, `${where}: header item ${k.id} wraps to another line`); }
+  assert(m.headH <= 64, `${where}: the header is one row (got ${m.headH}px)`);
+}
+const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour', 'done'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'people'); };
+
+(async () => {
+  await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const api = new Github();
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = [], native = [];
+    page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { native.push(d.type() + ': ' + d.message()); d.dismiss().catch(() => {}); });
+    await page.addInitScript(INIT); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.prow');
+    await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
+    const saved = () => page.waitForResponse(r => ['PUT', 'PATCH', 'DELETE'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
+    const confirmSheet = page.locator('dialog.ui-sheet--alert[open]'), menu = page.locator('.ui-menu');
+    const tomorrow = await page.evaluate(() => { const d = new Date(); d.setDate(d.getDate() + 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; });
+
+    // ---- person drawer: header, properties, sections ----
+    await page.locator('.prow', { hasText: 'Casey Example' }).click(); await page.locator('#dlgContact[open]').waitFor();
+    assert.equal(await page.locator('#pName').inputValue(), 'Casey Example');
+    assert.equal(await page.locator('#pAvatar').textContent(), 'CE');
+    assert.deepEqual(await page.locator('#pHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['Undo last board change', 'Copy for AI', 'More actions', 'Close']);
+    assert.deepEqual(await page.locator('#pProps .ui-props__label').allTextContents(), ['Stage', 'Next step', 'Next date', 'Client', 'Role', 'Value', 'Source', 'GitHub']);
+    assert.deepEqual(await page.locator('#pBody .ui-section__text:visible').allTextContents(), ['Emails', 'Phones', 'Contact log', 'Notes', 'Tasks', 'Links', 'Client north star', 'Projects', 'Files and folders for Acme', 'History']);
+    for (const sec of ['#pPhoneSec', '#pLinkSec', '#pFilesSec', '#pTasksSec']) { assert.equal(await page.locator(`${sec} .ui-addrow__ghost`).isVisible(), true, `${sec}: an empty section is one ghost add row`); assert.equal(await page.locator(`${sec} .ui-addrow__form`).isVisible(), false); }
+    assert.equal(await page.locator('#pHist').isVisible(), false, 'History starts closed');
+    await assertFits(page, 'dlgContact', 'person opened'); await shot(page, 'person-phone-light-writable');
+
+    // stage, next step and its date
+    let w = saved(); await page.locator('#pStage').selectOption('Contacted'); await w; assert.equal(api.person().stage, 'Contacted');
+    await page.locator('#pNext').fill('Call Casey'); w = saved(); await page.locator('#pNext').press('Tab'); await w; assert.equal(api.person().next, 'Call Casey');
+    w = saved(); await page.locator('#dlgContact .dquick', { hasText: 'Tomorrow' }).click(); await w; assert.equal(api.person().next_due, tomorrow);
+    assert.equal(await page.locator('#pNextDue').inputValue(), tomorrow); assert.equal(await page.locator('#pNextDueClear').isVisible(), true);
+    w = saved(); await page.locator('#pNextDueClear').click(); await w; assert.equal(api.person().next_due, '');
+    await page.locator('#pRole').fill('Head buyer'); w = saved(); await page.locator('#pRole').press('Tab'); await w; assert.equal(api.person().role, 'Head buyer');
+
+    // emails: add with label and address, then remove (asks first; Cancel keeps it)
+    await page.locator('#pEmailSec .ui-addrow__ghost').click(); await page.locator('#pEmailLabel').fill('Home'); await page.locator('#pEmailNew').fill('casey@home.test');
+    w = saved(); await page.locator('#pEmailAdd').click(); await w;
+    assert.deepEqual(api.person().emails.map(x => [x.label, x.value]), [['Work', 'casey@acme.test'], ['Home', 'casey@home.test']]);
+    await page.locator('#pEmails .methodvalue >> nth=1').waitFor(); assert.equal(await page.locator('#pEmailCount').textContent(), '2');
+    await page.locator('#pEmails [aria-label="Remove email"]').nth(1).click(); await confirmSheet.waitFor(); assert.match(await confirmSheet.textContent(), /Remove the Home email “casey@home\.test”\?/);
+    await confirmSheet.locator('button', { hasText: 'Cancel' }).click(); await confirmSheet.waitFor({ state: 'detached' }); assert.equal(api.person().emails.length, 2);
+    await page.locator('#pEmails [aria-label="Remove email"]').nth(1).click(); w = saved(); await confirmSheet.locator('button', { hasText: 'Remove' }).click(); await w;
+    assert.deepEqual(api.person().emails.map(x => x.value), ['casey@acme.test']);
+    await page.locator('#pEmailNew').fill('not an email'); await page.locator('#pEmailAdd').click(); await page.waitForTimeout(200);
+    assert.equal(await page.locator('#pEmailNew').inputValue(), 'not an email', 'an invalid address stays in the box'); assert.equal(api.person().emails.length, 1);
+    await page.locator('#pEmailNew').press('Escape'); assert.equal(await page.locator('#dlgContact').getAttribute('open'), '', 'Escape in an add row only closes the row');
+    assert.equal(await page.locator('#pEmailSec .ui-addrow__ghost').isVisible(), true);
+
+    // links: add (label + address), then remove
+    await page.locator('#pLinkSec .ui-addrow__ghost').click(); await page.locator('#pLinkTitle').fill('Blog'); await page.locator('#pLinkNew').fill('https://casey.example/blog');
+    w = saved(); await page.locator('#pLinkNew').press('Enter'); await w; assert.deepEqual(api.person().links, [{ title: 'Blog', url: 'https://casey.example/blog' }]);
+    assert.equal(await page.locator('#pLinks a.ui-listrow__main').getAttribute('href'), 'https://casey.example/blog');
+    await page.locator('#pLinks [aria-label="Remove link Blog"]').click(); w = saved(); await confirmSheet.locator('button', { hasText: 'Remove' }).click(); await w; assert.deepEqual(api.person().links, []);
+
+    // contact log: an email touch
+    await page.locator('#pTouchText').fill('Sent the intro deck'); await page.locator('#pChan').selectOption('email');
+    w = saved(); await page.locator('#pTouchPost').click(); await w;
+    const touch = api.person().comments.at(-1); assert.deepEqual([touch.channel, touch.text, touch.draft], ['email', 'Sent the intro deck', false]);
+    await page.locator('#pTouches .cmcard').waitFor(); assert.equal(await page.locator('#pTouchCount').textContent(), '1');
+    // a draft shows Mark sent and Copy
+    await page.locator('#pTouchText').fill('Draft follow-up'); await page.locator('#pDraft').check(); w = saved(); await page.locator('#pTouchPost').click(); await w;
+    assert.equal(api.person().comments.at(-1).draft, true); await page.locator('#pTouches .cmcard.draft').waitFor();
+    await page.locator('#pTouches .cmcard.draft button', { hasText: 'Copy' }).click(); await page.waitForFunction(() => window.__copied === 'Draft follow-up');
+
+    // notes and a task for this person
+    await page.locator('#pNotes').fill('Prefers email.'); w = saved(); await page.locator('#pNotes').blur(); await w; assert.equal(api.person().notes, 'Prefers email.');
+    await page.locator('#pTasksSec .ui-addrow__ghost').click(); await page.locator('#pTaskNew').fill('Send pricing'); w = saved(); await page.locator('#pTaskNew').press('Enter'); await w;
+    await page.locator('#pTasks .dtask').waitFor();
+    const newCard = Object.keys(api.files).filter(f => f.startsWith('cards/')).map(f => JSON.parse(api.files[f])).find(t => t.title === 'Send pricing');
+    assert.ok(newCard && newCard.contact === 'p_one' && newCard.client === 'Acme', 'the task is linked to the person and their client');
+
+    // History opens; the drawer still fits after all that
+    await page.locator('#pHistSec .ui-section__toggle').click(); assert.equal(await page.locator('#pHist').isVisible(), true);
+    assert.ok((await page.locator('#pHist li').count()) > 1);
+    await assertFits(page, 'dlgContact', 'person after edits');
+    await page.locator('#pBody').evaluate(b => { b.scrollTop = 0; }); await shot(page, 'person-phone-light-writable-filled');
+    if (SHOTS) {
+      await page.emulateMedia({ colorScheme: 'dark' }); await shot(page, 'person-phone-dark-writable');
+      await page.locator('#pBody').evaluate(b => { b.scrollTop = b.scrollHeight / 2; }); await shot(page, 'person-phone-dark-writable-middle');
+      await page.setViewportSize({ width: 1280, height: 860 }); await page.locator('#pBody').evaluate(b => { b.scrollTop = 0; }); await shot(page, 'person-desktop-dark-writable');
+      await page.emulateMedia({ colorScheme: 'light' }); await shot(page, 'person-desktop-light-writable');
+      await page.setViewportSize({ width: 390, height: 844 });
+    }
+
+    // the ⋯ menu: copy for AI, open the client
+    await page.locator('#pMore').click();
+    assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Copy for AI', 'Open client Acme', 'Delete person']);
+    await shot(page, 'person-phone-light-menu');
+    await menu.locator('[role=menuitem]', { hasText: 'Copy for AI' }).click(); await page.waitForFunction(() => /Help me with my contact Casey Example/.test(window.__copied));
+    await page.locator('#pMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Open client Acme' }).click();
+
+    // ---- client drawer ----
+    await page.locator('#dlgClient[open]').waitFor(); assert.equal(await page.locator('#dlgContact').getAttribute('open'), null);
+    assert.equal(await page.locator('#clName').textContent(), 'Acme');
+    assert.deepEqual(await page.locator('#clHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['More actions', 'Close']);
+    assert.deepEqual(await page.locator('#clBody .ui-props__label').allTextContents(), ['People', 'Tasks']);
+    assert.deepEqual(await page.locator('#clPeople .ui-pill__text').allTextContents(), ['Casey Example']);
+    assert.deepEqual(await page.locator('#clBody .ui-section__text').allTextContents(), ['North star', 'Projects', 'Files and folders']);
+    await page.locator('#clNorth').fill('Win the Acme rollout'); w = saved(); await page.locator('#clNorth').blur(); await w; assert.equal(api.root().client_info.Acme.north_star, 'Win the Acme rollout');
+    await page.locator('#clFilesSec .ui-addrow__ghost').click(); await page.locator('#clFileTitle').fill('Client Drive'); await page.locator('#clFileNew').fill('https://drive.google.com/drive/folders/acme');
+    w = saved(); await page.locator('#clFileAdd').click(); await w; assert.deepEqual(api.root().client_info.Acme.links, [{ title: 'Client Drive', url: 'https://drive.google.com/drive/folders/acme' }]);
+    await page.locator('#clFiles .ui-listrow').waitFor(); assert.match(await page.locator('#clFiles').textContent(), /Client Drive.*drive\.google\.com/);
+    await page.locator('#clFileTitle').fill('Local folder'); await page.locator('#clFileNew').fill('/srv/clients/acme'); w = saved(); await page.locator('#clFileAdd').click(); await w;
+    await page.locator('#clFiles [aria-label="Copy local path"]').click(); await page.waitForFunction(() => window.__copied === '/srv/clients/acme');
+    await page.locator('#clFiles [aria-label="Remove link Local folder"]').click(); w = saved(); await confirmSheet.locator('button', { hasText: 'Remove' }).click(); await w;
+    assert.deepEqual(api.root().client_info.Acme.links.map(l => l.title), ['Client Drive']);
+    await assertFits(page, 'dlgClient', 'client'); await shot(page, 'client-phone-light-writable');
+    if (SHOTS) { await page.emulateMedia({ colorScheme: 'dark' }); await shot(page, 'client-phone-dark-writable'); await page.setViewportSize({ width: 1280, height: 860 }); await shot(page, 'client-desktop-dark-writable'); await page.emulateMedia({ colorScheme: 'light' }); await shot(page, 'client-desktop-light-writable'); await page.setViewportSize({ width: 390, height: 844 }); }
+    await page.locator('#clMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Show only this client', 'Copy client name']); await page.keyboard.press('Escape');
+    // a new project opens in its own drawer
+    await page.locator('#clProjSec .ui-addrow__ghost').click(); await page.locator('#clProjName').fill('Phase two'); w = saved(); await page.locator('#clProjAdd').click(); await w;
+    await page.locator('#dlgProject[open]').waitFor(); assert.equal(await page.locator('#prName').inputValue(), 'Phase two');
+    assert.ok(api.projects().some(p => p.name === 'Phase two' && p.client === 'Acme'));
+    await page.locator('#prClose').click(); await page.locator('#dlgProject').waitFor({ state: 'hidden' });
+    await page.locator('#clProjects .dnav', { hasText: 'Launch' }).click();
+
+    // ---- project drawer ----
+    await page.locator('#dlgProject[open]').waitFor(); assert.equal(await page.locator('#prName').inputValue(), 'Launch'); assert.equal(await page.locator('#dlgClient').getAttribute('open'), null);
+    assert.deepEqual(await page.locator('#prHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['More actions', 'Close']);
+    assert.deepEqual(await page.locator('#prBody .ui-props__label').allTextContents(), ['Status', 'Client', 'Tasks']);
+    assert.equal(await page.locator('#prTaskSum').textContent(), '1 open · 0 done');
+    assert.deepEqual(await page.locator('#prTasks .ui-task__title').allTextContents(), ['Kick-off']);
+    w = saved(); await page.locator('#prStatus').selectOption('paused'); await w; assert.equal(api.project().status, 'paused');
+    assert.match(await page.locator('#prStatus').evaluate(x => x.parentElement.className), /ui-select--warn/);
+    await page.locator('#prName').fill('Launch v2'); w = saved(); await page.locator('#prName').press('Enter'); await w; assert.equal(api.project().name, 'Launch v2');
+    await page.locator('#prNorth').fill('Ship by spring'); w = saved(); await page.locator('#prNorth').blur(); await w; assert.equal(api.project().north_star, 'Ship by spring');
+    // people: a suggestion from the client's people, then remove it (asks first)
+    w = saved(); await page.locator('#prSuggest .ui-pill', { hasText: 'Casey Example' }).click(); await w; assert.deepEqual(api.project().people, ['casey@acme.test']);
+    await page.locator('#prPeople .ui-listrow').waitFor(); assert.match(await page.locator('#prPeople').textContent(), /Casey Example.*casey@acme\.test/);
+    await page.locator('#prPeople [aria-label="Remove Casey Example from the project"]').click(); w = saved(); await confirmSheet.locator('button', { hasText: 'Remove' }).click(); await w; assert.deepEqual(api.project().people, []);
+    await page.locator('#prPeopleSec .ui-addrow__ghost').click(); await page.locator('#prPersonEmail').fill('sam@acme.test'); w = saved(); await page.locator('#prPersonAdd').click(); await w; assert.deepEqual(api.project().people, ['sam@acme.test']);
+    await page.locator('#prLinkSec .ui-addrow__ghost').click(); await page.locator('#prLinkTitle').fill('Plan'); await page.locator('#prLinkNew').fill('https://example.com/plan'); w = saved(); await page.locator('#prLinkNew').press('Enter'); await w;
+    assert.deepEqual(api.project().links, [{ title: 'Plan', url: 'https://example.com/plan' }]);
+    // tick the task done from the drawer: it moves to Completed
+    w = saved(); await page.locator('#prTasks .dtask .ui-iconbtn').click(); await w; assert.equal(JSON.parse(api.files['cards/t_one.json']).column, 'done');
+    await page.locator('#prDoneSec .ui-section__toggle').click(); await page.locator('#prDoneTasks .dtask.is-done').waitFor();
+    await assertFits(page, 'dlgProject', 'project'); await page.locator('#prBody').evaluate(b => { b.scrollTop = 0; }); await shot(page, 'project-phone-light-writable');
+    if (SHOTS) { await page.emulateMedia({ colorScheme: 'dark' }); await shot(page, 'project-phone-dark-writable'); await page.setViewportSize({ width: 1280, height: 860 }); await shot(page, 'project-desktop-dark-writable'); await page.emulateMedia({ colorScheme: 'light' }); await shot(page, 'project-desktop-light-writable'); await page.setViewportSize({ width: 390, height: 844 }); }
+    // delete via ⋯: Cancel keeps it, Remove deletes it and clears it from its task
+    await page.locator('#prMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Open client Acme', 'Copy project name', 'Delete project']);
+    await menu.locator('[role=menuitem]', { hasText: 'Delete project' }).click(); await confirmSheet.waitFor(); assert.match(await confirmSheet.textContent(), /Remove project "Launch v2" and clear it from 1 task/);
+    await confirmSheet.locator('button', { hasText: 'Cancel' }).click(); await confirmSheet.waitFor({ state: 'detached' }); assert.ok(api.project(), 'Cancel keeps the project');
+    await page.locator('#prMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete project' }).click(); await confirmSheet.waitFor();
+    w = saved(); await confirmSheet.locator('button.ui-btn--danger').click(); await w; await page.locator('#dlgProject').waitFor({ state: 'hidden' });
+    for (let i = 0; i < 50 && api.project(); i++) await page.waitForTimeout(100);
+    assert.equal(api.project(), null, 'the project is gone'); assert.equal(JSON.parse(api.files['cards/t_one.json']).project, '', 'its task no longer points at it');
+
+    // ---- delete the person via ⋯ ----
+    await page.locator('.prow', { hasText: 'Casey Example' }).click(); await page.locator('#dlgContact[open]').waitFor();
+    assert.equal(await page.locator('#pEmailSec .ui-addrow__form').isVisible(), false, 'add rows start closed on every open');
+    await page.locator('#pMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete person' }).click(); await confirmSheet.waitFor();
+    assert.match(await confirmSheet.textContent(), /Delete person\?.*Delete the person “Casey Example”\?/s);
+    await confirmSheet.locator('button', { hasText: 'Cancel' }).click(); await confirmSheet.waitFor({ state: 'detached' }); assert.ok(api.person(), 'Cancel keeps the person');
+    await page.locator('#pMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete person' }).click(); await confirmSheet.waitFor();
+    w = saved(); await confirmSheet.locator('button.ui-btn--danger').click(); await w; await page.locator('#dlgContact').waitFor({ state: 'hidden' });
+    for (let i = 0; i < 50 && api.person(); i++) await page.waitForTimeout(100);
+    assert.equal(api.person(), null, 'the person file is gone');
+
+    // ---- the add-person form ----
+    await page.locator('.padd button').click(); await page.locator('#dlgAddPerson[open]').waitFor();
+    assert.deepEqual(await page.locator('#dlgAddPerson .ui-props__label').allTextContents(), ['Client', 'Role', 'Email', 'Phone', 'LinkedIn', 'GitHub']);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await shot(page, 'addperson-phone-light');
+    await page.locator('#apName').fill('Robin Doe'); await page.locator('#apCompany').fill('Acme'); await page.locator('#apEmail').fill('robin@acme.test');
+    w = page.waitForResponse(r => r.request().method() === 'PUT' && /\/contents\/board\/people\//.test(r.url())); await page.locator('#apSave').click(); await w;
+    await page.locator('#dlgContact[open]').waitFor(); assert.equal(await page.locator('#pName').inputValue(), 'Robin Doe');
+    assert.deepEqual(await page.locator('#pEmails .methodvalue').evaluateAll(xs => xs.map(x => x.value)), ['robin@acme.test']);
+    await page.keyboard.press('Escape'); await page.locator('#dlgContact').waitFor({ state: 'hidden' });
+
+    assert.deepEqual(native, [], 'no native dialogs');
+    assert.deepEqual(errors, [], 'no page errors');
+    await page.close();
+
+    // ---- read-only demo board: fields disabled, add and remove controls hidden, copy and navigation still work, no Delete ----
+    for (const vp of [{ width: 390, height: 844 }, { width: 1280, height: 860 }]) {
+      for (const scheme of SHOTS ? ['light', 'dark'] : ['light']) {
+        const demo = await browser.newPage({ viewport: vp, colorScheme: scheme }); const demoErrors = []; demo.on('pageerror', e => demoErrors.push(e.message));
+        await demo.addInitScript(() => { try { localStorage.setItem('kb_tour_seen', '1'); localStorage.setItem('kb_tour', 'done'); } catch {} });
+        await demo.goto(base + '/board/index.html?demo=crm'); await demo.locator('#roBar').waitFor();
+        await demo.locator('.prow').first().click(); await demo.locator('#dlgContact[open]').waitFor(); await demo.waitForTimeout(100);
+        for (const id of ['pName', 'pStage', 'pNext', 'pNextDue', 'pRole', 'pNotes', 'pTouchText']) assert.equal(await demo.locator('#' + id).isDisabled(), true, id + ' is locked');
+        assert.equal(await demo.locator('#dlgContact .ui-addrow:visible').count(), 0, 'no add rows'); assert.equal(await demo.locator('#dlgContact .ui-listrow button[aria-label^="Remove"]:visible').count(), 0, 'no remove buttons');
+        for (const id of ['pAgent', 'pMore', 'pClose']) assert.equal(await demo.locator('#' + id).isEnabled(), true, id + ' stays usable');
+        await demo.locator('#pMore').click(); const items = await demo.locator('.ui-menu [role=menuitem]').allTextContents(); assert.ok(!items.includes('Delete person')); assert.ok(items.includes('Copy for AI'));
+        await demo.keyboard.press('Escape'); await assertFits(demo, 'dlgContact', `read-only person ${vp.width}px`); await shot(demo, `person-${vp.width}-${scheme}-readonly`);
+        const client = items.find(x => x.startsWith('Open client'));
+        if (client) {
+          await demo.locator('#pMore').click(); await demo.locator('.ui-menu [role=menuitem]', { hasText: client }).click(); await demo.locator('#dlgClient[open]').waitFor(); await demo.waitForTimeout(100);
+          assert.equal(await demo.locator('#clNorth').isDisabled(), true); assert.equal(await demo.locator('#dlgClient .ui-addrow:visible').count(), 0);
+          await assertFits(demo, 'dlgClient', `read-only client ${vp.width}px`); await shot(demo, `client-${vp.width}-${scheme}-readonly`);
+          const proj = demo.locator('#clProjects .dnav').first();
+          if (await proj.count()) {
+            await proj.click(); await demo.locator('#dlgProject[open]').waitFor(); await demo.waitForTimeout(100);
+            for (const id of ['prName', 'prStatus', 'prNorth']) assert.equal(await demo.locator('#' + id).isDisabled(), true, id + ' is locked');
+            await demo.locator('#prMore').click(); assert.ok(!(await demo.locator('.ui-menu [role=menuitem]').allTextContents()).includes('Delete project')); await demo.keyboard.press('Escape');
+            await assertFits(demo, 'dlgProject', `read-only project ${vp.width}px`); await shot(demo, `project-${vp.width}-${scheme}-readonly`);
+          }
+        }
+        assert.deepEqual(demoErrors, [], 'no page errors on the demo');
+        await demo.close();
+      }
+    }
+    console.log('crm-drawers: all checks passed');
+  } finally { await browser.close(); server.close(); }
+})().catch(e => { console.error(e); process.exit(1); });

@@ -70,7 +70,7 @@ const server = http.createServer((req, res) => {
   await page.locator('#btnFilter').click();
 
   await openClientDetails('Harbour Foods');
-  await page.locator('#dlgClient .prowbtn').first().click();
+  await page.locator('#dlgClient .dnav').first().click();
   await page.locator('#dlgProject').waitFor({ state: 'visible' });
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(OUT, 'demo-project-drawer.png'), fullPage: false });
