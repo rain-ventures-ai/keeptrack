@@ -1539,7 +1539,7 @@ if (typeof window !== 'undefined') (() => {
   const projectTag = t => { const pr = t.project && projectById(t.project); if (!pr) return null; const p = ui.pill({ text: pr.name, outline: true, size: 'sm' }); if (pr.status === 'done' || pr.status === 'paused') { p.classList.add('tag-quiet'); p.title = `Project ${pr.status}`; } return p; };
   const changedDot = t => { if (!freshInfo(t).changed) return null; const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; return d; };
   function doneCircle(t, cls = '') {   // mark done / reopen, in list and schedule rows
-    const done = isDoneTask(t), b = el('button', 'circ' + cls, done ? '✓' : ''); b.type = 'button'; b.title = done ? 'Reopen' : 'Mark done'; b.setAttribute('aria-label', b.title);
+    const done = isDoneTask(t), b = el('button', 'circ' + cls + (done ? ' is-done' : ''), done ? '✓' : ''); b.type = 'button'; b.title = done ? 'Reopen' : 'Mark done'; b.setAttribute('aria-label', b.title);
     b.onclick = e => { e.stopPropagation(); toggleDone(t); }; return b;
   }
   const emptyNote = (text, icon) => ui.empty({ text, icon, size: 'sm' });   // a column, day or list with nothing in it
