@@ -71,6 +71,7 @@
     <button id="btnSettings" aria-label="Settings" title="Settings"><span class="ic"><i data-i="settings"></i></span><span class="tx"> Settings</span></button>
   </div>
 </header>
+<nav id="subnav" class="subnav" aria-label="Views in this section" hidden></nav>
 <div id="kitBar" class="kitbar" role="status" hidden></div>
 <div id="memberBar" class="kitbar memberbar" role="status" hidden></div>
 <div id="roBar" class="kitbar robar" role="status" hidden></div>
@@ -83,11 +84,10 @@
 <div id="tour" class="tour" hidden><div id="tourRing" class="tourring"></div><div id="tourTip" class="tourtip" role="dialog" aria-modal="true" aria-labelledby="tourTitle"><h3 id="tourTitle"></h3><p id="tourText"></p><div class="tourfoot"><span id="tourStep"></span><button type="button" id="tourSkip">Skip</button><button type="button" id="tourBack">Back</button><button type="button" id="tourNext" class="primary">Next</button></div></div></div>
 <nav id="dock" class="dock" aria-label="Main">
   <button type="button" class="dtab" data-grp="today" aria-label="Today"><i data-i="alarm-clock"></i><span class="dl">Today</span></button>
-  <button type="button" class="dtab" data-grp="tasks" aria-label="Tasks"><i data-i="square-kanban"></i><span class="dl">Kanban</span></button>
+  <button type="button" class="dtab" data-grp="tasks" aria-label="Tasks"><i data-i="square-kanban"></i><span class="dl">Tasks</span></button>
   <button type="button" class="dtab" data-grp="crm" aria-label="People"><i data-i="user"></i><span class="dl">People</span></button>
   <button type="button" class="dtab" data-head-action="btnSearch" aria-label="Search" title="Search everything (press /)"><i data-i="search"></i><span class="dl">Find</span></button>
   <button type="button" class="dtab" id="dockMenu" aria-haspopup="true" aria-expanded="false" aria-controls="dockPop" aria-label="Menu"><i data-i="menu"></i><span class="dl">Menu</span></button>
-  <div id="dockViews" class="popover dockpop" role="menu" hidden></div>
   <div id="dockPop" class="popover dockpop morepop" hidden>
     <button type="button" data-head-action="btnRefresh"><i data-i="refresh-cw"></i> Refresh board</button>
     <button type="button" data-head-action="btnCopy"><i data-i="copy"></i> Copy board</button>
@@ -118,10 +118,10 @@
   <div class="actions"><a id="pubLink" class="primary btnlink" href="#" target="_blank" rel="noopener noreferrer">Open the repo settings on GitHub</a><span class="spacer"></span><button id="pubOk" type="button">I understand, show the board</button></div>
   <p class="hint">This warning shows on every page load while the repository is public.</p>
 </dialog>
-<dialog id="dlgSearch" class="settings qsearch" aria-label="Search">
-  <div class="qrow"><input id="qQ" type="search" placeholder="Search people, tasks, notes and messages…" autocomplete="off" aria-label="Search"><label class="chk"><input type="checkbox" id="qArch"> Include archive</label></div>
+<dialog id="dlgSearch" class="qsearch" aria-label="Search">
+  <div class="qbar"><i data-i="search"></i><input id="qQ" type="search" enterkeyhint="search" placeholder="Search people and tasks" autocomplete="off" aria-label="Search people, tasks, notes and messages"><button id="qClose" type="button" class="qcancel">Cancel</button></div>
+  <div class="qopts"><label class="qchip"><input type="checkbox" id="qArch"> Include archive</label><span id="qInfo" class="muted" role="status"></span></div>
   <div id="qRes" class="qres" role="list"></div>
-  <div class="qfoot"><span id="qInfo" class="muted"></span><button id="qClose" type="button">Close</button></div>
 </dialog>
 <dialog id="dlgCopy" class="settings copydialog" aria-labelledby="copyTitle">
   <div class="sethead"><h3 id="copyTitle">Copy board</h3><button id="copyClose" class="ico" aria-label="Close copy options"><i data-i="x"></i></button></div>

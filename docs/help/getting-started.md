@@ -30,7 +30,7 @@ The wizard finds your GitHub username and your repo by itself. Green ticks show 
 The token stays in this browser only. The board sends it only to `api.github.com`. Treat it like a password.
 
 ### Finding your way around
-The board opens on **Today**: who to contact, what is due, and two shortcuts to **Kanban** (your tasks) and **People** (your CRM). The bar at the bottom of the screen goes everywhere: **Today**, **Kanban**, **People**, **Find** (search) and **Menu** (refresh, copy, help and **Settings**). Tap the highlighted tab again to switch to List, Calendar, Schedule, Activity or Pipeline. After each change, the bar shows **Undo** for a few seconds.
+The board opens on **Today**: who to contact, what is due, and two shortcuts to **Kanban** (your tasks) and **People** (your CRM). The bar at the bottom of the screen goes everywhere: **Today**, **Tasks**, **People**, **Find** (search, and a quick way to jump to any view) and **Menu** (refresh, copy, help and **Settings**). In Tasks and People, the strip at the top switches views: Kanban, List, Calendar, Schedule and Activity, or People and Pipeline. After each change, the bar shows **Undo** for a few seconds.
 
 New to Keeptrack? Tap **Show me around** on Today, or choose **Menu → Show me around** at any time, for a one-minute tour.
 
