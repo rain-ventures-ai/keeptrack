@@ -11,6 +11,10 @@ Open a person and type in **☑ Tasks**. The task is linked to that person and t
 ## Agents and tasks
 AI agents can claim a task, report progress and finish it. While an agent works on a task, the card shows its status. See [AI assistants](ai-assistants.md).
 
+## Labels
+
+Type a label on a task to create it. To rename, recolour or delete labels, or add one with a colour, open **Settings → General → Labels**. Renaming or deleting a label updates every task that uses it, and **Undo** reverts the whole change. The agent tool does the same with `label-set` and `label-rm`.
+
 ## Turn tasks or people on or off
 Open **Settings → General → Board sections** and switch **Tasks** or **People & pipeline (CRM)** on or off. Keep at least one section on.
 

@@ -2512,7 +2512,7 @@ if (typeof window !== 'undefined') (() => {
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
     settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderArchiveBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
@@ -3410,6 +3410,50 @@ if (typeof window !== 'undefined') (() => {
     $('dlgArch').showModal();
   }
   $('aClose').onclick = () => $('dlgArch').close();
+  // ---- Settings → General → Labels: rename, recolour, delete and add; each action is one mutate (one Undo) ----------------
+  const LABEL_DEFAULT = '#6b778c', hex6 = c => { c = labelColorOf(c); return /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : /^#[0-9a-f]{3}$/i.test(c) ? '#' + [...c.slice(1)].map(x => x + x).join('').toLowerCase() : LABEL_DEFAULT; };
+  const labelColorOf = c => typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : LABEL_DEFAULT;
+  const labelUse = name => state.tasks.filter(t => t.labels.includes(name));
+  const labelNameErr = (name, except) => !name ? 'Type a name for the label.' : name.length > 40 || /[,\r\n]/.test(name) ? 'A label name can be up to 40 characters, with no comma or line break.' : state.labels.some(l => l.name !== except && l.name.toLowerCase() === name.toLowerCase()) ? `There is already a label called “${name}”.` : '';
+  async function labelSet(old, patch) {   // patch: { name?, color? } for an existing label
+    const name = patch.name == null ? old : patch.name.trim(), color = patch.color == null ? null : patch.color.toLowerCase();
+    if (name !== old) { const err = labelNameErr(name, old); if (err) { toast(err, true); return renderLabelBox(); } }
+    const ids = name !== old ? labelUse(old).map(t => t.id) : [];
+    const ok = await mutate(n => { const lab = n.labels.find(l => l.name === old); if (!lab) return;
+      if (color) lab.color = color;
+      if (name !== old) { lab.name = name; n.tasks.forEach(t => { if (t.labels.includes(old)) { t.labels = [...new Set(t.labels.map(x => x === old ? name : x))]; stamp(t); } }); } }, `Update label: ${old}${name !== old ? ' → ' + name : ''}`, ids);
+    if (!ok) toast('Label not changed', true); renderLabelBox();
+  }
+  async function labelRemove(l) {
+    const used = labelUse(l.name), ids = used.map(t => t.id);
+    if (!confirmRemoval(`the “${l.name}” label${used.length ? ` from ${used.length} task${used.length === 1 ? '' : 's'}` : ''}`)) return;
+    await mutate(n => { n.labels = n.labels.filter(x => x.name !== l.name); n.tasks.forEach(t => { if (t.labels.includes(l.name)) { t.labels = t.labels.filter(x => x !== l.name); stamp(t); } }); }, `Remove label: ${l.name}`, ids); renderLabelBox();
+  }
+  async function labelAdd(name, color) {
+    name = name.trim(); const err = labelNameErr(name); if (err) { toast(err, true); return; }
+    await mutate(n => { if (!n.labels.some(l => l.name.toLowerCase() === name.toLowerCase())) n.labels.push({ name, color: color.toLowerCase() }); }, `Add label: ${name}`); renderLabelBox();
+  }
+  function renderLabelBox() {
+    const box = $('labelBox'); if (!box) return; box.textContent = '';
+    const edit = !ro, rows = el('div', 'lbrows');
+    state.labels.forEach(l => {
+      const row = el('div', 'lbrow'), n = labelUse(l.name).length, cnt = el('span', 'muted lbcnt', `${n} task${n === 1 ? '' : 's'}`);
+      const name = el('input'); name.value = l.name; name.maxLength = 40; name.setAttribute('aria-label', `Rename label ${l.name}`); name.disabled = !edit;
+      const col = el('input'); col.type = 'color'; col.value = hex6(l.color); col.title = 'Colour'; col.setAttribute('aria-label', `Colour for ${l.name}`); col.disabled = !edit;
+      name.onchange = () => { if (name.value.trim() !== l.name) labelSet(l.name, { name: name.value }); else name.value = l.name; };
+      name.onkeydown = e => { if (e.key === 'Enter') name.blur(); else if (e.key === 'Escape') { name.value = l.name; name.blur(); } };
+      col.onchange = () => labelSet(l.name, { color: col.value });
+      row.append(paintLabel(el('span', 'tag label lbprev', l.name), l.name), name, col, cnt);
+      if (edit) { const x = elI('button', 'small lbdel', 'x'); x.type = 'button'; x.title = 'Delete label'; x.setAttribute('aria-label', `Delete label ${l.name}`); x.onclick = () => labelRemove(l); row.append(x); }
+      rows.append(row);
+    });
+    if (!state.labels.length) rows.append(el('div', 'hint', 'No labels yet. Add one here, or type one on a task.'));
+    box.append(rows);
+    if (edit) {
+      const add = el('div', 'lbrow lbnew'), name = el('input'), col = el('input'), b = elI('button', 'small', 'plus', 'Add label'); name.placeholder = 'New label name'; name.maxLength = 40; name.setAttribute('aria-label', 'New label name'); col.type = 'color'; col.value = LABEL_DEFAULT; col.title = 'Colour'; col.setAttribute('aria-label', 'Colour for the new label'); b.type = 'button';
+      b.onclick = () => labelAdd(name.value, col.value); name.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); b.click(); } }; add.append(name, col, b); box.append(add);
+    }
+  }
   function renderArchiveBox() {   // Settings → General → Archive
     const box = $('archBox'); if (!box) return; box.textContent = '';
     const kb = Math.round(boardSize / 1024), limit = isSplit(state) ? 5 * 1024 : SIZE_WARN / 1024, files = (state.archive || {}).files || {}, r = archRules(), n = archiveCounts();
