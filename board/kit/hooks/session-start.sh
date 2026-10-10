@@ -6,7 +6,8 @@ found=""
 d=$PWD
 while :; do
   for f in .keeptrack/config.json .board/config.json; do
-    [ -f "$d/$f" ] && found=1
+    # a config git tracks came with the repo, not from `keeptrack.py use`: never trust it
+    [ -f "$d/$f" ] && ! git -C "$d" ls-files --error-unmatch -- "$f" >/dev/null 2>&1 && found=1
   done
   [ -n "$found" ] || [ "$d" = "/" ] && break
   d=$(dirname "$d")
