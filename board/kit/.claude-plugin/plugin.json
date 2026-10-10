@@ -1,6 +1,7 @@
 {
   "name": "keeptrack",
   "displayName": "Keeptrack",
+  "version": "0.17.0",
   "description": "Keeptrack: people, follow-ups, a simple pipeline and tasks in your own private GitHub repo. Log calls and messages, draft LinkedIn messages and emails (you send them), and see who to contact today.",
   "author": {
     "name": "Rain Ventures",

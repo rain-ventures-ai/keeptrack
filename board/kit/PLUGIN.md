@@ -26,7 +26,7 @@ claude plugin install keeptrack@keeptrack
 ```
 Or in a session: `/plugin marketplace add rain-ventures-ai/keeptrack`, then `/plugin install keeptrack@keeptrack`.
 
-**Keep it updated:** `/plugin` → **Marketplaces** → **keeptrack** → **Enable auto-update**. The Claude manifest has no `version`, so each commit is a new version. To update by hand: `claude plugin marketplace update keeptrack`.
+**Keep it updated:** `/plugin` → **Marketplaces** → **keeptrack** → **Enable auto-update**. Claude Code updates the plugin when `version` in `.claude-plugin/plugin.json` changes (`0.<kit version>.<patch>`), so bump it with each release. To update by hand: `claude plugin marketplace update keeptrack`.
 
 Settings form (`~/.claude/settings.json`):
 ```json
@@ -35,7 +35,7 @@ Settings form (`~/.claude/settings.json`):
   "enabledPlugins": { "keeptrack@keeptrack": true }
 }
 ```
-The plugin gives the skill `keeptrack:keeptrack`, `keeptrack.py` at `${CLAUDE_PLUGIN_ROOT}/keeptrack.py`, and a hook that sends a quiet heartbeat while a task claim is active.
+The plugin gives the skill `keeptrack:keeptrack`, `keeptrack.py` at `${CLAUDE_PLUGIN_ROOT}/keeptrack.py`, and a hook (`hooks/auto-heartbeat.sh`) that sends a quiet heartbeat while a task claim is active. Its directory icon is `.claude-plugin/icon.png`.
 
 ## Claude Desktop and Cowork (no terminal)
 First look in **Customize → Plugins**: if **keeptrack** is already installed, just check it is switched on. If the **rain-ventures-ai/keeptrack** marketplace is already listed, install **keeptrack** from it. Otherwise: **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. A Team or Enterprise admin can add the marketplace for the whole organisation. Then say, for example, "Who do I need to follow up with today?" or "Help me write a LinkedIn message to the CEO of Acme".
