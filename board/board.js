@@ -1106,15 +1106,12 @@ if (typeof window !== 'undefined') (() => {
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
   const visibleCols = () => state.columns.filter(c => !($('fHideDone').checked && c.id === 'done'));
   function activeCol() { const v = visibleCols(), s = LS.get('kb_tab'); return (v.find(c => c.id === s) || v[0] || {}).id; }
-  function setTab(id) { LS.set('kb_tab', id); document.querySelectorAll('.col').forEach(c => c.classList.toggle('active', c.dataset.col === id)); renderTabs(); }
-  function renderTabs() {
-    const box = $('tabs'); box.textContent = ''; const act = activeCol();
-    visibleCols().forEach(col => {
-      const n = state.tasks.filter(t => t.column === col.id && filtered(t)).length;
-      const b = el('button', 'tab' + (col.id === act ? ' on' : ''), col.name); b.append(el('span', 'count', String(n))); b.dataset.col = col.id;
-      b.onclick = () => setTab(col.id); box.append(b);
-    });
-    const on = box.querySelector('.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+  function setTab(id) { LS.set('kb_tab', id); document.querySelectorAll('.col').forEach(c => c.classList.toggle('active', c.dataset.col === id)); const tl = $('tabs').firstChild; if (tl && tl.select) { tl.select(id); showTab(); } else renderTabs(); }
+  const showTab = () => { const on = $('tabs').querySelector('[aria-selected="true"]'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' }); };
+  function renderTabs() {   // phones: one tab per column (ui.tabs); arrow keys or a swipe on the board move between them
+    const box = $('tabs'); box.textContent = '';
+    const items = visibleCols().map(col => ({ value: col.id, label: col.name, count: state.tasks.filter(t => t.column === col.id && filtered(t)).length }));
+    box.append(ui.tabs({ items, value: activeCol(), style: 'underline', label: 'Columns', onChange: setTab })); showTab();
   }
   // ---- phones: hold a card to pick it up; a Move bar appears and you drop the card on another lane ----------------
   const lift = { active: false, timer: null, t: null, card: null, ghost: null, bar: null, over: null, x: 0, y: 0, dx: 0, dy: 0, justLifted: false };
@@ -1363,28 +1360,41 @@ if (typeof window !== 'undefined') (() => {
   // Today is the home page: a new visit starts there. Within one tab the view survives reloads (app updates, refresh).
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
   let view = SS.get('kb_view') || 'today'; if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity'].includes(view)) view = 'today';
+  // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
+  // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
+  const VIEW_GROUPS = [
+    { grp: 'today', label: 'Today', views: [{ value: 'today', icon: 'alarm-clock', label: 'Today', title: 'Today: people to contact and tasks due' }] },
+    { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people by stage' }] },
+    { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'list', icon: 'list', label: 'List', title: 'List' },
+      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' }] }
+  ];
+  const tagViews = (tl, views) => { tl.querySelectorAll('.ui-tab').forEach((b, i) => { b.dataset.view = b.dataset.value; if (views[i].primary) b.classList.add('viewprimary'); }); return tl; };
+  const viewTabs = {};   // group -> its ui.tabs in #viewSw
+  VIEW_GROUPS.forEach(g => {
+    const tl = tagViews(ui.tabs({ items: g.views, value: '', label: g.label, onChange: v => setView(v) }), g.views);
+    tl.classList.add('viewgroup'); tl.dataset.grp = g.grp; viewTabs[g.grp] = tl; $('viewSw').append(tl);
+  });
   function applyModes() {   // Today combines every enabled section; settings.modes controls People and task-specific views
     const m = modes(), ok = v => v === 'today' || (CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks'));
-    document.querySelectorAll('#viewSw .viewgroup').forEach(g => { g.hidden = g.dataset.grp !== 'today' && !m.includes(g.dataset.grp); });
+    VIEW_GROUPS.forEach(g => { viewTabs[g.grp].hidden = g.grp !== 'today' && !m.includes(g.grp); });
     if (!ok(view)) view = 'today';
   }
   const setView = v => { view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); render(); };
-  const syncViewSw = () => { document.querySelectorAll('#viewSw button').forEach(b => { const on = b.dataset.view === view; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }); syncDock(); };
-  // The dock (layout "dock") is a fixed footer with one tab per #viewSw group, so views are defined once, in the header
-  // markup. A tab returns to the last view used in its group; the strip under the header (#subnav) switches views within it.
+  const syncViewSw = () => { Object.values(viewTabs).forEach(tl => tl.select(view)); syncDock(); };
+  // The dock (layout "dock") is a fixed footer with one tab per view group. A tab returns to the last view used in its group;
+  // the strip under the header (#subnav) switches views within it.
   const dockLast = { today: 'today', tasks: 'board', crm: 'people' };
-  const viewBtn = v => document.querySelector(`#viewSw button[data-view="${v}"]`);
-  const grpOf = v => { const b = viewBtn(v); return b ? b.closest('.viewgroup').dataset.grp : 'today'; };
+  const grpOf = v => (VIEW_GROUPS.find(g => g.views.some(x => x.value === v)) || VIEW_GROUPS[0]).grp;
   function syncDock() {
     const cur = grpOf(view); dockLast[cur] = view;
     document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => {
-      const g = document.querySelector(`#viewSw .viewgroup[data-grp="${t.dataset.grp}"]`), on = t.dataset.grp === cur;
+      const g = viewTabs[t.dataset.grp], on = t.dataset.grp === cur;
       t.hidden = !g || g.hidden; t.classList.toggle('on', on); if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
     });
-    const sub = $('subnav'), views = [...document.querySelectorAll(`#viewSw .viewgroup[data-grp="${cur}"] button`)];
+    const sub = $('subnav'), views = VIEW_GROUPS.find(g => g.grp === cur).views;
     sub.hidden = views.length < 2; if (sub.hidden) return;
-    if (sub.dataset.grp !== cur) { sub.textContent = ''; sub.dataset.grp = cur; views.forEach(b => { const it = el('button', null, b.textContent.trim()); it.type = 'button'; it.dataset.view = b.dataset.view; it.title = b.title; it.onclick = () => setView(b.dataset.view); sub.append(it); }); }
-    sub.querySelectorAll('button').forEach(it => { const on = it.dataset.view === view; it.classList.toggle('on', on); it.setAttribute('aria-pressed', String(on)); });
+    if (sub.dataset.grp !== cur) { sub.textContent = ''; sub.dataset.grp = cur; sub.append(tagViews(ui.tabs({ items: views.map(({ value, label, title }) => ({ value, label, title })), value: view, label: 'Views in this section', onChange: v => setView(v) }), views)); }
+    sub.firstChild.select(view);
   }
 
   // ---- "Show me around": a short tour that highlights one part of the real board at a time -------------------
@@ -1565,7 +1575,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- activity: what happened on the board in a day range, by whom (a person and their agents, or agents only) ----------
   // A card counts as worked on when someone logged a history entry or a comment on it in the range. History "by" is the
   // GitHub user for changes made on this page, and "agent@user" (e.g. claude@osouthgate) for changes made by that person's agent.
-  let actRange = LS.get('kb_act_range', 'today'), actDay = todayIso(), actWho = LS.get('kb_act_who', '__me'), actAgents = LS.get('kb_act_agents', '1') !== '';
+  let actRefocus = false, actRange = LS.get('kb_act_range', 'today'), actDay = todayIso(), actWho = LS.get('kb_act_who', '__me'), actAgents = LS.get('kb_act_agents', '1') !== '';
   const AGENT_BY = /@|^(claude|codex|cli)$/i;
   const fmtDay = iso => dfmt(new Date(iso + 'T00:00:00'), { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
   const fmtTime = iso => dfmt(new Date(iso), { hour: '2-digit', minute: '2-digit' });
@@ -1613,11 +1623,10 @@ if (typeof window !== 'undefined') (() => {
 
   function renderActivity() {
     const board = $('board'), wrap = el('div', 'act'), bar = el('div', 'calbar actbar');
-    const seg = el('div', 'seg actseg');
-    [['today', 'Today'], ['yday', 'Yesterday'], ['7d', '7 days'], ['day', 'Pick a day']].forEach(([v, l]) => {
-      const b = el('button', actRange === v ? 'on' : '', l); b.type = 'button'; b.setAttribute('aria-pressed', String(actRange === v));
-      b.onclick = () => { actRange = v; LS.set('kb_act_range', v); render(); }; seg.append(b); });
-    bar.append(seg);
+    const seg = ui.tabs({ items: [['today', 'Today'], ['yday', 'Yesterday'], ['7d', '7 days'], ['day', 'Pick a day']].map(([value, label]) => ({ value, label })), value: actRange, label: 'Range',
+      onChange: v => { actRange = v; LS.set('kb_act_range', v); actRefocus = true; render(); } });
+    seg.classList.add('actseg'); bar.append(seg);
+    if (actRefocus) { actRefocus = false; requestAnimationFrame(() => { const on = seg.querySelector('[aria-selected="true"]'); if (on && on.isConnected) on.focus(); }); }   // arrow keys re-render the view
     if (actRange === 'day') { const di = el('input'); di.type = 'date'; di.value = actDay; di.max = todayIso(); di.setAttribute('aria-label', 'Day'); di.onchange = () => { if (di.value) { actDay = di.value; render(); } }; bar.append(di); }
     const ws = el('select'); ws.setAttribute('aria-label', 'Whose activity');
     [['__me', 'Me' + (cfg().me ? ' (@' + cfg().me + ')' : '')], ['', 'Everyone'], ...state.people.filter(p => p.github.toLowerCase() !== (cfg().me || '').toLowerCase()).map(p => [p.github, '@' + p.github]), ['__agents', 'Agents only']]
@@ -2545,8 +2554,10 @@ if (typeof window !== 'undefined') (() => {
     `Set up a separate scheduled Keeptrack contact-email routine for ${c.repo || 'my board repo'}. Read the keeptrack-email skill and its references/routines.md guide in the repo (or at https://github.com/rain-ventures-ai/keeptrack/tree/main/board/kit/skills/keeptrack-email). Guide me one step at a time. First ask whether I use Gmail or Outlook, what first-run date range I want, and what schedule I want. Use read-only mailbox access, keep it separate from the @claude task routine, never handle my secrets, and never send, draft, delete, move, label or mark email as read. The routine must use exact stored contact addresses, keep automation/contact-email-sync.json with its last successful run, and update the board only through keeptrack.py.`,
     'Email-routine setup prompt copied. Paste it into Claude Code in your board repo.'); };
   function renderTools() {
-    const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg(); bar.textContent = body.textContent = '';
-    Object.entries(TOOLS).forEach(([k, [name]]) => { const b = el('button', 'agpill' + (k === pick ? ' on' : ''), name); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(k === pick)); b.onclick = () => { LS.set('kb_tool', k); renderTools(); }; bar.append(b); });
+    const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg();
+    const refocus = bar.contains(document.activeElement); bar.textContent = body.textContent = '';   // arrow keys rebuild the strip: keep the focus on it
+    bar.append(ui.tabs({ items: Object.entries(TOOLS).map(([value, [label]]) => ({ value, label })), value: pick, label: 'Your AI tool', onChange: k => { LS.set('kb_tool', k); renderTools(); } }));
+    if (refocus) bar.querySelector('[aria-selected="true"]').focus();
     const ol = el('ol', 'wmini'), say = `Use my Keeptrack board ${c.repo || 'owner/repo'}. My GitHub username is ${c.me || 'my-username'}.`;
     const step = (text, code, link) => { const li = el('li', null, text); if (link) { const a = el('a', 'agl', link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; li.append(' ', a); } if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = elI('button', 'small', 'clipboard-copy', 'Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
     (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code, link]) => step(t, code, link));
@@ -2682,8 +2693,7 @@ if (typeof window !== 'undefined') (() => {
   $('alTest').onclick = () => notify('Test alert', 'Board alerts work in this browser.', null);
   function settingsTab(name) {
     let edit = false; if (name === 'conn') { name = 'boards'; edit = true; }   // the connection fields live in Boards → This board → Change connection
-    const ids = { general: ['panelGeneral', 'tabGeneral'], claude: ['panelClaude', 'tabClaude'], boards: ['panelBoards', 'tabBoards'], checks: ['panelChecks', 'tabChecks'], alerts: ['panelAlerts', 'tabAlerts'] };
-    Object.keys(ids).forEach(n => { const on = n === name; $(ids[n][0]).hidden = !on; $(ids[n][1]).setAttribute('aria-selected', String(on)); });
+    SET_TABS.forEach(([n]) => { $('panel' + cap(n)).hidden = n !== name; }); setTabs.select(name);
     $('dlgSettings').scrollTop = 0;   // each tab starts at the top
     if (name === 'boards') { renderBoards(); showEdit(edit || !cfg().token); if (edit) setTimeout(() => (cfg().repo ? $('sToken') : $('sRepo')).focus(), 30); }
     if (name === 'alerts') renderAlerts();
@@ -2691,7 +2701,11 @@ if (typeof window !== 'undefined') (() => {
       const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
       $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
   }
-  document.querySelectorAll('.stabs button').forEach(b => { b.onclick = () => settingsTab(b.dataset.tab); });
+  // Settings sections: one ui.tabs; each tab keeps its old id (tabGeneral …) so the panels' aria-labelledby still points at it
+  const SET_TABS = [['general', 'General'], ['boards', 'Boards'], ['claude', 'Agents'], ['alerts', 'Alerts'], ['checks', 'Checks']];
+  const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'general', style: 'underline', label: 'Settings sections', onChange: v => settingsTab(v) });
+  setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach(b => { const n = cap(b.dataset.value); b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n); });
+  $('setTabs').replaceWith(setTabs);
   $('pubOk').onclick = () => $('dlgPublic').close();
   $('ckRun').onclick = () => runChecks();
   $('sTest').onclick = () => { const repo = $('sRepo').value.trim(), typed = $('sToken').value.trim(), same = repo === cfg().repo;
@@ -2837,7 +2851,6 @@ if (typeof window !== 'undefined') (() => {
       'Start by asking me the basics from step 1 (repo owner and name, the people on the board, client or area names).',
       'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
       'New-board prompt copied. Paste it into your current chat with Claude.'); };
-  document.querySelectorAll('#viewSw button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
   document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => { t.onclick = e => { e.stopPropagation(); closePops(); setView(dockLast[t.dataset.grp]); }; });
   $('dockMenu').onclick = e => { e.stopPropagation(); const pop = $('dockPop'), open = pop.hidden; closePops(); if (open) { pop.hidden = false; $('dockMenu').setAttribute('aria-expanded', 'true'); } };
   $('dockPop').addEventListener('click', e => e.stopPropagation());
@@ -3946,10 +3959,10 @@ if (typeof window !== 'undefined') (() => {
     const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, prefix: true, fuzzy: 0.2, combineWith: 'AND' } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
     res.textContent = '';
     // Views are part of search: an empty box lists them all ("Go to"), and typing "cal" offers Calendar first
-    const ql = q.toLowerCase(), goes = [...document.querySelectorAll('#viewSw .viewgroup:not([hidden]) button')].filter(b => !ql || b.textContent.trim().toLowerCase().startsWith(ql));
+    const ql = q.toLowerCase(), goes = VIEW_GROUPS.filter(g => !viewTabs[g.grp].hidden).flatMap(g => g.views).filter(v => !ql || v.label.toLowerCase().startsWith(ql));
     if (goes.length) { const grid = el('div', 'qgos'); res.append(el('div', 'qhead', 'Go to'), grid);
-      goes.forEach(b => { const g = el('button', 'qhit qgo'); g.type = 'button'; g.title = b.title; const svg = b.querySelector('.vi svg'); if (svg) g.append(svg.cloneNode(true)); g.append(el('span', null, b.textContent.trim()));
-        g.onclick = () => { $('dlgSearch').close(); setView(b.dataset.view); }; grid.append(g); }); }
+      goes.forEach(v => { const g = el('button', 'qhit qgo'); g.type = 'button'; g.title = v.title; g.append(svgIcon(v.icon), el('span', null, v.label));
+        g.onclick = () => { $('dlgSearch').close(); setView(v.value); }; grid.append(g); }); }
     if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} people and tasks` + (matchMedia('(pointer: fine)').matches ? ' · press / anywhere to search' : ''); if (res.firstElementChild) res.querySelector('.qhit').classList.add('first'); return; }
     const hits = msIndex.search(q).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
     $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');

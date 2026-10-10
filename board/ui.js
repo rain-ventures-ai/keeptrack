@@ -250,16 +250,22 @@
   }
 
   // ---- tabs ---------------------------------------------------------------------------------------------------
+  // items: [{ value, label, count?, icon?, title? }]. A value that matches no item (e.g. '') selects nothing; the first tab then takes focus.
   function tabs({ items = [], value, onChange, style = 'segmented', label = 'Views' } = {}) {
     const list = h('div', `ui-tabs ui-tabs--${style === 'underline' ? 'underline' : 'segmented'}`); list.setAttribute('role', 'tablist'); list.setAttribute('aria-label', label);
     let cur = value != null ? value : (items[0] && items[0].value);
     const tabsEls = items.map(it => {
       const b = btn('ui-tab'); b.setAttribute('role', 'tab'); b.dataset.value = it.value; b.id = nextId('tab');
-      b.append(h('span', null, it.label)); if (it.count != null) b.append(h('span', 'ui-count', it.count));
+      if (it.icon) b.append(icon(it.icon));
+      b.append(h('span', 'ui-tab__label', it.label)); if (it.count != null) b.append(h('span', 'ui-count', it.count));
+      if (it.title) b.title = it.title;
       b.addEventListener('click', () => choose(it.value, true));
       list.append(b); return b;
     });
-    function sync() { tabsEls.forEach(b => { const on = b.dataset.value === String(cur); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; }); }
+    function sync() {
+      tabsEls.forEach(b => { const on = b.dataset.value === String(cur); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+      if (tabsEls.length && !tabsEls.some(b => b.tabIndex === 0)) tabsEls[0].tabIndex = 0;
+    }
     function choose(v, fire) { const changed = String(v) !== String(cur); cur = v; sync(); if (fire && changed && onChange) onChange(v); }
     list.addEventListener('keydown', e => {
       const i = tabsEls.indexOf(document.activeElement); if (i < 0) return;

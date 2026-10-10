@@ -15,17 +15,7 @@
     <button id="boardBtn" class="logo boardbadge" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="boardPop" title="Board" aria-label="Board"><i data-i="square-kanban"></i></button>
     <div id="boardPop" class="popover boardpop" hidden></div>
   </div>
-  <nav id="viewSw" class="viewnav" aria-label="Views">
-    <div class="viewgroup" data-grp="today" role="group" aria-label="Today">
-      <div class="seg"><button data-view="today" title="Today: people to contact and tasks due"><span class="vi"><i data-i="alarm-clock"></i></span><span class="vt"> Today</span></button></div>
-    </div>
-    <div class="viewgroup" data-grp="crm" role="group" aria-label="People views">
-      <div class="seg"><button class="viewprimary" data-view="people" title="People"><span class="vi"><i data-i="user"></i></span><span class="vt"> People</span></button><button data-view="pipeline" title="Pipeline: people by stage"><span class="vi"><i data-i="trending-up"></i></span><span class="vt"> Pipeline</span></button></div>
-    </div>
-    <div class="viewgroup" data-grp="tasks" role="group" aria-label="Task views">
-      <div class="seg"><button class="viewprimary" data-view="board" title="Kanban: tasks in columns"><span class="vi"><i data-i="square-kanban"></i></span><span class="vt"> Kanban</span></button><button data-view="list" title="List"><span class="vi"><i data-i="list"></i></span><span class="vt"> List</span></button><button data-view="cal" title="Calendar"><span class="vi"><i data-i="calendar"></i></span><span class="vt"> Calendar</span></button><button data-view="sched" title="Schedule"><span class="vi"><i data-i="calendar-days"></i></span><span class="vt"> Schedule</span></button><button data-view="activity" title="Activity: what was done today, yesterday or on a day you pick"><span class="vi"><i data-i="history"></i></span><span class="vt"> Activity</span></button></div>
-    </div>
-  </nav>
+  <nav id="viewSw" class="viewnav" aria-label="Views"></nav>   <!-- one ui.tabs per view group, built by board.js from VIEW_GROUPS -->
   <div class="hfilters">
     <div class="clientwrap">
       <div id="clientBar" class="clientbar" role="group" aria-label="Filter by one or more clients"></div>
@@ -158,13 +148,7 @@
 </dialog>
 <dialog id="dlgSettings" class="settings">
   <div class="sethead"><h3>Settings</h3><button id="sClose" class="ico" aria-label="Close settings"><i data-i="x"></i></button></div>
-  <div class="stabs" role="tablist" aria-label="Settings sections">
-    <button id="tabGeneral" role="tab" aria-selected="true" data-tab="general">General</button>
-    <button id="tabBoards" role="tab" aria-selected="false" data-tab="boards">Boards</button>
-    <button id="tabClaude" role="tab" aria-selected="false" data-tab="claude">Agents</button>
-    <button id="tabAlerts" role="tab" aria-selected="false" data-tab="alerts">Alerts</button>
-    <button id="tabChecks" role="tab" aria-selected="false" data-tab="checks">Checks</button>
-  </div>
+  <div id="setTabs"></div>   <!-- ui.tabs, built by board.js; the tabs keep the ids tabGeneral, tabBoards, tabClaude, tabAlerts, tabChecks -->
 
   <div id="panelGeneral" role="tabpanel" aria-labelledby="tabGeneral">
     <p class="hint mt-0">Appearance changes apply straight away and are remembered in this browser.</p>
@@ -334,7 +318,7 @@
       <p class="hint">The easiest way: copy this prompt into a new chat with your assistant. It detects whether the board repo already contains everything, installs only what is needed, and checks each step with you.</p>
       <div class="cwfoot left"><button type="button" class="primary" id="agSetupPrompt">Copy setup prompt</button></div>
       <p class="hint mt-5">Or do it by hand:</p>
-      <div class="agtools" id="agTools" role="tablist" aria-label="Your AI tool"></div>
+      <div class="agtools" id="agTools"></div>
       <div id="agToolBody"></div>
     </section>
 
