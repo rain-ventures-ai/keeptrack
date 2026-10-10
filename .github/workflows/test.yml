@@ -39,3 +39,6 @@ jobs:
       - name: Mixed kit / board.js version tests
         working-directory: tests/browser
         run: node mixed-versions.test.js
+      - name: UI component catalogue and board boot
+        working-directory: tests/browser
+        run: node ui-catalogue.test.js

@@ -480,20 +480,22 @@
 
 <script>
 /* Bootstrap: GitHub Pages lets browsers cache files for ~10 minutes, so a plain <script src> can serve stale code after a deploy.
-   Here every load revalidates board.css and board.js with the server (a cheap 304 when unchanged), then runs the fresh text.
+   Here every load revalidates board.css, ui.css, icons.js, ui.js and board.js with the server (a cheap 304 when unchanged), then runs the fresh text.
    Offline or on any failure it falls back to normal tags so the page still opens from cache. */
 (function () {
   var done = false, reveal = function () { done = true; document.documentElement.classList.add('ready'); };
   setTimeout(function () { if (!done) reveal(); }, 6000);                                   // never leave the page blank
   function get(u) { return fetch(u, { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error(u + ' ' + r.status); return r.text(); }); }
   function fallback() {
-    var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'board.css'; document.head.appendChild(l);
-    var s = document.createElement('script'); s.src = 'board.js'; document.body.appendChild(s); reveal();
+    CSS.forEach(function (u) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = u; document.head.appendChild(l); });
+    JS.forEach(function (u) { var s = document.createElement('script'); s.src = u; s.async = false; document.body.appendChild(s); }); reveal();   // async=false keeps the order
   }
-  Promise.all([get('board.css'), get('board.js')]).then(function (a) {
-    window.__kbAssets = { css: a[0], js: a[1] };
-    var st = document.createElement('style'); st.textContent = a[0] + '\n/*# sourceURL=board.css */'; document.head.appendChild(st); reveal();
-    var sc = document.createElement('script'); sc.textContent = a[1] + '\n//# sourceURL=board.js'; document.body.appendChild(sc);
+  // Styles: board.css, then the ui.js component styles. Scripts in order: icons.js, ui.js (component library), board.js.
+  var CSS = ['board.css', 'ui.css'], JS = ['icons.js', 'ui.js', 'board.js'];
+  Promise.all(CSS.concat(JS).map(get)).then(function (a) {
+    window.__kbAssets = { css: a[0], js: a[4], extra: a.slice(1, 4).join('\n') };
+    CSS.forEach(function (u, i) { var st = document.createElement('style'); st.textContent = a[i] + '\n/*# sourceURL=' + u + ' */'; document.head.appendChild(st); }); reveal();
+    JS.forEach(function (u, i) { var sc = document.createElement('script'); sc.textContent = a[CSS.length + i] + '\n//# sourceURL=' + u; document.body.appendChild(sc); });
   }).catch(fallback);
   // The HTML itself can be stale too: compare the cached copy with a revalidated one and reload once if they differ.
   fetch(location.href, { cache: 'force-cache' }).then(function (r) { return r.text(); }).then(function (cached) {
