@@ -7,6 +7,31 @@ from test_keeptrack import Args, board, kt, read_json, write
 KIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "board", "kit")
 
 
+_XDG = tempfile.TemporaryDirectory()
+_SAVED_XDG = os.environ.get("XDG_CONFIG_HOME")
+
+
+def setUpModule():
+    os.environ["XDG_CONFIG_HOME"] = _XDG.name   # never touch the real ~/.config/keeptrack/trusted
+
+
+def tearDownModule():
+    if _SAVED_XDG is None:
+        os.environ.pop("XDG_CONFIG_HOME", None)
+    else:
+        os.environ["XDG_CONFIG_HOME"] = _SAVED_XDG
+
+
+def config(folder, data, trust=True):
+    """Write a config as `use` would (trusted) or as a stranger's file would arrive (not trusted)."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "config.json")
+    write(path, data)
+    if trust:
+        kt.trust_config(path)
+    return path
+
+
 def git_repo(path):
     subprocess.run(["git", "init", "-q", path], check=True)
     return path
@@ -23,11 +48,11 @@ class ConfigAndClaimFiles(unittest.TestCase):
 
     def test_keeptrack_folder_wins_and_legacy_board_folder_is_still_read(self):
         repo = git_repo(os.path.join(self.tmp.name, "r"))
-        os.makedirs(os.path.join(repo, ".board")); write(os.path.join(repo, ".board", "config.json"), {"repo": "o/legacy"})
+        config(os.path.join(repo, ".board"), {"repo": "o/legacy"})
         os.chdir(repo)
         self.assertEqual((os.path.realpath(repo), "o/legacy", ".board"),
                          (os.path.realpath(kt.project_config()[0]), kt.project_config()[1]["repo"], kt.project_config()[2]))
-        os.makedirs(os.path.join(repo, ".keeptrack")); write(os.path.join(repo, ".keeptrack", "config.json"), {"repo": "o/new"})
+        config(os.path.join(repo, ".keeptrack"), {"repo": "o/new"})
         self.assertEqual(("o/new", ".keeptrack"), (kt.project_config()[1]["repo"], kt.project_config()[2]))
 
     def test_use_writes_a_personal_config_git_never_sees(self):
@@ -60,7 +85,7 @@ class ConfigAndClaimFiles(unittest.TestCase):
     def test_a_committed_config_is_ignored(self):
         """A repo someone else wrote can't point Keeptrack (or the session-start hook) at a board of its choosing."""
         repo = git_repo(os.path.join(self.tmp.name, "cloned"))
-        os.makedirs(os.path.join(repo, ".keeptrack")); write(os.path.join(repo, ".keeptrack", "config.json"), {"repo": "evil/board"})
+        config(os.path.join(repo, ".keeptrack"), {"repo": "evil/board"})   # even if trusted, a committed copy is not
         subprocess.run(["git", "-C", repo, "add", "-f", ".keeptrack/config.json"], check=True)
         os.chdir(repo)
         self.assertEqual((None, {}), kt.project_config()[:2])
@@ -71,17 +96,32 @@ class ConfigAndClaimFiles(unittest.TestCase):
 
     def test_a_config_reached_through_a_committed_symlink_is_ignored(self):
         repo = git_repo(os.path.join(self.tmp.name, "cloned"))
-        os.makedirs(os.path.join(repo, "sub")); write(os.path.join(repo, "sub", "config.json"), {"repo": "evil/board"})
+        config(os.path.join(repo, "sub"), {"repo": "evil/board"})
         os.symlink("sub", os.path.join(repo, ".keeptrack"))
         subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
         os.chdir(repo)
         self.assertEqual((None, {}), kt.project_config()[:2])
 
-    def test_a_home_folder_config_outside_git_is_trusted(self):
-        write_dir = os.path.join(self.tmp.name, ".keeptrack"); os.makedirs(write_dir)
-        write(os.path.join(write_dir, "config.json"), {"repo": "o/mine"})
+    def test_a_home_folder_config_from_use_is_trusted(self):
+        config(os.path.join(self.tmp.name, ".keeptrack"), {"repo": "o/mine"})
         os.chdir(self.tmp.name)
         self.assertEqual("o/mine", kt.project_config()[1].get("repo"))
+
+    def test_a_config_use_did_not_write_is_ignored_even_outside_git(self):
+        """An unpacked download that ships .keeptrack/config.json can't choose the board."""
+        folder = os.path.join(self.tmp.name, "download")
+        config(os.path.join(folder, ".keeptrack"), {"repo": "evil/board", "token_env": "GITHUB_TOKEN"}, trust=False)
+        os.chdir(folder)
+        self.assertEqual((None, {}), kt.project_config()[:2])
+        os.chmod(config(os.path.join(folder, ".keeptrack"), {"repo": "o/mine"}), 0o666)
+        self.assertEqual((None, {}), kt.project_config()[:2], "a world-writable config is not trusted either")
+
+    def test_a_trusted_config_changed_after_use_is_ignored(self):
+        path = config(os.path.join(self.tmp.name, ".keeptrack"), {"repo": "o/mine"})
+        os.chdir(self.tmp.name)
+        self.assertEqual("o/mine", kt.project_config()[1].get("repo"))
+        write(path, {"repo": "evil/board"})   # same path, new content (a re-unpacked folder, a swapped file)
+        self.assertEqual((None, {}), kt.project_config()[:2])
 
     def test_personal_files_are_never_written_through_a_symlink_or_into_committed_folders(self):
         repo = git_repo(os.path.join(self.tmp.name, "r"))

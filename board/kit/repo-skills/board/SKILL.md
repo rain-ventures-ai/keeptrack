@@ -10,6 +10,12 @@ The board lives in the `board/` folder; `board/tasks.json` is its entry point. C
 ## 1. Identify who you act for
 Use `BOARD_USER` (or `gh api user --jq .login`). Valid users: the `people` in `board/tasks.json`. Set `BOARD_AGENT=claude` and `BOARD_SESSION` to a short id for this session.
 
+**Cloud sessions** (a fresh clone, `CLAUDE_CODE_REMOTE=true`) get no plugin and no start-up line. If this board repo is
+attached beside a code repo, run its `keeptrack.py` by full path from the code repo and start with `keeptrack.py here`:
+it names the board, project and user, set by the environment's `BOARD_REPO`, `BOARD_PROJECT` and `BOARD_USER`.
+The heartbeat hook runs only when the board repo is the session's main repo, so otherwise run `heartbeat` yourself
+every ~10 minutes.
+
 ## 2. Find work
 ```bash
 python3 board/keeptrack.py list --assignee "$BOARD_USER" --column todo --unclaimed

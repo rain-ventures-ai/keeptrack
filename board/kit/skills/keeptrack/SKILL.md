@@ -41,7 +41,7 @@ board project this repo belongs to (`$B projects` lists them), then:
 $B use <owner/name> --project "<project>" --user <github-user> [--token-env <VAR_NAME>]
 ```
 This writes `.keeptrack/config.json` with its own `.gitignore`: personal, never committed, invisible to teammates. It
-finds the default branch itself. Never write, read back or store a token. `--token-env` takes only the NAME of an
+finds the default branch itself and records the file in `~/.config/keeptrack/trusted`: keeptrack ignores any config `use` did not write on this computer (say so if a note reports one; never write a config by hand). Never write, read back or store a token. `--token-env` takes only the NAME of an
 environment variable. With a project set, `list`, `next`, `add` and `links` cover that project unless given another
 scope or `--all`. Commands by topic: `$B help`.
 

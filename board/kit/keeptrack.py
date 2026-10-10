@@ -89,20 +89,72 @@ def repo_from_git():
 CONFIG_DIRS = (".keeptrack", ".board")   # .board/ is the pre-v22 name, still read
 
 
+def _trust_file():
+    return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "keeptrack", "trusted")
+
+
+def _digest(path):
+    import hashlib
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def _trusted_configs():
+    """{real path: sha256 of the content `use` wrote}. A changed file is no longer the one `use` wrote."""
+    out = {}
+    try:
+        for l in open(_trust_file(), encoding="utf-8"):
+            h, _, path = l.strip().partition("  ")
+            if path:
+                out[path] = h
+    except OSError:
+        pass
+    return out
+
+
+def trust_config(path):
+    """Record a config `use` wrote (its path and a hash of its content), so only configs made on this computer by
+    this person, and unchanged since, are ever read."""
+    f = _trust_file()
+    if os.path.islink(os.path.dirname(f)) or os.path.islink(f):
+        raise OSError(f"{f} or its folder is a symlink")
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    known = _trusted_configs()
+    known[os.path.realpath(path)] = _digest(path)
+    write_private(f, "".join(f"{h}  {p}\n" for p, h in sorted(known.items())))
+
+
+UNTRUSTED_CONFIG = None   # a config found but not trusted, so commands can say why it was ignored
+
+
 def _untrusted(d, name):
-    """True unless d/name/config.json is a plain file that came from `use`, not from someone else's repo. A config
-    git tracks (or reaches through a symlink a repo could commit) would let a cloned repo point Keeptrack, and the
-    session-start hook's output, at a board of its choosing. Fails closed: if git can't answer, don't trust it."""
+    """True unless d/name/config.json was written by `use` on this computer: listed in ~/.config/keeptrack/trusted,
+    unchanged since, owned by this user, not a symlink and not committed to git. Anything else (a config shipped in a
+    cloned repo or an unpacked archive) could point Keeptrack, and the session-start hook's output, at a board of its
+    choosing."""
     folder = os.path.join(d, name)
-    if os.path.islink(folder) or os.path.islink(os.path.join(folder, "config.json")):
+    p = os.path.join(folder, "config.json")
+    if os.path.islink(folder) or os.path.islink(p):
         return True
     try:
-        r = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True, timeout=10)
-        if r.returncode != 0:
-            return "not a git repository" not in r.stderr   # outside any repo (a home folder): nothing could have shipped it
+        st = os.stat(p)
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            return True
+        if st.st_mode & 0o022:   # group- or world-writable: someone else could change it
+            return True
+    except OSError:
+        return True
+    try:
+        if _trusted_configs().get(os.path.realpath(p)) != _digest(p):
+            return True   # never written by `use`, or changed since
+    except OSError:
+        return True
+    try:
         r = subprocess.run(["git", "-C", d, "ls-files", "--error-unmatch", "--", os.path.join(name, "config.json")],
-                           capture_output=True, timeout=10)
-        return r.returncode != 1   # 1: untracked, made here. 0: committed. Anything else: unknown
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return True   # committed: it travels with the repo
+        return r.returncode != 1 and "not a git repository" not in r.stderr   # 1: untracked; outside git: fine
     except (OSError, subprocess.SubprocessError):
         return True
 
@@ -112,11 +164,15 @@ def project_config():
     (`keeptrack.py use` writes it, with a .gitignore of its own). Found by walking up from the current folder; the
     pre-v22 .board/config.json is still read. Environment variables still win over it.
     Returns (project folder, settings, config folder name)."""
+    global UNTRUSTED_CONFIG
     d = os.getcwd()
     while True:
         for name in CONFIG_DIRS:
             p = os.path.join(d, name, "config.json")
-            if os.path.isfile(p) and not _untrusted(d, name):
+            if os.path.isfile(p) and _untrusted(d, name):
+                UNTRUSTED_CONFIG = UNTRUSTED_CONFIG or p
+                continue
+            if os.path.isfile(p):
                 try:
                     return d, json.load(open(p)), name
                 except (OSError, ValueError) as e:
@@ -2300,6 +2356,7 @@ def cmd_use(a):
     try:
         ensure_local_dir(cfg_path)
         write_private(cfg_path, json.dumps(cfg, indent=2) + "\n")
+        trust_config(cfg_path)
     except OSError as e:
         sys.exit(f"cannot write {cfg_path}: {e}")
     print(f"this project now uses the board {a.repo}" + (f", project {a.project}" if cfg.get("project") else "")
@@ -3480,6 +3537,7 @@ def cmd_client_unlink(a):
 # ---- links: every resource linked around a client, project, card or person, classified for searching ------------
 # The keeptrack-search skill reads this and searches each link with whatever connectors the session has.
 LINK_KINDS = [   # (kind, pattern, group holding the id, if any); first match wins
+    ("email", r"mailto:([^?\s]+)", 1),
     ("drive-folder", r"https?://drive\.google\.com/drive/(?:u/\d+/)?folders/([\w-]+)", 1),
     ("drive-file", r"https?://docs\.google\.com/(?:document|spreadsheets|presentation|forms)/d/([\w-]+)", 1),
     ("drive-file", r"https?://drive\.google\.com/(?:file/d/|open\?id=)([\w-]+)", 1),
@@ -3528,6 +3586,12 @@ def collect_links(data, client=None, project=None, card=None, person=None):
             out.append({"url": l["url"], "title": _s(l.get("title")) or l["url"], "kind": kind, "id": ident, "source": source})
 
     tasks, projects, people = data.get("tasks", []), data.get("projects", []), data.get("contacts", [])
+
+    def add_person(p, source):
+        # the person's own links, then their addresses as mailto: links, so a search can look through their mail
+        add(person_links(p), source)
+        add([{"url": "mailto:" + e["value"], "title": f"{p.get('name')} ({e['label']})"} for e in person_methods(p, "email")], source)
+
     info = data.get("client_info") or {}
     if card:
         t = find(data, card)
@@ -3536,11 +3600,17 @@ def collect_links(data, client=None, project=None, card=None, person=None):
         client = client or t.get("client") or None
     if person:
         p = find_person(data, person)
-        add(person_links(p), f"person {p.get('name')}")
+        add_person(p, f"person {p.get('name')}")
         client = client or p.get("company") or None
     if project:
         pr = find_project(data, project)
         add(pr.get("links"), f"project {pr.get('name')}")
+        for em in pr.get("people") or []:
+            known = next((p for p in people if any(e["value"].lower() == str(em).lower() for e in person_methods(p, "email"))), None)
+            if known:
+                add_person(known, f"project {pr.get('name')}")
+            else:
+                add([{"url": f"mailto:{em}", "title": str(em)}], f"project {pr.get('name')}")
         for t in tasks:
             if t.get("project") == pr["id"]:
                 add(t.get("links"), f"card #{t.get('num')}" + (" (done)" if t.get("column") == "done" else ""))
@@ -3557,7 +3627,7 @@ def collect_links(data, client=None, project=None, card=None, person=None):
                 add(t.get("links"), f"card #{t.get('num')}" + (" (done)" if t.get("column") == "done" else ""))
         for p in people:
             if p.get("company") == client:
-                add(person_links(p), f"person {p.get('name')}")
+                add_person(p, f"person {p.get('name')}")
     return out
 
 
@@ -4200,6 +4270,10 @@ def main():
             sub._choices_actions.append(sub._ChoicesPseudoAction(name, (), COMMAND_HELP[name]))
     a = p.parse_args()
     FILE = a.file
+    if UNTRUSTED_CONFIG and not getattr(a, "hook", False) and a.f is not cmd_use:
+        print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
+              "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",
+              file=sys.stderr)
     return a.f(a) or 0
 
 
