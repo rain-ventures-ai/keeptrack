@@ -102,7 +102,7 @@
   <h3 style="margin-top:0">This board changed while you were working</h3>
   <p id="cfIntro" style="color:var(--muted);font-size:13px;margin-top:0"></p>
   <div id="cfBody"></div>
-  <div class="actions"><button id="cfDiscard">Discard my change</button><button id="cfApply" class="primary">Apply my change anyway</button></div>
+  <div class="actions"><button id="cfDiscard">Discard my change</button><button id="cfApply" class="primary">Save with my choices</button></div>
 </dialog>
 
 <dialog id="dlgSend" class="settings" aria-label="Send to Claude">
@@ -173,6 +173,12 @@
       <label class="chk big"><input id="sModeCrm" type="checkbox"> People &amp; pipeline (CRM)</label>
       <div class="hint">These switches are saved to the shared board. Turning a section off only hides its dedicated views: nothing is deleted. Today stays available and combines the sections that are on. Turn a section on again to see the same tasks or people. If CRM has no people yet, it opens empty; adding the first person creates their record automatically.</div>
     </fieldset>
+    <fieldset class="modeset" id="colSet">
+      <legend>Columns</legend>
+      <div id="colList" class="collist"></div>
+      <div class="coladd"><input id="colNew" aria-label="New column name" placeholder="New column name" maxlength="40"><button id="colAdd" type="button" class="primary"><i data-i="plus"></i> Add column</button></div>
+      <div class="hint">Changes are saved to the shared board straight away. A column keeps its hidden id when you rename it, so cards and agents are not affected. To do, In progress and Done cannot be removed, because agents use them. The new column goes before Done.</div>
+    </fieldset>
     <div><label for="sLayout">Layout</label><select id="sLayout"><option value="dock">Dock: one-row header, menu bar at the bottom</option><option value="classic">Classic: everything in the top bar</option></select><div class="hint">Saved in this browser only.</div></div>
     <div><label for="sStyle">Card style</label><select id="sStyle"><option value="classic">Classic</option><option value="colorful">Colourful (client and urgency colours)</option></select></div>
     <div><label for="sTheme">Theme</label><select id="sTheme"><option value="auto">Auto (follows your device)</option><optgroup label="Classic"><option value="light">Light</option><option value="dark">Dark</option><option value="midnight">Midnight</option><option value="sand">Sand</option></optgroup><optgroup label="3 colours: paper, ink, accent"><option value="paper">Paper</option><option value="mono">Mono</option><option value="iris">Iris</option><option value="forest">Forest</option><option value="ember">Ember (dark)</option><option value="ink">Ink (dark)</option></optgroup><optgroup label="5 colours: + cards, borders"><option value="studio">Studio</option><option value="newsprint">Newsprint</option><option value="blueprint">Blueprint</option><option value="graphite">Graphite (dark)</option></optgroup><option value="custom" id="sThemeCustom" hidden>Your DESIGN.md</option></select></div>
@@ -184,6 +190,7 @@
       <div class="hint">Copies everything configured in this browser: repository, username, theme, card style and view, and <b>all your secrets</b>: the GitHub token of <b>every saved board</b>, the Claude routine URL and token, and the cron-job.org key. The code is not encrypted, so anyone who has it can use them. Open the setup link, or paste the code below, on your other browser or phone, then delete the message you sent it in. Treat both like a password.</div>
       <textarea id="xPaste" rows="2" placeholder="Paste a settings code or setup link here" aria-label="Settings code to import" style="width:100%;margin-top:8px"></textarea>
       <div class="cbtns"><button id="xImport" type="button"><i data-i="download"></i> Import settings</button></div></div>
+    <div id="labelSec"><label>Labels</label><div class="hint">Rename a label, change its colour or delete it. A rename or delete updates every task that uses the label.</div><div id="labelBox" class="lbled"></div></div>
     <div><label>Archive</label><div id="archBox"></div></div>
     <div class="actions"><button id="sDone" class="primary">Done</button></div>
   </div>

@@ -118,6 +118,7 @@ dialog input:not([type=checkbox]), dialog textarea, dialog select { width: 100%;
 .claimbox { background: var(--panel); border-radius: 6px; padding: 9px 11px; font-size: 12px; margin-top: 4px; }
 .claimbox dt { color: var(--muted); float: left; clear: left; width: 110px; } .claimbox dd { margin: 0 0 2px 110px; word-break: break-all; }
 .cfcard { border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; margin: 8px 0; } .cfnote { color: var(--danger); font-size: 12px; margin: 4px 0; }
+.cfpick { display: flex; gap: 14px; margin-top: 8px; font-size: 13px; } .cfpick label { display: flex; align-items: center; gap: 4px; cursor: pointer; } .cfedit { width: 100%; margin-top: 6px; font: inherit; font-size: 13px; box-sizing: border-box; }
 .cftable { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
 .cftable th, .cftable td { text-align: left; border-top: 1px solid var(--border); padding: 4px 6px; vertical-align: top; word-break: break-word; }
 .cftable th { color: var(--muted); font-weight: 600; } .cftable td:first-child, .cftable th:first-child { white-space: nowrap; word-break: normal; }
@@ -1020,3 +1021,14 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .tourinvite .ti { flex: 1 1 200px; font-weight: 600; }
 .tourinvite .tix { border: 0; background: transparent; color: var(--muted); padding: 4px; display: inline-grid; place-items: center; }
 .htour { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; color: var(--muted); }
+
+/* Settings → Labels editor */
+.lbled { margin-top: 6px; } .lbrows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.lbrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } .lbrow input:not([type=color]) { flex: 1 1 120px; min-width: 0; }
+.lbrow input[type=color] { width: 36px; min-width: 36px; height: 32px; padding: 2px; flex: 0 0 auto; border: 1px solid var(--border); border-radius: 8px; background: var(--card); cursor: pointer; }
+.lbprev { flex: 0 0 auto; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .lbcnt { font-size: 12px; white-space: nowrap; }
+.lbdel { margin-left: auto; color: var(--danger, #c9372c); } .lbnew { padding-top: 4px; border-top: 1px dashed var(--border); }
+@media (max-width: 520px) { .lbprev { display: none; } }
+
+.collist { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 8px; } .colrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; } .colrow input { flex: 1 1 80px; min-width: 0; } .colrow .colcount { font-size: 12px; color: var(--muted); white-space: nowrap; } .colrow .colmove { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; } .colrow .colmove select { flex: 1 1 140px; min-width: 0; }
+.coladd { display: flex; gap: 6px; } .coladd input { flex: 1; min-width: 0; }

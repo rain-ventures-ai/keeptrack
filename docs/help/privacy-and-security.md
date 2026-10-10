@@ -24,3 +24,5 @@ An assistant can read the people on your board when you ask it to help. Use assi
 
 ## Public boards
 If the repo is public, anyone can read the board, also with no token. The board shows a warning when it finds a public repo. People who open a public board with no token see it read-only.
+
+To get an alert if the repo is ever made public, add the optional visibility alarm: `python3 board/keeptrack.py kit-update --visibility-alarm`. A daily check then opens a P0 issue for the board owner if the repo is not private.

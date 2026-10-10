@@ -29,8 +29,13 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
 Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
   keeptrack.py clients | client-rename OLD NEW | client-rm NAME | client-set NAME --north-star ..
+  keeptrack.py columns | column-add NAME [--after ID] | column-set ID --rename NAME | column-move ID --before|--after ID | column-rm ID [--move-to ID]
   keeptrack.py members | member-add USER [--name ..] | member-set USER --name .. | member-rm USER [--unassign]
+  keeptrack.py agents | agent-add NAME | agent-rm NAME [--unassign]
+  keeptrack.py task-rm ID --yes | person-rm REF --yes     # delete something created by mistake
   keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--stages "A,B,C" | --rename-stage OLD=NEW]
+  keeptrack.py projects [--client ..] [--status active|done|paused] [-q ..] | project REF   # project REF: its goal, people, links and OPEN tasks
+  keeptrack.py project-add NAME --client .. [--north-star ..] | project-set REF [--name ..] [--client ..] [--north-star ..] [--status ..] | project-remove REF [--clear-project]
   ID may also be a task number: '#12' (quote the # in a shell).
 
 ID may be any unique prefix. Defaults: BOARD_REPO, BOARD_BRANCH, BOARD_PATH, BOARD_AGENT, BOARD_USER,
@@ -60,7 +65,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, README.md, AGENTS.md, CLAUDE.md, empty tasks.json
 """
-import argparse, base64, contextlib, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
+import argparse, base64, contextlib, copy, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 try:
     import fcntl
 except ImportError:   # Windows
@@ -526,18 +531,21 @@ def cached_read(path):
     return text, d["sha"]
 
 
-def content_text(path, d):
-    """The text of a contents-API answer. Files over 1 MB come back with no content (encoding "none"): read them raw."""
+def content_text(path, d, ref=None):
+    """The text of a contents-API answer. Files over 1 MB come back with no content (encoding "none"): read them raw.
+    The raw read uses ref (a backup tag, branch or commit) when given, else the board branch: it must be the same
+    version the answer d came from."""
     if d.get("content") or d.get("encoding") != "none":
         return base64.b64decode(d.get("content") or "").decode()
-    url = f"repos/{REPO}/contents/{path}?ref={BRANCH}"
+    at = urllib.parse.quote(ref, safe="") if ref else BRANCH
+    url = f"repos/{REPO}/contents/{path}?ref={at}"
     if use_http():
         rc, out, err = http("GET", url, accept="application/vnd.github.raw+json")
     else:
         p = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw+json", url], capture_output=True, text=True)
         rc, out, err = p.returncode, p.stdout, p.stderr
     if rc:
-        sys.exit(f"cannot read {path} (over 1 MB) from {REPO}@{BRANCH}: {err.strip() or out.strip()}")
+        sys.exit(f"cannot read {path} (over 1 MB) from {REPO}@{ref or BRANCH}: {err.strip() or out.strip()}")
     return out
 
 
@@ -878,6 +886,129 @@ class UseGit(Exception):
     """The API refused the write because of the sandbox proxy: switch to the git transport and retry."""
 
 
+_MUT = {"base": None, "extra": {}}   # while fn runs inside mutate: the board state it reads and the extra files it wants saved with it
+
+
+def rewrite_archives(data, edit):
+    """Rewrite archive/<year>.json files in the same save as the board. edit(archive data) changes it in place and
+    returns how many entries it touched. Only call this from a mutate() fn. Returns the total."""
+    n = 0
+    for y in archive_years(data):
+        cur, _ = read_archive(y, _MUT["base"])
+        k = edit(cur) if cur else 0
+        if k:
+            _MUT["extra"][f"archive/{y}.json"] = _json_text(cur); n += k
+    return n
+
+
+# ---- three-way merge (the same rules as merge3 in board/board.js; see docs/conflicts.md) ----------------------------------
+_MISSING = object()
+_VOLATILE = {"updated": "mine", "updatedBy": "mine", "heartbeat_at": "mine", "next_num": "max"}   # bookkeeping, never a clash
+
+
+def _canon(v):
+    return "\0missing" if v is _MISSING else json.dumps(v, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _item_key(x):
+    return ("id", x["id"]) if isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] else ("json", _canon(x))
+
+
+def merge3(base, mine, theirs):
+    """Three-way merge of JSON values: base (what we loaded), mine (base plus our change), theirs (what is there now).
+    Returns {"merged", "clashes"}. Changes that do not overlap merge on their own. Lists merge by item id (items without
+    an id by content): an item added on either side is kept, one removed on one side and untouched on the other is
+    removed, one edited on both sides merges field by field. A clash is a value both sides changed to different things,
+    or an item one side edited and the other removed. merged keeps THEIR value at every clash. Never guesses."""
+    clashes = []
+    merged = _merge_value(base, mine, theirs, [], clashes)
+    return {"merged": None if merged is _MISSING else merged, "clashes": clashes}
+
+
+def _merge_value(b, m, t, path, clashes):
+    cb, cm, ct = _canon(b), _canon(m), _canon(t)
+    if cm == ct or ct == cb:   # same change on both sides, or only we changed it
+        return m
+    if cm == cb:               # only they changed it
+        return t
+    if path and path[-1] in _VOLATILE:
+        if _VOLATILE[path[-1]] == "max" and isinstance(m, int) and isinstance(t, int):
+            return max(m, t)
+        return m
+    if isinstance(m, dict) and isinstance(t, dict):
+        bd = b if isinstance(b, dict) else {}
+        out = {}
+        for k in list(t) + [k for k in m if k not in t] + [k for k in bd if k not in t and k not in m]:
+            v = _merge_value(bd.get(k, _MISSING), m.get(k, _MISSING), t.get(k, _MISSING), path + [k], clashes)
+            if v is not _MISSING:
+                out[k] = v
+        return out
+    if isinstance(m, list) and isinstance(t, list) and (isinstance(b, list) or b is _MISSING):
+        return _merge_list(b if isinstance(b, list) else [], m, t, path, clashes)
+    clashes.append({"path": list(path), "base": None if b is _MISSING else b, "mine": None if m is _MISSING else m,
+                    "theirs": None if t is _MISSING else t})
+    return t
+
+
+def _merge_list(b, m, t, path, clashes):
+    def index(lst):
+        d = {}
+        for x in lst:
+            d.setdefault(_item_key(x), x)
+        return d
+    ib, im, it = index(b), index(m), index(t)
+
+    def reordered(order, other):   # did this side change the relative order of the items both versions have?
+        return [k for k in order if k in other] != [k for k in other if k in order]
+    mine_first = reordered(list(im), ib) and not reordered(list(it), ib)
+    first, second = (im, it) if mine_first else (it, im)
+    order = list(first) + [k for k in second if k not in first]
+    out = []
+    for k in order:
+        bi, mi, ti = ib.get(k, _MISSING), im.get(k, _MISSING), it.get(k, _MISSING)
+        if bi is _MISSING:   # added: by one side, or by both
+            if mi is _MISSING or ti is _MISSING:
+                out.append(ti if mi is _MISSING else mi)
+            else:
+                out.append(_merge_value(_MISSING, mi, ti, path + [k[1]], clashes))
+        elif mi is _MISSING and ti is _MISSING:
+            continue
+        elif mi is _MISSING or ti is _MISSING:   # removed by one side
+            kept = ti if mi is _MISSING else mi
+            if _canon(kept) != _canon(bi):       # ...while the other side edited it
+                clashes.append({"path": path + [k[1]], "base": bi, "mine": None if mi is _MISSING else mi,
+                                "theirs": None if ti is _MISSING else ti})
+                if mi is _MISSING:
+                    out.append(ti)
+        else:
+            out.append(_merge_value(bi, mi, ti, path + [k[1]], clashes))
+    return out
+
+
+def describe_clashes(clashes, limit=12):
+    def short(v):
+        s = "(none)" if v is None else json.dumps(v, ensure_ascii=False)
+        return s if len(s) <= 80 else s[:77] + "..."
+    lines = [f"  {'/'.join(map(str, c['path'])) or '(whole board)'}: yours {short(c['mine'])}, theirs {short(c['theirs'])}"
+             for c in clashes[:limit]]
+    if len(clashes) > limit:
+        lines.append(f"  ... and {len(clashes) - limit} more")
+    return "\n".join(lines)
+
+
+def _renumber(merged, theirs):
+    """Both sides can hand the same #number to different new cards; the card that was already there keeps it."""
+    their_ids = {t.get("id") for t in (theirs or {}).get("tasks", [])}
+    count = {}
+    for t in merged.get("tasks", []):
+        if isinstance(t.get("num"), int):
+            count[t["num"]] = count.get(t["num"], 0) + 1
+    for t in merged.get("tasks", []):
+        if isinstance(t.get("num"), int) and count[t["num"]] > 1 and t.get("id") not in their_ids:
+            del t["num"]
+    return assign_nums(merged)
+
+
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
@@ -886,24 +1017,47 @@ def mutate(fn, message):
 
 def _mutate(fn, message):
     global WRITE
+    lost = None   # after a lost race: (the board as first loaded, what we wanted to save)
+    out = result = None
     for attempt in range(6):
         data, sha = load()
         guard_schema(data)
         # v1/v2 still move to v3 on write. Split storage is an explicit
         # migration because it creates many files and first makes a backup tag.
         migrate_data(data, min(SCHEMA, 3))
-        out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
-        with contextlib.redirect_stdout(out):
-            result = fn(data)
-        assign_nums(data)
+        if lost is None or lost[2]:
+            # First attempt, or a command that also rewrites archive files (renames): those run again on the
+            # latest board, because their archive edits are read from and written next to that revision.
+            base = copy.deepcopy(data)
+            out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
+            _MUT["base"], _MUT["extra"] = sha, {}
+            with contextlib.redirect_stdout(out):
+                result = fn(data)
+            assign_nums(data)
+        else:
+            # Someone saved first. Three-way merge: what we first loaded, what we wanted to save, what is there now.
+            # Never guess: a real clash stops here and writes nothing, so their version stays exactly as it is.
+            theirs = copy.deepcopy(data)
+            res = merge3(lost[0], lost[1], theirs)
+            if res["clashes"]:
+                print("not saved: someone else changed the same thing since this command read the board; their version is untouched.\n"
+                      + describe_clashes(res["clashes"]) + "\nRead the board again (keeptrack.py show / list), then redo the change if it still applies.",
+                      file=sys.stderr)
+                sys.exit(3)
+            merged = _renumber(copy.deepcopy(res["merged"]), theirs)
+            data.clear(); data.update(merged)
+            base = theirs
+            _MUT["extra"] = {}
+        extra = _MUT["extra"]
         try:
-            ok = save(data, sha, message)
+            ok = save_changes(data, sha, message, extra=extra) if extra else save(data, sha, message)
         except UseGit:
             WRITE = "git"  # re-read through git and apply the change again
             continue
         if ok:
             print(out.getvalue(), end="")
             return result
+        lost = (base, copy.deepcopy(data), bool(extra))
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not save after retries (board busy)")
 
@@ -1039,6 +1193,7 @@ def cmd_list(a):
             if t.get("project") != pref:
                 continue
         if getattr(a, "client", None) and t.get("client") != a.client: continue
+        if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
         print(line(data, t))
 
 
@@ -1294,6 +1449,20 @@ def cmd_todo_rm(a):
     mutate(fn, f"Remove to-do: {a.id}")
 
 
+def cmd_todo_edit(a):
+    """Change the text of a to-do in place: it keeps its number, its id and its done state."""
+    if not a.text.strip():
+        sys.exit("a to-do needs text")
+    tid, ident = todo_target(a)
+    def fn(data):
+        t = find(data, tid); n, d = todo_by_identity(t, ident)
+        if d.get("text") == a.text:
+            print(f"to-do #{n} unchanged"); return
+        old = d.get("text", ""); d["text"] = a.text
+        hist(t, f"edited to-do: {old} -> {a.text}"); t["updated"] = now(); print(f"to-do #{n} edited: {a.text}")
+    mutate(fn, f"Edit to-do: {a.id}")
+
+
 def cmd_comment(a):
     def fn(data):
         t = find(data, a.id)
@@ -1450,6 +1619,12 @@ def cmd_kit_update(a):
     try:
         m = json.loads(kit_fetch("manifest.json", a.source))
         files = {dest: kit_fetch(src, a.source) for dest, src in m["files"].items()}  # fetch everything before writing anything
+        # Optional files (manifest "optional"): installed only with their flag, then kept current wherever they exist.
+        for name, opt in m.get("optional", {}).items():
+            wanted = getattr(a, name.replace("-", "_"), False)
+            for dest, src in opt["files"].items():
+                if wanted or os.path.exists(os.path.join(ROOT, dest)):
+                    files[dest] = kit_fetch(src, a.source)
         root = os.path.abspath(ROOT)
         removals = []
         for dest in m.get("remove", []):
@@ -1890,7 +2065,7 @@ def _read_backup(ref):
     rc, out, err = gh(f"repos/{REPO}/contents/{PATH}?ref={urllib.parse.quote(ref, safe='')}")
     if rc:
         sys.exit(f"cannot read {PATH} at backup {ref}: {err.strip() or out.strip()}")
-    raw = content_text(PATH, json.loads(out))
+    raw = content_text(PATH, json.loads(out), ref)
     root = json.loads(raw)
     if root.get("layout") != "split":
         return root
@@ -1985,6 +2160,8 @@ def cmd_init(a):
         people.append({"github": gh_user, "name": name or gh_user})
     a.quiet = True
     cmd_kit_update(a)
+    if not getattr(a, "visibility_alarm", False) and not os.path.exists(os.path.join(ROOT, ".github", "workflows", "visibility-alarm.yml")):
+        print("optional: visibility alarm not installed (init --visibility-alarm adds a daily check that the repo stays private)")
     board_url = "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(
         {"repo": REPO, "branch": BRANCH, "path": PATH})
     fill = lambda t: (t.replace("{repo}", REPO).replace("{branch}", BRANCH).replace("{path}", PATH)
@@ -2332,6 +2509,22 @@ def cmd_person_set(a):
     mutate(fn, f"Update person: {a.ref}")
 
 
+def cmd_person_rm(a):
+    """Delete a CRM person added by mistake (not Lost: wrong). Needs --yes. Tasks that named them as contact lose that link
+    (as in the web board). Projects list people by email address, not by id, so they are left alone."""
+    def fn(data):
+        p = find_person(data, a.ref)
+        tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
+        if not a.yes:
+            sys.exit(f"this deletes {person_line(p)} for good (notes and history included); rerun with --yes to confirm. "
+                     f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
+        for t in tasks:
+            t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
+        data["contacts"] = [x for x in data["contacts"] if x is not p]
+        print(f"deleted {p['id']} {p['name']}" + (f"; cleared as contact on {len(tasks)} tasks" if tasks else ""))
+    mutate(fn, f"Delete person: {a.ref}")
+
+
 def cmd_touch(a):
     """Log a contact. --draft records a message that is not sent yet (it does not count as contact)."""
     event_at, source_id = check_event_time(getattr(a, "at", None)), check_source_id(getattr(a, "source_id", None))
@@ -2464,6 +2657,19 @@ def cmd_project_link(a):
     mutate(fn, f"Project link: {a.ref}")
 
 
+def cmd_project_unlink(a):
+    """Remove a link from a project by URL (or by title)."""
+    def fn(data):
+        pr = find_project(data, a.ref)
+        links = pr.get("links", [])
+        keep = [l for l in links if a.url not in (l.get("url"), l.get("title"))]
+        if len(keep) == len(links):
+            sys.exit(f"{pr['id']} has no link '{a.url}'")
+        pr["links"] = keep; pr["updated"] = now()
+        print(f"unlinked {pr['id']}: {a.url}")
+    mutate(fn, f"Project unlink: {a.ref}")
+
+
 def cmd_project_remove(a):
     def fn(data):
         pr = find_project(data, a.ref)
@@ -2541,6 +2747,22 @@ def cmd_task_set(a):
     mutate(fn, f"Update task: {a.id}")
 
 
+def cmd_task_rm(a):
+    """Delete a task that was created by mistake (the only other way out is done -> archive). Needs --yes.
+    Nothing else points at a task, so only the card goes; its number is not reused."""
+    def fn(data):
+        t = find(data, a.id)
+        c = t.get("claim") or {}
+        if c and c.get("status") not in (None, "done"):
+            sys.exit(f"#{t['num']} has an active claim ({c.get('agent') or c.get('on_behalf_of') or 'someone'}); release it first")
+        if not a.yes:
+            sys.exit(f"this deletes #{t['num']} '{t['title']}' for good (history included); rerun with --yes to confirm. "
+                     "A finished task should go done -> archive instead")
+        data["tasks"] = [x for x in data["tasks"] if x is not t]
+        print(f"deleted #{t['num']} {t['title']}")
+    mutate(fn, f"Delete task: {a.id}")
+
+
 def cmd_unlink(a):
     """Remove a link from a task by URL (or by title)."""
     def fn(data):
@@ -2597,12 +2819,6 @@ def find_label(data, name):
     sys.exit(f"no label '{name}'. Labels: {', '.join(x.get('name', '') for x in data['labels']) or '(none)'}")
 
 
-def _archive_note(data, what):
-    """Renames change the live board only; archive/<year>.json files keep the old name."""
-    if (data.get("archive") or {}).get("files"):
-        print(f"note: archived items keep the old {what}; after unarchive, fix them with task-set or person-set")
-
-
 def cmd_labels(a):
     data, _ = load()
     use = {}
@@ -2650,8 +2866,15 @@ def cmd_label_set(a):
                 if old in t.get("labels", []):
                     t["labels"] = list(dict.fromkeys(new if x == old else x for x in t["labels"]))
                     hist(t, f"label {old} renamed to {new}"); t["updated"] = now(); n += 1
-            print(f"renamed label {old} -> {new} on {n} cards")
-            _archive_note(data, "label name")
+            def edit(cur):
+                k = 0
+                for t in cur.get("tasks", []):
+                    if old in t.get("labels", []):
+                        t["labels"] = list(dict.fromkeys(new if x == old else x for x in t["labels"]))
+                        hist(t, f"label {old} renamed to {new}"); k += 1
+                return k
+            arch = rewrite_archives(data, edit)
+            print(f"renamed label {old} -> {new} on {n} cards" + (f" and {arch} archived" if arch else ""))
         print(f"label {lab['name']} {lab.get('color', '')}")
     mutate(fn, f"Update label: {a.name}")
 
@@ -2712,8 +2935,18 @@ def cmd_client_rename(a):
             pr["client"] = new; pr["updated"] = now()
         for c in people:
             c["company"] = new; hist(c, f"company renamed {a.client} -> {new}"); c["updated"] = now()
-        print(f"renamed client {a.client} -> {new} ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)")
-        _archive_note(data, "client name")
+        def edit(cur):
+            k = 0
+            for t in cur.get("tasks", []):
+                if t.get("client") == a.client:
+                    t["client"] = new; hist(t, f"client renamed {a.client} -> {new}"); k += 1
+            for c in cur.get("contacts", []):
+                if c.get("company") == a.client:
+                    c["company"] = new; hist(c, f"company renamed {a.client} -> {new}"); k += 1
+            return k
+        arch = rewrite_archives(data, edit)
+        print(f"renamed client {a.client} -> {new} ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people"
+              + (f", {arch} archived items" if arch else "") + ")")
     mutate(fn, f"Rename client: {a.client}")
 
 
@@ -2730,8 +2963,113 @@ def cmd_client_rm(a):
         data["clients"] = [c for c in clients if c != a.client]
         data.setdefault("client_info", {}).pop(a.client, None)
         print(f"removed client {a.client}")
-        _archive_note(data, "client name")
     mutate(fn, f"Remove client: {a.client}")
+
+
+PROTECTED_COLUMNS = ("todo", "in-progress", "done")  # the agent commands (add, claim, done) put cards in these by id
+
+
+def column_slug(name, used):
+    """A column id from its name: lower-case words joined by '-', made unique with -2, -3 ... Ids never change on rename."""
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "column"
+    cid, n = base, 2
+    while cid in used:
+        cid, n = f"{base}-{n}", n + 1
+    return cid
+
+
+def _column(data, cid):
+    cols = data.get("columns") or []
+    col = next((c for c in cols if c.get("id") == cid), None)
+    if not col:
+        sys.exit(f"no column '{cid}'. Columns: {', '.join(c['id'] for c in cols)}")
+    return col
+
+
+def cmd_columns(a):
+    data, _ = load()
+    for c in data.get("columns", []):
+        n = sum(1 for t in data.get("tasks", []) if t.get("column") == c["id"])
+        print(f"{c['id']}  {c.get('name', '')}  ({n} cards)" + ("  [done column]" if c["id"] == done_col(data) else ""))
+
+
+def cmd_column_add(a):
+    """Add a column: after --after, otherwise at the end (just before the done column when that is last)."""
+    def fn(data):
+        cols = data.setdefault("columns", [])
+        name = a.name.strip()
+        if not name:
+            sys.exit("the column name is empty")
+        if any(c.get("name", "").lower() == name.lower() for c in cols):
+            sys.exit(f"a column named '{name}' already exists")
+        cid = column_slug(name, {c.get("id") for c in cols})
+        if a.after:
+            _column(data, a.after)
+            at = next(i for i, c in enumerate(cols) if c["id"] == a.after) + 1
+        else:
+            at = len(cols) - 1 if cols and cols[-1]["id"] == done_col(data) else len(cols)
+        cols.insert(at, {"id": cid, "name": name})
+        print(f"added column {cid} ({name}) at position {at + 1}")
+    mutate(fn, f"Add column: {a.name.strip()}")
+
+
+def cmd_column_set(a):
+    """Rename a column. Its id stays, so cards, the done column and scripts keep working."""
+    def fn(data):
+        col = _column(data, a.column)
+        if a.rename is None:
+            sys.exit("nothing to change; use --rename NAME")
+        new = a.rename.strip()
+        if not new:
+            sys.exit("the new name is empty")
+        if new == col.get("name"):
+            print(f"column {col['id']} already has that name"); return
+        if any(c.get("name", "").lower() == new.lower() and c is not col for c in data["columns"]):
+            sys.exit(f"a column named '{new}' already exists")
+        print(f"renamed column {col['id']}: {col.get('name')} -> {new}")
+        col["name"] = new
+    mutate(fn, f"Rename column: {a.column}")
+
+
+def cmd_column_move(a):
+    """Reorder columns: put one before or after another."""
+    def fn(data):
+        cols = data["columns"]
+        col = _column(data, a.column)
+        if bool(a.before) == bool(a.after):
+            sys.exit("use exactly one of --before or --after")
+        anchor = _column(data, a.before or a.after)
+        if anchor is col:
+            sys.exit("a column cannot be moved before or after itself")
+        cols.remove(col)
+        cols.insert(cols.index(anchor) + (0 if a.before else 1), col)
+        print("columns: " + ", ".join(c["id"] for c in cols))
+    mutate(fn, f"Move column: {a.column}")
+
+
+def cmd_column_rm(a):
+    """Remove a column. Refuses while it has cards unless --move-to says where they go."""
+    def fn(data):
+        cols = data["columns"]
+        col = _column(data, a.column)
+        if len(cols) <= 1:
+            sys.exit("a board needs at least one column")
+        if a.column in PROTECTED_COLUMNS or a.column == done_col(data):
+            sys.exit(f"column '{a.column}' cannot be removed: the done/claim commands rely on todo, in-progress and done. Rename it instead (column-set)")
+        cards = [t for t in data.get("tasks", []) if t.get("column") == a.column]
+        if cards and not a.move_to:
+            sys.exit(f"'{col.get('name')}' still has {len(cards)} cards; use --move-to COLUMN to move them first, or move them with move/task-set")
+        if a.move_to:
+            if a.move_to == a.column:
+                sys.exit("--move-to must be a different column")
+            target = _column(data, a.move_to)
+            ordered = sorted(cards, key=task_order_key) if data.get("layout") == "split" else cards
+            for t in ordered:
+                hist(t, f"moved {col.get('name')} -> {target.get('name')}")
+                move_task_to_column(data, t, a.move_to); t["updated"] = now()
+        data["columns"] = [c for c in cols if c is not col]
+        print(f"removed column {a.column}" + (f"; moved {len(cards)} cards to {a.move_to}" if cards else ""))
+    mutate(fn, f"Remove column: {a.column}")
 
 
 def cmd_members(a):
@@ -2804,6 +3142,57 @@ def cmd_member_rm(a):
     mutate(fn, f"Remove member: {a.user}")
 
 
+def check_agent_name(name):
+    name = (name or "").strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}", name):
+        sys.exit(f"'{name}' is not an agent name: use 1-40 letters, digits, '.', '_' or '-' (for example claude)")
+    return name
+
+
+def cmd_agents(a):
+    data, _ = load()
+    for g in data.get("agents", []):
+        n = sum(1 for t in data.get("tasks", []) if g in t.get("assignees", []) and t.get("column") != "done")
+        print(f"{g}  ({n} open tasks)")
+    if not data.get("agents"):
+        print("(no agents)")
+
+
+def cmd_agent_add(a):
+    """Add an agent name (used by the web board's filters and for assignment, like a member but not a GitHub user)."""
+    def fn(data):
+        g = check_agent_name(a.name)
+        agents = data.setdefault("agents", [])
+        if any(str(x).lower() == g.lower() for x in agents):
+            sys.exit(f"{g} is already an agent")
+        agents.append(g)
+        print(f"added agent {g}")
+    mutate(fn, f"Add agent: {a.name}")
+
+
+def cmd_agent_rm(a):
+    """Remove an agent name. Refuses while it is assigned open tasks or has an active claim, unless --unassign (open tasks only)."""
+    def fn(data):
+        g = a.name.strip().lstrip("@")
+        agents = data.setdefault("agents", [])
+        hit = next((x for x in agents if str(x).lower() == g.lower()), None)
+        if hit is None:
+            sys.exit(f"{g} is not an agent. Agents: {', '.join(agents) or '(none)'}")
+        claimed = [t for t in data.get("tasks", []) if (t.get("claim") or {}).get("agent") == hit
+                   and (t.get("claim") or {}).get("status") not in (None, "done")]
+        if claimed:
+            sys.exit(f"{hit} has active claims on " + ", ".join(f"#{t.get('num')}" for t in claimed) + "; release them first")
+        open_tasks = [t for t in data.get("tasks", []) if hit in t.get("assignees", []) and t.get("column") != "done"]
+        if open_tasks and not a.unassign:
+            sys.exit(f"{hit} is assigned {len(open_tasks)} open task(s) (" + ", ".join(f"#{t.get('num')}" for t in open_tasks[:10])
+                     + "); reassign them or use --unassign")
+        for t in open_tasks:
+            t["assignees"] = [x for x in t["assignees"] if x != hit]; hist(t, f"unassigned @{hit} (agent removed)"); t["updated"] = now()
+        data["agents"] = [x for x in agents if x != hit]
+        print(f"removed agent {hit}" + (f"; unassigned from {len(open_tasks)} open tasks" if open_tasks else ""))
+    mutate(fn, f"Remove agent: {a.name}")
+
+
 def cmd_settings(a):
     data, _ = load()
     st = data.get("settings") or {}
@@ -2813,6 +3202,7 @@ def cmd_settings(a):
     print(f"modes: {', '.join(st.get('modes', [])) or '-'}")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
+    print(f"agents: {', '.join(data.get('agents', [])) or '-'}")
     print(f"labels: {len(data.get('labels', []))}  clients: {len(data.get('clients', []))}  members: {len(data.get('people', []))}")
 
 
@@ -2851,8 +3241,14 @@ def cmd_settings_set(a):
                          "use --rename-stage OLD=NEW or move them with person-set --stage first")
             st["stages"] = new_stages; print("stages: " + ", ".join(new_stages))
             if renames:
-                print(f"moved {moved} people to the renamed stage(s)")
-                _archive_note(data, "stage")
+                def edit(cur):
+                    k = 0
+                    for c in cur.get("contacts", []):
+                        if c.get("stage") in renames:
+                            hist(c, f"stage {c['stage']} renamed to {renames[c['stage']]}"); c["stage"] = renames[c["stage"]]; k += 1
+                    return k
+                arch = rewrite_archives(data, edit)
+                print(f"moved {moved} people to the renamed stage(s)" + (f" and {arch} archived" if arch else ""))
     mutate(fn, "Board settings")
 
 
@@ -2869,6 +3265,19 @@ def cmd_client_link(a):
         if a.client not in data.setdefault("clients", []): data["clients"].append(a.client)
         print(f"linked {a.client}: {a.title or a.url}")
     mutate(fn, f"Files: {a.client}")
+
+
+def cmd_client_unlink(a):
+    """Remove a file store link from a client by URL (or by title)."""
+    def fn(data):
+        ci = (data.get("client_info") or {}).get(a.client) or {}
+        links = ci.get("links", [])
+        keep = [l for l in links if a.url not in (l.get("url"), l.get("title"))]
+        if len(keep) == len(links):
+            sys.exit(f"{a.client} has no link '{a.url}'")
+        ci["links"] = keep
+        print(f"unlinked {a.client}: {a.url}")
+    mutate(fn, f"Files unlink: {a.client}")
 
 
 # ---- import: load an onboarding staging file (people, companies, folders, tasks) in one save -------------------
@@ -3358,6 +3767,7 @@ def main():
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
     s.add_argument("--unclaimed", action="store_true"); s.add_argument("--attention", action="store_true")
     s.add_argument("--project", help="project id or name prefix"); s.add_argument("--client", help="client name")
+    s.add_argument("--label", help="label name, exactly as on the card (the web board's label filter)")
     s.set_defaults(f=cmd_list)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)
@@ -3371,6 +3781,7 @@ def main():
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
+    s = sub.add_parser("todo-edit", help="change the text of checklist item N in place"); s.add_argument("id"); s.add_argument("n"); s.add_argument("text"); s.set_defaults(f=cmd_todo_edit)
     s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column")
     s.add_argument("--before"); s.add_argument("--after"); s.add_argument("--top", action="store_true")
     s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); s.set_defaults(f=cmd_move)
@@ -3387,13 +3798,16 @@ def main():
     s.set_defaults(f=cmd_add)
     s = sub.add_parser("kit-check"); s.add_argument("--card", action="store_true"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_kit_check)
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
+    s.add_argument("--visibility-alarm", action="store_true", help="install the optional visibility alarm workflow (kept current once installed)")
     s.set_defaults(f=cmd_kit_update)
     s = sub.add_parser("migrate"); s.add_argument("--to", type=int, help="4 = split storage; without --to the board goes up to v3 only"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
     s = sub.add_parser("verify"); s.add_argument("--against", required=True, help="backup tag, branch or commit, or a tasks.json file"); s.set_defaults(f=cmd_verify)
     s = sub.add_parser("doctor"); s.add_argument("--fix", action="store_true"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_doctor)
     s = sub.add_parser("kit-owner"); s.add_argument("user", nargs="?"); s.set_defaults(f=cmd_kit_owner)
     s = sub.add_parser("init"); s.add_argument("--person", action="append", required=True, help="github-user:Display Name (repeatable; the first is the upgrade owner)")
-    s.add_argument("--client", action="append"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_init)
+    s.add_argument("--client", action="append"); s.add_argument("--from", dest="source")
+    s.add_argument("--visibility-alarm", action="store_true", help="also install the optional visibility alarm workflow (.github/workflows/visibility-alarm.yml)")
+    s.set_defaults(f=cmd_init)
     s = sub.add_parser("use", help="name this project's board in .board/config.json (gitignored)"); s.add_argument("repo")
     s.add_argument("--user"); s.add_argument("--branch"); s.add_argument("--path"); s.add_argument("--token-env", help="NAME of the env variable that holds this board's token")
     s.set_defaults(f=cmd_use)
@@ -3407,6 +3821,7 @@ def main():
     s = sub.add_parser("person", help="show one person (id prefix or name)"); s.add_argument("ref"); s.set_defaults(f=cmd_person)
     s = sub.add_parser("person-add", help="add a person (refuses duplicates)"); s.add_argument("name"); pf(s); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_person_add)
     s = sub.add_parser("person-set", help="change a person's fields, stage or next step"); s.add_argument("ref"); s.add_argument("--name"); pf(s); s.set_defaults(f=cmd_person_set)
+    s = sub.add_parser("person-rm", help="delete a person added by mistake (needs --yes)"); s.add_argument("ref"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_person_rm)
     s = sub.add_parser("touch", help="log a contact; --draft for a message that is not sent yet"); s.add_argument("ref"); s.add_argument("text")
     s.add_argument("--channel", choices=CHANNELS, default="note"); s.add_argument("--draft", action="store_true")
     s.add_argument("--at", help="actual contact time as an ISO timestamp with timezone")
@@ -3421,6 +3836,7 @@ def main():
     s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref"); s.set_defaults(f=cmd_unarchive)
     s = sub.add_parser("client-set", help="set a client north star or other client_info"); s.add_argument("client"); s.add_argument("--north-star", dest="north_star"); s.set_defaults(f=cmd_client_set)
     s = sub.add_parser("client-link", help="link a client to a file store folder"); s.add_argument("client"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_client_link)
+    s = sub.add_parser("client-unlink", help="remove a file store link from a client"); s.add_argument("client"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_client_unlink)
     s = sub.add_parser("projects", help="list projects"); s.add_argument("--client"); s.add_argument("--status", choices=PROJECT_STATUSES); s.add_argument("-q"); s.set_defaults(f=cmd_projects)
     s = sub.add_parser("project", help="show one project and its open tasks"); s.add_argument("ref"); s.set_defaults(f=cmd_project)
     s = sub.add_parser("project-add", help="add a project under a client"); s.add_argument("name"); s.add_argument("--client"); s.add_argument("--north-star", dest="north_star")
@@ -3428,6 +3844,7 @@ def main():
     s = sub.add_parser("project-set", help="change a project"); s.add_argument("ref"); s.add_argument("--name"); s.add_argument("--client")
     s.add_argument("--north-star", dest="north_star"); s.add_argument("--status", choices=PROJECT_STATUSES); s.set_defaults(f=cmd_project_set)
     s = sub.add_parser("project-link", help="link a project to a file or folder"); s.add_argument("ref"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_project_link)
+    s = sub.add_parser("project-unlink", help="remove a link from a project"); s.add_argument("ref"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_project_unlink)
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
     s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project or contact")
@@ -3435,6 +3852,7 @@ def main():
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
     s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s = sub.add_parser("task-rm", help="delete a task created by mistake (needs --yes)"); s.add_argument("id"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_task_rm)
     s = sub.add_parser("unlink", help="remove a link from a task"); s.add_argument("id"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_unlink)
     s = sub.add_parser("labels", help="list labels and how many cards use each"); s.set_defaults(f=cmd_labels)
     s = sub.add_parser("label-add", help="create a label"); s.add_argument("name"); s.add_argument("--color", help="hex colour, e.g. #0c66e4"); s.set_defaults(f=cmd_label_add)
@@ -3443,10 +3861,18 @@ def main():
     s = sub.add_parser("clients", help="list clients and what uses each"); s.set_defaults(f=cmd_clients)
     s = sub.add_parser("client-rename", help="rename a client everywhere"); s.add_argument("client"); s.add_argument("new"); s.set_defaults(f=cmd_client_rename)
     s = sub.add_parser("client-rm", help="remove a client nothing uses"); s.add_argument("client"); s.set_defaults(f=cmd_client_rm)
+    s = sub.add_parser("columns", help="list columns and how many cards each holds"); s.set_defaults(f=cmd_columns)
+    s = sub.add_parser("column-add", help="add a column (default: at the end, before Done)"); s.add_argument("name"); s.add_argument("--after", metavar="ID", help="put it after this column"); s.set_defaults(f=cmd_column_add)
+    s = sub.add_parser("column-set", help="rename a column (its id stays)"); s.add_argument("column", metavar="ID"); s.add_argument("--rename", metavar="NAME"); s.set_defaults(f=cmd_column_set)
+    s = sub.add_parser("column-move", help="reorder: put a column before or after another"); s.add_argument("column", metavar="ID"); s.add_argument("--before", metavar="ID"); s.add_argument("--after", metavar="ID"); s.set_defaults(f=cmd_column_move)
+    s = sub.add_parser("column-rm", help="remove a column; --move-to is required while it has cards"); s.add_argument("column", metavar="ID"); s.add_argument("--move-to", dest="move_to", metavar="ID"); s.set_defaults(f=cmd_column_rm)
     s = sub.add_parser("members", help="list board members (assignable GitHub users) and agents"); s.set_defaults(f=cmd_members)
     s = sub.add_parser("member-add", help="add a board member"); s.add_argument("user", help="GitHub username"); s.add_argument("--name"); s.set_defaults(f=cmd_member_add)
     s = sub.add_parser("member-set", help="change a board member's display name"); s.add_argument("user"); s.add_argument("--name"); s.set_defaults(f=cmd_member_set)
     s = sub.add_parser("member-rm", help="remove a board member"); s.add_argument("user"); s.add_argument("--unassign", action="store_true", help="take them off their open tasks"); s.set_defaults(f=cmd_member_rm)
+    s = sub.add_parser("agents", help="list the board's agents (names used in filters and assignment)"); s.set_defaults(f=cmd_agents)
+    s = sub.add_parser("agent-add", help="add an agent name"); s.add_argument("name"); s.set_defaults(f=cmd_agent_add)
+    s = sub.add_parser("agent-rm", help="remove an agent name"); s.add_argument("name"); s.add_argument("--unassign", action="store_true", help="take it off its open tasks"); s.set_defaults(f=cmd_agent_rm)
     s = sub.add_parser("settings", help="show board settings"); s.set_defaults(f=cmd_settings)
     s = sub.add_parser("settings-set", help="change title, stale minutes or pipeline stages"); s.add_argument("--title")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")

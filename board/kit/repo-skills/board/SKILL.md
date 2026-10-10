@@ -37,6 +37,7 @@ If `show` lists to-dos, work through them in order and tick each one as soon as 
 ```bash
 python3 board/keeptrack.py todo-done <id> <N>      # N is the number shown by `show`
 python3 board/keeptrack.py todo-add <id> "<new step>"
+python3 board/keeptrack.py todo-edit <id> <N> "<corrected text>"   # reword in place; keeps its place and done state
 python3 board/keeptrack.py todo-undo <id> <N>      # reopen
 python3 board/keeptrack.py todo-rm <id> <N>
 python3 board/keeptrack.py history <id>            # automatic log of claims, progress notes, ticks and moves
@@ -117,7 +118,7 @@ A routine run starts with a `routine-fire-payload` naming a task number (`#N`) a
 6. Finish: `comment` the outcome, `assign '#N' <user>`, `done '#N' --note "<result>"`.
 
 ### Command cheat sheet
-`list`, `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members remain in the `people` list in `board/tasks.json`; CRM people are separate records.
+`list` (`--label X` for one label), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members remain in the `people` list in `board/tasks.json`; CRM people are separate records.
 
 ## Archive (old items)
 Old done tasks, Lost people and long histories move to `board/archive/<year>.json` with `python3 board/keeptrack.py archive` (`--dry-run` first). Search them with `archived -q "<words>"`, and bring one back with `unarchive '#N'`. The board file keeps an index in `archive.files`; do not edit archive files by hand.

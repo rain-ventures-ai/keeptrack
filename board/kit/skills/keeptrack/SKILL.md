@@ -79,6 +79,7 @@ $B show '#12'                                    # read the comments before you 
 $B claim '#12' --note "starting: <one-line plan>"
 $B heartbeat '#12' --note "<current step>"       # at each milestone
 $B todo-done '#12' <N>                           # tick each checklist item when it is done
+$B todo-edit '#12' <N> "<text>"                  # reword an item in place (keeps its place)
 $B comment '#12' "<question or update>"          # questions also need: heartbeat --status blocked
 $B done '#12' --note "<result, link>"            # or: release '#12' --column todo
 $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "<text>"
@@ -89,8 +90,11 @@ Change a task or the board's structure with commands too, never by editing JSON:
 ```bash
 $B task-set '#12' --title ".." --priority high --due +3 --label relay --unlabel call   # any task field; --due "" clears
 $B labels | label-add NAME --color "#hex" | label-set NAME --rename NEW | label-rm NAME [--force]
-$B clients | client-rename OLD NEW | client-rm NAME
+$B clients | client-rename OLD NEW | client-rm NAME | client-unlink CLIENT URL
+$B columns | column-add NAME [--after ID] | column-set ID --rename NAME | column-move ID --before|--after ID | column-rm ID [--move-to ID]
 $B members | member-add USER --name ".." | member-rm USER [--unassign]
+$B agents | agent-add NAME | agent-rm NAME [--unassign]
+$B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)
 $B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW
 ```
 Ask the user before a rename, a delete, removing a member or `--force`; the commands print what they will touch.

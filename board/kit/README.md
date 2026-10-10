@@ -200,11 +200,15 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 | :-- | :-- |
 | Task fields | `task-set ID [--title] [--details] [--priority] [--due YYYY-MM-DD\|today\|+N\|""] [--label X]... [--unlabel X]... [--client] [--project] [--contact]`, `unlink ID URL` |
 | Labels | `labels`, `label-add NAME [--color #hex]`, `label-set NAME [--rename NEW] [--color #hex]`, `label-rm NAME [--force]`. `add --label` and `task-set --label` create a missing label in grey, as the web board does |
-| Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link` |
+| Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |
+| Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links and open tasks), `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL [--title]`, `project-unlink REF URL` (URL or title, as `unlink`), `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
+| Columns | `columns` (with card counts), `column-add NAME [--after ID]`, `column-set ID --rename NAME` (the id stays), `column-move ID --before ID\|--after ID`, `column-rm ID [--move-to ID]` (refuses while the column has cards unless `--move-to` says where they go; never `todo`, `in-progress`, `done` or the last column). New ids are a slug of the name |
 | Board members | `members`, `member-add USER [--name]`, `member-set USER --name`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
+| Agents | `agents`, `agent-add NAME`, `agent-rm NAME [--unassign]` (the names the web board uses in filters and assignment; never one with an active claim) |
+| Delete by mistake | `task-rm ID --yes` (a card made by mistake; a finished one should go done and archive), `person-rm REF --yes` (a CRM person added by mistake, not a Lost one). Both refuse without `--yes`; `task-rm` also refuses an active claim. `person-rm` clears the person as a task contact |
 | Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW]` |
 
-Renames change the live board only: items in `archive/<year>.json` keep the old label, client or stage name (the command says so); after `unarchive`, fix them with `task-set` or `person-set`. Columns are not editable from the CLI yet. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
+Renames (`label-set --rename`, `client-rename`, `settings-set --rename-stage`) also rewrite matching items in `archive/<year>.json` in the same save, so `unarchive` never brings back an old name. Column names are renamed in place, so cards keep their column. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
 
 Useful environment variables: `BOARD_USER`, `BOARD_AGENT`, `BOARD_SESSION` (also `CLAUDE_SESSION_ID` / `CODEX_SESSION_ID`), `BOARD_REPO`, `BOARD_BRANCH`, `BOARD_PATH` (default `board/tasks.json`). Test safely with `--file some-copy.json`.
 
@@ -215,6 +219,13 @@ GitHub Pages is not available for private repos on the current (free) org plan, 
 - The token is stored in localStorage; use a fine-grained token scoped to this repo only, with an expiry.
 - Anyone with write access to this repo can edit the board (and the page's code). Keep client-confidential detail out of card text if the repo audience widens.
 - The page escapes all card text (no `innerHTML`) and only links `http(s)` URLs.
+
+### Optional: visibility alarm
+This repo holds contacts, so it must stay private. To get a warning if it ever becomes public, install the optional check:
+
+    python3 board/keeptrack.py kit-update --visibility-alarm
+
+It adds `.github/workflows/visibility-alarm.yml`. The workflow runs when the repo is made public, once a day, and on demand. If the repo is not private, it opens one issue titled `P0: board repo is not private`, assigned to the board owner (only if no such issue is already open), and the run fails. It uses only the built-in `GITHUB_TOKEN` (read the repo, write issues). Once installed, `kit-update` keeps it up to date; without the flag it is not installed. To remove it, delete the file and commit.
 
 ## Task numbers and mentions
 - Every task has a short number (`#12`) shown on its card and in the drawer; click it to copy. Say "#12" when you discuss a task. `keeptrack.py show '#12'` (or `claim`, `done`, `comment`...) accepts it in place of the long id. Quote the `#` in a shell.

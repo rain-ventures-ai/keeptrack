@@ -538,52 +538,105 @@ if (typeof window !== 'undefined') (() => {
     return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
   }
 
-  // ---- conflict detection: what you saw (base) vs what is on GitHub now (latest) vs your change ----
-  const IGNORE = new Set(['updated', 'updatedBy', 'history', 'comments']);   // comments are append-only and merge, so they never conflict
-  const norm = t => { if (!t) return null; const o = {}; Object.keys(t).sort().forEach(k => { if (!IGNORE.has(k)) o[k] = t[k]; });
-    if (o.claim) { o.claim = Object.assign({}, o.claim); delete o.claim.heartbeat_at; } return JSON.stringify(o); }; // heartbeats alone are not a conflict
-  const byId = (st, k = 'tasks') => new Map((st[k] || []).map(t => [t.id, t]));
-  const KINDS = ['tasks', 'contacts', 'projects'];   // cards, people and projects are checked for conflicts
-  const show = v => v == null ? '(none)' : typeof v === 'string' ? (v || '(empty)') : JSON.stringify(v);
-  function findConflicts(base, pre, post) {
-    const out = [];
-    KINDS.forEach(k => { const B = byId(base, k), P = byId(pre, k), A = byId(post, k);
-    new Set([...B.keys(), ...P.keys(), ...A.keys()]).forEach(id => {
-      const b = B.get(id), p = P.get(id), a = A.get(id);
-      if (!b) return;                                    // new card: nothing of theirs to clash with
-      if (!p) { if (norm(p) !== norm(a)) out.push({ id, b, p, a }); return; }   // they deleted it, I am changing it
-      const nb = JSON.parse(norm(b)), np = JSON.parse(norm(p)), na = a ? JSON.parse(norm(a)) : null;
-      if (!na) { if (norm(b) !== norm(p)) out.push({ id, b, p, a }); return; }  // I am deleting something they changed
-      const keys = new Set([...Object.keys(nb), ...Object.keys(np), ...Object.keys(na)]);
-      // conflict only when the SAME field was changed by both of us (moving a card while someone ticks a to-do is fine)
-      const clash = [...keys].some(k => JSON.stringify(np[k]) !== JSON.stringify(na[k]) && JSON.stringify(nb[k]) !== JSON.stringify(np[k]));
-      if (clash) out.push({ id, b, p, a });
-    }); });
+  // ---- three-way merge: what you saw (base) vs your change (mine) vs what is on GitHub now (theirs) ----
+  // Same rules as merge3 in board/kit/keeptrack.py (docs/conflicts.md). Changes that do not overlap merge on their own.
+  // Lists merge by item id (items without an id: by content): an item added on either side is kept, one removed on one
+  // side and untouched on the other is removed, one edited on both sides merges field by field. A clash is a value both
+  // sides changed to different things, or an item one side edited and the other removed. merged keeps THEIR value at a clash.
+  const VOLATILE = { updated: 'mine', updatedBy: 'mine', heartbeat_at: 'mine', next_num: 'max' };   // bookkeeping, never a clash
+  const sortKeys = v => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])])) : v;
+  const jcanon = v => v === undefined ? '\0missing' : JSON.stringify(sortKeys(v));
+  const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v), has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const itemKey = x => isObj(x) && typeof x.id === 'string' && x.id ? 'id:' + x.id : 'json:' + jcanon(x), keyName = k => k.slice(k.indexOf(':') + 1);
+  function merge3(base, mine, theirs) { const clashes = []; const merged = merge3v(base, mine, theirs, [], clashes); return { merged, clashes }; }
+  function merge3v(b, m, t, path, clashes) {
+    const cb = jcanon(b), cm = jcanon(m), ct = jcanon(t);
+    if (cm === ct || ct === cb) return m;   // same change on both sides, or only we changed it
+    if (cm === cb) return t;                // only they changed it
+    const last = path[path.length - 1];
+    if (typeof last === 'string' && has(VOLATILE, last)) return VOLATILE[last] === 'max' && Number.isInteger(m) && Number.isInteger(t) ? Math.max(m, t) : m;
+    if (isObj(m) && isObj(t)) {
+      const bd = isObj(b) ? b : {}, out = {};
+      [...Object.keys(t), ...Object.keys(m).filter(k => !has(t, k)), ...Object.keys(bd).filter(k => !has(t, k) && !has(m, k))].forEach(k => {
+        const v = merge3v(bd[k], m[k], t[k], [...path, k], clashes); if (v !== undefined) out[k] = v; });
+      return out;
+    }
+    if (Array.isArray(m) && Array.isArray(t) && (Array.isArray(b) || b === undefined)) return merge3list(b || [], m, t, path, clashes);
+    clashes.push({ path: [...path], base: b, mine: m, theirs: t }); return t;
+  }
+  function merge3list(b, m, t, path, clashes) {
+    const index = lst => { const d = new Map(); lst.forEach(x => { const k = itemKey(x); if (!d.has(k)) d.set(k, x); }); return d; };
+    const ib = index(b), im = index(m), it = index(t);
+    const reordered = (order, other) => { const a = order.filter(k => other.has(k)), c = [...other.keys()].filter(k => order.includes(k)); return a.join('\0') !== c.join('\0'); };   // did this side reorder the items both versions have?
+    const mineFirst = reordered([...im.keys()], ib) && !reordered([...it.keys()], ib), first = mineFirst ? im : it, second = mineFirst ? it : im;
+    const order = [...first.keys(), ...[...second.keys()].filter(k => !first.has(k))], out = [];
+    order.forEach(k => {
+      const bi = ib.get(k), mi = im.get(k), ti = it.get(k);
+      if (bi === undefined) { out.push(mi === undefined ? ti : ti === undefined ? mi : merge3v(undefined, mi, ti, [...path, keyName(k)], clashes)); return; }   // added by one side, or by both
+      if (mi === undefined && ti === undefined) return;
+      if (mi === undefined || ti === undefined) {   // removed by one side
+        const kept = mi === undefined ? ti : mi;
+        if (jcanon(kept) !== jcanon(bi)) { clashes.push({ path: [...path, keyName(k)], base: bi, mine: mi, theirs: ti }); if (mi === undefined) out.push(ti); }   // ...while the other side edited it
+        return;
+      }
+      out.push(merge3v(bi, mi, ti, [...path, keyName(k)], clashes));
+    });
     return out;
   }
+  // Put a chosen value at a clash path (undefined removes it). List items are found by id.
+  function setAt(root, path, value) {
+    let node = root;
+    for (let i = 0; i < path.length; i++) {
+      const seg = path[i], end = i === path.length - 1;
+      if (Array.isArray(node)) {
+        const idx = node.findIndex(x => keyName(itemKey(x)) === seg);
+        if (end) { if (value === undefined) { if (idx >= 0) node.splice(idx, 1); } else if (idx >= 0) node[idx] = value; else node.push(value); return; }
+        if (idx < 0) return; node = node[idx];
+      } else {
+        if (end) { if (value === undefined) delete node[seg]; else node[seg] = value; return; }
+        if (!node[seg] || typeof node[seg] !== 'object') return; node = node[seg];
+      }
+    }
+  }
+  // Both sides can hand the same #number to different new cards; the card that was already there keeps it.
+  function fixNums(d, theirs) {
+    const had = new Set((theirs.tasks || []).map(t => t.id)), count = new Map();
+    d.tasks.forEach(t => { if (Number.isInteger(t.num)) count.set(t.num, (count.get(t.num) || 0) + 1); });
+    d.tasks.forEach(t => { if (Number.isInteger(t.num) && count.get(t.num) > 1 && !had.has(t.id)) delete t.num; });
+    return assignNums(d);
+  }
+  const byId = (st, k = 'tasks') => new Map((st[k] || []).map(t => [t.id, t]));
+  const KINDS = ['tasks', 'contacts', 'projects'];   // cards, people and projects
+  const show = v => v === undefined || v === null ? '(none)' : typeof v === 'string' ? (v || '(empty)') : JSON.stringify(v);
   // Move/edit aimed at a card that someone else deleted: fn is a no-op, so detect it by id.
   function deletedUnderMe(base, pre, ids) { const has = (st, id) => KINDS.some(k => byId(st, k).has(id)); return ids.filter(id => has(base, id) && !has(pre, id)); }
-  function askConflict(list) {
+  // Resolution screen: one block per clash with what you saw, your value and theirs. Resolves with
+  // 'discard' (drop my whole change) or an array with one {side: 'theirs' | 'mine' | 'edit', value} per clash.
+  function askConflict(clashes, views) {
     return new Promise(res => {
-      const d = $('dlgConflict'), body = $('cfBody'); body.textContent = '';
-      const items = list.map(x => x.a || x.p || x.b);
-      const nT = items.filter(t => t.title).length;
-      const nPr = items.filter(t => !t.title && String(t.id || '').startsWith('pr_')).length;
-      const nP = items.filter(t => !t.title && !String(t.id || '').startsWith('pr_')).length;
-      const what = [nT && `${nT} card${nT > 1 ? 's' : ''}`, nP && `${nP} ${nP > 1 ? 'people' : 'person'}`, nPr && `${nPr} project${nPr > 1 ? 's' : ''}`].filter(Boolean).join(', ');
-      $('cfIntro').textContent = `${what} you are changing ${list.length > 1 ? 'were' : 'was'} changed by someone else (or an agent) since you loaded the board.`;
-      list.forEach(({ b, p, a }) => {
-        const t = a || p || b, box = el('div', 'cfcard'); box.append(el('strong', null, t.title || t.name || t.id));
-        if (!p) box.append(el('div', 'cfnote', 'It was deleted by someone else.'));
-        const keys = [...new Set([...Object.keys(b || {}), ...Object.keys(p || {}), ...Object.keys(a || {})])].filter(k => !IGNORE.has(k)
-          && [b && b[k], p && p[k], a && a[k]].map(x => JSON.stringify(x === undefined ? null : x)).some((x, _, arr) => x !== arr[0]));
-        const tb = el('table', 'cftable'), hr = el('tr'); ['Field', 'You saw', 'Now on GitHub', 'After your change'].forEach(h => hr.append(el('th', null, h))); tb.append(hr);
-        keys.forEach(k => { if (k === 'claim') { const f = x => x && x.claim ? `${x.claim.agent} ${x.claim.status}${x.claim.note ? ': ' + x.claim.note : ''}` : '(none)'; const r = el('tr'); [k, f(b), f(p), f(a)].forEach(v => r.append(el('td', null, v))); tb.append(r); return; }
-          const r = el('tr'); [k, show(b && b[k]), show(p && p[k]), show(a && a[k])].forEach(v => r.append(el('td', null, v))); tb.append(r); });
-        box.append(tb); body.append(box);
+      const d = $('dlgConflict'), body = $('cfBody'); body.textContent = ''; const picks = clashes.map(() => ({ side: 'theirs' }));
+      const isItem = c => KINDS.includes(c.path[0]) && c.path.length >= 2;
+      const nameOf = c => { const [k, id] = c.path; if (!isItem(c)) return 'Board settings'; const it = [views.pre, views.mine, views.base].map(s => byId(s, k).get(id)).find(Boolean) || {}; return `${k === 'tasks' ? 'Card' : k === 'contacts' ? 'Person' : 'Project'} “${it.title || it.name || id}”`; };
+      $('cfIntro').textContent = `${clashes.length === 1 ? 'One thing you are changing was' : clashes.length + ' things you are changing were'} also changed by someone else (or an agent) since you loaded the board. Everything else of yours merges on its own. Choose which version to keep for each.`;
+      clashes.forEach((c, i) => {
+        const box = el('div', 'cfcard'), field = (isItem(c) ? c.path.slice(2) : c.path).join(' › ');
+        box.append(el('strong', null, nameOf(c) + (field ? ' · ' + field : '')));
+        if (isItem(c) && c.path.length === 2) { if (c.theirs === undefined) box.append(el('div', 'cfnote', 'Someone else deleted it.')); else if (c.mine === undefined) box.append(el('div', 'cfnote', 'You deleted it.')); }
+        const tb = el('table', 'cftable'), hr = el('tr'); ['You saw', 'Mine', 'Theirs (now on GitHub)'].forEach(h => hr.append(el('th', null, h))); tb.append(hr);
+        const r = el('tr'); [c.base, c.mine, c.theirs].forEach(v => r.append(el('td', null, show(v)))); tb.append(r); box.append(tb);
+        const row = el('div', 'cfpick'), ta = el('textarea', 'cfedit'); ta.hidden = true; ta.rows = 2; ta.value = typeof c.theirs === 'string' ? c.theirs : JSON.stringify(c.theirs === undefined ? null : c.theirs);
+        [['theirs', 'Keep theirs'], ['mine', 'Keep mine'], ['edit', 'Edit…']].forEach(([side, label]) => {
+          const lab = el('label'), rb = el('input'); rb.type = 'radio'; rb.name = 'cf' + i; rb.value = side; rb.checked = side === 'theirs';
+          rb.onchange = () => { picks[i].side = side; ta.hidden = side !== 'edit'; if (side === 'edit') ta.focus(); }; lab.append(rb, ' ' + label); row.append(lab); });
+        ta.oninput = () => { picks[i].text = ta.value; }; picks[i].text = ta.value; box.append(row, ta); body.append(box);
       });
-      const done = v => { d.close(); $('cfApply').onclick = $('cfDiscard').onclick = null; d.oncancel = null; res(v); };
-      $('cfApply').onclick = () => done('apply'); $('cfDiscard').onclick = () => done('discard'); d.oncancel = () => done('discard');
+      const finish = v => { d.close(); $('cfApply').onclick = $('cfDiscard').onclick = null; d.oncancel = null; res(v); };
+      $('cfApply').onclick = () => {
+        const out = picks.map((p, i) => { if (p.side !== 'edit') return { side: p.side }; const c = clashes[i]; let value = p.text;
+          if (typeof c.theirs !== 'string' && typeof c.mine !== 'string') { try { value = JSON.parse(p.text); } catch (e) { return { side: 'theirs' }; } }
+          return { side: 'edit', value }; });
+        finish(out); };
+      $('cfDiscard').onclick = () => finish('discard'); d.oncancel = () => finish('discard');
       d.showModal();
     });
   }
@@ -676,6 +729,7 @@ if (typeof window !== 'undefined') (() => {
     busy = true; syncUndo(); loadGen++; const before = clone(state); let base = baseState || before;
     try {
       const o = clone(state); fn(o); ensureRanks(o); assignNums(o); state = o; render(); // optimistic
+      let mine = clone(o);
       for (let i = 0; i < 4; i++) {
         let res = null, latest = DEFAULT(), readSha = null, rawL = null;
         let viaTree = false;
@@ -691,18 +745,22 @@ if (typeof window !== 'undefined') (() => {
           if (rawL.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); state = before; render(); roToast(); return false; }   // a demo file is never written
           latest = normalise(rawL); }
         else if (rawL) latest = normalise(rawL);
-        const pre = clone(latest); fn(latest); ensureRanks(latest); assignNums(latest);
-        // checked on every attempt: "Apply anyway" covers only the revision that was shown, so a newer clash asks again
-        const gone = deletedUnderMe(base, pre, targetIds);
-        const conflicts = findConflicts(base, pre, latest);
-        if (gone.length && !conflicts.length) {
+        const pre = clone(latest);
+        // three-way merge: what I saw (base), my change (mine), what is on GitHub now (pre). Checked on every attempt:
+        // a choice covers only the revision that was shown, so a newer clash asks again
+        const gone = deletedUnderMe(base, pre, targetIds), mg = merge3(base, mine, pre);
+        if (gone.length && !mg.clashes.length) {
           state = pre; render(); setStatus('That card was deleted by someone else; nothing changed', 'err'); return false;
         }
-        if (conflicts.length) {
+        latest = clone(mg.merged);
+        if (mg.clashes.length) {
           setStatus('Waiting for your decision…', 'err');
-          if (await askConflict(conflicts) === 'discard') { state = pre; render(); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
+          const pick = await askConflict(mg.clashes, { base, mine, pre });
+          if (pick === 'discard') { state = pre; render(); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
+          mg.clashes.forEach((c, i) => { if (pick[i].side === 'mine') setAt(latest, c.path, c.mine === undefined ? undefined : clone(c.mine)); else if (pick[i].side === 'edit') setAt(latest, c.path, pick[i].value); });
         }
-        base = pre;   // from here on, "what you saw" is this revision
+        fixNums(latest, pre); ensureRanks(latest);
+        base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
         const out = await save(latest, message, readSha);
         if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
@@ -991,7 +1049,7 @@ if (typeof window !== 'undefined') (() => {
     fillProjectSelect(sortedProjects().map(p => [p.id, projectPickerLabel(p)]));
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
-    applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact();
+    applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox();
     if (view !== 'board') {
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
@@ -2512,7 +2570,7 @@ if (typeof window !== 'undefined') (() => {
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
     settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderArchiveBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
@@ -2828,6 +2886,61 @@ if (typeof window !== 'undefined') (() => {
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
   }
+  // ---- Settings → General → Columns: one mutate per action, so each can be undone ---------------------------------
+  const PROTECTED_COLS = ['todo', 'in-progress', 'done'];   // the agent commands put cards in these by id
+  const colSlug = (name, used) => { const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'column'; let id = base, n = 2; while (used.has(id)) id = `${base}-${n++}`; return id; };   // same ids as keeptrack.py column-add
+  let colRemoving = '';   // the column whose "move its cards to" row is open
+  function renderColumnsBox() {
+    const list = $('colList'); if (!list) return; list.textContent = '';
+    const locked = !!ro || !!newerSchema, dc = doneColId(), cols = state.columns;
+    cols.forEach((c, i) => {
+      const n = state.tasks.filter(t => t.column === c.id).length, row = el('div', 'colrow'), name = el('input'), count = el('span', 'colcount', `${n} card${n === 1 ? '' : 's'}`);
+      name.value = c.name; name.maxLength = 40; name.disabled = locked; name.setAttribute('aria-label', `Name of column ${c.name}`);
+      name.onchange = () => { const v = name.value.trim(), taken = state.columns.some(x => x.id !== c.id && x.name.toLowerCase() === v.toLowerCase());
+        if (!v || v === c.name) { name.value = c.name; return; }
+        if (taken) { toast(`A column called “${v}” already exists.`, true); name.value = c.name; return; }
+        mutate(d => { const x = d.columns.find(y => y.id === c.id); if (x) x.name = v; }, `Rename column: ${c.name}`).then(renderColumnsBox); };
+      const mv = (dir, label) => { const b = el('button', 'small', dir < 0 ? '↑' : '↓'); b.type = 'button'; b.title = `Move ${label} ${dir < 0 ? 'up' : 'down'}`; b.setAttribute('aria-label', b.title); b.disabled = locked || i + dir < 0 || i + dir >= cols.length;
+        b.onclick = () => mutate(d => { const k = d.columns.findIndex(y => y.id === c.id), o = k + dir; if (k < 0 || o < 0 || o >= d.columns.length) return; [d.columns[k], d.columns[o]] = [d.columns[o], d.columns[k]]; }, `Move column: ${c.name}`).then(renderColumnsBox); return b; };
+      const x = el('button', 'small danger', 'Remove'); x.type = 'button'; x.disabled = locked || cols.length <= 1 || PROTECTED_COLS.includes(c.id) || c.id === dc;
+      if (x.disabled && !locked) x.title = cols.length <= 1 ? 'A board needs at least one column' : 'Agents rely on this column';
+      x.onclick = () => { if (!n) { if (confirmRemoval(`the “${c.name}” column`)) removeColumn(c.id, ''); return; } colRemoving = colRemoving === c.id ? '' : c.id; renderColumnsBox(); };
+      row.append(name, count, mv(-1, c.name), mv(1, c.name), x);
+      if (colRemoving === c.id && n) {
+        const box = el('div', 'colmove'), sel = el('select'), go = el('button', 'small danger', 'Move cards and remove'), no = el('button', 'small', 'Cancel');
+        sel.setAttribute('aria-label', `Where to move the ${n} cards from ${c.name}`); cols.filter(y => y.id !== c.id).forEach(y => { const o = el('option', null, y.name); o.value = y.id; sel.append(o); });
+        go.type = no.type = 'button'; no.onclick = () => { colRemoving = ''; renderColumnsBox(); };
+        go.onclick = () => { const to = sel.value, dest = colName(to);
+          if (!confirm(`Remove the “${c.name}” column and move its ${n} card${n === 1 ? '' : 's'} to “${dest}”?\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) return; removeColumn(c.id, to); };
+        box.append(el('span', null, `Move its ${n} card${n === 1 ? '' : 's'} to`), sel, go, no); row.append(box);
+      }
+      list.append(row);
+    });
+    $('colNew').disabled = $('colAdd').disabled = locked;
+  }
+  async function removeColumn(id, to) {
+    const col = state.columns.find(c => c.id === id); if (!col) return;
+    const ids = state.tasks.filter(t => t.column === id).map(t => t.id); colRemoving = '';
+    await mutate(d => {
+      if (d.columns.length <= 1 || !d.columns.some(c => c.id === id)) return;
+      const moving = d.tasks.filter(t => t.column === id);
+      if (moving.length) {
+        if (!to || !d.columns.some(c => c.id === to && c.id !== id)) return;   // the target went away: leave the column alone
+        const ranks = d.tasks.filter(t => t.column === to && validRank(t.rank)).map(t => t.rank); let last = ranks.length ? ranks.reduce((a, b) => (a > b ? a : b)) : null;
+        moving.sort((a, b) => (validRank(a.rank) && validRank(b.rank) ? (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0) : 0)).forEach(t => { t.column = to; if (isSplit(d)) { t.rank = keyBetween(last, null); last = t.rank; } stamp(t); });
+      }
+      d.columns = d.columns.filter(c => c.id !== id);
+    }, `Remove column: ${col.name}`, ids);
+    renderColumnsBox();
+  }
+  $('colAdd').onclick = async () => {
+    const v = $('colNew').value.trim(); if (!v) { $('colNew').focus(); return; }
+    if (state.columns.some(c => c.name.toLowerCase() === v.toLowerCase())) { toast(`A column called “${v}” already exists.`, true); return; }
+    const ok = await mutate(d => { const at = d.columns.length && d.columns[d.columns.length - 1].id === (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1]).id ? d.columns.length - 1 : d.columns.length;
+      d.columns.splice(at, 0, { id: colSlug(v, new Set(d.columns.map(c => c.id))), name: v }); }, `Add column: ${v}`);
+    if (ok) $('colNew').value = ''; renderColumnsBox();
+  };
+  $('colNew').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('colAdd').click(); } };
   async function saveModeSettings() {
     const selected = [$('sModeTasks').checked && 'tasks', $('sModeCrm').checked && 'crm'].filter(Boolean);
     if (!selected.length) { toast('Keep at least one board section turned on.', true); syncModeSettings(); return; }
@@ -3410,6 +3523,50 @@ if (typeof window !== 'undefined') (() => {
     $('dlgArch').showModal();
   }
   $('aClose').onclick = () => $('dlgArch').close();
+  // ---- Settings → General → Labels: rename, recolour, delete and add; each action is one mutate (one Undo) ----------------
+  const LABEL_DEFAULT = '#6b778c', hex6 = c => { c = labelColorOf(c); return /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : /^#[0-9a-f]{3}$/i.test(c) ? '#' + [...c.slice(1)].map(x => x + x).join('').toLowerCase() : LABEL_DEFAULT; };
+  const labelColorOf = c => typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : LABEL_DEFAULT;
+  const labelUse = name => state.tasks.filter(t => t.labels.includes(name));
+  const labelNameErr = (name, except) => !name ? 'Type a name for the label.' : name.length > 40 || /[,\r\n]/.test(name) ? 'A label name can be up to 40 characters, with no comma or line break.' : state.labels.some(l => l.name !== except && l.name.toLowerCase() === name.toLowerCase()) ? `There is already a label called “${name}”.` : '';
+  async function labelSet(old, patch) {   // patch: { name?, color? } for an existing label
+    const name = patch.name == null ? old : patch.name.trim(), color = patch.color == null ? null : patch.color.toLowerCase();
+    if (name !== old) { const err = labelNameErr(name, old); if (err) { toast(err, true); return renderLabelBox(); } }
+    const ids = name !== old ? labelUse(old).map(t => t.id) : [];
+    const ok = await mutate(n => { const lab = n.labels.find(l => l.name === old); if (!lab) return;
+      if (color) lab.color = color;
+      if (name !== old) { lab.name = name; n.tasks.forEach(t => { if (t.labels.includes(old)) { t.labels = [...new Set(t.labels.map(x => x === old ? name : x))]; stamp(t); } }); } }, `Update label: ${old}${name !== old ? ' → ' + name : ''}`, ids);
+    if (!ok) toast('Label not changed', true); renderLabelBox();
+  }
+  async function labelRemove(l) {
+    const used = labelUse(l.name), ids = used.map(t => t.id);
+    if (!confirmRemoval(`the “${l.name}” label${used.length ? ` from ${used.length} task${used.length === 1 ? '' : 's'}` : ''}`)) return;
+    await mutate(n => { n.labels = n.labels.filter(x => x.name !== l.name); n.tasks.forEach(t => { if (t.labels.includes(l.name)) { t.labels = t.labels.filter(x => x !== l.name); stamp(t); } }); }, `Remove label: ${l.name}`, ids); renderLabelBox();
+  }
+  async function labelAdd(name, color) {
+    name = name.trim(); const err = labelNameErr(name); if (err) { toast(err, true); return; }
+    await mutate(n => { if (!n.labels.some(l => l.name.toLowerCase() === name.toLowerCase())) n.labels.push({ name, color: color.toLowerCase() }); }, `Add label: ${name}`); renderLabelBox();
+  }
+  function renderLabelBox() {
+    const box = $('labelBox'); if (!box) return; box.textContent = '';
+    const edit = !ro, rows = el('div', 'lbrows');
+    state.labels.forEach(l => {
+      const row = el('div', 'lbrow'), n = labelUse(l.name).length, cnt = el('span', 'muted lbcnt', `${n} task${n === 1 ? '' : 's'}`);
+      const name = el('input'); name.value = l.name; name.maxLength = 40; name.setAttribute('aria-label', `Rename label ${l.name}`); name.disabled = !edit;
+      const col = el('input'); col.type = 'color'; col.value = hex6(l.color); col.title = 'Colour'; col.setAttribute('aria-label', `Colour for ${l.name}`); col.disabled = !edit;
+      name.onchange = () => { if (name.value.trim() !== l.name) labelSet(l.name, { name: name.value }); else name.value = l.name; };
+      name.onkeydown = e => { if (e.key === 'Enter') name.blur(); else if (e.key === 'Escape') { name.value = l.name; name.blur(); } };
+      col.onchange = () => labelSet(l.name, { color: col.value });
+      row.append(paintLabel(el('span', 'tag label lbprev', l.name), l.name), name, col, cnt);
+      if (edit) { const x = elI('button', 'small lbdel', 'x'); x.type = 'button'; x.title = 'Delete label'; x.setAttribute('aria-label', `Delete label ${l.name}`); x.onclick = () => labelRemove(l); row.append(x); }
+      rows.append(row);
+    });
+    if (!state.labels.length) rows.append(el('div', 'hint', 'No labels yet. Add one here, or type one on a task.'));
+    box.append(rows);
+    if (edit) {
+      const add = el('div', 'lbrow lbnew'), name = el('input'), col = el('input'), b = elI('button', 'small', 'plus', 'Add label'); name.placeholder = 'New label name'; name.maxLength = 40; name.setAttribute('aria-label', 'New label name'); col.type = 'color'; col.value = LABEL_DEFAULT; col.title = 'Colour'; col.setAttribute('aria-label', 'Colour for the new label'); b.type = 'button';
+      b.onclick = () => labelAdd(name.value, col.value); name.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); b.click(); } }; add.append(name, col, b); box.append(add);
+    }
+  }
   function renderArchiveBox() {   // Settings → General → Archive
     const box = $('archBox'); if (!box) return; box.textContent = '';
     const kb = Math.round(boardSize / 1024), limit = isSplit(state) ? 5 * 1024 : SIZE_WARN / 1024, files = (state.archive || {}).files || {}, r = archRules(), n = archiveCounts();

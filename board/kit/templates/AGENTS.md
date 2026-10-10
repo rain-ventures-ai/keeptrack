@@ -3,7 +3,7 @@
 This repo holds the task board `{repo}` (`board/`). People on the board: {people}. Add this repo's own rules below the board sections.
 
 ## Rules
-1. **Never edit the JSON files under `board/` by hand.** Use `python3 board/keeptrack.py ...`. It re-reads the latest board and retries on conflict, so humans editing in the browser are never overwritten.
+1. **Never edit the JSON files under `board/` by hand.** Use `python3 board/keeptrack.py ...`. It re-reads the latest board and merges on conflict, so humans editing in the browser are never overwritten. If someone changed the same field first, it stops, writes nothing and exits with status 3: read the board again and redo the change only if it still applies.
 2. **Only work on tasks assigned to the human you act for.** Claims on other people's tasks are refused unless a human tells you to `--force`.
 3. **Claim before you start, heartbeat while you work, finish or release when you stop.** A claim with no heartbeat for 30 minutes shows as STALE so people can spot a stuck session.
 4. **Keep confidential detail out of task cards.** Link to the file or Drive document instead.
@@ -25,6 +25,7 @@ python3 board/keeptrack.py release <id> --column todo                           
 python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM-DD --client "<client>" --details "<text>"
 python3 board/keeptrack.py todo-done <id> <N>                                      # tick checklist item N (numbers come from `show`)
 python3 board/keeptrack.py todo-add <id> "new step"                                # add a checklist item you discovered
+python3 board/keeptrack.py todo-edit <id> <N> "reworded step"                      # fix an item's wording in place
 python3 board/keeptrack.py comment <id> "text"                                     # talk to the team on the card
 python3 board/keeptrack.py comments <id>                                           # read the comment stream
 python3 board/keeptrack.py history <id>                                            # who did what on the card

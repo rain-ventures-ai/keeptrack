@@ -76,9 +76,9 @@ class OneFile(unittest.TestCase):
         self.assertIn("spaced", self.live()["labels"])
         self.assertIn("spaced", [x["name"] for x in self.data()["labels"]])
 
-    def test_rename_notes_that_archives_keep_old_names(self):
+    def test_rename_no_longer_warns_about_archives(self):
         d = self.data(); d["archive"] = {"files": {"2025": {"tasks": 1}}}; write(self.file, d)
-        self.assertIn("archived items keep the old label name", run(kt.cmd_label_set, name="call", rename="phone", color=None))
+        self.assertNotIn("archived items keep", run(kt.cmd_label_set, name="call", rename="phone", color=None))
         out = run(kt.cmd_settings_set, title=None, stale_minutes=None, stages=None, rename_stage=["Contacted=Talking"])
         self.assertIn("moved 1 people", out)
 
@@ -279,3 +279,98 @@ class VerifyBackupThroughApi(unittest.TestCase):
             kt.FILE, kt.WRITE, kt.gh, kt._api_blob, kt.PATH = saved
         self.assertEqual([card], backup["tasks"])
         self.assertFalse(any("recursive" in c and "ROOT" in c for c in calls), calls)
+
+
+class Columns(unittest.TestCase):
+    """columns, column-add, column-set, column-move and column-rm; one-file board and split v4 board."""
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.dir.name, "board"))
+        self.file = os.path.join(self.dir.name, "board", "tasks.json")
+        d = board()
+        d["columns"] = [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"}, {"id": "done", "name": "Done"}]
+        d["tasks"][1]["column"] = "backlog"
+        write(self.file, d)
+        self.old = kt.FILE
+        kt.FILE = self.file
+
+    def tearDown(self):
+        kt.FILE = self.old
+        self.dir.cleanup()
+
+    def cols(self):
+        return [c["id"] for c in read_json(self.file)["columns"]]
+
+    def test_list_counts_cards_and_marks_done(self):
+        out = run(kt.cmd_columns)
+        self.assertIn("backlog  Backlog  (1 cards)", out)
+        self.assertIn("todo  To do  (0 cards)", out)
+        self.assertIn("done  Done  (1 cards)  [done column]", out)
+
+    def test_add_slugs_the_id_and_goes_before_done(self):
+        run(kt.cmd_column_add, name="In review", after=None)
+        self.assertEqual(["backlog", "todo", "in-review", "done"], self.cols())
+        self.assertEqual({"id": "in-review", "name": "In review"}, read_json(self.file)["columns"][2])
+        run(kt.cmd_column_add, name="Waiting", after="backlog")
+        self.assertEqual(["backlog", "waiting", "todo", "in-review", "done"], self.cols())
+        self.assertIn("already exists", refuses(self, kt.cmd_column_add, name="in REVIEW", after=None))
+        self.assertIn("no column", refuses(self, kt.cmd_column_add, name="X", after="ghost"))
+        run(kt.cmd_column_add, name="Done!", after=None)   # a clashing slug gets a number, not the done column's id
+        self.assertIn("done-2", self.cols())
+
+    def test_rename_keeps_the_id_and_the_cards(self):
+        run(kt.cmd_column_set, column="done", rename="Shipped")
+        d = read_json(self.file)
+        self.assertEqual({"id": "done", "name": "Shipped"}, d["columns"][2])
+        self.assertEqual("done", d["tasks"][0]["column"])
+        self.assertIn("already exists", refuses(self, kt.cmd_column_set, column="todo", rename="shipped"))
+        self.assertIn("empty", refuses(self, kt.cmd_column_set, column="todo", rename="  "))
+        self.assertIn("no column", refuses(self, kt.cmd_column_set, column="ghost", rename="X"))
+
+    def test_move_before_or_after(self):
+        run(kt.cmd_column_move, column="todo", before="backlog", after=None)
+        self.assertEqual(["todo", "backlog", "done"], self.cols())
+        run(kt.cmd_column_move, column="todo", before=None, after="backlog")
+        self.assertEqual(["backlog", "todo", "done"], self.cols())
+        self.assertIn("exactly one", refuses(self, kt.cmd_column_move, column="todo", before=None, after=None))
+        self.assertIn("itself", refuses(self, kt.cmd_column_move, column="todo", before="todo", after=None))
+
+    def test_remove_refuses_cards_without_move_to_then_moves_them(self):
+        run(kt.cmd_column_add, name="Review", after=None)
+        d = read_json(self.file); d["tasks"][1]["column"] = "review"; write(self.file, d)
+        msg = refuses(self, kt.cmd_column_rm, column="review", move_to=None)
+        self.assertIn("still has 1 cards", msg)
+        self.assertIn("--move-to", msg)
+        self.assertEqual(["backlog", "todo", "review", "done"], self.cols())
+        self.assertIn("different column", refuses(self, kt.cmd_column_rm, column="review", move_to="review"))
+        self.assertIn("no column", refuses(self, kt.cmd_column_rm, column="review", move_to="ghost"))
+        run(kt.cmd_column_rm, column="review", move_to="todo")
+        d = read_json(self.file)
+        self.assertEqual(["backlog", "todo", "done"], self.cols())
+        self.assertEqual("todo", d["tasks"][1]["column"])
+        self.assertIn("moved Review -> To do", d["tasks"][1]["history"][-1]["text"])
+
+    def test_remove_an_empty_column_needs_no_move_to(self):
+        run(kt.cmd_column_add, name="Spare", after=None)
+        run(kt.cmd_column_rm, column="spare", move_to=None)
+        self.assertEqual(["backlog", "todo", "done"], self.cols())
+
+    def test_remove_refuses_the_built_in_columns_and_the_last_column(self):
+        for cid in ("todo", "done"):
+            self.assertIn("cannot be removed", refuses(self, kt.cmd_column_rm, column=cid, move_to="backlog"))
+        d = read_json(self.file); d["columns"] = [{"id": "only", "name": "Only"}]; d["tasks"] = []; write(self.file, d)
+        self.assertIn("at least one column", refuses(self, kt.cmd_column_rm, column="only", move_to=None))
+
+    def test_split_board_saves_only_the_moved_cards_with_ranks_at_the_end(self):
+        board_dir = os.path.join(self.dir.name, "split")
+        shutil.copytree(os.path.join(FIXTURES, "v4"), board_dir)
+        kt.FILE = os.path.join(board_dir, "tasks.json")
+        run(kt.cmd_column_add, name="Review", after="todo")
+        run(kt.cmd_move, id="t_first", column="review", column_pos=None, before=None, after=None, top=False, priority=None, note=None)
+        run(kt.cmd_column_rm, column="review", move_to="done")
+        root = read_json(kt.FILE)
+        self.assertEqual(["todo", "done"], [c["id"] for c in root["columns"]])
+        first = read_json(os.path.join(board_dir, "cards", "t_first.json"))
+        self.assertEqual("done", first["column"])
+        self.assertTrue(kt.valid_rank(first["rank"]))
+        self.assertEqual("todo", read_json(os.path.join(board_dir, "cards", "t_second.json"))["column"])
