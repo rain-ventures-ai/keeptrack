@@ -20,8 +20,10 @@
   const tone = t => (TONES.includes(t) ? t : 'neutral');
   const safeHref = u => { try { const x = new URL(u, location.href); return ['https:', 'http:', 'mailto:', 'tel:'].includes(x.protocol) ? x.href : null; } catch { return null; } };
 
-  // One colour per name, used by avatars and person chips everywhere (same hue hash as the board's avatars).
-  function colourFor(name) { let x = 0; for (const ch of String(name || '').toLowerCase()) x = (x * 31 + ch.charCodeAt(0)) % 360; return `hsl(${x} 55% 45%)`; }
+  // The board's only text-to-colour hash: one hue per name (case-insensitive). Avatars and person chips use colourFor; clients,
+  // stages and board badges use hueFor with their own saturation and lightness. Key a person by their login, so they match everywhere.
+  function hueFor(name) { let x = 0; for (const ch of String(name || '').toLowerCase()) x = (x * 31 + ch.charCodeAt(0)) % 360; return x; }
+  function colourFor(name) { return `hsl(${hueFor(name)} 55% 45%)`; }
   function initials(name) {
     const s = String(name || '').replace(/^@/, '').trim(); if (!s) return '?';
     const w = s.split(/[\s._-]+/).filter(Boolean);
@@ -104,14 +106,14 @@
     const e = pill({ text: i.text, tone: i.tone, icon: 'calendar', size }); e.classList.add('ui-due'); e.dataset.due = i.state; e.title = 'Due ' + String(date).slice(0, 10);
     return e;
   }
-  function avatar(name, { size = 'md', title } = {}) {
+  function avatar(name, { size = 'md', title, key } = {}) {
     const a = h('span', `ui-avatar ui-avatar--${['sm', 'md', 'lg'].includes(size) ? size : 'md'}`, initials(name));
     a.setAttribute('role', 'img'); a.setAttribute('aria-label', String(name || 'Unknown')); a.title = title || String(name || '');
-    a.style.setProperty('--ui-av-c', colourFor(name));
+    a.style.setProperty('--ui-av-c', colourFor(key != null ? key : name));
     return a;
   }
-  function person({ name, onRemove, removeLabel, pressed, onClick, sub } = {}) {
-    const content = [avatar(name, { size: 'sm' }), h('span', 'ui-pill__text', name)];
+  function person({ name, key, onRemove, removeLabel, pressed, onClick, sub } = {}) {
+    const content = [avatar(name, { size: 'sm', key }), h('span', 'ui-pill__text', name)];
     if (sub) content.push(h('span', 'ui-person__sub', sub));
     const p = chip('ui-pill ui-person', { content, label: name, tone: 'neutral', onRemove, removeLabel, onClick, pressed });
     p.querySelector('.ui-avatar').setAttribute('aria-hidden', 'true');   // the name is already in the text
@@ -448,7 +450,7 @@
   }
 
   window.ui = Object.freeze({
-    button, iconButton, pill, select, avatar, person, colourFor, initials, props, addRow, sheet, menu, closeMenu,
+    button, iconButton, pill, select, avatar, person, colourFor, hueFor, initials, props, addRow, sheet, menu, closeMenu,
     section, tabs, toast, banner, confirm, promptText, listRow, taskRow, check, empty, icon, priority, priorityTone, due, dueInfo
   });
 })();

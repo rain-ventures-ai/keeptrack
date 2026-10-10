@@ -33,7 +33,7 @@ const COMPONENTS = ['button', 'iconButton', 'pill', 'select', 'avatar', 'person'
       const n = await page.locator(`section[data-component="${name}"] [class*="ui-"]`).count();
       assert.ok(n > 0, `section ${name} renders components`);
     }
-    assert.deepEqual(await page.evaluate(() => Object.keys(window.ui).sort()), ['addRow', 'avatar', 'banner', 'button', 'check', 'closeMenu', 'colourFor', 'confirm', 'empty', 'icon', 'iconButton', 'initials', 'listRow', 'menu', 'person', 'pill', 'promptText', 'props', 'section', 'select', 'sheet', 'tabs', 'taskRow', 'toast', 'priority', 'priorityTone', 'due', 'dueInfo'].sort());
+    assert.deepEqual(await page.evaluate(() => Object.keys(window.ui).sort()), ['addRow', 'avatar', 'banner', 'button', 'check', 'closeMenu', 'colourFor', 'confirm', 'empty', 'icon', 'iconButton', 'initials', 'listRow', 'menu', 'person', 'pill', 'promptText', 'props', 'section', 'select', 'sheet', 'tabs', 'taskRow', 'toast', 'priority', 'priorityTone', 'due', 'dueInfo', 'hueFor'].sort());
     assert.equal(await page.evaluate(() => window.ui.colourFor('alex') === window.ui.colourFor('ALEX')), true);
     // every button on the page has an accessible name
     const unnamed = await page.evaluate(() => [...document.querySelectorAll('#cat button')].filter(b => !(b.getAttribute('aria-label') || b.textContent.trim())).length);

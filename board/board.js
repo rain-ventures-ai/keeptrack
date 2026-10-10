@@ -838,11 +838,10 @@ if (typeof window !== 'undefined') (() => {
   const projectPickerLabel = p => { const st = p.status || 'active', mark = st === 'done' ? ' · done' : st === 'paused' ? ' · paused' : ''; return `${p.name}${p.client ? ' · ' + p.client : ''}${mark}`; };
   const sortedProjects = () => [...(state.projects || [])].sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || String(a.client || '').localeCompare(b.client || '') || String(a.name || '').localeCompare(b.name || ''));
   // ---- colour: a card's left edge is its client, its right edge is its urgency -------------------------------
-  // Any text can become a colour: hash it (FNV-1a), take the hash modulo 360 as a hue. Known clients are spaced by the golden angle
-  // (137.5 degrees) past the first six; the first six clients get hand-picked hues that avoid the urgency colours. Unknown text falls back to the hash.
-  function hashHue(str) { let x = 2166136261; for (const ch of String(str)) { x ^= ch.charCodeAt(0); x = Math.imul(x, 16777619); } return (x >>> 0) % 360; }
+  // Known clients are spaced by the golden angle (137.5 degrees) past the first six; the first six clients get hand-picked hues that
+  // avoid the urgency colours. Unknown text falls back to ui.hueFor, the one text-to-colour hash (avatars, stages and board badges use it too).
   const CLIENT_HUES = [270, 190, 315, 80, 48, 295];   // violet, cyan, magenta, lime, gold, purple: kept clear of the urgency colours (red, orange, blue, green)
-  function clientHue(name) { if (!name) return null; const i = state.clients.indexOf(name); return i >= 0 ? (i < CLIENT_HUES.length ? CLIENT_HUES[i] : Math.round((i * 137.508 + 215) % 360)) : hashHue(name); }
+  function clientHue(name) { if (!name) return null; const i = state.clients.indexOf(name); return i >= 0 ? (i < CLIENT_HUES.length ? CLIENT_HUES[i] : Math.round((i * 137.508 + 215) % 360)) : ui.hueFor(name); }
   const URG = [{ lvl: 0, color: '#30a46c', label: 'Low' }, { lvl: 1, color: '#3e63dd', label: 'Normal' }, { lvl: 2, color: '#f76b15', label: 'High' }, { lvl: 3, color: '#e5484d', label: 'Critical' }];
   function urgency(t) {   // priority sets the base; an approaching or missed due date raises it
     if (t.column === doneColId()) return { lvl: -1, color: '#8a94a6', label: 'Done' };
@@ -1776,10 +1775,9 @@ if (typeof window !== 'undefined') (() => {
     board.append(wrap);
   }
 
-  function avatar(login) {
+  function avatar(login) {   // ui.avatar coloured by the login, so a person has one colour in every view and in the drawer's person chips
     const p = state.people.find(x => x.github.toLowerCase() === String(login).toLowerCase());
-    const name = (p && p.name) || login; let h = 0; for (const ch of String(login).toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
-    const a = el('span', 'av', name.slice(0, 2).toUpperCase()); a.style.setProperty('--h', h); a.title = '@' + login + (p && p.name ? ' (' + p.name + ')' : ''); return a;
+    const a = ui.avatar((p && p.name) || login, { key: login, title: '@' + login + (p && p.name ? ' (' + p.name + ')' : '') }); a.classList.add('av'); return a;
   }
 
   function taskAssignControl(t, agentOnly = false) {
@@ -2041,7 +2039,7 @@ if (typeof window !== 'undefined') (() => {
     const box = $('cWho'); box.textContent = '';
     t.assignees.forEach(gh => {
       const p = state.people.find(x => x.github === gh), name = (p && p.name) || gh;
-      const chip = ui.person({ name, removeLabel: `Unassign ${name}`, onRemove: () => edit(editing, x => { x.assignees = x.assignees.filter(a => a !== gh); }, `Assignees: ${titleOf(editing)}`) });
+      const chip = ui.person({ name, key: gh, removeLabel: `Unassign ${name}`, onRemove: () => edit(editing, x => { x.assignees = x.assignees.filter(a => a !== gh); }, `Assignees: ${titleOf(editing)}`) });
       chip.title = '@' + gh; box.append(chip);
     });
     const claim = activeClaim(t); if (claim) { const a = ui.pill({ text: agentLabel(claim), icon: 'bot', tone: 'accent' }); a.title = 'This agent is working on the task'; box.append(a); }
@@ -2741,7 +2739,7 @@ if (typeof window !== 'undefined') (() => {
   };
   // The logo is the board switcher: a badge with the repo's initials (rain-ventures-ai/consulting → RVAC) in a colour of its own.
   const boardInitials = repo => String(repo || '').split('/').flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s_.-]+/)).filter(Boolean).map(w => w[0].toUpperCase()).join('').slice(0, 4) || '▦';
-  const boardColour = repo => { let h = 0; for (const ch of String(repo || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return `hsl(${h % 360} 58% 38%)`; };
+  const boardColour = repo => `hsl(${ui.hueFor(repo)} 58% 38%)`;
   function badge(repo, cls) { const b = el('span', cls || 'bbadge', boardInitials(repo)); b.style.background = boardColour(repo); return b; }
   function renderSwitcher() {
     const btn = $('boardBtn'), pop = $('boardPop'); if (!btn) return; const cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).sort();
@@ -3290,7 +3288,7 @@ if (typeof window !== 'undefined') (() => {
   $('apCancel').onclick = $('apX').onclick = () => $('dlgAddPerson').close();
   $('dlgAddPerson').addEventListener('close', () => { addPersonExtra = {}; $('apSave').disabled = false; });
 
-  function stagePill(s) { const b = el('span', 'stagepill' + (closedStage(s) ? ' closed' : ''), s || '—'); b.style.setProperty('--h', hashHue(s || '')); return b; }
+  function stagePill(s) { const b = el('span', 'stagepill' + (closedStage(s) ? ' closed' : ''), s || '—'); b.style.setProperty('--h', ui.hueFor(s || '')); return b; }
   function personRow(p) {
     const row = el('div', 'prow'); row.tabIndex = 0; row.onclick = () => openContact(p.id); row.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
     const who = el('div', 'pwho'); who.append(el('b', null, p.name || '(no name)'), el('span', 'muted', [p.role, p.company].filter(Boolean).join(' · ')));
