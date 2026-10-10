@@ -3670,5 +3670,5 @@ if (typeof window !== 'undefined') (() => {
   };
   $('sThemeExport').onclick = () => { if (window.kbDesignMd) copyText(window.kbDesignMd.exportCurrent(), 'Theme copied as DESIGN.md'); };
   applyRo(); render();
-  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); } })();
+  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); settingsTab('boards'); } })();   // no token for this board yet: Settings opens where it is connected
 })();
