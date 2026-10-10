@@ -65,7 +65,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, README.md, AGENTS.md, CLAUDE.md, empty tasks.json
 """
-import argparse, base64, contextlib, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
+import argparse, base64, contextlib, copy, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 try:
     import fcntl
 except ImportError:   # Windows
@@ -901,6 +901,114 @@ def rewrite_archives(data, edit):
     return n
 
 
+# ---- three-way merge (the same rules as merge3 in board/board.js; see docs/conflicts.md) ----------------------------------
+_MISSING = object()
+_VOLATILE = {"updated": "mine", "updatedBy": "mine", "heartbeat_at": "mine", "next_num": "max"}   # bookkeeping, never a clash
+
+
+def _canon(v):
+    return "\0missing" if v is _MISSING else json.dumps(v, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _item_key(x):
+    return ("id", x["id"]) if isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] else ("json", _canon(x))
+
+
+def merge3(base, mine, theirs):
+    """Three-way merge of JSON values: base (what we loaded), mine (base plus our change), theirs (what is there now).
+    Returns {"merged", "clashes"}. Changes that do not overlap merge on their own. Lists merge by item id (items without
+    an id by content): an item added on either side is kept, one removed on one side and untouched on the other is
+    removed, one edited on both sides merges field by field. A clash is a value both sides changed to different things,
+    or an item one side edited and the other removed. merged keeps THEIR value at every clash. Never guesses."""
+    clashes = []
+    merged = _merge_value(base, mine, theirs, [], clashes)
+    return {"merged": None if merged is _MISSING else merged, "clashes": clashes}
+
+
+def _merge_value(b, m, t, path, clashes):
+    cb, cm, ct = _canon(b), _canon(m), _canon(t)
+    if cm == ct or ct == cb:   # same change on both sides, or only we changed it
+        return m
+    if cm == cb:               # only they changed it
+        return t
+    if path and path[-1] in _VOLATILE:
+        if _VOLATILE[path[-1]] == "max" and isinstance(m, int) and isinstance(t, int):
+            return max(m, t)
+        return m
+    if isinstance(m, dict) and isinstance(t, dict):
+        bd = b if isinstance(b, dict) else {}
+        out = {}
+        for k in list(t) + [k for k in m if k not in t] + [k for k in bd if k not in t and k not in m]:
+            v = _merge_value(bd.get(k, _MISSING), m.get(k, _MISSING), t.get(k, _MISSING), path + [k], clashes)
+            if v is not _MISSING:
+                out[k] = v
+        return out
+    if isinstance(m, list) and isinstance(t, list) and (isinstance(b, list) or b is _MISSING):
+        return _merge_list(b if isinstance(b, list) else [], m, t, path, clashes)
+    clashes.append({"path": list(path), "base": None if b is _MISSING else b, "mine": None if m is _MISSING else m,
+                    "theirs": None if t is _MISSING else t})
+    return t
+
+
+def _merge_list(b, m, t, path, clashes):
+    def index(lst):
+        d = {}
+        for x in lst:
+            d.setdefault(_item_key(x), x)
+        return d
+    ib, im, it = index(b), index(m), index(t)
+
+    def reordered(order, other):   # did this side change the relative order of the items both versions have?
+        return [k for k in order if k in other] != [k for k in other if k in order]
+    mine_first = reordered(list(im), ib) and not reordered(list(it), ib)
+    first, second = (im, it) if mine_first else (it, im)
+    order = list(first) + [k for k in second if k not in first]
+    out = []
+    for k in order:
+        bi, mi, ti = ib.get(k, _MISSING), im.get(k, _MISSING), it.get(k, _MISSING)
+        if bi is _MISSING:   # added: by one side, or by both
+            if mi is _MISSING or ti is _MISSING:
+                out.append(ti if mi is _MISSING else mi)
+            else:
+                out.append(_merge_value(_MISSING, mi, ti, path + [k[1]], clashes))
+        elif mi is _MISSING and ti is _MISSING:
+            continue
+        elif mi is _MISSING or ti is _MISSING:   # removed by one side
+            kept = ti if mi is _MISSING else mi
+            if _canon(kept) != _canon(bi):       # ...while the other side edited it
+                clashes.append({"path": path + [k[1]], "base": bi, "mine": None if mi is _MISSING else mi,
+                                "theirs": None if ti is _MISSING else ti})
+                if mi is _MISSING:
+                    out.append(ti)
+        else:
+            out.append(_merge_value(bi, mi, ti, path + [k[1]], clashes))
+    return out
+
+
+def describe_clashes(clashes, limit=12):
+    def short(v):
+        s = "(none)" if v is None else json.dumps(v, ensure_ascii=False)
+        return s if len(s) <= 80 else s[:77] + "..."
+    lines = [f"  {'/'.join(map(str, c['path'])) or '(whole board)'}: yours {short(c['mine'])}, theirs {short(c['theirs'])}"
+             for c in clashes[:limit]]
+    if len(clashes) > limit:
+        lines.append(f"  ... and {len(clashes) - limit} more")
+    return "\n".join(lines)
+
+
+def _renumber(merged, theirs):
+    """Both sides can hand the same #number to different new cards; the card that was already there keeps it."""
+    their_ids = {t.get("id") for t in (theirs or {}).get("tasks", [])}
+    count = {}
+    for t in merged.get("tasks", []):
+        if isinstance(t.get("num"), int):
+            count[t["num"]] = count.get(t["num"], 0) + 1
+    for t in merged.get("tasks", []):
+        if isinstance(t.get("num"), int) and count[t["num"]] > 1 and t.get("id") not in their_ids:
+            del t["num"]
+    return assign_nums(merged)
+
+
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
@@ -909,17 +1017,37 @@ def mutate(fn, message):
 
 def _mutate(fn, message):
     global WRITE
+    lost = None   # after a lost race: (the board as first loaded, what we wanted to save)
+    out = result = None
     for attempt in range(6):
         data, sha = load()
         guard_schema(data)
         # v1/v2 still move to v3 on write. Split storage is an explicit
         # migration because it creates many files and first makes a backup tag.
         migrate_data(data, min(SCHEMA, 3))
-        out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
-        _MUT["base"], _MUT["extra"] = sha, {}
-        with contextlib.redirect_stdout(out):
-            result = fn(data)
-        assign_nums(data)
+        if lost is None or lost[2]:
+            # First attempt, or a command that also rewrites archive files (renames): those run again on the
+            # latest board, because their archive edits are read from and written next to that revision.
+            base = copy.deepcopy(data)
+            out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
+            _MUT["base"], _MUT["extra"] = sha, {}
+            with contextlib.redirect_stdout(out):
+                result = fn(data)
+            assign_nums(data)
+        else:
+            # Someone saved first. Three-way merge: what we first loaded, what we wanted to save, what is there now.
+            # Never guess: a real clash stops here and writes nothing, so their version stays exactly as it is.
+            theirs = copy.deepcopy(data)
+            res = merge3(lost[0], lost[1], theirs)
+            if res["clashes"]:
+                print("not saved: someone else changed the same thing since this command read the board; their version is untouched.\n"
+                      + describe_clashes(res["clashes"]) + "\nRead the board again (keeptrack.py show / list), then redo the change if it still applies.",
+                      file=sys.stderr)
+                sys.exit(3)
+            merged = _renumber(copy.deepcopy(res["merged"]), theirs)
+            data.clear(); data.update(merged)
+            base = theirs
+            _MUT["extra"] = {}
         extra = _MUT["extra"]
         try:
             ok = save_changes(data, sha, message, extra=extra) if extra else save(data, sha, message)
@@ -929,6 +1057,7 @@ def _mutate(fn, message):
         if ok:
             print(out.getvalue(), end="")
             return result
+        lost = (base, copy.deepcopy(data), bool(extra))
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not save after retries (board busy)")
 

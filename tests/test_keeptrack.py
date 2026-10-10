@@ -1242,6 +1242,27 @@ class RenamesReachArchives(unittest.TestCase):
     def test_single_file_board(self):
         self.check(self.one)
 
+    def test_rename_that_loses_a_save_race_still_rewrites_the_archive(self):
+        # Another writer saves between our read and our write. A rename runs again on the latest board (it is not
+        # merged), so the archive file is still rewritten and the other writer's change is kept.
+        kt.FILE = os.path.join(self.one, "tasks.json")
+        real, calls = kt.save_changes, []
+        def racing(data, state=None, message="", extra=None):
+            if not calls:
+                calls.append(1); d = read_json(kt.FILE); d["settings"]["title"] = "Theirs"; write(kt.FILE, d)
+                return False
+            return real(data, state, message, extra=extra)
+        kt.save_changes = racing
+        try:
+            out = run_quiet(kt.cmd_label_set, name="call", rename="phone", color=None)
+        finally:
+            kt.save_changes = real
+        self.assertEqual(1, len(calls)); self.assertIn("and 1 archived", out)
+        self.assertEqual(["phone", "x"], read_json(os.path.join(self.one, "archive", "2025.json"))["tasks"][0]["labels"])
+        board = read_json(kt.FILE)
+        self.assertEqual("Theirs", board["settings"]["title"])
+        self.assertEqual(["phone"], [l["name"] for l in board["labels"]])
+
     def test_split_board(self):
         self.check(self.split)
 
