@@ -116,6 +116,15 @@ class ConfigAndClaimFiles(unittest.TestCase):
         os.chmod(config(os.path.join(folder, ".keeptrack"), {"repo": "o/mine"}), 0o666)
         self.assertEqual((None, {}), kt.project_config()[:2], "a world-writable config is not trusted either")
 
+    def test_a_path_with_a_line_break_cannot_add_a_trusted_entry(self):
+        evil = os.path.join(self.tmp.name, "evil")
+        config(os.path.join(evil, ".keeptrack"), {"repo": "evil/board"}, trust=False)
+        trick = os.path.join(self.tmp.name, "x\n" + "0" * 64 + "  " + os.path.join(evil, ".keeptrack", "config.json"))
+        config(os.path.join(trick, ".keeptrack"), {"repo": "o/mine"})   # `use` run in a folder with a crafted name
+        os.chdir(evil)
+        self.assertEqual((None, {}), kt.project_config()[:2])
+        self.assertIsInstance(json.load(open(kt._trust_file())), dict)
+
     def test_a_trusted_config_changed_after_use_is_ignored(self):
         path = config(os.path.join(self.tmp.name, ".keeptrack"), {"repo": "o/mine"})
         os.chdir(self.tmp.name)

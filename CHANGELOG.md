@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
+### [24] — 2026-10-10
+
+- The trusted-config list is JSON, so a path cannot add entries; rerun `use` once ([#59](https://github.com/rain-ventures-ai/keeptrack/pull/59) follow-up).
+
 ### [23] — 2026-10-10
 
 - `links` lists people's email addresses; `keeptrack-search` searches their mail and handles vague questions with a file inventory. Configs are read only if `use` wrote them on this computer (`~/.config/keeptrack/trusted`); rerun `use` once.

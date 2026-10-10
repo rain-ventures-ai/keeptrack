@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v24 (schema 4)
+The list of trusted configs (`~/.config/keeptrack/trusted`) is now JSON. In v23 it was one line per config, and a folder name containing a line break could add a line of its own.
+- Run `kit-update` only. There is no board-data migration.
+- **Rerun `keeptrack.py use <owner/board-repo> [--project <name>]` once in each folder that has a config:** the v23 file is not read, so those configs are ignored (with a note) until then.
+- Check: after `use`, `~/.config/keeptrack/trusted` is a JSON object, and `keeptrack.py where` shows the config.
+
 ### v23 (schema 4)
 Search reaches email and copes with vague questions.
 - `links` now lists each in-scope person's email addresses as `email` links (`mailto:`), including a project's people. The `keeptrack-search` skill searches mail with them when a Gmail or Outlook connector is loaded, and handles vague questions ("is anything at risk?") by listing every file in the scope's folders and choosing by title and date, not by keyword alone.

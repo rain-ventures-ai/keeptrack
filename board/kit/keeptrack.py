@@ -100,16 +100,15 @@ def _digest(path):
 
 
 def _trusted_configs():
-    """{real path: sha256 of the content `use` wrote}. A changed file is no longer the one `use` wrote."""
-    out = {}
+    """{real path: sha256 of the content `use` wrote}. A changed file is no longer the one `use` wrote. Stored as JSON,
+    so no folder name (a line break in a path, say) can add an entry."""
     try:
-        for l in open(_trust_file(), encoding="utf-8"):
-            h, _, path = l.strip().partition("  ")
-            if path:
-                out[path] = h
-    except OSError:
-        pass
-    return out
+        data = json.load(open(_trust_file(), encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {p: h for p, h in data.items() if isinstance(p, str) and isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h)}
 
 
 def trust_config(path):
@@ -121,7 +120,7 @@ def trust_config(path):
     os.makedirs(os.path.dirname(f), exist_ok=True)
     known = _trusted_configs()
     known[os.path.realpath(path)] = _digest(path)
-    write_private(f, "".join(f"{h}  {p}\n" for p, h in sorted(known.items())))
+    write_private(f, json.dumps(known, indent=2, sort_keys=True) + "\n")
 
 
 UNTRUSTED_CONFIG = None   # a config found but not trusted, so commands can say why it was ignored
