@@ -871,6 +871,23 @@ class CrmProjects(unittest.TestCase):
         self.assertIn("bea@example.com", text)
         self.assertIn("Wire stock feed", text)
 
+    def test_project_show_lists_only_open_tasks_and_resolves_name(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_add(Args(name="Rollout", client="Acme", north_star="Go live in Q1", status="active"))
+            pid = read_json(self.file)["projects"][0]["id"]
+            kt.cmd_add(Args(title="Wire stock feed", column="todo", client="Acme", project=pid,
+                            priority="medium", due=None, assign=None, label=None, details=None, todo=None))
+            kt.cmd_add(Args(title="Shipped invoice", column="done", client="Acme", project=pid,
+                            priority="medium", due=None, assign=None, label=None, details=None, todo=None))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_project(Args(ref="Rollout"))   # by name, not id
+        text = out.getvalue()
+        self.assertIn("north star: Go live in Q1", text)
+        self.assertIn("open tasks:", text)
+        self.assertIn("Wire stock feed", text)
+        self.assertNotIn("Shipped invoice", text)
+
     def test_doctor_warns_board_member_without_person(self):
         data = read_json(self.file)
         data["people"] = [{"github": "ghostuser", "name": "Ghost"}]
