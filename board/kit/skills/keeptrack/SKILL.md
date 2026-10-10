@@ -85,6 +85,17 @@ $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "
 ```
 Only work on tasks assigned to the user you act for.
 
+Change a task or the board's structure with commands too, never by editing JSON:
+```bash
+$B task-set '#12' --title ".." --priority high --due +3 --label relay --unlabel call   # any task field; --due "" clears
+$B labels | label-add NAME --color "#hex" | label-set NAME --rename NEW | label-rm NAME [--force]
+$B clients | client-rename OLD NEW | client-rm NAME
+$B members | member-add USER --name ".." | member-rm USER [--unassign]
+$B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW
+```
+Ask the user before a rename, a delete, removing a member or `--force`; the commands print what they will touch.
+In a board repo the `board-admin` skill has the full table.
+
 The web board's Today rows and cinema cards can assign a task to the signed-in person's own Claude. That quick action
 writes a visible `@claude` request and starts the same configured routine as an `@claude` comment; it does not dispatch
 somebody else's agent.

@@ -24,6 +24,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v18 (schema 4)
+Board administration from the CLI, so agents never need to edit board JSON: labels (`labels`, `label-add`, `label-set` with rename and recolour, `label-rm`), clients (`clients`, `client-rename`, `client-rm`), board members (`members`, `member-add`, `member-set`, `member-rm`), settings (`settings`, `settings-set` with title, stale minutes and stages), a much wider `task-set` (title, details, priority, due, `--label`/`--unlabel`), and `unlink`. New repo skill `board-admin`.
+- Fix: `add --project` and `task-set --project` now store the project **id**. Before, they stored whatever was typed (a name or id prefix), so `list --project` and `doctor` missed those cards. Find old ones with `doctor` (code `PROJECT`) and repair each with `task-set ID --project <name or id>`.
+- Fix: `verify --against <backup>` on a split board now reads the backup's `cards/`, `people/` and `projects/` (from a local copy, a git ref, or the API). Before, it read only `tasks.json` there and reported every card as new.
+- Change: `add --label X` for a label the board doesn't have now creates it (grey, as the web board does) instead of leaving a card that `doctor` flags as `LABEL`.
+- Run `kit-update` only. There is no board-data migration; nothing changes until a command is used.
+- Check: `.claude/skills/board-admin/SKILL.md` exists; `keeptrack.py labels`, `settings` and `members` print; `doctor` is clean.
+
 ### v17 (schema 4)
 Lightweight CRM extensions: client **north star** text in `client_info`, **projects** under clients (one file per project in split layout), optional **project** on tasks, optional **github** on CRM person records, and `doctor` warnings when a board member has no matching person or a task points at a missing project.
 - **Order matters on split boards:** deploy the hosted web board (or hard-refresh after GitHub Pages updates) **before** anyone creates or edits projects on a split-layout board. Run `kit-update` on each board repo so the CLI can read and write `projects/*.json`. An older hosted page (v16) leaves project files on disk but cannot edit them; v17 only deletes `projects/` files when the board has successfully loaded projects from the repo (it will not wipe the folder if project data was missing from memory).

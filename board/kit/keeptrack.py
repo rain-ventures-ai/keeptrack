@@ -23,6 +23,14 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py move ID --column COLUMN [--before ID | --after ID | --top] [--priority high|medium|low]
   keeptrack.py assign ID USER [USER...] [--add|--remove] [--note ...]   # hand the task to people (replaces assignees unless --add/--remove)
   keeptrack.py link ID URL [--title ...]            # attach a link, e.g. the pull request
+  keeptrack.py unlink ID URL                        # remove a link (by URL or title)
+  keeptrack.py task-set ID [--title ..] [--details ..] [--priority ..] [--due ..] [--label x] [--unlabel y] [--client ..] [--project ..]
+
+Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
+  keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
+  keeptrack.py clients | client-rename OLD NEW | client-rm NAME | client-set NAME --north-star ..
+  keeptrack.py members | member-add USER [--name ..] | member-set USER --name .. | member-rm USER [--unassign]
+  keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--stages "A,B,C" | --rename-stage OLD=NEW]
   ID may also be a task number: '#12' (quote the # in a shell).
 
 ID may be any unique prefix. Defaults: BOARD_REPO, BOARD_BRANCH, BOARD_PATH, BOARD_AGENT, BOARD_USER,
@@ -1331,12 +1339,15 @@ def cmd_add(a):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
         t = {"id": new_board_id(data, "t_", "cards"), "title": a.title, "column": column,
-             "client": a.client or "", "project": getattr(a, "project", None) or "", "priority": a.priority, "due": a.due or "",
-             "labels": a.label or [], "assignees": a.assign or [], "details": a.details or "", "links": [],
+             "client": a.client or "", "project": "", "priority": a.priority, "due": check_date(a.due) or "",
+             "labels": [], "assignees": a.assign or [], "details": a.details or "", "links": [],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": x, "done": False} for x in (a.todo or [])],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
-        if t["project"]:
-            find_project(data, t["project"])
+        if getattr(a, "project", None):
+            t["project"] = find_project(data, a.project)["id"]   # store the id, not the typed name or prefix
+        for x in ensure_labels(data, a.label or []):
+            print(f"created label {x}")
+        t["labels"] = list(dict.fromkeys(check_label_name(x) for x in a.label or []))
         if data.get("layout") == "split":
             t["rank"] = key_between(max(ranks) if ranks else None, None)
         hist(t, "created")
@@ -1832,11 +1843,28 @@ def _migrate_v4(a):
         sys.exit("could not migrate after retries (board busy)")
 
 
+SPLIT_DIRS = ("cards/", "people/", "projects/")
+
+
 def _read_backup(ref):
-    """The board at a backup: a local tasks.json path, or a git tag/branch/commit of the board repo."""
+    """The board at a backup: a local tasks.json path, or a git tag/branch/commit of the board repo.
+    On a split board the cards, people and projects at that backup are read too, not only tasks.json."""
+    base = os.path.dirname(PATH)
+    rel = lambda path: path[len(base) + 1:] if base else path
+    wanted = lambda r: r.startswith(SPLIT_DIRS) and r.endswith(".json")
     if os.path.isfile(ref):
         with open(ref, encoding="utf-8") as f:
-            return json.load(f)
+            root = json.load(f)
+        if root.get("layout") != "split":
+            return root
+        files, d = {"tasks.json": json.dumps(root)}, os.path.dirname(os.path.abspath(ref))
+        for sub in SPLIT_DIRS:
+            folder = os.path.join(d, sub)
+            for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+                if name.endswith(".json"):
+                    with open(os.path.join(folder, name), encoding="utf-8") as f:
+                        files[sub + name] = f.read()
+        return load_v4_from_files(files)
     if FILE or WRITE == "git":
         if not ROOT:
             sys.exit(f"cannot read backup {ref}: not in a clone of the board repo")
@@ -1844,12 +1872,52 @@ def _read_backup(ref):
         for name in (ref, f"origin/{ref}", "FETCH_HEAD"):
             rc, raw, _ = git("show", f"{name}:{PATH}")
             if rc == 0:
-                return json.loads(raw)
+                root = json.loads(raw)
+                if root.get("layout") != "split":
+                    return root
+                files = {"tasks.json": raw}
+                rc, listing, err = git("ls-tree", "-r", "--name-only", name, "--", (base + "/") if base else ".")
+                if rc:
+                    sys.exit(f"cannot list {base or '.'} at backup {ref}: {err}")
+                for path in listing.splitlines():
+                    if wanted(rel(path)):
+                        rc, text, err = git("show", f"{name}:{path}")
+                        if rc:
+                            sys.exit(f"cannot read {path} at backup {ref}: {err}")
+                        files[rel(path)] = text
+                return load_v4_from_files(files)
         sys.exit(f"cannot read {PATH} at backup {ref}")
     rc, out, err = gh(f"repos/{REPO}/contents/{PATH}?ref={urllib.parse.quote(ref, safe='')}")
     if rc:
         sys.exit(f"cannot read {PATH} at backup {ref}: {err.strip() or out.strip()}")
-    return json.loads(content_text(PATH, json.loads(out)))
+    raw = content_text(PATH, json.loads(out))
+    root = json.loads(raw)
+    if root.get("layout") != "split":
+        return root
+    # Read only the board folder's subtree at that commit, as _api_snapshot does: a recursive
+    # read of the whole repo is large where client files live there, and GitHub truncates it.
+    rc, out, err = gh(f"repos/{REPO}/commits/{urllib.parse.quote(ref, safe='')}")
+    if rc:
+        sys.exit(f"cannot read backup {ref}: {err.strip() or out.strip()}")
+    sha = json.loads(out)["commit"]["tree"]["sha"]
+    for part in [x for x in base.strip("/").split("/") if x]:
+        rc, out, err = gh(f"repos/{REPO}/git/trees/{sha}")
+        if rc:
+            sys.exit(f"cannot list the board at backup {ref}: {err.strip() or out.strip()}")
+        sha = next((x["sha"] for x in json.loads(out).get("tree", []) if x.get("path") == part and x.get("type") == "tree"), None)
+        if not sha:
+            sys.exit(f"cannot find {base} at backup {ref}")
+    rc, out, err = gh(f"repos/{REPO}/git/trees/{sha}?recursive=1")
+    if rc:
+        sys.exit(f"cannot list the board at backup {ref}: {err.strip() or out.strip()}")
+    tree = json.loads(out)
+    if tree.get("truncated"):
+        sys.exit(f"the board tree at {ref} is too big to list in one call; run verify from a clone (BOARD_WRITE=git)")
+    files = {"tasks.json": raw}
+    for e in tree.get("tree", []):
+        if e.get("type") == "blob" and wanted(e.get("path", "")):
+            files[e["path"]] = _api_blob(e["sha"])
+    return load_v4_from_files(files)
 
 
 def verify_board(now, backup):
@@ -2428,21 +2496,364 @@ def cmd_project_person(a):
 
 
 def cmd_task_set(a):
+    """Change a task's fields. Empty string clears client, project, contact, details or due."""
     def fn(data):
         t = find(data, a.id)
-        if a.client is not None:
-            t["client"] = a.client
+        changed = []
+        if a.client is not None and a.client != t.get("client", ""):
+            t["client"] = a.client; changed.append(f"client: {a.client or 'cleared'}")
             if a.client and a.client not in data.setdefault("clients", []):
                 data["clients"].append(a.client)
         if a.project is not None:
-            if a.project:
-                find_project(data, a.project)
-            t["project"] = a.project
-        if a.contact is not None:
-            t["contact"] = a.contact
+            pid = find_project(data, a.project)["id"] if a.project else ""   # store the id, not the typed name or prefix
+            if pid != t.get("project", ""):
+                t["project"] = pid; changed.append(f"project: {pid or 'cleared'}")
+        if a.contact is not None and a.contact != t.get("contact", ""):
+            t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
+        if getattr(a, "title", None) is not None:
+            if not a.title.strip():
+                sys.exit("a task needs a title")
+            if a.title != t.get("title"):
+                t["title"] = a.title; changed.append(f"title: {a.title}")
+        if getattr(a, "details", None) is not None and a.details != t.get("details", ""):
+            t["details"] = a.details; changed.append("details updated" if a.details else "details cleared")
+        if getattr(a, "priority", None) and a.priority != t.get("priority"):
+            t["priority"] = a.priority; changed.append(f"priority: {a.priority}")
+        if getattr(a, "due", None) is not None:
+            due = check_date(a.due) or ""
+            if due != t.get("due", ""):
+                t["due"] = due; changed.append(f"due: {due or 'cleared'}")
+        add = [check_label_name(x) for x in getattr(a, "label", None) or []]
+        drop = [x.strip() for x in getattr(a, "unlabel", None) or []]
+        if add or drop:
+            for x in ensure_labels(data, add):
+                print(f"created label {x}")
+            cur = list(t.get("labels", []))
+            new = [x for x in cur if x not in drop] + [x for x in dict.fromkeys(add) if x not in cur and x not in drop]
+            if new != cur:
+                t["labels"] = new; changed.append("labels: " + (", ".join(new) or "none"))
+        if not changed:
+            print(f"#{t['num']} unchanged"); return
+        for x in changed:
+            hist(t, x)
         t["updated"] = now()
-        print(f"#{t['num']} updated")
+        print(f"#{t['num']} updated: " + "; ".join(changed))
     mutate(fn, f"Update task: {a.id}")
+
+
+def cmd_unlink(a):
+    """Remove a link from a task by URL (or by title)."""
+    def fn(data):
+        t = find(data, a.id)
+        links = t.get("links", [])
+        keep = [l for l in links if a.url not in (l.get("url"), l.get("title"))]
+        if len(keep) == len(links):
+            sys.exit(f"#{t['num']} has no link '{a.url}'")
+        t["links"] = keep; hist(t, f"unlinked {a.url}"); t["updated"] = now()
+        print(f"#{t['num']} unlinked {a.url}")
+    mutate(fn, f"Agent unlink: {a.id}")
+
+
+# ---- board structure: labels, clients, board members, settings ----------------------------------------------------
+# These live in board/tasks.json. Agents change them only through these commands, never by editing the file.
+DEFAULT_LABEL_COLOR = "#6b778c"   # the web board's colour for a label it creates on the fly
+COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})")   # #rgb, #rgba, #rrggbb, #rrggbbaa
+
+
+def check_color(c):
+    if c is None:
+        return None
+    c = c.strip()
+    if not COLOR_RE.fullmatch(c):
+        sys.exit(f"colour '{c}' must be a hex colour such as #0c66e4")
+    return c.lower()
+
+
+def check_label_name(name):
+    name = (name or "").strip()
+    if not name or len(name) > 40 or any(ch in name for ch in ",\n"):
+        sys.exit("a label name must be 1-40 characters with no comma or line break")
+    return name
+
+
+def ensure_labels(data, names):
+    """Create any label in names that the board does not have yet (as the web board does). Returns the new names."""
+    labels = data.setdefault("labels", [])
+    have = {x.get("name") for x in labels}
+    created = []
+    for n in dict.fromkeys(check_label_name(x) for x in names):
+        if n not in have:
+            labels.append({"name": n, "color": DEFAULT_LABEL_COLOR}); have.add(n); created.append(n)
+    return created
+
+
+def find_label(data, name):
+    for x in data.setdefault("labels", []):
+        if x.get("name") == name:
+            return x
+    m = [x for x in data["labels"] if x.get("name", "").lower() == name.lower()]
+    if len(m) == 1:
+        return m[0]
+    sys.exit(f"no label '{name}'. Labels: {', '.join(x.get('name', '') for x in data['labels']) or '(none)'}")
+
+
+def _archive_note(data, what):
+    """Renames change the live board only; archive/<year>.json files keep the old name."""
+    if (data.get("archive") or {}).get("files"):
+        print(f"note: archived items keep the old {what}; after unarchive, fix them with task-set or person-set")
+
+
+def cmd_labels(a):
+    data, _ = load()
+    use = {}
+    for t in data.get("tasks", []):
+        for n in t.get("labels", []):
+            use[n] = use.get(n, 0) + 1
+    for x in data.get("labels", []):
+        print(f"{x.get('name')}  {x.get('color', '')}  ({use.get(x.get('name'), 0)} cards)")
+    known = {x.get("name") for x in data.get("labels", [])}
+    for n in sorted(set(use) - known):
+        print(f"{n}  (missing from the label list; {use[n]} cards; add it with label-add)")
+    if not data.get("labels") and not use:
+        print("(no labels)")
+
+
+def cmd_label_add(a):
+    def fn(data):
+        name, color = check_label_name(a.name), check_color(a.color) or DEFAULT_LABEL_COLOR
+        labels = data.setdefault("labels", [])
+        if any(x.get("name", "").lower() == name.lower() for x in labels):
+            sys.exit(f"label '{name}' already exists; change it with label-set")
+        labels.append({"name": name, "color": color})
+        print(f"added label {name} {color}")
+    mutate(fn, f"Add label: {a.name}")
+
+
+def cmd_label_set(a):
+    """Rename or recolour a label. A rename updates every live card that carries it."""
+    def fn(data):
+        lab = find_label(data, a.name)
+        old = lab["name"]
+        if a.color is not None:
+            lab["color"] = check_color(a.color)
+        if a.rename is not None:
+            new = check_label_name(a.rename)
+            if new != old and any(x is not lab and x.get("name", "").lower() == new.lower() for x in data["labels"]):
+                sys.exit(f"label '{new}' already exists; move cards with task-set --label/--unlabel, then label-rm '{old}'")
+            if new == old:
+                print(f"label {old} already has that name")
+                new = None
+        if a.rename is not None and new:
+            lab["name"] = new
+            n = 0
+            for t in data.get("tasks", []):
+                if old in t.get("labels", []):
+                    t["labels"] = list(dict.fromkeys(new if x == old else x for x in t["labels"]))
+                    hist(t, f"label {old} renamed to {new}"); t["updated"] = now(); n += 1
+            print(f"renamed label {old} -> {new} on {n} cards")
+            _archive_note(data, "label name")
+        print(f"label {lab['name']} {lab.get('color', '')}")
+    mutate(fn, f"Update label: {a.name}")
+
+
+def cmd_label_rm(a):
+    """Delete a label. Refuses while cards carry it unless --force, which takes it off those cards."""
+    def fn(data):
+        lab = find_label(data, a.name)
+        name = lab["name"]
+        used = [t for t in data.get("tasks", []) if name in t.get("labels", [])]
+        if used and not a.force:
+            sys.exit(f"{len(used)} card(s) carry '{name}' (" + ", ".join(f"#{t.get('num', t['id'])}" for t in used[:10])
+                     + "); use --force to take it off them")
+        for t in used:
+            t["labels"] = [x for x in t["labels"] if x != name]; hist(t, f"label {name} removed (label deleted)"); t["updated"] = now()
+        data["labels"] = [x for x in data["labels"] if x is not lab]
+        print(f"removed label {name}" + (f" from {len(used)} cards" if used else ""))
+    mutate(fn, f"Remove label: {a.name}")
+
+
+def _client_refs(data, name):
+    return ([t for t in data.get("tasks", []) if t.get("client") == name],
+            [p for p in data.get("projects", []) if p.get("client") == name],
+            [c for c in data.get("contacts", []) if c.get("company") == name])
+
+
+def cmd_clients(a):
+    data, _ = load()
+    for c in data.get("clients", []):
+        tasks, projects, people = _client_refs(data, c)
+        ns = (data.get("client_info", {}).get(c, {}) or {}).get("north_star", "")
+        print(f"{c}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + (f"  north star: {ns}" if ns else ""))
+    if not data.get("clients"):
+        print("(no clients)")
+
+
+def cmd_client_rename(a):
+    """Rename a client everywhere: the client list, its info, tasks, projects and CRM people's company."""
+    def fn(data):
+        clients = data.setdefault("clients", [])
+        if a.client not in clients:
+            sys.exit(f"no client '{a.client}'. Clients: {', '.join(clients) or '(none)'}")
+        new = a.new.strip()
+        if not new:
+            sys.exit("the new name is empty")
+        if new == a.client:
+            print(f"client {new} already has that name"); return
+        if any(c.lower() == new.lower() and c != a.client for c in clients):
+            sys.exit(f"client '{new}' already exists; renaming onto it would merge two clients. Do that by hand in the web board")
+        tasks, projects, people = _client_refs(data, a.client)
+        data["clients"] = [new if c == a.client else c for c in clients]
+        info = data.setdefault("client_info", {})
+        if a.client in info:
+            info[new] = info.pop(a.client)
+        for t in tasks:
+            t["client"] = new; hist(t, f"client renamed {a.client} -> {new}"); t["updated"] = now()
+        for pr in projects:
+            pr["client"] = new; pr["updated"] = now()
+        for c in people:
+            c["company"] = new; hist(c, f"company renamed {a.client} -> {new}"); c["updated"] = now()
+        print(f"renamed client {a.client} -> {new} ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)")
+        _archive_note(data, "client name")
+    mutate(fn, f"Rename client: {a.client}")
+
+
+def cmd_client_rm(a):
+    """Remove a client that nothing uses any more (no tasks, projects or people)."""
+    def fn(data):
+        clients = data.setdefault("clients", [])
+        if a.client not in clients:
+            sys.exit(f"no client '{a.client}'")
+        tasks, projects, people = _client_refs(data, a.client)
+        if tasks or projects or people:
+            sys.exit(f"'{a.client}' is still used by {len(tasks)} tasks, {len(projects)} projects and {len(people)} people; "
+                     "move them first (task-set --client, project-set --client, person-set --company) or use client-rename")
+        data["clients"] = [c for c in clients if c != a.client]
+        data.setdefault("client_info", {}).pop(a.client, None)
+        print(f"removed client {a.client}")
+        _archive_note(data, "client name")
+    mutate(fn, f"Remove client: {a.client}")
+
+
+def cmd_members(a):
+    data, _ = load()
+    owner = (data.get("settings") or {}).get("kit_owner") or ((data.get("people") or [{}])[0].get("github"))
+    for m in data.get("people", []):
+        n = sum(1 for t in data.get("tasks", []) if m.get("github") in t.get("assignees", []) and t.get("column") != "done")
+        print(f"{m.get('github')}  {m.get('name', '')}  ({n} open tasks)" + ("  [upgrade owner]" if m.get("github") == owner else ""))
+    print("agents: " + (", ".join(data.get("agents", [])) or "-"))
+
+
+def check_github_user(u):
+    u = (u or "").strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", u):
+        sys.exit(f"'{u}' is not a GitHub username")
+    return u
+
+
+def cmd_member_add(a):
+    """Add a board member (a GitHub user who can be assigned tasks)."""
+    def fn(data):
+        u = check_github_user(a.user)
+        people = data.setdefault("people", [])
+        if any(m.get("github", "").lower() == u.lower() for m in people):
+            sys.exit(f"{u} is already a board member")
+        people.append({"github": u, "name": (a.name or u).strip()})
+        print(f"added member {u} ({a.name or u})")
+    mutate(fn, f"Add member: {a.user}")
+
+
+def cmd_member_set(a):
+    def fn(data):
+        u = a.user.strip().lstrip("@")
+        m = next((m for m in data.get("people", []) if m.get("github", "").lower() == u.lower()), None)
+        if not m:
+            sys.exit(f"{u} is not a board member")
+        if a.name is not None:
+            m["name"] = a.name.strip() or m["github"]
+        print(f"member {m['github']} ({m.get('name', '')})")
+    mutate(fn, f"Update member: {a.user}")
+
+
+def cmd_member_rm(a):
+    """Remove a board member. Refuses while they have open tasks, an active claim or are the upgrade owner,
+    unless --unassign (takes them off open tasks). History keeps their name."""
+    def fn(data):
+        u = a.user.strip().lstrip("@")   # match the stored login as it is, even an old odd one
+        people = data.setdefault("people", [])
+        m = next((m for m in people if m.get("github", "").lower() == u.lower()), None)
+        if not m:
+            sys.exit(f"{u} is not a board member")
+        u = m["github"]
+        if len(people) == 1:
+            sys.exit("a board needs at least one member")
+        st = data.setdefault("settings", {})
+        if st.get("kit_owner") == u or (not st.get("kit_owner") and people[0] is m):
+            sys.exit(f"{u} is the board's upgrade owner; give it to someone else first (kit-owner <user>)")
+        claimed = [t for t in data.get("tasks", []) if (t.get("claim") or {}).get("on_behalf_of") == u
+                   and (t.get("claim") or {}).get("status") not in (None, "done")]
+        if claimed:
+            sys.exit(f"{u} has active claims on " + ", ".join(f"#{t.get('num')}" for t in claimed) + "; release them first")
+        open_tasks = [t for t in data.get("tasks", []) if u in t.get("assignees", []) and t.get("column") != "done"]
+        if open_tasks and not a.unassign:
+            sys.exit(f"{u} is assigned {len(open_tasks)} open task(s) (" + ", ".join(f"#{t.get('num')}" for t in open_tasks[:10])
+                     + "); reassign them or use --unassign")
+        for t in open_tasks:
+            t["assignees"] = [x for x in t["assignees"] if x != u]; hist(t, f"unassigned @{u} (left the board)"); t["updated"] = now()
+        data["people"] = [x for x in people if x is not m]
+        print(f"removed member {u}" + (f"; unassigned from {len(open_tasks)} open tasks" if open_tasks else ""))
+    mutate(fn, f"Remove member: {a.user}")
+
+
+def cmd_settings(a):
+    data, _ = load()
+    st = data.get("settings") or {}
+    print(f"title: {st.get('title', '')}")
+    print(f"stale_after_minutes: {st.get('stale_after_minutes', 30)}")
+    print(f"stages: {', '.join(stages(data))}")
+    print(f"modes: {', '.join(st.get('modes', [])) or '-'}")
+    print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
+    print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
+    print(f"labels: {len(data.get('labels', []))}  clients: {len(data.get('clients', []))}  members: {len(data.get('people', []))}")
+
+
+def cmd_settings_set(a):
+    """Change board settings: title, stale minutes, pipeline stages (with renames)."""
+    def fn(data):
+        st = data.setdefault("settings", {})
+        if a.title is not None:
+            if not a.title.strip():
+                sys.exit("the title is empty")
+            st["title"] = a.title.strip(); print(f"title: {st['title']}")
+        if a.stale_minutes is not None:
+            if not 5 <= a.stale_minutes <= 24 * 60:
+                sys.exit("stale minutes must be between 5 and 1440")
+            st["stale_after_minutes"] = a.stale_minutes; print(f"stale_after_minutes: {a.stale_minutes}")
+        renames = {}
+        for r in a.rename_stage or []:
+            old, sep, new = r.partition("=")
+            if not sep or not old.strip() or not new.strip():
+                sys.exit("--rename-stage takes OLD=NEW")
+            renames[check_stage(data, old.strip())] = new.strip()
+        cur = list(stages(data))
+        new_stages = [x.strip() for x in a.stages.split(",") if x.strip()] if a.stages is not None else [renames.get(x, x) for x in cur]
+        if a.stages is not None and renames:
+            sys.exit("use --stages or --rename-stage, not both")
+        if len({x.lower() for x in new_stages}) != len(new_stages) or not new_stages:
+            sys.exit("stages must be a non-empty list with no repeats")
+        if new_stages != cur:
+            people, moved = data.get("contacts", []), 0
+            for c in people:
+                if c.get("stage") in renames:
+                    hist(c, f"stage {c['stage']} renamed to {renames[c['stage']]}"); c["stage"] = renames[c["stage"]]; c["updated"] = now(); moved += 1
+            orphan = sorted({c.get("stage") for c in people if c.get("stage") and c.get("stage") not in new_stages})
+            if orphan:
+                sys.exit("people are still in stage(s) " + ", ".join(orphan) + " that the new list drops; "
+                         "use --rename-stage OLD=NEW or move them with person-set --stage first")
+            st["stages"] = new_stages; print("stages: " + ", ".join(new_stages))
+            if renames:
+                print(f"moved {moved} people to the renamed stage(s)")
+                _archive_note(data, "stage")
+    mutate(fn, "Board settings")
 
 
 def cmd_client_link(a):
@@ -3019,7 +3430,28 @@ def main():
     s = sub.add_parser("project-link", help="link a project to a file or folder"); s.add_argument("ref"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_project_link)
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
-    s = sub.add_parser("task-set", help="change task client, project or contact"); s.add_argument("id"); s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project or contact")
+    s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details"); s.add_argument("--priority", choices=["high", "medium", "low"])
+    s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
+    s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
+    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s = sub.add_parser("unlink", help="remove a link from a task"); s.add_argument("id"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_unlink)
+    s = sub.add_parser("labels", help="list labels and how many cards use each"); s.set_defaults(f=cmd_labels)
+    s = sub.add_parser("label-add", help="create a label"); s.add_argument("name"); s.add_argument("--color", help="hex colour, e.g. #0c66e4"); s.set_defaults(f=cmd_label_add)
+    s = sub.add_parser("label-set", help="rename or recolour a label (a rename updates every card)"); s.add_argument("name"); s.add_argument("--rename"); s.add_argument("--color"); s.set_defaults(f=cmd_label_set)
+    s = sub.add_parser("label-rm", help="delete a label; --force also takes it off cards"); s.add_argument("name"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_label_rm)
+    s = sub.add_parser("clients", help="list clients and what uses each"); s.set_defaults(f=cmd_clients)
+    s = sub.add_parser("client-rename", help="rename a client everywhere"); s.add_argument("client"); s.add_argument("new"); s.set_defaults(f=cmd_client_rename)
+    s = sub.add_parser("client-rm", help="remove a client nothing uses"); s.add_argument("client"); s.set_defaults(f=cmd_client_rm)
+    s = sub.add_parser("members", help="list board members (assignable GitHub users) and agents"); s.set_defaults(f=cmd_members)
+    s = sub.add_parser("member-add", help="add a board member"); s.add_argument("user", help="GitHub username"); s.add_argument("--name"); s.set_defaults(f=cmd_member_add)
+    s = sub.add_parser("member-set", help="change a board member's display name"); s.add_argument("user"); s.add_argument("--name"); s.set_defaults(f=cmd_member_set)
+    s = sub.add_parser("member-rm", help="remove a board member"); s.add_argument("user"); s.add_argument("--unassign", action="store_true", help="take them off their open tasks"); s.set_defaults(f=cmd_member_rm)
+    s = sub.add_parser("settings", help="show board settings"); s.set_defaults(f=cmd_settings)
+    s = sub.add_parser("settings-set", help="change title, stale minutes or pipeline stages"); s.add_argument("--title")
+    s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
+    s.add_argument("--rename-stage", dest="rename_stage", action="append", help="OLD=NEW (repeatable); moves people in OLD")
+    s.set_defaults(f=cmd_settings_set)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     a = p.parse_args()
     FILE = a.file
