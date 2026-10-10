@@ -16,7 +16,7 @@ The same text is stored in `client_info` for that client name.
 A client can have several **projects**. Each project has a name, its own goal, a status (active, done, or paused), document links, and people (by email).
 
 1. Open the client panel and type a name under **Projects**, then **Add** (or add a project from a task).
-2. Open a project to see open and completed tasks, links, and people.
+2. Open a project to see open and completed tasks, links, and people. From the terminal, `keeptrack.py project NAME` shows the goal, people, links and open tasks (done tasks are left out); `keeptrack.py projects` lists them.
 3. When adding people, the board suggests colleagues whose person record lists that client. Click to add; nothing is added automatically.
 4. Remove a project from the project drawer (writable boards) or with `keeptrack.py project-remove` (`--clear-project` clears `task.project` on linked tasks).
 

@@ -33,6 +33,8 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | Rename a client everywhere | `client-rename "Acme" "Acme Ltd"` (tasks, projects, people's company, client info) |
 | Remove an unused client | `client-rm "Old Co"` (refuses while anything uses it) |
 | Client north star | `client-set "Acme" --north-star ".."` |
+| Add / change a project | `project-add "Rollout" --client "Acme" --north-star ".."`, `project-set "Rollout" --status done` |
+| What is left on a project | `project "Rollout"` (goal, people, links, open tasks); `projects --client "Acme"` lists them |
 | Add / rename a board member | `member-add sam --name "Sam"`, `member-set sam --name "Sam K"` |
 | Remove a board member | `member-rm sam` (refuses with open tasks; `--unassign` takes them off). Never the upgrade owner |
 | Board title, stale minutes | `settings-set --title "Ops" --stale-minutes 45` |

@@ -31,6 +31,8 @@ Board structure (labels, clients, members, settings) lives in tasks.json; change
   keeptrack.py clients | client-rename OLD NEW | client-rm NAME | client-set NAME --north-star ..
   keeptrack.py members | member-add USER [--name ..] | member-set USER --name .. | member-rm USER [--unassign]
   keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--stages "A,B,C" | --rename-stage OLD=NEW]
+  keeptrack.py projects [--client ..] [--status active|done|paused] [-q ..] | project REF   # project REF: its goal, people, links and OPEN tasks
+  keeptrack.py project-add NAME --client .. [--north-star ..] | project-set REF [--name ..] [--client ..] [--north-star ..] [--status ..] | project-remove REF [--clear-project]
   ID may also be a task number: '#12' (quote the # in a shell).
 
 ID may be any unique prefix. Defaults: BOARD_REPO, BOARD_BRANCH, BOARD_PATH, BOARD_AGENT, BOARD_USER,
