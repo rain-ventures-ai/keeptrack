@@ -736,8 +736,6 @@ if (typeof window !== 'undefined') (() => {
     return ui.confirm({ title, body: node, confirmLabel, danger });
   }
   const askRemoval = (what, title = 'Remove?') => ask(title, [`Remove ${what}?`, UNDO_HINT], 'Remove', true);
-  // Legacy synchronous version, still used only by the task drawer (#dlgCard) until its rebuild moves to askRemoval.
-  const confirmRemoval = what => confirm(`Remove ${what}?\n\n${UNDO_HINT}`);
 
   // Apply an edit to the LATEST file on GitHub (never overwrite with stale state); retry on a SHA conflict.
   // Returns true only when the change is saved on GitHub.
