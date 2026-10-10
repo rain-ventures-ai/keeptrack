@@ -148,6 +148,27 @@ if (typeof window !== 'undefined') (() => {
   const { svgIcon, setI, fillIcons } = window.kbIcons;
   const elI = (tag, cls, icon, text) => { const e = el(tag, cls); if (icon) e.append(svgIcon(icon)); if (text != null && text !== '') e.append((icon ? ' ' : '') + text); return e; };   // el() with a leading icon
   fillIcons(document);
+  // Board actions, defined once: the header buttons (wide screens), the ••• More menu (narrow headers) and the dock's Menu are built
+  // from this list. A menu item clicks the header button with the same id, so each action is wired in one place.
+  const HEAD_ACTIONS = [
+    { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
+    { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
+    { id: 'btnHelp', icon: 'circle-help', short: 'Help', menu: 'Help', title: 'Help' },
+    { tour: true, icon: 'compass', menu: 'Show me around' },
+    { id: 'btnSettings', icon: 'settings', short: 'Settings', menu: 'Settings', title: 'Settings' }
+  ];
+  (() => {
+    const utils = document.querySelector('header .hutils');
+    if (utils && !$('btnCopy')) HEAD_ACTIONS.filter(a => a.id).forEach(a => {   // an older cached page still has them in its markup
+      const b = el('button'); b.type = 'button'; b.id = a.id; b.title = a.title; b.setAttribute('aria-label', a.aria || a.title);
+      const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); utils.append(b);
+    });
+    ['morePop', 'dockPop'].forEach(id => {
+      const pop = $(id); if (!pop || pop.querySelector('[data-head-action], [data-tour-start]')) return;
+      const items = HEAD_ACTIONS.map(a => { const b = el('button'); b.type = 'button'; if (a.tour) b.dataset.tourStart = ''; else b.dataset.headAction = a.id; b.append(svgIcon(a.icon), ' ' + a.menu); return b; });
+      pop.prepend(...items);
+    });
+  })();
   const b64e = s => { const b = new TextEncoder().encode(s); let r = ''; b.forEach(x => r += String.fromCharCode(x)); return btoa(r); };
   const b64d = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -913,13 +934,14 @@ if (typeof window !== 'undefined') (() => {
       const more = el('button', 'cpill more'); more.type = 'button'; more.setAttribute('aria-haspopup', 'true'); box.append(more);
       const label = () => { more.textContent = `+${rest.length} ▾`; };
       label(); while (box.scrollWidth > box.clientWidth + 1 && shown.length) { shown.pop().remove(); rest = order.slice(shown.length); label(); }
-      more.onclick = e => { e.stopPropagation(); const pop = $('clientPop'); if (!pop.hidden) { closePops(); return; } closePops();
-        pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), row = el('div', 'cmenurow');
+      more.setAttribute('aria-controls', 'clientPop'); more.setAttribute('aria-expanded', 'false');
+      if (popOpen && popOpen.pop === $('clientPop')) { popOpen.trigger = more; more.setAttribute('aria-expanded', 'true'); }   // the bar was redrawn under an open list
+      more.onclick = e => { e.stopPropagation(); togglePop(more, $('clientPop'), { place: false, fill: pop => { pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), row = el('div', 'cmenurow');
           const b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
           b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name);
           const det = el('button', 'cmenu detail', 'Details'); det.type = 'button'; det.title = 'Open client details'; det.onclick = () => { closePops(); openClient(c.name); };
           row.append(b, det); pop.append(row); });
-        pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; pop.hidden = false; };
+        pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; } }); };
     }
     const pq = $('peopleQ'); pq.textContent = ''; const w = $('fWho').value;
     state.people.forEach(p => { const on = w === p.github, b = el('button', 'pq' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Show everyone' : `Only @${p.github}'s tasks`;
@@ -928,8 +950,27 @@ if (typeof window !== 'undefined') (() => {
       b.append(svgIcon('bot'), el('span', 'agentname', a.agent.slice(0, 1).toUpperCase() + a.agent.slice(1))); if (a.owner) b.append(avatar(a.owner)); b.append(el('span', 'agentcount', String(a.count)));
       b.onclick = () => { $('fWho').value = on ? '' : a.value; render(); }; pq.append(b); });
   }
-  function closePops() { ['clientPop', 'filterPop', 'boardPop', 'morePop', 'dockPop'].forEach(id => { $(id).hidden = true; }); $('dockMenu').setAttribute('aria-expanded', 'false'); $('btnFilter').setAttribute('aria-expanded', 'false'); $('boardBtn').setAttribute('aria-expanded', 'false'); $('btnMore').setAttribute('aria-expanded', 'false'); }
+  // ---- header popovers (board switcher, client overflow, filters, More, dock Menu): one open at a time ------------------------
+  // popover(trigger, pop) wires a trigger once; togglePop opens one (closing any other) or closes it. A click outside, Escape, or
+  // choosing an item closes it; Escape puts the focus back on the trigger.
+  let popOpen = null;   // { pop, trigger }
+  const POPS = new Set();
+  function closePops(refocus) {
+    POPS.forEach(p => { p.hidden = true; });
+    if (!popOpen) return; const { trigger } = popOpen; popOpen = null;
+    trigger.setAttribute('aria-expanded', 'false'); if (refocus === true && trigger.isConnected) trigger.focus();
+  }
   function placePop(pop) { if (window.matchMedia('(max-width: 760px)').matches) pop.style.top = (document.querySelector('header').getBoundingClientRect().bottom + 6) + 'px'; else pop.style.top = ''; }
+  function togglePop(trigger, pop, { fill, place = true } = {}) {
+    const wasOpen = !!popOpen && popOpen.pop === pop; closePops(); if (wasOpen) return;
+    POPS.add(pop); if (fill) fill(pop); if (place) placePop(pop);
+    pop.hidden = false; trigger.setAttribute('aria-expanded', 'true'); popOpen = { pop, trigger };
+  }
+  function popover(trigger, pop, opts) {
+    POPS.add(pop); trigger.setAttribute('aria-haspopup', 'true'); trigger.setAttribute('aria-expanded', 'false'); if (pop.id) trigger.setAttribute('aria-controls', pop.id);
+    trigger.addEventListener('click', e => { e.stopPropagation(); togglePop(trigger, pop, opts); });
+    pop.addEventListener('click', e => e.stopPropagation());
+  }
 
   // ---- keeping the app itself fresh -----------------------------------------------------------------------
   const hashStr = s => { let x = 2166136261; for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 16777619); } return (x >>> 0).toString(16).padStart(8, '0').slice(0, 6); };
@@ -1369,6 +1410,7 @@ if (typeof window !== 'undefined') (() => {
   ];
   const tagViews = (tl, views) => { tl.querySelectorAll('.ui-tab').forEach((b, i) => { b.dataset.view = b.dataset.value; if (views[i].primary) b.classList.add('viewprimary'); }); return tl; };
   const viewTabs = {};   // group -> its ui.tabs in #viewSw
+  $('viewSw').textContent = '';   // an older cached page still has static buttons here
   VIEW_GROUPS.forEach(g => {
     const tl = tagViews(ui.tabs({ items: g.views, value: '', label: g.label, onChange: v => setView(v) }), g.views);
     tl.classList.add('viewgroup'); tl.dataset.grp = g.grp; viewTabs[g.grp] = tl; $('viewSw').append(tl);
@@ -2713,7 +2755,7 @@ if (typeof window !== 'undefined') (() => {
   const SET_TABS = [['general', 'General'], ['boards', 'Boards'], ['claude', 'Agents'], ['alerts', 'Alerts'], ['checks', 'Checks']];
   const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'general', style: 'underline', label: 'Settings sections', onChange: v => settingsTab(v) });
   setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach(b => { const n = cap(b.dataset.value); b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n); });
-  $('setTabs').replaceWith(setTabs);
+  { const old = $('setTabs') || document.querySelector('#dlgSettings .stabs'); if (old) old.replaceWith(setTabs); }   // .stabs: an older cached page
   $('pubOk').onclick = () => $('dlgPublic').close();
   $('ckRun').onclick = () => runChecks();
   $('sTest').onclick = () => { const repo = $('sRepo').value.trim(), typed = $('sToken').value.trim(), same = repo === cfg().repo;
@@ -2753,10 +2795,8 @@ if (typeof window !== 'undefined') (() => {
     repos.forEach(r => { const row = el('button', 'bprow' + (r === cur ? ' cur' : '')); row.type = 'button'; row.append(badge(r), el('span', 'bpname', r), el('span', 'bpmark', r === cur ? '✓' : ''));
       row.onclick = () => { closePops(); if (r !== cur) { activateBoard(r); location.replace(boardUrl()); } }; pop.append(row); });
     const m = el('button', 'bpmanage', 'Manage boards…'); m.type = 'button'; m.onclick = () => { closePops(); $('btnSettings').click(); settingsTab('boards'); }; pop.append(m);
-    btn.onclick = e => { e.stopPropagation(); const open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); } };
-    pop.onclick = e => e.stopPropagation();
   }
-  renderSwitcher();
+  renderSwitcher(); popover($('boardBtn'), $('boardPop'));
   // Settings → Boards: this board (status, change connection, checks), the other boards, and the "Add a board" wizard
   const showEdit = on => { $('bEdit').hidden = !on; $('bEditBtn').setAttribute('aria-expanded', String(on)); };
   $('bEditBtn').onclick = () => showEdit($('bEdit').hidden);
@@ -2860,8 +2900,7 @@ if (typeof window !== 'undefined') (() => {
       'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
       'New-board prompt copied. Paste it into your current chat with Claude.'); };
   document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => { t.onclick = e => { e.stopPropagation(); closePops(); setView(dockLast[t.dataset.grp]); }; });
-  $('dockMenu').onclick = e => { e.stopPropagation(); const pop = $('dockPop'), open = pop.hidden; closePops(); if (open) { pop.hidden = false; $('dockMenu').setAttribute('aria-expanded', 'true'); } };
-  $('dockPop').addEventListener('click', e => e.stopPropagation());
+  popover($('dockMenu'), $('dockPop'), { place: false });   // the dock's menu opens upwards from the bar (CSS)
   document.querySelectorAll('[data-tour-start]').forEach(b => { b.onclick = e => { e.stopPropagation(); startTour(); }; });
   $('tourNext').onclick = () => { if (tour.i === tour.steps.length - 1) endTour(); else { tour.i++; showTourStep(); } };
   $('tourBack').onclick = () => { if (tour.i > 0) { tour.i--; showTourStep(); } }; $('tourSkip').onclick = endTour;
@@ -2877,11 +2916,10 @@ if (typeof window !== 'undefined') (() => {
   $('copyClose').onclick = () => $('dlgCopy').close();
   $('copyAgent').onclick = () => { $('dlgCopy').close(); copyText(agentPrompt(null), 'Board instructions copied for an agent'); };
   $('copyMarkdown').onclick = () => { $('dlgCopy').close(); copyMarkdown(); };
-  $('btnFilter').onclick = e => { e.stopPropagation(); const pop = $('filterPop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnFilter').setAttribute('aria-expanded', 'true'); } };
-  $('btnMore').onclick = e => { e.stopPropagation(); const pop = $('morePop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnMore').setAttribute('aria-expanded', 'true'); } };
+  popover($('btnFilter'), $('filterPop')); popover($('btnMore'), $('morePop'));
   document.querySelectorAll('[data-head-action]').forEach(b => { b.onclick = () => { const target = $(b.dataset.headAction); closePops(); if (target) target.click(); }; });
-  $('filterPop').addEventListener('click', e => e.stopPropagation()); $('clientPop').addEventListener('click', e => e.stopPropagation()); $('morePop').addEventListener('click', e => e.stopPropagation());
-  document.addEventListener('click', closePops); document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePops(); if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
+  $('clientPop').addEventListener('click', e => e.stopPropagation()); POPS.add($('clientPop'));
+  document.addEventListener('click', () => closePops()); document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (popOpen) { closePops(true); return; } if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
   $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)

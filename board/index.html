@@ -43,22 +43,13 @@
     <button id="btnUndo" type="button" aria-label="Undo last board change" title="Nothing to undo" disabled><span class="ic"><i data-i="undo-2"></i></span><span class="tx"> Undo</span></button>
     <div class="popwrap mobilemore">
       <button id="btnMore" aria-haspopup="true" aria-expanded="false" aria-controls="morePop" aria-label="More board actions" title="More board actions"><span class="moreglyph" aria-hidden="true">•••</span></button>
-      <div id="morePop" class="popover morepop" hidden>
-        <button type="button" data-head-action="btnRefresh"><i data-i="refresh-cw"></i> Refresh board</button>
-        <button type="button" data-head-action="btnCopy"><i data-i="copy"></i> Copy board</button>
-        <button type="button" data-head-action="btnHelp"><i data-i="circle-help"></i> Help</button>
-        <button type="button" data-tour-start><i data-i="compass"></i> Show me around</button>
-        <button type="button" data-head-action="btnSettings"><i data-i="settings"></i> Settings</button>
-      </div>
+      <div id="morePop" class="popover morepop" hidden></div>   <!-- items: HEAD_ACTIONS in board.js -->
     </div>
   </div>
   <div class="hutils">
     <div class="hbreak"></div>
     <span id="status">Not connected</span>
-    <button id="btnCopy" title="Copy board" aria-label="Copy board"><span class="ic"><i data-i="copy"></i></span><span class="tx"> Copy</span></button>
-    <button id="btnRefresh" title="Reload from GitHub" aria-label="Refresh"><span class="ic"><i data-i="refresh-cw"></i></span><span class="tx"> Refresh</span></button>
-    <button id="btnHelp" aria-label="Help" title="Help"><span class="ic"><i data-i="circle-help"></i></span><span class="tx"> Help</span></button>
-    <button id="btnSettings" aria-label="Settings" title="Settings"><span class="ic"><i data-i="settings"></i></span><span class="tx"> Settings</span></button>
+    <!-- Copy, Refresh, Help and Settings: HEAD_ACTIONS in board.js -->
   </div>
 </header>
 <nav id="subnav" class="subnav" aria-label="Views in this section" hidden></nav>
@@ -79,12 +70,7 @@
   <button type="button" class="dtab" data-grp="crm" aria-label="People"><i data-i="user"></i><span class="dl">People</span></button>
   <button type="button" class="dtab" data-head-action="btnSearch" aria-label="Search" title="Search everything (press /)"><i data-i="search"></i><span class="dl">Find</span></button>
   <button type="button" class="dtab" id="dockMenu" aria-haspopup="true" aria-expanded="false" aria-controls="dockPop" aria-label="Menu"><i data-i="menu"></i><span class="dl">Menu</span></button>
-  <div id="dockPop" class="popover dockpop morepop" hidden>
-    <button type="button" data-head-action="btnRefresh"><i data-i="refresh-cw"></i> Refresh board</button>
-    <button type="button" data-head-action="btnCopy"><i data-i="copy"></i> Copy board</button>
-    <button type="button" data-head-action="btnHelp"><i data-i="circle-help"></i> Help</button>
-    <button type="button" data-tour-start><i data-i="compass"></i> Show me around</button>
-    <button type="button" data-head-action="btnSettings"><i data-i="settings"></i> Settings</button>
+  <div id="dockPop" class="popover dockpop morepop" hidden>   <!-- items: HEAD_ACTIONS in board.js -->
     <div id="dockStatus" class="dockstatus"></div>
   </div>
 </nav>
