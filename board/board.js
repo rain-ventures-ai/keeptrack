@@ -538,52 +538,105 @@ if (typeof window !== 'undefined') (() => {
     return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
   }
 
-  // ---- conflict detection: what you saw (base) vs what is on GitHub now (latest) vs your change ----
-  const IGNORE = new Set(['updated', 'updatedBy', 'history', 'comments']);   // comments are append-only and merge, so they never conflict
-  const norm = t => { if (!t) return null; const o = {}; Object.keys(t).sort().forEach(k => { if (!IGNORE.has(k)) o[k] = t[k]; });
-    if (o.claim) { o.claim = Object.assign({}, o.claim); delete o.claim.heartbeat_at; } return JSON.stringify(o); }; // heartbeats alone are not a conflict
-  const byId = (st, k = 'tasks') => new Map((st[k] || []).map(t => [t.id, t]));
-  const KINDS = ['tasks', 'contacts', 'projects'];   // cards, people and projects are checked for conflicts
-  const show = v => v == null ? '(none)' : typeof v === 'string' ? (v || '(empty)') : JSON.stringify(v);
-  function findConflicts(base, pre, post) {
-    const out = [];
-    KINDS.forEach(k => { const B = byId(base, k), P = byId(pre, k), A = byId(post, k);
-    new Set([...B.keys(), ...P.keys(), ...A.keys()]).forEach(id => {
-      const b = B.get(id), p = P.get(id), a = A.get(id);
-      if (!b) return;                                    // new card: nothing of theirs to clash with
-      if (!p) { if (norm(p) !== norm(a)) out.push({ id, b, p, a }); return; }   // they deleted it, I am changing it
-      const nb = JSON.parse(norm(b)), np = JSON.parse(norm(p)), na = a ? JSON.parse(norm(a)) : null;
-      if (!na) { if (norm(b) !== norm(p)) out.push({ id, b, p, a }); return; }  // I am deleting something they changed
-      const keys = new Set([...Object.keys(nb), ...Object.keys(np), ...Object.keys(na)]);
-      // conflict only when the SAME field was changed by both of us (moving a card while someone ticks a to-do is fine)
-      const clash = [...keys].some(k => JSON.stringify(np[k]) !== JSON.stringify(na[k]) && JSON.stringify(nb[k]) !== JSON.stringify(np[k]));
-      if (clash) out.push({ id, b, p, a });
-    }); });
+  // ---- three-way merge: what you saw (base) vs your change (mine) vs what is on GitHub now (theirs) ----
+  // Same rules as merge3 in board/kit/keeptrack.py (docs/conflicts.md). Changes that do not overlap merge on their own.
+  // Lists merge by item id (items without an id: by content): an item added on either side is kept, one removed on one
+  // side and untouched on the other is removed, one edited on both sides merges field by field. A clash is a value both
+  // sides changed to different things, or an item one side edited and the other removed. merged keeps THEIR value at a clash.
+  const VOLATILE = { updated: 'mine', updatedBy: 'mine', heartbeat_at: 'mine', next_num: 'max' };   // bookkeeping, never a clash
+  const sortKeys = v => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])])) : v;
+  const jcanon = v => v === undefined ? '\0missing' : JSON.stringify(sortKeys(v));
+  const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v), has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const itemKey = x => isObj(x) && typeof x.id === 'string' && x.id ? 'id:' + x.id : 'json:' + jcanon(x), keyName = k => k.slice(k.indexOf(':') + 1);
+  function merge3(base, mine, theirs) { const clashes = []; const merged = merge3v(base, mine, theirs, [], clashes); return { merged, clashes }; }
+  function merge3v(b, m, t, path, clashes) {
+    const cb = jcanon(b), cm = jcanon(m), ct = jcanon(t);
+    if (cm === ct || ct === cb) return m;   // same change on both sides, or only we changed it
+    if (cm === cb) return t;                // only they changed it
+    const last = path[path.length - 1];
+    if (typeof last === 'string' && has(VOLATILE, last)) return VOLATILE[last] === 'max' && Number.isInteger(m) && Number.isInteger(t) ? Math.max(m, t) : m;
+    if (isObj(m) && isObj(t)) {
+      const bd = isObj(b) ? b : {}, out = {};
+      [...Object.keys(t), ...Object.keys(m).filter(k => !has(t, k)), ...Object.keys(bd).filter(k => !has(t, k) && !has(m, k))].forEach(k => {
+        const v = merge3v(bd[k], m[k], t[k], [...path, k], clashes); if (v !== undefined) out[k] = v; });
+      return out;
+    }
+    if (Array.isArray(m) && Array.isArray(t) && (Array.isArray(b) || b === undefined)) return merge3list(b || [], m, t, path, clashes);
+    clashes.push({ path: [...path], base: b, mine: m, theirs: t }); return t;
+  }
+  function merge3list(b, m, t, path, clashes) {
+    const index = lst => { const d = new Map(); lst.forEach(x => { const k = itemKey(x); if (!d.has(k)) d.set(k, x); }); return d; };
+    const ib = index(b), im = index(m), it = index(t);
+    const reordered = (order, other) => { const a = order.filter(k => other.has(k)), c = [...other.keys()].filter(k => order.includes(k)); return a.join('\0') !== c.join('\0'); };   // did this side reorder the items both versions have?
+    const mineFirst = reordered([...im.keys()], ib) && !reordered([...it.keys()], ib), first = mineFirst ? im : it, second = mineFirst ? it : im;
+    const order = [...first.keys(), ...[...second.keys()].filter(k => !first.has(k))], out = [];
+    order.forEach(k => {
+      const bi = ib.get(k), mi = im.get(k), ti = it.get(k);
+      if (bi === undefined) { out.push(mi === undefined ? ti : ti === undefined ? mi : merge3v(undefined, mi, ti, [...path, keyName(k)], clashes)); return; }   // added by one side, or by both
+      if (mi === undefined && ti === undefined) return;
+      if (mi === undefined || ti === undefined) {   // removed by one side
+        const kept = mi === undefined ? ti : mi;
+        if (jcanon(kept) !== jcanon(bi)) { clashes.push({ path: [...path, keyName(k)], base: bi, mine: mi, theirs: ti }); if (mi === undefined) out.push(ti); }   // ...while the other side edited it
+        return;
+      }
+      out.push(merge3v(bi, mi, ti, [...path, keyName(k)], clashes));
+    });
     return out;
   }
+  // Put a chosen value at a clash path (undefined removes it). List items are found by id.
+  function setAt(root, path, value) {
+    let node = root;
+    for (let i = 0; i < path.length; i++) {
+      const seg = path[i], end = i === path.length - 1;
+      if (Array.isArray(node)) {
+        const idx = node.findIndex(x => keyName(itemKey(x)) === seg);
+        if (end) { if (value === undefined) { if (idx >= 0) node.splice(idx, 1); } else if (idx >= 0) node[idx] = value; else node.push(value); return; }
+        if (idx < 0) return; node = node[idx];
+      } else {
+        if (end) { if (value === undefined) delete node[seg]; else node[seg] = value; return; }
+        if (!node[seg] || typeof node[seg] !== 'object') return; node = node[seg];
+      }
+    }
+  }
+  // Both sides can hand the same #number to different new cards; the card that was already there keeps it.
+  function fixNums(d, theirs) {
+    const had = new Set((theirs.tasks || []).map(t => t.id)), count = new Map();
+    d.tasks.forEach(t => { if (Number.isInteger(t.num)) count.set(t.num, (count.get(t.num) || 0) + 1); });
+    d.tasks.forEach(t => { if (Number.isInteger(t.num) && count.get(t.num) > 1 && !had.has(t.id)) delete t.num; });
+    return assignNums(d);
+  }
+  const byId = (st, k = 'tasks') => new Map((st[k] || []).map(t => [t.id, t]));
+  const KINDS = ['tasks', 'contacts', 'projects'];   // cards, people and projects
+  const show = v => v === undefined || v === null ? '(none)' : typeof v === 'string' ? (v || '(empty)') : JSON.stringify(v);
   // Move/edit aimed at a card that someone else deleted: fn is a no-op, so detect it by id.
   function deletedUnderMe(base, pre, ids) { const has = (st, id) => KINDS.some(k => byId(st, k).has(id)); return ids.filter(id => has(base, id) && !has(pre, id)); }
-  function askConflict(list) {
+  // Resolution screen: one block per clash with what you saw, your value and theirs. Resolves with
+  // 'discard' (drop my whole change) or an array with one {side: 'theirs' | 'mine' | 'edit', value} per clash.
+  function askConflict(clashes, views) {
     return new Promise(res => {
-      const d = $('dlgConflict'), body = $('cfBody'); body.textContent = '';
-      const items = list.map(x => x.a || x.p || x.b);
-      const nT = items.filter(t => t.title).length;
-      const nPr = items.filter(t => !t.title && String(t.id || '').startsWith('pr_')).length;
-      const nP = items.filter(t => !t.title && !String(t.id || '').startsWith('pr_')).length;
-      const what = [nT && `${nT} card${nT > 1 ? 's' : ''}`, nP && `${nP} ${nP > 1 ? 'people' : 'person'}`, nPr && `${nPr} project${nPr > 1 ? 's' : ''}`].filter(Boolean).join(', ');
-      $('cfIntro').textContent = `${what} you are changing ${list.length > 1 ? 'were' : 'was'} changed by someone else (or an agent) since you loaded the board.`;
-      list.forEach(({ b, p, a }) => {
-        const t = a || p || b, box = el('div', 'cfcard'); box.append(el('strong', null, t.title || t.name || t.id));
-        if (!p) box.append(el('div', 'cfnote', 'It was deleted by someone else.'));
-        const keys = [...new Set([...Object.keys(b || {}), ...Object.keys(p || {}), ...Object.keys(a || {})])].filter(k => !IGNORE.has(k)
-          && [b && b[k], p && p[k], a && a[k]].map(x => JSON.stringify(x === undefined ? null : x)).some((x, _, arr) => x !== arr[0]));
-        const tb = el('table', 'cftable'), hr = el('tr'); ['Field', 'You saw', 'Now on GitHub', 'After your change'].forEach(h => hr.append(el('th', null, h))); tb.append(hr);
-        keys.forEach(k => { if (k === 'claim') { const f = x => x && x.claim ? `${x.claim.agent} ${x.claim.status}${x.claim.note ? ': ' + x.claim.note : ''}` : '(none)'; const r = el('tr'); [k, f(b), f(p), f(a)].forEach(v => r.append(el('td', null, v))); tb.append(r); return; }
-          const r = el('tr'); [k, show(b && b[k]), show(p && p[k]), show(a && a[k])].forEach(v => r.append(el('td', null, v))); tb.append(r); });
-        box.append(tb); body.append(box);
+      const d = $('dlgConflict'), body = $('cfBody'); body.textContent = ''; const picks = clashes.map(() => ({ side: 'theirs' }));
+      const isItem = c => KINDS.includes(c.path[0]) && c.path.length >= 2;
+      const nameOf = c => { const [k, id] = c.path; if (!isItem(c)) return 'Board settings'; const it = [views.pre, views.mine, views.base].map(s => byId(s, k).get(id)).find(Boolean) || {}; return `${k === 'tasks' ? 'Card' : k === 'contacts' ? 'Person' : 'Project'} “${it.title || it.name || id}”`; };
+      $('cfIntro').textContent = `${clashes.length === 1 ? 'One thing you are changing was' : clashes.length + ' things you are changing were'} also changed by someone else (or an agent) since you loaded the board. Everything else of yours merges on its own. Choose which version to keep for each.`;
+      clashes.forEach((c, i) => {
+        const box = el('div', 'cfcard'), field = (isItem(c) ? c.path.slice(2) : c.path).join(' › ');
+        box.append(el('strong', null, nameOf(c) + (field ? ' · ' + field : '')));
+        if (isItem(c) && c.path.length === 2) { if (c.theirs === undefined) box.append(el('div', 'cfnote', 'Someone else deleted it.')); else if (c.mine === undefined) box.append(el('div', 'cfnote', 'You deleted it.')); }
+        const tb = el('table', 'cftable'), hr = el('tr'); ['You saw', 'Mine', 'Theirs (now on GitHub)'].forEach(h => hr.append(el('th', null, h))); tb.append(hr);
+        const r = el('tr'); [c.base, c.mine, c.theirs].forEach(v => r.append(el('td', null, show(v)))); tb.append(r); box.append(tb);
+        const row = el('div', 'cfpick'), ta = el('textarea', 'cfedit'); ta.hidden = true; ta.rows = 2; ta.value = typeof c.theirs === 'string' ? c.theirs : JSON.stringify(c.theirs === undefined ? null : c.theirs);
+        [['theirs', 'Keep theirs'], ['mine', 'Keep mine'], ['edit', 'Edit…']].forEach(([side, label]) => {
+          const lab = el('label'), rb = el('input'); rb.type = 'radio'; rb.name = 'cf' + i; rb.value = side; rb.checked = side === 'theirs';
+          rb.onchange = () => { picks[i].side = side; ta.hidden = side !== 'edit'; if (side === 'edit') ta.focus(); }; lab.append(rb, ' ' + label); row.append(lab); });
+        ta.oninput = () => { picks[i].text = ta.value; }; picks[i].text = ta.value; box.append(row, ta); body.append(box);
       });
-      const done = v => { d.close(); $('cfApply').onclick = $('cfDiscard').onclick = null; d.oncancel = null; res(v); };
-      $('cfApply').onclick = () => done('apply'); $('cfDiscard').onclick = () => done('discard'); d.oncancel = () => done('discard');
+      const finish = v => { d.close(); $('cfApply').onclick = $('cfDiscard').onclick = null; d.oncancel = null; res(v); };
+      $('cfApply').onclick = () => {
+        const out = picks.map((p, i) => { if (p.side !== 'edit') return { side: p.side }; const c = clashes[i]; let value = p.text;
+          if (typeof c.theirs !== 'string' && typeof c.mine !== 'string') { try { value = JSON.parse(p.text); } catch (e) { return { side: 'theirs' }; } }
+          return { side: 'edit', value }; });
+        finish(out); };
+      $('cfDiscard').onclick = () => finish('discard'); d.oncancel = () => finish('discard');
       d.showModal();
     });
   }
@@ -676,6 +729,7 @@ if (typeof window !== 'undefined') (() => {
     busy = true; syncUndo(); loadGen++; const before = clone(state); let base = baseState || before;
     try {
       const o = clone(state); fn(o); ensureRanks(o); assignNums(o); state = o; render(); // optimistic
+      let mine = clone(o);
       for (let i = 0; i < 4; i++) {
         let res = null, latest = DEFAULT(), readSha = null, rawL = null;
         let viaTree = false;
@@ -691,18 +745,22 @@ if (typeof window !== 'undefined') (() => {
           if (rawL.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); state = before; render(); roToast(); return false; }   // a demo file is never written
           latest = normalise(rawL); }
         else if (rawL) latest = normalise(rawL);
-        const pre = clone(latest); fn(latest); ensureRanks(latest); assignNums(latest);
-        // checked on every attempt: "Apply anyway" covers only the revision that was shown, so a newer clash asks again
-        const gone = deletedUnderMe(base, pre, targetIds);
-        const conflicts = findConflicts(base, pre, latest);
-        if (gone.length && !conflicts.length) {
+        const pre = clone(latest);
+        // three-way merge: what I saw (base), my change (mine), what is on GitHub now (pre). Checked on every attempt:
+        // a choice covers only the revision that was shown, so a newer clash asks again
+        const gone = deletedUnderMe(base, pre, targetIds), mg = merge3(base, mine, pre);
+        if (gone.length && !mg.clashes.length) {
           state = pre; render(); setStatus('That card was deleted by someone else; nothing changed', 'err'); return false;
         }
-        if (conflicts.length) {
+        latest = clone(mg.merged);
+        if (mg.clashes.length) {
           setStatus('Waiting for your decision…', 'err');
-          if (await askConflict(conflicts) === 'discard') { state = pre; render(); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
+          const pick = await askConflict(mg.clashes, { base, mine, pre });
+          if (pick === 'discard') { state = pre; render(); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
+          mg.clashes.forEach((c, i) => { if (pick[i].side === 'mine') setAt(latest, c.path, c.mine === undefined ? undefined : clone(c.mine)); else if (pick[i].side === 'edit') setAt(latest, c.path, pick[i].value); });
         }
-        base = pre;   // from here on, "what you saw" is this revision
+        fixNums(latest, pre); ensureRanks(latest);
+        base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
         const out = await save(latest, message, readSha);
         if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }

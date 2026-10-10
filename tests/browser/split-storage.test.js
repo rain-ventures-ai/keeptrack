@@ -395,6 +395,37 @@ let base;
     await cp.locator('#cTitle').blur(); await cp.waitForFunction(() => document.querySelector('#dlgConflict').open);
     assert.equal(cf.calls.filter(x => ['PUT', 'PATCH', 'DELETE'].includes(x.method)).length, 0, 'nothing is written before the person chooses'); await cp.close();
 
+    // Three-way merge on save. Another writer changes a DIFFERENT field of the same card between load and save: both changes survive, no dialog.
+    {
+      const mg = new Github(true), mp = await openBoard(browser, mg);
+      await mp.locator('.card', { hasText: 'First' }).dblclick(); await mp.locator('#cTitle').fill('Mine');
+      { const t = JSON.parse(mg.files['cards/t_one.json']); t.priority = 'low'; t.labels = ['pale']; t.updated = '2026-10-03T08:00:00.000Z'; mg.files['cards/t_one.json'] = text(t); mg.head = 'head-' + ++mg.n; }
+      const merged = mp.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')); await mp.locator('#cTitle').blur(); await merged;
+      const t = JSON.parse(mg.files['cards/t_one.json']); assert.equal(t.title, 'Mine'); assert.equal(t.priority, 'low', 'their change to another field must survive'); assert.deepEqual(t.labels, ['pale'], 'their change to another list must survive');
+      assert.equal(await mp.locator('#dlgConflict').getAttribute('open'), null, 'no dialog when the changes do not overlap'); await mp.close();
+    }
+    // The SAME field changed on both sides: the resolution screen shows base, mine and theirs. Choosing "Keep mine" saves mine; "Keep theirs" keeps theirs.
+    for (const keep of ['mine', 'theirs']) {
+      const cl = new Github(true), cq = await openBoard(browser, cl);
+      await cq.locator('.card', { hasText: 'First' }).dblclick(); await cq.locator('#cTitle').fill('Mine title');
+      { const t = JSON.parse(cl.files['cards/t_one.json']); t.title = 'Theirs title'; t.priority = 'low'; t.updated = '2026-10-03T08:00:00.000Z'; cl.files['cards/t_one.json'] = text(t); cl.head = 'head-' + ++cl.n; } cl.calls = [];
+      await cq.locator('#cTitle').blur(); await cq.waitForFunction(() => document.querySelector('#dlgConflict').open);
+      const shown = await cq.locator('#cfBody').textContent(); assert(shown.includes('Mine title') && shown.includes('Theirs title') && shown.includes('First'), 'base, mine and theirs are shown: ' + shown);
+      assert.equal(await cq.locator('#cfBody .cfcard').count(), 1, 'only the clashing field is listed'); assert.equal(cl.calls.filter(x => ['PUT', 'PATCH', 'DELETE'].includes(x.method)).length, 0, 'nothing is written before the person chooses');
+      await cq.locator(`#cfBody input[value="${keep}"]`).check(); const written = cq.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')); await cq.locator('#cfApply').click(); await written;
+      const t = JSON.parse(cl.files['cards/t_one.json']); assert.equal(t.title, keep === 'mine' ? 'Mine title' : 'Theirs title'); assert.equal(t.priority, 'low', 'their other change survives either way');
+      await cq.waitForFunction(() => !document.querySelector('#dlgConflict').open); await cq.close();
+    }
+    // Editing the value on the resolution screen saves the edited text.
+    {
+      const ce = new Github(true), cx = await openBoard(browser, ce);
+      await cx.locator('.card', { hasText: 'First' }).dblclick(); await cx.locator('#cTitle').fill('Mine title');
+      { const t = JSON.parse(ce.files['cards/t_one.json']); t.title = 'Theirs title'; ce.files['cards/t_one.json'] = text(t); ce.head = 'head-' + ++ce.n; }
+      await cx.locator('#cTitle').blur(); await cx.waitForFunction(() => document.querySelector('#dlgConflict').open);
+      await cx.locator('#cfBody input[value="edit"]').check(); await cx.locator('#cfBody textarea').fill('Both of ours'); const written = cx.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')); await cx.locator('#cfApply').click(); await written;
+      assert.equal(JSON.parse(ce.files['cards/t_one.json']).title, 'Both of ours'); await cx.close();
+    }
+
     {
     // A card file without fields the page fills in (here: no "details" and no "links") is not rewritten by an unrelated save.
     const sparse = new Github(true); const bare = JSON.parse(sparse.files['cards/t_two.json']); delete bare.details; delete bare.links; sparse.files['cards/t_two.json'] = JSON.stringify(bare, null, 2) + '\n';
