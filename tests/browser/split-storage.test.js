@@ -71,6 +71,19 @@ let base;
       const details = demo.locator('#roBar a.morelink'); assert.equal(await details.textContent(), 'View the repository for more details'); assert.equal(await details.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await details.getAttribute('target'), '_blank'); await demo.close();
     }
 
+    // On a phone the dock sits over fixed popovers: the Filters panel must stop above it and scroll, so its last
+    // controls (Hide done, Clear filters) stay reachable on a short screen.
+    const phone = await browser.newPage({ viewport: { width: 412, height: 690 }, isMobile: true, hasTouch: true });
+    await phone.goto(base + '/board/index.html?demo=board'); await phone.waitForSelector('#btnFilter', { state: 'visible' });
+    if (await phone.evaluate(() => document.documentElement.dataset.layout) === 'dock') {
+      await phone.locator('#btnFilter').click(); await phone.waitForSelector('#filterPop:not([hidden])');
+      await phone.evaluate(() => { const p = document.getElementById('filterPop'); p.scrollTop = p.scrollHeight; });
+      const dockBox = await phone.locator('#dock').boundingBox(), popBox = await phone.locator('#filterPop').boundingBox(), clearBox = await phone.locator('#fClear').boundingBox();
+      assert(popBox.y + popBox.height <= dockBox.y + 1, 'the phone Filters panel must stop above the dock');
+      assert(clearBox.y + clearBox.height <= dockBox.y, 'Clear filters must be reachable above the dock after scrolling');
+    }
+    await phone.close();
+
     // Every browser creation path starts on split schema v4 and adds a root README that links back to Keeptrack.
     // The empty board writes only its board root/index; the first task then gets its own card file without a legacy v3 round trip.
     const freshApi = new Github(true); freshApi.files = {};
@@ -180,6 +193,7 @@ let base;
     const compactApi = new Github(true), compact = await browser.newPage({ viewport: { width: 700, height: 800 } }); compact.on('pageerror', e => console.error('page error:', e.message));
     await compact.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); sessionStorage.setItem('kb_view', 'board'); });
     await compact.route('https://api.test/**', r => compactApi.route(r)); await compact.goto(base + '/board/index.html'); await compact.waitForSelector('#viewSw');
+    await compact.waitForSelector('.cpill.all'); await compact.evaluate(() => document.fonts.ready);   // measure after the header and fonts settle
     const compactBoard = await compact.locator('#boardBtn').boundingBox(), compactViews = await compact.locator('#viewSw').boundingBox(), compactFilters = await compact.locator('.hfilters').boundingBox();
     assert(Math.abs((compactBoard.y + compactBoard.height) - (compactViews.y + compactViews.height)) <= 2, 'board switcher and views must share a bottom edge in the first row'); assert(compactFilters.y > compactViews.y + 20, 'filters must form the second row');
     const compactAll = await compact.locator('.cpill.all').boundingBox(), compactSearch = await compact.locator('#btnSearch').boundingBox(); assert(Math.abs((compactAll.y + compactAll.height / 2) - (compactSearch.y + compactSearch.height / 2)) <= 3, 'compact filter controls must share a centre line');
@@ -303,13 +317,15 @@ let base;
 
     // The structured add-person form requires only a name, cancellation writes nothing, and optional fields are saved in one person record.
     const formApi = new Github(true); delete formApi.files['people/p_one.json']; const formPage = await openBoard(browser, formApi); await formPage.locator('#viewSw button[data-view="people"]').click(); formApi.calls = [];
-    await formPage.locator('.padd button').click(); assert.equal(await formPage.locator('#dlgAddPerson').getAttribute('open'), ''); await formPage.locator('#apCancel').click();
+    await formPage.locator('.padd button').click(); await formPage.waitForSelector('#dlgAddPerson[open]', { timeout: 5000 }).catch(() => {});
+    assert.equal(await formPage.locator('#dlgAddPerson').getAttribute('open'), ''); await formPage.locator('#apCancel').click();
     assert.equal(formApi.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).length, 0, 'cancelling the form must write nothing');
     await formPage.locator('.padd button').click(); await formPage.locator('#apSave').click(); assert.equal(await formPage.locator('#dlgAddPerson').getAttribute('open'), '', 'name is required');
     await formPage.locator('#apName').fill('Grace Hopper'); await formPage.locator('#apCompany').fill('Acme'); await formPage.locator('#apRole').fill('Admiral'); await formPage.locator('#apEmail').fill('grace@example.test'); await formPage.locator('#apPhone').fill('+1 555 0100'); await formPage.locator('#apLinkedin').fill('https://linkedin.com/in/grace-hopper');
     const formSaved = formPage.waitForResponse(r => r.request().method() === 'PUT' && /\/contents\/board\/people\//.test(r.url())); await formPage.locator('#apSave').click(); await formSaved;
     const formFiles = Object.keys(formApi.files).filter(x => x.startsWith('people/')); assert.equal(formFiles.length, 1); const grace = JSON.parse(formApi.files[formFiles[0]]);
     assert.deepEqual({ name: grace.name, company: grace.company, role: grace.role, email: grace.email, phone: grace.phone, linkedin: grace.linkedin }, { name: 'Grace Hopper', company: 'Acme', role: 'Admiral', email: 'grace@example.test', phone: '+1 555 0100', linkedin: 'https://linkedin.com/in/grace-hopper' });
+    await formPage.waitForSelector('#dlgContact[open]', { timeout: 5000 }).catch(() => {});   // the card opens just after the save resolves
     assert.equal(await formPage.locator('#dlgContact').getAttribute('open'), '', 'the new person card opens after saving'); await formPage.close();
 
     // Legacy single contact fields become the first labelled entries. Additional methods and profile links stay on

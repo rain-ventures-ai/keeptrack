@@ -487,7 +487,8 @@ header .badge { top: -6px; right: -6px; }
   .hutils:has(#status.ok) { display: none; }
   .hutils #status { flex: 1 1 100%; font-size: 11.5px; padding: 1px 2px 0; }
   .seg button { min-height: 40px; min-width: 38px; padding: 6px 8px; } header button { min-height: 40px; min-width: 40px; padding: 4px 6px; } header .seg button { min-width: 38px; }
-  .popover { position: fixed; left: 8px; right: 8px; top: 120px; width: auto; max-width: none; } .clientpop { left: 8px !important; } .filterpop { right: 8px; width: auto; }
+  .popover { position: fixed; left: 8px; right: 8px; top: 120px; width: auto; max-width: none;
+    max-height: calc(100vh - 128px); max-height: calc(100dvh - 128px - env(safe-area-inset-bottom, 0px)); overflow-y: auto; overscroll-behavior: contain; } .clientpop { left: 8px !important; } .filterpop { right: 8px; width: auto; }
   .filterpop select, .filterpop input { min-height: 42px; font-size: 16px; } .filterpop label.chk { min-height: 40px; } .cmenu { min-height: 44px; }
   .cpill { padding: 7px 10px; }
 }
@@ -972,9 +973,10 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 .dockstatus { margin-top: 4px; padding: 8px 10px 4px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
 .dockstatus.err { color: var(--danger); font-weight: 600; }
 @media (max-width: 760px) {
-  :root[data-layout="dock"] .popover { top: 64px; }
+  /* the dock sits on top of fixed popovers: stop them above it and let them scroll (a long Filters list was unreachable) */
+  :root[data-layout="dock"] .popover { top: 64px; max-height: calc(100vh - 64px - var(--dock-clear)); max-height: calc(100dvh - 64px - var(--dock-clear)); }
   :root[data-layout="dock"] body[data-view="board"] #board, :root[data-layout="dock"] body[data-view="list"] #board { padding-bottom: calc(var(--dock-top) + 84px); }   /* clear of the dock and the "Add a task" button */
-  :root[data-layout="dock"] #dock .dockpop { top: auto; }
+  :root[data-layout="dock"] #dock .dockpop { top: auto; max-height: calc(100vh - var(--dock-top) - 80px); max-height: calc(100dvh - var(--dock-top) - 80px); }
 }
 header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone tap size is for the pill, not the details icon inside it */
 @media (max-width: 380px) { #dock .dtab { min-width: 54px; padding: 3px 7px; } }
