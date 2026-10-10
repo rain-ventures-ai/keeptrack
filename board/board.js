@@ -691,11 +691,11 @@ if (typeof window !== 'undefined') (() => {
     if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); offerUndo(message);
   }
   // After every saved change, a short toast with Undo (ui.toast with an action; it sits above the dock).
-  let undoToast = null;
+  let undoToast = null, undoAt = 0;
   function hideUndo() { if (undoToast) { undoToast.dismiss(); undoToast = null; } }
   function offerUndo(message) {
     if (ro) return; hideUndo();
-    const t = undoToast = ui.toast(message, { action: { label: 'Undo', onClick: () => { if (undoToast === t) undoToast = null; undoLast(); } }, timeout: 6000 });
+    undoAt = Date.now(); const t = undoToast = ui.toast(message, { action: { label: 'Undo', onClick: () => { if (undoToast === t) undoToast = null; undoLast(); } }, timeout: 6000 });
     t.el.classList.add('kb-undo');
   }
   function applyInverse(target, entry) {
@@ -1171,9 +1171,10 @@ if (typeof window !== 'undefined') (() => {
       try { document.execCommand('copy') ? done() : toast('Copy failed: select and copy manually', true); } catch { toast('Copy failed', true); } ta.remove(); };
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
   }
-  // One toast system (ui.toast): a newer message replaces an older plain one; the Undo toast (offerUndo) keeps its place in the queue.
+  // One toast system (ui.toast): a newer message replaces an older plain one. An error, or any message once the Undo toast has
+  // been up 1.5s, replaces the Undo toast too (Undo stays on the button and Ctrl+Z), so messages never wait behind it.
   let lastToast = null;
-  function toast(msg, bad) { if (lastToast) lastToast.dismiss(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: 4500 } : { timeout: 2600 }); }
+  function toast(msg, bad) { if (lastToast) lastToast.dismiss(); if (bad || Date.now() - undoAt > 1500) hideUndo(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: 4500 } : { timeout: 2600 }); }
   function boardInfo() {
     const c = cfg(), repoUrl = `https://github.com/${c.repo}`, rawBase = `${repoUrl}/blob/${c.branch}`;
     return { c, repoUrl, skill: `${rawBase}/.claude/skills/board/SKILL.md`, agents: `${rawBase}/AGENTS.md`,
@@ -2802,7 +2803,7 @@ if (typeof window !== 'undefined') (() => {
     if (!name && cfg().token) {
       try { const r = await fetch(`${cfg().api}/user`, { headers: { Authorization: 'Bearer ' + cfg().token, Accept: 'application/vnd.github+json' } }); if (r.ok) { const u = await r.json(); name = u.name || u.login; email = email || (u.email || ''); } } catch {}
     }
-    if (!name) name = (await ui.promptText({ title: 'Your name', label: 'Your display name on the board:', value: meV, confirmLabel: 'Add me' })) || meV;
+    if (!name) { const v = await ui.promptText({ title: 'Your name', label: 'Your display name on the board:', value: meV, confirmLabel: 'Add me' }); if (v === null) return; name = v.trim() || meV; }
     const id = await addContact(name, { github: meV, email: email || '', company: '' });
     if (id) toast('Added you as a person on this board.');
   }
@@ -2890,7 +2891,7 @@ if (typeof window !== 'undefined') (() => {
     else if (!(await ask('Remove project?', `Remove project "${pr.name}"?`, 'Remove', true))) return;
     mutate(n => {
       n.projects = (n.projects || []).filter(p => p.id !== pr.id);
-      if (linked.length) n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });
+      n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });   // also tasks linked while the dialog was open
     }, `Remove project: ${pr.name}`).then(ok => { if (ok) $('dlgProject').close(); });
   };
   $('dlgProject').addEventListener('close', () => { editingProject = ''; render(); });
@@ -3199,7 +3200,7 @@ if (typeof window !== 'undefined') (() => {
         go.href = kind === 'email' ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = kind === 'email' ? 'Write email' : 'Call'; go.append(svgIcon(kind === 'email' ? 'mail' : 'phone'));
         const save = async () => { const lab = label.value.trim(), val = value.value.trim(), fallback = kind === 'email' ? 'Email' : 'Phone';
           if (!val) { if (!(await askRemoval(`the ${item.label || fallback} ${kind} “${item.value}”`, kind === 'email' ? 'Remove email?' : 'Remove phone?'))) { label.value = item.label || ''; value.value = item.value || ''; return; } }
-          else if (val !== item.value && !(await ask(kind === 'email' ? 'Change email?' : 'Change phone?', [`Change ${p.name}'s ${item.label || fallback} ${kind}?`, `From: ${item.value}\nTo: ${val}`, UNDO_HINT], 'Change'))) { label.value = item.label || ''; value.value = item.value || ''; return; }
+          else if (val !== item.value && !(await ask(kind === 'email' ? 'Change email?' : 'Change phone?', [`Change ${p.name}'s ${item.label || fallback} ${kind}?`, `From: ${item.value}`, `To: ${val}`, UNDO_HINT], 'Change'))) { label.value = item.label || ''; value.value = item.value || ''; return; }
           pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || fallback; found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
         label.addEventListener('change', save); value.addEventListener('change', save);
         x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = async () => { if (!(await askRemoval(`the ${item.label || (kind === 'email' ? 'Email' : 'Phone')} ${kind} “${item.value}”`, kind === 'email' ? 'Remove email?' : 'Remove phone?'))) return; pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
@@ -3478,6 +3479,7 @@ if (typeof window !== 'undefined') (() => {
     const rules = archRules(); let n = archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
     const what = `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
     if (!(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
+    if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
     if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
     // plan from the board as it is on GitHub now, not from this page's copy, so nobody's newer comment or edit is archived away

@@ -72,13 +72,13 @@
   </div>
 </header>
 <nav id="subnav" class="subnav" aria-label="Views in this section" hidden></nav>
-<div id="updateBar" class="kbbar" hidden></div>
+<div id="updateBar" class="kbbar" hidden><span>A new version of the board is available.</span><button id="updNow" type="button">Update now</button><button id="updLater" type="button">Later</button></div>
 <div id="kitBar" class="kbbar" hidden></div>
 <div id="memberBar" class="kbbar" hidden></div>
 <div id="roBar" class="kbbar" hidden></div>
 <div id="sizeBar" class="kbbar" hidden></div>
 <!-- Stubs for an older cached board.js running with this page (it looks these up at start-up). This board.js uses ui.toast and ui.banner instead. -->
-<div id="kbLegacy" hidden><div id="toast"></div><div id="undoSnack" hidden><span id="undoMsg"></span><button id="undoGo" type="button" tabindex="-1">Undo</button></div><button id="updNow" type="button" tabindex="-1"></button><button id="updLater" type="button" tabindex="-1"></button></div>
+<div id="kbLegacy"><div id="toast" role="status" aria-live="polite"></div><div id="undoSnack" hidden><span id="undoMsg"></span><button id="undoGo" type="button" tabindex="-1">Undo</button></div></div>
 <div id="legend" class="legend" aria-label="Colour key"></div>
 <nav id="tabs" aria-label="Columns"></nav>
 <div id="board"></div>

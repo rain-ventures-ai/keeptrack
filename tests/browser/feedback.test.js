@@ -137,6 +137,7 @@ let base;
       assert(box.toast.left >= 0 && box.toast.right <= box.vw, 'the Undo toast fits the phone width');
       await undo.getByRole('button', { name: 'Undo' }).click();
       await waitFor(page, () => JSON.parse(api.files['cards/t_one.json']).column === 'todo', 'Undo moves it back');
+      await page.locator('.ui-toast', { hasText: 'Undid' }).waitFor();   // the confirmation arrives after the save, so wait for it before counting
       assert.equal(await page.locator('.ui-toast').count(), 1, 'one toast at a time');
       assert.deepEqual(page.native, [], 'no native dialog opened');
       await page.close();
