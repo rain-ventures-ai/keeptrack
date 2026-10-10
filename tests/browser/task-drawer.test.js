@@ -195,6 +195,24 @@ async function assertFits(page, where) {
       await demo.keyboard.press('Escape'); await assertFits(demo, `read-only ${vp.width}px`); await shot(demo, `readonly-${vp.width}`);
       await demo.close();
     }
+
+    // Release claim while a different claim arrives (the confirm no longer blocks the page): the newer claim must survive.
+    {
+      const api = new Github(); const c = api.card(); const at = new Date().toISOString();
+      c.claim = { agent: 'codex', on_behalf_of: 'alex', session_id: 'A', status: 'stuck', note: 'old', claimed_at: at, heartbeat_at: at }; api.files['cards/t_one.json'] = text(c);
+      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+      await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board'); });
+      await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor();
+      await page.locator('#cRelease').click(); const sheet = page.locator('dialog.ui-sheet--alert[open]'); await sheet.waitFor();
+      const c1 = api.card(), now = new Date().toISOString(); c1.claim = { agent: 'claude', on_behalf_of: 'sam', session_id: 'B', status: 'running', note: 'new run by sam', claimed_at: now, heartbeat_at: now }; c1.updated = now; api.files['cards/t_one.json'] = text(c1); api.head = 'head-' + ++api.n;   // a new commit, so the board's next poll picks it up
+      await page.waitForFunction(() => /new run by sam/.test(document.getElementById('cClaimWrap').textContent), null, { timeout: 60000 });
+      await sheet.locator('button', { hasText: 'Release claim' }).click();
+      await page.locator('.ui-toast', { hasText: 'Nothing was released' }).waitFor();
+      assert.equal(api.card().claim && api.card().claim.session_id, 'B', 'the newer claim is kept');
+      await page.close();
+    }
+
     console.log('task-drawer: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

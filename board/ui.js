@@ -200,7 +200,7 @@
       buttons.push(b); m.append(b);
     });
     const enabled = () => buttons.filter(b => !b.disabled);
-    const focusAt = i => { const e = enabled(); if (e.length) e[(i + e.length) % e.length].focus(); };
+    const focusAt = i => { const e = enabled(); if (e.length) e[(i + e.length) % e.length].focus(); else { m.tabIndex = -1; m.focus(); } };   // nothing enabled: focus the menu itself so Escape still closes only the menu
     m.addEventListener('keydown', e => {
       const e2 = enabled(), i = e2.indexOf(document.activeElement);
       if (e.key === 'ArrowDown') { e.preventDefault(); focusAt(i + 1); }

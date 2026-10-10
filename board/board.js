@@ -2098,15 +2098,19 @@ if (typeof window !== 'undefined') (() => {
       if (last.session_url && safeUrl(last.session_url)) { const a = el('a', 'sesslink', /\/routines\//.test(last.session_url) ? 'Routine runs ↗' : 'Open session ↗'); a.href = safeUrl(last.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; lr.append(document.createTextNode(' · '), a); }
       if (last.note) lr.title = last.note;
     }
-    const wrap = $('cClaimWrap'); wrap.textContent = ''; wrap.hidden = !live; if (!live) return;
+    const wrap = $('cClaimWrap'); if (!live) { wrap.textContent = ''; wrap.hidden = true; delete wrap.dataset.sig; return; } wrap.hidden = false;
     const k = t.claim, st = claimState(k), tone = st === 'running' ? 'ok' : st === 'stuck' ? 'danger' : st === 'stale' || st === 'blocked' ? 'warn' : 'info';
     const txt = el('div', 'dclaim__text'), top = el('div', 'cltop'); top.append(el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); txt.append(top);
     if (k.note) txt.append(el('div', 'cnote', k.note));
     const where = [k.session_id && 'session ' + k.session_id, k.host, k.branch].filter(Boolean).join(' · '); if (where) txt.append(el('div', 'host', where));
     if (k.session_url && safeUrl(k.session_url)) { const sa = el('a', 'sesslink', /\/routines\//.test(k.session_url) ? 'Open the routine’s runs ↗' : 'Open the Claude session ↗'); sa.href = safeUrl(k.session_url); sa.target = '_blank'; sa.rel = 'noopener noreferrer'; txt.append(sa); }
+    // Same claim as last time: refresh only the text, so the buttons (and keyboard focus) and the banner node survive a board refresh.
+    const sig = JSON.stringify(k) + st, old = wrap.dataset.sig === sig && wrap.querySelector('.dclaim__text');
+    if (old) { old.replaceWith(txt); return; }
+    wrap.textContent = ''; wrap.dataset.sig = sig;
     const acts = el('div', 'dclaim__acts');
     const stuck = ui.button({ label: 'Mark stuck', size: 'sm', onClick: () => edit(editing, x => { if (x.claim) { x.claim.status = 'stuck'; x.claim.note = (x.claim.note ? x.claim.note + ' | ' : '') + `marked stuck by ${me() || 'human'}`; } }, `Mark stuck: ${titleOf(editing)}`) }); stuck.id = 'cStuck';
-    const rel = ui.button({ label: 'Release claim', size: 'sm', onClick: async () => { const id = editing; if (!(await ui.confirm({ title: 'Release the agent claim?', body: 'The agent session may still be running.', confirmLabel: 'Release claim', danger: true })) || editing !== id) return; edit(id, x => { x.claim = null; }, `Release claim: ${titleOf(id)}`); } }); rel.id = 'cRelease';
+    const rel = ui.button({ label: 'Release claim', size: 'sm', onClick: async () => { const id = editing, was = JSON.stringify(t.claim || null); if (!(await ui.confirm({ title: 'Release the agent claim?', body: 'The agent session may still be running.', confirmLabel: 'Release claim', danger: true })) || editing !== id) return; const now = state.tasks.find(x => x.id === id); if (!now || JSON.stringify(now.claim || null) !== was) { toast('The claim changed while you were deciding. Nothing was released.', true); return; } edit(id, x => { if (JSON.stringify(x.claim || null) === was) x.claim = null; }, `Release claim: ${titleOf(id)}`); } }); rel.id = 'cRelease';
     acts.append(stuck, rel); wrap.className = 'dclaim ' + st;
     wrap.append(ui.banner({ tone, icon: 'bot', text: [txt, acts] }));
   }
