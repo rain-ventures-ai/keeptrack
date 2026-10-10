@@ -30,6 +30,7 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | Retitle, details, priority, due | `task-set '#12' --title ".." --details ".." --priority high --due 2026-11-01` (`--due ""` clears) |
 | Card's client or project | `task-set '#12' --client "Acme" --project "Rollout"` (project by name, id or prefix; stored as its id) |
 | Remove a link | `unlink '#12' <url or title>` |
+| Remove a project or client link | `project-unlink "Rollout" <url or title>`, `client-unlink "Acme" <url or title>` |
 | Rename a client everywhere | `client-rename "Acme" "Acme Ltd"` (tasks, projects, people's company, client info) |
 | Remove an unused client | `client-rm "Old Co"` (refuses while anything uses it) |
 | Client north star | `client-set "Acme" --north-star ".."` |

@@ -145,6 +145,27 @@ class LocalBoard(unittest.TestCase):
         task = next(x for x in self.read()["tasks"] if x["id"] == "t_live")
         self.assertEqual(task["links"], [{"title": "Working folder", "url": "/srv/tasks/live"}])
 
+    def test_list_filters_by_label(self):
+        data = self.read(); data["tasks"][1]["labels"] = ["call"]; write(self.file, data)
+        def listed(label):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                kt.cmd_list(Args(q=None, column=None, assignee=None, unclaimed=False, attention=False,
+                                 project=None, client=None, label=label))
+            return out.getvalue()
+        text = listed("call")
+        self.assertIn("t_live", text); self.assertNotIn("t_old", text)
+        self.assertEqual("", listed("Call"))   # exact name, as the web board's label filter
+
+    def test_todo_edit_changes_text_in_place(self):
+        self.quiet(kt.cmd_todo_edit, Args(id="t_live", n="1", text="A, revised"))
+        self.quiet(kt.cmd_todo_edit, Args(id="t_live", n="2", text="B2"))
+        todos = self.read()["tasks"][1]["todos"]
+        self.assertEqual(todos, [{"id": "d_a", "text": "A, revised", "done": False}, {"text": "B2", "done": False}])
+        with self.assertRaises(SystemExit):
+            self.quiet(kt.cmd_todo_edit, Args(id="t_live", n="3", text="nope"))
+        self.assertEqual(self.read()["tasks"][1]["todos"], todos)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -898,6 +919,29 @@ class CrmProjects(unittest.TestCase):
         self.assertEqual([], data["projects"])
         live = next(t for t in data["tasks"] if t["id"] == "t_live")
         self.assertEqual("", live.get("project"))
+
+    def test_project_unlink_by_title_and_refuses_unknown_link(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_add(Args(name="Rollout", client="Acme", north_star="", status="active"))
+        pid = read_json(self.file)["projects"][0]["id"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_link(Args(ref=pid, url="https://drive.example/rollout", title="Plan"))
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_project_unlink(Args(ref=pid, url="https://nope"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_project_unlink(Args(ref=pid, url="Plan"))
+        self.assertEqual([], read_json(self.file)["projects"][0]["links"])
+
+    def test_client_unlink_by_url_and_refuses_unknown_link(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_client_link(Args(client="Acme", url="/srv/clients/acme", title="Local folder"))
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_client_unlink(Args(client="Acme", url="/srv/nope"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_client_unlink(Args(client="Acme", url="/srv/clients/acme"))
+        self.assertEqual([], read_json(self.file)["client_info"]["Acme"]["links"])
 
     def test_doctor_warns_orphan_project_reference(self):
         data = read_json(self.file)

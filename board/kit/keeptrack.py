@@ -1039,6 +1039,7 @@ def cmd_list(a):
             if t.get("project") != pref:
                 continue
         if getattr(a, "client", None) and t.get("client") != a.client: continue
+        if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
         print(line(data, t))
 
 
@@ -1292,6 +1293,20 @@ def cmd_todo_rm(a):
         t = find(data, tid); _, d = todo_by_identity(t, ident); t["todos"].remove(d)
         hist(t, f"removed to-do: {d['text']}"); t["updated"] = now(); print(f"removed to-do: {d['text']}")
     mutate(fn, f"Remove to-do: {a.id}")
+
+
+def cmd_todo_edit(a):
+    """Change the text of a to-do in place: it keeps its number, its id and its done state."""
+    if not a.text.strip():
+        sys.exit("a to-do needs text")
+    tid, ident = todo_target(a)
+    def fn(data):
+        t = find(data, tid); n, d = todo_by_identity(t, ident)
+        if d.get("text") == a.text:
+            print(f"to-do #{n} unchanged"); return
+        old = d.get("text", ""); d["text"] = a.text
+        hist(t, f"edited to-do: {old} -> {a.text}"); t["updated"] = now(); print(f"to-do #{n} edited: {a.text}")
+    mutate(fn, f"Edit to-do: {a.id}")
 
 
 def cmd_comment(a):
@@ -2464,6 +2479,19 @@ def cmd_project_link(a):
     mutate(fn, f"Project link: {a.ref}")
 
 
+def cmd_project_unlink(a):
+    """Remove a link from a project by URL (or by title)."""
+    def fn(data):
+        pr = find_project(data, a.ref)
+        links = pr.get("links", [])
+        keep = [l for l in links if a.url not in (l.get("url"), l.get("title"))]
+        if len(keep) == len(links):
+            sys.exit(f"{pr['id']} has no link '{a.url}'")
+        pr["links"] = keep; pr["updated"] = now()
+        print(f"unlinked {pr['id']}: {a.url}")
+    mutate(fn, f"Project unlink: {a.ref}")
+
+
 def cmd_project_remove(a):
     def fn(data):
         pr = find_project(data, a.ref)
@@ -2869,6 +2897,19 @@ def cmd_client_link(a):
         if a.client not in data.setdefault("clients", []): data["clients"].append(a.client)
         print(f"linked {a.client}: {a.title or a.url}")
     mutate(fn, f"Files: {a.client}")
+
+
+def cmd_client_unlink(a):
+    """Remove a file store link from a client by URL (or by title)."""
+    def fn(data):
+        ci = (data.get("client_info") or {}).get(a.client) or {}
+        links = ci.get("links", [])
+        keep = [l for l in links if a.url not in (l.get("url"), l.get("title"))]
+        if len(keep) == len(links):
+            sys.exit(f"{a.client} has no link '{a.url}'")
+        ci["links"] = keep
+        print(f"unlinked {a.client}: {a.url}")
+    mutate(fn, f"Files unlink: {a.client}")
 
 
 # ---- import: load an onboarding staging file (people, companies, folders, tasks) in one save -------------------
@@ -3358,6 +3399,7 @@ def main():
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
     s.add_argument("--unclaimed", action="store_true"); s.add_argument("--attention", action="store_true")
     s.add_argument("--project", help="project id or name prefix"); s.add_argument("--client", help="client name")
+    s.add_argument("--label", help="label name, exactly as on the card (the web board's label filter)")
     s.set_defaults(f=cmd_list)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)
@@ -3371,6 +3413,7 @@ def main():
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
+    s = sub.add_parser("todo-edit", help="change the text of checklist item N in place"); s.add_argument("id"); s.add_argument("n"); s.add_argument("text"); s.set_defaults(f=cmd_todo_edit)
     s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column")
     s.add_argument("--before"); s.add_argument("--after"); s.add_argument("--top", action="store_true")
     s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); s.set_defaults(f=cmd_move)
@@ -3421,6 +3464,7 @@ def main():
     s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref"); s.set_defaults(f=cmd_unarchive)
     s = sub.add_parser("client-set", help="set a client north star or other client_info"); s.add_argument("client"); s.add_argument("--north-star", dest="north_star"); s.set_defaults(f=cmd_client_set)
     s = sub.add_parser("client-link", help="link a client to a file store folder"); s.add_argument("client"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_client_link)
+    s = sub.add_parser("client-unlink", help="remove a file store link from a client"); s.add_argument("client"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_client_unlink)
     s = sub.add_parser("projects", help="list projects"); s.add_argument("--client"); s.add_argument("--status", choices=PROJECT_STATUSES); s.add_argument("-q"); s.set_defaults(f=cmd_projects)
     s = sub.add_parser("project", help="show one project and its open tasks"); s.add_argument("ref"); s.set_defaults(f=cmd_project)
     s = sub.add_parser("project-add", help="add a project under a client"); s.add_argument("name"); s.add_argument("--client"); s.add_argument("--north-star", dest="north_star")
@@ -3428,6 +3472,7 @@ def main():
     s = sub.add_parser("project-set", help="change a project"); s.add_argument("ref"); s.add_argument("--name"); s.add_argument("--client")
     s.add_argument("--north-star", dest="north_star"); s.add_argument("--status", choices=PROJECT_STATUSES); s.set_defaults(f=cmd_project_set)
     s = sub.add_parser("project-link", help="link a project to a file or folder"); s.add_argument("ref"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_project_link)
+    s = sub.add_parser("project-unlink", help="remove a link from a project"); s.add_argument("ref"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_project_unlink)
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
     s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project or contact")
