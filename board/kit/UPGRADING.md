@@ -16,6 +16,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 2. If `tasks.json` changes shape, increase `SCHEMA` and the manifest schema. Add a safe step to `MIGRATIONS`. Update each writer in the phase that adds its write support. Follow the version notes for the migration command. Do not migrate before the upgrade is merged.
 3. The web board and `keeptrack.py` must still read the schema version before the new one, so boards that are not upgraded yet continue to work.
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
+5. In the keeptrack repo: add a row to the root `CHANGELOG.md`, extend this file, and add a **frozen board** under `tests/fixtures/` (see `tests/fixtures/README.md`). Extend `tests/test_fixture_boards.py` so `kit-update`, `migrate` (when applicable), and `doctor` keep every task, person, client, and project. The `demo/` board stays the live showcase only.
 
 ## Backups and checks for every upgrade
 1. Before the upgrade, make a backup of the default branch: a tag or branch named `backup/kit<old version>-<YYYY-MM-DD>`. Keep it permanently. It costs almost nothing, because git already stores those files.

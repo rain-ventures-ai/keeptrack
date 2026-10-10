@@ -1,0 +1,12 @@
+{
+  "label": "v4 split with projects (kit v17)",
+  "schema": 4,
+  "layout": "split",
+  "kit_before_update": 16,
+  "counts": {
+    "tasks": 2,
+    "contacts": 1,
+    "clients": 1,
+    "projects": 1
+  }
+}
