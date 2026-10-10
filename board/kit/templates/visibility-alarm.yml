@@ -66,8 +66,9 @@ jobs:
             exit 0
           fi
 
-          existing=$(gh issue list --state open --limit 500 --json number,title \
-            --jq '.[] | select(.title == "P0: board repo is not private") | .number' | head -n 1)
+          # Only an issue this workflow opened counts: on a public repo anyone can open one with the same title.
+          existing=$(gh issue list --state open --limit 500 --json number,title,author \
+            --jq '.[] | select(.title == "P0: board repo is not private" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]" or .author.login == "github-actions")) | .number' | head -n 1)
           cat > "$body" <<BODY
           This board repo is **public**. Anyone on the internet can read its contacts and tasks.
 
@@ -86,8 +87,9 @@ jobs:
           Run: $RUN_URL
           BODY
           if [ -n "$existing" ]; then
-            echo "Open alarm issue #$existing already exists; adding a comment."
+            echo "Open alarm issue #$existing already exists; adding a comment and assigning the owner."
             gh issue comment "$existing" --body-file "$body"
+            gh issue edit "$existing" --add-assignee "$OWNER" || true
           else
             gh issue create --title "$TITLE" --body-file "$body" --assignee "$OWNER" \
               || gh issue create --title "$TITLE" --body-file "$body"

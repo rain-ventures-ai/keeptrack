@@ -1,6 +1,6 @@
 ---
 name: board
-description: Work from the team board in board/ via board/keeptrack.py. Use for task work and stuck agents, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
+description: Work from the board stored in THIS repo (a Keeptrack board repo, with board/tasks.json) via board/keeptrack.py. Use in the board repo itself for task work and stuck agents, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
 ---
 
 # Team board

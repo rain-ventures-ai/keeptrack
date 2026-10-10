@@ -25,6 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v22 (schema 4)
+Keeptrack becomes repo-aware, so it helps where you use it and stays out of the way where you don't (for example a shared code repo a colleague works in without keeptrack).
+- **Personal config is `.keeptrack/config.json`.** `use <owner/repo> [--project <name>]` writes it in the current folder with a `.gitignore` of `*`, so it never reaches git. The old `.board/config.json` is still read; rerun `use` to move to the new name. Environment variables (`BOARD_REPO`, `BOARD_PROJECT`, ...) still win.
+- **Default project scope.** With a project set, `list`, `next`, `add` and `links` act on that project unless you pass `--project`, `--client` or `--all`; a note on stderr says so.
+- **`here`** prints the board, project and user for this folder, your open cards, and a reminder to keep board details out of the repo's commits, PRs and docs. **`help [topic]`** groups every command by topic.
+- **Hooks (plugin):** a new SessionStart hook runs `here --hook` only where a `.keeptrack/` (or `.board/`) config or `BOARD_REPO` exists; elsewhere it exits silently. The heartbeat hook now checks for a claim file in the shell and only then starts Python.
+- **Claim file:** in a folder with its own config, the active claim is `.keeptrack/claim.json` there, so two repos don't share one claim. Board repos keep `.board-claim.json`.
+- **Alarm template:** the open alarm issue is found by title and author (GitHub Actions), so an issue someone else opens with the same title can't silence it; a repeat alarm reassigns the owner.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `python3 board/keeptrack.py help` lists the topics; `python3 board/keeptrack.py here` prints the board line.
+
 ### v21 (schema 4)
 The optional visibility alarm (`.github/workflows/visibility-alarm.yml`) gets a test mode and fuller instructions.
 - **Test mode:** Actions → visibility-alarm → Run workflow → tick **test**. It opens a `[TEST]` issue saying the repo is private and there is nothing to do; close it. This is the way to prove the alarm reaches the owner.

@@ -1,6 +1,6 @@
 ---
 name: keeptrack
-description: Use a Keeptrack board (people, follow-ups, pipeline and tasks in the board/ folder of a private GitHub repo). Use for follow-ups, contacts, leads, messages, pipeline and task work, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
+description: Use a Keeptrack board (people, follow-ups, pipeline and tasks in the board/ folder of a private GitHub repo) from any project, including a code repo connected to a board (the session then starts with a "Keeptrack: this repo is tracked on the board ..." line). Use for "what should I work on here", "my cards for this repo", claiming and finishing cards, follow-ups, contacts, leads, messages and pipeline, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
 ---
 
 # Keeptrack (people, follow-ups, pipeline and tasks)
@@ -32,13 +32,23 @@ If the board shows errors, a save fails, or a migration has just run, use `$B do
 
 ## 1. Which board?
 ```bash
-$B where
+$B here      # board, this repo's project, your open cards here (the session-start line says the same)
+$B where     # where each setting comes from
 ```
-If it says `board: (none)`, ask the user for the board repo (owner/name) and their GitHub username, then:
+If it says no board, ask the user for the board repo (owner/name), their GitHub username and, in a code repo, which
+board project this repo belongs to (`$B projects` lists them), then:
 ```bash
-$B use <owner/name> --user <github-user> [--token-env <VAR_NAME>]
+$B use <owner/name> --project "<project>" --user <github-user> [--token-env <VAR_NAME>]
 ```
-This writes `.board/config.json` (ignored by git). It finds the default branch itself. Never write, read back or store a token. `--token-env` takes only the NAME of an environment variable.
+This writes `.keeptrack/config.json` with its own `.gitignore`: personal, never committed, invisible to teammates. It
+finds the default branch itself. Never write, read back or store a token. `--token-env` takes only the NAME of an
+environment variable. With a project set, `list`, `next`, `add` and `links` cover that project unless given another
+scope or `--all`. Commands by topic: `$B help`.
+
+### Working in a shared code repo
+Other people working in this repo may not use Keeptrack. Keep the board out of the repo: no board files, card numbers,
+board links or Keeptrack notes in its commits, pull requests, docs or `CLAUDE.md`/`AGENTS.md`, unless the user asks.
+Link the PR to the card from the board side instead (`$B link '#N' <PR url> --title "PR"`).
 
 ### Board status and truth audits
 Natural requests such as “is my board accurate?”, “these say merged but not published”, “make the statuses truthful” or
