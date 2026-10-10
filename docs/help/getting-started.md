@@ -2,6 +2,8 @@
 
 You need a GitHub account. Setup takes about ten minutes. You do not need a terminal.
 
+You can do it all on a phone: open the setup page in your phone's browser. See [On your phone](where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser) for connecting Claude there too.
+
 Do you want to look first? On the welcome page, open a demo board: **people and pipeline** or **tasks**. You can also add `?demo=crm` or `?demo=board` at the end of the board address. The demo board is read-only and has invented data. Nothing you do there is saved.
 
 The setup wizard has three steps. To open it at any time, add `?setup` to the board address. In a demo board, click **Create my own board**.
@@ -37,7 +39,7 @@ The order is name, company, role and email. Only the name is necessary. Press En
 Have a spreadsheet of contacts? Ask your AI assistant to add them (see [AI assistants](ai-assistants.md)). It checks for duplicates.
 
 ## 5. Use it on another device
-In **⚙️ Settings → General**, click **Copy setup link** and open the link on your other device. The link holds your token, so send it only to yourself.
+In **⚙️ Settings → General**, click **Copy setup link** and open the link on your other device. The link holds your token, so send it only to yourself. To use Claude on your phone too, see [On your phone](where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser).
 
 ## Next
 - [People and follow-ups](people-and-follow-ups.md)

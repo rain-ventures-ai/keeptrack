@@ -13,12 +13,15 @@ Not sure which assistant to use, or whether you need Python? See [Where your ass
 - "Move Tom to Proposal." / "What is in my pipeline?"
 
 ## Connect the assistant
-The quickest way: in the web board open **⚙️ Settings → Agents → An assistant in your chat app**, select your tool, and copy the steps. Claude Code does not always need a plugin:
+The quickest way: in the web board open **⚙️ Settings → Agents → An assistant in your chat app**, select your tool, and copy the steps. Claude Code does not always need a plugin.
+
+Already installed? Check first: in the Claude app open **Customize → Plugins**. If **keeptrack** is listed, make sure it is switched on and skip the steps below. If only the **rain-ventures-ai/keeptrack** marketplace is listed, install **keeptrack** from it; do not add the marketplace again.
 
 | Tool | How |
 |---|---|
 | Claude Desktop or Cowork | **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. |
 | Claude Code cloud | Start the session on the board repo, or add the board repo as a second repo. No plugin or PAT. |
+| Claude phone app or claude.ai in a browser | Use the **Code** tab (or https://claude.ai/code): it is Claude Code cloud, so start the session on the board repo. Ordinary chat cannot update the board. Steps: [On your phone](where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser). |
 | Claude Code locally in the board repo | Start `claude` in the repo. No plugin; use your existing `gh` login. |
 | Claude Code locally in another project | `claude plugin marketplace add rain-ventures-ai/keeptrack` then `claude plugin install keeptrack@keeptrack` |
 | Codex | `codex plugin marketplace add rain-ventures-ai/keeptrack`, then install **keeptrack** from `/plugins`. |

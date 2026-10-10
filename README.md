@@ -13,7 +13,7 @@
 - **Contact log:** each LinkedIn message, email, call or meeting. A **draft** does not count as contact until you mark it **sent**.
 - **Contact details and resources:** each person can have multiple labelled emails, phone numbers and profile/reference links. Each company can link to working folders in Google Drive, Dropbox, OneDrive, SharePoint or on a local computer. Large files stay there, not in GitHub.
 - **Tasks (optional):** the board, list, calendar, schedule and activity views, linked to people and companies.
-- **AI helpers:** a plugin for Claude (Code, Desktop, Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
+- **AI helpers:** for Claude (Code on your computer, on the web and in the phone app; Desktop and Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
 
 ## Start
 **Easiest:** paste this into your current or a new chat with Claude, Codex or Cursor. It walks you through everything, also when you have no board yet:
@@ -21,6 +21,9 @@
 ```
 Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.
 ```
+
+**On a phone or at claude.ai:** paste it into the **Code** tab of the Claude app (or https://claude.ai/code), not
+an ordinary chat; ordinary chat cannot update the board. Steps: [On your phone](docs/help/where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser).
 
 Or by hand:
 1. Open the web board (`board/index.html`, served by GitHub Pages or any static host). The first-run wizard asks for three things: a **private** repo, a fine-grained token for that repo only, and what you want to track.

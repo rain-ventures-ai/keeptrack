@@ -42,11 +42,14 @@ When the person already has `<OWNER>/<BOARD-REPO>`, give them these instructions
    in and can access the repo.
 3. **Claude Code locally, from another project:** install the Keeptrack plugin, start a fresh session, and ask Claude
    to use `<OWNER>/<BOARD-REPO>` for that project. The plugin is for this cross-project case.
-4. **Ordinary Claude chat is not Claude Code.** A chat at claude.ai that is not in the **Code** tab cannot update the
-   board. Use Claude Code or the web board.
+4. **On a phone or at claude.ai in a browser:** this is case 1. In the Claude app tap **Code** (or open
+   https://claude.ai/code), connect GitHub the first time and give the Claude GitHub app access to the board repo, then
+   start a session on the board repo. Details: [On your phone](docs/help/where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser).
+5. **Ordinary Claude chat is not Claude Code.** A chat at claude.ai or in the phone app that is not in the **Code** tab
+   cannot update the board. Use Claude Code or the web board.
 
 Then verify read access with `where` and `list` or `today`. Ask permission before adding a small test task, verify it
-appears on the web board, then finish or delete it. Do not merely explain the four cases and stop.
+appears on the web board, then finish or delete it. Do not merely explain the cases and stop.
 
 Claude's current documentation confirms that cloud sessions can include multiple repositories and do not load
 plugins declared by a repository: https://code.claude.com/docs/en/desktop#install-plugins
@@ -73,10 +76,27 @@ https://github.com/settings/personal-access-tokens so they can edit the existing
 ### Step 1. Find out where you are
 Ask the person two questions (one line each, with your recommendation):
 1. **Do you already have a Keeptrack board?** If yes, which repo (for example `rain-ventures-ai/consulting`) and what is your GitHub username?
-2. Find out yourself which tool you are (Claude Code, Claude desktop app or Cowork, Codex, Cursor). Ask only if you cannot tell.
+2. Find out yourself which tool you are (Claude Code on a computer, Claude Code cloud in a browser or the phone app's
+   **Code** tab, Claude desktop app or Cowork, ordinary Claude chat on claude.ai or the phone app, Codex, Cursor). Ask
+   only if you cannot tell. Also ask whether they are **on a phone**, if you cannot tell.
+
+If you are **ordinary Claude chat** (you cannot run commands or clone the repo), say so plainly and do not pretend to
+install anything. Take the person through the phone and claude.ai path below instead.
 
 If they already have a board and asked about Claude Code cloud or local use, take the fast path above and then go to
 step 4. Otherwise go to step 2.
+
+### Phone and claude.ai path
+Use this when the person is on a phone, or talks to you in claude.ai in a browser.
+1. **No board yet:** they open https://rain-ventures-ai.github.io/keeptrack/board/?setup in the phone's browser and
+   follow step 3a. Everything works in a phone browser; they paste the token into the page, never into the chat.
+2. **Connect Claude:** in the Claude app they tap **Code** (or open https://claude.ai/code). The first time, they connect
+   GitHub and give the Claude GitHub app access to the board repo
+   (https://github.com/apps/claude/installations/select_target if it is missing). They start a session on the board repo
+   and paste the setup prompt there again, or say: **“Use Keeptrack from `<OWNER>/<BOARD-REPO>`.”**
+3. In that Code session you are Claude Code cloud: no plugin, no PAT. Continue at step 3b.
+4. **@claude on the board** (optional): the routine is made at https://claude.ai/code/routines in a browser. Suggest a
+   computer for this part; it has several pages and secrets to copy.
 
 ### Step 2. Make Keeptrack available in this session
 First check whether the assistant is already running in the board repo (look for `board/keeptrack.py`). A board repo
@@ -84,13 +104,24 @@ contains its own instructions, skill and CLI, so it does **not** need the plugin
 start its session on the board repo, or add the board repo as a second repo.
 
 Install the plugin only when the assistant is local and working from a different project, or when the tool needs the
-general Keeptrack integration:
+general Keeptrack integration.
+
+**Check before installing.** The person may have installed it already. Look first, and skip the install when it is there:
+- **You:** is a `keeptrack` skill (for example `keeptrack:keeptrack`) in your list of skills? Locally, also run
+  `claude plugin list` (or `codex plugin list`) and look for `keeptrack`.
+- **The person (Claude desktop app or Cowork):** open https://claude.ai/customize/plugins (**Customize → Plugins**) and
+  look for **keeptrack** under the installed plugins and **rain-ventures-ai/keeptrack** under the marketplaces. If it is
+  installed but switched off, they switch it on. If the marketplace is there but the plugin is not, they install it
+  from that marketplace; they do not add the marketplace again.
+
+Only when it is missing:
 
 | Tool | What to do |
 |---|---|
 | Claude Code locally, from another project | Run `claude plugin marketplace add rain-ventures-ai/keeptrack` then `claude plugin install keeptrack@keeptrack`. Tell the person to start a new session so the skill loads. |
-| Claude Code cloud | Do not install a plugin. Select the board repo for the session, or add it as a second repo. |
-| Claude desktop app or Cowork | The person does this: open https://claude.ai/customize/plugins (or **Customize → Plugins** in the app), click **Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. Then start a new chat and paste the prompt again. If it says "Failed to add marketplace", try once more with `https://github.com/rain-ventures-ai/keeptrack`; if that also fails, use the Claude Code fast path above. |
+| Claude Code cloud (claude.ai/code, or the **Code** tab in the desktop or phone app) | Do not install a plugin. Select the board repo for the session, or add it as a second repo. |
+| Ordinary Claude chat (claude.ai or the phone app, not **Code**) | Nothing to install: it cannot update the board. Use the phone and claude.ai path above. |
+| Claude desktop app or Cowork | The person does this: open https://claude.ai/customize/plugins (or **Customize → Plugins** in the app), click **Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. Then start a new chat and paste the prompt again. If it says "Failed to add marketplace", first check whether it is already listed (it may have been added before); if not, try once more with `https://github.com/rain-ventures-ai/keeptrack`; if that also fails, use the Claude Code fast path above. |
 | Codex | Run `codex plugin marketplace add rain-ventures-ai/keeptrack`, then the person types `/plugins` and installs **keeptrack**. |
 | Cursor | The person types `/add-plugin https://github.com/rain-ventures-ai/keeptrack` in Agent chat. |
 
