@@ -65,6 +65,23 @@ class OneFile(unittest.TestCase):
         self.assertNotIn("phone", [x["name"] for x in self.data()["labels"]])
         self.assertIn("no label", refuses(self, kt.cmd_label_rm, name="ghost", force=False))
 
+    def test_review_fixes_same_name_colour_and_spaces(self):
+        before = len(self.live()["history"])
+        self.assertIn("already has that name", run(kt.cmd_label_set, name="call", rename="call", color="#abcd"))
+        self.assertIn("already has that name", run(kt.cmd_client_rename, client="Acme", new="Acme"))
+        self.assertEqual(before, len(self.live()["history"]))
+        self.assertIn({"name": "call", "color": "#abcd"}, self.data()["labels"])
+        self.assertIn("hex colour", refuses(self, kt.cmd_label_add, name="x", color="#abcde"))
+        run(kt.cmd_task_set, id="t_live", **dict(TASK_SET, label=[" spaced "]))
+        self.assertIn("spaced", self.live()["labels"])
+        self.assertIn("spaced", [x["name"] for x in self.data()["labels"]])
+
+    def test_rename_notes_that_archives_keep_old_names(self):
+        d = self.data(); d["archive"] = {"files": {"2025": {"tasks": 1}}}; write(self.file, d)
+        self.assertIn("archived items keep the old label name", run(kt.cmd_label_set, name="call", rename="phone", color=None))
+        out = run(kt.cmd_settings_set, title=None, stale_minutes=None, stages=None, rename_stage=["Contacted=Talking"])
+        self.assertIn("moved 1 people", out)
+
     def test_labels_lists_usage_and_dangling(self):
         d = self.data(); d["tasks"][0]["labels"] = ["ghost"]; write(self.file, d)
         out = run(kt.cmd_labels)
@@ -229,3 +246,36 @@ class VerifySplitBackup(unittest.TestCase):
         code, out = self.verify("backup/kit17-test")
         self.assertIn("card t_first differs: title", out)
         self.assertNotIn("is new", out)
+
+
+class VerifyBackupThroughApi(unittest.TestCase):
+    """The API path reads only the board folder's subtree at the backup commit, with cached blobs."""
+    def test_reads_board_subtree_only(self):
+        import base64
+        root = {"version": 4, "layout": "split", "labels": []}
+        card = {"id": "t_a", "title": "A"}
+        calls = []
+
+        def gh(url, *a, **k):
+            calls.append(url)
+            if "/contents/" in url:
+                return 0, json.dumps({"content": base64.b64encode(json.dumps(root).encode()).decode()}), ""
+            if "/commits/" in url:
+                return 0, json.dumps({"commit": {"tree": {"sha": "ROOT"}}}), ""
+            if url.endswith("/git/trees/ROOT"):
+                return 0, json.dumps({"tree": [{"path": "board", "type": "tree", "sha": "BOARD"}, {"path": "clients", "type": "tree", "sha": "X"}]}), ""
+            if url.endswith("/git/trees/BOARD?recursive=1"):
+                return 0, json.dumps({"tree": [{"path": "tasks.json", "type": "blob", "sha": "T"},
+                                               {"path": "cards/t_a.json", "type": "blob", "sha": "C"},
+                                               {"path": "notes.md", "type": "blob", "sha": "N"}]}), ""
+            raise AssertionError(url)
+
+        saved = kt.FILE, kt.WRITE, kt.gh, kt._api_blob, kt.PATH
+        kt.FILE, kt.WRITE, kt.gh, kt.PATH = None, "api", gh, "board/tasks.json"
+        kt._api_blob = lambda sha: json.dumps(card) if sha == "C" else self.fail(sha)
+        try:
+            backup = kt._read_backup("backup/kit17")
+        finally:
+            kt.FILE, kt.WRITE, kt.gh, kt._api_blob, kt.PATH = saved
+        self.assertEqual([card], backup["tasks"])
+        self.assertFalse(any("recursive" in c and "ROOT" in c for c in calls), calls)

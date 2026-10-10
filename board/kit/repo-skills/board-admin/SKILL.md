@@ -23,7 +23,7 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | Want | Command |
 | :-- | :-- |
 | New label | `label-add relay --color "#5e4db2"` (hex only; default grey) |
-| Rename a label (all cards follow) | `label-set relay --rename agents` |
+| Rename a label (all live cards follow) | `label-set relay --rename agents` |
 | Recolour | `label-set relay --color "#0c66e4"` |
 | Delete a label | `label-rm relay` (refuses while cards carry it); `--force` takes it off those cards |
 | Label a card / take it off | `task-set '#12' --label relay --unlabel call` (a new label is created grey) |
@@ -46,5 +46,7 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 - A refusal is information, not an obstacle: it names what still depends on the thing. Fix that, or ask. Do not work
   round it by editing JSON.
 - Board members are GitHub users who can be assigned work. CRM people (`person-add`) are separate records.
+- Renames reach the live board only. Archived items keep the old name; after `unarchive`, fix them with `task-set`
+  or `person-set`. A client's working folder (for example `clients/<name>/` in the repo) is not renamed either: say so.
 - Columns can't be changed from the CLI yet; tell the person and leave them as they are.
 - After a structural change, run `python3 board/keeptrack.py doctor` and report anything it finds.

@@ -204,7 +204,7 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 | Board members | `members`, `member-add USER [--name]`, `member-set USER --name`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
 | Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW]` |
 
-Columns are not editable from the CLI yet. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
+Renames change the live board only: items in `archive/<year>.json` keep the old label, client or stage name (the command says so); after `unarchive`, fix them with `task-set` or `person-set`. Columns are not editable from the CLI yet. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
 
 Useful environment variables: `BOARD_USER`, `BOARD_AGENT`, `BOARD_SESSION` (also `CLAUDE_SESSION_ID` / `CODEX_SESSION_ID`), `BOARD_REPO`, `BOARD_BRANCH`, `BOARD_PATH` (default `board/tasks.json`). Test safely with `--file some-copy.json`.
 
