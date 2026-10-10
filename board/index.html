@@ -427,53 +427,29 @@
   </div>
 </dialog>
 
-<dialog id="dlgCard" class="drawer" aria-label="Task details">
-  <div class="dhead"><button id="dNum" type="button" class="numchip big" title="Copy the task reference"></button><button id="dLink" type="button" class="small" title="Copy a link to this task" aria-label="Copy link to this task"><i data-i="link"></i></button><span class="spacer"></span><span id="dSaved" class="dsaved" role="status"></span><button id="cUndo" type="button" class="ico undodrawer" aria-label="Undo last board change" title="Nothing to undo" disabled><i data-i="undo-2"></i></button><button id="cIssue" type="button" class="small agentcopy" title="Create a GitHub issue for this task" aria-label="Create GitHub issue"><span aria-hidden="true"><i data-i="github"></i></span><span class="atxt"> Create issue</span></button><button id="cCopyMd" type="button" class="small agentcopy" title="Copy this card as Markdown, with all details, comments and history" aria-label="Copy card as Markdown"><span aria-hidden="true"><i data-i="clipboard-copy"></i></span><span class="atxt"> Markdown</span></button><button id="cAgent" type="button" class="small agentcopy" title="Copy instructions for an AI agent to work on this task: the card, how to claim it, and the skill link" aria-label="Copy for agent"><span aria-hidden="true"><i data-i="bot"></i></span><span class="atxt"> Copy for agent</span></button><button id="cClose" class="ico" aria-label="Close"><i data-i="x"></i></button></div>
+<dialog id="dlgCard" class="drawer taskdrawer" aria-label="Task details">
+  <!-- The header buttons, the property list and the section frames are built by board.js with ui.js (buildDrawer); the static parts below are moved into them. -->
+  <div class="dhead" id="cHead"><span id="dSaved" class="dsaved" role="status"></span></div>
   <div class="dbody" id="cBody">
     <textarea id="cTitle" class="dtitle" rows="1" aria-label="Title" placeholder="Task title"></textarea>
-    <div class="dchips">
-      <select id="cCol" class="pillsel" aria-label="Status"></select>
-      <select id="cPrio" class="pillsel prio" aria-label="Priority"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
-      <span class="duepill" title="Due date"><span aria-hidden="true"><i data-i="calendar"></i></span><input id="cDue" type="date" class="pillinput" aria-label="Due date"><button id="cDueClear" class="lx" type="button" aria-label="Clear due date" title="Clear" hidden>×</button></span>
-      <span id="cCompletedBy" class="chip doneby" hidden></span>
-    </div>
-    <div id="cClaimWrap" class="claimbanner" hidden>
-      <div id="cClaim"></div>
-      <div class="cbtns"><button id="cStuck" type="button">Mark stuck</button><button id="cRelease" type="button" class="danger">Release claim</button></div>
-    </div>
+    <div id="cClaimWrap" class="dclaim" hidden></div>
     <div id="cLastRun" class="lastrun" hidden></div>
-
-    <div class="props">
-      <div class="proprow">
-      <div class="prop stack"><span class="pk"><i data-i="users"></i> People</span><div class="pv" id="cWho"></div></div>
-      <div class="prop stack"><span class="pk"><i data-i="building-2"></i> Client</span><div class="pv"><select id="cClient" class="pillsel" aria-label="Client"></select></div></div>
-      <div class="prop stack"><span class="pk"><i data-i="flag"></i> Project</span><div class="pv"><select id="cProject" class="pillsel" aria-label="Project"></select><div id="cProjNew" class="methodadd" hidden><input id="cProjNewName" placeholder="New project name" aria-label="New project name"><button id="cProjNewAdd" type="button">Add</button></div></div></div>
-      </div>
-      <div class="prop"><span class="pk"><i data-i="tag"></i> Labels</span><div class="pv"><span id="cLabelChips"></span><button id="cLabelAdd" type="button" class="tag lplus" title="Add a label" aria-label="Add a label">＋</button><input id="cLabelNew" list="labelList" class="addinline lnew" placeholder="Label name" hidden><datalist id="labelList"></datalist></div></div>
-    </div>
-
-    <section class="dsec">
-      <div class="dsech"><h4><i data-i="notebook-pen"></i> Description</h4><button id="cDescBtn" type="button" class="small">Edit</button></div>
+    <div id="cProps"></div>
+    <div id="cDescParts">
       <div id="cDescView" class="descview" tabindex="0" title="Double-click to edit"></div>
       <div id="descEdit" hidden>
         <textarea id="cDetails" class="ddesc" placeholder="Add a more detailed description. URLs become clickable." aria-label="Description"></textarea>
         <div class="cbtns"><button id="cDescSave" type="button" class="primary">Save</button><button id="cDescCancel" type="button">Cancel</button><span class="hint">Ctrl/Cmd+Enter saves</span></div>
       </div>
-    </section>
-
-    <section class="dsec" id="cmSec"><div class="dsech"><h4><i data-i="message-square"></i> Comments <span id="cmCount" class="muted"></span></h4></div>
+    </div>
+    <div id="cmParts">
       <div class="composer"><textarea id="cmText" rows="1" placeholder="Write a comment…" aria-label="Write a comment"></textarea>
         <div class="cbtns" id="cmActions" hidden><button id="cmPost" type="button" class="primary">Comment</button><span class="hint">Ctrl/Cmd+Enter posts</span></div></div>
       <div class="hint" id="cmHint" hidden>Set your GitHub username in Settings so comments show your name.</div>
       <div id="cmStream" class="cmlist" aria-live="polite"></div>
-    </section>
-    <div class="addbar" id="addBar" role="group" aria-label="Add to this task"><button type="button" data-sec="todos"><i data-i="square-check"></i> Checklist</button><button type="button" data-sec="links"><i data-i="link"></i> Link</button><button type="button" data-sec="contacts"><i data-i="user"></i> Contact</button></div>
-    <section class="dsec optsec" data-sec="todos"><div class="dsech"><h4><i data-i="square-check"></i> Checklist <span id="cTodoCount" class="muted"></span></h4></div><div id="cTodos"></div></section>
-    <section class="dsec optsec" data-sec="links"><div class="dsech"><h4><i data-i="link"></i> Task resources and reference links <span id="cLinkCount" class="muted"></span></h4></div><div class="hint">Working Drive, Dropbox or local files/folders, issues, pull requests and other supporting pages for this task. Cloud access needs the matching connector/plugin/MCP and account; a local path needs an agent session on that computer. Profile links such as LinkedIn belong on the person.</div><div id="cLinkList"></div><input id="cLinkNew" class="addinline wide" placeholder="＋ Add a cloud URL or local path (optionally Title | location)"></section>
-    <section class="dsec optsec" data-sec="contacts"><div class="dsech"><h4><i data-i="user"></i> Contacts</h4></div><div id="cContactList"></div><input id="cContactNew" class="addinline wide" placeholder="＋ Add a contact: Name | role | email | phone"></section>
-
-    <details id="cHistWrap" class="dsec"><summary id="cHistSum">Activity</summary><ol id="cHist" class="hist"></ol></details>
-    <div class="dfoot2"><span id="dCreated" class="dcreated"></span><button id="cDelete" type="button" class="danger">Delete task</button></div>
+    </div>
+    <div id="cSecs"></div>
+    <div class="dfoot2"><span id="dCreated" class="dcreated"></span></div>
   </div>
 </dialog>
 

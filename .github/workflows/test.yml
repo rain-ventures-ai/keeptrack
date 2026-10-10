@@ -45,3 +45,6 @@ jobs:
       - name: Feedback components (in-page confirm, toasts with Undo, no native dialogs)
         working-directory: tests/browser
         run: node feedback.test.js
+      - name: Task drawer
+        working-directory: tests/browser
+        run: node task-drawer.test.js

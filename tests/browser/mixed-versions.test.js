@@ -95,6 +95,8 @@ class Github {
 
 (async () => {
   const legacyJs = execSync('git show 400c9bc:board/board.js', { cwd: ROOT, encoding: 'utf8' });
+  // An old page is the old HTML, CSS and JS together (the current HTML no longer has every element the old script looks up).
+  const legacyHtml = execSync('git show 400c9bc:board/index.html', { cwd: ROOT, encoding: 'utf8' }), legacyCss = execSync('git show 400c9bc:board/board.css', { cwd: ROOT, encoding: 'utf8' });
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
   const base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
@@ -112,6 +114,8 @@ class Github {
     });
     await page.route('https://api.test/**', r => api.route(r));
     await page.route('**/board/board.js', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: legacyJs }));
+    await page.route('**/board/index.html', route => route.fulfill({ status: 200, contentType: 'text/html', body: legacyHtml }));
+    await page.route('**/board/board.css', route => route.fulfill({ status: 200, contentType: 'text/css', body: legacyCss }));
     await page.goto(base + '/board/index.html');
     await page.waitForSelector('.card');
     assert.ok(api.files['projects/pr_pilot01ab.json'], 'project file present before edit');

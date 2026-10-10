@@ -1274,16 +1274,21 @@ if (typeof window !== 'undefined') (() => {
     add.addEventListener('keydown', async e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = add.value; add.value = ''; await addTodo(t.id, v); if (inDialog) { renderDlgTodos(); const n = $('cTodos').querySelector('.todonew'); if (n) n.focus(); } });
     box.append(add); return box;
   }
-  function renderDlgTodos(force) {
+  function renderDlgTodos(force) {   // the drawer's checklist; adding goes through the section's add row
     const t = state.tasks.find(x => x.id === editing), box = $('cTodos'); if (!t) return;
-    const sig = JSON.stringify(t.todos.map(d => [d.id, d.text, !!d.done])); if (!force && sig === todoSig && box.childNodes.length) return; todoSig = sig;
-    const typed = box.querySelector('.todonew') ? box.querySelector('.todonew').value : ''; box.textContent = ''; box.append(todoList(t, true));
-    $('cTodoCount').textContent = t.todos.length ? `(${t.todos.filter(d => d.done).length}/${t.todos.length})` : '';
-    if (typed) box.querySelector('.todonew').value = typed;
+    const sig = JSON.stringify(t.todos.map(d => [d.id, d.text, !!d.done])); if (!force && sig === todoSig) return; todoSig = sig;
+    box.textContent = '';
+    t.todos.forEach(d => {
+      const row = el('label', 'todo dtodo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
+      cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); renderDlgTodos(); };
+      const x = ui.iconButton({ icon: 'x', label: `Remove “${d.text}”`, size: 'sm', onClick: async e => { e.preventDefault(); if (!(await confirmDrawerRemoval(`the checklist item “${d.text}”`))) return; await removeTodo(t.id, d.id); renderDlgTodos(); } });
+      row.append(cb, el('span', null, d.text), x); box.append(row);
+    });
+    $('cTodoCount').textContent = t.todos.length ? `${t.todos.filter(d => d.done).length}/${t.todos.length}` : '';
   }
   const ago2 = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
   function renderDlgHistory(t) {
-    const ol = $('cHist'); ol.textContent = ''; $('cHistSum').textContent = `History (${t.history.length})`;
+    const ol = $('cHist'); ol.textContent = ''; $('cHistCount').textContent = t.history.length || '';
     t.history.slice().reverse().forEach(h => { const li = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li); });
     if (!t.history.length) ol.append(el('li', null, 'No history yet.'));
   }
@@ -1293,7 +1298,7 @@ if (typeof window !== 'undefined') (() => {
   function renderComments() {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
     const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length; if (sig === cmSig) return; cmSig = sig;
-    $('cmCount').textContent = t.comments.length ? `(${t.comments.length})` : ''; const box = $('cmStream'); box.textContent = '';
+    $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
     t.comments.slice().reverse().forEach(cm => {      // newest first, like Trello: the composer is always at the top
       if (cm.type === 'activity') {   // a one-line event (for example "Claude started a session"), not a message
         const row = el('div', 'cmact' + (/failed/i.test(cm.text) ? ' bad' : '')), url = safeUrl(cm.session_url);
@@ -1891,6 +1896,69 @@ if (typeof window !== 'undefined') (() => {
   }
   const edit = (id, f, msg, baseKey) => saveField(n => { const t = n.tasks.find(x => x.id === id); if (t) { f(t, n); stamp(t); } }, msg, baseKey);
 
+  // ---- the drawer frame: built once with ui.js (header, one property list, sections); fillDrawer() fills it per task ----
+  const drawerAddRows = [];
+  const roKeep = x => { x.dataset.roKeep = '1'; return x; };   // read-only boards keep the buttons that only read or copy
+  const confirmDrawerRemoval = what => ui.confirm({ title: `Remove ${what}?`, body: 'This saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.', confirmLabel: 'Remove', danger: true });
+  function ghostAdd(id, label, aria, onClick) { const b = el('button', 'ui-addrow__ghost'); b.type = 'button'; b.id = id; b.setAttribute('aria-label', aria); b.title = aria; b.append(ui.icon('plus'), el('span', null, label)); b.onclick = onClick; return b; }
+  function drawerSelect(id, label, options) { const w = ui.select({ label, options: options || [] }); w.control.id = id; return w; }
+  function drawerAddRow(id, opts) { const r = ui.addRow({ collapsed: true, buttonLabel: 'Add', ...opts }); r.input.id = id; drawerAddRows.push(r); return r; }
+  function drawerSection(id, opts) { const s = ui.section(opts); s.id = id; s.classList.add('dsec2'); return s; }
+  function buildDrawer() {
+    // header: number pill (copies the link), undo, copy for agent, more actions, close
+    const num = ui.pill({ text: '#', icon: 'link', onClick: () => copyTaskLink() }); num.id = 'dNum'; num.classList.add('dnum'); roKeep(num);
+    const undo = ui.iconButton({ icon: 'undo-2', label: 'Undo last board change' }); undo.id = 'cUndo'; undo.disabled = true;
+    const agent = ui.iconButton({ icon: 'bot', label: 'Copy for agent', onClick: copyForAgent }); agent.id = 'cAgent'; roKeep(agent);
+    const more = ui.iconButton({ icon: 'ellipsis', label: 'More actions' }); more.id = 'dMore'; more.onclick = () => openDrawerMenu(more); roKeep(more);
+    const close = ui.iconButton({ icon: 'x', label: 'Close' }); close.id = 'cClose'; roKeep(close);
+    $('cHead').append(num, el('span', 'spacer'), $('dSaved'), undo, agent, more, close);
+    // properties
+    const status = el('span', 'dval'); status.id = 'cStatusVal'; status.append(drawerSelect('cCol', 'Status'));
+    const prio = drawerSelect('cPrio', 'Priority', [{ value: 'high', label: 'High' }, { value: 'medium', label: 'Medium' }, { value: 'low', label: 'Low' }]);
+    const due = el('span', 'ui-pill ui-pill--neutral ddue'); due.id = 'cDuePill'; due.title = 'Due date';
+    const dueIn = el('input', 'ddue__input'); dueIn.type = 'date'; dueIn.id = 'cDue'; dueIn.setAttribute('aria-label', 'Due date');
+    const dueX = el('button', 'ui-pill__remove'); dueX.type = 'button'; dueX.id = 'cDueClear'; dueX.setAttribute('aria-label', 'Clear due date'); dueX.title = 'Clear due date'; dueX.append(ui.icon('x')); dueX.hidden = true;
+    due.append(ui.icon('calendar'), dueIn, dueX);
+    const who = el('span', 'dval'); who.id = 'cWho';
+    const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
+    const chips = el('span', 'dval'); chips.id = 'cLabelChips';
+    const labelAdd = ghostAdd('cLabelAdd', 'Add', 'Add a label', () => { labelAdd.hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); });
+    const labelNew = el('input', 'ui-input dlabelnew'); labelNew.id = 'cLabelNew'; labelNew.setAttribute('list', 'labelList'); labelNew.placeholder = 'Label name'; labelNew.setAttribute('aria-label', 'New label name'); labelNew.hidden = true;
+    const labelList = el('datalist'); labelList.id = 'labelList';
+    $('cProps').append(ui.props([
+      { label: 'Status', icon: 'square-kanban', value: status },
+      { label: 'Priority', icon: 'flag', value: prio },
+      { label: 'Due', icon: 'calendar', value: due },
+      { label: 'People', icon: 'users', value: [who, whoAdd] },
+      { label: 'Client', icon: 'building-2', value: drawerSelect('cClient', 'Client') },
+      { label: 'Project', icon: 'folder', value: drawerSelect('cProject', 'Project') },
+      { label: 'Labels', icon: 'tag', value: [chips, labelAdd, labelNew, labelList] }
+    ]));
+    // sections: Description, Checklist, Links, Contacts, Comments, History
+    const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
+    const todos = el('div', 'dtodos'); todos.id = 'cTodos';
+    const todoAdd = drawerAddRow('cTodoNew', { placeholder: 'Add a checklist item', ghostLabel: 'Add item', label: 'New checklist item', onAdd: v => { const id = editing; addTodo(id, v).then(() => { if (editing === id) renderDlgTodos(); }); } });
+    const links = el('div', 'dlist'); links.id = 'cLinkList';
+    const linkAdd = drawerAddRow('cLinkNew', { placeholder: 'URL or local path (Title | location)', ghostLabel: 'Add link', label: 'New link: a cloud URL or local path, optionally as Title | location', onAdd: addLinkLine });
+    const linkHint = el('p', 'hint dhint', 'Working Drive, Dropbox or local files/folders, issues, pull requests and other supporting pages for this task. Cloud access needs the matching connector/plugin/MCP and account; a local path needs an agent session on that computer. Profile links such as LinkedIn belong on the person.');
+    const contacts = el('div', 'dlist'); contacts.id = 'cContactList';
+    const contactAdd = drawerAddRow('cContactNew', { placeholder: 'Name | role | email | phone', ghostLabel: 'Add contact', label: 'New contact: Name | role | email | phone', onAdd: addContactLine });
+    const hist = el('ol', 'hist'); hist.id = 'cHist';
+    const secs = [
+      drawerSection('cDescSec', { title: 'Description', action: descBtn, body: $('cDescParts') }),
+      drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
+      drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint] }),
+      drawerSection('cContactSec', { title: 'Contacts', count: '', body: [contacts, contactAdd] }),
+      drawerSection('cmSec', { title: 'Comments', count: '', body: $('cmParts') }),
+      drawerSection('cHistWrap', { title: 'History', count: '', collapsible: true, open: false, body: hist })
+    ];
+    [['cTodoSec', 'todos', 'cTodoCount'], ['cLinkSec', 'links', 'cLinkCount'], ['cContactSec', 'contacts', 'cContactCount'], ['cmSec', '', 'cmCount'], ['cHistWrap', '', 'cHistCount']].forEach(([sid, k, cid]) => {
+      const s = secs.find(x => x.id === sid); if (k) { s.dataset.sec = k; s.classList.add('optsec'); } s.querySelector('.ui-count').id = cid; });
+    roKeep(secs[5].querySelector('.ui-section__toggle'));
+    $('cSecs').append(...secs);
+  }
+  buildDrawer();
+
   function renderDescView(t) {
     const v = $('cDescView'); v.textContent = ''; if (t.details) linkify(v, t.details); else v.append(el('span', 'ph', 'Add a more detailed description…'));
   }
@@ -1919,88 +1987,110 @@ if (typeof window !== 'undefined') (() => {
   $('cTitle').addEventListener('input', () => autosize($('cTitle'))); $('cTitle').addEventListener('blur', commitTitle);
 
   $('cCol').onchange = e => { const id = editing, v = e.target.value; saveField(n => { place(n, id, v, null); }, `Move: ${titleOf(id)}`); };
-  $('cPrio').onchange = e => { const v = e.target.value; e.target.dataset.v = v; edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
-  $('cClient').onchange = e => {
-    let v = e.target.value;
+  const PRIO_TONE = { high: 'danger', medium: 'warn', low: 'ok' };
+  function syncPrio(v) { const w = $('cPrio').parentElement; ['danger', 'warn', 'ok'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + (PRIO_TONE[v] || 'warn')); }
+  $('cPrio').onchange = e => { const v = e.target.value; syncPrio(v); edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
+  $('cClient').onchange = async e => {
+    const sel = e.target, id = editing; let v = sel.value;
     if (v === '__new') {
-      const t0 = taskNow(); v = (prompt('New client name:') || '').replace(/\s+/g, ' ').trim();
-      if (!v) { e.target.value = (t0 && t0.client) || ''; return; }
+      const t0 = taskNow(); sel.value = (t0 && t0.client) || '';
+      v = ((await ui.promptText({ title: 'New client', label: 'Client name', confirmLabel: 'Add client' })) || '').replace(/\s+/g, ' ').trim();
+      if (!v || editing !== id) return;
       const known = state.clients.find(c => c.toLowerCase() === v.toLowerCase()); if (known) v = known;
-      edit(editing, (t, n) => { if (!n.clients.some(c => c.toLowerCase() === v.toLowerCase())) n.clients.push(v); t.client = v; }, `New client: ${v}`);
+      edit(id, (t, n) => { if (!n.clients.some(c => c.toLowerCase() === v.toLowerCase())) n.clients.push(v); t.client = v; }, `New client: ${v}`);
       return;
     }
-    edit(editing, t => { t.client = v; if (v && t.project) { const pr = projectById(t.project); if (pr && pr.client && pr.client !== v) t.project = ''; } }, `Client: ${titleOf(editing)}`);
+    edit(id, t => { t.client = v; if (v && t.project) { const pr = projectById(t.project); if (pr && pr.client && pr.client !== v) t.project = ''; } }, `Client: ${titleOf(id)}`);
   };
-  $('cProjNewAdd').onclick = () => {
-    const name = $('cProjNewName').value.trim(), client = $('cProjNew').dataset.client || '';
-    if (!name) { toast('Enter a project name.', true); return; }
-    const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
-    edit(editing, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
-    $('cProjNew').hidden = true; $('cProjNewName').value = '';
-  };
-  $('cProject').onchange = e => {
-    let v = e.target.value;
-    const t0 = taskNow();
+  $('cProject').onchange = async e => {
+    const sel = e.target, v = sel.value, t0 = taskNow(), id = editing;
     if (v === '__new') {
+      sel.value = (t0 && t0.project) || '';
       const client = (t0 && t0.client) || '';
-      $('cProjNew').hidden = false; $('cProjNewName').value = ''; $('cProjNewName').focus();
-      e.target.value = (t0 && t0.project) || '';
-      $('cProjNew').dataset.client = client;
+      const name = ((await ui.promptText({ title: 'New project', label: 'Project name', body: client ? `The project belongs to ${client}.` : undefined, confirmLabel: 'Add project' })) || '').replace(/\s+/g, ' ').trim();
+      if (!name || editing !== id) return;
+      const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
+      edit(id, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
       return;
     }
-    edit(editing, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(editing)}`);
+    edit(id, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(id)}`);
   };
-  $('cDue').onchange = e => { const v = e.target.value; $('cDueClear').hidden = !v; edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
-  $('cDueClear').onclick = () => { $('cDue').value = ''; $('cDueClear').hidden = true; edit(editing, t => { t.due = ''; }, `Clear due: ${titleOf(editing)}`); };
+  function syncDue(v, t) {   // overdue is red, today amber; a done task is never late
+    const st = dueState({ due: v, column: t ? t.column : '' }), p = $('cDuePill');
+    p.classList.toggle('ui-pill--danger', st === ' late'); p.classList.toggle('ui-pill--warn', st === ' today'); p.classList.toggle('ui-pill--neutral', !st);
+    p.classList.toggle('ddue--empty', !v); $('cDueClear').hidden = !v;
+  }
+  $('cDue').onchange = e => { const v = e.target.value; syncDue(v, taskNow()); edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
+  $('cDueClear').onclick = () => { $('cDue').value = ''; syncDue(''); edit(editing, t => { t.due = ''; }, `Clear due: ${titleOf(editing)}`); };
 
+  // People: one pill per assignee (x unassigns), the agent working on it, and one "+ Add" menu for people and agents
   function renderPeople(t) {
     const box = $('cWho'); box.textContent = '';
-    state.people.map(p => ({ github: p.github, name: p.name || p.github })).concat(t.assignees.filter(a => !state.people.some(p => p.github === a)).map(a => ({ github: a, name: a }))).forEach(p => {
-      const on = t.assignees.includes(p.github), b = el('button', 'pchip' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = (on ? 'Remove @' : 'Assign @') + p.github;
-      b.append(avatar(p.github), document.createTextNode(p.name));
-      b.onclick = () => edit(editing, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(editing)}`); box.append(b);
+    t.assignees.forEach(gh => {
+      const p = state.people.find(x => x.github === gh), name = (p && p.name) || gh;
+      const chip = ui.person({ name, removeLabel: `Unassign ${name}`, onRemove: () => edit(editing, x => { x.assignees = x.assignees.filter(a => a !== gh); }, `Assignees: ${titleOf(editing)}`) });
+      chip.title = '@' + gh; box.append(chip);
     });
-    box.append(taskAssignControl(t, true));
+    const claim = activeClaim(t); if (claim) { const a = ui.pill({ text: agentLabel(claim), icon: 'bot', tone: 'accent' }); a.title = 'This agent is working on the task'; box.append(a); }
+  }
+  function openPeopleMenu(anchor) {
+    const t = taskNow(); if (!t) return; const items = [], me = cfg().me;
+    const free = state.people.filter(p => !t.assignees.includes(p.github));
+    free.forEach(p => items.push({ label: p.name && p.name !== p.github ? `${p.name} (@${p.github})` : '@' + p.github, icon: 'user',
+      onSelect: () => edit(t.id, x => { if (!x.assignees.includes(p.github)) x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`) }));
+    if (!state.people.length) items.push({ label: 'Add people in Settings first', icon: 'users', disabled: true });
+    else if (!free.length) items.push({ label: 'Everyone on the board is assigned', icon: 'users', disabled: true });
+    items.push({ separator: true });
+    if (myAgents().includes('claude')) {
+      const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === me;
+      items.push({ label: mine ? `Claude for @${me} · assigned` : claim ? `${agentLabel(claim)} already has this task` : claudeReady() && me ? `Assign to Claude for @${me}` : 'Claude · finish setup first', icon: 'bot',
+        disabled: !!claim || !claudeReady() || !me, onSelect: () => assignMyClaude(t.id) });
+    } else items.push({ label: 'Set up your Claude agent…', icon: 'settings', onSelect: () => { $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); } });
+    ui.menu(anchor, items, { label: `Assign task #${t.num}` });
   }
   function renderLabelChips(t) {
     const box = $('cLabelChips'); box.textContent = ''; $('labelList').textContent = ''; state.labels.forEach(l => { const o = el('option'); o.value = l.name; $('labelList').append(o); });
-    t.labels.forEach(l => { const s = paintLabel(el('span', 'tag label lchip', l), l); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove label'; x.setAttribute('aria-label', 'Remove label ' + l);
-      x.onclick = () => { if (!confirmRemoval(`the “${l}” label`)) return; edit(editing, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(editing)}`); }; s.append(x); box.append(s); });
+    t.labels.forEach(l => box.append(ui.pill({ text: l, color: labelColor(l), removeLabel: 'Remove label ' + l,
+      onRemove: async () => { const id = editing; if (!(await confirmDrawerRemoval(`the “${l}” label`)) || editing !== id) return; edit(id, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(id)}`); } })));
   }
-  $('cLabelAdd').onclick = () => { $('cLabelAdd').hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); };
-  $('cLabelNew').addEventListener('blur', () => setTimeout(() => { if (!$('cLabelNew').value.trim()) { $('cLabelNew').hidden = true; $('cLabelAdd').hidden = false; } }, 150));
+  const closeLabelInput = () => { $('cLabelNew').value = ''; $('cLabelNew').hidden = true; $('cLabelAdd').hidden = false; };
+  $('cLabelNew').addEventListener('blur', () => setTimeout(() => { if (!$('cLabelNew').value.trim()) closeLabelInput(); }, 150));
   function addLabel() {
     const inp = $('cLabelNew'), v = inp.value.replace(/,/g, '').trim(); inp.value = ''; if (!v) return;
     edit(editing, (t, n) => { if (!t.labels.includes(v)) t.labels.push(v); if (!n.labels.some(x => x.name === v)) n.labels.push({ name: v, color: '#6b778c' }); }, `Labels: ${titleOf(editing)}`);
   }
-  $('cLabelNew').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addLabel(); } }); $('cLabelNew').addEventListener('change', addLabel);
+  $('cLabelNew').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addLabel(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLabelInput(); $('cLabelAdd').focus(); } }); $('cLabelNew').addEventListener('change', addLabel);
 
   const parseLine = txt => { const p = txt.split('|').map(x => x.trim()); const url = p.length > 1 ? p.slice(1).join('|').trim() : p[0]; return safeUrl(url) || localResource(url) ? { title: p.length > 1 && p[0] ? p[0] : url, url } : null; };
+  function addLinkLine(txt) {
+    const v = parseLine(txt); if (!v) { toast('Paste an http(s) cloud link or local path, optionally as: Title | location', true); return false; }
+    edit(editing, t => { if (!t.links.some(y => y.url === v.url)) t.links.push(v); }, `Links: ${titleOf(editing)}`);
+  }
   function renderLinkList(t) {
-    const box = $('cLinkList'); box.textContent = ''; $('cLinkCount').textContent = t.links.length ? `(${t.links.length})` : '';
+    const box = $('cLinkList'); box.textContent = ''; $('cLinkCount').textContent = t.links.length || '';
     t.links.forEach(l => {
-      const row = el('div', 'linkrow'), g = ghLink(l.url), href = safeUrl(l.url), local = localResource(l.url), main = href ? el('a', null, g ? g.label : (l.title || l.url)) : el('span', 'resourcepath', l.title || l.url); if (href) { main.href = href; main.target = '_blank'; main.rel = 'noopener noreferrer'; }
-      let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {} if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
-      const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.onclick = () => copyText(l.url, 'Path copied.'); }
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove link'; x.setAttribute('aria-label', 'Remove link');
-      x.onclick = () => { if (!confirmRemoval(`the task resource “${l.title || l.url}”`)) return; edit(editing, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(editing)}`); };
-      row.append(elI('span', 'li', g ? 'github' : local ? 'laptop' : 'link'), main, el('span', 'host', g && l.title && l.title !== l.url ? l.title : host)); if (cp) row.append(cp); row.append(x); box.append(row);
+      const g = ghLink(l.url), local = localResource(l.url); let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
+      const row = ui.listRow({ text: g ? g.label : (l.title || l.url), meta: g && l.title && l.title !== l.url ? l.title : host, href: safeUrl(l.url) || undefined, icon: g ? 'github' : local ? 'laptop' : 'link', removeLabel: `Remove link ${l.title || l.url}`,
+        onRemove: async () => { const id = editing; if (!(await confirmDrawerRemoval(`the task resource “${l.title || l.url}”`)) || editing !== id) return; edit(id, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(id)}`); } });
+      row.title = l.url;
+      if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
+      box.append(row);
     });
   }
-  $('cLinkNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = parseLine($('cLinkNew').value); if (!v) { toast('Paste an http(s) cloud link or local path, optionally as: Title | location', true); return; }
-    $('cLinkNew').value = ''; edit(editing, t => { if (!t.links.some(y => y.url === v.url)) t.links.push(v); }, `Links: ${titleOf(editing)}`); });
+  function addContactLine(txt) {
+    const p = txt.split('|').map(x => x.trim()); if (!p[0]) return false;
+    const k = { name: p[0], role: p[1] || '', email: p[2] || '', phone: p[3] || '' }; edit(editing, t => { t.contacts.push(k); }, `Contacts: ${titleOf(editing)}`);
+  }
   function renderContactList(t) {
-    const box = $('cContactList'); box.textContent = '';
+    const box = $('cContactList'); box.textContent = ''; $('cContactCount').textContent = t.contacts.length || '';
     t.contacts.forEach(k => {
-      const row = el('div', 'contact'), main = el('div', 'cmain'); main.append(el('b', null, k.name || '(no name)')); if (k.role) main.append(el('span', 'host', ' · ' + k.role));
-      const det = el('div', 'cdet'); if (k.email) { const a = el('a', null, k.email); a.href = 'mailto:' + k.email; det.append(a); } if (k.phone) { const a = el('a', null, k.phone); a.href = 'tel:' + k.phone.replace(/\s+/g, ''); det.append(a); }
-      main.append(det); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove contact'; x.setAttribute('aria-label', 'Remove contact');
-      x.onclick = () => { if (!confirmRemoval(`the task contact “${k.name}”`)) return; edit(editing, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(editing)}`); };
-      row.append(el('span', 'avc', (k.name || '?').slice(0, 1).toUpperCase()), main, x); box.append(row);
+      const row = ui.listRow({ text: k.name || '(no name)', meta: k.role || '', icon: 'user', removeLabel: `Remove contact ${k.name}`,
+        onRemove: async () => { const id = editing; if (!(await confirmDrawerRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(id)}`); } });
+      [[k.email, 'mailto:' + k.email, 'mail', 'Email'], [k.phone, 'tel:' + String(k.phone).replace(/\s+/g, ''), 'phone', 'Call']].forEach(([v, href, ic, verb]) => {
+        if (!v) return; const a = el('a', 'ui-iconbtn ui-iconbtn--ghost ui-iconbtn--sm'); a.href = href; a.title = v; a.setAttribute('aria-label', `${verb} ${k.name}: ${v}`); a.append(ui.icon(ic)); row.insertBefore(a, row.lastChild); });
+      box.append(row);
     });
   }
-  $('cContactNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); const p = $('cContactNew').value.split('|').map(x => x.trim()); if (!p[0]) return;
-    const k = { name: p[0], role: p[1] || '', email: p[2] || '', phone: p[3] || '' }; $('cContactNew').value = ''; edit(editing, t => { t.contacts.push(k); }, `Contacts: ${titleOf(editing)}`); });
 
   function renderClaim(t) {
     // a finished run leaves no banner, just one "Last run" line with its link (older cards kept a claim with status done)
@@ -2011,45 +2101,37 @@ if (typeof window !== 'undefined') (() => {
       if (last.session_url && safeUrl(last.session_url)) { const a = el('a', 'sesslink', /\/routines\//.test(last.session_url) ? 'Routine runs ↗' : 'Open session ↗'); a.href = safeUrl(last.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; lr.append(document.createTextNode(' · '), a); }
       if (last.note) lr.title = last.note;
     }
-    const wrap = $('cClaimWrap'); wrap.hidden = !live; const dl = $('cClaim'); dl.textContent = ''; if (!live) return;
-    const k = t.claim, st = claimState(k); wrap.className = 'claimbanner ' + st;
-    const top = el('div', 'cltop'); top.append(el('span', 'pulse'), el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); dl.append(top);
-    if (k.note) dl.append(el('div', 'cnote', k.note));
-    dl.append(el('div', 'host', [k.session_id && 'session ' + k.session_id, k.host, k.branch].filter(Boolean).join(' · ')));
-    if (k.session_url && safeUrl(k.session_url)) { const sa = el('a', 'sesslink', /\/routines\//.test(k.session_url) ? 'Open the routine’s runs ↗' : 'Open the Claude session ↗'); sa.href = safeUrl(k.session_url); sa.target = '_blank'; sa.rel = 'noopener noreferrer'; dl.append(sa); }
+    const wrap = $('cClaimWrap'); wrap.textContent = ''; wrap.hidden = !live; if (!live) return;
+    const k = t.claim, st = claimState(k), tone = st === 'running' ? 'ok' : st === 'stuck' ? 'danger' : st === 'stale' || st === 'blocked' ? 'warn' : 'info';
+    const txt = el('div', 'dclaim__text'), top = el('div', 'cltop'); top.append(el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); txt.append(top);
+    if (k.note) txt.append(el('div', 'cnote', k.note));
+    const where = [k.session_id && 'session ' + k.session_id, k.host, k.branch].filter(Boolean).join(' · '); if (where) txt.append(el('div', 'host', where));
+    if (k.session_url && safeUrl(k.session_url)) { const sa = el('a', 'sesslink', /\/routines\//.test(k.session_url) ? 'Open the routine’s runs ↗' : 'Open the Claude session ↗'); sa.href = safeUrl(k.session_url); sa.target = '_blank'; sa.rel = 'noopener noreferrer'; txt.append(sa); }
+    const acts = el('div', 'dclaim__acts');
+    const stuck = ui.button({ label: 'Mark stuck', size: 'sm', onClick: () => edit(editing, x => { if (x.claim) { x.claim.status = 'stuck'; x.claim.note = (x.claim.note ? x.claim.note + ' | ' : '') + `marked stuck by ${me() || 'human'}`; } }, `Mark stuck: ${titleOf(editing)}`) }); stuck.id = 'cStuck';
+    const rel = ui.button({ label: 'Release claim', size: 'sm', onClick: async () => { const id = editing; if (!(await ui.confirm({ title: 'Release the agent claim?', body: 'The agent session may still be running.', confirmLabel: 'Release claim', danger: true })) || editing !== id) return; edit(id, x => { x.claim = null; }, `Release claim: ${titleOf(id)}`); } }); rel.id = 'cRelease';
+    acts.append(stuck, rel); wrap.className = 'dclaim ' + st;
+    wrap.append(ui.banner({ tone, icon: 'bot', text: [txt, acts] }));
   }
-  $('cStuck').onclick = () => edit(editing, t => { if (t.claim) { t.claim.status = 'stuck'; t.claim.note = (t.claim.note ? t.claim.note + ' | ' : '') + `marked stuck by ${me() || 'human'}`; } }, `Mark stuck: ${titleOf(editing)}`);
-  $('cRelease').onclick = () => { if (!confirm('Release the agent claim? The agent session may still be running.')) return; edit(editing, t => { t.claim = null; }, `Release claim: ${titleOf(editing)}`); };
 
   function fillDrawer(t, force) {
-    { $('dLink').onclick = () => copyText(`${location.origin}${location.pathname}${location.search}#${t.num}`, `Link to #${t.num} copied`); }
-    { const nb = $('dNum'); nb.textContent = '#' + t.num + '  ⧉'; nb.title = `Task #${t.num}: click to copy the reference`; nb.onclick = () => copyText('#' + t.num, `Copied #${t.num}`); }
+    { const nb = $('dNum'); nb.querySelector('.ui-pill__text').textContent = '#' + t.num; nb.title = `Task #${t.num}: copy a link to it`; nb.setAttribute('aria-label', `Task #${t.num}, copy link`); }
     const set = (x, v) => { if ((force || document.activeElement !== x) && x.value !== v) x.value = v; };
     const cl = [...new Set([...state.clients, t.client].filter(Boolean))];
     if (force || $('cClient').options.length !== cl.length + 2) fillSelect($('cClient'), [['', '(none)'], ...cl.map(c => [c, c]), ['__new', '＋ New client…']]);
     const prOpts = [['', '(none)'], ...sortedProjects().filter(p => !t.client || p.client === t.client).map(p => [p.id, projectPickerLabel(p)]), ['__new', '＋ New project…']];
     if (force || $('cProject').options.length !== prOpts.length) fillSelect($('cProject'), prOpts);
-    if (force) $('cProjNew').hidden = true;
     if (force) { fillSelect($('cCol'), state.columns.map(c => [c.id, c.name])); }
     set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cClient'), t.client || ''); set($('cProject'), t.project || ''); set($('cDue'), t.due || '');
-    { const who = completionOf(t), done = $('cCompletedBy'); done.hidden = !who; done.className = 'chip doneby' + (who && who.agent ? ' agent' : ' person'); done.textContent = who ? 'Completed by ' + who.label : ''; done.title = who && who.at ? fmtStamp(who.at) : ''; }
-    $('cPrio').dataset.v = $('cPrio').value; $('cDueClear').hidden = !$('cDue').value;
+    { const who = completionOf(t), old = $('cCompletedBy'); if (old) old.remove();
+      if (who) { const p = ui.pill({ text: 'Completed by ' + who.label, icon: 'circle-check', tone: who.agent ? 'accent' : 'ok' }); p.id = 'cCompletedBy'; p.title = who.at ? fmtStamp(who.at) : ''; $('cStatusVal').append(p); } }
+    syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (force || (document.activeElement !== ti && ti.value !== t.title)) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncIssueBtn(t); syncAgentBtn(t);
+    renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
-  // Checklist / Links / Contacts show only when they hold something (or were just opened from the add bar)
-  const openSecs = new Set();
-  function syncSections(t) {
-    const has = { todos: t.todos.length, links: t.links.length, contacts: t.contacts.length };
-    let hidden = 0;
-    document.querySelectorAll('.optsec').forEach(s => { const k = s.dataset.sec, show = !!has[k] || openSecs.has(k); s.hidden = !show; });
-    document.querySelectorAll('#addBar button').forEach(b => { const k = b.dataset.sec, show = !has[k] && !openSecs.has(k); b.hidden = !show; if (show) hidden++; });
-    $('addBar').hidden = !hidden;
-  }
-  document.querySelectorAll('#addBar button').forEach(b => { b.onclick = () => {
-    const k = b.dataset.sec; openSecs.add(k); const t = taskNow(); if (t) syncSections(t);
-    const f = k === 'todos' ? document.querySelector('#cTodos .todonew') : $(k === 'links' ? 'cLinkNew' : 'cContactNew'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }; });
+  // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
+  function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
   // deep links: the address carries the task number (#13) while a card is open, and loading a URL with #13 opens that card
   const hashNum = () => { const m = /^#(\d{1,5})$/.exec(location.hash); return m ? Number(m[1]) : null; };
   const setHash = h => { try { history.replaceState(null, '', location.pathname + location.search + h); } catch {} };
@@ -2062,15 +2144,29 @@ if (typeof window !== 'undefined') (() => {
   function refreshDrawer() { const t = taskNow(); if (!t) { $('dlgCard').close(); return; } fillDrawer(t, false); }   // board data changed underneath an open card
 
   function openCard(id, focus) {
-    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; openSecs.clear(); commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false;
+    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false;
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
+    drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
-    fillDrawer(t, true); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; $('cHistWrap').open = false;
+    fillDrawer(t, true); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; $('cHistWrap').toggle(false);
     markSeen(id); render();
     $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num);
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
   $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
+  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(`${location.origin}${location.pathname}${location.search}#${t.num}`, `Link to #${t.num} copied`); };
+  // the ⋯ menu: copy link or reference, the GitHub issue, Markdown, delete
+  function openDrawerMenu(anchor) {
+    const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
+    const items = [
+      { label: 'Copy link', icon: 'link', onSelect: copyTaskLink },
+      { label: `Copy reference #${t.num}`, icon: 'copy', onSelect: () => copyText('#' + t.num, `Copied #${t.num}`) },
+      { label: il ? `Open GitHub issue #${il.n}` : 'Create GitHub issue', icon: 'github', disabled: issueBusy || (!il && !!ro), onSelect: issueAction },
+      { label: 'Copy as Markdown', icon: 'clipboard-copy', onSelect: () => { const x = taskNow(); if (x) copyText(taskMarkdown(x), 'Card copied as Markdown'); } }
+    ];
+    if (!ro) items.push({ separator: true }, { label: 'Delete task', icon: 'trash-2', danger: true, onSelect: deleteTask });
+    ui.menu(anchor, items, { label: `Actions for task #${t.num}` });
+  }
   // ---- GitHub issue from a card: creates an issue that carries the task and tells automation how to report back ----
   const issueLinkOf = t => { const r = new RegExp('^https://github\\.com/' + cfg().repo.replace(/[.]/g, '\\.') + '/issues/(\\d+)$', 'i'); for (const l of t.links) { const m = r.exec(l.url); if (m) return { url: l.url, n: m[1] }; } return null; };
   // Codex can't be started from the board, so when a card's newest @codex request is unanswered the Copy button turns into "Copy for Codex"
@@ -2080,9 +2176,8 @@ if (typeof window !== 'undefined') (() => {
     for (let i = t.comments.length - 1; i >= 0; i--) { const m = t.comments[i]; if (/codex/i.test(m.by || '')) return false; if (mentionsCodex(m.text)) return true; }
     return false;
   }
-  function syncAgentBtn(t) { const b = $('cAgent'), on = codexWanted(t); b.classList.toggle('hot', on); b.querySelector('.atxt').textContent = on ? ' Copy for Codex' : ' Copy for agent';
+  function syncAgentBtn(t) { const b = $('cAgent'), on = codexWanted(t); b.classList.toggle('hot', on); b.setAttribute('aria-label', on ? 'Copy for Codex' : 'Copy for agent');
     b.title = on ? 'Codex was asked on this card. Copy its instructions, then paste them into Codex (the board cannot start Codex by itself)' : 'Copy instructions for an AI agent to work on this task: the card, how to claim it, and the skill link'; }
-  function syncIssueBtn(t) { const b = $('cIssue'), il = issueLinkOf(t); b.hidden = false; b.querySelector('.atxt').textContent = il ? ` Issue #${il.n}` : ' Create issue'; b.title = il ? 'Open the linked GitHub issue' : 'Create a GitHub issue for this task (so Claude or a teammate can work it from GitHub)'; }
   function issueBody(t) {
     const { c, skill, agents, web } = boardInfo(), L = [], ref = '#' + t.num;
     L.push(`**Board task ${ref}**: ${t.title}`, '', [t.client && `Client: ${t.client}`, `Priority: ${t.priority || 'medium'}`, t.due && `Due: ${t.due}`, t.assignees.length && `Assigned: ${t.assignees.map(a => '@' + a).join(' ')}`].filter(Boolean).join(' · '), '');
@@ -2097,12 +2192,13 @@ if (typeof window !== 'undefined') (() => {
       `keeptrack.py link '${ref}' <pr-or-url> --title "PR"  # attach the pull request`, '```', 'Never edit board/tasks.json by hand.');
     return L.join('\n');
   }
-  $('cIssue').onclick = async () => {
+  let issueBusy = false;
+  async function issueAction() {
     const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
     if (il) { window.open(il.url, '_blank', 'noopener'); return; }
     const c = cfg(); if (!c.token) { toast('Add your GitHub token in Settings first', true); return; }
-    if (!confirm(`Create a GitHub issue in ${c.repo} for task #${t.num}?\n\n"${t.title}"\n\nIt will include the description, checklist, recent comments and instructions for reporting back, and be labelled "board-task".`)) return;
-    const b = $('cIssue'); b.disabled = true;
+    if (!(await ui.confirm({ title: `Create a GitHub issue for task #${t.num}?`, body: `“${t.title}” goes to ${c.repo} with the description, checklist, recent comments and instructions for reporting back, labelled "board-task".`, confirmLabel: 'Create issue' }))) return;
+    issueBusy = true;
     try {
       const r = await fetch(`${c.api}/repos/${c.repo}/issues`, { method: 'POST', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: `[#${t.num}] ${t.title}`, body: issueBody(t), labels: ['board-task'] }) });
@@ -2111,11 +2207,15 @@ if (typeof window !== 'undefined') (() => {
       const iss = await r.json(), id = t.id;
       await edit(id, x => { if (!x.links.some(l => l.url === iss.html_url)) x.links.push({ title: `Issue #${iss.number}`, url: iss.html_url }); }, `Issue #${iss.number} for task #${t.num}`);
       toast(`Created issue #${iss.number}`);
-    } catch (e) { toast('Could not reach GitHub', true); } finally { b.disabled = false; const t2 = taskNow(); if (t2) syncIssueBtn(t2); }
-  };
-  $('cAgent').onclick = () => { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); };
-  $('dlgCard').addEventListener('close', () => { if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; });   // closing never loses typed text
-  $('cDelete').onclick = () => { const id = editing, title = titleOf(id); if (!confirm(`Delete the task “${title}”?\n\nThis removes its details, checklist, comments and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) return; editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]); };
+    } catch (e) { toast('Could not reach GitHub', true); } finally { issueBusy = false; }
+  }
+  function copyForAgent() { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); }
+  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; });   // closing never loses typed text
+  async function deleteTask() {
+    const id = editing, title = titleOf(id);
+    if (!(await ui.confirm({ title: 'Delete this task?', body: `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`, confirmLabel: 'Delete task', danger: true })) || editing !== id) return;
+    editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
+  }
 
   $('xCode').onclick = () => copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.');
   $('xLink').onclick = () => copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.');
@@ -2760,7 +2860,6 @@ if (typeof window !== 'undefined') (() => {
   $('copyClose').onclick = () => $('dlgCopy').close();
   $('copyAgent').onclick = () => { $('dlgCopy').close(); copyText(agentPrompt(null), 'Board instructions copied for an agent'); };
   $('copyMarkdown').onclick = () => { $('dlgCopy').close(); copyMarkdown(); };
-  $('cCopyMd').onclick = () => { const t = taskNow(); if (t) copyText(taskMarkdown(t), 'Card copied as Markdown'); };
   $('btnFilter').onclick = e => { e.stopPropagation(); const pop = $('filterPop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnFilter').setAttribute('aria-expanded', 'true'); } };
   $('btnMore').onclick = e => { e.stopPropagation(); const pop = $('morePop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnMore').setAttribute('aria-expanded', 'true'); } };
   document.querySelectorAll('[data-head-action]').forEach(b => { b.onclick = () => { const target = $(b.dataset.headAction); closePops(); if (target) target.click(); }; });
@@ -3671,10 +3770,10 @@ if (typeof window !== 'undefined') (() => {
     if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; text.push(' ', a); }
     showBar('roBar', { tone: 'warn', icon: 'lock', text, action: { label, onClick: go } }).setAttribute('role', 'status'); lockDrawers();   // shown on every load: polite, not an alert
   }
-  const RO_KEEP = new Set(['cClose', 'pClose', 'cCopyMd', 'cAgent', 'pAgent', 'dLink']);   // buttons that only read or copy
+  const RO_KEEP = new Set(['pClose', 'pAgent']);   // buttons that only read or copy (task drawer buttons say so with data-ro-keep)
   function lockDrawers() {
     if (!ro) return;
-    document.querySelectorAll('#dlgCard, #dlgContact').forEach(d => d.querySelectorAll('input, select, textarea, button').forEach(x => { if (!RO_KEEP.has(x.id) && !x.disabled) { x.disabled = true; x.dataset.ro = '1'; } }));
+    document.querySelectorAll('#dlgCard, #dlgContact').forEach(d => d.querySelectorAll('input, select, textarea, button').forEach(x => { if (!RO_KEEP.has(x.id) && !x.dataset.roKeep && !x.closest('.ui-menu') && !x.disabled) { x.disabled = true; x.dataset.ro = '1'; } }));
   }
   let lockQueued = false; const lockObs = new MutationObserver(() => { if (!ro || lockQueued) return; lockQueued = true; queueMicrotask(() => { lockQueued = false; lockDrawers(); }); });
   ['dlgCard', 'dlgContact'].forEach(id => lockObs.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] }));
