@@ -72,15 +72,16 @@
   </div>
 </header>
 <nav id="subnav" class="subnav" aria-label="Views in this section" hidden></nav>
-<div id="kitBar" class="kitbar" role="status" hidden></div>
-<div id="memberBar" class="kitbar memberbar" role="status" hidden></div>
-<div id="roBar" class="kitbar robar" role="status" hidden></div>
-<div id="sizeBar" class="kitbar sizebar" role="status" hidden></div>
+<div id="updateBar" class="kbbar" hidden></div>
+<div id="kitBar" class="kbbar" hidden></div>
+<div id="memberBar" class="kbbar" hidden></div>
+<div id="roBar" class="kbbar" hidden></div>
+<div id="sizeBar" class="kbbar" hidden></div>
+<!-- Stubs for an older cached board.js running with this page (it looks these up at start-up). This board.js uses ui.toast and ui.banner instead. -->
+<div id="kbLegacy" hidden><div id="toast"></div><div id="undoSnack" hidden><span id="undoMsg"></span><button id="undoGo" type="button" tabindex="-1">Undo</button></div><button id="updNow" type="button" tabindex="-1"></button><button id="updLater" type="button" tabindex="-1"></button></div>
 <div id="legend" class="legend" aria-label="Colour key"></div>
 <nav id="tabs" aria-label="Columns"></nav>
 <div id="board"></div>
-<div id="toast" role="status" aria-live="polite"></div>
-<div id="undoSnack" class="undosnack" role="status" aria-live="polite" hidden><span id="undoMsg" class="umsg"></span><button id="undoGo" type="button">Undo</button></div>
 <div id="tour" class="tour" hidden><div id="tourRing" class="tourring"></div><div id="tourTip" class="tourtip" role="dialog" aria-modal="true" aria-labelledby="tourTitle"><h3 id="tourTitle"></h3><p id="tourText"></p><div class="tourfoot"><span id="tourStep"></span><button type="button" id="tourSkip">Skip</button><button type="button" id="tourBack">Back</button><button type="button" id="tourNext" class="primary">Next</button></div></div></div>
 <nav id="dock" class="dock" aria-label="Main">
   <button type="button" class="dtab" data-grp="today" aria-label="Today"><i data-i="alarm-clock"></i><span class="dl">Today</span></button>
@@ -475,8 +476,6 @@
     <div class="dfoot2"><span id="dCreated" class="dcreated"></span><button id="cDelete" type="button" class="danger">Delete task</button></div>
   </div>
 </dialog>
-
-<div id="updateBar" class="updatebar" role="status" hidden><span>A new version of the board is available.</span><button id="updNow" class="primary" type="button">Update now</button><button id="updLater" type="button">Later</button></div>
 
 <script>
 /* Bootstrap: GitHub Pages lets browsers cache files for ~10 minutes, so a plain <script src> can serve stale code after a deploy.

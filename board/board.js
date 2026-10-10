@@ -113,9 +113,9 @@ if (typeof window !== 'undefined') (() => {
   // setup link: the code rides in the #fragment, which browsers never send to any server; it is stripped straight away
   (() => { const m = /[#&]kbcfg=([^&]+)/.exec(location.hash); if (!m) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch {}
-    try { const o = parseCode('kbcfg1.' + m[1]);
-      if (confirm(`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?\n\nThis replaces the settings stored in this browser.`)) { applyCode('kbcfg1.' + m[1]); location.reload(); }
-    } catch (e) { alert('Could not import the settings link: ' + e.message); } })();
+    let o; try { o = parseCode('kbcfg1.' + m[1]); } catch (e) { setTimeout(() => toast('Could not import the settings link: ' + e.message, true)); return; }
+    setTimeout(() => ask('Import settings?', [`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?`, 'This replaces the settings stored in this browser.'], 'Import')
+      .then(yes => { if (!yes) return; try { applyCode('kbcfg1.' + m[1]); location.reload(); } catch (e) { toast('Could not import the settings link: ' + e.message, true); } })); })();
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
     columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }],
@@ -399,7 +399,7 @@ if (typeof window !== 'undefined') (() => {
   let kitChecked = '';
   async function checkKit() {
     const c = cfg(), key = c.repo + '@' + c.branch, bar = $('kitBar'); if (!bar) return;
-    if (newerSchema) { bar.hidden = false; bar.dataset.schema = '1'; bar.textContent = `This board was saved by newer board tools (schema v${newerSchema}). It is read-only here until this page updates.`; return; }
+    if (newerSchema) { showBar('kitBar', { tone: 'warn', text: `This board was saved by newer board tools (schema v${newerSchema}). It is read-only here until this page updates.` }); bar.dataset.schema = '1'; return; }
     if (bar.dataset.schema) { delete bar.dataset.schema; bar.hidden = true; kitChecked = ''; }
     if (kitChecked === key) return; kitChecked = key;
     try {
@@ -412,13 +412,12 @@ if (typeof window !== 'undefined') (() => {
   }
   const kitOwner = () => (state.settings && state.settings.kit_owner) || ((state.people[0] || {}).github || '');
   function renderKitBar(have, want) {
-    const bar = $('kitBar'); bar.textContent = ''; bar.hidden = !(want > have); if (bar.hidden) return;
+    if (!(want > have)) { showBar('kitBar', null); return; }
     const owner = kitOwner(), title = `Upgrade board tools to kit v${want}`, card = state.tasks.find(t => t.title === title && t.column !== 'done');
-    bar.append(el('span', null, `Board tools are out of date (this repo v${have}, latest v${want}). `));
-    if (card) { const b = el('button', 'small', `Open #${card.num}`); b.onclick = () => openCard(card.id, 'comments'); bar.append(el('span', null, `Upgrade card #${card.num} is with @${owner}. `), b); return; }
-    if (!owner || (me() || '').toLowerCase() !== owner.toLowerCase()) { bar.append(el('span', null, `The upgrade owner is @${owner || '?'}.`)); return; }
-    const b = el('button', 'small primary', 'Make the upgrade card');
-    b.onclick = async () => {
+    const intro = `Board tools are out of date (this repo v${have}, latest v${want}). `, bar = o => showBar('kitBar', Object.assign({ tone: 'info', icon: 'puzzle' }, o));
+    if (card) { bar({ text: intro + `Upgrade card #${card.num} is with @${owner}.`, action: { label: `Open #${card.num}`, onClick: () => openCard(card.id, 'comments') } }); return; }
+    if (!owner || (me() || '').toLowerCase() !== owner.toLowerCase()) { bar({ text: intro + `The upgrade owner is @${owner || '?'}.` }); return; }
+    const make = async () => {
       const id = uid(), raw = HOME + '/board/kit/UPGRADING.md';
       await mutate(n => { if (n.tasks.some(t => t.title === title && t.column !== 'done')) return;
         n.tasks.push({ id, title, column: 'todo', client: '', priority: 'medium', due: '', labels: n.labels.some(l => l.name === 'board') ? ['board'] : [], assignees: [owner],
@@ -428,7 +427,14 @@ if (typeof window !== 'undefined') (() => {
       renderKitBar(have, want); const t = state.tasks.find(x => x.id === id);
       if (t) { openCard(id, 'comments'); $('cmText').value = '@claude upgrade the board kit'; autosize($('cmText')); }
     };
-    bar.append(el('span', null, 'You are the upgrade owner. '), b);
+    bar({ text: intro + 'You are the upgrade owner.', action: ui.button({ label: 'Make the upgrade card', variant: 'primary', size: 'sm', onClick: make }) });
+  }
+  // The strips under the header (#updateBar, #kitBar, #memberBar, #roBar, #sizeBar) each hold one ui.banner. opts null hides the strip;
+  // opts.onDismiss adds the banner's dismiss button, which hides the strip too.
+  function showBar(id, opts) {
+    const bar = $(id); if (!bar) return null; bar.textContent = ''; bar.hidden = !opts; if (!opts) return null;
+    const o = Object.assign({}, opts); if (opts.onDismiss) o.onDismiss = () => { bar.hidden = true; opts.onDismiss(); };
+    const b = ui.banner(o); bar.append(b); return b;
   }
 
   // GitHub answers 404 both for a missing file and for a repo your token cannot see, so check which.
@@ -445,7 +451,7 @@ if (typeof window !== 'undefined') (() => {
       setStatus(`${c.path} not found`, 'err'); lastProblem = `"${c.path}" not found on branch "${c.branch}"`;
       box.append(el('p', null, `The repo is reachable, but "${c.path}" does not exist on branch "${c.branch}".`), el('p', null, 'Check the file path and branch in Settings (the usual path is board/tasks.json).'));
       const b = el('button', null, 'Create a new empty board at this path…');
-      b.onclick = async () => { if (!confirm(`Create ${c.path} on ${c.branch} in ${c.repo}?`)) return; state = NEW_BOARD(); sha = null; await saveNewBoard(clone(state), 'Create board file'); render(); };
+      b.onclick = async () => { if (!(await ask('Create board file?', `Create ${c.path} on ${c.branch} in ${c.repo}?`, 'Create'))) return; state = NEW_BOARD(); sha = null; await saveNewBoard(clone(state), 'Create board file'); render(); };
       box.append(b);
     }
     const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); }; box.append(ck);
@@ -684,12 +690,13 @@ if (typeof window !== 'undefined') (() => {
     undoStack.push({ before: clone(before), after: clone(after), message, board: [cfg().repo, cfg().branch, cfg().path].join('|') });
     if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); offerUndo(message);
   }
-  // After every saved change, a short message with Undo. Where it sits is up to the layout's CSS (in the dock, it replaces the tabs).
-  let undoSnackTimer = null;
-  function hideUndo() { clearTimeout(undoSnackTimer); $('undoSnack').hidden = true; }
+  // After every saved change, a short toast with Undo (ui.toast with an action; it sits above the dock).
+  let undoToast = null;
+  function hideUndo() { if (undoToast) { undoToast.dismiss(); undoToast = null; } }
   function offerUndo(message) {
-    if (ro) return; $('undoMsg').textContent = message; $('undoSnack').hidden = false;
-    clearTimeout(undoSnackTimer); undoSnackTimer = setTimeout(hideUndo, 6000);
+    if (ro) return; hideUndo();
+    const t = undoToast = ui.toast(message, { action: { label: 'Undo', onClick: () => { if (undoToast === t) undoToast = null; undoLast(); } }, timeout: 6000 });
+    t.el.classList.add('kb-undo');
   }
   function applyInverse(target, entry) {
     const { before, after } = entry;
@@ -721,7 +728,16 @@ if (typeof window !== 'undefined') (() => {
     const ok = await mutate(n => applyInverse(n, entry), `Undo: ${entry.message}`, ids, entry.after, { remember: false });
     if (ok) { undoStack.pop(); syncUndo(); toast(`Undid: ${entry.message}`); }
   }
-  const confirmRemoval = what => confirm(`Remove ${what}?\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`);
+  // In-page confirmations (ui.confirm; never the browser's blocking confirm()). body: a string or a list of paragraphs.
+  const UNDO_HINT = 'This saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.';
+  function ask(title, body, confirmLabel = 'OK', danger = false) {
+    let node = null;
+    if (body != null) { node = el('div', 'kb-ask'); (Array.isArray(body) ? body : [body]).forEach(t => node.append(el('p', 'ui-sheet__text', t))); }
+    return ui.confirm({ title, body: node, confirmLabel, danger });
+  }
+  const askRemoval = (what, title = 'Remove?') => ask(title, [`Remove ${what}?`, UNDO_HINT], 'Remove', true);
+  // Legacy synchronous version, still used only by the task drawer (#dlgCard) until its rebuild moves to askRemoval.
+  const confirmRemoval = what => confirm(`Remove ${what}?\n\n${UNDO_HINT}`);
 
   // Apply an edit to the LATEST file on GitHub (never overwrite with stale state); retry on a SHA conflict.
   // Returns true only when the change is saved on GitHub.
@@ -920,16 +936,19 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- keeping the app itself fresh -----------------------------------------------------------------------
   const hashStr = s => { let x = 2166136261; for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 16777619); } return (x >>> 0).toString(16).padStart(8, '0').slice(0, 6); };
-  const loadedVersion = () => window.__kbAssets ? hashStr(window.__kbAssets.css + window.__kbAssets.js) : 'unknown';
+  // __kbAssets (index.html): css = board.css, js = board.js, extra = ui.css, icons.js and ui.js joined with a newline, in that order.
+  const EXTRA_ASSETS = ['ui.css', 'icons.js', 'ui.js'];
+  const loadedVersion = () => window.__kbAssets ? hashStr(window.__kbAssets.css + window.__kbAssets.js + (window.__kbAssets.extra || '')) : 'unknown';
   const revalidate = u => fetch(u, { cache: 'no-cache' }).then(r => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))));
   let updateReady = false, lastUpdateCheck = Date.now();
   async function checkForUpdate(force) {
     if (updateReady || (!force && Date.now() - lastUpdateCheck < 120000)) return updateReady; lastUpdateCheck = Date.now();
     try {
-      const [css, js] = await Promise.all([revalidate('board.css'), revalidate('board.js')]);
-      let changed = !!window.__kbAssets && (css !== window.__kbAssets.css || js !== window.__kbAssets.js);
+      const A = window.__kbAssets, withExtra = !!A && typeof A.extra === 'string';
+      const [css, js, ...extra] = await Promise.all(['board.css', 'board.js', ...(withExtra ? EXTRA_ASSETS : [])].map(revalidate));
+      let changed = !!A && (css !== A.css || js !== A.js || (withExtra && extra.join('\n') !== A.extra));
       if (!changed && window.__kbHtml) { const html = await revalidate(location.href); changed = html !== window.__kbHtml; }
-      if (changed) { updateReady = true; $('updateBar').hidden = false; }
+      if (changed) { updateReady = true; showUpdateBar(); }
     } catch { /* offline or rate limited: try again next time */ }
     return updateReady;
   }
@@ -943,7 +962,11 @@ if (typeof window !== 'undefined') (() => {
     location.reload();
   }
   window.kbUpdate = { check: () => checkForUpdate(true), refresh: hardRefresh, version: loadedVersion };
-  $('updNow').onclick = hardRefresh; $('updLater').onclick = () => { $('updateBar').hidden = true; setTimeout(() => { updateReady = false; }, 30 * 60000); };
+  function showUpdateBar() {   // "Later" (the banner's dismiss) hides it and asks again in 30 minutes
+    const bar = $('updateBar'); if (!bar) return; bar.textContent = ''; bar.hidden = false;
+    bar.append(ui.banner({ tone: 'accent', icon: 'refresh-cw', text: 'A new version of the board is available.', action: ui.button({ label: 'Update now', variant: 'primary', size: 'sm', onClick: hardRefresh }),
+      onDismiss: () => { bar.hidden = true; setTimeout(() => { updateReady = false; }, 30 * 60000); } }));
+  }
   $('sUpdate').onclick = hardRefresh;
   setInterval(() => { if (!document.hidden) checkForUpdate(); }, 10 * 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
@@ -1148,8 +1171,9 @@ if (typeof window !== 'undefined') (() => {
       try { document.execCommand('copy') ? done() : toast('Copy failed: select and copy manually', true); } catch { toast('Copy failed', true); } ta.remove(); };
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
   }
-  let toastTimer = null;
-  function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'show' + (bad ? ' bad' : ''); clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, 2600); }
+  // One toast system (ui.toast): a newer message replaces an older plain one; the Undo toast (offerUndo) keeps its place in the queue.
+  let lastToast = null;
+  function toast(msg, bad) { if (lastToast) lastToast.dismiss(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: 4500 } : { timeout: 2600 }); }
   function boardInfo() {
     const c = cfg(), repoUrl = `https://github.com/${c.repo}`, rawBase = `${repoUrl}/blob/${c.branch}`;
     return { c, repoUrl, skill: `${rawBase}/.claude/skills/board/SKILL.md`, agents: `${rawBase}/AGENTS.md`,
@@ -2094,9 +2118,9 @@ if (typeof window !== 'undefined') (() => {
 
   $('xCode').onclick = () => copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.');
   $('xLink').onclick = () => copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.');
-  $('xImport').onclick = () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
+  $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
-      if (!confirm(`Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ''}? This replaces this browser's settings.`)) return;
+      if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ''}? This replaces this browser's settings.`, 'Import'))) return;
       applyCode(m ? 'kbcfg1.' + m[1] : v); location.reload();
     } catch (e) { toast(e.message); } };
   // ---- @ and # suggestions in comment/description boxes -----------------------------------------------------
@@ -2318,8 +2342,11 @@ if (typeof window !== 'undefined') (() => {
   document.querySelectorAll('#cwSteps .cwh').forEach(h => { h.onclick = () => { const n = +h.parentNode.dataset.step; cwOpen = h.parentNode.classList.contains('open') ? -1 : n; cwRender(); }; });
   document.querySelectorAll('[data-cw-done]').forEach(b => { b.onclick = () => { cwMark(b.dataset.cwDone); cwOpen = 0; cwRender(); }; });
   document.querySelectorAll('[data-cw-copy]').forEach(b => { b.onclick = () => copyText($(b.dataset.cwCopy).textContent, 'Copied'); });
-  const ckRow = (box, ok, text, link) => { const d = el('div', 'wck ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'wait'), (ok === true ? '✓ ' : ok === false ? '✕ ' : '… ') + text);
-    if (link) { const a = el('a', null, link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; d.append(' ', a); } box.append(d); return d; };
+  // Check lines (ui.check): ok true → ✓, false → ✕, null → still checking, 'warn' → ⚠. ckState maps the same values for the other check lists.
+  const ckState = ok => (ok === true ? 'ok' : ok === false ? 'bad' : ok === 'warn' ? 'warn' : 'wait');
+  const ckLine = (ok, text, fix) => ui.check({ state: ckState(ok), text, fix });
+  const ckRow = (box, ok, text, link) => { const t = [text];
+    if (link) { const a = el('a', null, link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; t.push(' ', a); } const d = ckLine(ok, t); box.append(d); return d; };
   function cwTrigCheck() {
     const box = $('cwTrigCk'), u = $('sClaudeUrl').value.trim(), t = $('sClaudeTok').value.trim(); box.textContent = '';
     if (u) ckRow(box, FIRE_RE.test(u), FIRE_RE.test(u) ? 'The URL looks right' : 'The URL must look like https://api.anthropic.com/v1/claude_code/routines/trig_…/fire');
@@ -2359,10 +2386,10 @@ if (typeof window !== 'undefined') (() => {
     const t0 = Date.now(), tick = setInterval(async () => {
       if (!busy && !document.hidden) await load(true);
       const x = state.tasks.find(y => y.id === id), k = x && (x.claim || x.last_run), url = k && k.session_url;
-      if (url && started.classList.contains('wait')) { started.replaceWith(ckRow(el('div'), true, 'Claude started.', ['Open the session', url])); }
+      if (url && started.classList.contains('ui-check--wait')) { started.replaceWith(ckRow(el('div'), true, 'Claude started.', ['Open the session', url])); }
       if (x && x.claim && x.claim.status === 'stuck') { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, x.claim.note || 'The routine did not start.')); btn.disabled = false; return; }
       const said = x && x.comments.find(m => m.type !== 'activity' && /^claude\b/i.test(m.by || '') && m.at > at);
-      if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); markWorks(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
+      if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('ui-check--wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); markWorks(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
       if (Date.now() - t0 > 10 * 60000) { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, `No reply after 10 minutes. Open task #${x ? x.num : '?'} or your routine's recent runs to see why.`)); btn.disabled = false; }
     }, FAST ? 300 : 15000);
   };
@@ -2370,7 +2397,7 @@ if (typeof window !== 'undefined') (() => {
   function renderRelayLog() {
     const box = $('cwLog'), repo = cfg().repo, a = relayLog().filter(e => !e.repo || e.repo === repo); box.textContent = '';   // this board's sends only
     if (!a.length) { box.append(el('div', 'muted', 'Nothing sent from this browser yet.')); return; }
-    a.forEach(e => { const d = el('div', 'wck ' + (e.ok === false ? 'bad' : e.ok ? 'ok' : 'wait')); d.append(el('b', null, `${hhmm(e.at)} · #${e.num ?? '?'} · ${e.ev}`), el('div', 'muted', e.detail)); box.append(d); });
+    a.forEach(e => box.append(ckLine(e.ok === false ? false : e.ok ? true : null, el('b', null, `${hhmm(e.at)} · #${e.num ?? '?'} · ${e.ev}`), e.detail)));
   }
   $('cwDebug').addEventListener('toggle', () => { if ($('cwDebug').open) renderRelayLog(); });
   $('cwCronTest').onclick = async () => {
@@ -2445,8 +2472,9 @@ if (typeof window !== 'undefined') (() => {
   let lastReport = '';
   async function runChecks(over) {   // over: values typed in Connection but not saved yet
     const c = Object.assign(cfg(), over || {}), out = $('ckList'), rows = []; out.textContent = ''; $('ckRun').disabled = true;
-    const add = (ok, title, detail, fix) => { rows.push({ ok, title, detail, fix }); const li = el('li', 'ck ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'warn'));
-      li.append(el('span', 'ckic', ok === true ? '✓' : ok === false ? '✗' : '!'), el('b', null, title)); if (detail) li.append(el('div', 'ckd', detail)); if (fix) li.append(fix); out.append(li); return li; };
+    const add = (ok, title, detail, fix) => { rows.push({ ok, title, detail, fix }); const st = ok === true ? 'ok' : ok === false ? 'bad' : 'warn', li = el('li', 'ck ' + st);
+      const more = [detail ? el('div', 'ckd', detail) : null, fix || null].filter(Boolean);
+      li.append(ui.check({ state: st, text: el('b', null, title), fix: more.length ? more : null })); out.append(li); return li; };
     try {
       add(REPO_RE.test(c.repo), 'Repository name', c.repo || '(empty)');
       add(c.path ? true : false, 'Branch and file', `${c.branch} · ${c.path}`);
@@ -2582,7 +2610,7 @@ if (typeof window !== 'undefined') (() => {
   $('sRepo').addEventListener('input', () => { $('patLink').href = patUrl(); });
   $('btnSettings').addEventListener('click', () => { $('patLink').href = patUrl(); });
   $('sCancel').onclick = () => $('dlgSettings').close();
-  $('sForget').onclick = () => { if (!confirm('Forget this board token from this browser?\n\nThe board is not changed, but you will need to add a working token before you can save again.')) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
+  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
   $('sSave').onclick = async () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
@@ -2629,7 +2657,7 @@ if (typeof window !== 'undefined') (() => {
       if (r === cur) row.append(el('span', 'bcur', 'this board'));
       else { const o = el('button', 'small', 'Open'), x = el('button', 'small danger', 'Remove');
         o.onclick = () => { activateBoard(r); location.replace(boardUrl()); };
-        x.onclick = () => { if (!confirm(`Remove ${r} from the boards in this browser?\n\nIts saved token and routine settings are deleted here. The repo itself is not changed.`)) return; forgetBoard(r); renderBoards(); renderSwitcher(); };
+        x.onclick = async () => { if (!(await ask('Remove board?', [`Remove ${r} from the boards in this browser?`, 'Its saved token and routine settings are deleted here. The repo itself is not changed.'], 'Remove', true))) return; forgetBoard(r); renderBoards(); renderSwitcher(); };
         row.append(o, x); }
       box.append(row); }); }
   // "Add a board": pick new or existing; for an existing one, paste a token, pick the repo, the page checks for the board file
@@ -2651,7 +2679,7 @@ if (typeof window !== 'undefined') (() => {
       const ol = el('ol', 'wmini'); ['Resource owner: the account or organisation that owns the board repo.', 'Repository access: Only select repositories, then the board repo.', 'Generate token, copy it, and paste it below.'].forEach(t => ol.append(el('li', null, t)));
       const tok = el('input'); tok.type = 'password'; tok.placeholder = 'github_pat_…'; tok.autocomplete = 'off'; tok.value = AW.tok; const lab = el('label', 'wlabel', 'Token'); lab.append(tok);
       const res = el('div', 'wchecks'); w.append(a, ol, lab, res, el('p', 'hint', 'The token stays in this browser and goes only to api.github.com.'));
-      const draw = () => { res.textContent = ''; AW.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === null ? 'wait' : 'bad'), (ok === true ? '✓ ' : ok === null ? '… ' : '✕ ') + t))); next.disabled = !AW.ok; };
+      const draw = () => { res.textContent = ''; AW.rows.forEach(([ok, t]) => res.append(ckLine(ok === true || ok === null ? ok : false, t))); next.disabled = !AW.ok; };
       const check = async () => { const t = AW.tok; AW.repos = []; AW.ok = false; if (!t) { AW.rows = []; draw(); return; } AW.rows = [[null, 'Checking the token…']]; draw();
         const api = cfg().api, u = await fetch(`${api}/user`, { headers: ghH(t) }).catch(() => null); if (t !== AW.tok) return;
         if (!u || !u.ok) { AW.rows = [[false, u && u.status === 401 ? 'GitHub did not accept this token. Copy it again.' : 'Could not reach GitHub. Check your connection.']]; draw(); return; }
@@ -2674,13 +2702,13 @@ if (typeof window !== 'undefined') (() => {
       const adv = el('details', 'wadv'), bin = el('input'), pin = el('input'); adv.append(el('summary', null, 'Branch and file (only if the board is not in the usual place)'));
       bin.placeholder = 'the repo’s default branch'; bin.value = AW.branch || ''; pin.value = AW.path || 'board/tasks.json'; bin.autocomplete = pin.autocomplete = 'off';
       const bl = el('label', 'wlabel', 'Branch'), pl = el('label', 'wlabel', 'File'); bl.append(bin); pl.append(pin); adv.append(bl, pl); adv.open = !!(AW.branch || (AW.path && AW.path !== 'board/tasks.json'));
-      const res = el('div', 'wchecks'), meBox = el('label', 'wck warn wme'), meCb = el('input'); meCb.type = 'checkbox'; meBox.hidden = true;
+      const res = el('div', 'wchecks'), meBox = el('label', 'wme'), meCb = el('input'); meCb.type = 'checkbox'; meBox.hidden = true;
       w.append(lab, rlab, adv, res, meBox);
       const draw = () => { res.textContent = ''; const f = AW.found; next.disabled = !(f && f.ok);
-        if (!f) return; if (f.busy) { res.append(el('div', 'wck wait', '… Looking for the board…')); return; }
-        res.append(el('div', 'wck ' + (f.ok ? 'ok' : 'bad'), (f.ok ? '✓ ' : '✕ ') + f.text));
-        if (f.ok && !f.push) res.append(el('div', 'wck warn', '⚠ This token can read the board but cannot save to it. The board opens read-only. To change that, edit the token on GitHub: Contents, Read and write.'));
-        if (f.ok && f.pub) res.append(el('div', 'wck warn', '⚠ This repo is PUBLIC: everybody can read the board.'));
+        if (!f) return; if (f.busy) { res.append(ckLine(null, 'Looking for the board…')); return; }
+        res.append(ckLine(!!f.ok, f.text));
+        if (f.ok && !f.push) res.append(ckLine('warn', 'This token can read the board but cannot save to it. The board opens read-only. To change that, edit the token on GitHub: Contents, Read and write.'));
+        if (f.ok && f.pub) res.append(ckLine('warn', 'This repo is PUBLIC: everybody can read the board.'));
         const me = cfg().me; meBox.textContent = ''; meBox.hidden = !(f.ok && AW.me && me && me.toLowerCase() !== AW.me.toLowerCase());
         if (!meBox.hidden) { meCb.checked = !!AW.useMe; meCb.onchange = () => { AW.useMe = meCb.checked; }; meBox.append(meCb, ` This token is for @${AW.me}, but your name in this browser is "${me}". Use @${AW.me} from now on.`); } };
       const look = async () => { const name = AW.repo, path = (pin.value.trim() || 'board/tasks.json'); AW.path = path; AW.branch = bin.value.trim();
@@ -2716,7 +2744,6 @@ if (typeof window !== 'undefined') (() => {
   document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => { t.onclick = e => { e.stopPropagation(); closePops(); setView(dockLast[t.dataset.grp]); }; });
   $('dockMenu').onclick = e => { e.stopPropagation(); const pop = $('dockPop'), open = pop.hidden; closePops(); if (open) { pop.hidden = false; $('dockMenu').setAttribute('aria-expanded', 'true'); } };
   $('dockPop').addEventListener('click', e => e.stopPropagation());
-  $('undoGo').onclick = () => undoLast();
   document.querySelectorAll('[data-tour-start]').forEach(b => { b.onclick = e => { e.stopPropagation(); startTour(); }; });
   $('tourNext').onclick = () => { if (tour.i === tour.steps.length - 1) endTour(); else { tour.i++; showTourStep(); } };
   $('tourBack').onclick = () => { if (tour.i > 0) { tour.i--; showTourStep(); } }; $('tourSkip').onclick = endTour;
@@ -2763,13 +2790,10 @@ if (typeof window !== 'undefined') (() => {
   const doneCol = () => doneColId();
 
   function renderMemberBar() {
-    const bar = $('memberBar'); if (!bar || ro === 'demo' || DEMO) { if (bar) bar.hidden = true; return; }
-    const meV = cfg().me; if (!meV || memberPerson() || LS.get('kb_member_nudge_off:' + cfg().repo)) { bar.hidden = true; return; }
-    bar.hidden = false; bar.textContent = '';
-    bar.append(document.createTextNode(`You are signed in as @${meV} but have no person record on this board. `));
-    const add = el('button', 'small primary', 'Add yourself as a person'); add.type = 'button'; add.onclick = () => offerSelfPerson();
-    const hide = el('button', 'small', 'Dismiss'); hide.type = 'button'; hide.onclick = () => { LS.set('kb_member_nudge_off:' + cfg().repo, '1'); bar.hidden = true; };
-    bar.append(add, hide);
+    const meV = cfg().me; if (ro === 'demo' || DEMO || !meV || memberPerson() || LS.get('kb_member_nudge_off:' + cfg().repo)) { showBar('memberBar', null); return; }
+    showBar('memberBar', { tone: 'info', icon: 'user', text: `You are signed in as @${meV} but have no person record on this board.`,
+      action: ui.button({ label: 'Add yourself as a person', variant: 'primary', size: 'sm', onClick: () => offerSelfPerson() }),
+      onDismiss: () => LS.set('kb_member_nudge_off:' + cfg().repo, '1') });
   }
 
   async function offerSelfPerson(prefill) {
@@ -2778,7 +2802,7 @@ if (typeof window !== 'undefined') (() => {
     if (!name && cfg().token) {
       try { const r = await fetch(`${cfg().api}/user`, { headers: { Authorization: 'Bearer ' + cfg().token, Accept: 'application/vnd.github+json' } }); if (r.ok) { const u = await r.json(); name = u.name || u.login; email = email || (u.email || ''); } } catch {}
     }
-    if (!name) name = prompt('Your display name on the board:', meV) || meV;
+    if (!name) name = (await ui.promptText({ title: 'Your name', label: 'Your display name on the board:', value: meV, confirmLabel: 'Add me' })) || meV;
     const id = await addContact(name, { github: meV, email: email || '', company: '' });
     if (id) toast('Added you as a person on this board.');
   }
@@ -2859,16 +2883,14 @@ if (typeof window !== 'undefined') (() => {
   $('prLinkAdd').onclick = () => { const l = parseNamedLink($('prLinkTitle').value, $('prLinkNew').value, true); if (!l) { toast('Enter a cloud URL or local path.', true); return; }
     projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); $('prLinkTitle').value = ''; $('prLinkNew').value = ''; };
   $('prClose').onclick = () => $('dlgProject').close();
-  $('prDelete').onclick = () => {
+  $('prDelete').onclick = async () => {
     const pr = projectById(editingProject); if (!pr || ro) return;
     const linked = state.tasks.filter(t => t.project === pr.id);
-    let clear = false;
-    if (linked.length) clear = confirm(`Remove project "${pr.name}" and clear it from ${linked.length} task(s)?\n\nOK clears task.project. Cancel keeps the project.`);
-    else if (!confirm(`Remove project "${pr.name}"?`)) return;
-    if (linked.length && !clear) return;
+    if (linked.length) { if (!(await ask('Remove project?', [`Remove project "${pr.name}" and clear it from ${linked.length} task(s)?`, 'Remove clears task.project. Cancel keeps the project.'], 'Remove', true))) return; }
+    else if (!(await ask('Remove project?', `Remove project "${pr.name}"?`, 'Remove', true))) return;
     mutate(n => {
       n.projects = (n.projects || []).filter(p => p.id !== pr.id);
-      if (clear) n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });
+      if (linked.length) n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });
     }, `Remove project: ${pr.name}`).then(ok => { if (ok) $('dlgProject').close(); });
   };
   $('dlgProject').addEventListener('close', () => { editingProject = ''; render(); });
@@ -2907,14 +2929,14 @@ if (typeof window !== 'undefined') (() => {
         b.onclick = () => mutate(d => { const k = d.columns.findIndex(y => y.id === c.id), o = k + dir; if (k < 0 || o < 0 || o >= d.columns.length) return; [d.columns[k], d.columns[o]] = [d.columns[o], d.columns[k]]; }, `Move column: ${c.name}`).then(renderColumnsBox); return b; };
       const x = el('button', 'small danger', 'Remove'); x.type = 'button'; x.disabled = locked || cols.length <= 1 || PROTECTED_COLS.includes(c.id) || c.id === dc;
       if (x.disabled && !locked) x.title = cols.length <= 1 ? 'A board needs at least one column' : 'Agents rely on this column';
-      x.onclick = () => { if (!n) { if (confirmRemoval(`the “${c.name}” column`)) removeColumn(c.id, ''); return; } colRemoving = colRemoving === c.id ? '' : c.id; renderColumnsBox(); };
+      x.onclick = async () => { if (!n) { if (await askRemoval(`the “${c.name}” column`, 'Remove column?')) removeColumn(c.id, ''); return; } colRemoving = colRemoving === c.id ? '' : c.id; renderColumnsBox(); };
       row.append(name, count, mv(-1, c.name), mv(1, c.name), x);
       if (colRemoving === c.id && n) {
         const box = el('div', 'colmove'), sel = el('select'), go = el('button', 'small danger', 'Move cards and remove'), no = el('button', 'small', 'Cancel');
         sel.setAttribute('aria-label', `Where to move the ${n} cards from ${c.name}`); cols.filter(y => y.id !== c.id).forEach(y => { const o = el('option', null, y.name); o.value = y.id; sel.append(o); });
         go.type = no.type = 'button'; no.onclick = () => { colRemoving = ''; renderColumnsBox(); };
-        go.onclick = () => { const to = sel.value, dest = colName(to);
-          if (!confirm(`Remove the “${c.name}” column and move its ${n} card${n === 1 ? '' : 's'} to “${dest}”?\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) return; removeColumn(c.id, to); };
+        go.onclick = async () => { const to = sel.value, dest = colName(to);
+          if (!(await ask('Remove column?', [`Remove the “${c.name}” column and move its ${n} card${n === 1 ? '' : 's'} to “${dest}”?`, UNDO_HINT], 'Move and remove', true))) return; removeColumn(c.id, to); };
         box.append(el('span', null, `Move its ${n} card${n === 1 ? '' : 's'} to`), sel, go, no); row.append(box);
       }
       list.append(row);
@@ -3175,12 +3197,12 @@ if (typeof window !== 'undefined') (() => {
         label.value = item.label || ''; label.placeholder = 'Label'; label.setAttribute('aria-label', `${kind} label`);
         value.value = item.value || ''; value.type = kind === 'email' ? 'email' : 'tel'; value.setAttribute('aria-label', kind === 'email' ? 'Email address' : 'Phone number');
         go.href = kind === 'email' ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = kind === 'email' ? 'Write email' : 'Call'; go.append(svgIcon(kind === 'email' ? 'mail' : 'phone'));
-        const save = () => { const lab = label.value.trim(), val = value.value.trim(), fallback = kind === 'email' ? 'Email' : 'Phone';
-          if (!val) { if (!confirmRemoval(`the ${item.label || fallback} ${kind} “${item.value}”`)) { label.value = item.label || ''; value.value = item.value || ''; return; } }
-          else if (val !== item.value && !confirm(`Change ${p.name}'s ${item.label || fallback} ${kind}?\n\nFrom: ${item.value}\nTo: ${val}\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) { label.value = item.label || ''; value.value = item.value || ''; return; }
+        const save = async () => { const lab = label.value.trim(), val = value.value.trim(), fallback = kind === 'email' ? 'Email' : 'Phone';
+          if (!val) { if (!(await askRemoval(`the ${item.label || fallback} ${kind} “${item.value}”`, kind === 'email' ? 'Remove email?' : 'Remove phone?'))) { label.value = item.label || ''; value.value = item.value || ''; return; } }
+          else if (val !== item.value && !(await ask(kind === 'email' ? 'Change email?' : 'Change phone?', [`Change ${p.name}'s ${item.label || fallback} ${kind}?`, `From: ${item.value}\nTo: ${val}`, UNDO_HINT], 'Change'))) { label.value = item.label || ''; value.value = item.value || ''; return; }
           pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || fallback; found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
         label.addEventListener('change', save); value.addEventListener('change', save);
-        x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = () => { if (!confirmRemoval(`the ${item.label || (kind === 'email' ? 'Email' : 'Phone')} ${kind} “${item.value}”`)) return; pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
+        x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = async () => { if (!(await askRemoval(`the ${item.label || (kind === 'email' ? 'Email' : 'Phone')} ${kind} “${item.value}”`, kind === 'email' ? 'Remove email?' : 'Remove phone?'))) return; pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
         row.append(label, value, go, x); box.append(row);
       });
       if (!items.length) box.append(el('div', 'muted small', kind === 'email' ? 'No email addresses yet.' : 'No phone numbers yet.'));
@@ -3194,7 +3216,7 @@ if (typeof window !== 'undefined') (() => {
       const host = local ? 'Local path' : (() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
       if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
       const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.setAttribute('aria-label', 'Copy local path'); cp.onclick = () => copyText(l.url, 'Path copied.'); }
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = () => { if (confirmRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); };
+      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = async () => { if (await askRemoval(`the ${kind} “${l.title || l.url}”`, 'Remove link?')) onRemove(l); };
       row.append(elI('span', 'li', local ? 'laptop' : storeIcon(host)), main, el('span', 'host', host)); if (cp) row.append(cp); row.append(x); box.append(row); });
     if (!links.length) box.append(el('div', 'muted small', 'No links yet.'));
   }
@@ -3213,9 +3235,9 @@ if (typeof window !== 'undefined') (() => {
       const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
     });
   }
-  function markSent(pid, cmid) {
+  async function markSent(pid, cmid) {
     const p = state.contacts.find(x => x.id === pid); if (!p) return;
-    const nextDue = prompt('Marked as sent. When do you want to follow up? (YYYY-MM-DD, or empty for no date)', plusDays(5)); if (nextDue === null) return;
+    const nextDue = await ui.promptText({ title: 'Mark as sent', body: 'When do you want to follow up? Leave it empty for no date.', label: 'Follow up on', type: 'date', value: plusDays(5), confirmLabel: 'Mark sent' }); if (nextDue === null) return;
     pedit(pid, x => { const c = x.comments.find(y => y.id === cmid); if (!c) return; c.draft = false; c.sent_at = nowIso();
       if (x.stage === stages()[0]) x.stage = stages()[1] || x.stage;
       if (/^\d{4}-\d{2}-\d{2}$/.test(nextDue.trim())) { x.next_due = nextDue.trim(); if (!x.next) x.next = 'Follow up'; } }, `Sent: ${p.name}`);
@@ -3265,7 +3287,7 @@ if (typeof window !== 'undefined') (() => {
   $('pChan').onchange = () => { $('pDraftWrap').hidden = $('pChan').value === 'note'; };
   $('pClose').onclick = () => $('dlgContact').close();
   $('dlgContact').addEventListener('close', () => { editingContact = null; render(); });
-  $('pDelete').onclick = () => { const p = contactNow(); if (!p || !confirm(`Delete the person “${p.name}”?\n\nThis removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.`)) return; const id = p.id; $('dlgContact').close();
+  $('pDelete').onclick = async () => { const p = contactNow(); if (!p || !(await ask('Delete person?', [`Delete the person “${p.name}”?`, 'This removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.'], 'Delete', true))) return; const id = p.id; $('dlgContact').close();
     mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`); };
   $('pAgent').onclick = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
   function personPrompt(p) {
@@ -3324,7 +3346,7 @@ if (typeof window !== 'undefined') (() => {
         if (!c) return; if (c.busy) { res.append(el('div', 'muted', 'Checking…')); return; }
         if (WZ.repos.length > 1) { const sel = el('select'); WZ.repos.forEach(r => { const o = el('option', null, r.full_name + (r.private ? '' : ' (public)')); o.value = r.full_name; sel.append(o); }); sel.value = WZ.repo;
           sel.onchange = () => { WZ.repo = sel.value; check(); }; const l = el('label', 'wlabel', 'Repo'); l.append(sel); pickBox.append(l); }
-        c.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === 'warn' ? 'warn' : 'bad'), (ok === true ? '✓ ' : ok === 'warn' ? '⚠ ' : '✕ ') + t)));
+        c.rows.forEach(([ok, t]) => res.append(ckLine(ok === true || ok === 'warn' ? ok : false, t)));
       };
       const check = async () => {
         const t = WZ.tok; if (!t) { WZ.checks = null; draw(); return; }
@@ -3356,7 +3378,7 @@ if (typeof window !== 'undefined') (() => {
   async function wizardGo(btn) {
     const repo = WZ.repo, tok = WZ.tok, meV = WZ.me, title = WZ.title.trim() || 'Keeptrack', r = WZ.repos.find(x => x.full_name === repo);
     if (!r || !tok) return;
-    if (!r.private && !confirm(`${repo} is PUBLIC. Everybody can read names and contact details in it. Continue anyway?`)) return;
+    if (!r.private && !(await ask('Public repository', `${repo} is PUBLIC. Everybody can read names and contact details in it. Continue anyway?`, 'Continue anyway', true))) return;
     btn.disabled = true; btn.textContent = 'Creating…';
     LS.set('kb_repo', repo); LS.set('kb_token', tok); LS.del('kb_ro:' + repo); LS.set('kb_branch', r.default_branch || 'main'); LS.set('kb_path', 'board/tasks.json'); if (meV) LS.set('kb_me', meV); stashBoard && stashBoard();
     const ex = await gh('GET');
@@ -3455,7 +3477,7 @@ if (typeof window !== 'undefined') (() => {
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }
     const rules = archRules(); let n = archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
     const what = `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
-    if (!confirm(`Archive ${what}?\n\nThey move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`)) return;
+    if (!(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
     // plan from the board as it is on GitHub now, not from this page's copy, so nobody's newer comment or edit is archived away
@@ -3542,7 +3564,7 @@ if (typeof window !== 'undefined') (() => {
   }
   async function labelRemove(l) {
     const used = labelUse(l.name), ids = used.map(t => t.id);
-    if (!confirmRemoval(`the “${l.name}” label${used.length ? ` from ${used.length} task${used.length === 1 ? '' : 's'}` : ''}`)) return;
+    if (!(await askRemoval(`the “${l.name}” label${used.length ? ` from ${used.length} task${used.length === 1 ? '' : 's'}` : ''}`, 'Remove label?'))) return;
     await mutate(n => { n.labels = n.labels.filter(x => x.name !== l.name); n.tasks.forEach(t => { if (t.labels.includes(l.name)) { t.labels = t.labels.filter(x => x !== l.name); stamp(t); } }); }, `Remove label: ${l.name}`, ids); renderLabelBox();
   }
   async function labelAdd(name, color) {
@@ -3579,12 +3601,11 @@ if (typeof window !== 'undefined') (() => {
     const b = elI('button', null, 'archive', n.tasks + n.contacts + n.history ? `Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : 'Nothing to archive yet'); b.type = 'button'; b.disabled = !!ro || !(n.tasks + n.contacts + n.history); b.onclick = archiveNow; box.append(b);
   }
   function sizeBar() {   // a quiet nudge once the board file gets large
-    const bar = $('sizeBar'); if (!bar) return; const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
-    bar.hidden = !big; if (!big) return; bar.textContent = '';
-    const a = el('button', 'small', 'Archive old items'), x = el('button', 'small', 'Later'); a.type = x.type = 'button';
-    a.onclick = () => { $('btnSettings').click(); settingsTab('general'); renderArchiveBox(); $('archBox').scrollIntoView({ block: 'center' }); };
-    x.onclick = () => { LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))); bar.hidden = true; };
-    bar.append(elI('span', null, 'archive', `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`), a, x);
+    const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
+    if (!big) { showBar('sizeBar', null); return; }
+    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
+      action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('general'); renderArchiveBox(); $('archBox').scrollIntoView({ block: 'center' }); } },
+      onDismiss: () => LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))) });
   }
 
   // ---- search everything: people, tasks, notes, comments and (on request) the archive, with MiniSearch ---------------
@@ -3643,10 +3664,10 @@ if (typeof window !== 'undefined') (() => {
   };
   function roToast() { toast((RO_TEXT[ro] || ['Read-only'])[0], true); }
   function applyRo() {
-    document.body.classList.toggle('ro', !!ro); syncUndo(); const bar = $('roBar'); bar.hidden = !ro; bar.textContent = ''; if (!ro) return;
-    const [msg, label, go] = RO_TEXT[ro], b = el('button', 'small', label); b.type = 'button'; b.onclick = go; bar.append(elI('span', null, 'lock', msg));
-    if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; bar.append(a); }
-    bar.append(b); lockDrawers();
+    document.body.classList.toggle('ro', !!ro); syncUndo(); if (!ro) { showBar('roBar', null); return; }
+    const [msg, label, go] = RO_TEXT[ro], text = [msg];
+    if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; text.push(' ', a); }
+    showBar('roBar', { tone: 'warn', icon: 'lock', text, action: { label, onClick: go } }).setAttribute('role', 'status'); lockDrawers();   // shown on every load: polite, not an alert
   }
   const RO_KEEP = new Set(['cClose', 'pClose', 'cCopyMd', 'cAgent', 'pAgent', 'dLink']);   // buttons that only read or copy
   function lockDrawers() {

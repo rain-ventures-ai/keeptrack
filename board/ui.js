@@ -286,6 +286,8 @@
     if (canPopover) { try { if (toastRegion.matches(':popover-open')) toastRegion.hidePopover(); toastRegion.showPopover(); } catch {} }   // re-show: stays above newer dialogs
     return toastRegion;
   }
+  // A toast shown inside a modal dialog moves back out when that dialog closes, so it stays visible.
+  document.addEventListener('close', e => { if (toastRegion && toastCur && e.target instanceof HTMLDialogElement && e.target.contains(toastRegion)) region(); }, true);
   function pumpToast() {
     if (toastCur && !toastCur.el.isConnected) { clearTimeout(toastCur.timer); toastCur.done = true; toastCur = null; }   // its dialog was removed with it
     if (toastCur || !toastQ.length) return;

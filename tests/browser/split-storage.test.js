@@ -57,6 +57,14 @@ class Github {
   }
 }
 
+// The board asks with in-page dialogs (ui.confirm / ui.promptText), never window.confirm. autoConfirm answers every one of
+// them with its confirm button, like the old page.on('dialog', d => d.accept()); it also covers pages opened later in the page.
+const AUTO_CONFIRM = () => { const go = () => new MutationObserver(() => { document.querySelectorAll('dialog.ui-sheet--alert[open]:not([data-auto])').forEach(d => { d.dataset.auto = '1'; setTimeout(() => { const b = d.querySelectorAll('.ui-sheet__foot button'); if (b.length) b[b.length - 1].click(); }); }); }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
+  if (document.documentElement) go(); else document.addEventListener('DOMContentLoaded', go); };
+async function autoConfirm(page) { page.on('dialog', d => d.accept());   /* the task drawer still has a few native confirms */ await page.addInitScript(AUTO_CONFIRM); await page.evaluate(AUTO_CONFIRM).catch(() => {}); }
+// The confirm sheet that is open now: check its text, then press the named button.
+async function answer(page, re, label) { const d = page.getByRole('alertdialog'); await d.waitFor(); assert.match(await d.textContent(), re); await d.getByRole('button', { name: label, exact: true }).click(); }
+
 async function openBoard(browser, api) {
   const page = await browser.newPage(); page.on('pageerror', e => console.error('page error:', e.message)); await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); sessionStorage.setItem('kb_view', 'board'); });
   await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); try { await page.waitForSelector('.card, .todayhead'); } catch (e) { console.error('status:', await page.locator('#status').textContent().catch(() => '?'), 'calls:', api.calls); throw e; } return page;
@@ -87,7 +95,7 @@ let base;
     // Every browser creation path starts on split schema v4 and adds a root README that links back to Keeptrack.
     // The empty board writes only its board root/index; the first task then gets its own card file without a legacy v3 round trip.
     const freshApi = new Github(true); freshApi.files = {};
-    const fresh = await browser.newPage(); fresh.on('dialog', d => d.accept());
+    const fresh = await browser.newPage(); await autoConfirm(fresh);
     await fresh.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); sessionStorage.setItem('kb_view', 'board'); });
     await fresh.route('https://api.test/**', r => freshApi.route(r)); await fresh.goto(base + '/board/index.html');
     const create = fresh.locator('button', { hasText: 'Create a new empty board' }); await create.waitFor(); const created = fresh.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); const readmeCreated = fresh.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/README.md')); await create.click(); await Promise.all([created, readmeCreated]);
@@ -98,7 +106,7 @@ let base;
 
     // Creating a board in an existing project never replaces that project's README.
     const documentedApi = new Github(true); documentedApi.files = {}; documentedApi.readme = '# Existing project\n';
-    const documented = await browser.newPage(); documented.on('dialog', d => d.accept());
+    const documented = await browser.newPage(); await autoConfirm(documented);
     await documented.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); sessionStorage.setItem('kb_view', 'board'); });
     await documented.route('https://api.test/**', r => documentedApi.route(r)); await documented.goto(base + '/board/index.html'); const documentedCreate = documented.locator('button', { hasText: 'Create a new empty board' }); await documentedCreate.waitFor(); const documentedBoard = documented.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); const readmeChecked = documented.waitForResponse(r => r.request().method() === 'GET' && r.url().includes('/contents/README.md')); await documentedCreate.click(); await Promise.all([documentedBoard, readmeChecked]);
     assert.equal(documentedApi.readme, '# Existing project\n'); assert(!documentedApi.calls.some(x => x.method === 'PUT' && x.path.startsWith('/contents/README.md'))); await documented.close();
@@ -239,8 +247,8 @@ let base;
     assert(clear.last <= clear.dock - 8, `the last card must scroll clear of the dock: ${JSON.stringify(clear)}`);
     await dock.locator('#dockMenu').click(); assert.equal(await dock.locator('#dockPop').isVisible(), true); await dock.locator('#dockPop [data-head-action="btnSettings"]').click(); assert.equal(await dock.locator('#dlgSettings').getAttribute('open'), ''); assert.equal(await dock.locator('#sLayout').inputValue(), 'dock'); await dock.locator('#sClose').click();
     await dock.locator('.card', { hasText: 'First' }).locator('.t').click(); await dock.locator('#dlgCard').waitFor({ state: 'visible' }); const dockMoved = dock.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')); await dock.locator('#cCol').selectOption('done'); await dockMoved; await dock.locator('#cClose').click();
-    assert.equal(JSON.parse(dockApi.files['cards/t_one.json']).column, 'done'); assert.equal(await dock.locator('#undoSnack').isVisible(), true); assert.equal(await dock.locator('#dock').isVisible(), true); assert(await dock.evaluate(() => document.querySelector('#undoSnack').getBoundingClientRect().bottom <= document.querySelector('#dock').getBoundingClientRect().top), 'the Undo message sits above the footer');
-    const dockUndone = dock.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')); await dock.locator('#undoGo').click(); await dockUndone; assert.equal(JSON.parse(dockApi.files['cards/t_one.json']).column, 'todo'); assert.equal(await dock.locator('#undoSnack').isHidden(), true); assert.equal(await dock.locator('#dock').isVisible(), true);
+    assert.equal(JSON.parse(dockApi.files['cards/t_one.json']).column, 'done'); await dock.locator('.ui-toast.kb-undo').waitFor(); assert.equal(await dock.locator('#dock').isVisible(), true); assert(await dock.evaluate(() => document.querySelector('.ui-toast.kb-undo').getBoundingClientRect().bottom <= document.querySelector('#dock').getBoundingClientRect().top), 'the Undo message sits above the footer');
+    const dockUndone = dock.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')); await dock.locator('.ui-toast.kb-undo').getByRole('button', { name: 'Undo' }).click(); await dockUndone; assert.equal(JSON.parse(dockApi.files['cards/t_one.json']).column, 'todo'); assert.equal(await dock.locator('.ui-toast.kb-undo').count(), 0); assert.equal(await dock.locator('#dock').isVisible(), true);
     await dock.locator('#dockMenu').click(); await dock.locator('#dockPop [data-head-action="btnSettings"]').click(); await dock.locator('#sLayout').selectOption('classic'); await dock.locator('#sClose').click(); assert.equal(await dock.locator('#dock').isHidden(), true); assert.equal(await dock.locator('#viewSw').isVisible(), true); assert.equal(await dock.evaluate(() => localStorage.getItem('kb_layout')), 'classic'); await dock.close();
 
     // Token controls distinguish browser storage from an unsaved/password-manager value. A token saved for
@@ -336,7 +344,7 @@ let base;
     const methodsPage = await openBoard(browser, methodsApi); await methodsPage.locator('#viewSw button[data-view="people"]').click(); await methodsPage.locator('.prow', { hasText: 'Casey Example' }).click();
     assert.deepEqual(await methodsPage.locator('#pEmails .methodvalue').evaluateAll(xs => xs.map(x => x.value)), ['casey@work.test']); assert.deepEqual(await methodsPage.locator('#pPhones .methodvalue').evaluateAll(xs => xs.map(x => x.value)), ['+44 20 7000 0000']); assert.match(await methodsPage.locator('#pLinks').textContent(), /LinkedIn.*linkedin\.com/s);
     await methodsPage.locator('#pEmailLabel').fill('Personal'); await methodsPage.locator('#pEmailNew').fill('casey@home.test'); const secondEmail = methodsPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/people/p_one.json')); await methodsPage.locator('#pEmailAdd').click(); await secondEmail;
-    methodsPage.once('dialog', async d => { assert.match(d.message(), /Remove the Email email.*saves to GitHub immediately.*Undo button/s); await d.accept(); }); const removedEmail = methodsPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/people/p_one.json')); await methodsPage.locator('#pEmails [aria-label="Remove email"]').first().click(); await removedEmail; assert.deepEqual(JSON.parse(methodsApi.files['people/p_one.json']).emails.map(x => x.value), ['casey@home.test']);
+    const removedEmail = methodsPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/people/p_one.json')); await methodsPage.locator('#pEmails [aria-label="Remove email"]').first().click(); await answer(methodsPage, /Remove the Email email.*saves to GitHub immediately.*Undo button/s, 'Remove'); await removedEmail; assert.deepEqual(JSON.parse(methodsApi.files['people/p_one.json']).emails.map(x => x.value), ['casey@home.test']);
     const undoEmail = methodsPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/people/p_one.json')); await methodsPage.keyboard.press('Control+z'); await undoEmail; assert.deepEqual(JSON.parse(methodsApi.files['people/p_one.json']).emails.map(x => x.value), ['casey@work.test', 'casey@home.test']); assert.equal(await methodsPage.locator('#btnUndo').isDisabled(), false, 'the earlier add can still be undone after undoing the removal');
     const undoAddedEmail = methodsPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/people/p_one.json')); await methodsPage.locator('#pUndo').click(); await undoAddedEmail; assert.deepEqual(JSON.parse(methodsApi.files['people/p_one.json']).emails.map(x => x.value), ['casey@work.test']);
     await methodsPage.locator('#pPhoneLabel').fill('Mobile'); await methodsPage.locator('#pPhoneNew').fill('+44 7700 900123'); const secondPhone = methodsPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/people/p_one.json')); await methodsPage.locator('#pPhoneAdd').click(); await secondPhone;
@@ -449,7 +457,7 @@ let base;
     colApi.files['cards/t_two.json'] = text({ ...JSON.parse(colApi.files['cards/t_two.json']), column: 'backlog', rank: 'a0' });
     const colPage = await openBoard(browser, colApi), colIds = () => JSON.parse(colApi.files['tasks.json']).columns.map(c => c.id).join(','), colNames = () => JSON.parse(colApi.files['tasks.json']).columns.map(c => c.name).join(',');
     const colWait = async (fn, what) => { for (let i = 0; i < 60 && !fn(); i++) await colPage.waitForTimeout(100); assert(fn(), what); };
-    colPage.on('dialog', d => d.accept());
+    await autoConfirm(colPage);
     await colPage.locator('#btnSettings').click(); await colPage.locator('#colList .colrow').first().waitFor();
     assert.equal(await colPage.locator('#colList .colrow').count(), 3); assert.match(await colPage.locator('#colList .colrow').nth(0).textContent(), /1 card/);
     assert.equal(await colPage.locator('#colList .colrow').nth(1).locator('button.danger').isDisabled(), true, 'To do cannot be removed'); assert.equal(await colPage.locator('#colList .colrow').nth(2).locator('button.danger').isDisabled(), true, 'Done cannot be removed');
@@ -472,7 +480,7 @@ let base;
     }
     // Settings → Labels: rename, recolour, add and delete are each one save, touch only the cards that use the label, and Undo reverts them.
     {
-    const lb = new Github(true), lp = await openBoard(browser, lb); lp.on('dialog', d => d.accept());
+    const lb = new Github(true), lp = await openBoard(browser, lb); await autoConfirm(lp);
     await lp.locator('#btnSettings').click(); await lp.locator('#labelBox .lbrow').first().waitFor();
     assert.deepEqual(await lp.locator('#labelBox .lbcnt').allTextContents(), ['1 task', '1 task']);
     lb.calls = []; const renamed = lp.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()));

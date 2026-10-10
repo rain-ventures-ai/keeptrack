@@ -42,3 +42,6 @@ jobs:
       - name: UI component catalogue and board boot
         working-directory: tests/browser
         run: node ui-catalogue.test.js
+      - name: Feedback components (in-page confirm, toasts with Undo, no native dialogs)
+        working-directory: tests/browser
+        run: node feedback.test.js
