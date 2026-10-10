@@ -217,6 +217,13 @@ GitHub Pages is not available for private repos on the current (free) org plan, 
 - Anyone with write access to this repo can edit the board (and the page's code). Keep client-confidential detail out of card text if the repo audience widens.
 - The page escapes all card text (no `innerHTML`) and only links `http(s)` URLs.
 
+### Optional: visibility alarm
+This repo holds contacts, so it must stay private. To get a warning if it ever becomes public, install the optional check:
+
+    python3 board/keeptrack.py kit-update --visibility-alarm
+
+It adds `.github/workflows/visibility-alarm.yml`. The workflow runs when the repo is made public, once a day, and on demand. If the repo is not private, it opens one issue titled `P0: board repo is not private`, assigned to the board owner (only if no such issue is already open), and the run fails. It uses only the built-in `GITHUB_TOKEN` (read the repo, write issues). Once installed, `kit-update` keeps it up to date; without the flag it is not installed. To remove it, delete the file and commit.
+
 ## Task numbers and mentions
 - Every task has a short number (`#12`) shown on its card and in the drawer; click it to copy. Say "#12" when you discuss a task. `keeptrack.py show '#12'` (or `claim`, `done`, `comment`...) accepts it in place of the long id. Quote the `#` in a shell.
 - In comments and descriptions, `@github-username` highlights that person (or agent) and `#12` becomes a link to that task. Typing `@` or `#` in the web page offers a pick list.
