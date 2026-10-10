@@ -29,6 +29,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
 Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
   keeptrack.py clients | client-rename OLD NEW | client-rm NAME | client-set NAME --north-star ..
+  keeptrack.py columns | column-add NAME [--after ID] | column-set ID --rename NAME | column-move ID --before|--after ID | column-rm ID [--move-to ID]
   keeptrack.py members | member-add USER [--name ..] | member-set USER --name .. | member-rm USER [--unassign]
   keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--stages "A,B,C" | --rename-stage OLD=NEW]
   ID may also be a task number: '#12' (quote the # in a shell).
@@ -2734,6 +2735,112 @@ def cmd_client_rm(a):
     mutate(fn, f"Remove client: {a.client}")
 
 
+PROTECTED_COLUMNS = ("todo", "in-progress", "done")  # the agent commands (add, claim, done) put cards in these by id
+
+
+def column_slug(name, used):
+    """A column id from its name: lower-case words joined by '-', made unique with -2, -3 ... Ids never change on rename."""
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "column"
+    cid, n = base, 2
+    while cid in used:
+        cid, n = f"{base}-{n}", n + 1
+    return cid
+
+
+def _column(data, cid):
+    cols = data.get("columns") or []
+    col = next((c for c in cols if c.get("id") == cid), None)
+    if not col:
+        sys.exit(f"no column '{cid}'. Columns: {', '.join(c['id'] for c in cols)}")
+    return col
+
+
+def cmd_columns(a):
+    data, _ = load()
+    for c in data.get("columns", []):
+        n = sum(1 for t in data.get("tasks", []) if t.get("column") == c["id"])
+        print(f"{c['id']}  {c.get('name', '')}  ({n} cards)" + ("  [done column]" if c["id"] == done_col(data) else ""))
+
+
+def cmd_column_add(a):
+    """Add a column: after --after, otherwise at the end (just before the done column when that is last)."""
+    def fn(data):
+        cols = data.setdefault("columns", [])
+        name = a.name.strip()
+        if not name:
+            sys.exit("the column name is empty")
+        if any(c.get("name", "").lower() == name.lower() for c in cols):
+            sys.exit(f"a column named '{name}' already exists")
+        cid = column_slug(name, {c.get("id") for c in cols})
+        if a.after:
+            _column(data, a.after)
+            at = next(i for i, c in enumerate(cols) if c["id"] == a.after) + 1
+        else:
+            at = len(cols) - 1 if cols and cols[-1]["id"] == done_col(data) else len(cols)
+        cols.insert(at, {"id": cid, "name": name})
+        print(f"added column {cid} ({name}) at position {at + 1}")
+    mutate(fn, f"Add column: {a.name.strip()}")
+
+
+def cmd_column_set(a):
+    """Rename a column. Its id stays, so cards, the done column and scripts keep working."""
+    def fn(data):
+        col = _column(data, a.column)
+        if a.rename is None:
+            sys.exit("nothing to change; use --rename NAME")
+        new = a.rename.strip()
+        if not new:
+            sys.exit("the new name is empty")
+        if new == col.get("name"):
+            print(f"column {col['id']} already has that name"); return
+        if any(c.get("name", "").lower() == new.lower() and c is not col for c in data["columns"]):
+            sys.exit(f"a column named '{new}' already exists")
+        print(f"renamed column {col['id']}: {col.get('name')} -> {new}")
+        col["name"] = new
+    mutate(fn, f"Rename column: {a.column}")
+
+
+def cmd_column_move(a):
+    """Reorder columns: put one before or after another."""
+    def fn(data):
+        cols = data["columns"]
+        col = _column(data, a.column)
+        if bool(a.before) == bool(a.after):
+            sys.exit("use exactly one of --before or --after")
+        anchor = _column(data, a.before or a.after)
+        if anchor is col:
+            sys.exit("a column cannot be moved before or after itself")
+        cols.remove(col)
+        cols.insert(cols.index(anchor) + (0 if a.before else 1), col)
+        print("columns: " + ", ".join(c["id"] for c in cols))
+    mutate(fn, f"Move column: {a.column}")
+
+
+def cmd_column_rm(a):
+    """Remove a column. Refuses while it has cards unless --move-to says where they go."""
+    def fn(data):
+        cols = data["columns"]
+        col = _column(data, a.column)
+        if len(cols) <= 1:
+            sys.exit("a board needs at least one column")
+        if a.column in PROTECTED_COLUMNS or a.column == done_col(data):
+            sys.exit(f"column '{a.column}' cannot be removed: the done/claim commands rely on todo, in-progress and done. Rename it instead (column-set)")
+        cards = [t for t in data.get("tasks", []) if t.get("column") == a.column]
+        if cards and not a.move_to:
+            sys.exit(f"'{col.get('name')}' still has {len(cards)} cards; use --move-to COLUMN to move them first, or move them with move/task-set")
+        if a.move_to:
+            if a.move_to == a.column:
+                sys.exit("--move-to must be a different column")
+            target = _column(data, a.move_to)
+            ordered = sorted(cards, key=task_order_key) if data.get("layout") == "split" else cards
+            for t in ordered:
+                hist(t, f"moved {col.get('name')} -> {target.get('name')}")
+                move_task_to_column(data, t, a.move_to); t["updated"] = now()
+        data["columns"] = [c for c in cols if c is not col]
+        print(f"removed column {a.column}" + (f"; moved {len(cards)} cards to {a.move_to}" if cards else ""))
+    mutate(fn, f"Remove column: {a.column}")
+
+
 def cmd_members(a):
     data, _ = load()
     owner = (data.get("settings") or {}).get("kit_owner") or ((data.get("people") or [{}])[0].get("github"))
@@ -3443,6 +3550,11 @@ def main():
     s = sub.add_parser("clients", help="list clients and what uses each"); s.set_defaults(f=cmd_clients)
     s = sub.add_parser("client-rename", help="rename a client everywhere"); s.add_argument("client"); s.add_argument("new"); s.set_defaults(f=cmd_client_rename)
     s = sub.add_parser("client-rm", help="remove a client nothing uses"); s.add_argument("client"); s.set_defaults(f=cmd_client_rm)
+    s = sub.add_parser("columns", help="list columns and how many cards each holds"); s.set_defaults(f=cmd_columns)
+    s = sub.add_parser("column-add", help="add a column (default: at the end, before Done)"); s.add_argument("name"); s.add_argument("--after", metavar="ID", help="put it after this column"); s.set_defaults(f=cmd_column_add)
+    s = sub.add_parser("column-set", help="rename a column (its id stays)"); s.add_argument("column", metavar="ID"); s.add_argument("--rename", metavar="NAME"); s.set_defaults(f=cmd_column_set)
+    s = sub.add_parser("column-move", help="reorder: put a column before or after another"); s.add_argument("column", metavar="ID"); s.add_argument("--before", metavar="ID"); s.add_argument("--after", metavar="ID"); s.set_defaults(f=cmd_column_move)
+    s = sub.add_parser("column-rm", help="remove a column; --move-to is required while it has cards"); s.add_argument("column", metavar="ID"); s.add_argument("--move-to", dest="move_to", metavar="ID"); s.set_defaults(f=cmd_column_rm)
     s = sub.add_parser("members", help="list board members (assignable GitHub users) and agents"); s.set_defaults(f=cmd_members)
     s = sub.add_parser("member-add", help="add a board member"); s.add_argument("user", help="GitHub username"); s.add_argument("--name"); s.set_defaults(f=cmd_member_add)
     s = sub.add_parser("member-set", help="change a board member's display name"); s.add_argument("user"); s.add_argument("--name"); s.set_defaults(f=cmd_member_set)

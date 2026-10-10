@@ -11,6 +11,11 @@ Open a person and type in **☑ Tasks**. The task is linked to that person and t
 ## Agents and tasks
 AI agents can claim a task, report progress and finish it. While an agent works on a task, the card shows its status. See [AI assistants](ai-assistants.md).
 
+## Change the columns
+Open **Settings → General → Columns**. You can rename a column, move it up or down, add a new one, or remove one. Each change is saved at once and **Undo** reverses it.
+
+A column's name can change, but its hidden id stays, so cards, the Done column and AI agents keep working. To remove a column that still has cards, Keeptrack asks where to move them. **To do**, **In progress** and **Done** cannot be removed, because agents use them, and a board always keeps at least one column. Agents and scripts have matching commands (`columns`, `column-add`, `column-set`, `column-move`, `column-rm`).
+
 ## Turn tasks or people on or off
 Open **Settings → General → Board sections** and switch **Tasks** or **People & pipeline (CRM)** on or off. Keep at least one section on.
 

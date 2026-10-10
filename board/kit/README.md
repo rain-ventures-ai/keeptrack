@@ -201,10 +201,11 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 | Task fields | `task-set ID [--title] [--details] [--priority] [--due YYYY-MM-DD\|today\|+N\|""] [--label X]... [--unlabel X]... [--client] [--project] [--contact]`, `unlink ID URL` |
 | Labels | `labels`, `label-add NAME [--color #hex]`, `label-set NAME [--rename NEW] [--color #hex]`, `label-rm NAME [--force]`. `add --label` and `task-set --label` create a missing label in grey, as the web board does |
 | Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link` |
+| Columns | `columns` (with card counts), `column-add NAME [--after ID]`, `column-set ID --rename NAME` (the id stays), `column-move ID --before ID\|--after ID`, `column-rm ID [--move-to ID]` (refuses while the column has cards unless `--move-to` says where they go; never `todo`, `in-progress`, `done` or the last column). New ids are a slug of the name |
 | Board members | `members`, `member-add USER [--name]`, `member-set USER --name`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
 | Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW]` |
 
-Renames change the live board only: items in `archive/<year>.json` keep the old label, client or stage name (the command says so); after `unarchive`, fix them with `task-set` or `person-set`. Columns are not editable from the CLI yet. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
+Renames change the live board only: items in `archive/<year>.json` keep the old label, client or stage name (the command says so); after `unarchive`, fix them with `task-set` or `person-set`. Column names are renamed in place, so cards keep their column. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
 
 Useful environment variables: `BOARD_USER`, `BOARD_AGENT`, `BOARD_SESSION` (also `CLAUDE_SESSION_ID` / `CODEX_SESSION_ID`), `BOARD_REPO`, `BOARD_BRANCH`, `BOARD_PATH` (default `board/tasks.json`). Test safely with `--file some-copy.json`.
 

@@ -33,6 +33,11 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | Rename a client everywhere | `client-rename "Acme" "Acme Ltd"` (tasks, projects, people's company, client info) |
 | Remove an unused client | `client-rm "Old Co"` (refuses while anything uses it) |
 | Client north star | `client-set "Acme" --north-star ".."` |
+| List columns with card counts | `columns` |
+| Add a column | `column-add "In review" [--after todo]` (id is a slug of the name; default is just before Done) |
+| Rename a column | `column-set in-review --rename "Review"` (the id stays, so cards and Done keep working) |
+| Reorder columns | `column-move review --before todo` or `--after todo` |
+| Remove a column | `column-rm review --move-to todo` (refuses while it has cards unless `--move-to` is given; never `todo`, `in-progress`, `done` or the last column) |
 | Add / rename a board member | `member-add sam --name "Sam"`, `member-set sam --name "Sam K"` |
 | Remove a board member | `member-rm sam` (refuses with open tasks; `--unassign` takes them off). Never the upgrade owner |
 | Board title, stale minutes | `settings-set --title "Ops" --stale-minutes 45` |

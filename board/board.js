@@ -991,7 +991,7 @@ if (typeof window !== 'undefined') (() => {
     fillProjectSelect(sortedProjects().map(p => [p.id, projectPickerLabel(p)]));
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
-    applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact();
+    applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox();
     if (view !== 'board') {
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
@@ -2512,7 +2512,7 @@ if (typeof window !== 'undefined') (() => {
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
     settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderArchiveBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
@@ -2828,6 +2828,61 @@ if (typeof window !== 'undefined') (() => {
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
   }
+  // ---- Settings → General → Columns: one mutate per action, so each can be undone ---------------------------------
+  const PROTECTED_COLS = ['todo', 'in-progress', 'done'];   // the agent commands put cards in these by id
+  const colSlug = (name, used) => { const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'column'; let id = base, n = 2; while (used.has(id)) id = `${base}-${n++}`; return id; };   // same ids as keeptrack.py column-add
+  let colRemoving = '';   // the column whose "move its cards to" row is open
+  function renderColumnsBox() {
+    const list = $('colList'); if (!list) return; list.textContent = '';
+    const locked = !!ro || !!newerSchema, dc = doneColId(), cols = state.columns;
+    cols.forEach((c, i) => {
+      const n = state.tasks.filter(t => t.column === c.id).length, row = el('div', 'colrow'), name = el('input'), count = el('span', 'colcount', `${n} card${n === 1 ? '' : 's'}`);
+      name.value = c.name; name.maxLength = 40; name.disabled = locked; name.setAttribute('aria-label', `Name of column ${c.name}`);
+      name.onchange = () => { const v = name.value.trim(), taken = state.columns.some(x => x.id !== c.id && x.name.toLowerCase() === v.toLowerCase());
+        if (!v || v === c.name) { name.value = c.name; return; }
+        if (taken) { toast(`A column called “${v}” already exists.`, true); name.value = c.name; return; }
+        mutate(d => { const x = d.columns.find(y => y.id === c.id); if (x) x.name = v; }, `Rename column: ${c.name}`).then(renderColumnsBox); };
+      const mv = (dir, label) => { const b = el('button', 'small', dir < 0 ? '↑' : '↓'); b.type = 'button'; b.title = `Move ${label} ${dir < 0 ? 'up' : 'down'}`; b.setAttribute('aria-label', b.title); b.disabled = locked || i + dir < 0 || i + dir >= cols.length;
+        b.onclick = () => mutate(d => { const k = d.columns.findIndex(y => y.id === c.id), o = k + dir; if (k < 0 || o < 0 || o >= d.columns.length) return; [d.columns[k], d.columns[o]] = [d.columns[o], d.columns[k]]; }, `Move column: ${c.name}`).then(renderColumnsBox); return b; };
+      const x = el('button', 'small danger', 'Remove'); x.type = 'button'; x.disabled = locked || cols.length <= 1 || PROTECTED_COLS.includes(c.id) || c.id === dc;
+      if (x.disabled && !locked) x.title = cols.length <= 1 ? 'A board needs at least one column' : 'Agents rely on this column';
+      x.onclick = () => { if (!n) { if (confirmRemoval(`the “${c.name}” column`)) removeColumn(c.id, ''); return; } colRemoving = colRemoving === c.id ? '' : c.id; renderColumnsBox(); };
+      row.append(name, count, mv(-1, c.name), mv(1, c.name), x);
+      if (colRemoving === c.id && n) {
+        const box = el('div', 'colmove'), sel = el('select'), go = el('button', 'small danger', 'Move cards and remove'), no = el('button', 'small', 'Cancel');
+        sel.setAttribute('aria-label', `Where to move the ${n} cards from ${c.name}`); cols.filter(y => y.id !== c.id).forEach(y => { const o = el('option', null, y.name); o.value = y.id; sel.append(o); });
+        go.type = no.type = 'button'; no.onclick = () => { colRemoving = ''; renderColumnsBox(); };
+        go.onclick = () => { const to = sel.value, dest = colName(to);
+          if (!confirm(`Remove the “${c.name}” column and move its ${n} card${n === 1 ? '' : 's'} to “${dest}”?\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) return; removeColumn(c.id, to); };
+        box.append(el('span', null, `Move its ${n} card${n === 1 ? '' : 's'} to`), sel, go, no); row.append(box);
+      }
+      list.append(row);
+    });
+    $('colNew').disabled = $('colAdd').disabled = locked;
+  }
+  async function removeColumn(id, to) {
+    const col = state.columns.find(c => c.id === id); if (!col) return;
+    const ids = state.tasks.filter(t => t.column === id).map(t => t.id); colRemoving = '';
+    await mutate(d => {
+      if (d.columns.length <= 1 || !d.columns.some(c => c.id === id)) return;
+      const moving = d.tasks.filter(t => t.column === id);
+      if (moving.length) {
+        if (!to || !d.columns.some(c => c.id === to && c.id !== id)) return;   // the target went away: leave the column alone
+        const ranks = d.tasks.filter(t => t.column === to && validRank(t.rank)).map(t => t.rank); let last = ranks.length ? ranks.reduce((a, b) => (a > b ? a : b)) : null;
+        moving.sort((a, b) => (validRank(a.rank) && validRank(b.rank) ? (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0) : 0)).forEach(t => { t.column = to; if (isSplit(d)) { t.rank = keyBetween(last, null); last = t.rank; } stamp(t); });
+      }
+      d.columns = d.columns.filter(c => c.id !== id);
+    }, `Remove column: ${col.name}`, ids);
+    renderColumnsBox();
+  }
+  $('colAdd').onclick = async () => {
+    const v = $('colNew').value.trim(); if (!v) { $('colNew').focus(); return; }
+    if (state.columns.some(c => c.name.toLowerCase() === v.toLowerCase())) { toast(`A column called “${v}” already exists.`, true); return; }
+    const ok = await mutate(d => { const at = d.columns.length && d.columns[d.columns.length - 1].id === (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1]).id ? d.columns.length - 1 : d.columns.length;
+      d.columns.splice(at, 0, { id: colSlug(v, new Set(d.columns.map(c => c.id))), name: v }); }, `Add column: ${v}`);
+    if (ok) $('colNew').value = ''; renderColumnsBox();
+  };
+  $('colNew').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('colAdd').click(); } };
   async function saveModeSettings() {
     const selected = [$('sModeTasks').checked && 'tasks', $('sModeCrm').checked && 'crm'].filter(Boolean);
     if (!selected.length) { toast('Keep at least one board section turned on.', true); syncModeSettings(); return; }
