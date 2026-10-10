@@ -263,7 +263,7 @@ body:not([data-view="board"]) #tabs { display: none !important; }
 /* ---- calendar view ------------------------------------------------------- */
 .cal { max-width: 1100px; margin: 0 auto; }
 .calbar { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-4); } .caltitle { margin: 0 var(--sp-3); font-size: 18px; flex: 1; text-align: center; }
-.calnav { min-width: 40px; }
+#board .calbar .ui-btn { min-width: 40px; }
 .calgrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); background: var(--card); border-radius: var(--r-md); overflow: hidden; }
 .calwd { text-align: center; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: var(--sp-2) 0; background: var(--panel); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .calcell { min-height: 96px; padding: var(--sp-1) 5px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); cursor: pointer; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -857,8 +857,7 @@ dialog.archview { max-width: 640px; } .archview pre.atext { white-space: pre-wra
 .archview .acm { white-space: pre-wrap; border-left: 3px solid var(--border); padding: var(--sp-1) var(--sp-4); margin: var(--sp-2) 0; font-size: var(--fs-md); } .archview h3 { font-size: var(--fs-md); margin: var(--sp-5) 0 var(--sp-1); }
 #archBox .hint { margin-bottom: var(--sp-2); }
 
-.showmore { display: block; width: 100%; margin: var(--sp-2) 0; padding: var(--sp-3); border: 1px dashed var(--border); background: transparent; color: var(--muted); border-radius: var(--r-md); }
-.showmore:hover { color: var(--text, inherit); background: var(--panel); }
+.ui-btn.showmore { display: flex; width: 100%; margin: var(--sp-2) 0; border: 1px dashed var(--border); color: var(--muted); }   /* ui.button ghost */
 @media (max-width: 1340px) { .attnbtn .atx.short { display: none; } }
 
 /* Primary destinations stay labelled; secondary view icons stay compact and never move when selected. */

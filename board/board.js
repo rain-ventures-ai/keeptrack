@@ -1571,10 +1571,11 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- long lists: draw the first CAP items and a "Show more" button, so a huge board never builds 100,000s of elements ----
   const CAP = 150, shownMax = {};
+  const navBtn = (label, aria, onClick) => { const b = ui.button({ label, size: 'sm', onClick }); b.setAttribute('aria-label', aria); b.title = aria; return b; };   // calendar and schedule toolbars
   function capList(key, items, make, box) {
     const n = shownMax[key] || CAP; items.slice(0, n).forEach(x => box.append(make(x)));
-    if (items.length > n) { const b = el('button', 'showmore', `Show ${Math.min(500, items.length - n)} more (${items.length - n} not shown)`); b.type = 'button';
-      b.onclick = e => { e.stopPropagation(); shownMax[key] = n + 500; render(); }; box.append(b); }
+    if (items.length > n) { const b = ui.button({ label: `Show ${Math.min(500, items.length - n)} more (${items.length - n} not shown)`, variant: 'ghost', size: 'sm', onClick: e => { e.stopPropagation(); shownMax[key] = n + 500; render(); } });
+      b.classList.add('showmore'); box.append(b); }
   }
   function tableOf(items, key = 'tbl') {   // header row + rows; on a phone the header disappears and rows reflow
     const box = el('div', 'ttable'), hd = el('div', 'trow thead');
@@ -1604,7 +1605,7 @@ if (typeof window !== 'undefined') (() => {
     const dated = tasks.filter(t => t.due).sort(byDate), undated = tasks.filter(t => !t.due);
     const overdue = dated.filter(t => t.due < today && t.column !== dc), earlier = dated.filter(t => t.due < today && t.column === dc), upcoming = dated.filter(t => t.due >= today);
     const wrap = el('div', 'sched'), bar = el('div', 'calbar');
-    const todayBtn = el('button', 'calnav', 'Today'); todayBtn.onclick = () => { const x = wrap.querySelector('.sday.today'); if (x) x.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+    const todayBtn = navBtn('Today', 'Go to today', () => { const x = wrap.querySelector('.sday.today'); if (x) x.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
     bar.append(todayBtn, el('h2', 'caltitle', 'Schedule'), el('span', 'spacer')); wrap.append(bar);
 
     const item = (t, showDue) => {
@@ -1698,7 +1699,7 @@ if (typeof window !== 'undefined') (() => {
     ws.onchange = () => { actWho = ws.value; LS.set('kb_act_who', actWho); render(); };
     const ag = el('label', 'chk'), agc = el('input'); agc.type = 'checkbox'; agc.checked = actAgents; agc.disabled = actWho === '__agents';
     agc.onchange = () => { actAgents = agc.checked; LS.set('kb_act_agents', actAgents ? '1' : ''); render(); }; ag.append(agc, document.createTextNode(' Include agents'));
-    const cp = elI('button', 'primary', 'clipboard-copy', 'Copy as Markdown'); cp.type = 'button'; cp.onclick = copyMarkdown;
+    const cp = ui.button({ label: 'Copy as Markdown', icon: 'clipboard-copy', variant: 'primary', size: 'sm', onClick: copyMarkdown });
     bar.append(ws, ag, el('span', 'spacer'), cp); wrap.append(bar);
 
     const a = activityData();
@@ -1797,7 +1798,7 @@ if (typeof window !== 'undefined') (() => {
     const tasks = state.tasks.filter(t => filtered(t) && !(hideDone && t.column === doneColId())), byDay = new Map(), undated = [];
     tasks.forEach(t => { if (t.due) { if (!byDay.has(t.due)) byDay.set(t.due, []); byDay.get(t.due).push(t); } else undated.push(t); });
     const wrap = el('div', 'cal'), bar = el('div', 'calbar');
-    const nav = (txt, label, fn) => { const b = el('button', 'calnav', txt); b.setAttribute('aria-label', label); b.onclick = fn; return b; };
+    const nav = navBtn;
     bar.append(nav('‹', 'Previous month', () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); render(); }),
       el('h2', 'caltitle', calMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })),
       nav('›', 'Next month', () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); render(); }),
