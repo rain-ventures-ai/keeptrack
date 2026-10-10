@@ -4,7 +4,7 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/keeptrack.py\" auto-heartbeat", "timeout": 20 }
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-heartbeat.sh\"", "timeout": 20 }
         ]
       }
     ]

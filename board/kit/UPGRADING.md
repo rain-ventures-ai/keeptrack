@@ -12,7 +12,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 - The owner comments `@claude upgrade the board kit` on the card. Their routine follows `.claude/skills/board-upgrade/SKILL.md`.
 
 ## Rules for a kit change (for whoever changes keeptrack board/kit)
-1. Increase `version` in `manifest.json` by one, and add a section below for the new version.
+1. Increase `version` in `manifest.json` by one, and add a section below for the new version. Set `version` in `.claude-plugin/plugin.json` to `0.<new kit version>.0` so plugin users get the update. A plugin-only change between kit versions (a skill, a hook) bumps the last number instead.
 2. If `tasks.json` changes shape, increase `SCHEMA` and the manifest schema. Add a safe step to `MIGRATIONS`. Update each writer in the phase that adds its write support. Follow the version notes for the migration command. Do not migrate before the upgrade is merged.
 3. The web board and `keeptrack.py` must still read the schema version before the new one, so boards that are not upgraded yet continue to work.
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
