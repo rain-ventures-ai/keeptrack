@@ -324,6 +324,9 @@ button.ui-task--button:hover:not(:disabled) { background: var(--card-hover); bor
 .ui-empty { display: grid; justify-items: center; align-content: center; gap: var(--sp-3, 8px); padding: var(--sp-8, 24px) var(--sp-6, 16px); border: 1px dashed var(--border); border-radius: var(--r-lg, 10px); color: var(--muted); text-align: center; }
 .ui-empty > .ui-i { width: 26px; height: 26px; opacity: .7; }
 .ui-empty__text { margin: 0; max-width: 36ch; font-size: var(--fs-base, 13px); line-height: 1.5; }
+.ui-empty--sm { grid-auto-flow: column; justify-content: center; gap: var(--sp-2, 6px); padding: var(--sp-5, 12px) var(--sp-4, 10px); }
+.ui-empty--sm > .ui-i { width: 16px; height: 16px; }
+.ui-empty--sm .ui-empty__text { font-size: var(--fs-sm, 12px); }
 
 /* ---- focus -------------------------------------------------------------------------------------------------- */
 .ui-btn:focus-visible, .ui-iconbtn:focus-visible, .ui-pill--button:focus-visible, .ui-pill__main:focus-visible, .ui-pill__remove:focus-visible,

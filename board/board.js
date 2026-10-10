@@ -1085,7 +1085,7 @@ if (typeof window !== 'undefined') (() => {
     state.columns.forEach((col, ci) => {
       if (hideDone && col.id === 'done') return;
       const focused = cinemaCol === col.id, raw = state.tasks.filter(t => t.column === col.id && filtered(t)), items = focused ? priorityTasks(raw) : displayTasks(raw);
-      const c = el('section', 'col' + (col.id === activeCol() ? ' active' : '') + (focused ? ' cinema-col' : '')); c.dataset.col = col.id; const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', col.name), el('span', 'count', String(items.length)));
+      const c = el('section', 'col' + (col.id === activeCol() ? ' active' : '') + (focused ? ' cinema-col' : '')); c.dataset.col = col.id; const h = colHead(col.name, items.length);
       if (focused) h.append(el('span', 'cinemaorder', 'High → low · Esc to exit'));
       const full = elI('button', 'hcinema', focused ? 'minimize-2' : 'maximize-2'); full.type = 'button'; full.title = focused ? 'Exit cinema mode' : `Show only ${col.name} in cinema mode`; full.setAttribute('aria-label', full.title);
       const hb = el('button', 'hadd', '＋'); hb.type = 'button'; hb.title = 'Add a task to ' + col.name; hb.setAttribute('aria-label', 'Add a task to ' + col.name); h.append(full, hb); c.append(h);
@@ -1093,7 +1093,7 @@ if (typeof window !== 'undefined') (() => {
       cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
       cards.addEventListener('dragleave', () => c.classList.remove('over'));
       cards.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); dropOn(e, col.id, null); });
-      capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(el('div', 'emptycol', 'Nothing here. Drop a card or add one below.')); c.append(cards);
+      capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(emptyNote('Nothing here. Drop a card or add one below.', 'square-kanban')); c.append(cards);
       const add = el('div', 'add'), inp = el('input'), btn = el('button', 'primary', 'Add'); inp.placeholder = 'Add a task…';
       const go = () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; addTask(v, col.id); };
       btn.onclick = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
@@ -1476,24 +1476,43 @@ if (typeof window !== 'undefined') (() => {
 
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
   const firstLine = t => (t.details || '').split('\n').find(x => x.trim()) || '';
-  function chipTodo(t) { const tc = todoCount(t); if (!tc.all) return null; const b = elI('button', 'chip todochip' + (tc.done === tc.all ? ' full' : ''), 'square-check', `${tc.done}/${tc.all}`); b.title = 'Show or hide the checklist'; b.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; return b; }
-  function chipComments(t) { const n = t.comments.length; if (!n) return null; const fr = freshInfo(t); const b = elI('button', 'chip cmchip has' + (fr.unread ? ' unread' : ''), 'message-square', String(n)); if (fr.unread) b.append(newBadge(fr.unread)); b.title = `${n} comment${n > 1 ? 's' : ''}`; b.onclick = () => openCard(t.id, 'comments'); return b; }
+  // The chips a task shows in every view (kanban card, list row, schedule row). always: also show an empty checklist/comments chip (cards).
+  function chipTodo(t, always) {
+    const tc = todoCount(t); if (!tc.all && !always) return null;
+    const b = elI('button', 'chip todochip' + (tc.all && tc.done === tc.all ? ' full' : ''), 'square-check', tc.all ? `${tc.done}/${tc.all}` : '+'); b.type = 'button';
+    b.title = tc.all ? 'Show or hide the checklist' : 'Add a checklist'; b.setAttribute('aria-expanded', String(openLists.has(t.id)));
+    b.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; return b;
+  }
+  function chipComments(t, always) {
+    const n = t.comments.length; if (!n && !always) return null; const fr = freshInfo(t);
+    const b = elI('button', 'chip cmchip' + (n ? ' has' : '') + (fr.unread ? ' unread' : ''), 'message-square', n ? String(n) : ''); b.type = 'button'; if (fr.unread) b.append(newBadge(fr.unread));
+    b.title = n ? `${n} comment${n > 1 ? 's' : ''}${fr.unread ? ', ' + fr.unread + ' unread' : ''}` : 'Add a comment'; b.setAttribute('aria-label', b.title); b.onclick = () => openComments(t.id); return b;
+  }
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
   function chipCompleted(t) { const x = completionOf(t); if (!x) return null; const c = elI('span', 'chip doneby ' + (x.agent ? 'agent' : 'person'), x.agent ? 'bot' : 'user', x.label); c.title = `Completed by ${x.label}${x.at ? ' · ' + fmtStamp(x.at) : ''}`; return c; }
-  function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; out.push(a); }); return out; }
-  const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { out.push(paintLabel(el('span', 'tag label', l), l)); }); if (max && t.labels.length > max) out.push(el('span', 'tag', '+' + (t.labels.length - max))); return out; };
+  function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; out.push(a); }); return out; }
+  const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { out.push(paintLabel(el('span', 'tag label', l), l)); }); if (max && t.labels.length > max) out.push(ui.pill({ text: '+' + (t.labels.length - max), size: 'sm' })); return out; };
+  const clientTag = t => (t.client ? ui.pill({ text: t.client, tone: 'accent', size: 'sm' }) : null);
+  const projectTag = t => { const pr = t.project && projectById(t.project); if (!pr) return null; const p = ui.pill({ text: pr.name, outline: true, size: 'sm' }); if (pr.status === 'done' || pr.status === 'paused') { p.classList.add('tag-quiet'); p.title = `Project ${pr.status}`; } return p; };
+  const changedDot = t => { if (!freshInfo(t).changed) return null; const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; return d; };
+  function doneCircle(t, cls = '') {   // mark done / reopen, in list and schedule rows
+    const done = isDoneTask(t), b = el('button', 'circ' + cls, done ? '✓' : ''); b.type = 'button'; b.title = done ? 'Reopen' : 'Mark done'; b.setAttribute('aria-label', b.title);
+    b.onclick = e => { e.stopPropagation(); toggleDone(t); }; return b;
+  }
+  const emptyNote = (text, icon) => ui.empty({ text, icon, size: 'sm' });   // a column, day or list with nothing in it
+  function colHead(name, count) {   // kanban and pipeline column header: dot, name, count (callers add their buttons)
+    const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', name), el('span', 'ui-count', String(count))); return h;
+  }
 
   function listRow(t) {
-    const isDone = t.column === doneColId(), row = paint(el('div', 'trow' + (isDone ? ' done' : '')), t);
-    const circ = el('button', 'circ', isDone ? '✓' : ''); circ.title = isDone ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title);
-    circ.onclick = e => { e.stopPropagation(); toggleDone(t); };
-    const c0 = el('div', 'c-check'); c0.append(circ);
-    const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.prepend(d); } task.append(title);
+    const row = paint(el('div', 'trow' + (isDoneTask(t) ? ' done' : '')), t);
+    const c0 = el('div', 'c-check'); c0.append(doneCircle(t));
+    const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); { const d = changedDot(t); if (d) title.prepend(d); } task.append(title);
     const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title
     if (t.due) mm.append(duePill(t));
     mm.append(prioPill(t));
-    mm.append(...labelTags(t)); if (t.client) mm.append(el('span', 'tag client', t.client));
+    mm.append(...labelTags(t)); { const c = clientTag(t); if (c) mm.append(c); }
     [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t));
@@ -1528,10 +1547,10 @@ if (typeof window !== 'undefined') (() => {
       const items = state.tasks.filter(t => t.column === col.id && filtered(t)), shut = collapsed.has(col.id);
       const sec = el('section', 'lsec'); sec.dataset.col = col.id;
       const head = el('button', 'lhead'); head.setAttribute('aria-expanded', String(!shut));
-      head.append(el('span', 'spill', col.name), el('span', 'count', String(items.length)), el('span', 'spacer'), el('span', 'caret', shut ? '▸' : '▾'));
+      head.append(el('span', 'spill', col.name), el('span', 'ui-count', String(items.length)), el('span', 'spacer'), el('span', 'caret', shut ? '▸' : '▾'));
       head.onclick = () => { shut ? collapsed.delete(col.id) : collapsed.add(col.id); LS.set('kb_collapsed', JSON.stringify([...collapsed])); render(); };
       sec.append(head);
-      if (!shut) { const sc = el('div', 'tscroll'); if (items.length) sc.append(tableOf(items, 'l:' + col.id)); else sc.append(el('div', 'emptycol', 'Nothing here.')); sec.append(addRow(col.id), sc); }
+      if (!shut) { const sc = el('div', 'tscroll'); if (items.length) sc.append(tableOf(items, 'l:' + col.id)); else sc.append(emptyNote('Nothing here.', 'list')); sec.append(addRow(col.id), sc); }
       board.append(sec);
     });
   }
@@ -1547,9 +1566,8 @@ if (typeof window !== 'undefined') (() => {
     bar.append(todayBtn, el('h2', 'caltitle', 'Schedule'), el('span', 'spacer')); wrap.append(bar);
 
     const item = (t, showDue) => {
-      const done = t.column === dc, row = paint(el('div', 'sitem' + (done ? ' done' : '')), t);
-      const circ = el('button', 'circ sm', done ? '✓' : ''); circ.title = done ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title); circ.onclick = e => { e.stopPropagation(); toggleDone(t); };
-      const title = el('div', 'stitle'); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.append(d); } title.append(document.createTextNode(t.title));
+      const row = paint(el('div', 'sitem' + (isDoneTask(t) ? ' done' : '')), t), circ = doneCircle(t, ' sm');
+      const title = el('div', 'stitle'); { const d = changedDot(t); if (d) title.append(d); } title.append(document.createTextNode(t.title));
       const sub = [t.client, ...t.labels].filter(Boolean).join(' · '); if (sub) title.append(el('span', 'ssub', sub));
       const avs = el('div', 'lavs'); t.assignees.forEach(a => avs.append(avatar(a)));
       const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && extra.append(x));
@@ -1559,7 +1577,7 @@ if (typeof window !== 'undefined') (() => {
       const d = new Date(key + 'T00:00:00'), sec = el('section', 'sday' + (cls || ''));
       const dl = el('div', 'sdate');
       if (label) dl.append(el('span', 'sdn lbl', label)); else dl.append(el('span', 'sdn', String(d.getDate())), el('span', 'sdl', d.toLocaleDateString('en-GB', { month: 'short', weekday: 'short' }).replace(' ', ', ')));
-      const items = el('div', 'sitems'); capList('s:' + (key || label), list, t => item(t, !key), items); if (!list.length) items.append(el('div', 'snone', 'Nothing due'));
+      const items = el('div', 'sitems'); capList('s:' + (key || label), list, t => item(t, !key), items); if (!list.length) items.append(emptyNote('Nothing due', 'calendar-days'));
       sec.append(dl, items); return sec;
     };
     if (overdue.length) wrap.append(day('', 'Overdue', overdue, ' overdue'));
@@ -1646,14 +1664,14 @@ if (typeof window !== 'undefined') (() => {
     const nums = el('div', 'actnums'); [[a.cards.length, 'cards worked on'], [a.done.length, 'completed'], [a.comments, 'comments']].forEach(([n, l]) => { const s = el('span', 'actnum'); s.append(el('b', null, String(n)), document.createTextNode(' ' + l)); nums.append(s); });
     sum.append(nums); wrap.append(sum);
     if (!cfg().me && actWho === '__me') wrap.append(el('div', 'snone', 'Set your GitHub username in Settings to see your own activity. Showing everyone.'));
-    if (!a.cards.length) { wrap.append(el('div', 'emptycol', 'No activity in this range' + (filterDesc() ? ' with these filters.' : '.'))); board.append(wrap); return; }
+    if (!a.cards.length) { wrap.append(ui.empty({ text: 'No activity in this range' + (filterDesc() ? ' with these filters.' : '.'), icon: 'history' })); board.append(wrap); return; }
     if (a.done.length) {
-      const sec = el('section', 'actsec actdone'); sec.append(el('h3', null, `✓ Completed (${a.done.length})`));
-      a.done.forEach(t => { const r = el('button', 'actcard'), who = completionOf(t); r.type = 'button'; r.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', [t.client, who && 'Completed by ' + who.label].filter(Boolean).join(' · '))); r.onclick = () => openCard(t.id); sec.append(r); });
+      const sec = ui.section({ title: 'Completed', count: a.done.length, icon: 'circle-check' }); sec.classList.add('actsec', 'actdone');
+      a.done.forEach(t => { const r = el('button', 'actcard'), who = completionOf(t); r.type = 'button'; r.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', [t.client, who && 'Completed by ' + who.label].filter(Boolean).join(' · '))); r.onclick = () => openCard(t.id); sec.body.append(r); });
       wrap.append(sec);
     }
     a.days.forEach(d => {
-      const sec = el('section', 'actsec'); sec.append(el('h3', null, fmtDay(d.day)));
+      const sec = ui.section({ title: fmtDay(d.day), count: d.cards.length }); sec.classList.add('actsec');
       d.cards.forEach(({ t, ev }) => {
         const box = el('div', 'actitem'), head = el('button', 'actcard'); head.type = 'button';
         head.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', cardSub(t))); head.onclick = () => openCard(t.id);
@@ -1661,7 +1679,7 @@ if (typeof window !== 'undefined') (() => {
         ev.forEach(e => { const li = el('li', (e.comment ? 'cm' : '') + (e.done ? ' dn' : '')), tm = el('time', null, fmtTime(e.at)); tm.title = e.at;
           const who = el('b', AGENT_BY.test(String(e.by || '')) ? 'agent' : '', ' ' + (e.by || '?') + ' ');
           li.append(tm, who); if (e.comment) li.append(elI('span', 'cmic', 'message-square'), ' '); linkify(li, e.text); ol.append(li); });
-        box.append(head, ol); sec.append(box);
+        box.append(head, ol); sec.body.append(box);
       });
       wrap.append(sec);
     });
@@ -1767,9 +1785,8 @@ if (typeof window !== 'undefined') (() => {
       grid.append(cell);
     }
     wrap.append(grid);
-    const day = el('section', 'calday'), sel = byDay.get(calSel) || [];
-    const hd = el('h3', null, new Date(calSel + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })); hd.append(el('span', 'count', String(sel.length))); day.append(hd);
-    if (sel.length) { const sc = el('div', 'tscroll'); sc.append(tableOf(sel)); day.append(sc); } else day.append(el('div', 'emptycol', 'Nothing due this day.')); day.append(addRow(reopenColId(), calSel)); wrap.append(day);
+    const sel = byDay.get(calSel) || [], day = ui.section({ title: dfmt(new Date(calSel + 'T00:00:00'), { weekday: 'long', day: 'numeric', month: 'long' }), count: sel.length, icon: 'calendar' }); day.classList.add('calday');
+    if (sel.length) { const sc = el('div', 'tscroll'); sc.append(tableOf(sel)); day.body.append(sc); } else day.body.append(emptyNote('Nothing due this day.', 'calendar')); day.body.append(addRow(reopenColId(), calSel)); wrap.append(day);
     const und = el('details', 'calundated'); und.open = LS.get('kb_undated', '') === '1'; und.addEventListener('toggle', () => LS.set('kb_undated', und.open ? '1' : ''));
     und.append(el('summary', null, `No due date (${undated.length})`)); if (undated.length) { const sc = el('div', 'tscroll'); sc.append(tableOf(undated)); und.append(sc); } wrap.append(und);
     board.append(wrap);
@@ -1810,8 +1827,7 @@ if (typeof window !== 'undefined') (() => {
     c.addEventListener('dblclick', () => openCard(t.id));
     c.addEventListener('click', e => { if (phone() && !lift.justLifted && !e.target.closest('button, a, input, select, textarea, .taskactions')) openCard(t.id); });   // phones: tap a card to open it (and change its status there)
     c.addEventListener('touchstart', e => liftStart(e, t, c), { passive: true });   // phones: hold to pick it up and drop it on another lane   // phones: tap a card to open it (and change its status there)
-    const fr = freshInfo(t);
-    const top = el('div', 'top'); top.append(numChip(t)); if (fr.changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; top.append(d); } top.append(prioPill(t), el('span', 'spacer'));
+    const top = el('div', 'top'); top.append(numChip(t)); { const d = changedDot(t); if (d) top.append(d); } top.append(prioPill(t), el('span', 'spacer'));
     const edit = elI('button', 'ico', 'pencil'), bot = elI('button', 'ico', 'bot');
     edit.title = 'Edit task'; edit.setAttribute('aria-label', 'Edit task'); edit.onclick = () => openCard(t.id);
     bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent');
@@ -1819,9 +1835,7 @@ if (typeof window !== 'undefined') (() => {
     c.append(el('div', 't', t.title));
     if (t.details) c.append(el('div', 'n', t.details));
     const tags = el('div', 'tags');
-    t.labels.forEach(l => { tags.append(paintLabel(el('span', 'tag label', l), l)); });
-    if (t.client) tags.append(el('span', 'tag client', t.client));
-    if (t.project) { const pr = projectById(t.project); if (pr) tags.append(el('span', 'tag project' + (pr.status === 'done' ? ' done' : pr.status === 'paused' ? ' paused' : ''), pr.name)); }
+    [...labelTags(t), clientTag(t), projectTag(t)].forEach(x => x && tags.append(x));
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
     if (detailed) { const actions = taskQuickActions(t); actions.classList.add('cinemaactions'); c.append(actions); }
@@ -1833,18 +1847,9 @@ if (typeof window !== 'undefined') (() => {
       const activity = t.history[t.history.length - 1]; if (activity) addContext('history', 'Latest activity', `${activity.by || 'someone'} · ${ago(activity.at)}`, activity.text);
       if (context.childNodes.length) c.append(context);
     }
-    const foot = el('div', 'foot'); { const mc = chipMention(t); if (mc) foot.append(mc); }
-    { const tc = todoCount(t), chip = elI('button', 'chip todochip' + (tc.all && tc.done === tc.all ? ' full' : ''), 'square-check', tc.all ? `${tc.done}/${tc.all}` : '+');
-      chip.title = tc.all ? 'Show or hide the checklist' : 'Add a checklist'; chip.setAttribute('aria-expanded', String(openLists.has(t.id)));
-      chip.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; foot.append(chip); }
-    { const n = t.comments.length, cm = elI('button', 'chip cmchip' + (n ? ' has' : ''), 'message-square', n ? String(n) : ''); cm.title = n ? `${n} comment${n > 1 ? 's' : ''}${fr.unread ? ', ' + fr.unread + ' unread' : ''}` : 'Add a comment'; if (fr.unread) { cm.classList.add('unread'); cm.append(newBadge(fr.unread)); } cm.setAttribute('aria-label', cm.title); cm.onclick = () => openComments(t.id); foot.append(cm); }
-    if (t.due) foot.append(duePill(t));
-    const other = [];
-    t.links.forEach(l => { const g = ghLink(l.url); if (!g) { other.push(l); return; }
-      const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; foot.append(a); });
-    if (other.length) foot.append(elI('span', 'chip', 'link', String(other.length)));
-    if (t.contacts.length) foot.append(elI('span', 'chip', 'user', String(t.contacts.length)));
-    { const dc = chipCompleted(t); if (dc) foot.append(dc); }
+    const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
+    [chipMention(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+      other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
     c.append(foot);
@@ -3341,13 +3346,13 @@ if (typeof window !== 'undefined') (() => {
     }
     if (go.childElementCount) wrap.append(go);
     const addGroups = list => list.forEach(([[ic, title], items]) => {
-      if (!items.length) return; const sec = el('section', 'tsec'); sec.append(elI('h3', null, ic, `${title} (${items.length})`));
-      items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec); wrap.append(sec);
+      if (!items.length) return; const sec = ui.section({ title, count: items.length, icon: ic }); sec.classList.add('tsec');
+      items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec.body); wrap.append(sec);
     });
     addGroups(groups.slice(0, 2));
-    if (dueTasks.length) { const sec = el('section', 'tsec'); sec.append(elI('h3', null, 'square-check', `Tasks due (${dueTasks.length})`)); dueTasks.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', dueTasks, taskTodayRow, sec); wrap.append(sec); }
+    if (dueTasks.length) { const sec = ui.section({ title: 'Tasks due', count: dueTasks.length, icon: 'square-check' }); sec.classList.add('tsec'); dueTasks.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', dueTasks, taskTodayRow, sec.body); wrap.append(sec); }
     addGroups(groups.slice(2));
-    if (hasCrm && !state.contacts.length) { const e = el('div', 'empty'); e.append(el('p', null, 'No people yet. Add the first person you want to keep track of.')); wrap.append(e); }
+    if (hasCrm && !state.contacts.length) wrap.append(ui.empty({ text: 'No people yet. Add the first person you want to keep track of.', icon: 'users' }));
     if (hasCrm) wrap.append(addPersonBox()); board.append(wrap);
   }
 
@@ -3362,7 +3367,7 @@ if (typeof window !== 'undefined') (() => {
     const items = state.contacts.filter(p => crmFilter(p) && (!peopleStage || p.stage === peopleStage) && (!ql || [p.name, p.company, p.role, p.notes, p.next, ...p.emails.map(x => x.value), ...p.phones.map(x => x.value), ...p.links.flatMap(x => [x.title, x.url])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => a.name.localeCompare(b.name));
     capList('people', items, personRow, wrap);
-    if (!items.length) wrap.append(el('div', 'emptycol', state.contacts.length ? 'Nobody matches.' : 'No people yet.'));
+    if (!items.length) wrap.append(ui.empty({ text: state.contacts.length ? 'Nobody matches.' : 'No people yet.', icon: 'users' }));
     wrap.append(addPersonBox()); board.append(wrap);
   }
 
@@ -3371,7 +3376,7 @@ if (typeof window !== 'undefined') (() => {
     const money = v => { const n = parseFloat(String(v).replace(/[^0-9.]/g, '')); return isFinite(n) ? n : 0; };
     stages().forEach(s => {
       const items = state.contacts.filter(p => p.stage === s && crmFilter(p)), sum = items.reduce((a, p) => a + money(p.value), 0);
-      const c = el('section', 'col'); c.dataset.stage = s; const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', s), el('span', 'count', String(items.length)));
+      const c = el('section', 'col'); c.dataset.stage = s; const h = colHead(s, items.length);
       if (sum) h.append(el('span', 'psum', sum.toLocaleString('en-GB'))); c.append(h);
       const cards = el('div', 'cards');
       cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
@@ -3388,7 +3393,7 @@ if (typeof window !== 'undefined') (() => {
         if (p.value) k.append(el('div', 'pval', p.value));
         return k;
       }, cards);
-      if (!items.length) cards.append(el('div', 'emptycol', 'Drop a person here.'));
+      if (!items.length) cards.append(emptyNote('Drop a person here.', 'user'));
       c.append(cards);
       if (s === stages()[0]) c.append(addPersonBox('Add: Name | Client', { stage: s }));
       board.append(c);

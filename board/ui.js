@@ -265,10 +265,10 @@
 
   // ---- section ------------------------------------------------------------------------------------------------
   // Returns the <section>; append content to section.body.
-  function section({ title, count, action, collapsible = false, open = true, body } = {}) {
+  function section({ title, count, action, collapsible = false, open = true, body, icon: ic } = {}) {
     const s = h('section', 'ui-section'), head = h('div', 'ui-section__head'), b = h('div', 'ui-section__body'), bid = nextId('sec');
     b.id = bid; append(b, body);
-    const titleBits = [h('span', 'ui-section__text', title)];
+    const titleBits = [h('span', 'ui-section__text', title)]; if (ic && !collapsible) titleBits.unshift(icon(ic));
     if (count != null) titleBits.push(h('span', 'ui-count', count));
     const hd = h('h3', 'ui-section__title');
     if (collapsible) {
@@ -443,8 +443,8 @@
   }
 
   // ---- empty state --------------------------------------------------------------------------------------------
-  function empty({ text, action, icon: ic = 'inbox' } = {}) {
-    const e = h('div', 'ui-empty'); e.append(icon(ic), h('p', 'ui-empty__text', text));
+  function empty({ text, action, icon: ic = 'inbox', size } = {}) {   // size 'sm': one line, for a column or a day with nothing in it
+    const e = h('div', 'ui-empty' + (size === 'sm' ? ' ui-empty--sm' : '')); e.append(icon(ic), h('p', 'ui-empty__text', text));
     if (action) e.append(action instanceof Node ? action : button({ label: action.label, icon: action.icon, variant: 'secondary', size: 'sm', onClick: action.onClick }));
     return e;
   }
