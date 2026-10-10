@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v21 (schema 4)
+The optional visibility alarm (`.github/workflows/visibility-alarm.yml`) gets a test mode and fuller instructions.
+- **Test mode:** Actions → visibility-alarm → Run workflow → tick **test**. It opens a `[TEST]` issue saying the repo is private and there is nothing to do; close it. This is the way to prove the alarm reaches the owner.
+- **Real alarm:** the issue now lists what to do after making the repo private: note the window and traffic, rotate anything ever committed, check forks (public forks stay public), ask GitHub Support to clear cached views, and decide whether a data-protection authority must be told within 72 hours. A repeat alarm comments on the open issue instead of only logging.
+- Run `kit-update` only. Boards without the alarm are unaffected; boards with it get the new version.
+- Check: run the workflow once with **test** ticked; a `[TEST]` issue appears; close it.
+
 ### v20 (schema 4)
 Search across what a client or project links to. New command `links` lists every link around a client, project, card or person, nearest first, de-duplicated and classified by kind. The new skill `keeptrack-search` (plugin and repo) answers a question by searching those links with whatever connectors the session has: it walks Google Drive folders and their sub-folders (Drive's own search does not recurse), reads Drive files, GitHub, web pages and local paths, cites a source for every fact, and says what it could not reach. Read-only.
 - Run `kit-update` only. There is no board-data migration.

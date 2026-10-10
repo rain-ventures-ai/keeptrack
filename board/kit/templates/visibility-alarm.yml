@@ -2,6 +2,9 @@
 # Installed by: python3 board/keeptrack.py init --visibility-alarm  (kit-update keeps it current once installed).
 # Runs when the repo is made public, once a day, and on demand. If the repo is not private it opens one
 # P0 issue for the board owner (unless one is already open) and fails the run.
+# Test it: Actions -> visibility-alarm -> Run workflow -> tick "test". That opens a [TEST] issue saying the repo
+# is private and there is nothing to do; close it.
+# It cannot make the repo private again: that needs admin rights, which no board token should have.
 name: visibility-alarm
 
 on:
@@ -9,14 +12,24 @@ on:
   schedule:
     - cron: "37 8 * * *"
   workflow_dispatch:
+    inputs:
+      test:
+        description: "Open a test alarm issue even though the repo is private"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: visibility-alarm
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check that the repo is private
         env:
@@ -24,31 +37,58 @@ jobs:
           GH_REPO: ${{ github.repository }}
           REPO: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
+          EVENT: ${{ github.event_name }}
+          TEST: ${{ inputs.test }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           TITLE="P0: board repo is not private"
           private=$(gh api "repos/$REPO" --jq .private) || { echo "::error::could not read the repo visibility"; exit 1; }
-          if [ "$private" = "true" ]; then
-            echo "$REPO is private. OK."
-            exit 0
-          fi
-          if [ "$private" != "false" ]; then
+          if [ "$private" != "true" ] && [ "$private" != "false" ]; then
             echo "::error::unexpected visibility value: $private"
             exit 1
+          fi
+          body=$(mktemp)
+
+          if [ "$private" = "true" ]; then
+            if [ "${TEST:-false}" != "true" ]; then
+              echo "$REPO is private. OK."
+              exit 0
+            fi
+            cat > "$body" <<BODY
+          Test run of the visibility alarm (event: \`$EVENT\`). The repository is **private**, so there is nothing to do.
+
+          This issue only proves the alarm can open an issue and reach the owner. Close it.
+
+          Run: $RUN_URL
+          BODY
+            gh issue create --title "[TEST] visibility alarm works (repo is private)" --body-file "$body" --assignee "$OWNER" \
+              || gh issue create --title "[TEST] visibility alarm works (repo is private)" --body-file "$body"
+            exit 0
           fi
 
           existing=$(gh issue list --state open --limit 500 --json number,title \
             --jq '.[] | select(.title == "P0: board repo is not private") | .number' | head -n 1)
-          if [ -n "$existing" ]; then
-            echo "Open alarm issue #$existing already exists; not opening another."
-          else
-            body=$(mktemp)
-            cat > "$body" <<'BODY'
+          cat > "$body" <<BODY
           This board repo is **public**. Anyone on the internet can read its contacts and tasks.
 
-          To fix it: open the repo on GitHub, then **Settings** → **Danger Zone** → **Change visibility** → **Private**.
+          Do this now, in order:
 
-          Then close this issue. The check runs again every day and whenever the repo is made public.
+          1. **Make it private:** open the repo on GitHub, then **Settings** → **Danger Zone** → **Change visibility** → **Private**.
+          2. **Note how long it was public and who looked:** the time of this issue, your account's security log (Settings → Archives → Security log), and the repo's **Insights → Traffic** (views and clones for the last 14 days). Screenshot the traffic now.
+          3. **Rotate anything that was ever in the repo**, including old commits: tokens, keys, passwords. Rotate the board's own tokens too.
+          4. **Check forks** (Insights → Forks): public forks stay public after the original goes private. Ask their owners to delete them, or GitHub Support.
+          5. **Ask GitHub Support** (support.github.com) to remove cached views of sensitive data.
+          6. **Personal data:** if the repo held personal data about other people, your data-protection authority may need telling within 72 hours (UK GDPR / GDPR Art. 33). Record your decision either way.
+          7. If this repo has its own exposure playbook, follow it as well.
+
+          Close this issue with a note on what was exposed and for how long. The check runs again every day and whenever the repo is made public.
+
+          Run: $RUN_URL
           BODY
+          if [ -n "$existing" ]; then
+            echo "Open alarm issue #$existing already exists; adding a comment."
+            gh issue comment "$existing" --body-file "$body"
+          else
             gh issue create --title "$TITLE" --body-file "$body" --assignee "$OWNER" \
               || gh issue create --title "$TITLE" --body-file "$body"
           fi
