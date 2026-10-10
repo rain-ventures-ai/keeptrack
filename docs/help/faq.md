@@ -22,7 +22,8 @@ Another device or agent uses a newer version of Keeptrack. Reload the page (**Se
 
 **My AI assistant cannot write to the board.**
 - It needs a GitHub login or a token: see [AI assistants](ai-assistants.md).
-- Claude's cloud sandbox can block writes to GitHub. Run the step on your own computer.
+- Claude's cloud (claude.ai/code or the app's **Code** tab) blocks writes through the GitHub API. Start the session on the board repo, so the tool saves with `git push`. See [Where your assistant runs](where-agents-run.md).
+- Ordinary Claude chat on claude.ai or the phone app (not the **Code** tab) cannot write to the board at all.
 
 **I do not see Today, People and Pipeline (or the task views).**
 Your board shows only what you track (`settings.modes`). Ask your assistant to change it.

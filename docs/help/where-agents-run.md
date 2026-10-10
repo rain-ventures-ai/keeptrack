@@ -38,13 +38,51 @@ use the board.
 
 Ordinary Claude chat is not Claude Code and cannot update the board. Use the **Code** tab or the web board.
 
+## On your phone, or at claude.ai in a browser
+
+You can do everything without a computer. You use two things:
+
+- **The web board** in your phone's browser, to look at and change the board.
+- **Claude Code** in the Claude phone app (the **Code** tab) or at https://claude.ai/code in any browser, for the
+  assistant. It is the same Claude Code cloud as above, so it needs **no plugin and no token**.
+
+### 1. Make the board (skip if you already have one)
+1. In your phone's browser, open https://rain-ventures-ai.github.io/keeptrack/board/?setup and sign in to GitHub in
+   the same browser when GitHub asks.
+2. Follow the three steps of the wizard (see [Getting started](getting-started.md)). The repo and token pages open in
+   the browser. Copy the token and paste it into the wizard, never into a chat.
+
+Already have a board on your computer? There, open **⚙️ Settings → General → Copy setup link**, send the link to
+yourself and open it on your phone. The link holds your token, so send it only to yourself. Tip: use your browser's
+**Add to Home Screen** to open the board like an app.
+
+### 2. Connect Claude to the board (once)
+1. Open the Claude phone app and tap **Code**, or open https://claude.ai/code in a browser.
+2. The first time, Claude asks you to connect GitHub. Allow it, and give the Claude GitHub app access to your board
+   repo. If the repo is not in the list later, add it at https://github.com/apps/claude/installations/select_target.
+3. Start a new session and select your board repo (for example `your-name/my-keeptrack`). The default environment is
+   fine.
+4. Say: **“Use Keeptrack from `<OWNER>/<BOARD-REPO>`. Show my tasks and anything needing attention.”**
+
+Each new session needs the board repo selected again. To keep going, open the same session from your session list.
+
+### What does not work on a phone or at claude.ai
+- **Ordinary Claude chat** (the chat screen, not **Code**) cannot run `keeptrack.py`, so it cannot read or save the
+  board. If you paste the setup prompt there, it should send you to the **Code** tab. For a quick draft, use
+  **🤖 Copy for AI** on a person and paste it into the chat.
+- **The Keeptrack plugin** at claude.ai/customize/plugins is for the Claude desktop app and Cowork. You do not need it
+  for the **Code** tab: the board repo already has the skill and the tool.
+- **@claude on the board** needs a routine, an API trigger token and a cron-job.org job (see
+  [ROUTINE-SETUP.md](../../board/kit/ROUTINE-SETUP.md)). Create the routine at https://claude.ai/code/routines in a
+  browser. It is easier on a computer; afterwards **Copy settings code** moves the board's settings to your phone.
+
 ## Which set-up is best for me?
 
 | You are... | Use |
 |---|---|
 | Not a terminal user | The web board, and **Claude Code in the Claude app** (the **Code** tab, or claude.ai/code in a browser), in a session on your board repo. It needs no token. |
 | A developer | The web board, and **Claude Code**, **Codex** or **Cursor** on your computer. |
-| Away from your computer | The web board on your phone, and the **Code** tab in the Claude phone app. |
+| Away from your computer, or only on a phone | The web board in your phone's browser, and the **Code** tab in the Claude phone app. See [On your phone](#on-your-phone-or-at-claudeai-in-a-browser). |
 
 ## Summary
 
@@ -53,7 +91,7 @@ Ordinary Claude chat is not Claude Code and cannot update the board. Use the **C
 | Claude Desktop (Cowork) | Cowork's own machine on your computer | No. Cowork has it. | A token | Writes to GitHub not tested yet |
 | Claude Code on your computer | Your computer | Yes (Python 3) | `gh auth login` or a token | Works |
 | Claude Code on the web and in the Claude app (Code tab) | A Claude cloud machine | No. It has Python. | The Claude GitHub app, with `git push`. No token. | Works, from a session on your board repo |
-| Claude chat (not the Code tab) | - | - | - | Not supported. Use the Code tab. |
+| Claude chat on claude.ai or the phone app (not the Code tab) | - | - | - | Not supported. Use the Code tab. |
 | Codex on your computer | Your computer | Yes (Python 3) | `gh auth login` or a token | Works |
 | Codex cloud | A Codex cloud machine | No | Needs internet access to GitHub | Not tested yet |
 | Cursor | Your computer | Yes (Python 3) | `gh auth login` or a token | Works |

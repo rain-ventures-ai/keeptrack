@@ -19,6 +19,7 @@ Official Claude documentation: cloud sessions can have multiple repos, but do no
 plugins: https://code.claude.com/docs/en/desktop#install-plugins
 
 ### Install for another local project
+Check first with `claude plugin list` (or `/plugin`): if `keeptrack@keeptrack` is there, skip this.
 ```bash
 claude plugin marketplace add rain-ventures-ai/keeptrack
 claude plugin install keeptrack@keeptrack
@@ -37,7 +38,9 @@ Settings form (`~/.claude/settings.json`):
 The plugin gives the skill `keeptrack:keeptrack`, `keeptrack.py` at `${CLAUDE_PLUGIN_ROOT}/keeptrack.py`, and a hook that sends a quiet heartbeat while a task claim is active.
 
 ## Claude Desktop and Cowork (no terminal)
-**Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. A Team or Enterprise admin can add the marketplace for the whole organisation. Then say, for example, "Who do I need to follow up with today?" or "Help me write a LinkedIn message to the CEO of Acme".
+First look in **Customize → Plugins**: if **keeptrack** is already installed, just check it is switched on. If the **rain-ventures-ai/keeptrack** marketplace is already listed, install **keeptrack** from it. Otherwise: **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. A Team or Enterprise admin can add the marketplace for the whole organisation. Then say, for example, "Who do I need to follow up with today?" or "Help me write a LinkedIn message to the CEO of Acme".
+
+The plugin is not used by the **Code** tab of the Claude phone or desktop app, or by claude.ai/code: those are Claude Code cloud (above). Ordinary Claude chat on claude.ai or the phone app cannot run `keeptrack.py`.
 
 Not yet checked: whether the Cowork sandbox lets `keeptrack.py` reach api.github.com. If it cannot, use Claude Code on the web or in the Claude app's **Code** tab, in a session on the board repo: it saves with no token.
 
