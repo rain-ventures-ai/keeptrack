@@ -854,7 +854,7 @@ if (typeof window !== 'undefined') (() => {
       b.append(svgIcon('bot'), el('span', 'agentname', a.agent.slice(0, 1).toUpperCase() + a.agent.slice(1))); if (a.owner) b.append(avatar(a.owner)); b.append(el('span', 'agentcount', String(a.count)));
       b.onclick = () => { $('fWho').value = on ? '' : a.value; render(); }; pq.append(b); });
   }
-  function closePops() { ['clientPop', 'filterPop', 'boardPop', 'morePop', 'dockPop', 'dockViews'].forEach(id => { $(id).hidden = true; }); $('dockMenu').setAttribute('aria-expanded', 'false'); $('btnFilter').setAttribute('aria-expanded', 'false'); $('boardBtn').setAttribute('aria-expanded', 'false'); $('btnMore').setAttribute('aria-expanded', 'false'); }
+  function closePops() { ['clientPop', 'filterPop', 'boardPop', 'morePop', 'dockPop'].forEach(id => { $(id).hidden = true; }); $('dockMenu').setAttribute('aria-expanded', 'false'); $('btnFilter').setAttribute('aria-expanded', 'false'); $('boardBtn').setAttribute('aria-expanded', 'false'); $('btnMore').setAttribute('aria-expanded', 'false'); }
   function placePop(pop) { if (window.matchMedia('(max-width: 760px)').matches) pop.style.top = (document.querySelector('header').getBoundingClientRect().bottom + 6) + 'px'; else pop.style.top = ''; }
 
   // ---- keeping the app itself fresh -----------------------------------------------------------------------
@@ -1280,31 +1280,21 @@ if (typeof window !== 'undefined') (() => {
   }
   const setView = v => { view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); render(); };
   const syncViewSw = () => { document.querySelectorAll('#viewSw button').forEach(b => { const on = b.dataset.view === view; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }); syncDock(); };
-  // The dock (layout "dock") has one tab per #viewSw group, so views are defined once, in the header markup.
-  // A tab remembers the last view used in its group; tapping the active tab again lists the group's other views.
+  // The dock (layout "dock") is a fixed footer with one tab per #viewSw group, so views are defined once, in the header
+  // markup. A tab returns to the last view used in its group; the strip under the header (#subnav) switches views within it.
   const dockLast = { today: 'today', tasks: 'board', crm: 'people' };
   const viewBtn = v => document.querySelector(`#viewSw button[data-view="${v}"]`);
   const grpOf = v => { const b = viewBtn(v); return b ? b.closest('.viewgroup').dataset.grp : 'today'; };
   function syncDock() {
     const cur = grpOf(view); dockLast[cur] = view;
     document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => {
-      const grp = t.dataset.grp, g = document.querySelector(`#viewSw .viewgroup[data-grp="${grp}"]`), b = viewBtn(dockLast[grp]), on = grp === cur;
-      t.hidden = !g || g.hidden; if (!g) return; t.classList.toggle('on', on); t.classList.toggle('more', on && g.querySelectorAll('button').length > 1);
-      if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
-      if (!b) return; const label = b.textContent.trim(), svg = b.querySelector('.vi svg'), mine = t.querySelector('svg');
-      t.querySelector('.dl').textContent = label; t.title = t.classList.contains('more') ? `${label}: tap again for the other ${grp === 'crm' ? 'people' : 'task'} views` : b.title;
-      if (svg && mine && t.dataset.icon !== dockLast[grp]) { mine.replaceWith(svg.cloneNode(true)); t.dataset.icon = dockLast[grp]; }
+      const g = document.querySelector(`#viewSw .viewgroup[data-grp="${t.dataset.grp}"]`), on = t.dataset.grp === cur;
+      t.hidden = !g || g.hidden; t.classList.toggle('on', on); if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
     });
-  }
-  function toggleDockViews(tab) {
-    const pop = $('dockViews'), grp = tab.dataset.grp, open = pop.hidden || pop.dataset.grp !== grp; closePops(); if (!open) return;
-    pop.textContent = ''; pop.dataset.grp = grp;
-    document.querySelectorAll(`#viewSw .viewgroup[data-grp="${grp}"] button`).forEach(b => {
-      const it = el('button', b.dataset.view === view ? 'on' : null); it.type = 'button'; it.setAttribute('role', 'menuitemradio'); it.setAttribute('aria-checked', String(b.dataset.view === view)); it.title = b.title;
-      const svg = b.querySelector('.vi svg'); if (svg) it.append(svg.cloneNode(true)); it.append(document.createTextNode(' ' + b.textContent.trim()));
-      it.onclick = () => { closePops(); setView(b.dataset.view); }; pop.append(it);
-    });
-    pop.hidden = false;
+    const sub = $('subnav'), views = [...document.querySelectorAll(`#viewSw .viewgroup[data-grp="${cur}"] button`)];
+    sub.hidden = views.length < 2; if (sub.hidden) return;
+    if (sub.dataset.grp !== cur) { sub.textContent = ''; sub.dataset.grp = cur; views.forEach(b => { const it = el('button', null, b.textContent.trim()); it.type = 'button'; it.dataset.view = b.dataset.view; it.title = b.title; it.onclick = () => setView(b.dataset.view); sub.append(it); }); }
+    sub.querySelectorAll('button').forEach(it => { const on = it.dataset.view === view; it.classList.toggle('on', on); it.setAttribute('aria-pressed', String(on)); });
   }
 
   // ---- "Show me around": a short tour that highlights one part of the real board at a time -------------------
@@ -1319,7 +1309,7 @@ if (typeof window !== 'undefined') (() => {
       { title: 'Welcome to Keeptrack', text: `Keeptrack keeps ${tasks && crm ? 'your tasks and the people you work with' : tasks ? 'your tasks' : 'the people you work with'} in one place. Today is the home page: everything that needs you now.`, view: 'today' },
       tasks && { title: 'Kanban: your tasks', text: 'Each card is a task. It moves through the columns from To do to Done: drag it, or change its status inside the card. This card opens the board.', view: 'today', at: ['.tgo[data-go="board"]'] },
       crm && { title: 'People: your CRM', text: 'Everyone you work with, each with a next step and a date. Log messages and calls in a person\'s card. Pipeline shows people by stage.', view: 'today', at: ['.tgo[data-go="people"]'] },
-      dock ? { title: 'The bar at the bottom', text: 'It goes everywhere: Today, Kanban and People. Tap the highlighted tab again for its other views, such as List, Calendar or Pipeline.', at: ['#dock'] }
+      dock ? { title: 'The bar at the bottom', text: 'It goes everywhere: Today, Tasks and People. In Tasks and People, the strip at the top switches between views such as Kanban, List, Calendar or Pipeline.', at: ['#dock'] }
         : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
       { title: 'Find anything', text: 'Search people, tasks, notes and messages. On a computer, press / from anywhere.', at: [dock ? '#dock [data-head-action="btnSearch"]' : '#btnSearch'] },
       { title: 'Filters', text: 'Show one client, one person, or only what needs attention. The number shows how many filters are on.', at: ['#btnFilter'] },
@@ -2662,7 +2652,7 @@ if (typeof window !== 'undefined') (() => {
       'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
       'New-board prompt copied. Paste it into your current chat with Claude.'); };
   document.querySelectorAll('#viewSw button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
-  document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => { t.onclick = e => { e.stopPropagation(); if (t.classList.contains('more')) toggleDockViews(t); else { closePops(); setView(dockLast[t.dataset.grp]); } }; });
+  document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => { t.onclick = e => { e.stopPropagation(); closePops(); setView(dockLast[t.dataset.grp]); }; });
   $('dockMenu').onclick = e => { e.stopPropagation(); const pop = $('dockPop'), open = pop.hidden; closePops(); if (open) { pop.hidden = false; $('dockMenu').setAttribute('aria-expanded', 'true'); } };
   $('dockPop').addEventListener('click', e => e.stopPropagation());
   $('undoGo').onclick = () => undoLast();
@@ -3456,19 +3446,26 @@ if (typeof window !== 'undefined') (() => {
     let MS; try { MS = await loadMs(); } catch (e) { $('qInfo').textContent = e.message; return; }
     const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, prefix: true, fuzzy: 0.2, combineWith: 'AND' } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
     res.textContent = '';
-    if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} cards. Press / anywhere to search.${archYears().length && !withArch ? ' Tick “Include archive” to search old items too.' : ''}`; return; }
-    const hits = msIndex.search(q).slice(0, 60);
-    $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : 'Nothing found. Check the spelling, or tick “Include archive”.');
+    // Views are part of search: an empty box lists them all ("Go to"), and typing "cal" offers Calendar first
+    const ql = q.toLowerCase(), goes = [...document.querySelectorAll('#viewSw .viewgroup:not([hidden]) button')].filter(b => !ql || b.textContent.trim().toLowerCase().startsWith(ql));
+    if (goes.length) { const grid = el('div', 'qgos'); res.append(el('div', 'qhead', 'Go to'), grid);
+      goes.forEach(b => { const g = el('button', 'qhit qgo'); g.type = 'button'; g.title = b.title; const svg = b.querySelector('.vi svg'); if (svg) g.append(svg.cloneNode(true)); g.append(el('span', null, b.textContent.trim()));
+        g.onclick = () => { $('dlgSearch').close(); setView(b.dataset.view); }; grid.append(g); }); }
+    if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} people and tasks` + (matchMedia('(pointer: fine)').matches ? ' · press / anywhere to search' : ''); if (res.firstElementChild) res.querySelector('.qhit').classList.add('first'); return; }
+    const hits = msIndex.search(q).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
+    $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
     hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
       b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
         else if (h.kind === 'task') openCard(h.ref); else openContact(h.ref); };
-      res.append(b); if (i === 0) b.classList.add('first'); });
+      res.append(b); });
+    const first = res.querySelector('.qhit'); if (first) first.classList.add('first');
   }
   let qTimer = null;
   function openSearch() { const d = $('dlgSearch'); if (!d.open) d.showModal(); $('qQ').select(); runSearch(); }
   $('qQ').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(runSearch, 80); });
-  $('qQ').addEventListener('keydown', e => { if (e.key === 'Enter') { const f = $('qRes').querySelector('.qhit'); if (f) f.click(); } else if (e.key === 'ArrowDown') { const f = $('qRes').querySelector('.qhit'); if (f) { e.preventDefault(); f.focus(); } } });
-  $('qRes').addEventListener('keydown', e => { const b = document.activeElement; if (e.key === 'ArrowDown' && b.nextElementSibling) { e.preventDefault(); b.nextElementSibling.focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); (b.previousElementSibling || $('qQ')).focus(); } });
+  // Enter: preventDefault, or the key also presses the button that gets focus back when the dialog closes
+  $('qQ').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const f = $('qRes').querySelector('.qhit'); if (f) f.click(); } else if (e.key === 'ArrowDown') { const f = $('qRes').querySelector('.qhit'); if (f) { e.preventDefault(); f.focus(); } } });
+  $('qRes').addEventListener('keydown', e => { const all = [...$('qRes').querySelectorAll('.qhit')], i = all.indexOf(document.activeElement); if (e.key === 'ArrowDown' && all[i + 1]) { e.preventDefault(); all[i + 1].focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); (all[i - 1] || $('qQ')).focus(); } });   // skips the section headings
   $('qArch').onchange = runSearch; $('qClose').onclick = () => $('dlgSearch').close(); $('btnSearch').onclick = openSearch;
   ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { $(id).onclick = undoLast; }); syncUndo();
   document.addEventListener('keydown', e => {
