@@ -387,11 +387,12 @@ class Links(unittest.TestCase):
         folder = "https://drive.google.com/drive/folders/FOLDER1?usp=drivesdk"
         d["client_info"] = {"Acme": {"links": [{"title": "Acme folder", "url": folder}]},
                             "Other": {"links": [{"title": "Other site", "url": "https://other.example"}]}}
-        d["projects"] = [{"id": "pr_roll", "name": "Rollout", "client": "Acme", "status": "active", "people": [],
+        d["projects"] = [{"id": "pr_roll", "name": "Rollout", "client": "Acme", "status": "active", "people": ["ops@acme.example"],
                           "links": [{"title": "Same folder", "url": "https://drive.google.com/drive/folders/FOLDER1"},
                                     {"title": "Brief", "url": "https://docs.google.com/document/d/DOC1/edit?usp=drivesdk&ouid=1"},
                                     {"title": "Repo", "url": "https://github.com/acme/app"}]}]
         d["contacts"] = [{"id": "p_1", "name": "Bea", "company": "Acme", "stage": "New", "comments": [], "history": [],
+                          "emails": [{"label": "Work", "value": "bea@acme.example"}],
                           "links": [{"title": "LinkedIn", "url": "https://www.linkedin.com/in/bea"}]}]
         d["tasks"][1].update(client="Acme", project="pr_roll", links=[{"title": "PR", "url": "https://github.com/acme/app/pull/7"},
                                                                        {"title": "Local", "url": "~/work/acme/notes.md"}])
@@ -419,15 +420,17 @@ class Links(unittest.TestCase):
             "https://www.notion.so/page": ("notion", ""),
             "/Users/o/acme": ("local", ""),
             "https://acme.example/about": ("web", ""),
-            "mailto:x@example.com": ("other", ""),
+            "mailto:x@example.com": ("email", "x@example.com"),
         }
         for url, want in cases.items():
             self.assertEqual(want, kt.link_kind(url), url)
 
     def test_card_scope_walks_out_to_project_client_and_people(self):
         got = self.links(card="#2")
-        self.assertEqual(["card #2", "card #2", "project Rollout", "project Rollout", "project Rollout", "person Bea"],
+        self.assertEqual(["card #2", "card #2"] + ["project Rollout"] * 4 + ["person Bea"] * 2,
                          [l["source"] for l in got])
+        self.assertEqual([("email", "ops@acme.example"), ("email", "bea@acme.example")],
+                         [(l["kind"], l["id"]) for l in got if l["kind"] == "email"])
         self.assertEqual("Same folder", got[2]["title"])            # the client's copy of the same folder is dropped
         self.assertNotIn("https://other.example", [l["url"] for l in got])
 
