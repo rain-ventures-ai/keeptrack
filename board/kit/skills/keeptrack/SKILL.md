@@ -15,6 +15,10 @@ If the source is a meeting transcript, call notes, minutes or free-form notes, u
 skill. It matches attendees and actions against the existing board, asks about material ambiguity and avoids storing
 the transcript itself. Use `onboard-keeptrack` instead for a bulk migration from another CRM or task system.
 
+If the user asks a question whose answer lives in a client's or project's linked files, folders, repos or pages
+("what did we agree with Acme?", "find the pricing doc for this project"), use the separate `keeptrack-search`
+skill. It lists every link with `$B links` and searches each one with the connectors this session has.
+
 If the user asks to scan, sync or reconcile Gmail or Outlook with existing people, use the separate `keeptrack-email`
 skill. It exact-matches stored addresses, logs concise email contact facts and defines a safe recurring routine with a
 durable last-run checkpoint. Do not use it merely to draft one message.

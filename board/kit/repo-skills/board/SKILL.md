@@ -84,6 +84,10 @@ Natural requests such as “is my board accurate?”, “these say merged but no
 “check the board against the repos” belong to this skill. Do not ask the user to name Keeptrack or repeat this repo.
 Read [references/status-audits.md](references/status-audits.md) and follow it.
 
+## Searching a client's or project's linked material
+`python3 board/keeptrack.py links --client "<name>"` (or `--project`, `--card`, `--person`) lists every linked
+folder, file, repo and page with its kind. To answer a question from that material, use the `keeptrack-search` skill.
+
 ## People and follow-ups (Keeptrack CRM)
 If the board has CRM people, use:
 `keeptrack.py today` (who to contact), `people`, `person "<name>"`, `person-add` (refuses duplicates), `person-set`, `touch "<name>" "<text>" --channel linkedin|email|call|meeting|note [--draft]`, `sent "<name>"` and `client-link "<company>" <cloud-url-or-local-path>`. `person` lists every labelled email and phone number, profile/reference link, and company file/folder resource. To set up a board from a spreadsheet, email, Trello or folders, use the `onboard-keeptrack` skill (it ends with `import`).

@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v20 (schema 4)
+Search across what a client or project links to. New command `links` lists every link around a client, project, card or person, nearest first, de-duplicated and classified by kind. The new skill `keeptrack-search` (plugin and repo) answers a question by searching those links with whatever connectors the session has: it walks Google Drive folders and their sub-folders (Drive's own search does not recurse), reads Drive files, GitHub, web pages and local paths, cites a source for every fact, and says what it could not reach. Read-only.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `.claude/skills/keeptrack-search/SKILL.md` exists; `keeptrack.py links --client "<a client>"` lists that client's links.
+
 ### v19 (schema 4)
 Columns, labels and safer saves. No data migration: the schema stays 4 and nothing changes shape.
 - **Web board:** Settings → General gets **Columns** (add, rename, reorder, remove; removing a column with cards asks where to move them; To do, In progress and Done cannot be removed) and **Labels** (rename, recolour, add, delete; a rename or delete updates every task that uses the label).
