@@ -194,6 +194,8 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 
 **Automatic heartbeat:** `claim` writes `.board-claim.json` (gitignored). `keeptrack.py auto-heartbeat` refreshes that claim at most every 5 minutes and silently does nothing if there is no active claim, it was released or finished, or another session took the task over. `.claude/settings.json` runs it as a Claude Code `PostToolUse` hook. Other agents call `keeptrack.py heartbeat` themselves.
 
+**Searching what is linked.** `links --client NAME | --project REF | --card ID | --person REF [--kind drive-folder ...] [--json]` lists every link around that scope, nearest first and de-duplicated, each classified (`drive-folder`, `drive-file`, `github`, `dropbox`, `microsoft`, `notion`, `linear`, `profile`, `local`, `web`, `other`) with its id where one exists. The `keeptrack-search` skill uses it to answer questions from a client's or project's files with whatever connectors the session has, walking Drive sub-folders itself because Drive search does not.
+
 **Changing the board itself.** Labels, clients, board members and settings live in `tasks.json`; tasks can be edited after creation. All of it has a command, so nothing needs a hand edit:
 
 | Area | Commands |

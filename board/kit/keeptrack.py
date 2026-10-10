@@ -3280,6 +3280,109 @@ def cmd_client_unlink(a):
     mutate(fn, f"Files unlink: {a.client}")
 
 
+# ---- links: every resource linked around a client, project, card or person, classified for searching ------------
+# The keeptrack-search skill reads this and searches each link with whatever connectors the session has.
+LINK_KINDS = [   # (kind, pattern, group holding the id, if any); first match wins
+    ("drive-folder", r"https?://drive\.google\.com/drive/(?:u/\d+/)?folders/([\w-]+)", 1),
+    ("drive-file", r"https?://docs\.google\.com/(?:document|spreadsheets|presentation|forms)/d/([\w-]+)", 1),
+    ("drive-file", r"https?://drive\.google\.com/(?:file/d/|open\?id=)([\w-]+)", 1),
+    ("github", r"https?://github\.com/([\w.-]+/[\w.-]+(?:/(?:pull|issues|blob|tree)/[^?#]+)?)", 1),
+    ("dropbox", r"https?://(?:www\.)?dropbox\.com/", None),
+    ("microsoft", r"https?://(?:[\w-]+\.sharepoint\.com|onedrive\.live\.com|1drv\.ms)/", None),
+    ("notion", r"https?://(?:www\.)?notion\.(?:so|site)/", None),
+    ("linear", r"https?://linear\.app/", None),
+    ("profile", r"https?://(?:www\.)?linkedin\.com/", None),
+    ("local", r"(?:file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", None),
+    ("web", r"https?://", None),
+]
+
+
+def link_kind(url):
+    """Classify a link: (kind, id or ''). Unknown schemes are 'other'."""
+    u = (url or "").strip()
+    for kind, pat, group in LINK_KINDS:
+        m = re.match(pat, u)
+        if m:
+            return kind, (m.group(group).rstrip("/") if group else "")
+    return "other", ""
+
+
+def _link_key(url):
+    """De-duplication key: drops Drive tracking parameters, keeps case (Drive ids are case-sensitive)."""
+    u = (url or "").strip()
+    if u.startswith(("http://", "https://")):
+        u = re.sub(r"[?&](?:usp|ouid|authuser)=[^&#]*", "", u).rstrip("?&").rstrip("/")
+    return u
+
+
+def collect_links(data, client=None, project=None, card=None, person=None):
+    """Links around the scope, nearest first, de-duplicated by URL. Each: url, title, kind, id, source."""
+    out, seen = [], set()
+
+    def add(items, source):
+        for l in items or []:
+            if not isinstance(l, dict) or not _s(l.get("url")):
+                continue
+            key = _link_key(l["url"])
+            if key in seen:
+                continue
+            seen.add(key)
+            kind, ident = link_kind(l["url"])
+            out.append({"url": l["url"], "title": _s(l.get("title")) or l["url"], "kind": kind, "id": ident, "source": source})
+
+    tasks, projects, people = data.get("tasks", []), data.get("projects", []), data.get("contacts", [])
+    info = data.get("client_info") or {}
+    if card:
+        t = find(data, card)
+        add(t.get("links"), f"card #{t.get('num')}")
+        project = project or t.get("project") or None
+        client = client or t.get("client") or None
+    if person:
+        p = find_person(data, person)
+        add(person_links(p), f"person {p.get('name')}")
+        client = client or p.get("company") or None
+    if project:
+        pr = find_project(data, project)
+        add(pr.get("links"), f"project {pr.get('name')}")
+        for t in tasks:
+            if t.get("project") == pr["id"]:
+                add(t.get("links"), f"card #{t.get('num')}" + (" (done)" if t.get("column") == "done" else ""))
+        client = client or pr.get("client") or None
+    if client:
+        if client not in data.get("clients", []) and client not in info:
+            sys.exit(f"no client '{client}'. Clients: {', '.join(data.get('clients', [])) or '(none)'}")
+        add((info.get(client) or {}).get("links"), f"client {client}")
+        for pr in projects:
+            if pr.get("client") == client:
+                add(pr.get("links"), f"project {pr.get('name')}")
+        for t in tasks:
+            if t.get("client") == client:
+                add(t.get("links"), f"card #{t.get('num')}" + (" (done)" if t.get("column") == "done" else ""))
+        for p in people:
+            if p.get("company") == client:
+                add(person_links(p), f"person {p.get('name')}")
+    return out
+
+
+def cmd_links(a):
+    if not (a.client or a.project or a.card or a.person):
+        sys.exit("say whose links: --client NAME, --project REF, --card ID or --person REF")
+    data, _ = load()
+    links = collect_links(data, a.client, a.project, a.card, a.person)
+    if a.kind:
+        links = [l for l in links if l["kind"] in a.kind]
+    if a.json:
+        print(json.dumps(links, indent=2, ensure_ascii=False))
+        return
+    for l in links:
+        print(f"{l['kind']:<13} {l['title']}\n{'':<13} {l['url']}  ({l['source']})")
+    if not links:
+        print("(no links)")
+    else:
+        print("\naccess: cloud links need the matching connector and signed-in account; local paths need a session on "
+              "the computer that holds them. Say what you could not open.")
+
+
 # ---- import: load an onboarding staging file (people, companies, folders, tasks) in one save -------------------
 # The agent reads each source (a spreadsheet, Gmail, Trello...) and writes one staging file; this is the only door in.
 # Rules: nothing is overwritten (empty fields are filled, nothing else), a second run adds nothing, every record keeps
@@ -3844,6 +3947,10 @@ def main():
     s = sub.add_parser("project-set", help="change a project"); s.add_argument("ref"); s.add_argument("--name"); s.add_argument("--client")
     s.add_argument("--north-star", dest="north_star"); s.add_argument("--status", choices=PROJECT_STATUSES); s.set_defaults(f=cmd_project_set)
     s = sub.add_parser("project-link", help="link a project to a file or folder"); s.add_argument("ref"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_project_link)
+    s = sub.add_parser("links", help="every link around a client, project, card or person, with its kind (for searching)")
+    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--card"); s.add_argument("--person")
+    s.add_argument("--kind", action="append", help="only these kinds (repeatable): drive-folder, drive-file, github, web, local, ...")
+    s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_links)
     s = sub.add_parser("project-unlink", help="remove a link from a project"); s.add_argument("ref"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_project_unlink)
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
