@@ -81,7 +81,7 @@
 
   // Apply a custom theme: CSS variables on <html>, data-theme="custom". Saved so theme.js can restore it before paint.
   function apply(t, save) {
-    window.kbTheme.paintCustom(t);   // theme.js (loaded first, in <head>) owns the variables; status colours live in board.css
+    if (window.kbTheme && window.kbTheme.paintCustom) window.kbTheme.paintCustom(t); else { location.reload(); return; }   // theme.js (loaded first, in <head>) owns the variables; status colours live in board.css
     document.documentElement.setAttribute('data-theme', 'custom');
     if (save !== false) try { localStorage.setItem('kb_custom', JSON.stringify(t)); localStorage.setItem('kb_theme', 'custom'); } catch (e) {}
   }
