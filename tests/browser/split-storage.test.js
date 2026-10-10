@@ -413,6 +413,27 @@ let base;
     assert.deepEqual(moving.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/cards/t_one.json']);
     assert.equal(JSON.parse(moving.files['cards/t_one.json']).title, 'After split'); assert(!('tasks' in JSON.parse(moving.files['tasks.json'])), 'tasks.json must stay settings only'); await mv.close();
 
+    // Settings → General → Columns: add, rename, reorder and remove (moving its cards), one saved change each.
+    const colApi = new Github(true), colRoot = JSON.parse(colApi.files['tasks.json']); colRoot.columns = [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }]; colApi.files['tasks.json'] = text(colRoot);
+    colApi.files['cards/t_two.json'] = text({ ...JSON.parse(colApi.files['cards/t_two.json']), column: 'backlog', rank: 'a0' });
+    const colPage = await openBoard(browser, colApi), colIds = () => JSON.parse(colApi.files['tasks.json']).columns.map(c => c.id).join(','), colNames = () => JSON.parse(colApi.files['tasks.json']).columns.map(c => c.name).join(',');
+    const colWait = async (fn, what) => { for (let i = 0; i < 60 && !fn(); i++) await colPage.waitForTimeout(100); assert(fn(), what); };
+    colPage.on('dialog', d => d.accept());
+    await colPage.locator('#btnSettings').click(); await colPage.locator('#colList .colrow').first().waitFor();
+    assert.equal(await colPage.locator('#colList .colrow').count(), 3); assert.match(await colPage.locator('#colList .colrow').nth(0).textContent(), /1 card/);
+    assert.equal(await colPage.locator('#colList .colrow').nth(1).locator('button.danger').isDisabled(), true, 'To do cannot be removed'); assert.equal(await colPage.locator('#colList .colrow').nth(2).locator('button.danger').isDisabled(), true, 'Done cannot be removed');
+    await colPage.locator('#colNew').fill('In review'); await colPage.locator('#colAdd').click(); await colWait(() => colIds() === 'backlog,todo,in-review,done', 'a new column goes before Done with a slug id: ' + colIds());
+    const colRow = n => colPage.locator('#colList .colrow').nth(n);
+    await colRow(2).locator('input').fill('Review'); await colRow(2).locator('input').blur(); await colWait(() => colNames() === 'Backlog,To do,Review,Done', 'rename saved: ' + colNames()); assert.equal(colIds(), 'backlog,todo,in-review,done', 'a rename keeps the id');
+    await colPage.locator('#colList [aria-label="Move Review up"]').click(); await colWait(() => colIds() === 'backlog,in-review,todo,done', 'move up saved: ' + colIds());
+    await colRow(0).locator('button.danger').click(); await colPage.locator('#colList .colmove select').selectOption('todo');
+    await colPage.locator('#colList .colmove button.danger').click(); await colWait(() => colIds() === 'in-review,todo,done', 'the column is removed: ' + colIds());
+    await colWait(() => JSON.parse(colApi.files['cards/t_two.json']).column === 'todo', 'its card moved to To do'); const moved = JSON.parse(colApi.files['cards/t_two.json']);
+    assert(moved.rank > JSON.parse(colApi.files['cards/t_one.json']).rank, 'a moved card goes to the end of the target column'); assert(!('tasks' in JSON.parse(colApi.files['tasks.json'])), 'tasks.json must stay settings only');
+    await colPage.locator('#sClose').click(); await colPage.locator('#btnUndo').click(); await colWait(() => colIds() === 'backlog,in-review,todo,done' && JSON.parse(colApi.files['cards/t_two.json']).column === 'backlog', 'Undo puts the column and its card back');
+    await colPage.setViewportSize({ width: 390, height: 780 }); await colPage.evaluate(() => document.getElementById('btnSettings').click()); await colPage.locator('#colList .colrow').first().waitFor();
+    assert.equal(await colPage.evaluate(() => document.querySelector('#dlgSettings').scrollWidth <= document.querySelector('#dlgSettings').clientWidth + 1), true, 'the columns list must fit the phone width'); await colPage.close();
+
     // An old (v2) board file is saved as v3, as before.
     const v2 = new Github(false); const v2root = JSON.parse(v2.files['tasks.json']); v2root.version = 2; v2.files['tasks.json'] = JSON.stringify(v2root, null, 2) + '\n';
     const vp = await openBoard(browser, v2); await vp.locator('.card').first().dblclick(); await vp.locator('#cTitle').fill('v2 edit'); const v2Saved = vp.waitForResponse(r => r.request().method() === 'PUT'); await vp.locator('#cTitle').blur(); await v2Saved;

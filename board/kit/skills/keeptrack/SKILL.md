@@ -91,6 +91,7 @@ Change a task or the board's structure with commands too, never by editing JSON:
 $B task-set '#12' --title ".." --priority high --due +3 --label relay --unlabel call   # any task field; --due "" clears
 $B labels | label-add NAME --color "#hex" | label-set NAME --rename NEW | label-rm NAME [--force]
 $B clients | client-rename OLD NEW | client-rm NAME | client-unlink CLIENT URL
+$B columns | column-add NAME [--after ID] | column-set ID --rename NAME | column-move ID --before|--after ID | column-rm ID [--move-to ID]
 $B members | member-add USER --name ".." | member-rm USER [--unassign]
 $B agents | agent-add NAME | agent-rm NAME [--unassign]
 $B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)

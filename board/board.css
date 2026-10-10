@@ -1028,3 +1028,6 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .lbprev { flex: 0 0 auto; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .lbcnt { font-size: 12px; white-space: nowrap; }
 .lbdel { margin-left: auto; color: var(--danger, #c9372c); } .lbnew { padding-top: 4px; border-top: 1px dashed var(--border); }
 @media (max-width: 520px) { .lbprev { display: none; } }
+
+.collist { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 8px; } .colrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; } .colrow input { flex: 1 1 140px; min-width: 0; } .colrow .colcount { font-size: 12px; color: var(--muted); white-space: nowrap; } .colrow .colmove { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; } .colrow .colmove select { flex: 1 1 140px; min-width: 0; }
+.coladd { display: flex; gap: 6px; } .coladd input { flex: 1; min-width: 0; }
