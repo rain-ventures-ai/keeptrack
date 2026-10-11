@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v32 (schema 4)
+Hardening from the relay-merge reviews of private-tasks#28. Output: the sanitizer and `EMAIL_RE` also strip line and paragraph separators (U+2028/2029), invisible operators (U+2060-2064) and tag characters; `identity_line` shows a time zone only if it is a real one; an address over 254 characters is not an address; `members` cleans the agents line; `member-set` refuses a member whose `emails` value isn't a list. Claims: the local `.board-claim.json` is written only after the claim is saved, so a claim refused after a lost save race leaves no record behind; a heartbeat that brings a stale, stuck or blocked claim back to running counts against `max_agent_claims` like a new claim, and so does the same session re-claiming it (the automatic heartbeat leaves such a claim stale and says so on stderr). The sanitizer and email check now go by Unicode category; `members` shows only valid addresses and time zones.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `keeptrack.py me` and `keeptrack.py members` read as before.
+
 ### v31 (schema 4)
 A member record holds **work** email addresses only: onboarding, `me`, the `--email` help, the skills and the AGENTS template no longer ask for personal addresses or aliases (a board is a repo other people can read). Output hardening: one sanitizer strips control, zero-width and bidi characters from board data printed by `here`, `me`, `members` and `doctor`; `identity_line` shows only valid addresses; the `here` identity line says it is board data; `EMAIL_RE` refuses zero-width and bidi characters; `settings` shows the limit actually enforced and says when a stored value is ignored.
 - Run `kit-update` only. There is no board-data migration.

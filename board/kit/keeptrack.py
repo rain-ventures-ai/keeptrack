@@ -1394,6 +1394,37 @@ def claim_limit(data):
     return v if isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 100 else 0
 
 
+def busy_over_limit(data, t):
+    """Other running agent claims, when they already fill settings.max_agent_claims; else []. The count reads other
+    cards, so a save that lost a race re-counts on the newer board."""
+    limit = claim_limit(data)
+    if not limit:
+        return []
+    _MUT["recheck"] = True
+    busy = [x for x in data["tasks"] if x is not t and (x.get("claim") or {}) and not x["claim"].get("attended")
+            and claim_state(data, x["claim"]) == "running"]
+    return busy if len(busy) >= limit else []
+
+
+def limit_message(data, busy):
+    return (f"{len(busy)} agent claims already running, the board's limit is {claim_limit(data)} "
+            f"({', '.join('#' + str(x.get('num')) for x in busy)}); wait for one to finish")
+
+
+_PENDING_CLAIM = {}   # the local claim record do_claim wants; written only after the claim is saved
+
+
+def write_claim_record():
+    rec = _PENDING_CLAIM.pop("rec", None)
+    if not rec or FILE:
+        return
+    try:
+        ensure_local_dir(CLAIM_FILE)
+        write_private(CLAIM_FILE, json.dumps(rec))
+    except OSError as e:
+        print(f"note: no local claim record, so no automatic heartbeat ({e})", file=sys.stderr)
+
+
 def do_claim(a, tid, data):
     t = find(data, tid)
     user = a.for_user or default_user()
@@ -1402,14 +1433,11 @@ def do_claim(a, tid, data):
     if not a.force and user and user.lower() not in [x.lower() for x in t.get("assignees", [])]:
         sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
     cs = claim_state(data, t.get("claim"))
-    limit = claim_limit(data)
-    if limit and not attended(a) and not a.force and not (t.get("claim") and t["claim"].get("session_id") == sid):
-        _MUT["recheck"] = True   # the count reads other cards: a save that lost a race re-counts on the newer board
-        busy = [x for x in data["tasks"] if x is not t and (x.get("claim") or {}) and not x["claim"].get("attended")
-                and claim_state(data, x["claim"]) == "running"]
-        if len(busy) >= limit:
-            sys.exit(f"refused: {len(busy)} agent claims already running, the board's limit is {limit} "
-                     f"({', '.join('#' + str(x.get('num')) for x in busy)}); wait for one to finish (or --force)")
+    # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
+    if not attended(a) and not a.force and not (t.get("claim") and t["claim"].get("session_id") == sid and cs == "running"):
+        busy = busy_over_limit(data, t)
+        if busy:
+            sys.exit(f"refused: {limit_message(data, busy)} (or --force)")
     if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force:
         c = t["claim"]
         sys.exit(f"refused: already claimed by {c['agent']} session {c.get('session_id')} ({cs}, last beat {c.get('heartbeat_at')})")
@@ -1428,18 +1456,15 @@ def do_claim(a, tid, data):
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
     hist(t, "claimed" + (f": {a.note}" if a.note else ""), f"{agent}@{user}")
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
-    if not FILE:
-        try:
-            ensure_local_dir(CLAIM_FILE)
-            write_private(CLAIM_FILE, json.dumps({"id": t["id"], "agent": agent, "user": user, "session": sid,
-                                                  "attended": attended(a)}))
-        except OSError as e:
-            print(f"note: no local claim record, so no automatic heartbeat ({e})", file=sys.stderr)
+    # a save that loses a race re-runs this on the newer board and may refuse: write the local record after the save
+    _PENDING_CLAIM["rec"] = {"id": t["id"], "agent": agent, "user": user, "session": sid, "attended": attended(a)}
     return t["id"]
 
 
 def cmd_claim(a):
+    _PENDING_CLAIM.clear()
     mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}")
+    write_claim_record()
 
 
 def cmd_next(a):
@@ -1455,7 +1480,9 @@ def cmd_next(a):
                     and claim_state(data, t.get("claim")) in (None, "done", "stale"):
                 return do_claim(a, t["id"], data)
         sys.exit(f"nothing claimable in 'todo' for @{user}")
+    _PENDING_CLAIM.clear()
     mutate(fn, "Agent claim: next task")
+    write_claim_record()
 
 
 def must_claim(t):
@@ -1467,6 +1494,10 @@ def must_claim(t):
 def cmd_heartbeat(a):
     def fn(data):
         t = find(data, a.id); c = must_claim(t)
+        if claim_state(data, c) != "running" and (a.status or c.get("status")) == "running" and not c.get("attended"):
+            busy = busy_over_limit(data, t)   # reviving a stale, stuck or blocked claim counts like a new claim
+            if busy:
+                sys.exit(f"refused: {limit_message(data, busy)}; this claim stays {claim_state(data, c)}")
         c["heartbeat_at"] = now()
         if a.status and a.status != c.get("status"): hist(t, f"status {a.status}" + (f": {a.note}" if a.note else ""))
         elif a.note is not None and a.note != c.get("note"): hist(t, f"progress: {a.note}")
@@ -1686,6 +1717,10 @@ def cmd_auto_heartbeat(a):
             t = find(data, info["id"]); c = t.get("claim")
             if not c or c.get("status") == "done" or c.get("session_id") != info.get("session"):
                 drop_claim_file(); return  # released, finished, or taken over by another session
+            if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
+                print(f"keeptrack: claim {info['id']} is stale and the board's agent limit is full; it stays stale "
+                      "(another session may take the card)", file=sys.stderr)
+                return
             c["heartbeat_at"] = now(); t["updated"] = now()
         mutate(fn, f"Agent heartbeat: {info['id']}")
     except BaseException:
@@ -2010,7 +2045,7 @@ def doctor_board(fix=False):
         if m.get("emails") is not None and not isinstance(m.get("emails"), list):
             problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r}: emails must be a list.")
         for e in m.get("emails") if isinstance(m.get("emails"), list) else []:
-            if not isinstance(e, str) or not EMAIL_RE.fullmatch(e.strip()):
+            if not valid_email(e.strip() if isinstance(e, str) else e):
                 problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r} has an invalid email address {e!r}.")
         # The CRM person is optional: only suggest one while the board shows the CRM.
         if gh_user and "crm" in board_modes and not person_for_github(data, gh_user):
@@ -3410,24 +3445,37 @@ def cmd_members(a):
     for m in data.get("people", []):
         n = sum(1 for t in data.get("tasks", []) if m.get("github") in t.get("assignees", []) and t.get("column") != "done")
         print(clean(f"{m.get('github')}  {m.get('name', '')}") + f"  ({n} open tasks)" + ("  [upgrade owner]" if m.get("github") == owner else ""))
-        if m.get("emails") or m.get("timezone"):
-            ident = "  ".join(x for x in [", ".join(map(str, m.get("emails") or [])), str(m.get("timezone") or "")] if x)
+        tz = m.get("timezone") if valid_timezone(m.get("timezone")) else ""
+        ident = "  ".join(x for x in [", ".join(member_emails(m)), tz] if x)   # the same filters as identity_line
+        if ident:
             print("    " + clean(ident))
-    print("agents: " + (", ".join(data.get("agents", [])) or "-"))
+    print("agents: " + (clean(", ".join(map(str, data.get("agents", [])))) or "-"))
 
 
 # A member record is the person's identity on the board: GitHub login, name, work email address(es) and a time
 # zone. It is not a CRM person (those are optional and come and go with the CRM section); the upgrade owner's record
 # can't be removed. Agents read it to recognise the owner's own mail and to read times in their zone.
-_EMAIL_BAD = "@\\s<>,;\\x00-\\x1f\\x7f-\\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff"
+_EMAIL_BAD = "@\\s<>,;\\x00-\\x1f\\x7f-\\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f"
+EMAIL_MAX = 254
 EMAIL_RE = re.compile(f"[^{_EMAIL_BAD}]+@[^{_EMAIL_BAD}]+\\.[^{_EMAIL_BAD}]+")
 
 
 def check_email(e):
     e = (e or "").strip()
-    if not EMAIL_RE.fullmatch(e):
+    if not valid_email(e):
         sys.exit(f"'{e}' is not an email address")
     return e
+
+
+def valid_timezone(tz):
+    if not isinstance(tz, str) or not tz or len(tz) > 64:
+        return False
+    try:
+        import zoneinfo
+        zoneinfo.ZoneInfo(tz)
+        return True
+    except Exception:
+        return False
 
 
 def check_timezone(tz):
@@ -3442,6 +3490,8 @@ def check_timezone(tz):
 
 def set_identity(m, emails=(), remove=(), timezone=None):
     """Add/remove email addresses and set the time zone on a member record. Returns a list of what changed."""
+    if m.get("emails") is not None and not (isinstance(m.get("emails"), list) and all(isinstance(x, str) for x in m["emails"])):
+        sys.exit(f"{m.get('github')}'s emails on the board is not a list of addresses; fix it by hand first (doctor reports it)")
     changed, have = [], list(m.get("emails") or [])
     for e in remove or []:
         e = e.strip()
@@ -3465,13 +3515,41 @@ def set_identity(m, emails=(), remove=(), timezone=None):
     return changed
 
 
-UNSAFE_TEXT = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+")
+UNSAFE_TEXT = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff"
+                         "\U000e0000-\U000e007f]+")
+_FILLERS = {"\u034f", "\u115f", "\u1160", "\u180e", "\u3164", "\uffa0"}
+
+
+def unsafe_char(c):
+    """Control, format (zero-width, bidi, tags), separator, private-use, surrogate, unassigned, variation selector or
+    a blank filler: never printed from board data (v32: by Unicode category, not a list of ranges)."""
+    import unicodedata
+    return (unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
+            or "\ufe00" <= c <= "\ufe0f" or "\U000e0100" <= c <= "\U000e01ef" or c in _FILLERS)
 
 
 def clean(text, limit=None):
-    """Board data printed to a terminal or an agent: no control, zero-width or bidi characters, optionally capped."""
-    t = UNSAFE_TEXT.sub(" ", str(text))
+    """Board data printed to a terminal or an agent: no control, zero-width, bidi or other invisible characters,
+    optionally capped."""
+    t = str(text)
+    if t.isascii():
+        t = UNSAFE_TEXT.sub(" ", t)
+    else:   # a run of unsafe characters becomes one space, as UNSAFE_TEXT does
+        out, prev = [], False
+        for c in t:
+            bad = unsafe_char(c)
+            if not bad:
+                out.append(c)
+            elif not prev:
+                out.append(" ")
+            prev = bad
+        t = "".join(out)
     return t[:limit] if limit else t
+
+
+def valid_email(e):
+    """One plain address: a string of at most 254 characters, EMAIL_RE, and no invisible characters."""
+    return isinstance(e, str) and len(e) <= EMAIL_MAX and bool(EMAIL_RE.fullmatch(e)) and not any(unsafe_char(c) for c in e)
 
 
 def member_record(data, user):
@@ -3483,10 +3561,13 @@ def identity_line(m):
     if not m:
         return ""
     bits = [m.get("name") or m.get("github"), f"@{m.get('github')}"]
-    emails = [e for e in m["emails"] if isinstance(e, str) and EMAIL_RE.fullmatch(e)] if isinstance(m.get("emails"), list) else []
-    bits.append(", ".join(emails) if emails else "no email addresses on record")   # only valid addresses: never free text
-    bits.append(m.get("timezone") or "no time zone on record")
+    bits.append(", ".join(member_emails(m)) or "no email addresses on record")   # only valid addresses: never free text
+    bits.append(m.get("timezone") if valid_timezone(m.get("timezone")) else "no time zone on record")
     return clean(" · ".join(map(str, bits)))   # board data never drives the terminal
+
+
+def member_emails(m):
+    return [e for e in m["emails"] if valid_email(e)] if isinstance(m.get("emails"), list) else []
 
 
 def cmd_me(a):
