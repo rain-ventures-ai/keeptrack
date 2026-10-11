@@ -145,7 +145,7 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       }
       const routine = JSON.parse(req.postDataJSON().job.extendedData.body).text;
       assert.doesNotMatch(routine, /--force/, 'the routine no longer claims with --force');
-      assert.match(routine, /keeptrack\.py claim '#1' --for alex --agent claude --session <your session id> --note "working"/);
+      assert.match(routine, /keeptrack\.py claim '#1' --for alex --agent claude --session <a short random id you generate for this run> --note "working"/);
       assert.match(routine, /done '#1' --note "<result>"/); assert.match(routine, /open checklist items/); assert.match(routine, /todo-done/); assert.match(routine, /done '#1' --cancel --note "<why>"/);
       await page.close();
     }

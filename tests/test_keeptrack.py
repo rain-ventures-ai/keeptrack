@@ -1696,12 +1696,36 @@ class ClaimLifecycle(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             kt.cmd_show(Args(id="t_c1"))
-        self.assertNotIn("secret-s1", out.getvalue()); self.assertIn("secr…", out.getvalue())
+        self.assertNotIn("secret-s1", out.getvalue()); self.assertIn("sec…", out.getvalue())
         self.done(1, session="secret-s1"); out = io.StringIO()
         with contextlib.redirect_stdout(out):
             kt.cmd_show(Args(id="t_c1"))
         self.assertNotIn("secret-s1", out.getvalue())                 # the run record keeps the id, show does not print it
         self.assertEqual(kt.redact_session("abc"), "a…"); self.assertEqual(kt.redact_session("pending-x"), "pending-x")
+        self.assertEqual(kt.redact_session("abcdef01"), "abc…")
+
+    def test_the_public_link_id_and_a_placeholder_prefix_are_never_a_claim_id(self):
+        os.environ["CLAUDE_CODE_REMOTE_SESSION_ID"] = "session_PUBLIC123"
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.claim(1, "PUBLIC123")                                       # the id in the session link
+            self.assertNotEqual(self.card(1)["claim"]["session_id"], "PUBLIC123")
+            self.assertIn("not this session's", self.refusal(self.done, 1, session="PUBLIC123"))
+            write(self.claim_file, {"id": "t_c1", "session": self.card(1)["claim"]["session_id"]})   # the record the routine's clone keeps
+            self.done(1, session="PUBLIC123"); self.assertEqual(self.card(1)["column"], "done")
+        finally:
+            os.environ.pop("CLAUDE_CODE_REMOTE_SESSION_ID", None)
+        self.placeholder(2)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.claim(2, "pending-ab12")                                        # copying the placeholder's id grants nothing: a random id is used
+        self.assertNotEqual(self.card(2)["claim"]["session_id"], "pending-ab12")
+
+    def test_list_query_never_matches_a_session_id(self):
+        self.claim(1, "zzsecret99")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_list(Args(q="zzsec", column=None, assignee=None, label=None, unclaimed=False, attention=False, project=None, all=True, client=None))
+        self.assertNotIn("Card 1", out.getvalue())
 
     def test_a_claim_with_no_session_id_belongs_to_nobody(self):
         self.placeholder(1, session_id="")

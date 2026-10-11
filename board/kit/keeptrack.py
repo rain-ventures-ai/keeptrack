@@ -1314,17 +1314,35 @@ def default_user():
     return out.strip() if rc == 0 else ""
 
 
+def public_session_tail():
+    """The id in this run's claude.ai session link (CLAUDE_CODE_REMOTE_SESSION_ID): public, so never a claim id."""
+    v = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")
+    return v.split("_", 1)[1] if "_" in v else v
+
+
+def usable_session(sid):
+    """A session id a run may act as: not empty, not the page's placeholder prefix, not the public link id."""
+    sid = str(sid or "")
+    return sid if sid and not sid.startswith("pending-") and sid != public_session_tail() else ""
+
+
 def session_id(args):
-    return args.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") \
-        or os.environ.get("CODEX_SESSION_ID") or uuid.uuid4().hex[:8]
+    """The id a new claim records: --session, else the environment, else a random id. A value that is public in the
+    session link, or that copies the page's placeholder prefix, is not used (a random id is, and the local record
+    keeps it for the later done or release)."""
+    given = args.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")
+    if given and not usable_session(given):
+        print("note: that session id is public (it is in the session link) or a placeholder prefix; this run's claim uses a random id, "
+              "kept in the local claim record", file=sys.stderr)
+    return usable_session(given) or uuid.uuid4().hex[:8]
 
 
 def session_for(a, task_id):
     """The session id this run acts as on an existing card: --session, then the environment (same order as
     session_id), then the local claim record when it is for this card (an attended session with no environment that
     claimed earlier in this clone still owns its card). Only then a random id, which owns nothing."""
-    sid = getattr(a, "session", None) or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") \
-        or os.environ.get("CODEX_SESSION_ID")
+    sid = usable_session(getattr(a, "session", None) or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID")
+                         or os.environ.get("CODEX_SESSION_ID"))
     if sid:
         return sid
     try:
@@ -1340,7 +1358,7 @@ def session_for(a, task_id):
 def redact_session(sid):
     """A session id shown to whoever did not claim the card: enough to recognise it, not enough to pass as it."""
     sid = str(sid or "")
-    return sid if not sid or sid.startswith("pending-") else sid[:4 if len(sid) > 4 else 1] + "…"
+    return sid if not sid or sid.startswith("pending-") else sid[:min(3, len(sid) // 2)] + "…"
 
 
 def is_placeholder_claim(c):
@@ -1395,13 +1413,23 @@ def _default_scope(a, data=None):
     print(f"(project {DEFAULT_PROJECT}, this repo's default; --all for the whole board)", file=sys.stderr)
 
 
+def searchable(t):
+    """A card as text search sees it: without the claim's and the run record's session ids (a query could otherwise
+    extend a redacted prefix one character at a time)."""
+    out = {k: v for k, v in t.items() if k not in ("claim", "last_run")}
+    for k in ("claim", "last_run"):
+        if isinstance(t.get(k), dict):
+            out[k] = {x: y for x, y in t[k].items() if x != "session_id"}
+    return out
+
+
 def cmd_list(a):
     _default_scope(a)
     data, _ = load()
     ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
     query = (getattr(a, "q", None) or "").casefold()
     for t in ordered:
-        if query and query not in json.dumps(t, ensure_ascii=False).casefold(): continue
+        if query and query not in json.dumps(searchable(t), ensure_ascii=False).casefold(): continue   # never a substring oracle for a session id
         if a.column and t["column"] != a.column: continue
         if a.assignee and a.assignee.lower() not in [x.lower() for x in t.get("assignees", [])]: continue
         if a.unclaimed and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): continue
@@ -4483,7 +4511,7 @@ def cmd_archived(a):
     for y in archive_years(data):
         cur, _ = read_archive(y, base)
         for t in (cur or {}).get("tasks", []):
-            if not q or q in json.dumps(t).lower():
+            if not q or q in json.dumps(searchable(t)).lower():
                 print(f"{y}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
         for p in (cur or {}).get("contacts", []):
             if not q or q in json.dumps(p).lower():
