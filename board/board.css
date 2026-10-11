@@ -397,7 +397,7 @@ dialog.settings[open] { animation: slidein .22s ease; }
 .setsec .ui-section__body { display: grid; gap: var(--sp-4); min-width: 0; }
 .setsec .ui-section__title .ui-i { width: 15px; height: 15px; }
 .setsec__meta { margin: -2px 0 0; color: var(--muted); font-size: var(--fs-base); line-height: 1.5; }
-.setsec__scope { display: inline-flex; align-items: center; gap: var(--sp-1); margin-right: var(--sp-3); padding: 0 var(--sp-3); border-radius: var(--r-pill); background: var(--panel); font-size: var(--fs-xs); font-weight: 600; line-height: 20px; white-space: nowrap; vertical-align: 1px; }
+.setsec__scope { position: relative; display: inline-flex; align-items: center; gap: var(--sp-1); margin-right: var(--sp-3); padding: 0 var(--sp-3); border-radius: var(--r-pill); background: var(--panel); font-size: var(--fs-xs); font-weight: 600; line-height: 20px; white-space: nowrap; vertical-align: 1px; }
 .setsec__scope .ui-i { width: 12px; height: 12px; }
 .setsec__learn { color: var(--accent); font-weight: 600; white-space: nowrap; }
 .schip:empty { display: none; }
