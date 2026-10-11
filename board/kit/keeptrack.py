@@ -1866,9 +1866,9 @@ def cmd_auto_heartbeat(a):
         if time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
         info = json.load(open(CLAIM_FILE))
+        os.utime(CLAIM_FILE)  # throttle even if the network call fails, and even when there is nothing to beat
         if info.get("attended") or not info.get("id"):
             return  # a person drives this session, or no card is active: no automatic heartbeats
-        os.utime(CLAIM_FILE)  # throttle even if the network call fails
 
         def fn(data):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
