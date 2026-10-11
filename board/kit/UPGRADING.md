@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v27 (schema 4)
+A board can cap how many agent claims run at once. `settings-set --max-agent-claims N` stores `settings.max_agent_claims`; `claim` (and `next`) then refuses an agent claim when N others are already running, checked inside the same write as the claim, so two sessions racing can't both get past it. Attended claims and stale claims don't count; re-claiming your own card and `--force` are never refused. Absent or 0 means no limit, as before.
+- Run `kit-update` only. There is no board-data migration.
+- **Optional:** set the limit your agents follow, e.g. `keeptrack.py settings-set --max-agent-claims 2`.
+- Check: `keeptrack.py settings` shows `max_agent_claims`.
+
 ### v26 (schema 4)
 Heartbeats are quieter. Automatic heartbeats come at most every 15 minutes (was 5). A claim made with `--attended`, or with `BOARD_ATTENDED=1` set, is for a session a person drives: it sends no heartbeats and shows as stale only after 12 hours. The web board reads the same `attended` flag.
 - Run `kit-update` only. There is no board-data migration; existing claims have no `attended` flag and behave as before.

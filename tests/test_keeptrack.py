@@ -1355,3 +1355,64 @@ class AttendedClaims(unittest.TestCase):
 
     def test_heartbeat_interval_is_15_minutes(self):
         self.assertEqual(kt.HEARTBEAT_EVERY, 900)
+
+
+class AgentClaimLimit(unittest.TestCase):
+    """v27: a board setting max_agent_claims makes claim refuse past the limit, atomically with the claim."""
+
+    read = LocalBoard.read
+    quiet = LocalBoard.quiet
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.dir.name, "board"))
+        self.file = os.path.join(self.dir.name, "board", "tasks.json")
+        write(self.file, board())
+        self.old = kt.FILE, kt.save
+        kt.FILE = self.file
+        os.environ.setdefault("BOARD_USER", "osouthgate")
+        d = self.read()
+        d["columns"] = [{"id": "todo", "name": "To do"}, {"id": "in-progress", "name": "In progress"},
+                        {"id": "done", "name": "Done"}]
+        d["tasks"] = [{"id": f"t_c{i}", "num": i, "title": f"Card {i}", "column": "todo", "assignees": ["osouthgate"],
+                       "updated": "2026-10-01T00:00:00Z", "history": [], "todos": [], "comments": []} for i in range(1, 6)]
+        d["settings"] = {"max_agent_claims": 2}
+        write(self.file, d)
+        self.old_att = os.environ.pop("BOARD_ATTENDED", None)
+
+    def tearDown(self):
+        if self.old_att is not None:
+            os.environ["BOARD_ATTENDED"] = self.old_att
+        kt.FILE, kt.save = self.old
+        self.dir.cleanup()
+
+    def claim(self, tid, session, **kw):
+        args = Args(id=tid, for_user="osouthgate", agent="claude", session=session, force=False, note="x",
+                    session_url=None, attended=False)
+        args.__dict__.update(kw)
+        self.quiet(kt.cmd_claim, args)
+
+    def test_third_agent_claim_is_refused(self):
+        self.claim("t_c1", "s1"); self.claim("t_c2", "s2")
+        with self.assertRaises(SystemExit) as e:
+            self.claim("t_c3", "s3")
+        self.assertIn("limit is 2", str(e.exception))
+        self.assertFalse(self.read()["tasks"][2].get("claim"))
+
+    def test_attended_stale_and_same_session_do_not_count_or_get_blocked(self):
+        self.claim("t_c1", "s1"); self.claim("t_c2", "s2")
+        self.claim("t_c3", "me", attended=True)                  # a person's session is not an agent slot
+        d = self.read(); d["tasks"][0]["claim"]["heartbeat_at"] = d["tasks"][0]["claim"]["claimed_at"] = "2026-01-01T00:00:00Z"
+        write(self.file, d)                                       # #1 is now a dead run: its slot is free
+        self.claim("t_c4", "s4")
+        with self.assertRaises(SystemExit):
+            self.claim("t_c5", "s5")
+        self.claim("t_c2", "s2")                                  # re-claiming your own card is never refused
+        self.claim("t_c5", "s5", force=True)                      # --force overrides
+
+    def test_settings_set_max_agent_claims(self):
+        self.quiet(kt.cmd_settings_set, Args(title=None, stale_minutes=None, stages=None, rename_stage=None,
+                                             max_agent_claims=0))
+        self.assertNotIn("max_agent_claims", self.read()["settings"])
+        for i in range(1, 6):
+            self.claim(f"t_c{i}", f"s{i}")                        # no limit

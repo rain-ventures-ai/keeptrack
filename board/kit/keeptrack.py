@@ -33,7 +33,7 @@ Board structure (labels, clients, members, settings) lives in tasks.json; change
   keeptrack.py members | member-add USER [--name ..] | member-set USER --name .. | member-rm USER [--unassign]
   keeptrack.py agents | agent-add NAME | agent-rm NAME [--unassign]
   keeptrack.py task-rm ID --yes | person-rm REF --yes     # delete something created by mistake
-  keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--stages "A,B,C" | --rename-stage OLD=NEW]
+  keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--max-agent-claims N] [--stages "A,B,C" | --rename-stage OLD=NEW]
   keeptrack.py projects [--client ..] [--status active|done|paused] [-q ..] | project REF   # project REF: its goal, people, links and OPEN tasks
   keeptrack.py project-add NAME --client .. [--north-star ..] | project-set REF [--name ..] [--client ..] [--north-star ..] [--status ..] | project-remove REF [--clear-project]
   ID may also be a task number: '#12' (quote the # in a shell).
@@ -1371,6 +1371,13 @@ def do_claim(a, tid, data):
     if not a.force and user and user.lower() not in [x.lower() for x in t.get("assignees", [])]:
         sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
     cs = claim_state(data, t.get("claim"))
+    limit = (data.get("settings") or {}).get("max_agent_claims")
+    if limit and not attended(a) and not a.force and not (t.get("claim") and t["claim"].get("session_id") == sid):
+        busy = [x for x in data["tasks"] if x is not t and (x.get("claim") or {}) and not x["claim"].get("attended")
+                and claim_state(data, x["claim"]) == "running"]
+        if len(busy) >= int(limit):
+            sys.exit(f"refused: {len(busy)} agent claims already running, the board's limit is {limit} "
+                     f"({', '.join('#' + str(x.get('num')) for x in busy)}); wait for one to finish (or --force)")
     if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force:
         c = t["claim"]
         sys.exit(f"refused: already claimed by {c['agent']} session {c.get('session_id')} ({cs}, last beat {c.get('heartbeat_at')})")
@@ -3469,6 +3476,7 @@ def cmd_settings(a):
     st = data.get("settings") or {}
     print(f"title: {st.get('title', '')}")
     print(f"stale_after_minutes: {st.get('stale_after_minutes', 30)}")
+    print(f"max_agent_claims: {st.get('max_agent_claims') or 'no limit'}")
     print(f"stages: {', '.join(stages(data))}")
     print(f"modes: {', '.join(st.get('modes', [])) or '-'}")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
@@ -3489,6 +3497,14 @@ def cmd_settings_set(a):
             if not 5 <= a.stale_minutes <= 24 * 60:
                 sys.exit("stale minutes must be between 5 and 1440")
             st["stale_after_minutes"] = a.stale_minutes; print(f"stale_after_minutes: {a.stale_minutes}")
+        if getattr(a, "max_agent_claims", None) is not None:
+            if not 0 <= a.max_agent_claims <= 100:
+                sys.exit("max agent claims must be between 0 (no limit) and 100")
+            if a.max_agent_claims:
+                st["max_agent_claims"] = a.max_agent_claims
+            else:
+                st.pop("max_agent_claims", None)
+            print(f"max_agent_claims: {a.max_agent_claims or 'no limit'}")
         renames = {}
         for r in a.rename_stage or []:
             old, sep, new = r.partition("=")
@@ -4280,6 +4296,8 @@ def main():
     s = sub.add_parser("settings", help="show board settings"); s.set_defaults(f=cmd_settings)
     s = sub.add_parser("settings-set", help="change title, stale minutes or pipeline stages"); s.add_argument("--title")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
+    s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
+                   help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
     s.add_argument("--rename-stage", dest="rename_stage", action="append", help="OLD=NEW (repeatable); moves people in OLD")
     s.set_defaults(f=cmd_settings_set)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
