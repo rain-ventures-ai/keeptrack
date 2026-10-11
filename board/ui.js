@@ -248,11 +248,15 @@
     (anchor.closest('dialog[open]') || document.body).append(m);
     if (canPopover) { m.popover = 'manual'; try { m.showPopover(); } catch {} }   // top layer: never clipped by an overflow parent
     const place = () => {
-      if (window.matchMedia(PHONE).matches) return;   // phones: CSS shows it as a bottom sheet
-      const r = anchor.getBoundingClientRect(), mw = m.offsetWidth, mh = m.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
-      let x = r.left, y = r.bottom + 4;
-      if (x + mw > vw - 8) x = Math.max(8, r.right - mw);
-      if (y + mh > vh - 8 && r.top - mh - 4 > 8) y = r.top - mh - 4;
+      // Next to its button on every screen (a menu at the top of a drawer opens at the top): below it, or above when there
+      // is more room there; never past the screen edges, and it scrolls when it is taller than the room it has.
+      m.style.maxHeight = '';
+      const r = anchor.getBoundingClientRect(), mw = m.offsetWidth, vw = window.innerWidth, vh = window.innerHeight;
+      const below = vh - r.bottom - 12, above = r.top - 12, up = m.offsetHeight > below && above > below;
+      m.style.maxHeight = Math.max(120, up ? above : below) + 'px';
+      const mh = m.offsetHeight;
+      let x = r.left; if (x + mw > vw - 8) x = Math.max(8, r.right - mw);
+      const y = up ? r.top - mh - 4 : r.bottom + 4;
       m.style.setProperty('--ui-menu-x', Math.round(x) + 'px'); m.style.setProperty('--ui-menu-y', Math.round(y) + 'px');
     };
     place();

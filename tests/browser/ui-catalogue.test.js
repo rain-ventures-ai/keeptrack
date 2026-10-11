@@ -144,6 +144,23 @@ const COMPONENTS = ['button', 'iconButton', 'pill', 'select', 'avatar', 'person'
     assert.equal(await stale.locator('.card, .todayhead').count(), 0, 'the board is not started on the old markup');
     assert.deepEqual(serr, [], 'no page errors on a stale page'); await stale.close();
 
+
+    // phones: a menu opens next to its button (below a button at the top, above one at the bottom), never as a bottom sheet
+    {
+      const ph = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      await ph.goto(base + '/board/ui.html'); await ph.waitForFunction(() => window.catReady === true);
+      const at = async top => ph.evaluate(top => {
+        const a = document.createElement('button'); a.textContent = 'More'; a.style.cssText = `position:fixed;right:8px;${top ? 'top:8px' : 'bottom:8px'};z-index:1`; document.body.append(a);
+        ui.menu(a, [{ label: 'One' }, { label: 'Two' }, { label: 'Three' }, { label: 'Four' }], { label: 'Test' });
+        const m = document.querySelector('.ui-menu').getBoundingClientRect(), r = a.getBoundingClientRect(); ui.closeMenu(); a.remove();
+        return { below: m.top >= r.bottom && m.top - r.bottom <= 12, above: m.bottom <= r.top && r.top - m.bottom <= 12, inside: m.left >= 0 && m.right <= innerWidth && m.top >= 0 && m.bottom <= innerHeight };
+      }, top);
+      const t = await at(true), b = await at(false);
+      assert.ok(t.below && t.inside, 'a menu at the top of a phone opens under its button: ' + JSON.stringify(t));
+      assert.ok(b.above && b.inside, 'a menu at the bottom of a phone opens above its button: ' + JSON.stringify(b));
+      await ph.close();
+    }
+
     console.log('ui catalogue: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
