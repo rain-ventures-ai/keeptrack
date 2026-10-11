@@ -1476,7 +1476,9 @@ class ClaimLifecycle(unittest.TestCase):
     def tearDown(self):
         kt.FILE, kt.save, kt.CLAIM_FILE, kt.cloud_session_url = self.old
         for k, v in self.old_env.items():
-            if v is not None:
+            if v is None:
+                os.environ.pop(k, None)
+            else:
                 os.environ[k] = v
         if self.old_user is None:
             os.environ.pop("BOARD_USER", None)
@@ -1610,10 +1612,14 @@ class ClaimLifecycle(unittest.TestCase):
         self.claim(3, "s3")
         self.assertIn("not this session's", self.refusal(self.release, 3))
 
-    def test_the_local_record_for_another_card_grants_nothing(self):
+    def test_a_record_with_another_session_grants_nothing_and_one_clone_is_one_session(self):
         self.claim(1, "s1")
-        write(self.claim_file, {"id": "t_c2", "session": "s1"})   # this clone's record is for a different card
+        write(self.claim_file, {"id": "t_c2", "session": "other"})   # this clone's record names a different session
         self.assertIn("not this session's", self.refusal(self.beat, 1, session="s2"))
+        write(self.claim_file, {"id": "t_c2", "session": "s1"})      # the clone that claimed card 1 went on to claim card 2
+        self.beat(1)                                                  # with no id in the environment it still owns card 1
+        self.assertEqual(self.card(1)["claim"]["session_id"], "s1")
+        self.claim(3, None); self.assertEqual(self.card(3)["claim"]["session_id"], "s1")   # and a new claim reuses its session
 
     def test_outcome_never_disagrees_with_the_last_run_and_clears_on_reopen(self):
         self.claim(3, "s1"); self.done(3, session="s1", cancel=True, note="dropped")
@@ -1642,7 +1648,7 @@ class ClaimLifecycle(unittest.TestCase):
                 os.environ.pop(k, None)
         write(self.claim_file, {"id": "t_c1", "session": "rec"})
         self.assertEqual(kt.session_for(Args(session=None), "t_c1"), "rec")
-        self.assertNotEqual(kt.session_for(Args(session=None), "t_c2"), "rec")
+        self.assertEqual(kt.session_for(Args(session=None), "t_c2"), "rec")   # one clone is one session, whichever card it claimed last
 
     def test_a_page_placeholder_needs_force_for_done_release_and_heartbeat(self):
         self.placeholder(1)

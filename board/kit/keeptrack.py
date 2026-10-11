@@ -1327,14 +1327,15 @@ def usable_session(sid):
 
 
 def session_id(args):
-    """The id a new claim records: --session, else the environment, else a random id. A value that is public in the
-    session link, or that copies the page's placeholder prefix, is not used (a random id is, and the local record
-    keeps it for the later done or release)."""
+    """The id a new claim records: --session, else the environment, else the session this clone's local claim record
+    already holds (one clone is one session, whichever card it claimed last), else a random id. A value that is
+    public in the session link, or that copies the page's placeholder prefix, is not used (a random id is, and the
+    local record keeps it for the later done or release)."""
     given = args.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")
     if given and not usable_session(given):
         print("note: that session id is public (it is in the session link) or a placeholder prefix; this run's claim uses a random id, "
               "kept in the local claim record", file=sys.stderr)
-    return usable_session(given) or uuid.uuid4().hex[:8]
+    return usable_session(given) or recorded_session() or uuid.uuid4().hex[:8]
 
 
 def session_for(a, task_id):
@@ -1343,16 +1344,7 @@ def session_for(a, task_id):
     claimed earlier in this clone still owns its card). Only then a random id, which owns nothing."""
     sid = usable_session(getattr(a, "session", None) or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID")
                          or os.environ.get("CODEX_SESSION_ID"))
-    if sid:
-        return sid
-    try:
-        with open(CLAIM_FILE) as f:
-            info = json.load(f)
-        if isinstance(info, dict) and info.get("id") == task_id and info.get("session"):
-            return info["session"]
-    except (OSError, ValueError):
-        pass
-    return uuid.uuid4().hex[:8]
+    return sid or recorded_session() or uuid.uuid4().hex[:8]
 
 
 def redact_session(sid):
@@ -1366,12 +1358,14 @@ def is_placeholder_claim(c):
     return str((c or {}).get("session_id") or "").startswith("pending-")
 
 
-def recorded_session(task_id):
-    """The session in this clone's local claim record when the record is for this card, else ''."""
+def recorded_session(task_id=None):
+    """The session in this clone's local claim record (for this card when task_id is given), else ''. A clone is one
+    trust domain: the record it wrote is its session, whichever card it claimed last."""
     try:
         with open(CLAIM_FILE) as f:
             info = json.load(f)
-        return info.get("session") or "" if isinstance(info, dict) and info.get("id") == task_id else ""
+        ok = isinstance(info, dict) and usable_session(info.get("session")) and (task_id is None or info.get("id") == task_id)
+        return info["session"] if ok else ""
     except (OSError, ValueError):
         return ""
 
@@ -1387,7 +1381,7 @@ def claim_owner_check(data, t, a, action):
         return   # no live claim (older cards kept a finished one)
     state = claim_state(data, c)
     own = c.get("session_id")
-    if own and not is_placeholder_claim(c) and own in {session_for(a, t["id"]), recorded_session(t["id"])}:
+    if own and not is_placeholder_claim(c) and own in {session_for(a, t["id"]), recorded_session()}:
         return   # a claim with no session id is nobody's: only --force finishes it
     if action == "release" and state in ("stale", "stuck", "blocked"):
         return   # a stale placeholder (the routine never started) is a dead run too

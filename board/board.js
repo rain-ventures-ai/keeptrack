@@ -1387,6 +1387,7 @@ if (typeof window !== 'undefined') (() => {
       if (t.links.length) L.push('- task resources and reference links:', ...t.links.map(l => `    ${l.title}: ${l.url}`), '    Access note: cloud resources need the matching connector/plugin/MCP and signed-in account; local paths need a session on the computer that holds them. If access fails, ask the user.');
       if (t.contacts.length) L.push('- contacts:', ...t.contacts.map(k => `    ${[k.name, k.role, k.email, k.phone].filter(Boolean).join(' | ')}`));
       if (t.claim) L.push(`- NOTE: already claimed by ${t.claim.agent} (session ${shortSid(t.claim.session_id) || '?'}, ${claimState(t.claim)}). Do not take it over unless the user says so.`);
+      { const cx = cancelledRun(t); if (cx) L.push(`- NOTE: this card was closed as cancelled${cx.note ? ': ' + cx.note : ''}. Ask before reopening it.`); }
       if (agent === 'codex') L.push('', `You are Codex, asked by @${who}. Do what the newest comment mentioning @codex asks, and nothing beyond it. Pass --agent codex when you claim.`);
       L.push('', 'Do this, in order:',
         `1. python3 board/keeptrack.py show ${t.id}   (re-read the latest card first)`,
