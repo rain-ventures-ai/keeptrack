@@ -15,7 +15,7 @@ Claude that helps them. It is the target of the "Copy new-board prompt for Claud
   person usually goes in their own account; a team board goes in the organisation.
 - The people: GitHub username and display name for each one. The first person is the **upgrade owner**: their Claude
   does future board kit upgrades (change it later with `keeptrack.py kit-owner`).
-- The upgrade owner's email addresses (all of them: work, personal, aliases) and time zone. They go on the owner's
+- The upgrade owner's work email address(es) (never a personal one: the board is a shared repo) and time zone. They go on the owner's
   member record, which email skills use to recognise the owner's own mail. Skippable; `keeptrack.py me` asks later.
 - Optional: the client or area names for the `client` field (default: `General`).
 

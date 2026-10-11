@@ -25,8 +25,9 @@ in an unrelated product repo.
 
 ## Who you are, first
 Run `$B me`. If the owner's member record has no email addresses or time zone, ask once, in one message: **"Your name,
-every email address you use (work, personal, aliases) and your time zone?"** Save it with
-`$B member-set <github-user> --name ".." --email a@x --email b@y --timezone Area/City`. Skipping is fine; `$B me`
+your work email address(es) and your time zone?"** Save it with
+`$B member-set <github-user> --name ".." --email a@x --timezone Area/City`. Work addresses only: the board is a repo
+other people can read, so a personal address never goes on it. Skipping is fine; `$B me`
 reminds later. This record is the owner's identity on the board: email skills use it to recognise the owner's own mail.
 It is not a CRM person and stays when the CRM section is turned off.
 
