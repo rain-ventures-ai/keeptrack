@@ -1,3 +1,7 @@
+// Markup handshake: the ids and page structure this file needs from index.html. index.html sets window.kbMarkup to the
+// version it carries (and its loader reads this line before running the file). Bump both together whenever board.js
+// starts to need markup an older index.html does not have, or index.html drops markup an older board.js needs.
+const KB_MARKUP = 2;
 // Fractional ranks. This is the same algorithm as board/kit/keeptrack.py.
 // Keep it outside the browser closure so the Python parity test can load it in Node.
 const RANK_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -55,8 +59,33 @@ function keyBetween(a, b) {
 const jsonText = o => JSON.stringify(o, null, 2) + '\n';
 if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText };
 
+// A page and a board.js from different deploys (GitHub Pages and browsers cache index.html for ~10 minutes) never wire up:
+// refresh the cached page and reload once, and if the server still has the other version, say so. index.html has the same
+// code for a board.js from before the handshake (kbStalePage there).
+function kbStalePage() {
+  if (document.getElementById('kbStale')) return;
+  let auto = false;
+  try { const k = 'kb_markup_reload', t = +sessionStorage.getItem(k) || 0;   // at most one automatic reload a minute, and none when storage is blocked
+    if (Date.now() - t > 60000) { const now = String(Date.now()); sessionStorage.setItem(k, now); auto = sessionStorage.getItem(k) === now; } } catch { auto = false; }
+  const reload = () => fetch(location.href, { cache: 'reload' }).catch(() => {}).then(() => location.reload());
+  const show = () => {
+    document.documentElement.classList.add('ready');
+    const box = document.createElement('div'), card = document.createElement('div'), p = document.createElement('p'), b = document.createElement('button');
+    box.id = 'kbStale'; box.setAttribute('role', 'alert');
+    box.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--paper,#f6f6f4);color:var(--ink,#1c1c1c);font:15px/1.5 system-ui,sans-serif';
+    card.style.cssText = 'max-width:360px;padding:20px;border:1px solid var(--line,#ddd);border-radius:12px;background:var(--surface,#fff);text-align:center';
+    p.textContent = 'A new version of the board is being published. Reload in a minute.'; p.style.margin = '0 0 12px';
+    b.type = 'button'; b.textContent = 'Reload'; b.style.cssText = 'font:inherit;padding:6px 16px;border-radius:8px;border:1px solid var(--line,#ccc);background:var(--hero,#2b59c3);color:var(--on-hero,#fff);cursor:pointer';
+    b.onclick = reload; card.append(p, b); box.append(card); document.body.append(box);
+  };
+  if (document.body) show(); else document.addEventListener('DOMContentLoaded', show);
+  if (auto) reload();
+}
+
 if (typeof window !== 'undefined') (() => {
   'use strict';
+  window.kbBoardMarkup = KB_MARKUP;   // announced for index.html's check
+  if (window.kbMarkup !== KB_MARKUP) { kbStalePage(); return; }   // nothing below runs against markup it was not written for
   // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
   // tokens or routines. Only the look (theme, style) is shared.
   const SANDBOX = new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style|custom)$/, MEM = new Map();
@@ -136,23 +165,7 @@ if (typeof window !== 'undefined') (() => {
   let newerSchema = 0;
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-  // Line icons live in icons.js and components in ui.js, both loaded before this file. A page cached from before they
-  // existed (GitHub Pages keeps index.html ~10 minutes) loads only board.css and board.js: fetch the missing files here,
-  // synchronously, so the board still starts. Normal loads skip this.
-  (() => {
-    const base = ((document.currentScript && document.currentScript.src) || location.href).replace(/[^/]*([?#].*)?$/, '');
-    const need = [['kbIcons', 'icons.js'], ['ui', 'ui.js']].filter(([g]) => !window[g]);
-    if (need.length && !document.querySelector('link[href*="ui.css"], style[data-kb="ui.css"]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = base + 'ui.css'; document.head.append(l); }
-    need.forEach(([, f]) => { try { const x = new XMLHttpRequest(); x.open('GET', base + f + '?t=' + Date.now(), false); x.send(); if (x.status === 200) { const sc = document.createElement('script'); sc.textContent = x.responseText; document.head.append(sc); } } catch (e) {} });
-  })();
-  // The same for the Settings dialog: an index.html cached from before the section layout has the old #dlgSettings, so take
-  // the current one from the server (synchronously, once) and swap it in before anything is wired to it.
-  (() => {
-    const old = document.getElementById('dlgSettings'); if (!old || old.querySelector('[data-sec]')) return;
-    try { const x = new XMLHttpRequest(); x.open('GET', location.pathname + '?t=' + Date.now(), false); x.send();
-      const fresh = x.status === 200 && new DOMParser().parseFromString(x.responseText, 'text/html').getElementById('dlgSettings');
-      if (fresh && fresh.querySelector('[data-sec]')) old.replaceWith(document.importNode(fresh, true)); } catch (e) {}
-  })();
+  // Line icons live in icons.js and components in ui.js; index.html loads both before this file.
   const { svgIcon, setI, fillIcons } = window.kbIcons;
   const elI = (tag, cls, icon, text) => { const e = el(tag, cls); if (icon) e.append(svgIcon(icon)); if (text != null && text !== '') e.append((icon ? ' ' : '') + text); return e; };   // el() with a leading icon
   fillIcons(document);
@@ -209,7 +222,7 @@ if (typeof window !== 'undefined') (() => {
   ];
   (() => {
     const utils = document.querySelector('header .hutils');
-    if (utils && !$('btnCopy')) HEAD_ACTIONS.filter(a => a.id).forEach(a => {   // an older cached page still has them in its markup
+    if (utils) HEAD_ACTIONS.filter(a => a.id).forEach(a => {
       const b = el('button'); b.type = 'button'; b.id = a.id; b.title = a.title; b.setAttribute('aria-label', a.aria || a.title);
       const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); utils.append(b);
     });
@@ -1528,7 +1541,6 @@ if (typeof window !== 'undefined') (() => {
   ];
   const tagViews = (tl, views) => { tl.querySelectorAll('.ui-tab').forEach((b, i) => { b.dataset.view = b.dataset.value; if (views[i].primary) b.classList.add('viewprimary'); }); return tl; };
   const viewTabs = {};   // group -> its ui.tabs in #viewSw
-  $('viewSw').textContent = '';   // an older cached page still has static buttons here
   VIEW_GROUPS.forEach(g => {
     const tl = tagViews(ui.tabs({ items: g.views, value: '', label: g.label, onChange: v => setView(v) }), g.views);
     tl.classList.add('viewgroup'); tl.dataset.grp = g.grp; viewTabs[g.grp] = tl; $('viewSw').append(tl);
@@ -2749,7 +2761,6 @@ if (typeof window !== 'undefined') (() => {
   $('hSetupPrompt').onclick = () => copyPrompt('start');
   function renderTools() {
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg();
-    bar.removeAttribute('role'); bar.removeAttribute('aria-label');   // an older cached index.html marks the holder as a tablist; ui.tabs inside is the tablist
     const refocus = bar.contains(document.activeElement); bar.textContent = body.textContent = '';   // arrow keys rebuild the strip: keep the focus on it
     bar.append(ui.tabs({ items: Object.entries(TOOLS).map(([value, [label]]) => ({ value, label })), value: pick, label: 'Your AI tool', onChange: k => { LS.set('kb_tool', k); renderTools(); } }));
     if (refocus) bar.querySelector('[aria-selected="true"]').focus();
@@ -2904,7 +2915,7 @@ if (typeof window !== 'undefined') (() => {
   const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'prefs', style: 'underline', label: 'Settings sections', onChange: v => setPanel(v) });
   setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach((b, i) => { const n = cap(b.dataset.value), short = SET_TABS[i][2]; b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n);
     if (short) { const l = b.querySelector('.ui-tab__label'); l.textContent = ''; l.append(el('span', 'tl-long', SET_TABS[i][1]), el('span', 'tl-short', short)); } });   // phones: the short name, so all four fit
-  { const old = $('setTabs') || document.querySelector('#dlgSettings .stabs'); if (old) old.replaceWith(setTabs); }   // .stabs: an older cached page
+  $('setTabs').replaceWith(setTabs);
   const secTop = id => { const x = $(id); if (x) requestAnimationFrame(() => x.scrollIntoView({ block: 'start' })); };
   function setPanel(tab) {   // a tab chosen by hand: its panel, from the top
     SET_TABS.forEach(([n]) => { $('panel' + cap(n)).hidden = n !== tab; }); setTabs.select(tab);

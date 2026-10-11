@@ -21,7 +21,10 @@
     if (!t || !t.paper || !t.ink || !t.hero) return false;
     paintCustom(t); return true;
   }
-  function clearCustom() { ['--paper', '--surface', '--line', '--ink', '--hero', '--on-hero'].forEach(function (k) { root.style.removeProperty(k); }); root.removeAttribute('data-mode'); }
+  function clearCustom() {   // --lift ... --warn and color-scheme: set inline by a designmd.js cached from before paintCustom
+    ['--paper', '--surface', '--line', '--ink', '--hero', '--on-hero', '--lift', '--lift-pct', '--danger', '--ok', '--warn'].forEach(function (k) { root.style.removeProperty(k); });
+    root.style.colorScheme = ''; root.removeAttribute('data-mode');
+  }
   if (saved === 'custom' && !applyCustom()) saved = 'auto';
   root.setAttribute('data-theme', saved);
   var STYLES = ['classic', 'colorful'], style = 'classic';

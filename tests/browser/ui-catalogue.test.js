@@ -133,12 +133,15 @@ const COMPONENTS = ['button', 'iconButton', 'pill', 'select', 'avatar', 'person'
     assert.equal(await rg.evaluate(async () => { const p = ui.confirm({ title: 'X' }); document.querySelector('dialog[open]').remove(); return await Promise.race([p, new Promise(r => setTimeout(() => r('pending'), 500))]); }), false, 'removing an open confirm resolves it false');
     assert.deepEqual(rerr, []); await rg.close();
 
-    // a page cached from before icons.js/ui.js existed loads only board.css + board.js: the board must still start
+    // a page cached from before icons.js/ui.js and the markup handshake loads only board.css + board.js: board.js must not
+    // wire itself to that markup (no page errors), and shows the "being published" message instead (full mixes: mixed-versions.test.js)
     const stale = await browser.newPage(), serr = []; stale.on('pageerror', e => serr.push(e.message));
+    await stale.addInitScript(() => { try { sessionStorage.setItem('kb_markup_reload', String(Date.now())); } catch (e) {} });   // the one automatic reload already happened
     await stale.route('**/board/index.html*', async r => { const html = fs.readFileSync(path.join(ROOT, 'board/index.html'), 'utf8')
       .replace(/<script>[\s\S]*?var CSS = \[[\s\S]*?<\/script>/, '<link rel="stylesheet" href="board.css"><script src="board.js"></script>'); await r.fulfill({ contentType: 'text/html', body: html }); });
-    await stale.goto(base + '/board/index.html?demo=board'); await stale.waitForFunction(() => window.ui && window.kbIcons && document.querySelector('.card, .todayhead'));
-    assert.equal(await stale.evaluate(() => !!(window.ui && window.kbIcons)), true, 'board.js fetched icons.js and ui.js itself');
+    await stale.goto(base + '/board/index.html?demo=board'); await stale.waitForSelector('#kbStale');
+    assert.match(await stale.locator('#kbStale').innerText(), /being published/);
+    assert.equal(await stale.locator('.card, .todayhead').count(), 0, 'the board is not started on the old markup');
     assert.deepEqual(serr, [], 'no page errors on a stale page'); await stale.close();
 
     console.log('ui catalogue: all checks passed');

@@ -58,8 +58,6 @@
 <div id="memberBar" class="kbbar" hidden></div>
 <div id="roBar" class="kbbar" hidden></div>
 <div id="sizeBar" class="kbbar" hidden></div>
-<!-- Stubs for an older cached board.js running with this page (it looks these up at start-up). This board.js uses ui.toast and ui.banner instead. -->
-<div id="kbLegacy"><div id="toast" role="status" aria-live="polite"></div><div id="undoSnack" hidden><span id="undoMsg"></span><button id="undoGo" type="button" tabindex="-1">Undo</button></div></div>
 <div id="legend" class="legend" aria-label="Colour key"></div>
 <nav id="tabs" aria-label="Columns"></nav>
 <div id="board"></div>
@@ -431,22 +429,47 @@
 <script>
 /* Bootstrap: GitHub Pages lets browsers cache files for ~10 minutes, so a plain <script src> can serve stale code after a deploy.
    Here every load revalidates board.css, ui.css, icons.js, ui.js and board.js with the server (a cheap 304 when unchanged), then runs the fresh text.
-   Offline or on any failure it falls back to normal tags so the page still opens from cache. */
+   Offline it uses the browser's cached copies; if even that fails, normal tags, so the page still opens.
+   Markup handshake: kbMarkup is the version of this page's markup; board.js declares the version it needs (const KB_MARKUP).
+   A board.js for another version is not run: kbStalePage refreshes this page and reloads once, then shows a message.
+   board.js has the same check for an index.html from before the handshake. Bump both numbers together. */
 (function () {
+  var MARKUP = window.kbMarkup = 2;
   var done = false, reveal = function () { done = true; document.documentElement.classList.add('ready'); };
   setTimeout(function () { if (!done) reveal(); }, 6000);                                   // never leave the page blank
-  function get(u) { return fetch(u, { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error(u + ' ' + r.status); return r.text(); }); }
-  function fallback() {
-    CSS.forEach(function (u) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = u; document.head.appendChild(l); });
-    JS.forEach(function (u) { var s = document.createElement('script'); s.src = u; s.async = false; document.body.appendChild(s); }); reveal();   // async=false keeps the order
+  function kbStalePage() {   // same as kbStalePage in board.js
+    if (document.getElementById('kbStale')) return;
+    var auto = false;
+    try { var k = 'kb_markup_reload', t = +sessionStorage.getItem(k) || 0;   // at most one automatic reload a minute, and none when storage is blocked
+      if (Date.now() - t > 60000) { var now = String(Date.now()); sessionStorage.setItem(k, now); auto = sessionStorage.getItem(k) === now; } } catch (e) { auto = false; }
+    var reload = function () { fetch(location.href, { cache: 'reload' }).catch(function () {}).then(function () { location.reload(); }); };
+    reveal();
+    var box = document.createElement('div'), card = document.createElement('div'), p = document.createElement('p'), b = document.createElement('button');
+    box.id = 'kbStale'; box.setAttribute('role', 'alert');
+    box.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--paper,#f6f6f4);color:var(--ink,#1c1c1c);font:15px/1.5 system-ui,sans-serif';
+    card.style.cssText = 'max-width:360px;padding:20px;border:1px solid var(--line,#ddd);border-radius:12px;background:var(--surface,#fff);text-align:center';
+    p.textContent = 'A new version of the board is being published. Reload in a minute.'; p.style.margin = '0 0 12px';
+    b.type = 'button'; b.textContent = 'Reload'; b.style.cssText = 'font:inherit;padding:6px 16px;border-radius:8px;border:1px solid var(--line,#ccc);background:var(--hero,#2b59c3);color:var(--on-hero,#fff);cursor:pointer';
+    b.onclick = reload; card.appendChild(p); card.appendChild(b); box.appendChild(card); document.body.appendChild(box);
+    if (auto) reload();
   }
+  function get(mode) { return function (u) { return fetch(u, { cache: mode }).then(function (r) { if (!r.ok) throw new Error(u + ' ' + r.status); return r.text(); }); }; }
   // Styles: board.css, then the ui.js component styles. Scripts in order: icons.js, ui.js (component library), board.js.
-  var CSS = ['board.css', 'ui.css'], JS = ['icons.js', 'ui.js', 'board.js'];
-  Promise.all(CSS.concat(JS).map(get)).then(function (a) {
+  var CSS = ['board.css', 'ui.css'], JS = ['icons.js', 'ui.js', 'board.js'], ALL = CSS.concat(JS);
+  function run(a) {
+    var m = /\bconst KB_MARKUP = (\d+);/.exec(a[4]);
+    if (!m || +m[1] !== MARKUP) return kbStalePage();                                      // a board.js from another deploy: never run it on this markup
     window.__kbAssets = { css: a[0], js: a[4], extra: a.slice(1, 4).join('\n') };
     CSS.forEach(function (u, i) { var st = document.createElement('style'); st.textContent = a[i] + '\n/*# sourceURL=' + u + ' */'; document.head.appendChild(st); }); reveal();
     JS.forEach(function (u, i) { var sc = document.createElement('script'); sc.textContent = a[CSS.length + i] + '\n//# sourceURL=' + u; document.body.appendChild(sc); });
-  }).catch(fallback);
+  }
+  function tags() {   // last resort (fetch unavailable, e.g. a file:// page): the board.js tag cannot be checked before it runs, so check after
+    CSS.forEach(function (u) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = u; document.head.appendChild(l); });
+    JS.forEach(function (u) { var s = document.createElement('script'); s.src = u; s.async = false;   // async=false keeps the order
+      if (u === 'board.js') s.onload = function () { if (window.kbBoardMarkup !== MARKUP) kbStalePage(); };
+      document.body.appendChild(s); }); reveal();
+  }
+  Promise.all(ALL.map(get('no-cache'))).catch(function () { return Promise.all(ALL.map(get('force-cache'))); }).then(run, tags);
   // The HTML itself can be stale too: compare the cached copy with a revalidated one and reload once if they differ.
   fetch(location.href, { cache: 'force-cache' }).then(function (r) { return r.text(); }).then(function (cached) {
     return fetch(location.href, { cache: 'no-cache' }).then(function (r) { return r.text(); }).then(function (fresh) {
