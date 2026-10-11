@@ -1561,7 +1561,14 @@ if (typeof window !== 'undefined') (() => {
     VIEW_GROUPS.forEach(g => { viewTabs[g.grp].hidden = g.grp !== 'today' && !m.includes(g.grp); });
     if (!ok(view)) view = 'today';
   }
-  const setView = v => { view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); render(); };
+  // Each view you switch to is a step in the browser's history, so Back and Forward move between views (and back out of a
+  // card to the view it was opened from). fromHistory: the switch came from Back/Forward, so it adds no new step.
+  const setView = (v, fromHistory) => {
+    const was = view; view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); render();
+    if (fromHistory || v === was) return;
+    const push = () => { try { history.pushState({ kbView: v }, '', location.pathname + location.search); } catch {} };
+    if (backPending) backPending.then(push); else push();   // a dialog that just closed is still taking its own step off
+  };
   const syncViewSw = () => { Object.values(viewTabs).forEach(tl => tl.select(view)); syncDock(); };
   // The dock (layout "dock") is a fixed footer with one tab per view group. A tab returns to the last view used in its group;
   // the strip under the header (#subnav) switches views within it.
@@ -1603,7 +1610,7 @@ if (typeof window !== 'undefined') (() => {
   function startTour() { closePops(); document.querySelectorAll('dialog[open]').forEach(d => d.close()); tour = { steps: tourSteps(), i: 0, back: document.activeElement }; $('tour').hidden = false; showTourStep(); }
   function endTour() { if (!tour) return; const back = tour.back; tour = null; $('tour').hidden = true; LS.set('kb_tour', 'done'); if (view === 'today') render(); if (back && back.isConnected) back.focus(); }
   function showTourStep() {
-    const st = tour.steps[tour.i], last = tour.i === tour.steps.length - 1; if (st.view && view !== st.view) setView(st.view);
+    const st = tour.steps[tour.i], last = tour.i === tour.steps.length - 1; if (st.view && view !== st.view) setView(st.view, true);   // the tour moves between views without filling the history
     $('tourTitle').textContent = st.title; $('tourText').textContent = st.text; $('tourStep').textContent = `${tour.i + 1} of ${tour.steps.length}`;
     $('tourBack').hidden = tour.i === 0; $('tourSkip').hidden = last; $('tourNext').textContent = last ? 'Done' : 'Next';
     placeTour(true); $('tourNext').focus();
@@ -2364,10 +2371,10 @@ if (typeof window !== 'undefined') (() => {
       const url = d.id === 'dlgCard' ? bareUrl() + location.hash : bareUrl();
       const top = backStack[backStack.length - 1];
       if (top && !$(top).open && st.kbDlg === top) {   // it replaces a drawer that just closed (person → Open client): take over its entry
-        backStack.pop(); history.replaceState({ kbDlg: d.id, depth: backStack.length + 1 }, '', url); backStack.push(d.id); return;
+        backStack.pop(); history.replaceState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id); return;
       }
-      if (d.id === 'dlgCard' && location.hash) history.replaceState(st.kbDlg ? st : null, '', bareUrl());   // the entry under the card is the board
-      history.pushState({ kbDlg: d.id, depth: backStack.length + 1 }, '', url); backStack.push(d.id);
+      if (d.id === 'dlgCard' && location.hash) history.replaceState(st.kbDlg ? st : { kbView: view }, '', bareUrl());   // the entry under the card is the board
+      history.pushState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id);
     } catch {}
   }
   function backClosed(d) {
@@ -2387,7 +2394,10 @@ if (typeof window !== 'undefined') (() => {
       const d = $(backStack[backStack.length - 1]); backStack.pop();
       if (d && d.open) d.close();   // its close handler finds it already off the stack, so it won't go back again
     }
+    const v = (history.state || {}).kbView;   // Back/Forward between views
+    if (v && v !== view && !backStack.length) setView(v, true);
   });
+  try { if (!(history.state || {}).kbView) history.replaceState({ ...(history.state || {}), kbView: view }, ''); } catch {}   // the first entry knows its view
   BACK_DIALOGS.forEach(id => { const d = $(id); if (!d) return;
     new MutationObserver(() => { if (d.open) backOpened(d); }).observe(d, { attributes: true, attributeFilter: ['open'] });
     d.addEventListener('close', () => backClosed(d)); });

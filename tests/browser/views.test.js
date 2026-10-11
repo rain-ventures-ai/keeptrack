@@ -91,7 +91,9 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       const who = await page.locator('.card .foot .ui-avatar').first().getAttribute('aria-label');
       const login = await page.locator('.card .foot .ui-avatar').first().getAttribute('title');   // "@login (Name)"
       const onCard = await bg(page, `.card .foot .ui-avatar[aria-label="${who}"]`);
-      assert.equal(await bg(page, `.pq .ui-avatar[aria-label="${who}"]`), onCard, 'header filter avatar matches the card');
+      // the header strip can redraw (refit) between finding the avatar and reading it, so read both in one go once it is there
+      const hdr = await page.waitForFunction(who => { const a = document.querySelector(`.pq .ui-avatar[aria-label="${who}"]`); const c = a && getComputedStyle(a).backgroundColor; return c || false; }, who).then(h => h.jsonValue());
+      assert.equal(hdr, onCard, 'header filter avatar matches the card');
       await page.locator('.card', { has: page.locator(`.foot .ui-avatar[aria-label="${who}"]`) }).first().locator('.t').dblclick(); await page.locator('#dlgCard[open]').waitFor();
       assert.equal(await bg(page, `#cWho .ui-avatar`), onCard, `the drawer's person chip for ${login} matches the card`);
       await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
@@ -155,6 +157,24 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await dock.locator('#dockMenu').click(); await dock.keyboard.press('Escape'); assert.equal(await dock.locator('#dockPop').isHidden(), true); assert.equal(await dock.evaluate(() => document.activeElement.id), 'dockMenu');
       assert.deepEqual(dock.errors, []); await dock.done();
     }
+
+    // Back and Forward move between views, and out of a card to the view it was opened from
+    {
+      const p = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }); await p.addInitScript(() => { try { localStorage.setItem('kb_tour_seen', '1'); } catch {} });
+      await p.goto(base + '/board/index.html?demo=board'); await p.locator('#roBar').waitFor({ state: 'visible' });
+      const at = () => p.evaluate(() => ({ view: document.body.dataset.view, card: document.getElementById('dlgCard').open }));
+      const until = (v, card) => p.waitForFunction(([v, card]) => document.body.dataset.view === v && document.getElementById('dlgCard').open === card, [v, card]);
+      assert.equal((await at()).view, 'today');
+      await p.locator('#dock .dtab[data-grp="tasks"]').click(); await until('board', false);
+      await p.locator('.card:visible .t').first().click(); await until('board', true);
+      await p.goBack(); await until('board', false);
+      await p.goBack(); await until('today', false);
+      await p.goForward(); await until('board', false);
+      await p.goForward(); await until('board', true);
+      assert.deepEqual(await at(), { view: 'board', card: true }, 'Forward reopens the card on its view');
+      await p.close();
+    }
+
     console.log('views: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
