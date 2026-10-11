@@ -2329,7 +2329,7 @@ def cmd_init(a):
                 "next_num": 1}
         os.makedirs(os.path.dirname(tj), exist_ok=True)
         open(tj, "w").write(json.dumps(data, indent=2, ensure_ascii=False) + "\n"); print(f"wrote {PATH} (empty board, upgrade owner @{people[0]['github']})")
-    print("Next: commit and push to the default branch, then add the board in the web board: Settings → Boards → Add an existing board.")
+    print("Next: commit and push to the default branch, then add the board in the web board: Settings → Connection → Your boards → Add a board.")
 
 
 def cmd_use(a):

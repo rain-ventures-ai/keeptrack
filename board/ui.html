@@ -232,7 +232,7 @@
 
   demo('check', 'ui.check({state, text, fix})', s => {
     s.append(ui.check({ state: 'ok', text: 'Token can write to acme/board' }),
-      ui.check({ state: 'bad', text: 'Routine trigger returned 401', fix: 'Create a new API trigger token and paste it in Settings → Agents.' }),
+      ui.check({ state: 'bad', text: 'Routine trigger returned 401', fix: 'Create a new API trigger token and paste it in Settings → Agents & integrations.' }),
       ui.check({ state: 'wait', text: 'Checking the cron-job.org relay…' }),
       ui.check({ state: 'warn', text: 'Board tools are one version behind', fix: 'Run the board-upgrade skill.' }));
   });

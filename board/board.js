@@ -2436,7 +2436,7 @@ if (typeof window !== 'undefined') (() => {
   const claudeCfg = () => ({ url: LS.get('kb_claude_url'), token: LS.get('kb_claude_token'), cron: LS.get('kb_cron_key') });
   const routinePage = () => { const m = /\/routines\/(trig_[A-Za-z0-9]+)\/fire$/.exec(claudeCfg().url); return m ? `https://claude.ai/code/routines/${m[1]}` : ''; };
   const claudeReady = () => { const c = claudeCfg(); return FIRE_RE.test(c.url) && !!c.token && !!c.cron; };
-  // which agents this person uses (Settings → Agents); before they choose, Claude counts as on if its routine is set up
+  // which agents this person uses (Settings → Agents & integrations); before they choose, Claude counts as on if its routine is set up
   const KNOWN_AGENTS = ['claude', 'codex'];
   const myAgents = () => { const v = LS.get('kb_agents', null); return v === null ? (claudeReady() ? ['claude'] : []) : v.split(',').filter(a => KNOWN_AGENTS.includes(a)); };
   const cronFetch = (method, path, body) => fetch(CRON + path, { method, headers: { Authorization: 'Bearer ' + claudeCfg().cron, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -2582,7 +2582,7 @@ if (typeof window !== 'undefined') (() => {
       'B) Do it for me in my browser: if you have a browser tool (Claude in Chrome or the built-in browser), open claude.ai/code/routines, GitHub\'s fine-grained token page and console.cron-job.org (I am already signed in) and do the clicking and the non-secret fields: routine name, the loader prompt from routine-loader.txt, the repository, a dedicated environment with Trusted network access, no connectors, and the API trigger.', '',
       'Rules: never type, paste, read back or store a secret (routine trigger token, BOARD_TOKEN, cron-job.org API key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Remove all connectors from the routine. Finish by running the verification checklist and the first test from the runbook and tell me what passed and failed.'].join('\n'), 'Setup prompt copied. Paste it into a new chat with Claude.'];
   }
-  // ---- Settings → Agents: a guided "Connect Claude" checklist. Each step shows ✓ when it is done, values save as you
+  // ---- Settings → Agents & integrations: a guided "Connect Claude" checklist. Each step shows ✓ when it is done, values save as you
   // type, and step 5 sends a real test task to the routine. Which steps are done is kept per board (BOARD_KEYS).
   const LOADER = "You work for the person named in the routine-fire-payload block that starts this run. It gives the task number (like #12)\nand who asked. Your full instructions live in this repository, which is already cloned: read board/routine-prompt.md now\nand follow it exactly, using the task number and requester from the payload. Do nothing else until you have read it.";   // the same text as board/kit/routine-loader.txt (a unit test checks this)
   const showAgentBoxes = () => { $('boxClaude').hidden = !$('sUseClaude').checked; $('boxCodex').hidden = !$('sUseCodex').checked; agentChips(); };
@@ -2662,7 +2662,7 @@ if (typeof window !== 'undefined') (() => {
     if (ro) { ckRow(box, false, 'This board is read-only here, so the test cannot make a task.'); return; }
     btn.disabled = true;
     const id = uid(), cid = 'c_' + Date.now().toString(36), at = nowIso(), title = 'Test: Claude says hello',
-      text = '@claude This is a test from Settings → Agents. Add a comment that says hello, then mark this task done.';
+      text = '@claude This is a test from Settings → Agents & integrations. Add a comment that says hello, then mark this task done.';
     await mutate(n => { n.tasks.push({ id, title, column: reopenColId(), client: '', priority: 'low', due: '', labels: [], assignees: [who], details: 'A test of the @claude connection. You can delete this task.', links: [], contacts: [], todos: [],
       comments: [{ id: cid, at, by: who, text }], history: [], created: at, updated: at, createdBy: who, updatedBy: who,
       claim: { agent: 'claude', on_behalf_of: who, session_id: 'pending-' + Date.now().toString(36), session_url: '', host: 'cron-job.org relay', status: 'running', note: `Sent to Claude by @${who}; waiting for the routine to start (about 1 to 2 minutes)`, claimed_at: at, heartbeat_at: at } }); }, `Add task: ${title}`);
