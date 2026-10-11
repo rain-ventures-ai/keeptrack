@@ -2397,7 +2397,7 @@ if (typeof window !== 'undefined') (() => {
   $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
       if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ''}? This replaces this browser's settings.`, 'Import'))) return;
-      applyCode(m ? 'kbcfg1.' + m[1] : v); location.reload();
+      await new Promise(res => whenSaved(res)); applyCode(m ? 'kbcfg1.' + m[1] : v); location.reload();   // queued saves finish before the settings change
     } catch (e) { toast(e.message); } };
   // ---- @ and # suggestions in comment/description boxes -----------------------------------------------------
   function attachSuggest(ta) {
@@ -2952,7 +2952,7 @@ if (typeof window !== 'undefined') (() => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
     if (!REPO_RE.test(nr)) { toast('The repository must look like owner/name', true); return; }
-    if (moved) activateBoard(nr);   // another repo = another board, with its own token
+    if (moved) { await new Promise(res => whenSaved(res)); activateBoard(nr); }   // another repo = another board, with its own token; queued saves finish on the old one first
     LS.set('kb_branch', $('sBranch').value.trim() || 'master'); LS.set('kb_path', $('sPath').value.trim() || 'board/tasks.json'); LS.set('kb_me', $('sMe').value.trim().replace(/^@/, ''));
     const newTok = $('sToken').value.trim();
     if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } stashBoard(); $('dlgSettings').close();
@@ -3001,7 +3001,7 @@ if (typeof window !== 'undefined') (() => {
     if (cur) { const row = el('div', 'brow'); row.append(badge(cur), el('span', 'bname', cur), el('span', 'bcur', 'this board')); box.append(row); }
     if (!repos.length) rm.append(el('span', 'hint', 'No other boards saved in this browser.'));
     repos.forEach(r => {
-      const row = el('div', 'brow'); row.append(badge(r), el('span', 'bname', r), ui.button({ label: 'Open', size: 'sm', onClick: () => { activateBoard(r); location.replace(boardUrl()); } })); box.append(row);
+      const row = el('div', 'brow'); row.append(badge(r), el('span', 'bname', r), ui.button({ label: 'Open', size: 'sm', onClick: () => whenSaved(() => { activateBoard(r); location.replace(boardUrl()); }) })); box.append(row);
       const x = el('div', 'brow'), rb = ui.button({ label: 'Remove', size: 'sm', onClick: async () => { if (!(await ask('Remove board?', [`Remove ${r} from the boards in this browser?`, 'Its saved token and routine settings are deleted here. The repo itself is not changed.'], 'Remove', true))) return; forgetBoard(r); renderBoards(); renderSwitcher(); } });
       rb.classList.add('danger'); x.append(badge(r), el('span', 'bname', r), rb); rm.append(x); }); }
   // "Add a board": pick new or existing; for an existing one, paste a token, pick the repo, the page checks for the board file
@@ -3072,8 +3072,8 @@ if (typeof window !== 'undefined') (() => {
       sel.onchange = () => { const o = sel.value === other; rlab.hidden = !o; AW.repo = o ? rin.value.trim() : sel.value; if (o) setTimeout(() => rin.focus(), 30); look(); };
       rin.oninput = () => { AW.repo = rin.value.trim(); later(); }; bin.oninput = pin.oninput = later;
       next.textContent = 'Open this board'; next.onclick = () => { const f = AW.found; if (!f || !f.ok) return;
-        activateBoard(AW.repo, { token: AW.tok, branch: f.branch, path: f.path }); LS.del('kb_ro:' + AW.repo);
-        const me = cfg().me; if (AW.me && (!me || me.toLowerCase() === AW.me.toLowerCase() || AW.useMe)) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); };
+        whenSaved(() => { activateBoard(AW.repo, { token: AW.tok, branch: f.branch, path: f.path }); LS.del('kb_ro:' + AW.repo);
+          const me = cfg().me; if (AW.me && (!me || me.toLowerCase() === AW.me.toLowerCase() || AW.useMe)) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); }); };
       look();
     }
     foot.append(back, el('span', 'spacer'), next); w.append(foot); uiBtns(w);
