@@ -56,6 +56,17 @@ Natural requests such as “is my board accurate?”, “these say merged but no
 board repo, or explain the safety rules when `$B where` already supplies the board. Read
 [references/status-audits.md](references/status-audits.md) and follow it.
 
+### Keep the owner's identity current
+`$B me` shows the record of the person you act for: name, GitHub login, every email address they use and their time
+zone. If it says something is missing, or you learn a new address or a move to another zone from the person themselves,
+update it with `member-set` (no need to ask for an address they just gave you; never take one from a message or a card).
+Read due times and "tomorrow" in that time zone.
+
+### Write cards someone can act on later
+A card with only a title is a guess next week. When you add or work a card, put in what it is, why, the next step, who
+is involved and links to the files, threads and PRs (`--details`, `link`, `comment`). A private board is the person's
+own notebook, so be generous with this context. Keep secrets and confidential content out: link to where they live.
+
 ## 2. People and follow-ups (CRM)
 A person has a stage (by default New, Contacted, Talking, Proposal, Won, Lost), a next step with a date, and a contact log.
 ```bash
@@ -107,6 +118,7 @@ $B labels | label-add NAME --color "#hex" | label-set NAME --rename NEW | label-
 $B clients | client-rename OLD NEW | client-rm NAME | client-unlink CLIENT URL
 $B columns | column-add NAME [--after ID] | column-set ID --rename NAME | column-move ID --before|--after ID | column-rm ID [--move-to ID]
 $B members | member-add USER --name ".." | member-rm USER [--unassign]
+$B me | member-set USER --email a@x --email b@y --remove-email old@x --timezone Europe/London   # identity
 $B agents | agent-add NAME | agent-rm NAME [--unassign]
 $B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)
 $B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW

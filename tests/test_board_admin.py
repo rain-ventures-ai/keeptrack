@@ -153,6 +153,48 @@ class OneFile(unittest.TestCase):
         self.assertEqual([], self.live()["assignees"])
         self.assertNotIn("bea", [m["github"] for m in self.data()["people"]])
 
+    def test_member_identity_emails_and_timezone(self):
+        """v28: a member record holds every email address the person uses and a time zone."""
+        run(kt.cmd_member_add, user="carol", name="Carol", email=["carol@work.example", "c@home.example"], timezone="Europe/London")
+        m = next(x for x in self.data()["people"] if x["github"] == "carol")
+        self.assertEqual((["carol@work.example", "c@home.example"], "Europe/London"), (m["emails"], m["timezone"]))
+        run(kt.cmd_member_set, user="carol", name=None, email=["C@HOME.example", "alias@work.example"],
+            remove_email=["carol@work.example"], timezone=None)
+        m = next(x for x in self.data()["people"] if x["github"] == "carol")
+        self.assertEqual(["c@home.example", "alias@work.example"], m["emails"])   # case-insensitive, no duplicates
+        self.assertIn("not an email", refuses(self, kt.cmd_member_set, user="carol", name=None, email=["nope"], remove_email=[], timezone=None))
+        self.assertIn("not a time zone", refuses(self, kt.cmd_member_set, user="carol", name=None, email=[], remove_email=[], timezone="Mars/Base"))
+        self.assertIn("has no email", refuses(self, kt.cmd_member_set, user="carol", name=None, email=[], remove_email=["x@y.example"], timezone=None))
+        run(kt.cmd_member_set, user="carol", name=None, email=[], remove_email=["c@home.example", "alias@work.example"], timezone="")
+        m = next(x for x in self.data()["people"] if x["github"] == "carol")
+        self.assertEqual({"github": "carol", "name": "Carol"}, m)                  # cleared fields leave no empty keys
+        out = run(kt.cmd_members)
+        self.assertNotIn("carol@", out)
+
+    def test_me_shows_identity_and_what_is_missing(self):
+        os.environ["BOARD_USER"] = "osouthgate"
+        out = run(kt.cmd_me)
+        self.assertIn("no email addresses on record", out)
+        self.assertIn("member-set osouthgate", out)
+        run(kt.cmd_member_set, user="osouthgate", name=None, email=["o@work.example"], remove_email=[], timezone="Europe/London")
+        out = run(kt.cmd_me)
+        self.assertIn("o@work.example", out)
+        self.assertNotIn("complete it", out)
+        self.assertIn("upgrade owner", refuses(self, kt.cmd_member_rm, user="osouthgate", unassign=True))   # identity can't be deleted
+
+    def test_doctor_member_identity(self):
+        d = self.data()
+        d["people"][0]["emails"] = ["ok@x.example", "broken"]
+        write(self.file, d)
+        issues, _, code = kt.doctor_board(False)
+        self.assertIn("MEMBER_EMAIL", {x["code"] for x in issues})
+        d["people"][0]["emails"] = ["ok@x.example"]
+        d["settings"]["modes"] = ["tasks"]                                           # CRM off: no nudge to add a CRM person
+        write(self.file, d)
+        issues, _, _ = kt.doctor_board(False)
+        self.assertNotIn("MEMBER_NO_PERSON", {x["code"] for x in issues})
+        self.assertNotIn("MEMBER_EMAIL", {x["code"] for x in issues})
+
     def test_member_with_active_claim_is_kept(self):
         d = self.data()
         d["tasks"][1]["claim"] = {"on_behalf_of": "bea", "status": "running", "agent": "claude"}

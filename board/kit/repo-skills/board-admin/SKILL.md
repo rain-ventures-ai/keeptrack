@@ -42,6 +42,7 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | Reorder columns | `column-move review --before todo` or `--after todo` |
 | Remove a column | `column-rm review --move-to todo` (refuses while it has cards unless `--move-to` is given; never `todo`, `in-progress`, `done` or the last column) |
 | Add / rename a board member | `member-add sam --name "Sam"`, `member-set sam --name "Sam K"` |
+| A member's email addresses and time zone | `member-set sam --email sam@work.example --email sam@home.example --remove-email old@x --timezone Europe/London`; `me` shows yours |
 | Remove a board member | `member-rm sam` (refuses with open tasks; `--unassign` takes them off). Never the upgrade owner |
 | List / add / remove an agent name | `agents`, `agent-add codex`, `agent-rm codex` (refuses with open tasks or a claim; `--unassign` takes it off open tasks) |
 | Delete a card or CRM person made by mistake | `task-rm '#12' --yes`, `person-rm "Cat" --yes` (refuse without `--yes`; ask first, it cannot be undone from the CLI). A finished task goes done and archive instead; a person who is not a fit goes to Lost |
@@ -55,7 +56,8 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
   Say what it touches (the commands print counts) and wait for a yes. Adding a label or retitling one card needs no ask.
 - A refusal is information, not an obstacle: it names what still depends on the thing. Fix that, or ask. Do not work
   round it by editing JSON.
-- Board members are GitHub users who can be assigned work. CRM people (`person-add`) are separate records.
+- Board members are GitHub users who can be assigned work, and their record is their identity (name, emails, time
+  zone). CRM people (`person-add`) are separate, optional records; turning the CRM off never touches a member.
 - Renames reach archived items too (`archive/<year>.json` is rewritten in the same save). A client's working folder (for example `clients/<name>/` in the repo) is not renamed: say so.
 - Columns can't be changed from the CLI yet; tell the person and leave them as they are.
 - After a structural change, run `python3 board/keeptrack.py doctor` and report anything it finds.

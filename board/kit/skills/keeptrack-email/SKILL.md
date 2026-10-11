@@ -14,6 +14,8 @@ least-privilege routine, incremental checkpoint, last-run log and copyable promp
 ## Match safely
 
 1. Find the board using the main Keeptrack skill, then list the current people and every labelled email address.
+   Run `keeptrack.py me` for the owner's own addresses: mail between the owner's own addresses is not a contact touch,
+   and "sent" means sent from any of them.
 2. Use the time window the person supplied. If a one-off request has no window, ask for one; never search the entire
    mailbox silently. Recurring runs use the checkpoint rules in the routine guide.
 3. Search sent and received mail by exact address. Read headers first. Read message text only for an already matched

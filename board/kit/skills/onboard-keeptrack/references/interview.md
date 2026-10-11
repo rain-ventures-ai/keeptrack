@@ -1,5 +1,8 @@
 # The interview
 
+Before these, the owner's own name, email addresses and time zone go on their member record (SKILL.md, "Who you are,
+first"); they are not interview rows.
+
 Ask one question at a time. Accept short answers. "Skip", "later", "don't know" and "just do it" are good answers: use the default and go on. Never ask a question that an earlier answer already answered.
 
 | # | Question | Why | Default if skipped |

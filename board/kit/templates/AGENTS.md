@@ -6,7 +6,7 @@ This repo holds the task board `{repo}` (`board/`). People on the board: {people
 1. **Never edit the JSON files under `board/` by hand.** Use `python3 board/keeptrack.py ...`. It re-reads the latest board and merges on conflict, so humans editing in the browser are never overwritten. If someone changed the same field first, it stops, writes nothing and exits with status 3: read the board again and redo the change only if it still applies.
 2. **Only work on tasks assigned to the human you act for.** Claims on other people's tasks are refused unless a human tells you to `--force`.
 3. **Claim before you start, heartbeat while you work, finish or release when you stop.** A claim with no heartbeat for 30 minutes shows as STALE so people can spot a stuck session.
-4. **Keep confidential detail out of task cards.** Link to the file or Drive document instead.
+4. **Write cards a person can act on later, and keep confidential detail out of them.** Give the what, why, next step and links (`--details`, `link`, `comment`); link to the file or Drive document for anything confidential.
 5. **Do not send anything outside the repo** (emails, messages, quotes to a client) without the human's explicit say-so.
 
 ## Board workflow
@@ -32,6 +32,8 @@ python3 board/keeptrack.py history <id>                                         
 python3 board/keeptrack.py list --attention                                        # stale / stuck / blocked claims
 ```
 Auth: `gh` logged in with access to this repo, or (cloud sandboxes, CI, no `gh`) set `BOARD_TOKEN` to a fine-grained token with Contents: Read and write on this repo; `keeptrack.py` then calls the GitHub API directly.
+
+**Who you act for:** `python3 board/keeptrack.py me` shows their member record: name, GitHub login, every email address they use and their time zone. If something is missing, ask them once and save it (`member-set <user> --email .. --email .. --timezone Area/City`). Read dates and times in their zone.
 
 **Checklists and history:** a task can carry a to-do checklist (shown as `[3/8]` in `list`). Work through it and tick each item with `todo-done` the moment it is finished; do not batch ticks at the end. Every claim, status change, progress note, tick and move is logged automatically in the card's history.
 
