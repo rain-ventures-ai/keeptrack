@@ -3005,7 +3005,7 @@ if (typeof window !== 'undefined') (() => {
     $('dlgSettings').scrollTop = 0;
     if (tab === 'prefs') renderAlerts();
     if (tab === 'board') renderBoardTab();
-    if (tab === 'conn') { renderBoards(); showEdit(!!cfg().repo && !cfg().token && !DEMO); autoCheck(); }
+    if (tab === 'conn') { renderBoards(); showEdit(!!cfg().repo && !cfg().token && !DEMO && !SETUP); autoCheck(); }   // ?setup: never open the old board's form
     if (tab === 'agents') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key');
       const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); $('sUseEmail').checked = !!LS.get('kb_email_sync'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
       $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
@@ -3092,6 +3092,7 @@ if (typeof window !== 'undefined') (() => {
     st.textContent = '';
     if (DEMO) st.append(ui.banner({ tone: 'info', icon: 'lock', text: 'This is a read-only demo board with invented data. There is nothing to connect here, and nothing you do is saved.', action: { label: 'Create my own board', onClick: () => { location.href = location.pathname + '?setup'; } } }));
     else if (setup) st.append(ui.banner({ tone: 'info', icon: 'compass', text: 'No board yet. Add one below: connect a board you already have, or make a new one. Each step checks itself.' }));
+    else if (SETUP) st.append(ui.banner({ tone: 'info', icon: 'compass', text: `You're setting up a new board. This browser's current board is ${c.repo}; the settings below are for that board, not the new one. To make the new board, close Settings and follow the steps on the page.`, action: { label: `Back to ${c.repo}`, onClick: () => { location.href = boardUrl(); } } }));
     [...st.querySelectorAll('.ui-banner')].forEach(b => b.setAttribute('role', 'status'));
     $('bThis').hidden = !!DEMO; $('secHealth').hidden = !!DEMO || setup; $('bThisInfo').hidden = setup; $('sForgetRow').hidden = !c.token;
     $('bEditBtn').textContent = setup ? 'Enter the details by hand' : 'Change connection';
