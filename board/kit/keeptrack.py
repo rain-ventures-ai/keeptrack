@@ -294,11 +294,16 @@ def ensure_local_dir(path):
     if os.path.islink(d):
         raise OSError(f"{d} is a symlink; Keeptrack will not write through it")
     os.makedirs(d, exist_ok=True)
-    tracked = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True).stdout.strip()
-    if tracked:
-        raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
-    if os.path.basename(d) in CONFIG_DIRS and not os.path.lexists(os.path.join(d, ".gitignore")):
-        write_private(os.path.join(d, ".gitignore"), "# personal Keeptrack settings for this project; never committed\n*\n")
+    if os.path.basename(d) in CONFIG_DIRS:   # Keeptrack's own folder: nothing in it may be committed
+        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True).stdout.strip()
+        if tracked:
+            raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
+        if not os.path.lexists(os.path.join(d, ".gitignore")):
+            write_private(os.path.join(d, ".gitignore"), "# personal Keeptrack settings for this project; never committed\n*\n")
+    else:   # a board repo's root (.board-claim.json): the file itself must not be committed (the kit's gitignore lists it)
+        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", os.path.basename(path)], capture_output=True, text=True).stdout.strip()
+        if tracked:
+            raise OSError(f"{path} is committed to git; Keeptrack keeps its personal files out of git (add it to .gitignore)")
 
 
 def write_private(path, text):
@@ -1341,8 +1346,8 @@ def session_id(args):
     local record keeps it for the later done or release)."""
     given = args.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")
     if given and not usable_session(given):
-        print("note: that session id is public (it is in the session link) or a placeholder prefix; this run's claim uses a random id, "
-              "kept in the local claim record", file=sys.stderr)
+        print("note: that session id is public (it is in the session link) or a placeholder prefix; this run's claim uses this clone's "
+              "recorded session or a random id, kept in the local claim record", file=sys.stderr)
     return usable_session(given) or recorded_session() or uuid.uuid4().hex[:8]
 
 
@@ -1619,8 +1624,12 @@ def cmd_heartbeat(a):
 
 
 def drop_claim_file(task_id=None):
-    """Remove the local claim record. With task_id, only when the record is for that card: releasing someone else's
-    dead run must not forget the card this clone is working on."""
+    """Forget the card in the local claim record. With task_id, only when the record is for that card (releasing
+    someone else's dead run must not forget the card this clone is working on), and the clone keeps its session
+    (one clone is one session: its other claimed cards stay its own). Without task_id the record goes entirely.
+    A --file board writes no record, so it never touches one either."""
+    if FILE:
+        return
     try:
         if task_id:
             try:
@@ -1630,6 +1639,8 @@ def drop_claim_file(task_id=None):
                 info = None
             if isinstance(info, dict) and info.get("id") and info.get("id") != task_id:
                 return
+            if isinstance(info, dict) and usable_session(info.get("session")):
+                write_private(CLAIM_FILE, json.dumps({"session": info["session"]})); return
         os.remove(CLAIM_FILE)
     except OSError:
         pass
@@ -1854,8 +1865,8 @@ def cmd_auto_heartbeat(a):
         if time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
         info = json.load(open(CLAIM_FILE))
-        if info.get("attended"):
-            return  # a person drives this session: no automatic heartbeats
+        if info.get("attended") or not info.get("id"):
+            return  # a person drives this session, or no card is active: no automatic heartbeats
         os.utime(CLAIM_FILE)  # throttle even if the network call fails
 
         def fn(data):

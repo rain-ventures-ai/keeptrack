@@ -1608,7 +1608,7 @@ class ClaimLifecycle(unittest.TestCase):
         self.assertIn("not this session's", self.refusal(self.beat, 2))     # but the record is for card 1 only
         self.done(1)
         self.assertEqual(self.card(1)["column"], "done")
-        self.assertFalse(os.path.exists(self.claim_file))     # done drops the record, so the next call owns nothing
+        self.assertTrue(os.path.exists(self.claim_file))      # a --file board never touches the record
         self.claim(3, "s3")
         self.assertIn("not this session's", self.refusal(self.release, 3))
 
@@ -1683,7 +1683,7 @@ class ClaimLifecycle(unittest.TestCase):
         self.assertIsNone(self.card(2)["claim"])
         self.assertEqual(json.load(open(self.claim_file))["id"], "t_c1")   # still remembered
         self.done(1, session="s1")
-        self.assertFalse(os.path.exists(self.claim_file))
+        self.assertTrue(os.path.exists(self.claim_file))                 # a --file board never touches the record
 
     def test_a_refusal_never_prints_the_owning_session_id(self):
         self.claim(1, "secret-s1")
@@ -1755,6 +1755,41 @@ class ClaimLifecycle(unittest.TestCase):
         clashes = kt.merge3(base, mine, theirs)["clashes"]
         text = kt.describe_clashes(clashes)
         self.assertTrue(clashes); self.assertNotIn("their-secret-2", text); self.assertNotIn("mine-secret-1", text)
+
+    def test_the_claim_record_is_written_at_a_board_repos_root(self):
+        repo = os.path.join(self.dir.name, "repo"); os.makedirs(os.path.join(repo, "board"))
+        write(os.path.join(repo, "board", "tasks.json"), {})
+        g = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *a],
+                                      cwd=repo, capture_output=True, text=True, check=True)
+        g("init", "-q"); g("add", "-A"); g("commit", "-qm", "init")   # a board repo's root always holds committed files
+        kt.CLAIM_FILE = os.path.join(repo, ".board-claim.json")
+        kt._PENDING_CLAIM["rec"] = {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False}
+        old = kt.FILE; kt.FILE = None
+        try:
+            kt.write_claim_record()
+        finally:
+            kt.FILE = old
+        self.assertEqual(json.load(open(kt.CLAIM_FILE))["session"], "s1")
+        g("add", "-f", ".board-claim.json"); g("commit", "-qm", "oops")   # once committed, the kit refuses to write it
+        with self.assertRaises(OSError):
+            kt.ensure_local_dir(kt.CLAIM_FILE)
+        cfg = os.path.join(repo, ".keeptrack"); os.makedirs(cfg); write(os.path.join(cfg, "x.json"), {}); g("add", "-f", ".keeptrack/x.json"); g("commit", "-qm", "cfg")
+        with self.assertRaises(OSError):                                 # Keeptrack's own folder may hold nothing committed
+            kt.ensure_local_dir(os.path.join(cfg, "claim.json"))
+
+    def test_finishing_one_card_keeps_the_clones_session_for_its_other_cards(self):
+        self.claim(1, "s1"); self.claim(2, "s1")
+        write(self.claim_file, {"id": "t_c2", "session": "s1"})          # the record names the card claimed last
+        old = kt.FILE; kt.FILE = None                                       # what done/release do to the record on a real board
+        try:
+            kt.drop_claim_file("t_c3"); self.assertEqual(json.load(open(self.claim_file))["id"], "t_c2")   # another card: untouched
+            kt.drop_claim_file("t_c2")
+        finally:
+            kt.FILE = old
+        self.assertEqual(json.load(open(self.claim_file)), {"session": "s1"})   # the card is forgotten, the session kept
+        self.beat(1); self.done(1)                                          # card 1 is still this clone's
+        self.assertEqual(self.card(1)["column"], "done")
+        self.assertEqual(kt.recorded_session("t_c1"), ""); self.assertEqual(kt.recorded_session(), "s1")
 
     def test_unclaimed_cards_need_no_ownership(self):
         self.release(1, session="s1")
