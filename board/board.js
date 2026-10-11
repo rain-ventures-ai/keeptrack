@@ -222,6 +222,7 @@ if (typeof window !== 'undefined') (() => {
   // Board actions, defined once: the header buttons (wide screens), the ••• More menu (narrow headers) and the dock's Menu are built
   // from this list. A menu item clicks the header button with the same id, so each action is wired in one place.
   const HEAD_ACTIONS = [
+    { id: 'btnUndo', icon: 'undo-2', menu: 'Undo last change', title: 'Nothing to undo' },
     { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
     { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
     { id: 'btnHelp', icon: 'circle-help', short: 'Help', menu: 'Help', title: 'Help' },
@@ -231,6 +232,7 @@ if (typeof window !== 'undefined') (() => {
   (() => {
     const utils = document.querySelector('header .hutils');
     if (utils) HEAD_ACTIONS.filter(a => a.id).forEach(a => {
+      if ($(a.id)) return;   // Undo is already in the wide header; its menu copies still come from HEAD_ACTIONS.
       const b = el('button'); b.type = 'button'; b.id = a.id; b.title = a.title; b.setAttribute('aria-label', a.aria || a.title);
       const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); utils.append(b);
     });
@@ -784,7 +786,9 @@ if (typeof window !== 'undefined') (() => {
   const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   function syncUndo() {
     const top = undoStack[undoStack.length - 1];
-    ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { const b = $(id); if (!b) return; b.disabled = !top || busy || ro; b.title = top ? `Undo: ${top.message} (Ctrl/Cmd+Z)` : 'Nothing to undo'; });
+    const disabled = !top || busy || ro, title = top ? `Undo: ${top.message} (Ctrl/Cmd+Z)` : 'Nothing to undo';
+    [...['btnUndo', 'pUndo', 'cUndo'].map($), ...document.querySelectorAll('[data-head-action="btnUndo"]')]
+      .filter(Boolean).forEach(b => { b.disabled = disabled; b.title = title; });
   }
   function rememberUndo(before, after, message) {
     if (sameJson(before, after)) return;
@@ -1603,7 +1607,7 @@ if (typeof window !== 'undefined') (() => {
         : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
       { title: 'Find anything', text: 'Search people, tasks, notes and messages. On a computer, press / from anywhere.', at: [dock ? '#dock [data-head-action="btnSearch"]' : '#btnSearch'] },
       { title: 'Filters', text: 'Show one client, one person, or only what needs attention. The number shows how many filters are on.', at: ['#btnFilter'] },
-      { title: 'Undo', text: 'After every change, a message with Undo appears for a few seconds. Ctrl+Z (\u2318Z on a Mac) works too.', at: dock ? [] : ['#btnUndo'] },
+      { title: 'Undo', text: dock ? 'After a change, tap Undo in the message. You can also use Menu \u2192 Undo last change.' : 'After every change, a message with Undo appears for a few seconds. The Undo button and Ctrl+Z (\u2318Z on a Mac) work too.', at: [dock ? '#dockMenu' : '#btnUndo'] },
       $('boardBtn').dataset.status === 'err' && { title: 'Not saving yet', text: 'A red dot here means changes are not saving to GitHub. Open Settings \u2192 Boards to connect, and Settings \u2192 Checks to see what is wrong.', at: ['#boardBtn'] },
       { title: 'Menu', text: 'Settings, help, refresh and this tour. That\'s it: you\'re ready.', at: dock ? ['#dockMenu'] : ['#btnMore', '#btnSettings'] }
     ].filter(Boolean);
