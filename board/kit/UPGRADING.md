@@ -25,6 +25,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v30 (schema 4)
+Security fixes. On a split board, card, person and project ids name files (`cards/<id>.json`). An id is now used as a file name only if it is a plain token (letters, digits, `-`, `_`); anything else, such as an id containing `../` written into the board by someone with access to the repo, stops the save before anything is written, and `doctor` reports it as `BAD_ID`. Local reads and writes also refuse any path whose real location is outside the board folder, so a `..` or a symlink committed to the board repo (say `cards` -> a folder elsewhere) is never followed. The session-start `here` line strips control characters from the project name and from error text.
+- Run `kit-update` only. There is no board-data migration; ids keeptrack and the web board create already pass.
+- Check: `doctor` shows no `BAD_ID`.
 ### v29 (schema 4)
 The agent claim limit (v27) now holds when sessions race: a claim under a limit saves through a commit that fails if anyone else saved since it read the board, and a claim that loses that race is checked again on the newer board instead of being merged in. A `max_agent_claims` value that is not a whole number 1-100 is ignored and `doctor` warns (`SETTINGS`), so a bad hand edit can't stop every claim. Member names, addresses and time zones are printed without control characters; `init --email/--timezone` says so when it keeps an existing board.
 - Run `kit-update` only. There is no board-data migration.

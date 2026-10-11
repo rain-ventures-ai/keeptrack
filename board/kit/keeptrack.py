@@ -678,7 +678,26 @@ def _remote_path(rel):
 
 
 def _local_path(rel):
-    return os.path.join(os.path.dirname(os.path.abspath(FILE)), *rel.split("/"))
+    # A file name from board data, or a symlink committed to the board repo, must never lead outside the board folder:
+    # compare real paths, so a link (cards -> ~/somewhere) is caught for reads and writes alike.
+    base = os.path.realpath(os.path.dirname(os.path.abspath(FILE)))
+    path = os.path.normpath(os.path.join(base, *rel.split("/")))
+    if os.path.commonpath([base, os.path.realpath(path)]) != base:
+        sys.exit(f"refused: board/{rel} is outside the board folder (a '..' or a symlink); nothing was read or written")
+    return path
+
+
+# Item ids name files on split boards (cards/<id>.json, ...). Board data can come from anyone who can write the repo,
+# so an id is used as a file name only if it is a plain token: never a path.
+SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def _item_file(folder, item):
+    ident = item.get("id") if isinstance(item, dict) else None
+    if not isinstance(ident, str) or not SAFE_ID.fullmatch(ident):
+        sys.exit(f"refused: {folder[:-1]} id {ident!r} can't be a file name (letters, digits, - and _ only); nothing was "
+                 "written. Run keeptrack.py doctor, and fix the item in the web board or by hand in git.")
+    return f"{folder}/{ident}.json"
 
 
 def _blob_cache_file(sha):
@@ -714,18 +733,17 @@ def _wanted_rel(rel):
 
 def _local_snapshot():
     files = {}
-    board_dir = os.path.dirname(os.path.abspath(FILE))
     for rel in ["tasks.json"]:
         path = _local_path(rel)
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 files[rel] = {"text": f.read(), "sha": None, "size": os.path.getsize(path)}
     for folder in ("cards", "people", "projects", "archive"):
-        path = os.path.join(board_dir, folder)
+        path = _local_path(folder)
         if not os.path.isdir(path):
             continue
         for name in sorted(os.listdir(path)):
-            full = os.path.join(path, name)
+            full = _local_path(f"{folder}/{name}")
             if os.path.isfile(full):
                 rel = f"{folder}/{name}"
                 with open(full, encoding="utf-8", errors="replace") as f:
@@ -871,11 +889,11 @@ def _desired_files(data, state, extra=None):
     desired_obj = {"tasks.json": root}
     if split:
         for t in data.get("tasks", []):
-            desired_obj[f"cards/{t['id']}.json"] = t
+            desired_obj[_item_file("cards", t)] = t
         for p in data.get("contacts", []):
-            desired_obj[f"people/{p['id']}.json"] = p
+            desired_obj[_item_file("people", p)] = p
         for pr in data.get("projects", []):
-            desired_obj[f"projects/{pr['id']}.json"] = pr
+            desired_obj[_item_file("projects", pr)] = pr
     desired = {}
     for rel, obj in desired_obj.items():
         old = state.get("files", {}).get(rel)
@@ -1890,6 +1908,8 @@ def doctor_board(fix=False):
     for kind, items in (("task", tasks), ("person", people), ("project", projects)):
         for item in items:
             ident = item.get("id")
+            if ident is not None and not (isinstance(ident, str) and SAFE_ID.fullmatch(ident)):
+                problem("BAD_ID", "tasks.json", f"{kind.title()} id {ident!r} can't be a file name (letters, digits, - and _ only).")
             if ident in ids:
                 duplicate_ids = True
                 problem("DUPLICATE_ID", "tasks.json", f"{kind.title()} id {ident!r} is also used by {ids[ident]}.")
@@ -2429,7 +2449,8 @@ def cmd_here(a):
         if not a.hook:
             raise
         if REPO:
-            print(f"Keeptrack: this repo is tracked on the board {REPO}, but it could not be read just now ({e.code}).")
+            why = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", str(e.code))[:160]   # error text can quote board data
+            print(f"Keeptrack: this repo is tracked on the board {REPO}, but it could not be read just now ({why}).")
     except Exception as e:   # a hook must never break the session
         if not a.hook:
             raise
@@ -2452,7 +2473,7 @@ def _here(a):
     data, _ = load()
     user = os.environ.get("BOARD_USER") or default_user()
     pr = find_project(data, DEFAULT_PROJECT, allow_missing=True) if DEFAULT_PROJECT else None
-    scope = f", project {pr['name']} ({pr['id']})" if pr else (f", project {DEFAULT_PROJECT} (NOT FOUND on the board)" if DEFAULT_PROJECT else "")
+    scope = (", project " + re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", f"{pr.get('name')} ({pr.get('id')})")[:120]) if pr else (f", project {DEFAULT_PROJECT} (NOT FOUND on the board)" if DEFAULT_PROJECT else "")
     print(f"Keeptrack: this repo is tracked on the board {REPO}{scope}, for @{user}. Setting: {where} (personal, not in git).")
     me = member_record(data, user)
     if me:

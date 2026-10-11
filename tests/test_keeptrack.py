@@ -235,6 +235,33 @@ class SplitStorage(unittest.TestCase):
         v4 = kt.load_board()
         self.assertEqual(without_v4_fields(v3), without_v4_fields(v4))
 
+    def test_an_id_that_is_a_path_never_becomes_a_file_outside_the_board(self):
+        # Board data comes from anyone who can write the repo: a card whose id is a path must not make keeptrack write
+        # outside the board folder on another member's machine.
+        path = os.path.join(self.board_dir, "cards", "t_first.json")
+        card = read_json(path); card["id"] = "../../escape"; write(path, card)
+        before = tree_bytes(self.temp.name)
+        with self.assertRaises(SystemExit) as e:
+            self.quiet(kt.cmd_add, Args(title="New", column="todo", client=None, priority="medium", due=None,
+                                        label=None, assign=None, details=None, todo=None))
+        self.assertIn("can't be a file name", str(e.exception))
+        self.assertEqual(before, tree_bytes(self.temp.name))
+        self.assertFalse(os.path.exists(os.path.join(self.temp.name, "escape.json")))
+        with self.assertRaises(SystemExit):
+            kt._local_path("cards/../../../x.json")
+        self.assertTrue(kt._local_path("cards/t_ok.json").endswith(os.path.join("board", "cards", "t_ok.json")))
+
+    def test_a_symlinked_folder_is_never_followed(self):
+        # A board repo can carry a committed symlink: cards -> a folder elsewhere on the member's machine.
+        outside = os.path.join(self.temp.name, "outside"); os.makedirs(outside)
+        shutil.move(os.path.join(self.board_dir, "cards"), os.path.join(outside, "cards"))
+        os.symlink(os.path.join(outside, "cards"), os.path.join(self.board_dir, "cards"))
+        before = tree_bytes(outside)
+        with self.assertRaises(SystemExit) as e:
+            kt.load_board()
+        self.assertIn("outside the board folder", str(e.exception))
+        self.assertEqual(before, tree_bytes(outside))
+
     def test_add_changes_settings_and_one_new_card(self):
         before = tree_bytes(self.board_dir)
         self.quiet(kt.cmd_add, Args(title="New", column="todo", client=None, priority="medium", due=None,
