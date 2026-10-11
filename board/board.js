@@ -115,7 +115,8 @@ if (typeof window !== 'undefined') (() => {
   const qv = v => encodeURIComponent(v).replace(/%2F/gi, '/');   // keep owner/name and board/tasks.json readable
   const boardUrl = () => `${location.pathname}?repo=${qv(LS.get('kb_repo'))}&branch=${qv(LS.get('kb_branch', 'master'))}&path=${qv(LS.get('kb_path', 'board/tasks.json'))}`;
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
-    const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {}); }   // also drop the cached copy of its cards
+    const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
+    try { Object.keys(localStorage).filter(k => (k.startsWith(`kb_context:${repo}:`) || k.startsWith(`kb_drafts:${repo}:`))).forEach(k => localStorage.removeItem(k)); } catch {} }   // also drop cached cards, local drafts, context and Undo
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
   (() => { const q = new URLSearchParams(location.search), repo = q.get('repo'), over = {};
     ['branch', 'path'].forEach(k => { const v = q.get(k); if (v && /^[\w./-]+$/.test(v)) over[k] = v; });
@@ -123,6 +124,11 @@ if (typeof window !== 'undefined') (() => {
     if (repo && REPO_RE.test(repo) && cur && repo !== cur) activateBoard(repo, boardsMap()[repo] ? {} : over);
     else { if (repo && REPO_RE.test(repo) && !cur) LS.set('kb_repo', repo); Object.keys(over).forEach(k => { if (!LS.get('kb_' + k)) LS.set('kb_' + k, over[k]); }); }
     stashBoard(); })();
+  const boardStoreId = (c = cfg()) => `${c.repo}:${c.branch}:${c.path}`;
+  const localBoardJson = kind => { try { const x = JSON.parse(LS.get(`kb_${kind}:${boardStoreId()}`, '{}')); return x && typeof x === 'object' && !Array.isArray(x) ? x : {}; } catch { return {}; } };
+  const saveLocalBoardJson = (kind, value) => LS.set(`kb_${kind}:${boardStoreId()}`, JSON.stringify(value));
+  const boardContext = () => localBoardJson('context');
+  function saveBoardContext(patch) { if (SANDBOX || !cfg().repo) return; saveLocalBoardJson('context', { ...boardContext(), ...patch, at: nowIso() }); }
   // ---- move settings between browsers/devices: one pasteable code or a setup link (token included) --------------
   const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
@@ -222,6 +228,7 @@ if (typeof window !== 'undefined') (() => {
   // Board actions, defined once: the header buttons (wide screens), the ••• More menu (narrow headers) and the dock's Menu are built
   // from this list. A menu item clicks the header button with the same id, so each action is wired in one place.
   const HEAD_ACTIONS = [
+    { id: 'btnUndo', icon: 'undo-2', menu: 'Undo last change', title: 'Nothing to undo' },
     { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
     { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
     { id: 'btnHelp', icon: 'circle-help', short: 'Help', menu: 'Help', title: 'Help' },
@@ -231,6 +238,7 @@ if (typeof window !== 'undefined') (() => {
   (() => {
     const utils = document.querySelector('header .hutils');
     if (utils) HEAD_ACTIONS.filter(a => a.id).forEach(a => {
+      if ($(a.id)) return;   // Undo is already in the wide header; its menu copies still come from HEAD_ACTIONS.
       const b = el('button'); b.type = 'button'; b.id = a.id; b.title = a.title; b.setAttribute('aria-label', a.aria || a.title);
       const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); utils.append(b);
     });
@@ -438,7 +446,7 @@ if (typeof window !== 'undefined') (() => {
   }
   async function loadDemo() {   // the example boards in demo/<name>/tasks.json, served from the same site as this page
     try { const r = await fetch(`../demo/${DEMO}/tasks.json`, { cache: 'no-cache' }); if (!r.ok) throw new Error('demo ' + DEMO + ': ' + r.status);
-      state = normalise(demoShift(await r.json())); lastSyncOk = true; setStatus('Demo board (read-only)', 'ok'); applyRo(); render(); return true;
+      state = normalise(demoShift(await r.json())); lastSyncOk = true; setStatus('Demo board (read-only)', 'ok'); applyRo(); render(); setTimeout(restoreBoardContext, 30); return true;
     } catch (e) { console.error(e); setStatus('Could not load the demo board', 'err'); return false; }
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
@@ -454,7 +462,7 @@ if (typeof window !== 'undefined') (() => {
         if (isSplit(raw)) { ro = 'public'; applyRo(); setStatus('This board needs a token to read', 'err'); const b = $('board'); b.textContent = ''; b.append(el('div', 'empty', 'This board needs a token to read')); return false; }
         const isDemo = fileDemo = !!raw.demo_base; raw = demoShift(raw);
         newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo();
-        setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
+        setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true; }
       if (ro === 'public') { ro = ''; applyRo(); }
     }
     if (!c.token) { setStatus('Not connected', 'err'); if ($('board').className !== 'v-welcome') render(); if (c.repo) noTokenBox(); else if ($('board').className !== 'v-welcome') renderWelcome(); return false; }
@@ -466,7 +474,7 @@ if (typeof window !== 'undefined') (() => {
         if (!isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
         if (got.unchanged) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); return true; }
         const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); state = normalise(got.data);
-        if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true;
+        if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
       }
       const res = await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
@@ -480,8 +488,8 @@ if (typeof window !== 'undefined') (() => {
       else if (ro === 'demo') { ro = LS.get(roKey()) ? 'token' : ''; applyRo(); }
       if (isSplit(raw)) { const got = await splitSnapshot(true); if (stale()) return false; splitMeta = got.meta; raw = got.data; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); }
       else splitMeta = null;
-      newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkPublic(); lastSyncOk = true; initSeen(); setTimeout(openFromHash, 30);
-      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); return true;
+      newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkPublic(); lastSyncOk = true; initSeen();
+      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
     } catch (e) { console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
 
@@ -780,11 +788,22 @@ if (typeof window !== 'undefined') (() => {
 
   // Undo restores only the fields touched by a saved operation. Unrelated newer work is left alone, and mutate's
   // normal conflict screen still protects a field if somebody else changed that same field after our save.
-  const undoStack = [], UNDO_LIMIT = 20;
+  const undoStack = [], UNDO_LIMIT = 20, UNDO_PERSIST_LIMIT = 5; let undoPersist = Promise.resolve();
+  const undoKey = () => 'kb_undo:' + boardStoreId();
+  const persistUndo = () => { if (SANDBOX || !cfg().repo) return Promise.resolve(); const saved = clone(undoStack.slice(-UNDO_PERSIST_LIMIT)); return undoPersist = undoPersist.then(() => idb.set(undoKey(), saved)); };
+  async function restoreUndo() {
+    if (SANDBOX || !cfg().repo) return;
+    const saved = await idb.get(undoKey()); if (!Array.isArray(saved)) return;
+    const board = [cfg().repo, cfg().branch, cfg().path].join('|');
+    saved.filter(x => x && x.board === board && x.before && x.after && typeof x.message === 'string').slice(-UNDO_PERSIST_LIMIT).forEach(x => undoStack.push(x));
+    syncUndo();
+  }
   const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   function syncUndo() {
     const top = undoStack[undoStack.length - 1];
-    ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { const b = $(id); if (!b) return; b.disabled = !top || busy || ro; b.title = top ? `Undo: ${top.message} (Ctrl/Cmd+Z)` : 'Nothing to undo'; });
+    const disabled = !top || busy || ro, title = top ? `Undo: ${top.message} (Ctrl/Cmd+Z)` : 'Nothing to undo';
+    [...['btnUndo', 'pUndo', 'cUndo'].map($), ...document.querySelectorAll('[data-head-action="btnUndo"]')]
+      .filter(Boolean).forEach(b => { b.disabled = disabled; b.title = title; });
   }
   function rememberUndo(before, after, message) {
     if (sameJson(before, after)) return;
@@ -793,7 +812,7 @@ if (typeof window !== 'undefined') (() => {
     // it, undoing "Add task" found the card changed on GitHub and asked about a conflict that was not there.
     const saved = clone(after); normalise({ settings: saved.settings, people: saved.people, columns: saved.columns, tasks: saved.tasks, contacts: saved.contacts, projects: saved.projects, next_num: saved.next_num });
     const entry = { before: clone(before), after: saved, message, board: [cfg().repo, cfg().branch, cfg().path].join('|') };
-    undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); offerUndo(message, entry);
+    entry.at = nowIso(); undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); persistUndo(); syncUndo(); offerUndo(message, entry);
   }
   // After every saved change, a short toast with Undo (ui.toast with an action; it sits above the dock).
   let undoToast = null, undoAt = 0;
@@ -835,11 +854,11 @@ if (typeof window !== 'undefined') (() => {
     if (target && undoStack[undoStack.length - 1] !== target) {   // a newer change was saved after the one this toast offered to undo
       toast(undoStack.includes(target) ? 'A newer change was saved since; press Ctrl+Z to undo the latest.' : 'That change was already undone.'); return; }
     const entry = undoStack.pop(); if (!entry) { toast('Nothing to undo.'); return; }   // taken off now, so a second Ctrl+Z undoes the one before
-    if (entry.board !== [cfg().repo, cfg().branch, cfg().path].join('|')) { undoStack.length = 0; syncUndo(); toast('Nothing to undo on this board.'); return; }
-    syncUndo();
+    if (entry.board !== [cfg().repo, cfg().branch, cfg().path].join('|')) { undoStack.length = 0; persistUndo(); syncUndo(); toast('Nothing to undo on this board.'); return; }
+    persistUndo(); syncUndo();
     const ids = KINDS.flatMap(k => [...new Set([...byId(entry.before, k).keys(), ...byId(entry.after, k).keys()])].filter(id => !sameJson(byId(entry.before, k).get(id), byId(entry.after, k).get(id))));
     const ok = await mutate(n => applyInverse(n, entry), `Undo: ${entry.message}`, ids, entry.after, { remember: false });
-    if (ok) toast(`Undid: ${entry.message}`); else { undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); }   // not saved: it can still be undone
+    if (ok) toast(`Undid: ${entry.message}`); else { undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); persistUndo(); syncUndo(); }   // not saved: it can still be undone
   }
   // In-page confirmations (ui.confirm; never the browser's blocking confirm()). body: a string or a list of paragraphs.
   const UNDO_HINT = 'This saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.';
@@ -1550,9 +1569,9 @@ if (typeof window !== 'undefined') (() => {
   setInterval(() => { if ($('dlgCard').open && !busy && !document.hidden && lastSyncOk) load(true); }, 10000);   // near-live while a conversation is open (304s are free)
 
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
-  // Today is the home page: a new visit starts there. Within one tab the view survives reloads (app updates, refresh).
+  // Each board remembers its last view in this browser. sessionStorage still wins while Back/Forward is active in one tab.
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
-  let view = SS.get('kb_view') || 'today'; if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity'].includes(view)) view = 'today';
+  let view = SS.get('kb_view') || boardContext().view || 'today'; if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity'].includes(view)) view = 'today';
   // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
   // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
   const VIEW_GROUPS = [
@@ -1575,7 +1594,7 @@ if (typeof window !== 'undefined') (() => {
   // Each view you switch to is a step in the browser's history, so Back and Forward move between views (and back out of a
   // card to the view it was opened from). fromHistory: the switch came from Back/Forward, so it adds no new step.
   const setView = (v, fromHistory) => {
-    const was = view; view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); render();
+    const was = view; view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); saveBoardContext({ view: v }); render();
     if (fromHistory || v === was) return;
     const push = () => { try { history.pushState({ kbView: v }, '', location.pathname + location.search); } catch {} };
     if (backPending) backPending.then(push); else push();   // a dialog that just closed is still taking its own step off
@@ -1613,7 +1632,7 @@ if (typeof window !== 'undefined') (() => {
         : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
       { title: 'Find anything', text: 'Search people, tasks, notes and messages. On a computer, press / from anywhere.', at: [dock ? '#dock [data-head-action="btnSearch"]' : '#btnSearch'] },
       { title: 'Filters', text: 'Show one client, one person, or only what needs attention. The number shows how many filters are on.', at: ['#btnFilter'] },
-      { title: 'Undo', text: 'After every change, a message with Undo appears for a few seconds. Ctrl+Z (\u2318Z on a Mac) works too.', at: dock ? [] : ['#btnUndo'] },
+      { title: 'Undo', text: dock ? 'After a change, tap Undo in the message. You can also use Menu \u2192 Undo last change.' : 'After every change, a message with Undo appears for a few seconds. The Undo button and Ctrl+Z (\u2318Z on a Mac) work too.', at: [dock ? '#dockMenu' : '#btnUndo'] },
       $('boardBtn').dataset.status === 'err' && { title: 'Not saving yet', text: 'A red dot here means changes are not saving to GitHub. Open Settings \u2192 Boards to connect, and Settings \u2192 Checks to see what is wrong.', at: ['#boardBtn'] },
       { title: 'Menu', text: 'Settings, help, refresh and this tour. That\'s it: you\'re ready.', at: dock ? ['#dockMenu'] : ['#btnMore', '#btnSettings'] }
     ].filter(Boolean);
@@ -2109,16 +2128,44 @@ if (typeof window !== 'undefined') (() => {
   const linksText = ls => (ls || []).map(l => l.title && l.title !== l.url ? `${l.title} | ${l.url}` : l.url).join('\n');
   const contactsText = cs => (cs || []).map(c => [c.name, c.role, c.email, c.phone].join(' | ').replace(/( \| )+$/, '')).join('\n');
 
-  let fieldBase = { title: '', details: '' }, editingDesc = false, saveTimer = null;
+  let fieldBase = { title: '', details: '' }, editingDesc = false, saveTimer = null, titleSaving = false, activeDraft = { title: false, details: false };
   const autosize = ta => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 640) + 'px'; };
   const taskNow = () => state.tasks.find(x => x.id === editing);
-  const baseFor = key => { const b = clone(state), i = b.tasks.findIndex(x => x.id === editing); if (i >= 0) b.tasks[i][key] = fieldBase[key]; return b; };   // the text as it was when I started editing it
-  async function saveField(fn, msg, baseKey) {     // every field saves on its own (no Save button); conflicts are checked per field
-    const id = editing, sv = $('dSaved'); sv.textContent = 'Saving…'; sv.className = 'dsaved';
-    const ok = await mutate(fn, msg, [id], baseKey ? baseFor(baseKey) : null); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
-    clearTimeout(saveTimer); saveTimer = setTimeout(() => { sv.textContent = ''; }, 2500);
+  const drafts = () => localBoardJson('drafts');
+  function draftField(id, key) { const all = drafts(); return all[id] && all[id][key]; }
+  function saveDraft(id, key, base, value) {
+    if (SANDBOX || !id) return; const all = drafts(); if (!all[id]) all[id] = {};
+    all[id][key] = { base, draft: value, at: nowIso() }; saveLocalBoardJson('drafts', all);
   }
-  const edit = (id, f, msg, baseKey) => saveField(n => { const t = n.tasks.find(x => x.id === id); if (t) { f(t, n); stamp(t); } }, msg, baseKey);
+  function clearDraft(id, key) {
+    if (SANDBOX || !id) return; const all = drafts(); if (!all[id]) return;
+    if (key) delete all[id][key]; else delete all[id];
+    if (all[id] && !Object.keys(all[id]).length) delete all[id]; saveLocalBoardJson('drafts', all);
+  }
+  function captureDraft(key, value) {
+    if (!editing) return; activeDraft[key] = value !== fieldBase[key];
+    if (activeDraft[key]) saveDraft(editing, key, fieldBase[key], value); else clearDraft(editing, key);
+  }
+  function restoreCardDrafts(t) {
+    activeDraft = { title: false, details: false }; const notices = [];
+    for (const key of ['title', 'details']) {
+      const d = draftField(t.id, key), live = key === 'details' ? (t.details || '') : t.title;
+      if (!d || typeof d.draft !== 'string' || typeof d.base !== 'string') { if (d) clearDraft(t.id, key); continue; }
+      if (d.draft === live || d.draft === d.base) { clearDraft(t.id, key); continue; }
+      fieldBase[key] = d.base; activeDraft[key] = true; const changed = live !== d.base; notices.push(changed ? `${key} draft recovered; GitHub also changed it` : `${key} draft recovered`);
+      if (key === 'title') { $('cTitle').value = d.draft; autosize($('cTitle')); }
+      else { editingDesc = true; $('cDetails').value = d.draft; $('cDescView').hidden = true; $('cDescBtn').hidden = true; $('descEdit').hidden = false; autosize($('cDetails')); }
+    }
+    if (notices.length) { const sv = $('dSaved'); sv.textContent = notices.some(x => x.includes('GitHub')) ? 'Draft restored · GitHub changed too' : 'Draft restored'; sv.className = 'dsaved ' + (notices.some(x => x.includes('GitHub')) ? 'bad' : 'ok'); }
+  }
+  const baseFor = key => { const b = clone(state), i = b.tasks.findIndex(x => x.id === editing); if (i >= 0) b.tasks[i][key] = fieldBase[key]; return b; };   // the text as it was when I started editing it
+  async function saveField(fn, msg, baseKey, baseState = null) {     // every field saves on its own (no Save button); conflicts are checked per field
+    const id = editing, sv = $('dSaved'); sv.textContent = 'Saving…'; sv.className = 'dsaved';
+    const ok = await mutate(fn, msg, [id], baseState || (baseKey ? baseFor(baseKey) : null)); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
+    clearTimeout(saveTimer); saveTimer = setTimeout(() => { sv.textContent = ''; }, 2500);
+    return ok;
+  }
+  const edit = (id, f, msg, baseKey, baseState) => saveField(n => { const t = n.tasks.find(x => x.id === id); if (t) { f(t, n); stamp(t); } }, msg, baseKey, baseState);
 
   // ---- the drawer frame: built once with ui.js (header, one property list, sections); fillDrawer() fills it per task ----
   const drawerAddRows = [];
@@ -2209,25 +2256,36 @@ if (typeof window !== 'undefined') (() => {
     const t = taskNow(); if (!t || editingDesc) return; editingDesc = true; fieldBase.details = t.details || '';
     $('cDetails').value = fieldBase.details; $('cDescView').hidden = true; $('cDescBtn').hidden = true; $('descEdit').hidden = false; autosize($('cDetails')); const ta = $('cDetails'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
   }
-  function closeDesc(save) {
+  async function closeDesc(save) {
     if (!editingDesc) return; const t = taskNow(), v = $('cDetails').value, id = editing; editingDesc = false;
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false;
-    if (save && t && v !== fieldBase.details) { edit(id, x => { x.details = v; }, `Edit description: ${t.title}`, 'details'); fieldBase.details = v; t.details = v; }
-    if (t) renderDescView(t);
+    if (!save) { clearDraft(id, 'details'); activeDraft.details = false; }
+    else if (t && v !== fieldBase.details) {
+      captureDraft('details', v); const base = fieldBase.details, baseState = baseFor('details'); fieldBase.details = v;
+      const ok = await edit(id, x => { x.details = v; }, `Edit description: ${t.title}`, null, baseState);
+      if (ok) { clearDraft(id, 'details'); activeDraft.details = false; fieldBase.details = v; }
+      else if (editing === id && $('dlgCard').open) { editingDesc = true; fieldBase.details = base; $('cDetails').value = v; $('cDescView').hidden = true; $('cDescBtn').hidden = true; $('descEdit').hidden = false; autosize($('cDetails')); }
+    }
+    { const now = taskNow(); if (now) renderDescView(now); }
   }
   $('cDescBtn').onclick = startDesc; $('cDescView').addEventListener('dblclick', startDesc);
   $('cDescView').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); startDesc(); } });
   $('cDescSave').onclick = () => closeDesc(true); $('cDescCancel').onclick = () => closeDesc(false);
-  $('cDetails').addEventListener('input', () => autosize($('cDetails')));
+  $('cDetails').addEventListener('input', () => { autosize($('cDetails')); captureDraft('details', $('cDetails').value); });
   $('cDetails').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); closeDesc(true); } });
 
-  function commitTitle() {
+  async function commitTitle() {
+    if (titleSaving) return;
     const t = taskNow(); if (!t) return; const ti = $('cTitle'), v = ti.value.trim();
-    if (!v) { ti.value = fieldBase.title; autosize(ti); return; } if (v === fieldBase.title) return;
-    const id = editing; edit(id, x => { x.title = v; }, `Rename: ${v}`, 'title'); fieldBase.title = v;
+    if (!v) { ti.value = fieldBase.title; clearDraft(editing, 'title'); activeDraft.title = false; autosize(ti); return; } if (v === fieldBase.title) { clearDraft(editing, 'title'); activeDraft.title = false; return; }
+    const id = editing, base = fieldBase.title, baseState = baseFor('title'); titleSaving = true; captureDraft('title', v); fieldBase.title = v;
+    try { const ok = await edit(id, x => { x.title = v; }, `Rename: ${v}`, null, baseState);
+      if (ok) { clearDraft(id, 'title'); activeDraft.title = false; fieldBase.title = v; }
+      else if (editing === id) { fieldBase.title = base; ti.value = v; activeDraft.title = true; autosize(ti); }
+    } finally { titleSaving = false; }
   }
   $('cTitle').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('cTitle').blur(); } });
-  $('cTitle').addEventListener('input', () => autosize($('cTitle'))); $('cTitle').addEventListener('blur', commitTitle);
+  $('cTitle').addEventListener('input', () => { autosize($('cTitle')); captureDraft('title', $('cTitle').value); }); $('cTitle').addEventListener('blur', commitTitle);
 
   $('cCol').onchange = e => { const id = editing, v = e.target.value; saveField(n => { place(n, id, v, null); }, `Move: ${titleOf(id)}`); };
   function syncPrio(v) { const w = $('cPrio').parentElement; ['danger', 'warn', 'ok'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + ui.priorityTone(v)); }
@@ -2362,7 +2420,7 @@ if (typeof window !== 'undefined') (() => {
     { const who = completionOf(t), old = $('cCompletedBy'); if (old) old.remove();
       if (who) { const p = ui.pill({ text: 'Completed by ' + who.label, icon: 'circle-check', tone: who.agent ? 'accent' : 'ok' }); p.id = 'cCompletedBy'; p.title = who.at ? fmtStamp(who.at) : ''; $('cStatusVal').append(p); } }
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
-    const ti = $('cTitle'); if (force || (document.activeElement !== ti && ti.value !== t.title)) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
+    const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
     renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
@@ -2426,17 +2484,24 @@ if (typeof window !== 'undefined') (() => {
     const t = state.tasks.find(x => x.num === n); if (!t) { toast(`Task #${n} was not found on this board`, true); setHash(''); return; }
     if (editing !== t.id || !$('dlgCard').open) openCard(t.id);
   }
+  let contextRestored = false;
+  function restoreBoardContext() {
+    if (contextRestored || !lastSyncOk || SETUP) return; contextRestored = true;
+    if (hashNum() !== null) { openFromHash(); return; }
+    const id = boardContext().card; if (!id) return;
+    if (state.tasks.some(t => t.id === id)) openCard(id); else { clearDraft(id); saveBoardContext({ view, card: '' }); }
+  }
   window.addEventListener('hashchange', openFromHash);
   function refreshDrawer() { const t = taskNow(); if (!t) { $('dlgCard').close(); return; } fillDrawer(t, false); }   // board data changed underneath an open card
 
   function openCard(id, focus) {
-    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false;
+    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false; activeDraft = { title: false, details: false };
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
-    fillDrawer(t, true); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; $('cHistWrap').toggle(false);
+    fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; $('cHistWrap').toggle(false);
     markSeen(id); render();
-    $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num);
+    $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
   $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
@@ -2497,7 +2562,7 @@ if (typeof window !== 'undefined') (() => {
     } catch (e) { toast('Could not reach GitHub', true); } finally { issueBusy = false; }
   }
   function copyForAgent() { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); }
-  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; });   // closing never loses typed text
+  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // closing never loses typed text
   async function deleteTask() {
     const id = editing, title = titleOf(id);
     if (!(await ui.confirm({ title: 'Delete this task?', body: `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`, confirmLabel: 'Delete task', danger: true })) || editing !== id) return;
@@ -4163,7 +4228,7 @@ if (typeof window !== 'undefined') (() => {
     if (meV) state.people = [{ github: meV, name: meV }];
     sha = null; const out = await saveNewBoard(clone(state), 'Create Keeptrack board');
     if (out !== 'ok') { toast('Could not create the board file (' + out + ').', true); btn.disabled = false; btn.textContent = 'Create my board'; return; }
-    view = WZ.crm ? 'today' : 'board'; SS.set('kb_view', view); Object.assign(WZ, { step: 0, tok: '', checks: null });
+    view = WZ.crm ? 'today' : 'board'; SS.set('kb_view', view); saveBoardContext({ view, card: '' }); Object.assign(WZ, { step: 0, tok: '', checks: null });
     endSetup(); await load();
     if (modes().includes('crm') && meV && !memberPerson()) setTimeout(() => offerSelfPerson({ name: meV }), 300);
     setTimeout(() => { const i = document.querySelector('.padd input, .addbar input'); if (i) i.focus(); }, 80);
@@ -4490,5 +4555,5 @@ if (typeof window !== 'undefined') (() => {
   };
   $('sThemeExport').onclick = () => { if (window.kbDesignMd) copyText(window.kbDesignMd.exportCurrent(), 'Theme copied as DESIGN.md'); };
   applyRo(); render();
-  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo || SETUP) load(); else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // no token for this board yet: the app opens Settings itself, on Connection with the form open (a click on Settings opens Preferences)
+  (async () => { await restoreUndo(); await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo || SETUP) load(); else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // no token for this board yet: the app opens Settings itself, on Connection with the form open (a click on Settings opens Preferences)
 })();
