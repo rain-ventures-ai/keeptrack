@@ -2092,6 +2092,29 @@ if (typeof window !== 'undefined') (() => {
   function ghostAdd(id, label, aria, onClick) { const b = el('button', 'ui-addrow__ghost'); b.type = 'button'; b.id = id; b.setAttribute('aria-label', aria); b.title = aria; b.append(ui.icon('plus'), el('span', null, label)); b.onclick = onClick; return b; }
   function drawerSelect(id, label, options) { const w = ui.select({ label, options: options || [] }); w.control.id = id; return w; }
   function drawerAddRow(id, opts) { const r = ui.addRow({ collapsed: true, buttonLabel: 'Add', ...opts }); r.input.id = id; drawerAddRows.push(r); return r; }
+  // A date property in a drawer: a pill that reads like every other date on the board (ui.dueInfo: "10 Oct", "Today",
+  // "9 Oct · overdue"), a button that opens the browser's date picker, the native <input type=date> (id, value and change
+  // event, kept for the saves) and a clear button. paintDate(id, value, opts) refreshes the pill after a change.
+  function datePill(id, label, clear) {
+    const pill = el('span', 'ui-pill ui-pill--neutral ddue'); pill.id = id + 'Pill'; pill.title = label;
+    const input = el('input', 'ddue__input'); input.type = 'date'; input.id = id; input.tabIndex = -1; input.setAttribute('aria-label', label);
+    const btn = el('button', 'ddue__btn'); btn.type = 'button'; btn.id = id + 'Btn';
+    btn.onclick = () => {
+      if (typeof input.showPicker === 'function') { try { input.showPicker(); return; } catch {} }
+      pill.classList.add('ddue--edit'); input.tabIndex = 0; input.focus();   // no showPicker: show the native field itself until it loses focus
+    };
+    input.addEventListener('blur', () => { pill.classList.remove('ddue--edit'); input.tabIndex = -1; });
+    const x = el('button', 'ui-pill__remove'); x.type = 'button'; x.id = id + 'Clear'; x.setAttribute('aria-label', clear); x.title = clear; x.append(ui.icon('x'));
+    pill.append(ui.icon('calendar'), btn, input, x);
+    return pill;
+  }
+  function paintDate(id, v, { done = false, empty = 'Add date' } = {}) {
+    const info = ui.dueInfo(v, { done }), tone = info ? info.tone : 'neutral', p = $(id + 'Pill'), btn = $(id + 'Btn'), label = $(id).getAttribute('aria-label');
+    ['danger', 'warn', 'accent', 'neutral'].forEach(t => p.classList.toggle('ui-pill--' + t, t === (tone === 'accent' ? 'neutral' : tone)));
+    p.classList.toggle('ddue--empty', !info); $(id + 'Clear').hidden = !v;
+    btn.textContent = info ? info.text : empty; btn.setAttribute('aria-label', `${label}: ${info ? info.text : 'none'}. Change`);
+    if (v) btn.title = v; else btn.removeAttribute('title');
+  }
   function drawerSection(id, opts) { const s = ui.section(opts); s.id = id; s.classList.add('dsec2'); return s; }
   function buildDrawer() {
     // header: number pill (copies the link), undo, copy for agent, more actions, close
@@ -2104,10 +2127,7 @@ if (typeof window !== 'undefined') (() => {
     // properties
     const status = el('span', 'dval'); status.id = 'cStatusVal'; status.append(drawerSelect('cCol', 'Status'));
     const prio = drawerSelect('cPrio', 'Priority', [{ value: 'high', label: 'High' }, { value: 'medium', label: 'Medium' }, { value: 'low', label: 'Low' }]);
-    const due = el('span', 'ui-pill ui-pill--neutral ddue'); due.id = 'cDuePill'; due.title = 'Due date';
-    const dueIn = el('input', 'ddue__input'); dueIn.type = 'date'; dueIn.id = 'cDue'; dueIn.setAttribute('aria-label', 'Due date');
-    const dueX = el('button', 'ui-pill__remove'); dueX.type = 'button'; dueX.id = 'cDueClear'; dueX.setAttribute('aria-label', 'Clear due date'); dueX.title = 'Clear due date'; dueX.append(ui.icon('x')); dueX.hidden = true;
-    due.append(ui.icon('calendar'), dueIn, dueX);
+    const due = datePill('cDue', 'Due date', 'Clear due date');
     const who = el('span', 'dval'); who.id = 'cWho';
     const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
     const chips = el('span', 'dval'); chips.id = 'cLabelChips';
@@ -2203,11 +2223,7 @@ if (typeof window !== 'undefined') (() => {
     }
     edit(id, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(id)}`);
   };
-  function syncDue(v, t) {   // overdue is red, today amber; a done task is never late
-    const tone = (ui.dueInfo(v, { done: !!t && isDoneTask(t) }) || {}).tone, late = tone === 'danger', today = tone === 'warn', p = $('cDuePill');
-    p.classList.toggle('ui-pill--danger', late); p.classList.toggle('ui-pill--warn', today); p.classList.toggle('ui-pill--neutral', !late && !today);
-    p.classList.toggle('ddue--empty', !v); $('cDueClear').hidden = !v;
-  }
+  const syncDue = (v, t) => paintDate('cDue', v, { done: !!t && isDoneTask(t) });   // overdue is red, today amber; a done task is never late
   $('cDue').onchange = e => { const v = e.target.value; syncDue(v, taskNow()); edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
   $('cDueClear').onclick = () => { $('cDue').value = ''; syncDue(''); edit(editing, t => { t.due = ''; }, `Clear due: ${titleOf(editing)}`); };
 
@@ -3638,10 +3654,7 @@ if (typeof window !== 'undefined') (() => {
     const agent = ui.iconButton({ icon: 'bot', label: 'Copy for AI' }); agent.id = 'pAgent'; agent.title = 'Copy this person and their recent contact for Claude, Codex or ChatGPT, for example to write a message'; roKeep(agent);
     drawerHead('p', { kind: 'Person', tile: av, more: openPersonMenu, extra: [undo, agent] });
     // properties: stage, next step and its date, then the person's details
-    const due = el('span', 'ui-pill ui-pill--neutral ddue'); due.id = 'pNextDuePill'; due.title = 'Next step date';
-    const dueIn = el('input', 'ddue__input'); dueIn.type = 'date'; dueIn.id = 'pNextDue'; dueIn.setAttribute('aria-label', 'Next step date');
-    const dueX = el('button', 'ui-pill__remove'); dueX.type = 'button'; dueX.id = 'pNextDueClear'; dueX.dataset.due = ''; dueX.setAttribute('aria-label', 'No date'); dueX.title = 'No date'; dueX.append(ui.icon('x'));
-    due.append(ui.icon('calendar'), dueIn, dueX);
+    const due = datePill('pNextDue', 'Next step date', 'No date'); due.querySelector('.ui-pill__remove').dataset.due = '';   // clears like the quick-date buttons
     const quick = [['0', 'Today'], ['1', 'Tomorrow'], ['7', '+1 week']].map(([d, l]) => { const b = ui.button({ label: l, size: 'sm', variant: 'ghost' }); b.dataset.due = d; b.classList.add('dquick'); return b; });
     const companies = el('datalist'); companies.id = 'pCompanies';
     const props = el('div', 'dprops'); props.id = 'pProps';
@@ -3694,11 +3707,7 @@ if (typeof window !== 'undefined') (() => {
   }
   const STAGE_TONE = s => /^won$/i.test(s) ? 'ok' : /^lost$/i.test(s) ? 'neutral' : s === stages()[0] ? 'neutral' : 'info';
   function syncStage(v) { const w = $('pStage').parentElement; ['ok', 'neutral', 'info'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + STAGE_TONE(v)); }
-  function syncNextDue(v) {   // overdue is red, today amber, like a task's due date
-    const t = todayIso(), p = $('pNextDuePill');
-    p.classList.toggle('ui-pill--danger', !!v && v < t); p.classList.toggle('ui-pill--warn', v === t); p.classList.toggle('ui-pill--neutral', !v || v > t);
-    p.classList.toggle('ddue--empty', !v); $('pNextDueClear').hidden = !v;
-  }
+  const syncNextDue = v => paintDate('pNextDue', v, { empty: 'No date' });   // overdue is red, today amber, like a task's due date
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
     const sig = JSON.stringify([p, p.company && (state.client_info || {})[p.company], p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), modes()]); if (!force && sig === pSig) return; pSig = sig;

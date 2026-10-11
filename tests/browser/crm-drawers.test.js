@@ -107,7 +107,9 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     await page.locator('#pNext').fill('Call Casey'); w = saved(); await page.locator('#pNext').press('Tab'); await w; assert.equal(api.person().next, 'Call Casey');
     w = saved(); await page.locator('#dlgContact .dquick', { hasText: 'Tomorrow' }).click(); await w; assert.equal(api.person().next_due, tomorrow);
     assert.equal(await page.locator('#pNextDue').inputValue(), tomorrow); assert.equal(await page.locator('#pNextDueClear').isVisible(), true);
+    assert.equal(await page.locator('#pNextDueBtn').innerText(), 'Tomorrow', 'the date pill reads like the rest of the board');
     w = saved(); await page.locator('#pNextDueClear').click(); await w; assert.equal(api.person().next_due, '');
+    assert.equal(await page.locator('#pNextDueBtn').innerText(), 'No date');
     await page.locator('#pRole').fill('Head buyer'); w = saved(); await page.locator('#pRole').press('Tab'); await w; assert.equal(api.person().role, 'Head buyer');
 
     // emails: add with label and address, then remove (asks first; Cancel keeps it)

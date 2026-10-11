@@ -588,10 +588,15 @@ header .badge { top: -6px; right: -6px; }
 .uidrawer .ui-props__row { grid-template-columns: 112px minmax(0, 1fr); }
 .uidrawer .dval { display: contents; }
 .uidrawer .ui-props__value .ui-select { max-width: 100%; }
-.ddue { gap: var(--sp-1); min-height: 32px; padding: 0 2px 0 var(--sp-4); font-size: var(--fs-base); font-weight: 600; }
-.ddue .ddue__input { width: auto; min-width: 0; height: 30px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; }
-.ddue .ddue__input:focus { outline: none; } .ddue:focus-within { box-shadow: 0 0 0 2px var(--accent); }
-.ddue .ddue__input::-webkit-calendar-picker-indicator { opacity: .6; cursor: pointer; }
+.ddue { position: relative; gap: var(--sp-1); min-height: 32px; padding: 0 2px 0 var(--sp-4); font-size: var(--fs-base); font-weight: 600; }
+/* The pill shows the board's date text in a button; the native date input stays underneath it (the picker anchors to it, saves
+   listen to it) and only shows itself in browsers without input.showPicker() (.ddue--edit). */
+.ddue .ddue__btn { height: 30px; min-height: 0; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.ddue .ddue__btn:focus-visible { outline: none; } .ddue:focus-within { box-shadow: 0 0 0 2px var(--accent); }
+.ddue .ddue__input { position: absolute; left: 0; bottom: 0; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+.ddue.ddue--edit .ddue__btn { display: none; }
+.ddue.ddue--edit .ddue__input { position: static; width: auto; height: 30px; opacity: 1; pointer-events: auto; background: transparent; color: inherit; font: inherit; }
+.ddue .ddue__input:focus { outline: none; }
 .ddue:not(:has(.ui-pill__remove:not([hidden]))) { padding-right: var(--sp-4); }
 .ddue.ddue--empty { --ui-pill-bg: transparent; --ui-pill-bd: var(--border); --ui-pill-fg: var(--muted); font-weight: 500; }
 .taskdrawer .dlabelnew { width: 160px; height: 30px; }
@@ -618,7 +623,7 @@ header .badge { top: -6px; right: -6px; }
   .uidrawer .ui-props__row { grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-3); }
   .uidrawer .ui-props__label { font-size: var(--fs-sm); }
   .ddue { min-height: var(--touch); padding-left: var(--sp-5); font-size: var(--fs-md); }
-  .ddue .ddue__input { height: 40px; }
+  .ddue .ddue__btn, .ddue.ddue--edit .ddue__input { height: 40px; }
   .taskdrawer .dlabelnew { height: var(--touch); width: 100%; }
   .taskdrawer .dtodo { min-height: var(--touch); }
   .taskdrawer .dtodo .ui-iconbtn { opacity: 1; }

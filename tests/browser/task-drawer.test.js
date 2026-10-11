@@ -102,7 +102,18 @@ async function assertFits(page, where) {
     assert.match(await page.locator('#cPrio').evaluate(x => x.parentElement.className), /ui-select--ok/);
     w = saved(); await page.locator('#cDue').fill('2026-01-05'); await w; assert.equal(api.card().due, '2026-01-05');
     assert.match(await page.locator('#cDuePill').getAttribute('class'), /ui-pill--danger/);
+    assert.equal(await page.locator('#cDueBtn').innerText(), '5 Jan · overdue', 'the pill reads like every other date (ui.due), not the input locale format');
     assert.equal(await page.locator('#cDueClear').isVisible(), true);
+    // the pill opens the native picker: by click and by keyboard; without showPicker the native field itself shows and takes the focus
+    await page.evaluate(() => { window.__picks = 0; HTMLInputElement.prototype.showPicker = function () { window.__picks++; }; });
+    await page.locator('#cDueBtn').click(); await page.locator('#cDueBtn').focus(); await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => window.__picks), 2, 'click and Enter open the date picker');
+    await page.evaluate(() => { HTMLInputElement.prototype.showPicker = function () { throw new Error('not allowed'); }; });
+    await page.locator('#cDueBtn').click();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'cDue', 'fallback: the native date field takes the focus');
+    assert.match(await page.locator('#cDuePill').getAttribute('class'), /ddue--edit/);
+    await page.locator('#cDueBtn').evaluate(() => document.activeElement.blur());
+    assert.doesNotMatch(await page.locator('#cDuePill').getAttribute('class'), /ddue--edit/);
     w = saved(); await page.locator('#cDueClear').click(); await w; assert.equal(api.card().due, ''); assert.equal(await page.locator('#cDueClear').isVisible(), false);
 
     // people: the pill's x unassigns, the "+ Add" menu lists members and the agent options
