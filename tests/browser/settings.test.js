@@ -150,6 +150,11 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       // 7. At 1280px the tab list sits left of the panel.
       const lay = await page.evaluate(() => { const t = document.querySelector('#dlgSettings .stabs').getBoundingClientRect(), p = document.getElementById('panelAgents').getBoundingClientRect(); return { tr: t.right, pl: p.left, th: t.height }; });
       assert(lay.tr <= lay.pl, 'two columns: the tab list is left of the panel'); assert(lay.th > 100, 'the tab list is vertical');
+      assert.equal(await page.locator('#dlgSettings [role=tablist]').first().getAttribute('aria-orientation'), 'vertical', 'the vertical tab list says so');
+      await page.setViewportSize({ width: 390, height: 844 }); await settle(page);
+      assert.equal(await page.locator('#dlgSettings [role=tablist]').first().getAttribute('aria-orientation'), 'horizontal');
+      await page.setViewportSize({ width: 1280, height: 860 }); await settle(page);
+      assert.deepEqual([...new Set(await page.locator('#dlgSettings .setsec__scope').allTextContents())].sort(), ['Shared board: shared with everyone on the board. ', 'This browser: saved in this browser only. '], 'the scope tag reads as one phrase');
       await shot(page, 'settings-1280-agents');
       assert.deepEqual(page.errors, []); await page.close();
     }

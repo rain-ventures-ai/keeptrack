@@ -179,7 +179,7 @@ if (typeof window !== 'undefined') (() => {
   // muted line (scope tag "This browser" / "Shared board", the one-line purpose, Learn more), ui.props rows (data-props),
   // ui.button buttons, ui.banner (data-banner) and the one "Copy setup prompt" helper (data-prompt). Runs once, before any
   // handler is attached; ids stay on the same controls.
-  const SET_SCOPES = { browser: ['laptop', 'This browser', 'Saved in this browser only'], board: ['users', 'Shared board', 'Saved to the shared board, for everyone on it'] };
+  const SET_SCOPES = { browser: ['laptop', 'This browser', 'Saved in this browser only'], board: ['users', 'Shared board', 'Shared with everyone on the board'] };
   const PROMPT_PASTE = { start: 'Paste it into a new chat with Claude, Codex or Cursor.', board: 'Paste it into a new chat with Claude.',
     routine: 'Paste it into a new chat with Claude.', email: 'Paste it into Claude Code in your board repo.' };
   const helpDoc = doc => HOME + '/docs/help/' + doc;
@@ -208,7 +208,7 @@ if (typeof window !== 'undefined') (() => {
       if (chip) { chip.removeAttribute('data-chip'); setChip(chip, chip.textContent); }
       const sec = ui.section({ title: d.title, icon: d.icon, action: chip, collapsible: 'fold' in d, open: false }), meta = el('p', 'setsec__meta');
       sec.classList.add('setsec'); sec.id = src.id; sec.hidden = src.hidden;
-      if (d.scope) { const [ic, t, tip] = SET_SCOPES[d.scope], tag = el('span', 'setsec__scope'); tag.title = tip; tag.append(ui.icon(ic), document.createTextNode(t)); meta.append(tag); }
+      if (d.scope) { const [ic, t, tip] = SET_SCOPES[d.scope], tag = el('span', 'setsec__scope'); tag.title = tip; tag.append(ui.icon(ic), document.createTextNode(t), el('span', 'ui-sr', `: ${tip.toLowerCase()}. `)); meta.append(tag); }   // read as one phrase, not run into the purpose
       if (d.purpose) meta.append(document.createTextNode(d.purpose + ' '));
       if (d.learn) { const a = el('a', 'setsec__learn', 'Learn more'); a.href = helpDoc(d.learn); a.target = '_blank'; a.rel = 'noopener noreferrer'; meta.append(a); }
       sec.body.append(meta, ...src.childNodes); src.replaceWith(sec);
@@ -2938,6 +2938,8 @@ if (typeof window !== 'undefined') (() => {
     if (short) { const l = b.querySelector('.ui-tab__label'); l.textContent = ''; l.append(el('span', 'tl-long', SET_TABS[i][1]), el('span', 'tl-short', short)); } });   // phones: the short name, so all four fit
   $('setTabs').replaceWith(setTabs);
   const secTop = id => { const x = $(id); if (x) requestAnimationFrame(() => x.scrollIntoView({ block: 'start' })); };
+  { const list = setTabs.matches('[role=tablist]') ? setTabs : setTabs.querySelector('[role=tablist]'), wide = matchMedia('(min-width: 1000px)');   // from 1000px the tab list is a column (board.css)
+    const orient = () => list.setAttribute('aria-orientation', wide.matches ? 'vertical' : 'horizontal'); orient(); wide.addEventListener('change', orient); }
   function setPanel(tab) {   // a tab chosen by hand: its panel, from the top
     SET_TABS.forEach(([n]) => { $('panel' + cap(n)).hidden = n !== tab; }); setTabs.select(tab);
     $('dlgSettings').scrollTop = 0;
