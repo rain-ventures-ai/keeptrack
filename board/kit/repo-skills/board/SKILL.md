@@ -14,7 +14,7 @@ Use `BOARD_USER` (or `gh api user --jq .login`). Valid users: the `people` in `b
 attached beside a code repo, run its `keeptrack.py` by full path from the code repo and start with `keeptrack.py here`:
 it names the board, project and user, set by the environment's `BOARD_REPO`, `BOARD_PROJECT` and `BOARD_USER`.
 The heartbeat hook runs only when the board repo is the session's main repo, so otherwise run `heartbeat` yourself
-every ~10 minutes.
+every ~15 minutes. A session a person drives claims with `--attended` (or has `BOARD_ATTENDED=1`) and sends none.
 
 ## 2. Find work
 ```bash

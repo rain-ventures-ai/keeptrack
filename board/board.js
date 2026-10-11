@@ -952,7 +952,7 @@ if (typeof window !== 'undefined') (() => {
     if (!c) return null;
     if (c.status === 'done' || c.status === 'stuck' || c.status === 'blocked') return c.status;
     const mins = (Date.now() - Date.parse(c.heartbeat_at || c.claimed_at)) / 60000;
-    return mins > (state.settings.stale_after_minutes || 30) ? 'stale' : 'running';
+    return mins > (c.attended ? 12 * 60 : (state.settings.stale_after_minutes || 30)) ? 'stale' : 'running';
   }
   const ago = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
   const needsAttention = t => { const cs = claimState(t.claim); const late = t.due && t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); return late || cs === 'stale' || cs === 'stuck' || cs === 'blocked'; };

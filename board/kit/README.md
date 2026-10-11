@@ -183,7 +183,7 @@ You work from the team board in `board/` using `board/keeptrack.py` (`board/task
 2. Claim it:       python3 board/keeptrack.py claim <id> --for <github-user> --agent <claude|codex> --session <session-id> --note "starting"
                    (or:  keeptrack.py next --for <github-user> --agent claude --session <id>)
    - You may only claim tasks assigned to the human you work for. A fresh claim by another session is refused.
-3. While working:  keeptrack.py heartbeat <id> --note "<what you are doing>"      # at least every 10 minutes
+3. While working:  keeptrack.py heartbeat <id> --note "<what you are doing>"      # at least every 15 minutes (not for --attended)
    If blocked:     keeptrack.py heartbeat <id> --status blocked --note "<why>"
 4. Finish:         keeptrack.py done <id> --note "<result, PR link>"            # or: keeptrack.py release <id> --column todo
 Never edit board JSON files by hand; always go through `keeptrack.py` so conflicts are handled.
@@ -192,7 +192,9 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 
 **Auth without `gh`:** set `BOARD_TOKEN` (or `GH_TOKEN`/`GITHUB_TOKEN`) to a fine-grained token with Contents: Read and write on this repo and `keeptrack.py` calls the GitHub API directly with the standard library. If `BOARD_TOKEN` is set it is used even when `gh` exists. This is the route for cloud agent sandboxes.
 
-**Automatic heartbeat:** `claim` writes `.board-claim.json` in a board repo, or `.keeptrack/claim.json` at the top of any other git repo (both gitignored), so each repo has its own. `keeptrack.py auto-heartbeat` refreshes that claim at most every 5 minutes and silently does nothing if there is no active claim, it was released or finished, or another session took the task over. `.claude/settings.json` runs it as a Claude Code `PostToolUse` hook. Other agents call `keeptrack.py heartbeat` themselves.
+**Automatic heartbeat:** `claim` writes `.board-claim.json` in a board repo, or `.keeptrack/claim.json` at the top of any other git repo (both gitignored), so each repo has its own. `keeptrack.py auto-heartbeat` refreshes that claim at most every 15 minutes and silently does nothing if there is no active claim, the claim is attended, it was released or finished, or another session took the task over. `.claude/settings.json` runs it as a Claude Code `PostToolUse` hook. Other agents call `keeptrack.py heartbeat` themselves.
+
+**Attended claims:** when a person drives the session, heartbeats are noise (a commit every few minutes, all day). Claim with `--attended`, or set `BOARD_ATTENDED=1` once in your own environment: the claim sends no heartbeats and shows as stale only after 12 hours. Background agents (routines, cloud threads, workers) don't set it, so a stuck one still shows within the board's `stale_after_minutes`.
 
 **Searching what is linked.** `links --client NAME | --project REF | --card ID | --person REF [--kind drive-folder ...] [--json]` lists every link around that scope, nearest first and de-duplicated, each classified (`drive-folder`, `drive-file`, `github`, `dropbox`, `microsoft`, `notion`, `linear`, `profile`, `local`, `web`, `other`) with its id where one exists. The `keeptrack-search` skill uses it to answer questions from a client's or project's files with whatever connectors the session has, walking Drive sub-folders itself because Drive search does not.
 

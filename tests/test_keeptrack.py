@@ -1307,3 +1307,51 @@ class VerifyLargeBackup(unittest.TestCase):
         text = kt.content_text("board/tasks.json", {"encoding": "none", "content": ""})
         self.assertEqual("t_live", json.loads(text)["tasks"][0]["id"])
         self.assertIn("ref=main", self.urls[0])
+
+
+class AttendedClaims(unittest.TestCase):
+    """v26: a session a person drives sends no heartbeats and goes stale only after 12 hours."""
+
+    def ago(self, minutes):
+        import datetime as dt
+        return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def test_attended_claim_stays_running_far_longer(self):
+        data = {"settings": {"stale_after_minutes": 30}}
+        plain = {"status": "running", "claimed_at": self.ago(60), "heartbeat_at": self.ago(45)}
+        self.assertEqual(kt.claim_state(data, plain), "stale")
+        self.assertEqual(kt.claim_state(data, dict(plain, attended=True)), "running")
+        self.assertEqual(kt.claim_state(data, dict(plain, attended=True, heartbeat_at=self.ago(13 * 60))), "stale")
+
+    def test_attended_from_flag_or_environment(self):
+        old = os.environ.pop("BOARD_ATTENDED", None)
+        try:
+            self.assertFalse(kt.attended(Args()))
+            self.assertTrue(kt.attended(Args(attended=True)))
+            os.environ["BOARD_ATTENDED"] = "1"
+            self.assertTrue(kt.attended(Args()))
+            os.environ["BOARD_ATTENDED"] = "0"
+            self.assertFalse(kt.attended(Args()))
+        finally:
+            os.environ.pop("BOARD_ATTENDED", None)
+            if old is not None:
+                os.environ["BOARD_ATTENDED"] = old
+
+    def test_auto_heartbeat_skips_attended_and_beats_otherwise(self):
+        d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
+        claim_file = os.path.join(d.name, "claim.json")
+        calls = []
+        old = kt.CLAIM_FILE, kt.mutate
+        kt.CLAIM_FILE, kt.mutate = claim_file, lambda fn, msg: calls.append(msg)
+        try:
+            for attended, expect in ((True, 0), (False, 1)):
+                calls.clear()
+                write(claim_file, {"id": "t_x", "session": "s", "attended": attended})
+                os.utime(claim_file, (0, 0))   # long ago, so the throttle allows a beat
+                kt.cmd_auto_heartbeat(Args())
+                self.assertEqual(len(calls), expect, f"attended={attended}")
+        finally:
+            kt.CLAIM_FILE, kt.mutate = old
+
+    def test_heartbeat_interval_is_15_minutes(self):
+        self.assertEqual(kt.HEARTBEAT_EVERY, 900)
