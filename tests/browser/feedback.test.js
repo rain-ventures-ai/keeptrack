@@ -109,10 +109,10 @@ let base;
       assert.deepEqual(page.native, [], 'no native dialog opened');
       await page.close();
     }
-    // 3. Settings → Labels: removing a label asks first (Cancel keeps it), then removes it from the board and its card.
+    // 3. Settings → Board → Labels: removing a label asks first (Cancel keeps it), then removes it from the board and its card.
     {
       const api = new Github(true), page = await openBoard(browser, api);
-      await page.locator('#btnSettings').click(); await page.locator('#labelBox .lbrow').first().waitFor();
+      await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click(); await page.locator('#labelBox .lbrow').first().waitFor();
       const before = writes(api), remove = () => page.locator('#labelBox [aria-label="Delete label pale"]').click();
       await remove(); const ask = page.getByRole('alertdialog'); await ask.waitFor();
       assert.match(await ask.textContent(), /Remove label\?.*Remove the “pale” label from 1 task\?/s);

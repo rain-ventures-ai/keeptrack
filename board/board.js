@@ -74,7 +74,7 @@ if (typeof window !== 'undefined') (() => {
     token: LS.get('kb_token'), me: LS.get('kb_me', ''), api: LS.get('kb_api', 'https://api.github.com') // api override is for local testing only
   });
   // ---- several boards: each repo keeps its own branch, path, token and Claude routine in kb_boards (this browser only) ----
-  const BOARD_KEYS = ['branch', 'path', 'token', 'claude_url', 'claude_token', 'claude_steps', 'claude_ok'], REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+  const BOARD_KEYS = ['branch', 'path', 'token', 'claude_url', 'claude_token', 'claude_steps', 'claude_ok', 'email_sync'], REPO_RE = /^[\w.-]+\/[\w.-]+$/;
   const boardsMap = () => { try { const o = JSON.parse(LS.get('kb_boards', '{}')); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } };
   function stashBoard() { const repo = LS.get('kb_repo'); if (!repo) return; const m = boardsMap(), e = {};
     BOARD_KEYS.forEach(k => { const v = LS.get('kb_' + k); if (v) e[k] = v; }); m[repo] = e; LS.set('kb_boards', JSON.stringify(m)); }
@@ -145,9 +145,59 @@ if (typeof window !== 'undefined') (() => {
     if (need.length && !document.querySelector('link[href*="ui.css"], style[data-kb="ui.css"]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = base + 'ui.css'; document.head.append(l); }
     need.forEach(([, f]) => { try { const x = new XMLHttpRequest(); x.open('GET', base + f + '?t=' + Date.now(), false); x.send(); if (x.status === 200) { const sc = document.createElement('script'); sc.textContent = x.responseText; document.head.append(sc); } } catch (e) {} });
   })();
+  // The same for the Settings dialog: an index.html cached from before the section layout has the old #dlgSettings, so take
+  // the current one from the server (synchronously, once) and swap it in before anything is wired to it.
+  (() => {
+    const old = document.getElementById('dlgSettings'); if (!old || old.querySelector('[data-sec]')) return;
+    try { const x = new XMLHttpRequest(); x.open('GET', location.pathname + '?t=' + Date.now(), false); x.send();
+      const fresh = x.status === 200 && new DOMParser().parseFromString(x.responseText, 'text/html').getElementById('dlgSettings');
+      if (fresh && fresh.querySelector('[data-sec]')) old.replaceWith(document.importNode(fresh, true)); } catch (e) {}
+  })();
   const { svgIcon, setI, fillIcons } = window.kbIcons;
   const elI = (tag, cls, icon, text) => { const e = el(tag, cls); if (icon) e.append(svgIcon(icon)); if (text != null && text !== '') e.append((icon ? ' ' : '') + text); return e; };   // el() with a leading icon
   fillIcons(document);
+  // ---- Settings (#dlgSettings): one section template ---------------------------------------------------------------------
+  // index.html marks each block with data-sec; buildSettings turns it into one ui.section: [icon] TITLE + status chip, then a
+  // muted line (scope tag "This browser" / "Shared board", the one-line purpose, Learn more), ui.props rows (data-props),
+  // ui.button buttons, ui.banner (data-banner) and the one "Copy setup prompt" helper (data-prompt). Runs once, before any
+  // handler is attached; ids stay on the same controls.
+  const SET_SCOPES = { browser: ['laptop', 'This browser', 'Saved in this browser only'], board: ['users', 'Shared board', 'Saved to the shared board, for everyone on it'] };
+  const PROMPT_PASTE = { start: 'Paste it into a new chat with Claude, Codex or Cursor.', board: 'Paste it into a new chat with Claude.',
+    routine: 'Paste it into a new chat with Claude.', email: 'Paste it into Claude Code in your board repo.' };
+  const helpDoc = doc => HOME + '/docs/help/' + doc;
+  const setChip = (ch, text, tone) => { ch.textContent = text; ch.className = `schip ui-pill ui-pill--sm ui-pill--${tone || 'neutral'}`; };
+  function uiBtns(root) {   // plain <button>s (static markup, older builders) get the ui.button look: primary/danger → variant, small → size
+    root.querySelectorAll('button:not([class*="ui-"]):not(.cwh):not(.wcard):not(.agpick):not(.ico)').forEach(b => {
+      const s = b.classList.contains('small') ? 'sm' : 'md', red = b.classList.contains('danger'), v = b.classList.contains('primary') ? 'primary' : red && s === 'md' ? 'danger' : 'secondary';
+      b.classList.remove('primary', 'small'); if (v === 'danger') b.classList.remove('danger'); b.classList.add('ui-btn', 'ui-btn--' + v, 'ui-btn--' + s);   // a small destructive button keeps .danger: red text, not a red block
+      if (!b.getAttribute('type')) b.type = 'button';
+      b.querySelectorAll('svg.i').forEach(i => i.classList.add('ui-i'));
+    });
+  }
+  function buildSettings() {
+    const dlg = $('dlgSettings'); if (!dlg || !dlg.querySelector('[data-sec]')) return;
+    dlg.querySelectorAll('[data-props]').forEach(box => {
+      const rows = [...box.children].filter(r => r.dataset.row != null), dl = ui.props(rows.map(r => ({ label: r.dataset.row, value: [...r.childNodes] })));
+      [...dl.children].forEach((row, i) => { const r = rows[i]; if (r.id) row.id = r.id; row.hidden = r.hidden;
+        if (r.dataset.for) { const lab = el('label', null, r.dataset.row); lab.htmlFor = r.dataset.for; row.querySelector('.ui-props__label > span').replaceWith(lab); } });
+      box.replaceWith(dl);
+    });
+    dlg.querySelectorAll('[data-banner]').forEach(b => { const n = ui.banner({ tone: b.dataset.banner, text: b.textContent }); n.setAttribute('role', 'note'); b.replaceWith(n); });
+    dlg.querySelectorAll('[data-prompt]').forEach(p => { const kind = p.dataset.prompt, w = el('div', 'sprompt'), b = ui.button({ label: 'Copy setup prompt', icon: 'clipboard-copy', onClick: () => copyPrompt(kind) });
+      b.id = p.dataset.id; w.append(b, el('span', 'hint', PROMPT_PASTE[kind])); p.replaceWith(w); });
+    dlg.querySelectorAll('[data-sec]').forEach(src => {
+      const d = src.dataset, chip = src.querySelector(':scope > [data-chip]');
+      if (chip) { chip.removeAttribute('data-chip'); setChip(chip, chip.textContent); }
+      const sec = ui.section({ title: d.title, icon: d.icon, action: chip, collapsible: 'fold' in d, open: false }), meta = el('p', 'setsec__meta');
+      sec.classList.add('setsec'); sec.id = src.id; sec.hidden = src.hidden;
+      if (d.scope) { const [ic, t, tip] = SET_SCOPES[d.scope], tag = el('span', 'setsec__scope'); tag.title = tip; tag.append(ui.icon(ic), document.createTextNode(t)); meta.append(tag); }
+      if (d.purpose) meta.append(document.createTextNode(d.purpose + ' '));
+      if (d.learn) { const a = el('a', 'setsec__learn', 'Learn more'); a.href = helpDoc(d.learn); a.target = '_blank'; a.rel = 'noopener noreferrer'; meta.append(a); }
+      sec.body.append(meta, ...src.childNodes); src.replaceWith(sec);
+    });
+    uiBtns(dlg);
+  }
+  buildSettings();
   // Board actions, defined once: the header buttons (wide screens), the ••• More menu (narrow headers) and the dock's Menu are built
   // from this list. A menu item clicks the header button with the same id, so each action is wired in one place.
   const HEAD_ACTIONS = [
@@ -349,7 +399,7 @@ if (typeof window !== 'undefined') (() => {
       keys: () => run('readonly', st => st.getAllKeys()).catch(() => []), del: k => run('readwrite', st => st.delete(k)).catch(() => {}) };
   })();
 
-  let lastProblem = '';   // shown in Settings → Checks
+  let lastProblem = '';   // shown in Settings → Connection → Health
   // ---- instant start: show the copy this browser loaded last time, then replace it with the live file ---------
   const snapKey = c => 'kb_snap:' + c.repo + ':' + c.branch + ':' + c.path;
   function snapSave(c, raw) { idb.set(snapKey(c), raw); }
@@ -484,7 +534,7 @@ if (typeof window !== 'undefined') (() => {
       b.onclick = async () => { if (!(await ask('Create board file?', `Create ${c.path} on ${c.branch} in ${c.repo}?`, 'Create'))) return; state = NEW_BOARD(); sha = null; await saveNewBoard(clone(state), 'Create board file'); render(); };
       box.append(b);
     }
-    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); }; box.append(ck);
+    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); }; box.append(ck);
     board.append(box);
   }
   function noTokenBox() {   // e.g. a ?repo= link to a board this browser has no token for
@@ -494,7 +544,7 @@ if (typeof window !== 'undefined') (() => {
     const others = Object.keys(boardsMap()).filter(r => r !== c.repo && boardsMap()[r].token);
     if (others.length) { const p = el('p'); others.forEach(r => { const x = el('button', 'small', r); x.onclick = () => switchRepo(r); p.append(x, document.createTextNode(' ')); }); box.append(p); }
     const add = el('button', 'primary', 'Add a token for ' + c.repo); add.onclick = () => { $('btnSettings').click(); settingsTab('conn'); };
-    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); };
+    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); };
     box.append(add, document.createTextNode(' '), ck); board.append(box);
   }
   function offerCreate() {
@@ -1424,8 +1474,8 @@ if (typeof window !== 'undefined') (() => {
   }
   async function assignMyClaude(id) {
     const t = state.tasks.find(x => x.id === id), who = cfg().me; if (!t) return;
-    if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents first.', true); return; }
-    if (!claudeReady()) { toast('Finish your Claude routine setup in Settings → Agents first.', true); return; }
+    if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents & integrations first.', true); return; }
+    if (!claudeReady()) { toast('Finish your Claude routine setup in Settings → Agents & integrations first.', true); return; }
     if (!who) { toast('Set your GitHub username in Settings first.', true); return; }
     const live = activeClaim(t); if (live) { toast(`${agentLabel(live)} already has this task. Release that claim before assigning another agent.`, true); return; }
     const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
@@ -1438,7 +1488,7 @@ if (typeof window !== 'undefined') (() => {
     let send = false;
     if (wantsClaude(text)) {
       if (!myAgents().includes('claude')) { /* this person does not use Claude: a plain mention */ }
-      else if (!claudeReady()) toast('To make @claude start your routine, set it up in Settings → Agents. Posting as a normal comment.');
+      else if (!claudeReady()) toast('To make @claude start your routine, set it up in Settings → Agents & integrations. Posting as a normal comment.');
       else if (!cfg().me) toast('Set your GitHub username in Settings first. Posting as a normal comment.', true);
       else { const t0 = state.tasks.find(x => x.id === id), other = t0 && t0.claim && claimState(t0.claim) === 'running' && String(t0.claim.session_id || '').indexOf('pending-') !== 0;
         if (other && !(await ui.confirm({ title: 'Send to Claude anyway?', body: `${t0.claim.agent} already has a running session on this task. Cancel posts the comment without starting Claude.`, confirmLabel: 'Send to Claude' }))) { /* post only */ }
@@ -2325,7 +2375,7 @@ if (typeof window !== 'undefined') (() => {
     try {
       const r = await fetch(`${c.api}/repos/${c.repo}/issues`, { method: 'POST', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: `[#${t.num}] ${t.title}`, body: issueBody(t), labels: ['board-task'] }) });
-      if (r.status === 403 || r.status === 404) { toast('GitHub refused: your token needs Issues: Read and write on this repo (Settings → Boards → create a new token)', true); return; }
+      if (r.status === 403 || r.status === 404) { toast('GitHub refused: your token needs Issues: Read and write on this repo (Settings → Connection → create a new token)', true); return; }
       if (!r.ok) { toast(`GitHub error ${r.status} creating the issue`, true); return; }
       const iss = await r.json(), id = t.id;
       await edit(id, x => { if (!x.links.some(l => l.url === iss.html_url)) x.links.push({ title: `Issue #${iss.number}`, url: iss.html_url }); }, `Issue #${iss.number} for task #${t.num}`);
@@ -2340,8 +2390,10 @@ if (typeof window !== 'undefined') (() => {
     editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
   }
 
-  $('xCode').onclick = () => copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.');
-  $('xLink').onclick = () => copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.');
+  // Settings → Connection → Advanced → Move settings: the code holds every saved token unencrypted, so each copy asks first
+  const askExport = what => ask(`Copy ${what}?`, [`The ${what} holds every board, GitHub token, routine token and cron-job.org key saved in this browser. It is not encrypted: anyone who has it can use them.`, 'Paste it only into your own devices, then delete the message you sent it in.'], `Copy ${what}`, true);
+  $('xCode').onclick = async () => { if (await askExport('settings code')) copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.'); };
+  $('xLink').onclick = async () => { if (await askExport('setup link')) copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.'); };
   $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
       if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ''}? This replaces this browser's settings.`, 'Import'))) return;
@@ -2489,7 +2541,7 @@ if (typeof window !== 'undefined') (() => {
     if (entered && entered !== saved) { text = tokenTyped ? 'Entered · not saved' : 'Value present · not saved'; kind = 'warn'; }
     else if (saved) { text = 'Saved for this board'; kind = 'ok'; }
     else { text = 'No token saved'; kind = 'warn'; }
-    chip.textContent = text; chip.className = 'agchip ' + kind; $('sTokenBtns').hidden = !(saved || entered);
+    setChip(chip, text, kind); $('sTokenBtns').hidden = !(saved || entered);
   }
   $('sToken').addEventListener('input', () => { tokenTyped = true; $('sTokenReuse').textContent = ''; syncTokenUi(); });
   $('sToken').addEventListener('change', syncTokenUi);
@@ -2521,22 +2573,36 @@ if (typeof window !== 'undefined') (() => {
     if (run === tokenReuseRun) { msg.textContent = 'None of the tokens already saved in this browser can access this board. Paste a PAT below or make a new one.'; syncTokenUi(); }
     return false;
   }
-  $('sClaudePrompt').onclick = () => {
+  function routinePrompt() {
     const c = cfg(), base = `https://github.com/${c.repo}/blob/${c.branch}`, who = c.me || '<your-github-username>';
-    copyText([`Please set up my Claude routine for the task board in ${c.repo}, so that typing @claude in a task comment starts it.`, '',
+    return [[`Please set up my Claude routine for the task board in ${c.repo}, so that typing @claude in a task comment starts it.`, '',
       `My GitHub username is ${who}. The board repo is ${c.repo}.`, 'Read these first:',
       `- ${base}/board/ROUTINE-SETUP.md (the runbook)`, `- ${base}/board/routine-loader.txt (the short prompt to paste into the routine; it points at routine-prompt.md in the repo)`, `- ${base}/.claude/skills/board-routine-setup/SKILL.md (what you may and may not do)`, '',
       'Then ask me which mode I want:', 'A) Guide me: walk me through each step in order and check each one.',
       'B) Do it for me in my browser: if you have a browser tool (Claude in Chrome or the built-in browser), open claude.ai/code/routines, GitHub\'s fine-grained token page and console.cron-job.org (I am already signed in) and do the clicking and the non-secret fields: routine name, the loader prompt from routine-loader.txt, the repository, a dedicated environment with Trusted network access, no connectors, and the API trigger.', '',
-      'Rules: never type, paste, read back or store a secret (routine trigger token, BOARD_TOKEN, cron-job.org API key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Remove all connectors from the routine. Finish by running the verification checklist and the first test from the runbook and tell me what passed and failed.'].join('\n'),
-      'Setup prompt copied. Paste it into a new chat with Claude.');
-  };
+      'Rules: never type, paste, read back or store a secret (routine trigger token, BOARD_TOKEN, cron-job.org API key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Remove all connectors from the routine. Finish by running the verification checklist and the first test from the runbook and tell me what passed and failed.'].join('\n'), 'Setup prompt copied. Paste it into a new chat with Claude.'];
+  }
   // ---- Settings → Agents: a guided "Connect Claude" checklist. Each step shows ✓ when it is done, values save as you
   // type, and step 5 sends a real test task to the routine. Which steps are done is kept per board (BOARD_KEYS).
   const LOADER = "You work for the person named in the routine-fire-payload block that starts this run. It gives the task number (like #12)\nand who asked. Your full instructions live in this repository, which is already cloned: read board/routine-prompt.md now\nand follow it exactly, using the task number and requester from the payload. Do nothing else until you have read it.";   // the same text as board/kit/routine-loader.txt (a unit test checks this)
-  const showAgentBoxes = () => { $('boxClaude').hidden = !$('sUseClaude').checked; $('boxCodex').hidden = !$('sUseCodex').checked; };
+  const showAgentBoxes = () => { $('boxClaude').hidden = !$('sUseClaude').checked; $('boxCodex').hidden = !$('sUseCodex').checked; agentChips(); };
   const saveAgents = () => LS.set('kb_agents', KNOWN_AGENTS.filter(a => $(a === 'claude' ? 'sUseClaude' : 'sUseCodex').checked).join(','));
   $('sUseClaude').onchange = $('sUseCodex').onchange = () => { saveAgents(); showAgentBoxes(); cwRender(); };
+  $('sUseEmail').onchange = () => { LS.set('kb_email_sync', $('sUseEmail').checked ? '1' : ''); stashBoard(); agentChips(); };   // a marker per board: "I set this routine up"
+  // Settings → Agents & integrations: a chooser of the three integrations, each with the same status chip as its section
+  const AG_PICKS = [['agClaude', 'bot', '@claude in task comments', 'Your own Claude routine works on a task when you ask in a comment.'],
+    ['agLocal', 'laptop', 'Claude or Codex in your chat app', 'Chat with an assistant that reads and updates the board.'],
+    ['agEmail', 'mail', 'Email contact sync', 'A scheduled routine records contact history from Gmail or Outlook.']];
+  function agentChips() {
+    const codex = $('sUseCodex').checked; setChip($('agLocalChip'), codex ? '@codex on' : 'In your app', codex ? 'ok' : 'neutral');
+    const em = $('sUseEmail').checked; setChip($('agEmailChip'), em ? 'On' : 'Off', em ? 'ok' : 'neutral');
+    const box = $('agChooser'); box.textContent = '';
+    AG_PICKS.forEach(([id, ic, title, text]) => {
+      const b = el('button', 'agpick'), t = el('span', 'agpick__t'), chip = $(id + 'Chip').cloneNode(true); b.type = 'button'; chip.removeAttribute('id'); chip.removeAttribute('role');
+      t.append(el('b', null, title), el('span', 'muted', text)); b.append(ui.icon(ic), t, chip, ui.icon('chevron-right'));
+      b.onclick = () => $(id).scrollIntoView({ block: 'start', behavior: 'smooth' }); box.append(b);
+    });
+  }
   const khash = v => { let h = 5381; for (const ch of String(v)) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h.toString(36); };   // remembers which key was tested, without keeping the key twice
   const claudeFp = () => { const c = claudeCfg(); return khash([c.url, c.token, c.cron].join('|')); };
   const claudeWorks = () => { const v = LS.get('kb_claude_ok'); return !!v && (!v.includes('|') || v.split('|')[0] === claudeFp()); };   // a pass counts only for the same URL, token and key (old values had no fingerprint)
@@ -2551,8 +2617,8 @@ if (typeof window !== 'undefined') (() => {
   let cwOpen = 0;   // the step the person opened by hand (0: the first step that is not done, -1: none)
   function cwChip() {
     const ch = $('agClaudeChip'), st = cwState(), on = $('sUseClaude').checked, next = st.indexOf(false) + 1;
-    ch.textContent = !on ? 'Off' : st[4] ? '✓ Working' : next === 5 ? 'Ready to test' : st.some(Boolean) ? `Step ${next} of 5` : 'Not set up';
-    ch.className = 'agchip' + (!on ? '' : st[4] ? ' ok' : ' warn');
+    setChip(ch, !on ? 'Off' : st[4] ? '✓ Working' : next === 5 ? 'Ready to test' : st.some(Boolean) ? `Step ${next} of 5` : 'Not set up', !on ? 'neutral' : st[4] ? 'ok' : 'warn');
+    agentChips();
   }
   function cwRender() {
     const c = cfg(), st = cwState(), open = cwOpen || st.indexOf(false) + 1, owner = (c.repo || '').split('/')[0];
@@ -2592,7 +2658,7 @@ if (typeof window !== 'undefined') (() => {
   $('cwTest').onclick = async () => {
     const box = $('cwTestCk'), btn = $('cwTest'), who = cfg().me; box.textContent = '';
     if (!claudeReady()) { ckRow(box, false, 'Finish steps 3 and 4 first.'); return; }
-    if (!who) { ckRow(box, false, 'Add your GitHub username in Settings → Boards first.'); return; }
+    if (!who) { ckRow(box, false, 'Add your GitHub username in Settings → Connection first.'); return; }
     if (ro) { ckRow(box, false, 'This board is read-only here, so the test cannot make a task.'); return; }
     btn.disabled = true;
     const id = uid(), cid = 'c_' + Date.now().toString(36), at = nowIso(), title = 'Test: Claude says hello',
@@ -2648,7 +2714,7 @@ if (typeof window !== 'undefined') (() => {
       ours.forEach(j => { ckRow(box, null, `${j.title} · job ${j.jobId} · last result HTTP ${j.lastStatus || '-'}`); });
       if (ours.length) { const b = el('button', 'small danger', `Remove ${ours.length} Keeptrack job${ours.length === 1 ? '' : 's'}`); b.type = 'button';
         b.onclick = async () => { b.disabled = true; let n = 0; for (const j of ours) { const d = await cronFetch('DELETE', `/jobs/${j.jobId}`).catch(() => null); if (d && d.ok) n++; } box.textContent = ''; ckRow(box, n === ours.length, `Removed ${n} of ${ours.length} jobs.`); };
-        box.append(b); }
+        box.append(b); uiBtns(box); }
     } catch { ckRow(box, false, 'Could not reach cron-job.org.'); }
   };
   $('cwReport').onclick = () => {
@@ -2664,13 +2730,23 @@ if (typeof window !== 'undefined') (() => {
     code: ['Claude Code', [['Cloud: start a Code session with this board repo selected. If you are working in another code repo, add this board repo as the second repo. No plugin or PAT is needed.'], ['Local in this board repo: check your GitHub login, open the repo and start Claude. No Keeptrack plugin is needed.', 'gh auth status\ncd <board-repo>\ngit pull\nclaude'], ['Only for a local session in another project: install the plugin, then start a fresh session.', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
     codex: ['Codex', [['Run in a terminal:', 'codex plugin marketplace add rain-ventures-ai/keeptrack'], ['Type /plugins and install keeptrack.']]],
     cursor: ['Cursor', [['In Agent chat, type:', '/add-plugin https://github.com/rain-ventures-ai/keeptrack']]] };
-  const copySetupPrompt = () => { const c = cfg();
-    copyText(`Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.` +
-      (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into your current chat with Claude or another assistant.'); };
-  ['agSetupPrompt', 'hSetupPrompt', 'sSetupPrompt'].forEach(id => { $(id).onclick = copySetupPrompt; });
-  $('agEmailPrompt').onclick = () => { const c = cfg(); copyText(
-    `Set up a separate scheduled Keeptrack contact-email routine for ${c.repo || 'my board repo'}. Read the keeptrack-email skill and its references/routines.md guide in the repo (or at https://github.com/rain-ventures-ai/keeptrack/tree/main/board/kit/skills/keeptrack-email). Guide me one step at a time. First ask whether I use Gmail or Outlook, what first-run date range I want, and what schedule I want. Use read-only mailbox access, keep it separate from the @claude task routine, never handle my secrets, and never send, draft, delete, move, label or mark email as read. The routine must use exact stored contact addresses, keep automation/contact-email-sync.json with its last successful run, and update the board only through keeptrack.py.`,
-    'Email-routine setup prompt copied. Paste it into Claude Code in your board repo.'); };
+  // The one "Copy setup prompt" helper: every setup prompt (Help, Connection, Agents) is built here and copied the same way;
+  // PROMPT_PASTE (top of the file) says where each one goes, under its button.
+  function setupPrompt(kind) {   // [text, toast]
+    const c = cfg(), who = c.me || '<your-github-username>';
+    if (kind === 'routine') return routinePrompt();
+    if (kind === 'email') return [`Set up a separate scheduled Keeptrack contact-email routine for ${c.repo || 'my board repo'}. Read the keeptrack-email skill and its references/routines.md guide in the repo (or at https://github.com/rain-ventures-ai/keeptrack/tree/main/board/kit/skills/keeptrack-email). Guide me one step at a time. First ask whether I use Gmail or Outlook, what first-run date range I want, and what schedule I want. Use read-only mailbox access, keep it separate from the @claude task routine, never handle my secrets, and never send, draft, delete, move, label or mark email as read. The routine must use exact stored contact addresses, keep automation/contact-email-sync.json with its last successful run, and update the board only through keeptrack.py.`,
+      'Email-routine setup prompt copied. Paste it into Claude Code in your board repo.'];
+    if (kind === 'board') return [['Please help me set up a new Keeptrack board (a private GitHub repo with the Keeptrack board kit).', '',
+      `My GitHub username is ${who}.`, 'Read this guide first and follow it step by step: ' + HOME + '/board/kit/NEW-BOARD.md', '',
+      'Start by asking me the basics from step 1 (repo owner and name, the people on the board, client or area names).',
+      'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
+      'New-board prompt copied. Paste it into a new chat with Claude.'];
+    return [`Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.` +
+      (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into a new chat with Claude, Codex or Cursor.'];
+  }
+  function copyPrompt(kind) { const [text, msg] = setupPrompt(kind); copyText(text, msg); }
+  $('hSetupPrompt').onclick = () => copyPrompt('start');
   function renderTools() {
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg();
     bar.removeAttribute('role'); bar.removeAttribute('aria-label');   // an older cached index.html marks the holder as a tablist; ui.tabs inside is the tablist
@@ -2682,12 +2758,12 @@ if (typeof window !== 'undefined') (() => {
     (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code, link]) => step(t, code, link));
     step('Then say:', say);
     const hint = pick === 'phone' ? 'This is Claude Code cloud: it uses the board repo connection, so no plugin or PAT. Never paste a token into the chat.' : pick === 'code' ? 'Claude cloud uses the board repo connection. Local Claude uses your GitHub login. A PAT is only needed locally when there is no usable gh login; never paste one into chat.' : 'It needs a GitHub login on your computer (gh auth login) or a token in an environment variable. Never paste a token into the chat.';
-    body.append(ol, el('p', 'hint', hint));
+    body.append(ol, el('p', 'hint', hint)); uiBtns(body);
   }
   setTimeout(sweepClaudeJobs, 5000);
 
   // ---- settings ---------------------------------------------------------------
-  // ---- Settings → Checks: test each step of the connection and say what is wrong (never shows the token) ----------
+  // ---- Settings → Connection → Health: test each step of the connection and say what is wrong (never shows the token) ----------
   const ghGet = (path, accept, c = cfg()) => fetch(c.api + path, { cache: 'no-store', headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
   async function tokenRepos(c = cfg()) { try { const r = await ghGet('/user/repos?per_page=100&sort=updated', null, c); return r.ok ? (await r.json()).map(x => x.full_name) : []; } catch { return []; } }
   async function nearRepos(repo, c = cfg()) {   // repos this token can see, closest names first (same owner, then shared words)
@@ -2695,13 +2771,14 @@ if (typeof window !== 'undefined') (() => {
     const score = r => { const [ro, rn] = r.toLowerCase().split('/'); return (ro === o ? 2 : 0) + words.filter(w => rn.includes(w)).length; };
     return all.filter(r => r.toLowerCase() !== String(repo).toLowerCase()).sort((a, b) => score(b) - score(a)).slice(0, 5);
   }
-  function switchRepo(r) { whenSaved(() => { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Boards', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }); }
+  function switchRepo(r) { whenSaved(() => { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Connection', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }); }
   let lastReport = '';
+  let checkGen = 0;
   async function runChecks(over) {   // over: values typed in Connection but not saved yet
-    const c = Object.assign(cfg(), over || {}), out = $('ckList'), rows = []; out.textContent = ''; $('ckRun').disabled = true;
-    const add = (ok, title, detail, fix) => { rows.push({ ok, title, detail, fix }); const st = ok === true ? 'ok' : ok === false ? 'bad' : 'warn', li = el('li', 'ck ' + st);
-      const more = [detail ? el('div', 'ckd', detail) : null, fix || null].filter(Boolean);
-      li.append(ui.check({ state: st, text: el('b', null, title), fix: more.length ? more : null })); out.append(li); return li; };
+    const c = Object.assign(cfg(), over || {}), out = $('ckList'), rows = [], gen = ++checkGen; out.textContent = ''; $('ckRun').disabled = true; setChip($('ckChip'), 'Checking…', 'neutral');
+    const add = (ok, title, detail, fix) => { const st = ok === true ? 'ok' : ok === false ? 'bad' : 'warn', li = el('li', 'ck ' + st); if (gen !== checkGen) return li;   // a newer run took over the list
+      rows.push({ ok, title, detail, fix }); const more = [detail ? el('div', 'ckd', detail) : null, fix || null].filter(Boolean);
+      li.append(ui.check({ state: st, text: el('b', null, title), fix: more.length ? more : null })); uiBtns(li); out.append(li); return li; };
     try {
       add(REPO_RE.test(c.repo), 'Repository name', c.repo || '(empty)');
       add(c.path ? true : false, 'Branch and file', `${c.branch} · ${c.path}`);
@@ -2710,7 +2787,7 @@ if (typeof window !== 'undefined') (() => {
       let login = '';
       try { const r = await ghGet('/user', null, c); if (r.ok) { login = (await r.json()).login; const exp = r.headers.get('github-authentication-token-expiration');
           add(true, 'Token works', `Signed in as @${login}${exp ? ' · expires ' + exp : ''}`); if (c.me && login.toLowerCase() !== c.me.toLowerCase()) add(null, 'Username differs from token', `The token belongs to @${login}, but Settings says @${c.me}.`); }
-        else add(false, 'Token works', r.status === 401 ? 'GitHub rejected the token (401). It is wrong, revoked or expired. Make a new one in Settings → Boards.' : `GitHub said ${r.status}.`); } catch (e) { add(false, 'Reach GitHub', 'No connection to api.github.com: ' + (e.message || e)); return; }
+        else add(false, 'Token works', r.status === 401 ? 'GitHub rejected the token (401). It is wrong, revoked or expired. Make a new one in Settings → Connection.' : `GitHub said ${r.status}.`); } catch (e) { add(false, 'Reach GitHub', 'No connection to api.github.com: ' + (e.message || e)); return; }
       const rr = await ghGet(`/repos/${c.repo}`, null, c);
       if (!rr.ok) {
         const near = await nearRepos(c.repo, c), fix = el('div', 'cknext'), owner = c.repo.split('/')[0];
@@ -2720,7 +2797,7 @@ if (typeof window !== 'undefined') (() => {
         if (sameOwner) {
           ol.append(el('li', null, 'Open your GitHub token settings and edit this token.'), el('li', null, `Under Repository access, add “${c.repo}”.`), el('li', null, 'Confirm Contents is set to Read and write, then save the token.'), el('li', null, 'Come back here and select Run checks.'));
         } else {
-          ol.append(el('li', null, `Make a PAT with Resource owner “${owner}”.`), el('li', null, `Under Repository access, select “${c.repo}”.`), el('li', null, 'Set Contents to Read and write and generate the token.'), el('li', null, 'Return to Settings → Boards, paste it under Change connection, then select Save & connect.'));
+          ol.append(el('li', null, `Make a PAT with Resource owner “${owner}”.`), el('li', null, `Under Repository access, select “${c.repo}”.`), el('li', null, 'Set Contents to Read and write and generate the token.'), el('li', null, 'Return to Settings → Connection, paste it under Change connection, then select Save & connect.'));
         }
         fix.append(ol); const acts = el('div', 'ckactions');
         const make = el('a', 'btnlink', 'Make a correctly configured PAT'); make.href = patUrl(); make.target = '_blank'; make.rel = 'noopener noreferrer';
@@ -2737,7 +2814,7 @@ if (typeof window !== 'undefined') (() => {
       if (!br.ok) {
         if (c.branch === repo.default_branch) {   // GitHub just told us this branch exists, so this is a PAT scope problem rather than a spelling problem
           const fix = el('div', 'cknext'), owner = c.repo.split('/')[0]; fix.append(el('b', null, 'Do this next'));
-          const ol = el('ol'); ol.append(el('li', null, 'Open this PAT on GitHub, or make a correctly configured one below.'), el('li', null, 'Under Repository permissions, set Contents to Read and write, then save or generate the PAT.'), el('li', null, 'If you made a new PAT, paste it in Settings → Boards → Change connection and select Save & connect.'), el('li', null, 'Come back here and select Run checks.')); fix.append(ol);
+          const ol = el('ol'); ol.append(el('li', null, 'Open this PAT on GitHub, or make a correctly configured one below.'), el('li', null, 'Under Repository permissions, set Contents to Read and write, then save or generate the PAT.'), el('li', null, 'If you made a new PAT, paste it in Settings → Connection → Change connection and select Save & connect.'), el('li', null, 'Come back here and select Run checks.')); fix.append(ol);
           const acts = el('div', 'ckactions'), make = el('a', 'btnlink', 'Make a PAT with permissions prefilled'), edit = el('a', 'small', 'Edit an existing PAT'); make.href = patUrl(); edit.href = 'https://github.com/settings/personal-access-tokens'; [make, edit].forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; }); acts.append(make, edit); fix.append(acts, el('div', 'cknote', `The link pre-fills Resource owner “${owner}” and Contents/Issues: Read and write. GitHub still requires you to select “${c.repo}” yourself.`));
           add(false, 'PAT permissions — action needed', `The token can see “${c.repo}”, but it cannot read its default branch. It is missing Contents permission (GitHub said ${br.status}).`, fix);
         } else add(false, 'Branch', `Branch "${c.branch}" could not be read (GitHub said ${br.status}). The repo's default branch is "${repo.default_branch}". Check the branch name; if it is correct, give the PAT Contents: Read and write.`);
@@ -2751,7 +2828,7 @@ if (typeof window !== 'undefined') (() => {
           const total = files.reduce((n, [, x]) => n + (x.size || 0), 0), largest = files.reduce((a, b) => (b[1].size || 0) > (a[1].size || 0) ? b : a, ['', { size: 0 }]);
           add(total <= 5 * 1024 * 1024 && largest[1].size <= 200 * 1024 ? true : null, 'Split board size', `${files.filter(([p]) => p.startsWith('cards/')).length} card files · ${files.filter(([p]) => p.startsWith('people/')).length} person files · ${Math.round(total / 1024)} KB total · largest file ${Math.round((largest[1].size || 0) / 1024)} KB${total > 5 * 1024 * 1024 ? '. Warning: total size is above 5 MB.' : ''}${largest[1].size > 200 * 1024 ? `. Warning: ${largest[0]} is above 200 KB.` : ''}`);
           add(true, 'Board file', `schema v4 split (this page reads up to v${KNOWN_SCHEMA})`);
-        } else { add(kb < 600, 'Board size', `${kb} KB. GitHub's limit for this page is 100 MB, but the board stays fast below about 1 MB. ${kb >= 600 ? 'Archive old items: Settings → General → Archive.' : ''}`); add(Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? false : true, 'Board file', `${(raw.tasks || []).length} tasks · ${(raw.contacts || []).length} people · schema v${raw.version || 1} (this page reads up to v${KNOWN_SCHEMA}) · ${Math.round(d.size / 1024)} KB`); } }
+        } else { add(kb < 600, 'Board size', `${kb} KB. GitHub's limit for this page is 100 MB, but the board stays fast below about 1 MB. ${kb >= 600 ? 'Archive old items: Settings → Board → Archive.' : ''}`); add(Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? false : true, 'Board file', `${(raw.tasks || []).length} tasks · ${(raw.contacts || []).length} people · schema v${raw.version || 1} (this page reads up to v${KNOWN_SCHEMA}) · ${Math.round(d.size / 1024)} KB`); } }
       catch (e) { add(false, 'Board file', 'The file is not valid board JSON: ' + (e.message || e)); return; }
       const perm = repo.permissions || {}; add(perm.push ? true : null, 'Write access', perm.push ? 'Your account can write to this repo. The token also needs Contents: Read and write; a save shows "Token rejected" if it does not.' : 'Your account cannot push to this repo, so saves will fail.');
       try { const want = (await (await fetch('kit/manifest.json', { cache: 'no-store' })).json()).version, dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : '';
@@ -2761,11 +2838,13 @@ if (typeof window !== 'undefined') (() => {
     } finally {
       if (lastProblem && !over) add(null, 'Last problem on this page', lastProblem);
       const ua = navigator.userAgent; lastReport = [`Board checks · ${new Date().toISOString()} · page ${loadedVersion()}`, `repo ${c.repo} · branch ${c.branch} · path ${c.path} · user ${c.me || '-'}`, ...rows.map(r => `${r.ok === true ? 'OK  ' : r.ok === false ? 'FAIL' : 'WARN'} ${r.title}: ${r.detail || ''}`), `browser ${ua}`].join('\n');
-      $('ckCopy').hidden = false; $('ckRun').disabled = false;
+      if (gen === checkGen) { const bad = rows.filter(r => r.ok === false).length, warn = rows.filter(r => r.ok !== true && r.ok !== false).length, at = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setChip($('ckChip'), bad ? `${bad} problem${bad === 1 ? '' : 's'} · ${at}` : warn ? `${warn} warning${warn === 1 ? '' : 's'} · ${at}` : `All good · ${at}`, bad ? 'danger' : warn ? 'warn' : 'ok');
+        $('ckCopy').hidden = false; $('ckRun').disabled = false; }
     }
   }
   // ---- alerts: desktop notifications for changes made by other people (and by your own agents) ----------
-  // Works while the board is open in any tab (also a background tab). Settings → Alerts picks what to hear about.
+  // Works while the board is open in any tab (also a background tab). Settings → Preferences → Notifications picks what to hear about.
   const ALERT_KINDS = [['mention', '@ mentions of me'], ['assign', 'Cards assigned to me'], ['mine', 'Comments and changes on my cards'], ['agents', 'Updates from my agents'],
     ['blocked', 'An agent is blocked or stuck'], ['new', 'New cards'], ['comment', 'All new comments'], ['done', 'Cards completed'], ['all', 'Every other change']];
   const ALERT_PRESETS = { all: ALERT_KINDS.map(k => k[0]), me: ['mention', 'assign', 'mine', 'agents', 'blocked'], tagged: ['mention', 'assign'], off: [] };
@@ -2796,42 +2875,70 @@ if (typeof window !== 'undefined') (() => {
     try { const x = new Notification(title, { body: String(body).slice(0, 240), tag: id || 'board', icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') });
       x.onclick = () => { window.focus(); if (id) openCard(id); x.close(); }; } catch { toast(title + ': ' + body); }
   }
-  function renderAlerts() {
+  function renderAlerts() {   // Settings → Preferences → Notifications
     const ac = alertCfg(), perm = 'Notification' in window ? Notification.permission : 'unsupported', box = $('alKinds'); box.textContent = '';
-    $('alOn').checked = ac.on;
-    $('alPerm').textContent = perm === 'granted' ? '✓ Notifications are allowed in this browser.' : perm === 'denied' ? '✗ This browser blocks notifications from this page. Allow them in the site settings (the icon left of the address), then reload.' : perm === 'unsupported' ? 'This browser cannot show notifications. Alerts show as messages on the page.' : 'Notifications are not allowed yet. Switch alerts on to ask.';
-    ALERT_KINDS.forEach(([k, l]) => { const lab = el('label', 'chk'), i = el('input'); i.type = 'checkbox'; i.checked = ac.kinds.includes(k); i.disabled = !ac.on;
+    $('alOn').checked = ac.on; $('alPresetRow').hidden = $('alFold').hidden = !ac.on;
+    setChip($('alChip'), !ac.on ? 'Off' : perm === 'granted' ? 'On' : perm === 'denied' ? 'Blocked' : 'On · in the page', !ac.on ? 'neutral' : perm === 'granted' ? 'ok' : perm === 'denied' ? 'danger' : 'warn');
+    const pm = $('alPerm'); pm.textContent = '';
+    pm.append(ui.check(perm === 'granted' ? { state: 'ok', text: 'Notifications are allowed.' } : perm === 'denied' ? { state: 'bad', text: 'Notifications are blocked for this page.', fix: 'Allow them in the site settings (the icon left of the address), then reload.' }
+      : perm === 'unsupported' ? { state: 'warn', text: 'This browser cannot show notifications.', fix: 'Alerts show as messages on the page instead.' } : { state: 'warn', text: 'Not allowed yet.', fix: 'Switching alerts on asks the browser for permission.' }));
+    ALERT_KINDS.forEach(([k, l]) => { const lab = el('label', 'schk'), i = el('input'); i.type = 'checkbox'; i.checked = ac.kinds.includes(k);
       i.onchange = () => { const o = alertCfg(); o.kinds = ALERT_KINDS.map(x => x[0]).filter(x => x === k ? i.checked : o.kinds.includes(x)); saveAlertCfg(o); syncPreset(); }; lab.append(i, document.createTextNode(' ' + l)); box.append(lab); });
     syncPreset();
   }
-  function syncPreset() { const ks = alertCfg().kinds.slice().sort().join(); $('alPreset').value = Object.keys(ALERT_PRESETS).find(p => ALERT_PRESETS[p].slice().sort().join() === ks) || 'custom'; }
+  function syncPreset() { const ks = alertCfg().kinds.slice().sort().join(); $('alPreset').value = Object.keys(ALERT_PRESETS).find(p => ALERT_PRESETS[p].slice().sort().join() === ks) || 'custom'; if ($('alPreset').value === 'custom') $('alFold').open = true; }
   $('alOn').onchange = async () => { const o = alertCfg(); o.on = $('alOn').checked; saveAlertCfg(o);
     if (o.on && 'Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch {} } renderAlerts(); };
-  $('alPreset').onchange = async () => { const v = $('alPreset').value; if (!ALERT_PRESETS[v]) return; const o = alertCfg(); o.kinds = ALERT_PRESETS[v].slice(); o.on = v !== 'off'; saveAlertCfg(o);
+  $('alPreset').onchange = async () => { const v = $('alPreset').value; if (v === 'custom') { $('alFold').open = true; return; } if (!ALERT_PRESETS[v]) return; const o = alertCfg(); o.kinds = ALERT_PRESETS[v].slice(); o.on = v !== 'off'; saveAlertCfg(o);
     if (o.on && 'Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch {} } renderAlerts(); };
   $('alTest').onclick = () => notify('Test alert', 'Board alerts work in this browser.', null);
-  function settingsTab(name) {
-    let edit = false; if (name === 'conn') { name = 'boards'; edit = true; }   // the connection fields live in Boards → This board → Change connection
-    SET_TABS.forEach(([n]) => { $('panel' + cap(n)).hidden = n !== name; }); setTabs.select(name);
-    $('dlgSettings').scrollTop = 0;   // each tab starts at the top
-    if (name === 'boards') { renderBoards(); showEdit(edit || !cfg().token); if (edit) setTimeout(() => (cfg().repo ? $('sToken') : $('sRepo')).focus(), 30); }
-    if (name === 'alerts') renderAlerts();
-    if (name === 'claude') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key'); $('sClaudeMsg').textContent = '';
-      const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
+
+  // ---- Settings tabs: Preferences (this browser), Board (shared), Connection (this browser's link to it), Agents & integrations.
+  // Tabs keep tabPrefs/panelPrefs-style ids. settingsTab(name) is the deep link every other place uses: it also takes the
+  // names of the old tabs and of single sections, and opens or scrolls to the right one.
+  const SET_TABS = [['prefs', 'Preferences'], ['board', 'Board'], ['conn', 'Connection'], ['agents', 'Agents & integrations', 'Agents']];
+  const SET_LINKS = { general: ['prefs'], preferences: ['prefs'], appearance: ['prefs', 'secLook'], alerts: ['prefs', 'secAlerts'], notifications: ['prefs', 'secAlerts'],
+    modes: ['board', 'secModes'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], archive: ['board', 'secArchive'],
+    connect: ['conn'], conn: ['conn', 'bThis'], boards: ['conn', 'secBoards'], checks: ['conn', 'secHealth'], health: ['conn', 'secHealth'], move: ['conn', 'secMove'], advanced: ['conn', 'secAdv'],
+    claude: ['agents', 'agClaude'], codex: ['agents', 'agLocal'], chat: ['agents', 'agLocal'], email: ['agents', 'agEmail'] };
+  const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'prefs', style: 'underline', label: 'Settings sections', onChange: v => setPanel(v) });
+  setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach((b, i) => { const n = cap(b.dataset.value), short = SET_TABS[i][2]; b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n);
+    if (short) { const l = b.querySelector('.ui-tab__label'); l.textContent = ''; l.append(el('span', 'tl-long', SET_TABS[i][1]), el('span', 'tl-short', short)); } });   // phones: the short name, so all four fit
+  { const old = $('setTabs') || document.querySelector('#dlgSettings .stabs'); if (old) old.replaceWith(setTabs); }   // .stabs: an older cached page
+  const secTop = id => { const x = $(id); if (x) requestAnimationFrame(() => x.scrollIntoView({ block: 'start' })); };
+  function setPanel(tab) {   // a tab chosen by hand: its panel, from the top
+    SET_TABS.forEach(([n]) => { $('panel' + cap(n)).hidden = n !== tab; }); setTabs.select(tab);
+    $('dlgSettings').scrollTop = 0;
+    if (tab === 'prefs') renderAlerts();
+    if (tab === 'board') renderBoardTab();
+    if (tab === 'conn') { renderBoards(); showEdit(!!cfg().repo && !cfg().token && !DEMO); autoCheck(); }
+    if (tab === 'agents') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key');
+      const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); $('sUseEmail').checked = !!LS.get('kb_email_sync'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
       $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
   }
-  // Settings sections: one ui.tabs; each tab keeps its old id (tabGeneral …) so the panels' aria-labelledby still points at it
-  const SET_TABS = [['general', 'General'], ['boards', 'Boards'], ['claude', 'Agents'], ['alerts', 'Alerts'], ['checks', 'Checks']];
-  const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'general', style: 'underline', label: 'Settings sections', onChange: v => settingsTab(v) });
-  setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach(b => { const n = cap(b.dataset.value); b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n); });
-  { const old = $('setTabs') || document.querySelector('#dlgSettings .stabs'); if (old) old.replaceWith(setTabs); }   // .stabs: an older cached page
+  function settingsTab(name, over) {   // a deep link: an old tab name, a tab, or a section (see SET_LINKS)
+    const [tab, sec] = SET_LINKS[name] || [SET_TABS.some(t => t[0] === name) ? name : 'prefs'];
+    setPanel(tab);
+    if (name === 'conn') { showEdit(true); setTimeout(() => (cfg().repo ? $('sToken') : $('sRepo')).focus(), 30); }
+    if (name === 'move' || name === 'advanced') $('secAdv').toggle(true);
+    if (name === 'checks' || name === 'health') runChecks(over);
+    if (name === 'archive') renderArchiveBox();
+    if (sec && name !== 'conn') secTop(sec);
+  }
+  window.kbSettings = Object.freeze({ open: name => { if (!$('dlgSettings').open) $('btnSettings').click(); settingsTab(name); } });   // the same deep links, for the console and the browser tests
+  let autoChecked = '';
+  function autoCheck() {   // Connection opened while the board is not connected: run the checks once per board, so the reason shows without a click
+    const c = cfg(); if (DEMO || !c.repo || !c.token || lastSyncOk || ro === 'demo' || autoChecked === c.repo) return;
+    autoChecked = c.repo; runChecks();
+  }
   $('pubOk').onclick = () => $('dlgPublic').close();
   $('ckRun').onclick = () => runChecks();
-  $('sTest').onclick = () => { const repo = $('sRepo').value.trim(), typed = $('sToken').value.trim(), same = repo === cfg().repo;
+  $('sTest').onclick = () => { const repo = $('sRepo').value.trim(), typed = $('sToken').value.trim(), same = repo === cfg().repo;   // checks the typed values here, in Health
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
-    settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
-  $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab('general'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
+    runChecks(over); secTop('secHealth'); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
+  $('sClose').onclick = () => $('dlgSettings').close();
+  const fillConn = () => { const c = cfg(); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); fillConn(); setPanel('prefs'); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
@@ -2839,8 +2946,8 @@ if (typeof window !== 'undefined') (() => {
     return 'https://github.com/settings/personal-access-tokens/new?' + q; };
   $('sRepo').addEventListener('input', () => { $('patLink').href = patUrl(); });
   $('btnSettings').addEventListener('click', () => { $('patLink').href = patUrl(); });
-  $('sCancel').onclick = () => $('dlgSettings').close();
-  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
+  $('sCancel').onclick = () => { fillConn(); showEdit(false); };   // put the saved values back and fold the form
+  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Token removed'); };
   $('sSave').onclick = async () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
@@ -2866,31 +2973,40 @@ if (typeof window !== 'undefined') (() => {
     const m = el('button', 'bpmanage', 'Manage boards…'); m.type = 'button'; m.onclick = () => { closePops(); $('btnSettings').click(); settingsTab('boards'); }; pop.append(m);
   }
   renderSwitcher(); popover($('boardBtn'), $('boardPop'));
-  // Settings → Boards: this board (status, change connection, checks), the other boards, and the "Add a board" wizard
-  const showEdit = on => { $('bEdit').hidden = !on; $('bEditBtn').setAttribute('aria-expanded', String(on)); };
-  $('bEditBtn').onclick = () => showEdit($('bEdit').hidden);
-  $('bCheck').onclick = () => { settingsTab('checks'); runChecks(); };
+  // Settings → Connection: this board (status, the connection form, Test connection), Health, your boards and "Add a board",
+  // and Advanced (version, move settings, forget the token, remove a board). The form is a fold: open when a token is missing.
+  const showEdit = on => { $('bEditFold').open = !!on; };
   function renderThis() {
-    const c = cfg(), has = !!c.repo; $('bThisBadge').textContent = ''; if (has) $('bThisBadge').append(badge(c.repo));
-    $('bThisRepo').textContent = has ? c.repo : 'No board connected';
-    $('bThisSub').textContent = has ? `${c.branch} · ${c.path}${c.me ? ' · you are @' + c.me : ''}` : 'Add a board below, or fill in the connection.';
-    const [t, k] = !has ? ['Not set up', 'warn'] : !c.token ? ['No token', 'warn'] : ro === 'token' ? ['Read-only', 'warn'] : ro === 'demo' ? ['Demo', ''] : lastSyncOk ? ['Connected', 'ok'] : ['Not connected', 'warn'];
-    const ch = $('bThisChip'); ch.textContent = t; ch.className = 'agchip' + (k ? ' ' + k : '');
+    const c = cfg(), has = !!c.repo, setup = !has && !DEMO, st = $('bState'), p = $('panelConn'); $('bThisBadge').textContent = ''; if (has) $('bThisBadge').append(badge(c.repo));
+    $('bThisRepo').textContent = has ? c.repo : 'No board connected'; $('bThisSub').textContent = has ? `${c.branch} · ${c.path}` : '';
+    $('bThisMe').textContent = c.me ? '@' + c.me : 'Not set: edits show as “someone”'; $('bThisMe').classList.toggle('muted', !c.me);
+    const [t, k] = DEMO ? ['Demo', 'neutral'] : !has ? ['Not set up', 'warn'] : !c.token ? ['No token', 'warn'] : ro === 'token' ? ['Read-only', 'warn'] : ro === 'demo' ? ['Demo', 'neutral'] : lastSyncOk ? ['Connected', 'ok'] : ['Not connected', 'danger'];
+    setChip($('bThisChip'), t, k);
+    st.textContent = '';
+    if (DEMO) st.append(ui.banner({ tone: 'info', icon: 'lock', text: 'This is a read-only demo board with invented data. There is nothing to connect here, and nothing you do is saved.', action: { label: 'Create my own board', onClick: () => { location.href = location.pathname + '?setup'; } } }));
+    else if (setup) st.append(ui.banner({ tone: 'info', icon: 'compass', text: 'No board yet. Add one below: connect a board you already have, or make a new one. Each step checks itself.' }));
+    [...st.querySelectorAll('.ui-banner')].forEach(b => b.setAttribute('role', 'status'));
+    $('bThis').hidden = !!DEMO; $('secHealth').hidden = !!DEMO || setup; $('bThisInfo').hidden = setup; $('sForgetRow').hidden = !c.token;
+    $('bEditBtn').textContent = setup ? 'Enter the details by hand' : 'Change connection';
+    p.classList.toggle('is-setup', setup);
+    if (setup && $('secBoards').nextElementSibling !== $('bThis')) p.insertBefore($('secBoards'), $('bThis'));   // setup: the "Add a board" steps come first
+    if (!setup && $('secHealth').nextElementSibling !== $('secBoards')) $('secHealth').after($('secBoards'));
   }
+  function openAddWiz(step = 0) { Object.assign(AW, { step, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); }
   function renderBoards() {
-    renderThis(); if ($('bWiz').hidden) $('bAdd').hidden = false;
-    const box = $('bList'), cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).filter(r => r !== cur).sort(); box.textContent = '';
-    if (!repos.length) box.append(el('div', 'hint', cur ? 'No other boards yet.' : 'No board yet.'));
-    repos.forEach(r => { const row = el('div', 'brow'), name = el('span', 'bname', r); row.append(badge(r), name);
-      if (r === cur) row.append(el('span', 'bcur', 'this board'));
-      else { const o = el('button', 'small', 'Open'), x = el('button', 'small danger', 'Remove');
-        o.onclick = () => { activateBoard(r); location.replace(boardUrl()); };
-        x.onclick = async () => { if (!(await ask('Remove board?', [`Remove ${r} from the boards in this browser?`, 'Its saved token and routine settings are deleted here. The repo itself is not changed.'], 'Remove', true))) return; forgetBoard(r); renderBoards(); renderSwitcher(); };
-        row.append(o, x); }
-      box.append(row); }); }
+    renderThis(); const cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).filter(r => r !== cur).sort(), box = $('bList'), rm = $('bRemoveList'); box.textContent = rm.textContent = '';
+    if (!cur && !DEMO && $('bWiz').hidden) openAddWiz();   // setup: the wizard is open from the start
+    if ($('bWiz').hidden) $('bAdd').hidden = false;
+    box.hidden = !cur && !repos.length;
+    if (cur) { const row = el('div', 'brow'); row.append(badge(cur), el('span', 'bname', cur), el('span', 'bcur', 'this board')); box.append(row); }
+    if (!repos.length) rm.append(el('span', 'hint', 'No other boards saved in this browser.'));
+    repos.forEach(r => {
+      const row = el('div', 'brow'); row.append(badge(r), el('span', 'bname', r), ui.button({ label: 'Open', size: 'sm', onClick: () => { activateBoard(r); location.replace(boardUrl()); } })); box.append(row);
+      const x = el('div', 'brow'), rb = ui.button({ label: 'Remove', size: 'sm', onClick: async () => { if (!(await ask('Remove board?', [`Remove ${r} from the boards in this browser?`, 'Its saved token and routine settings are deleted here. The repo itself is not changed.'], 'Remove', true))) return; forgetBoard(r); renderBoards(); renderSwitcher(); } });
+      rb.classList.add('danger'); x.append(badge(r), el('span', 'bname', r), rb); rm.append(x); }); }
   // "Add a board": pick new or existing; for an existing one, paste a token, pick the repo, the page checks for the board file
   const AW = { step: 0, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null };
-  $('bAdd').onclick = () => { Object.assign(AW, { step: 0, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); $('bWiz').scrollIntoView({ block: 'nearest' }); };
+  $('bAdd').onclick = () => { openAddWiz(); $('bWiz').scrollIntoView({ block: 'nearest' }); };
   function renderAddWiz() {
     const w = $('bWiz'); w.textContent = ''; const s = AW.step, foot = el('div', 'wfoot'), back = el('button', null, s ? 'Back' : 'Cancel'), next = el('button', 'primary', 'Next');
     back.type = next.type = 'button'; back.onclick = () => { if (s) { AW.step--; renderAddWiz(); } else { w.hidden = true; $('bAdd').hidden = false; } };
@@ -2960,14 +3076,8 @@ if (typeof window !== 'undefined') (() => {
         const me = cfg().me; if (AW.me && (!me || me.toLowerCase() === AW.me.toLowerCase() || AW.useMe)) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); };
       look();
     }
-    foot.append(back, el('span', 'spacer'), next); w.append(foot);
+    foot.append(back, el('span', 'spacer'), next); w.append(foot); uiBtns(w);
   }
-  $('bNewPrompt').onclick = () => { const who = cfg().me || '<your-github-username>';
-    copyText(['Please help me set up a new Keeptrack board (a private GitHub repo with the Keeptrack board kit).', '',
-      `My GitHub username is ${who}.`, 'Read this guide first and follow it step by step: ' + HOME + '/board/kit/NEW-BOARD.md', '',
-      'Start by asking me the basics from step 1 (repo owner and name, the people on the board, client or area names).',
-      'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
-      'New-board prompt copied. Paste it into your current chat with Claude.'); };
   document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => { t.onclick = e => { e.stopPropagation(); closePops(); setView(dockLast[t.dataset.grp]); }; });
   popover($('dockMenu'), $('dockPop'), { place: false });   // the dock's menu opens upwards from the bar (CSS)
   document.querySelectorAll('[data-tour-start]').forEach(b => { b.onclick = e => { e.stopPropagation(); startTour(); }; });
@@ -3247,7 +3357,7 @@ if (typeof window !== 'undefined') (() => {
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
   }
-  // ---- Settings → General → Columns: one mutate per action, so each can be undone ---------------------------------
+  // ---- Settings → Board → Columns: one mutate per action, so each can be undone ---------------------------------
   const PROTECTED_COLS = ['todo', 'in-progress', 'done'];   // the agent commands put cards in these by id
   const colSlug = (name, used) => { const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'column'; let id = base, n = 2; while (used.has(id)) id = `${base}-${n++}`; return id; };   // same ids as keeptrack.py column-add
   let colRemoving = '';   // the column whose "move its cards to" row is open
@@ -3278,6 +3388,7 @@ if (typeof window !== 'undefined') (() => {
       list.append(row);
     });
     $('colNew').disabled = $('colAdd').disabled = locked;
+    uiBtns(list);
   }
   async function removeColumn(id, to) {
     const col = state.columns.find(c => c.id === id); if (!col) return;
@@ -3811,8 +3922,8 @@ if (typeof window !== 'undefined') (() => {
       next.textContent = 'Create my board'; next.onclick = () => wizardGo(next);
     }
     foot.append(back, el('span', 'spacer'), next); w.append(body, foot); board.append(w);
-    const have = $('wHave'); if (have) have.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('boards'); $('bAdd').click(); AW.step = 1; renderAddWiz(); };
-    const imp = $('wImport'); if (imp) imp.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('general'); setTimeout(() => { const t = document.querySelector('#panelGeneral textarea'); if (t) t.focus(); }, 60); };
+    const have = $('wHave'); if (have) have.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('boards'); openAddWiz(1); };
+    const imp = $('wImport'); if (imp) imp.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('move'); setTimeout(() => $('xPaste').focus(), 60); };
   }
   function endSetup() { if (SETUP) { SETUP = false; history.replaceState(null, '', location.pathname); } $('board').className = ''; }
   async function wizardGo(btn) {
@@ -3989,7 +4100,7 @@ if (typeof window !== 'undefined') (() => {
     $('dlgArch').showModal();
   }
   $('aClose').onclick = () => $('dlgArch').close();
-  // ---- Settings → General → Labels: rename, recolour, delete and add; each action is one mutate (one Undo) ----------------
+  // ---- Settings → Board → Labels: rename, recolour, delete and add; each action is one mutate (one Undo) ----------------
   const LABEL_DEFAULT = '#6b778c', hex6 = c => { c = labelColorOf(c); return /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : /^#[0-9a-f]{3}$/i.test(c) ? '#' + [...c.slice(1)].map(x => x + x).join('').toLowerCase() : LABEL_DEFAULT; };
   const labelColorOf = c => typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : LABEL_DEFAULT;
   const labelUse = name => state.tasks.filter(t => t.labels.includes(name));
@@ -4031,21 +4142,36 @@ if (typeof window !== 'undefined') (() => {
     if (edit) {
       const add = el('div', 'lbrow lbnew'), name = el('input'), col = el('input'), b = elI('button', 'small', 'plus', 'Add label'); name.placeholder = 'New label name'; name.maxLength = 40; name.setAttribute('aria-label', 'New label name'); col.type = 'color'; col.value = LABEL_DEFAULT; col.title = 'Colour'; col.setAttribute('aria-label', 'Colour for the new label'); b.type = 'button';
       b.onclick = () => labelAdd(name.value, col.value); name.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); b.click(); } }; add.append(name, col, b); box.append(add);
-    }
+    }  uiBtns(box);
   }
-  function renderArchiveBox() {   // Settings → General → Archive
+  function renderArchiveBox() {   // Settings → Board → Archive
     const box = $('archBox'); if (!box) return; box.textContent = '';
     const kb = Math.round(boardSize / 1024), limit = isSplit(state) ? 5 * 1024 : SIZE_WARN / 1024, files = (state.archive || {}).files || {}, r = archRules(), n = archiveCounts();
-    const tot = Object.values(files).reduce((m, f) => ({ t: m.t + (f.tasks || 0), p: m.p + (f.contacts || 0) }), { t: 0, p: 0 });
-    box.append(el('div', 'hint', `Board ${isSplit(state) ? 'files' : 'file'}: ${kb ? kb + ' KB' : 'size not known yet'}${kb > limit ? ' (large: archive old items)' : ''}. In the archive: ${tot.t} tasks and ${tot.p} people${Object.keys(files).length ? ' (' + Object.keys(files).sort().join(', ') + ')' : ''}.`));
-    box.append(el('div', 'hint', `Archive moves tasks that have been done for more than ${r.done_days} days, Lost people with no change for ${r.lost_days} days, and all but the last ${r.keep_history} history lines of each card. Search still finds them, and you can bring any of them back.`));
-    const b = elI('button', null, 'archive', n.tasks + n.contacts + n.history ? `Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : 'Nothing to archive yet'); b.type = 'button'; b.disabled = !!ro || !(n.tasks + n.contacts + n.history); b.onclick = archiveNow; box.append(b);
+    const tot = Object.values(files).reduce((m, f) => ({ t: m.t + (f.tasks || 0), p: m.p + (f.contacts || 0) }), { t: 0, p: 0 }), years = Object.keys(files).sort();
+    const size = el('span', kb > limit ? 'warntext' : null, kb ? `${kb} KB${kb > limit ? ' · large: archive old items' : ''}` : 'Not known yet');
+    box.append(ui.props([{ label: isSplit(state) ? 'Board files' : 'Board file', value: size },
+      { label: 'In the archive', value: `${tot.t} task${tot.t === 1 ? '' : 's'} and ${tot.p} ${tot.p === 1 ? 'person' : 'people'}${years.length ? ' (' + years.join(', ') + ')' : ''}` },
+      { label: 'What moves', value: el('span', 'hint', `Tasks done over ${r.done_days} days ago, Lost people unchanged for ${r.lost_days} days, and all but the last ${r.keep_history} history lines of a card.`) }]));
+    const todo = n.tasks + n.contacts + n.history;
+    box.append(ui.button({ icon: 'archive', label: todo ? `Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : 'Nothing to archive yet', disabled: !!ro || !todo, onClick: archiveNow }));
+  }
+  // Settings → Board: a read-only note when this browser cannot change the shared board, then the sections; Advanced shows the file
+  function renderBoardTab() {
+    const box = $('sBoardRo'), c = cfg(); box.textContent = '';
+    const why = DEMO || ro === 'demo' ? 'Demo board: you can look at these settings, but nothing you change is saved.' : !c.repo ? 'No board connected yet. Connect one under Connection first.'
+      : ro === 'public' || !c.token ? 'Read-only: this browser has no token for this board, so its shared settings cannot change here.' : ro === 'token' ? 'Read-only: your token can read this board but cannot change it.'
+      : newerSchema ? 'Read-only: the board file is newer than this page. Reload to update.' : '';
+    if (why) { const b = ui.banner({ tone: 'warn', icon: 'lock', text: why }); b.setAttribute('role', 'status'); box.append(b); }
+    syncModeSettings(); renderColumnsBox(); renderLabelBox(); renderArchiveBox();
+    const info = $('bInfo'); info.textContent = '';
+    info.append(ui.props([{ label: 'Repository', value: c.repo || '—' }, { label: 'Branch', value: c.repo ? c.branch : '—' }, { label: 'File', value: c.repo ? c.path : '—' },
+      { label: 'Format', value: !c.repo ? '—' : `${isSplit(state) ? 'Split: one file per card and person' : 'One file'} · this page reads up to schema v${KNOWN_SCHEMA}` }]));
   }
   function sizeBar() {   // a quiet nudge once the board file gets large
     const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
     if (!big) { showBar('sizeBar', null); return; }
     showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
-      action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('general'); renderArchiveBox(); $('archBox').scrollIntoView({ block: 'center' }); } },
+      action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('archive'); } },
       onDismiss: () => LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))) });
   }
 
@@ -4140,5 +4266,5 @@ if (typeof window !== 'undefined') (() => {
   };
   $('sThemeExport').onclick = () => { if (window.kbDesignMd) copyText(window.kbDesignMd.exportCurrent(), 'Theme copied as DESIGN.md'); };
   applyRo(); render();
-  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); settingsTab('boards'); } })();   // no token for this board yet: Settings opens where it is connected
+  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // no token for this board yet: the app opens Settings itself, on Connection with the form open (a click on Settings opens Preferences)
 })();

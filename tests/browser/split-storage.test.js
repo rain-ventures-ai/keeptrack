@@ -127,10 +127,10 @@ let base;
     assert.equal(await page.locator('#btnAgent, #btnCopyMd, #fCopyMd, #sortMenuMobile, .sortpick').count(), 0);
     await page.locator('#btnCopy').click(); assert.equal(await page.locator('#dlgCopy').getAttribute('open'), ''); assert.deepEqual(await page.locator('#dlgCopy .copychoices b').allTextContents(), ['Copy as Markdown', 'Copy prompt for an agent']); await page.locator('#copyAgent').click(); assert.match(await page.evaluate(() => window.__copied), /You are working from the Keeptrack board/);
     await page.locator('#btnCopy').click(); await page.locator('#copyMarkdown').click(); assert.match(await page.evaluate(() => window.__copied), /^# Board: acme\/board/);
-    await page.locator('#btnHelp').click(); const helpRepo = page.locator('#dlgHelp .mainRepoLink'); assert.equal(await helpRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await helpRepo.getAttribute('target'), '_blank'); assert.match(await page.locator('#dlgHelp .hagent').textContent(), /board repo.*no plugin.*another project.*install the Keeptrack plugin/s); assert.match(await page.locator('#dlgHelp .hagent a').allTextContents().then(x => x.join(' ')), /Which setup.*Plugin guide.*Keeptrack skills/); await page.locator('#hSetupPrompt').click(); assert.match(await page.evaluate(() => window.__copied), /in this conversation.*Do not just explain the options/); await page.locator('#hAgentSetup').click(); assert.equal(await page.locator('#dlgHelp').getAttribute('open'), null); assert.equal(await page.locator('#dlgSettings').getAttribute('open'), ''); assert.equal(await page.locator('#tabClaude').getAttribute('aria-selected'), 'true');
+    await page.locator('#btnHelp').click(); const helpRepo = page.locator('#dlgHelp .mainRepoLink'); assert.equal(await helpRepo.getAttribute('href'), 'https://github.com/rain-ventures-ai/keeptrack'); assert.equal(await helpRepo.getAttribute('target'), '_blank'); assert.match(await page.locator('#dlgHelp .hagent').textContent(), /board repo.*no plugin.*another project.*install the Keeptrack plugin/s); assert.match(await page.locator('#dlgHelp .hagent a').allTextContents().then(x => x.join(' ')), /Which setup.*Plugin guide.*Keeptrack skills/); await page.locator('#hSetupPrompt').click(); assert.match(await page.evaluate(() => window.__copied), /in this conversation.*Do not just explain the options/); await page.locator('#hAgentSetup').click(); assert.equal(await page.locator('#dlgHelp').getAttribute('open'), null); assert.equal(await page.locator('#dlgSettings').getAttribute('open'), ''); assert.equal(await page.locator('#tabAgents').getAttribute('aria-selected'), 'true');
     assert.equal(await page.locator('#agSetupPrompt').isVisible(), true);
-    assert.equal(await page.locator('#agEmail').isVisible(), true); assert.equal(await page.locator('#agEmailPrompt').isVisible(), true); await page.locator('#agEmailPrompt').click(); assert.match(await page.evaluate(() => window.__copied), /scheduled Keeptrack contact-email routine for acme\/board/); assert.match(await page.evaluate(() => window.__copied), /automation\/contact-email-sync\.json/); await page.locator('#agTools button', { hasText: 'Claude Code' }).click(); const codeHelp = await page.locator('#agToolBody').textContent(); assert.match(codeHelp, /Cloud: start a Code session with this board repo selected/); assert.match(codeHelp, /No plugin or PAT is needed/); assert.match(codeHelp, /Only for a local session in another project: install the plugin/);
-    await page.locator('#tabBoards').click(); await page.locator('#bEditBtn').click(); assert.equal(await page.locator('#sTokenState').textContent(), 'Saved for this board'); assert.equal(await page.locator('#sTokenBtns').isVisible(), true); await page.locator('#sClose').click();
+    assert.equal(await page.locator('#agEmail').isVisible(), true); assert.equal(await page.locator('#agEmailPrompt').isVisible(), true); await page.locator('#agEmailPrompt').click(); assert.match(await page.evaluate(() => window.__copied), /scheduled Keeptrack contact-email routine for acme\/board/); assert.match(await page.evaluate(() => window.__copied), /automation\/contact-email-sync\.json/); await page.locator('#agHand > summary').click(); await page.locator('#agTools button', { hasText: 'Claude Code' }).click(); const codeHelp = await page.locator('#agToolBody').textContent(); assert.match(codeHelp, /Cloud: start a Code session with this board repo selected/); assert.match(codeHelp, /No plugin or PAT is needed/); assert.match(codeHelp, /Only for a local session in another project: install the plugin/);
+    await page.locator('#tabConn').click(); await page.locator('#bEditBtn').click(); assert.equal(await page.locator('#sTokenState').textContent(), 'Saved for this board'); assert.equal(await page.locator('#sTokenBtns').isVisible(), true); await page.locator('#sClose').click();
     assert(!api.calls.some(x => /git\/trees\/root-.*recursive/.test(x.path)), 'must not read the whole repository tree');
     assert(api.calls.some(x => /git\/trees\/board-.*recursive/.test(x.path)), 'must read only the board subtree');
 
@@ -272,11 +272,11 @@ let base;
 
     // A repository-access failure leads with the exact next action; visible repos are supporting evidence only.
     const deniedApi = new Github(true), denied = await openBoard(browser, deniedApi); deniedApi.denyRepo = true; deniedApi.calls = [];
-    await denied.locator('#btnSettings').click(); await denied.locator('#tabChecks').click(); await denied.locator('#ckRun').click(); const next = denied.locator('.cknext'); await next.waitFor();
+    await denied.locator('#btnSettings').click(); await denied.locator('#tabConn').click(); await denied.locator('#ckRun').click(); const next = denied.locator('.cknext'); await next.waitFor();
     assert.match(await next.textContent(), /Do this next.*acme\/board.*Contents.*Run checks/s); assert.equal(await next.locator('a.btnlink').textContent(), 'Make a correctly configured PAT'); const patHref = await next.locator('a.btnlink').getAttribute('href'); assert.match(patHref, /github\.com\/settings\/personal-access-tokens\/new/); assert.match(patHref, /target_name=acme/); assert.match(patHref, /contents=write/); await denied.close();
 
     const missingPermApi = new Github(true), missingPerm = await openBoard(browser, missingPermApi); missingPermApi.calls = [];
-    await missingPerm.locator('#btnSettings').click(); await missingPerm.locator('#tabChecks').click(); await missingPerm.locator('#ckRun').click(); const permFix = missingPerm.locator('.cknext'); await permFix.waitFor();
+    await missingPerm.locator('#btnSettings').click(); await missingPerm.locator('#tabConn').click(); await missingPerm.locator('#ckRun').click(); const permFix = missingPerm.locator('.cknext'); await permFix.waitFor();
     assert.match(await missingPerm.locator('.ck.bad').last().textContent(), /PAT permissions.*cannot read its default branch/s); const permHref = await permFix.locator('a.btnlink').getAttribute('href'); assert.match(permHref, /target_name=acme/); assert.match(permHref, /contents=write/); await missingPerm.close();
 
     api.calls = []; await page.locator('.card').first().dblclick(); await page.locator('#cTitle').fill('First edited'); const edited = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/')); await page.locator('#cTitle').blur(); await edited;
@@ -303,7 +303,7 @@ let base;
     const crmTodayPage = await openBoard(browser, crmTodayApi); await crmTodayPage.locator('#viewSw button[data-view="today"]').click(); assert.equal(await crmTodayPage.locator('#viewSw .viewgroup[data-grp="today"]').isVisible(), true); assert.equal(await crmTodayPage.locator('#viewSw .viewgroup[data-grp="tasks"]').isHidden(), true); assert.equal(await crmTodayPage.locator('.prow').filter({ hasText: 'Casey Example' }).count(), 1); assert.equal(await crmTodayPage.locator('.ttoday').count(), 0); await crmTodayPage.close();
 
     // Board sections can be hidden and restored after setup. The mode save changes only settings, never task or person files.
-    const modesApi = new Github(true), modesPage = await openBoard(browser, modesApi); await modesPage.locator('#btnSettings').click();
+    const modesApi = new Github(true), modesPage = await openBoard(browser, modesApi); await modesPage.locator('#btnSettings').click(); await modesPage.locator('#tabBoard').click();
     assert.equal(await modesPage.locator('#sModeTasks').isChecked(), true); assert.equal(await modesPage.locator('#sModeCrm').isChecked(), true); modesApi.calls = [];
     const crmOff = modesPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await modesPage.locator('#sModeCrm').uncheck(); await crmOff;
     assert.deepEqual(JSON.parse(modesApi.files['tasks.json']).settings.modes, ['tasks']);
@@ -318,11 +318,11 @@ let base;
 
     // Enabling CRM on a board with no people creates no placeholder. Adding the first person creates their own file.
     const emptyCrm = new Github(true); emptyCrm.files['tasks.json'] = text({ ...root, settings: { ...root.settings, modes: ['tasks'] } }); delete emptyCrm.files['people/p_one.json'];
-    const emptyPage = await openBoard(browser, emptyCrm); await emptyPage.locator('#btnSettings').click(); emptyCrm.calls = [];
+    const emptyPage = await openBoard(browser, emptyCrm); await emptyPage.locator('#btnSettings').click(); await emptyPage.locator('#tabBoard').click(); emptyCrm.calls = [];
     const enabled = emptyPage.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await emptyPage.locator('#sModeCrm').check(); await enabled;
     assert.equal(Object.keys(emptyCrm.files).some(x => x.startsWith('people/')), false, 'enabling an empty CRM must not create a placeholder person');
     assert.deepEqual(emptyCrm.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/tasks.json']);
-    await emptyPage.locator('#sDone').click(); await emptyPage.locator('#viewSw button[data-view="people"]').click(); emptyCrm.calls = [];
+    await emptyPage.locator('#sClose').click(); await emptyPage.locator('#viewSw button[data-view="people"]').click(); emptyCrm.calls = [];
     await emptyPage.locator('.padd input').fill('Ada Example'); const firstPerson = emptyPage.waitForResponse(r => r.request().method() === 'PUT' && /\/contents\/board\/people\//.test(r.url())); await emptyPage.locator('.padd input').press('Enter'); await firstPerson;
     const peopleFiles = Object.keys(emptyCrm.files).filter(x => x.startsWith('people/')); assert.equal(peopleFiles.length, 1); assert.equal(JSON.parse(emptyCrm.files[peopleFiles[0]]).name, 'Ada Example');
     assert.deepEqual(emptyCrm.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/' + peopleFiles[0]]); await emptyPage.close();
@@ -457,13 +457,13 @@ let base;
     assert.deepEqual(moving.calls.filter(x => ['PUT', 'PATCH', 'POST', 'DELETE'].includes(x.method)).map(x => x.method + ' ' + x.path), ['PUT /contents/board/cards/t_one.json']);
     assert.equal(JSON.parse(moving.files['cards/t_one.json']).title, 'After split'); assert(!('tasks' in JSON.parse(moving.files['tasks.json'])), 'tasks.json must stay settings only'); await mv.close();
 
-    // Settings → General → Columns: add, rename, reorder and remove (moving its cards), one saved change each.
+    // Settings → Board → Columns: add, rename, reorder and remove (moving its cards), one saved change each.
     const colApi = new Github(true), colRoot = JSON.parse(colApi.files['tasks.json']); colRoot.columns = [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }]; colApi.files['tasks.json'] = text(colRoot);
     colApi.files['cards/t_two.json'] = text({ ...JSON.parse(colApi.files['cards/t_two.json']), column: 'backlog', rank: 'a0' });
     const colPage = await openBoard(browser, colApi), colIds = () => JSON.parse(colApi.files['tasks.json']).columns.map(c => c.id).join(','), colNames = () => JSON.parse(colApi.files['tasks.json']).columns.map(c => c.name).join(',');
     const colWait = async (fn, what) => { for (let i = 0; i < 60 && !fn(); i++) await colPage.waitForTimeout(100); assert(fn(), what); };
     await autoConfirm(colPage);
-    await colPage.locator('#btnSettings').click(); await colPage.locator('#colList .colrow').first().waitFor();
+    await colPage.locator('#btnSettings').click(); await colPage.locator('#tabBoard').click(); await colPage.locator('#colList .colrow').first().waitFor();
     assert.equal(await colPage.locator('#colList .colrow').count(), 3); assert.match(await colPage.locator('#colList .colrow').nth(0).textContent(), /1 card/);
     assert.equal(await colPage.locator('#colList .colrow').nth(1).locator('button.danger').isDisabled(), true, 'To do cannot be removed'); assert.equal(await colPage.locator('#colList .colrow').nth(2).locator('button.danger').isDisabled(), true, 'Done cannot be removed');
     await colPage.locator('#colNew').fill('In review'); await colPage.locator('#colAdd').click(); await colPage.locator('#colList .colrow').nth(3).waitFor(); await colWait(() => colIds() === 'backlog,todo,in-review,done', 'a new column goes before Done with a slug id: ' + colIds());
@@ -475,7 +475,7 @@ let base;
     await colWait(() => JSON.parse(colApi.files['cards/t_two.json']).column === 'todo', 'its card moved to To do'); const moved = JSON.parse(colApi.files['cards/t_two.json']);
     assert(moved.rank > JSON.parse(colApi.files['cards/t_one.json']).rank, 'a moved card goes to the end of the target column'); assert(!('tasks' in JSON.parse(colApi.files['tasks.json'])), 'tasks.json must stay settings only');
     await colPage.locator('#sClose').click(); await colPage.locator('#btnUndo').click(); await colWait(() => colIds() === 'backlog,in-review,todo,done' && JSON.parse(colApi.files['cards/t_two.json']).column === 'backlog', 'Undo puts the column and its card back');
-    await colPage.setViewportSize({ width: 390, height: 780 }); await colPage.evaluate(() => document.getElementById('btnSettings').click()); await colPage.locator('#colList .colrow').first().waitFor();
+    await colPage.setViewportSize({ width: 390, height: 780 }); await colPage.evaluate(() => document.getElementById('btnSettings').click()); await colPage.locator('#tabBoard').click(); await colPage.locator('#colList .colrow').first().waitFor();
     assert.equal(await colPage.evaluate(() => document.querySelector('#dlgSettings').scrollWidth <= document.querySelector('#dlgSettings').clientWidth + 1), true, 'the columns list must fit the phone width'); await colPage.close();
 
     // An old (v2) board file is saved as v3, as before.
@@ -483,10 +483,10 @@ let base;
     const vp = await openBoard(browser, v2); await vp.locator('.card').first().dblclick(); await vp.locator('#cTitle').fill('v2 edit'); const v2Saved = vp.waitForResponse(r => r.request().method() === 'PUT'); await vp.locator('#cTitle').blur(); await v2Saved;
     assert.equal(JSON.parse(v2.files['tasks.json']).version, 3); await vp.close();
     }
-    // Settings → Labels: rename, recolour, add and delete are each one save, touch only the cards that use the label, and Undo reverts them.
+    // Settings → Board → Labels: rename, recolour, add and delete are each one save, touch only the cards that use the label, and Undo reverts them.
     {
     const lb = new Github(true), lp = await openBoard(browser, lb); await autoConfirm(lp);
-    await lp.locator('#btnSettings').click(); await lp.locator('#labelBox .lbrow').first().waitFor();
+    await lp.locator('#btnSettings').click(); await lp.locator('#tabBoard').click(); await lp.locator('#labelBox .lbrow').first().waitFor();
     assert.deepEqual(await lp.locator('#labelBox .lbcnt').allTextContents(), ['1 task', '1 task']);
     lb.calls = []; const renamed = lp.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()));
     await lp.locator('#labelBox input[aria-label="Rename label pale"]').fill('soft'); await lp.locator('#labelBox input[aria-label="Rename label pale"]').blur(); await renamed;

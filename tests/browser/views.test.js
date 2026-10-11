@@ -116,10 +116,10 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await page.locator('#viewSw [data-view="activity"]').click(); await page.waitForSelector('.actseg');
       await page.locator('.actseg [aria-selected="true"]').focus(); const before = await page.locator('.actseg [aria-selected="true"]').textContent();
       await page.keyboard.press('ArrowRight'); await page.waitForFunction(b => { const a = document.activeElement; return a && a.closest('.actseg') && a.getAttribute('aria-selected') === 'true' && a.textContent !== b; }, before);
-      // Settings sections keep their ids and switch panels
-      await page.locator('#btnSettings').click(); await page.locator('#tabChecks').click();
-      assert.equal(await page.locator('#tabChecks').getAttribute('aria-selected'), 'true'); assert.equal(await page.locator('#panelChecks').isVisible(), true); assert.equal(await page.locator('#panelGeneral').isHidden(), true);
-      await page.locator('#tabChecks').focus(); await page.keyboard.press('ArrowLeft'); assert.equal(await page.locator('#panelAlerts').isVisible(), true, 'arrow keys switch settings sections');
+      // Settings tabs (tabPrefs, tabBoard, tabConn, tabAgents) switch their panels
+      await page.locator('#btnSettings').click(); await page.locator('#tabConn').click();
+      assert.equal(await page.locator('#tabConn').getAttribute('aria-selected'), 'true'); assert.equal(await page.locator('#panelConn').isVisible(), true); assert.equal(await page.locator('#panelPrefs').isHidden(), true);
+      await page.locator('#tabConn').focus(); await page.keyboard.press('ArrowLeft'); assert.equal(await page.locator('#panelBoard').isVisible(), true, 'arrow keys switch settings sections');
       await page.done();
       const phone = await open(browser, { view: 'board', viewport: PHONE, layout: 'dock' });
       assert.deepEqual(await phone.locator('#subnav [role="tab"]').allTextContents(), ['Kanban', 'List', 'Calendar', 'Schedule', 'Activity']);
