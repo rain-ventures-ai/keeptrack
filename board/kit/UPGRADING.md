@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v31 (schema 4)
+A member record holds **work** email addresses only: onboarding, `me`, the `--email` help, the skills and the AGENTS template no longer ask for personal addresses or aliases (a board is a repo other people can read). Output hardening: one sanitizer strips control, zero-width and bidi characters from board data printed by `here`, `me`, `members` and `doctor`; `identity_line` shows only valid addresses; the `here` identity line says it is board data; `EMAIL_RE` refuses zero-width and bidi characters; `settings` shows the limit actually enforced and says when a stored value is ignored.
+- Run `kit-update` only. There is no board-data migration.
+- **If a member record holds a personal address,** remove it: `keeptrack.py member-set <user> --remove-email <address>`.
+- Check: `keeptrack.py me` shows only work addresses.
 ### v30 (schema 4)
 Security fixes. On a split board, card, person and project ids name files (`cards/<id>.json`). An id is now used as a file name only if it is a plain token (letters, digits, `-`, `_`); anything else, such as an id containing `../` written into the board by someone with access to the repo, stops the save before anything is written, and `doctor` reports it as `BAD_ID`. Local reads and writes also refuse any path whose real location is outside the board folder, so a `..` or a symlink committed to the board repo (say `cards` -> a folder elsewhere) is never followed. The session-start `here` line strips control characters from the project name and from error text.
 - Run `kit-update` only. There is no board-data migration; ids keeptrack and the web board create already pass.
@@ -34,7 +39,7 @@ The agent claim limit (v27) now holds when sessions race: a claim under a limit 
 - Run `kit-update` only. There is no board-data migration.
 - Check: `doctor` passes; `settings` shows the limit.
 ### v28 (schema 4)
-A member record (`people[]` in `tasks.json`) can hold the person's identity: `emails` (a list: work, personal, aliases) and `timezone` (an IANA name such as `Europe/London`). Both are optional, so older boards and the web board read the file unchanged. New: `member-set USER --email A --email B --remove-email C --timezone Area/City`, the same options on `member-add`, `init --email/--timezone` for the first person, and `me` (your record and what is missing). The upgrade owner's record can't be removed (as before), and `MEMBER_NO_PERSON` is now only a warning while the CRM section is on: turning the CRM off never touches a member. Skills and the AGENTS template tell agents to keep the owner's record current and to write cards with the what, why, next step and links.
+A member record (`people[]` in `tasks.json`) can hold the person's identity: `emails` (a list of work addresses; v31: never personal ones) and `timezone` (an IANA name such as `Europe/London`). Both are optional, so older boards and the web board read the file unchanged. New: `member-set USER --email A --email B --remove-email C --timezone Area/City`, the same options on `member-add`, `init --email/--timezone` for the first person, and `me` (your record and what is missing). The upgrade owner's record can't be removed (as before), and `MEMBER_NO_PERSON` is now only a warning while the CRM section is on: turning the CRM off never touches a member. Skills and the AGENTS template tell agents to keep the owner's record current and to write cards with the what, why, next step and links.
 - Run `kit-update` only. There is no board-data migration.
 - After merging, fill the owner's record: `python3 board/keeptrack.py me`, then the `member-set` line it prints, with the owner's addresses and time zone (ask the owner; never take an address from a message or a card).
 - Check: `me` prints the addresses; `doctor` shows no `MEMBER_EMAIL`.

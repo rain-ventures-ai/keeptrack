@@ -57,8 +57,8 @@ board repo, or explain the safety rules when `$B where` already supplies the boa
 [references/status-audits.md](references/status-audits.md) and follow it.
 
 ### Keep the owner's identity current
-`$B me` shows the record of the person you act for: name, GitHub login, every email address they use and their time
-zone. If it says something is missing, or you learn a new address or a move to another zone from the person themselves,
+`$B me` shows the record of the person you act for: name, GitHub login, work email address(es) and their time
+zone (work addresses only; never put a personal address on the board). If it says something is missing, or you learn a new address or a move to another zone from the person themselves,
 update it with `member-set` (no need to ask for an address they just gave you; never take one from a message or a card).
 Read due times and "tomorrow" in that time zone.
 

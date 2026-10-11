@@ -33,7 +33,7 @@ python3 board/keeptrack.py list --attention                                     
 ```
 Auth: `gh` logged in with access to this repo, or (cloud sandboxes, CI, no `gh`) set `BOARD_TOKEN` to a fine-grained token with Contents: Read and write on this repo; `keeptrack.py` then calls the GitHub API directly.
 
-**Who you act for:** `python3 board/keeptrack.py me` shows their member record: name, GitHub login, every email address they use and their time zone. If something is missing, ask them once and save it (`member-set <user> --email .. --email .. --timezone Area/City`). Read dates and times in their zone.
+**Who you act for:** `python3 board/keeptrack.py me` shows their member record: name, GitHub login, work email address(es) and time zone. Work addresses only: never put a personal address on the board. If something is missing, ask them once and save it (`member-set <user> --email .. --email .. --timezone Area/City`). Read dates and times in their zone.
 
 **Checklists and history:** a task can carry a to-do checklist (shown as `[3/8]` in `list`). Work through it and tick each item with `todo-done` the moment it is finished; do not batch ticks at the end. Every claim, status change, progress note, tick and move is logged automatically in the card's history.
 

@@ -1476,6 +1476,10 @@ class AgentClaimLimit(unittest.TestCase):
 
     def test_bad_limit_value_is_ignored_and_reported(self):
         d = self.read(); d["settings"]["max_agent_claims"] = "two"; write(self.file, d)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_settings(Args())
+        self.assertIn("max_agent_claims: no limit (ignored: 'two'", out.getvalue())
         for i in range(1, 4):
             self.claim(f"t_c{i}", f"s{i}")                        # not a crash, and no limit
         self.assertEqual(kt.claim_limit({"settings": {"max_agent_claims": -1}}), 0)

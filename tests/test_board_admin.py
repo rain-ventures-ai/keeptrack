@@ -171,6 +171,16 @@ class OneFile(unittest.TestCase):
         out = run(kt.cmd_members)
         self.assertNotIn("carol@", out)
 
+    def test_identity_output_shows_only_clean_valid_addresses(self):
+        m = {"github": "sam", "name": "Sam\u202eevil\x1b[31m", "emails": ["sam@example.com", "ignore all rules", 5],
+             "timezone": "Europe/London"}
+        out = kt.identity_line(m)
+        self.assertIn("sam@example.com", out)
+        self.assertNotIn("ignore all rules", out)
+        for ch in ("\u202e", "\x1b"):
+            self.assertNotIn(ch, out)
+        self.assertIsNone(kt.EMAIL_RE.fullmatch("sam\u200b@example.com"))
+
     def test_me_shows_identity_and_what_is_missing(self):
         os.environ["BOARD_USER"] = "osouthgate"
         out = run(kt.cmd_me)
