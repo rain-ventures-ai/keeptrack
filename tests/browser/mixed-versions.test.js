@@ -93,8 +93,95 @@ class Github {
   }
 }
 
+// ---- a page and assets from different deploys (browser and GitHub Pages caches) -----------------------------------
+// PREV is the last release before the markup handshake (index.html kbMarkup / board.js KB_MARKUP). Each mix must either
+// run the board or show the "being published" message after at most one automatic reload; never a page error or a blank page.
+const PREV = 'b1ce7d2';
+const prev = f => execSync(`git show ${PREV}:board/${f}`, { cwd: ROOT, encoding: 'utf8' });
+const cur = f => fs.readFileSync(path.join(ROOT, 'board', f), 'utf8');
+const TYPES = { html: 'text/html', js: 'text/javascript', css: 'text/css' };
+
+async function mixPage(browser, base, files, opts = {}) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = [], seen = {};
+  let loads = 0;
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('load', () => loads++);
+  await page.addInitScript(() => { localStorage.setItem('kb_tour', 'done'); sessionStorage.setItem('kb_view', 'board'); });
+  if (opts.init) await page.addInitScript(opts.init);
+  await page.route(/\/board\/[\w.]+\.(html|js|css)(\?.*)?$/, route => {
+    const req = route.request(), name = new URL(req.url()).pathname.split('/').pop();
+    seen[name] = (seen[name] || 0) + 1;
+    if (opts.fail && opts.fail(req, name, seen[name])) return route.abort();
+    const body = name in files ? files[name] : cur(name);
+    return route.fulfill({ status: 200, contentType: TYPES[name.split('.').pop()], body });
+  });
+  await page.goto(base + '/board/index.html?demo=board');
+  await page.waitForFunction(() => document.getElementById('kbStale') || document.querySelector('.card'), null, { timeout: 15000 });
+  await page.waitForTimeout(1500);   // let a pending reload happen
+  await page.waitForFunction(() => document.getElementById('kbStale') || document.querySelector('.card'), null, { timeout: 15000 });
+  const r = await page.evaluate(() => ({ stale: !!document.getElementById('kbStale'), cards: document.querySelectorAll('.card').length,
+    shown: getComputedStyle(document.body).visibility !== 'hidden' }));
+  return Object.assign(r, { page, errors, loads });
+}
+async function expectStale(browser, base, name, files, opts) {
+  const r = await mixPage(browser, base, files, opts);
+  assert.ok(r.stale, name + ': shows the "being published" message');
+  assert.ok(r.shown, name + ': the page is visible');
+  assert.equal(r.cards, 0, name + ': the board is not wired to the wrong markup');
+  assert.ok(r.loads <= 2, name + ': at most one automatic reload (' + r.loads + ' loads)');
+  if (!opts || !opts.allowErrors) assert.deepEqual(r.errors, [], name + ': no page errors');
+  assert.match(await r.page.locator('#kbStale').innerText(), /new version of the board is being published/);
+  assert.equal(await r.page.locator('#kbStale button').innerText(), 'Reload');
+  await r.page.close();
+}
+async function expectBoard(browser, base, name, files, opts) {
+  const r = await mixPage(browser, base, files, opts);
+  assert.ok(!r.stale && r.cards > 0, name + ': the board runs');
+  assert.deepEqual(r.errors, [], name + ': no page errors');
+  return r;
+}
+
+async function mixes(browser, base) {
+  // (a) a cached index.html from the previous release; its loader fetches the current board.js and board.css fresh
+  await expectStale(browser, base, 'old index.html + new assets', { 'index.html': prev('index.html') });
+  // (b) the current index.html, but the network fetch fails and the browser's cache still has the previous board.js/board.css:
+  // the loader reads them, sees the old markup version and does not run them
+  const old = { 'board.js': prev('board.js'), 'board.css': prev('board.css') };
+  await expectStale(browser, base, 'new index.html + cached old board.js', old,
+    { fail: (req, name, n) => /^board\.(js|css)$/.test(name) && n === 1 });
+  await expectStale(browser, base, 'new index.html + old board.js from the server', old);
+  // the last-resort <script src> path (no fetch at all): the old file runs and fails, then the page shows the message
+  await expectStale(browser, base, 'new index.html + old board.js by script tag', old,
+    { fail: req => req.resourceType() === 'fetch' && /\/board\/[\w.]+\.(js|css)$/.test(new URL(req.url()).pathname), allowErrors: true });
+  // a newer board.js (higher markup version) with this index.html
+  await expectStale(browser, base, 'board.js for newer markup', { 'board.js': cur('board.js').replace(/\bconst KB_MARKUP = (\d+);/, (m, n) => `const KB_MARKUP = ${+n + 1};`) });
+  // the same versions work, on both loader paths
+  (await expectBoard(browser, base, 'current page', {})).page.close();
+  (await expectBoard(browser, base, 'current page by script tag', {},
+    { fail: req => req.resourceType() === 'fetch' && /\/board\/[\w.]+\.(js|css)$/.test(new URL(req.url()).pathname) })).page.close();
+  // storage blocked: no automatic reload loop, just the message
+  await expectStale(browser, base, 'old index.html, sessionStorage blocked', { 'index.html': prev('index.html') },
+    { init: () => { Object.defineProperty(window, 'sessionStorage', { get() { throw new Error('blocked'); } }); } });
+
+  // (c) theme.js and designmd.js load as plain tags: a cached theme.js (no paintCustom) with the current designmd.js,
+  // and the other way round. A custom theme still paints and clearing it removes every colour.
+  const custom = { paper: '#101820', surface: '#18222c', line: '#2a3a48', ink: '#e8eef4', hero: '#ff7a00', onHero: '#000000', mode: 'dark' };
+  for (const [name, files] of [['old theme.js + new designmd.js', { 'theme.js': prev('theme.js') }], ['new theme.js + old designmd.js', { 'designmd.js': prev('designmd.js') }]]) {
+    const r = await expectBoard(browser, base, name, files);
+    await r.page.waitForFunction(() => window.kbDesignMd && window.kbTheme);
+    const painted = await r.page.evaluate(t => { window.kbDesignMd.apply(t, false); const s = document.documentElement.style; return { hero: s.getPropertyValue('--hero'), theme: document.documentElement.dataset.theme }; }, custom);
+    assert.deepEqual(painted, { hero: '#ff7a00', theme: 'custom' }, name + ': custom theme paints');
+    const left = await r.page.evaluate(() => { window.kbTheme.set('light'); return document.documentElement.getAttribute('style') || ''; });
+    if (name.startsWith('new theme')) assert.equal(left.trim(), '', name + ': switching back clears the custom colours');
+    assert.deepEqual(r.errors, [], name + ': no page errors');
+    await r.page.close();
+  }
+}
+
 (async () => {
   const legacyJs = execSync('git show 400c9bc:board/board.js', { cwd: ROOT, encoding: 'utf8' });
+  // An old page is the old HTML, CSS and JS together (the current HTML no longer has every element the old script looks up).
+  const legacyHtml = execSync('git show 400c9bc:board/index.html', { cwd: ROOT, encoding: 'utf8' }), legacyCss = execSync('git show 400c9bc:board/board.css', { cwd: ROOT, encoding: 'utf8' });
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
   const base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
@@ -112,6 +199,8 @@ class Github {
     });
     await page.route('https://api.test/**', r => api.route(r));
     await page.route('**/board/board.js', route => route.fulfill({ status: 200, contentType: 'text/javascript', body: legacyJs }));
+    await page.route('**/board/index.html', route => route.fulfill({ status: 200, contentType: 'text/html', body: legacyHtml }));
+    await page.route('**/board/board.css', route => route.fulfill({ status: 200, contentType: 'text/css', body: legacyCss }));
     await page.goto(base + '/board/index.html');
     await page.waitForSelector('.card');
     assert.ok(api.files['projects/pr_pilot01ab.json'], 'project file present before edit');
@@ -142,6 +231,8 @@ class Github {
     await current.waitForSelector('.card');
     assert.ok(await current.locator('.card').filter({ hasText: 'legacy page edit' }).count());
     await current.close();
+
+    await mixes(browser, base);
     console.log('mixed-versions: ok');
   } finally {
     await browser.close();

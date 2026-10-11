@@ -9,7 +9,7 @@ Copy this into your current or a new chat with your assistant:
 Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.
 ```
 
-The web board has the same prompt with your board and username filled in: **Settings → Agents → An assistant in your chat app → Copy setup prompt**.
+The web board has the same prompt with your board and username filled in: **Settings → Agents & integrations → Claude or Codex in your chat app → Copy setup prompt**.
 
 ---
 
@@ -201,7 +201,7 @@ Give three examples, in their words:
 - "Add a task to send the proposal to Sam by Friday."
 
 ### Optional: @claude on the board
-If the person wants to type **@claude** in a task comment on the web board and have Claude do the task in the cloud, tell them to open the web board, then **Settings → Agents**, and tick **I use @claude**. The page has five steps with a check for each. Full guide: [board/kit/ROUTINE-SETUP.md](board/kit/ROUTINE-SETUP.md).
+If the person wants to type **@claude** in a task comment on the web board and have Claude do the task in the cloud, tell them to open the web board, then **Settings → Agents & integrations → @claude in task comments**, and switch **Use @claude** on. The page has five steps with a check for each. Full guide: [board/kit/ROUTINE-SETUP.md](board/kit/ROUTINE-SETUP.md).
 
 ### If something goes wrong
 - `board: (none)`: run step 3b.

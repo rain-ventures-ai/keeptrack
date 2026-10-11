@@ -3,7 +3,7 @@
 A board is a GitHub repo with the board kit and a `board/` data folder. `board/tasks.json` is its entry point; current
 boards keep individual tasks in `board/cards/` and CRM people in `board/people/`. The web board at
 https://rain-ventures-ai.github.io/keeptrack/board/ works with any such repo. This guide is for a person and for the
-Claude that helps them. It is the target of the "Copy new-board prompt for Claude" button in Settings → Boards.
+Claude that helps them. It is the target of the "Copy new-board prompt for Claude" button in Settings → Connection (Your boards → Set up a new board with Claude).
 
 ## Rules for Claude
 - Never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step,
@@ -45,14 +45,14 @@ branch to `main` in the web board and `BOARD_BRANCH=main` for agents.
    It pre-fills the resource owner, expiry, **Contents: Read and write** and **Issues: Read and write**. GitHub cannot
    preselect a private repo from the link, so the person must still choose **Only select repositories → this repo**,
    then generate and copy the token. Claude never sees it.
-2. On the web board: Settings → **Boards** → **Add a board** → **Connect a board I have**. Paste the token and pick the repo.
+2. On the web board: Settings → **Connection** → **Add a board** → **Connect a board I have**. Paste the token and pick the repo.
 3. The header's board menu now switches between your boards. Each board keeps its own token in this browser.
 
 Each person on the board does steps 4.1 and 4.2 in their own browser, with their own token.
 
 ## 5. Claude routine for @claude (optional, each person)
 Follow `board/ROUTINE-SETUP.md` in the new repo, with the new repo as the routine's repository and a `BOARD_TOKEN` for
-this repo. Then open the new board and paste the routine URL and token in Settings → Agents. A routine for another
+this repo. Then open the new board and paste the routine URL and token in Settings → Agents & integrations. A routine for another
 board cannot write to this one.
 
 ## 6. Check

@@ -81,12 +81,12 @@
 
   // Apply a custom theme: CSS variables on <html>, data-theme="custom". Saved so theme.js can restore it before paint.
   function apply(t, save) {
-    var s = document.documentElement.style;
-    ['paper', 'surface', 'line', 'ink', 'hero'].forEach(function (k) { if (t[k]) s.setProperty('--' + k, t[k]); else s.removeProperty('--' + k); });
-    s.setProperty('--on-hero', t.onHero);
-    s.setProperty('--lift', t.mode === 'dark' ? t.ink : '#ffffff'); s.setProperty('--lift-pct', t.mode === 'dark' ? '7%' : '70%');
-    s.setProperty('--danger', t.mode === 'dark' ? '#ff7a70' : '#c8312b'); s.setProperty('--ok', t.mode === 'dark' ? '#4fd49c' : '#1d7f4e'); s.setProperty('--warn', t.mode === 'dark' ? '#e8b33a' : '#a96a00');
-    s.colorScheme = t.mode;
+    if (window.kbTheme && window.kbTheme.paintCustom) window.kbTheme.paintCustom(t);   // theme.js (loaded first, in <head>) owns the variables; status colours live in board.css
+    else {   // a theme.js cached from before paintCustom: set the picked colours here so the theme still shows
+      var s = document.documentElement.style;
+      ['paper', 'surface', 'line', 'ink', 'hero'].forEach(function (k) { if (t[k]) s.setProperty('--' + k, t[k]); else s.removeProperty('--' + k); });
+      s.setProperty('--on-hero', t.onHero || '#ffffff'); document.documentElement.setAttribute('data-mode', t.mode === 'dark' ? 'dark' : 'light');
+    }
     document.documentElement.setAttribute('data-theme', 'custom');
     if (save !== false) try { localStorage.setItem('kb_custom', JSON.stringify(t)); localStorage.setItem('kb_theme', 'custom'); } catch (e) {}
   }

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Keeptrack UI components</title>
+<script src="theme.js"></script>
+<link rel="stylesheet" href="board.css">
+<link rel="stylesheet" href="ui.css">
+<style>
+  /* Catalogue page layout only (not part of the component library). */
+  html, body { overflow-x: hidden; }
+  body { display: block; height: auto; min-height: 100vh; }
+  .cat-top { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--header); }
+  .cat-top h1 { margin: 0 auto 0 0; font-size: 16px; }
+  .cat-top label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .cat-main { max-width: 980px; margin: 0 auto; padding: 16px 16px 140px; display: grid; gap: 16px; }
+  .cat-sec { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); display: grid; gap: 12px; min-width: 0; }
+  .cat-sec > h2 { margin: 0; font-size: 15px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .cat-sec > h2 code { font-size: 12px; font-weight: 500; color: var(--muted); }
+  .cat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+  .cat-label { width: 100%; margin: 4px 0 0; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .cat-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
+  .cat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .cat-log { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  .cat-frame { display: block; margin: 16px auto 140px; width: 390px; max-width: calc(100vw - 16px); height: 780px; border: 1px solid var(--border); border-radius: 24px; background: var(--bg); box-shadow: var(--shadow-hover); }
+  body.cat-embed .cat-top { display: none; }
+  @media (max-width: 760px) { .cat-main { padding: 12px 12px 140px; } .cat-sec { padding: 12px; } .cat-phone-toggle { display: none; } }
+</style>
+</head>
+<body>
+<div class="cat-top">
+  <h1>Keeptrack UI components</h1>
+  <label for="catTheme">Theme <select id="catTheme"></select></label>
+  <span id="catPhoneSlot" class="cat-phone-toggle"></span>
+</div>
+<main id="cat" class="cat-main" aria-label="Component catalogue"></main>
+<iframe id="catFrame" class="cat-frame" title="Phone-width preview (390px)" hidden></iframe>
+<p class="cat-log" hidden><output id="catLog" aria-live="polite"></output></p>
+
+<script src="icons.js"></script>
+<script src="ui.js"></script>
+<script>
+(function () {
+  'use strict';
+  const ui = window.ui, $ = id => document.getElementById(id), q = new URLSearchParams(location.search);
+  const embed = q.has('embed'); if (embed) document.body.classList.add('cat-embed');
+  const h = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const log = msg => { const o = $('catLog'); o.textContent = msg; o.parentNode.hidden = false; o.dataset.n = String((+o.dataset.n || 0) + 1); };
+  const main = $('cat');
+
+  // ---- theme picker: previews a theme without changing the board's saved one ----
+  function applyTheme(t) {
+    let prev = null; try { prev = localStorage.getItem('kb_theme'); } catch (e) {}
+    window.kbTheme.set(t);
+    try { if (prev == null) localStorage.removeItem('kb_theme'); else localStorage.setItem('kb_theme', prev); } catch (e) {}
+    const f = $('catFrame'); try { if (!f.hidden && f.contentWindow && f.contentWindow.catTheme) f.contentWindow.catTheme(t); } catch (e) {}
+  }
+  window.catTheme = applyTheme;
+  const sel = $('catTheme'); window.kbTheme.list.forEach(t => { const o = h('option', null, t); o.value = t; sel.append(o); });
+  if (q.get('theme')) applyTheme(q.get('theme'));
+  sel.value = window.kbTheme.get(); sel.onchange = () => { applyTheme(sel.value); sel.value = window.kbTheme.get(); };
+
+  // ---- phone-width preview: the same page in a 390px frame, so the phone media queries really apply ----
+  const phoneBtn = ui.button({ label: 'Phone preview', size: 'sm', onClick: () => {
+    const f = $('catFrame'), on = f.hidden; f.hidden = !on; main.hidden = on; phoneBtn.setAttribute('aria-pressed', String(on));
+    if (on) f.src = 'ui.html?embed=1&theme=' + encodeURIComponent(window.kbTheme.get());
+  } });
+  phoneBtn.setAttribute('aria-pressed', 'false'); $('catPhoneSlot').append(phoneBtn);
+
+  function demo(name, sig, build) {
+    const s = h('section', 'cat-sec'); s.dataset.component = name; s.id = 'c-' + name;
+    const t = h('h2', null, name + ' '); t.append(h('code', null, sig)); s.append(t); build(s); main.append(s); return s;
+  }
+  const row = (...kids) => { const r = h('div', 'cat-row'); r.append(...kids); return r; };
+  const label = text => h('p', 'cat-label', text);
+  const noop = () => {};
+
+  demo('button', 'ui.button({label, variant, size, icon, onClick, type})', s => {
+    ['primary', 'secondary', 'ghost', 'danger'].forEach(v => {
+      s.append(label(v), row(ui.button({ label: 'Save', variant: v, onClick: () => log('button ' + v) }), ui.button({ label: 'With icon', icon: 'plus', variant: v }),
+        ui.button({ label: 'Small', variant: v, size: 'sm' }), ui.button({ label: 'Disabled', variant: v, disabled: true })));
+    });
+  });
+
+  demo('iconButton', 'ui.iconButton({icon, label, onClick})', s => {
+    s.append(label('ghost (default), secondary, danger, small, pressed'), row(
+      ui.iconButton({ icon: 'pencil', label: 'Edit' }), ui.iconButton({ icon: 'copy', label: 'Copy', variant: 'secondary' }),
+      ui.iconButton({ icon: 'trash-2', label: 'Delete', variant: 'danger' }), ui.iconButton({ icon: 'x', label: 'Close', size: 'sm' }),
+      ui.iconButton({ icon: 'pin', label: 'Pinned', pressed: true })));
+  });
+
+  demo('pill', 'ui.pill({text, tone, outline, color, onRemove, onClick, pressed})', s => {
+    const tones = ['neutral', 'accent', 'ok', 'warn', 'danger', 'info'];
+    s.append(label('tones'), row(...tones.map(t => ui.pill({ text: t, tone: t }))));
+    s.append(label('outline'), row(...tones.map(t => ui.pill({ text: t, tone: t, outline: true }))));
+    s.append(label('custom colour (labels)'), row(...[['design', '#8e4ec6'], ['bug', '#d33f33'], ['ops', '#1b8a5a'], ['pale', '#dce1e7'], ['dark', '#334155']].map(([n, c]) => ui.pill({ text: n, color: c }))));
+    s.append(label('with icon, removable'), row(ui.pill({ text: 'Due 12 Oct', tone: 'warn', icon: 'calendar' }),
+      ui.pill({ text: 'Acme', tone: 'accent', onRemove: e => e.currentTarget.closest('.ui-pill').remove() }),
+      ui.pill({ text: 'frontend', color: '#2563eb', onRemove: e => e.currentTarget.closest('.ui-pill').remove() })));
+    const toggles = ['Acme', 'Globex', 'Initech'].map((n, i) => { const p = ui.pill({ text: n, pressed: i === 0, onClick: () => p.setAttribute('aria-pressed', String(p.getAttribute('aria-pressed') !== 'true')) }); return p; });
+    s.append(label('toggle (aria-pressed)'), row(...toggles, ui.pill({ text: 'Overdue', tone: 'danger', pressed: true, onClick: noop })));
+  });
+
+  demo('select', 'ui.select({value, options, label, tone, onChange})', s => {
+    const opts = [{ value: 'high', label: 'High' }, { value: 'medium', label: 'Medium' }, { value: 'low', label: 'Low' }];
+    const toneFor = { high: 'danger', medium: 'warn', low: 'neutral' };
+    const prio = ui.select({ value: 'high', options: opts, label: 'Priority', tone: 'danger', onChange: v => { prio.className = 'ui-select ui-select--' + toneFor[v]; log('select ' + v); } });
+    s.append(row(ui.select({ value: 'todo', label: 'Column', options: [{ value: 'backlog', label: 'Backlog' }, { value: 'todo', label: 'To do' }, { value: 'done', label: 'Done' }] }),
+      prio, ui.select({ value: 'a', label: 'Stage', tone: 'accent', options: [{ value: 'a', label: 'Talking' }, { value: 'b', label: 'Proposal' }] }),
+      ui.select({ value: 'w', label: 'Won', tone: 'ok', options: [{ value: 'w', label: 'Won' }] }),
+      ui.select({ value: 'x', label: 'Disabled', disabled: true, options: [{ value: 'x', label: 'Disabled' }] })));
+  });
+
+  demo('avatar', 'ui.avatar(name, {size}) · ui.colourFor(name)', s => {
+    const names = ['Oliver Southgate', 'alex', 'Casey Example', 'sam-lee', 'Robin', 'Mina Patel'];
+    ['sm', 'md', 'lg'].forEach(z => s.append(label(z), row(...names.map(n => ui.avatar(n, { size: z })))));
+  });
+
+  demo('person', 'ui.person({name, onRemove, pressed, onClick})', s => {
+    s.append(label('static, removable'), row(ui.person({ name: 'Oliver Southgate' }), ui.person({ name: 'alex', sub: 'owner' }),
+      ui.person({ name: 'Casey Example', onRemove: e => e.currentTarget.closest('.ui-person').remove() })));
+    const pick = ['Mina Patel', 'Robin'].map((n, i) => { const p = ui.person({ name: n, pressed: i === 0, onClick: () => p.setAttribute('aria-pressed', String(p.getAttribute('aria-pressed') !== 'true')) }); return p; });
+    s.append(label('toggle (assignee picker)'), row(...pick, ui.person({ name: 'sam-lee', pressed: true, onClick: noop, onRemove: e => e.currentTarget.closest('.ui-person').remove() })));
+  });
+
+  demo('props', 'ui.props([{icon, label, value}])', s => {
+    s.append(ui.props([
+      { icon: 'users', label: 'People', value: [ui.person({ name: 'Oliver Southgate', onRemove: noop }), ui.person({ name: 'alex', onRemove: noop })] },
+      { icon: 'building-2', label: 'Client', value: ui.select({ value: 'acme', label: 'Client', options: [{ value: 'acme', label: 'Acme' }, { value: 'globex', label: 'Globex' }] }) },
+      { icon: 'folder', label: 'Project', value: ui.pill({ text: 'Website relaunch', tone: 'info' }) },
+      { icon: 'tag', label: 'Labels', value: [ui.pill({ text: 'design', color: '#8e4ec6', onRemove: noop }), ui.addRow({ collapsed: true, ghostLabel: 'Label', placeholder: 'New label', onAdd: noop })] },
+      { icon: 'calendar', label: 'Due', value: 'Friday 16 October' }
+    ]));
+  });
+
+  demo('addRow', 'ui.addRow({placeholder, buttonLabel, onAdd, collapsed, ghostLabel})', s => {
+    const list = h('div', 'cat-stack'); list.id = 'catAddList';
+    s.append(label('open'), ui.addRow({ placeholder: 'Add a checklist item', onAdd: v => { list.append(ui.listRow({ text: v, onRemove: e => e.currentTarget.closest('.ui-listrow').remove() })); log('add ' + v); } }), list);
+    s.append(label('collapsed (tap to expand, Escape collapses)'), row(ui.addRow({ collapsed: true, ghostLabel: 'Add link', placeholder: 'https://…', onAdd: v => log('add link ' + v) })));
+  });
+
+  demo('sheet', 'ui.sheet({title, actions, body, footer, side, onClose}) → {el, open(), close()}', s => {
+    const make = side => {
+      const body = h('div', 'cat-stack');
+      body.append(ui.props([{ icon: 'user', label: 'Owner', value: ui.person({ name: 'Oliver Southgate' }) }, { icon: 'flag', label: 'Priority', value: ui.pill({ text: 'High', tone: 'danger' }) }]),
+        ui.banner({ tone: 'info', text: 'Sheets are native <dialog> elements: Escape and the backdrop close them.' }));
+      const more = ui.iconButton({ icon: 'ellipsis', label: 'More actions', onClick: () => ui.menu(more, [{ icon: 'copy', label: 'Copy link', onSelect: () => ui.toast('Link copied') }, { icon: 'trash-2', label: 'Delete', danger: true, onSelect: noop }]) });
+      const sh = ui.sheet({ title: side === 'right' ? 'Task #12 · Draft the proposal' : 'Centre sheet', side, actions: [more], body,
+        footer: [ui.button({ label: 'Cancel', onClick: () => sh.close() }), ui.button({ label: 'Save', variant: 'primary', onClick: () => sh.close('save') })], onClose: v => log('sheet closed ' + (v || '')) });
+      return sh;
+    };
+    const right = make('right'), centre = make('center');
+    const b1 = ui.button({ label: 'Open right sheet', icon: 'panel-right-open', onClick: () => right.open() }); b1.id = 'catSheetRight';
+    const b2 = ui.button({ label: 'Open centre sheet', onClick: () => centre.open() }); b2.id = 'catSheetCenter';
+    s.append(row(b1, b2));
+  });
+
+  demo('menu', 'ui.menu(anchor, [{icon, label, onSelect, danger, separator}])', s => {
+    const a = ui.button({ label: 'Actions', icon: 'chevron-down', onClick: () => ui.menu(a, [
+      { icon: 'pencil', label: 'Edit', onSelect: () => log('menu edit') }, { icon: 'copy', label: 'Duplicate', onSelect: () => log('menu duplicate') },
+      { icon: 'archive', label: 'Archive', onSelect: () => log('menu archive') }, { separator: true },
+      { icon: 'trash-2', label: 'Delete', danger: true, onSelect: () => log('menu delete') }]) });
+    a.id = 'catMenuBtn';
+    const b = ui.iconButton({ icon: 'ellipsis', label: 'More', variant: 'secondary', onClick: () => ui.menu(b, [{ icon: 'link', label: 'Copy link', onSelect: () => ui.toast('Link copied') }, { icon: 'github', label: 'Open issue', onSelect: noop }]) });
+    s.append(row(a, b));
+  });
+
+  demo('section', 'ui.section({title, count, action, collapsible, open})', s => {
+    const g = h('div', 'cat-grid');
+    const a = ui.section({ title: 'Checklist', count: '3/8', action: ui.iconButton({ icon: 'plus', label: 'Add item', size: 'sm' }) });
+    a.body.append(ui.check({ state: 'ok', text: 'Draft written' }), ui.check({ state: 'wait', text: 'Waiting for review' }));
+    const b = ui.section({ title: 'History', count: 12, collapsible: true, open: false }); b.body.append(ui.listRow({ text: 'Moved to In progress', meta: '2h' }));
+    const c = ui.section({ title: 'Links', collapsible: true, open: true }); c.body.append(ui.listRow({ text: 'github.com/acme/site/pull/4', href: 'https://github.com/acme/site/pull/4', icon: 'github' }));
+    g.append(a, b, c); s.append(g);
+  });
+
+  demo('tabs', 'ui.tabs({items, value, onChange, style})', s => {
+    const items = [{ value: 'today', label: 'Today', count: 4 }, { value: 'week', label: 'This week' }, { value: 'later', label: 'Later', count: 12 }];
+    const seg = ui.tabs({ items, value: 'today', label: 'Range', onChange: v => log('tabs ' + v) }); seg.id = 'catTabs';
+    s.append(label('segmented'), seg, label('underline'), ui.tabs({ items: [{ value: 'general', label: 'General' }, { value: 'boards', label: 'Boards' }, { value: 'agents', label: 'Agents', count: 2 }, { value: 'checks', label: 'Checks' }], value: 'boards', style: 'underline', label: 'Settings' }));
+  });
+
+  demo('toast', 'ui.toast(text, {action, timeout})', s => {
+    const b1 = ui.button({ label: 'Show toast', onClick: () => ui.toast('Saved') }); b1.id = 'catToast';
+    const b2 = ui.button({ label: 'Toast with Undo', onClick: () => ui.toast('Task archived', { action: { label: 'Undo', onClick: () => log('toast undo') } }) });
+    const b3 = ui.button({ label: 'Queue three', onClick: () => ['One', 'Two', 'Three'].forEach(t => ui.toast(t, { timeout: 1200 })) });
+    s.append(row(b1, b2, b3));
+  });
+
+  demo('banner', 'ui.banner({tone, text, action, onDismiss})', s => {
+    s.append(ui.banner({ tone: 'info', text: 'Board tools v19 are available.', action: { label: 'Upgrade', onClick: () => log('banner upgrade') } }),
+      ui.banner({ tone: 'ok', text: 'Connected to acme/board.' }),
+      ui.banner({ tone: 'warn', text: 'This board is read-only: the token can read but not write.', onDismiss: () => log('banner dismissed') }),
+      ui.banner({ tone: 'danger', text: 'Save failed: someone else changed the board.', action: { label: 'Reload', onClick: noop } }),
+      ui.banner({ tone: 'neutral', text: 'You are viewing a demo board.' }));
+  });
+
+  demo('confirm', 'ui.confirm({title, body, confirmLabel, danger}) → Promise<boolean> · ui.promptText({title, label, value, placeholder, confirmLabel}) → Promise<string|null>', s => {
+    const a = ui.button({ label: 'Confirm', onClick: async () => log('confirm ' + await ui.confirm({ title: 'Move 3 tasks to Done?', body: 'They stay on the board until archived.', confirmLabel: 'Move' })) }); a.id = 'catConfirm';
+    const b = ui.button({ label: 'Danger confirm', variant: 'danger', onClick: async () => log('confirm ' + await ui.confirm({ title: 'Delete task #12?', body: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) }); b.id = 'catConfirmDanger';
+    const c = ui.button({ label: 'Prompt', onClick: async () => log('prompt ' + JSON.stringify(await ui.promptText({ title: 'Snooze until', label: 'Date (YYYY-MM-DD)', placeholder: '2026-10-20', confirmLabel: 'Snooze' }))) }); c.id = 'catPrompt';
+    s.append(row(a, b, c));
+  });
+
+  demo('listRow', 'ui.listRow({text, meta, href, onRemove, removeLabel})', s => {
+    const st = h('div', 'cat-stack');
+    st.append(ui.listRow({ text: 'casey@example.com', meta: 'email', icon: 'mail', onRemove: e => e.currentTarget.closest('.ui-listrow').remove() }),
+      ui.listRow({ text: 'Alexandra Montgomery-Smith', meta: 'alexandra.montgomery-smith@example-consulting.co.uk', icon: 'user', onRemove: e => e.currentTarget.closest('.ui-listrow').remove() }),   // long meta must shrink, not overflow
+      ui.listRow({ text: 'Proposal draft (Drive)', href: 'https://drive.google.com/', icon: 'file-text', onRemove: noop, removeLabel: 'Remove link' }),
+      ui.listRow({ text: 'A very long row text that should truncate with an ellipsis when it does not fit the available width', meta: 'meta' }),
+      ui.listRow({ text: 'Plain row' }));
+    s.append(st);
+  });
+
+  demo('taskRow', 'ui.taskRow(task, {density, onOpen})', s => {
+    const iso = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+    const tasks = [
+      { num: 12, title: 'Draft the proposal for the Acme website relaunch', priority: 'high', due: iso(-2), client: 'Acme', labels: [{ name: 'design', color: '#8e4ec6' }, 'copy'], todoDone: 3, todoTotal: 8 },
+      { num: 7, title: 'Send invoice', priority: 'medium', due: iso(0), client: 'Globex', labels: [], todoDone: 2, todoTotal: 2 },
+      { num: 31, title: 'Tidy the backlog', priority: 'low', due: iso(9) },
+      { num: 40, title: 'No priority, no due date' }
+    ];
+    ['card', 'row', 'compact'].forEach(d => {
+      s.append(label(d));
+      const wrap = h('div', d === 'card' ? 'cat-grid' : 'cat-stack');
+      tasks.forEach(t => wrap.append(ui.taskRow(t, { density: d, onOpen: x => log('open #' + x.num) })));
+      s.append(wrap);
+    });
+    s.append(label('display only (no onOpen)'), ui.taskRow(tasks[0], { density: 'row' }));
+  });
+
+  demo('check', 'ui.check({state, text, fix})', s => {
+    s.append(ui.check({ state: 'ok', text: 'Token can write to acme/board' }),
+      ui.check({ state: 'bad', text: 'Routine trigger returned 401', fix: 'Create a new API trigger token and paste it in Settings → Agents & integrations.' }),
+      ui.check({ state: 'wait', text: 'Checking the cron-job.org relay…' }),
+      ui.check({ state: 'warn', text: 'Board tools are one version behind', fix: 'Run the board-upgrade skill.' }));
+  });
+
+  demo('empty', 'ui.empty({text, action})', s => {
+    const g = h('div', 'cat-grid');
+    g.append(ui.empty({ text: 'Nothing due today.' }), ui.empty({ text: 'No people yet. Add the first person you work with.', icon: 'users', action: { label: 'Add a person', icon: 'plus', onClick: () => log('empty add') } }));
+    s.append(g);
+  });
+
+  document.documentElement.classList.add('ready');
+  window.catReady = true;
+})();
+</script>
+</body>
+</html>
