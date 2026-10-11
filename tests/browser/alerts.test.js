@@ -19,7 +19,9 @@ const server = http.createServer((req, res) => {
 (async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/board/index.html?demo=crm`;
-  const browser = await chromium.launch();
+  // full Chromium in headless mode, not the default headless shell: the shell ignores the granted notifications
+  // permission (Notification.permission stays "denied"), so the service-worker path could never run there
+  const browser = await chromium.launch({ channel: 'chromium' });
   try {
     // 1. Android: the constructor throws, permission is granted. The test alert is shown by the service worker.
     {
