@@ -450,14 +450,16 @@
     card.style.cssText = 'max-width:360px;padding:20px;border:1px solid var(--line,#ddd);border-radius:12px;background:var(--surface,#fff);text-align:center';
     p.textContent = 'A new version of the board is being published. Reload in a minute.'; p.style.margin = '0 0 12px';
     b.type = 'button'; b.textContent = 'Reload'; b.style.cssText = 'font:inherit;padding:6px 16px;border-radius:8px;border:1px solid var(--line,#ccc);background:var(--hero,#2b59c3);color:var(--on-hero,#fff);cursor:pointer';
-    b.onclick = reload; card.appendChild(p); card.appendChild(b); box.appendChild(card); document.body.appendChild(box);
+    b.onclick = reload; card.appendChild(p); card.appendChild(b); box.appendChild(card);
+    for (var i = 0; i < document.body.children.length; i++) document.body.children[i].inert = true;   // keyboard focus stays on the message
+    document.body.appendChild(box); b.focus();
     if (auto) reload();
   }
   function get(mode) { return function (u) { return fetch(u, { cache: mode }).then(function (r) { if (!r.ok) throw new Error(u + ' ' + r.status); return r.text(); }); }; }
   // Styles: board.css, then the ui.js component styles. Scripts in order: icons.js, ui.js (component library), board.js.
   var CSS = ['board.css', 'ui.css'], JS = ['icons.js', 'ui.js', 'board.js'], ALL = CSS.concat(JS);
   function run(a) {
-    var m = /\bconst KB_MARKUP = (\d+);/.exec(a[4]);
+    var m = /\bconst\s+KB_MARKUP\s*=\s*(\d+)/.exec(a[4]);   // tolerant of reformatting (a minifier, spacing)
     if (!m || +m[1] !== MARKUP) return kbStalePage();                                      // a board.js from another deploy: never run it on this markup
     window.__kbAssets = { css: a[0], js: a[4], extra: a.slice(1, 4).join('\n') };
     CSS.forEach(function (u, i) { var st = document.createElement('style'); st.textContent = a[i] + '\n/*# sourceURL=' + u + ' */'; document.head.appendChild(st); }); reveal();

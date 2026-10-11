@@ -76,7 +76,9 @@ function kbStalePage() {
     card.style.cssText = 'max-width:360px;padding:20px;border:1px solid var(--line,#ddd);border-radius:12px;background:var(--surface,#fff);text-align:center';
     p.textContent = 'A new version of the board is being published. Reload in a minute.'; p.style.margin = '0 0 12px';
     b.type = 'button'; b.textContent = 'Reload'; b.style.cssText = 'font:inherit;padding:6px 16px;border-radius:8px;border:1px solid var(--line,#ccc);background:var(--hero,#2b59c3);color:var(--on-hero,#fff);cursor:pointer';
-    b.onclick = reload; card.append(p, b); box.append(card); document.body.append(box);
+    b.onclick = reload; card.append(p, b); box.append(card);
+    [...document.body.children].forEach(n => { n.inert = true; });   // keyboard focus stays on the message
+    document.body.append(box); b.focus();
   };
   if (document.body) show(); else document.addEventListener('DOMContentLoaded', show);
   if (auto) reload();
