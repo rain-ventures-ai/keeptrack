@@ -21,6 +21,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
+### [34] — 2026-10-11
+
+- Claim ownership and launch checks, from the external review of private-tasks. `done`, `release` and `heartbeat` refuse a card whose claim belongs to another session; `--force` on them is only for a person's explicit say-so, and it overrides only the assignee check and another session's live claim. Releasing a stale, stuck or blocked claim works from any session. A session is identified by `--session`, `BOARD_SESSION`, `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, or else the local claim record this clone wrote, so an attended session keeps its own card. A routine's `claim` replaces the web page's `pending-...` placeholder for the same agent and person without `--force`. `--force` no longer bypasses `settings.max_agent_claims`; the capacity refusal says to raise it or use `--attended`. The web page will not send a card to Claude when the board's agent limit is full, and its quick-assign button says why. The routine text no longer mentions `--force`.
+- Done evidence and time zones, from the same review. `done` needs `--note` and refuses open checklist items. `done --cancel --note "why"` closes a card without finishing it and records `outcome: cancelled`; a normal done records `outcome: completed`, also in `last_run.outcome`. `show` prints the outcome, the web page shows a "cancelled" pill and includes it in Copy for AI, and `move ID done` still works but warns about open to-dos. `--due today` / `+N`, the OVERDUE/TODAY flags and `today` use the acting member's time zone (then the kit owner's, then the first member's), falling back to the host clock when none is on record. `today` starts with `Today is YYYY-MM-DD (Zone)`.
+
 ### [33] — 2026-10-11
 
 - A CRM person whose GitHub login is a board member's is that member's own record, not a contact (worked out from `people[]`, nothing stored). `today` never lists it as a follow-up and `people`/`person` mark it "board member @login: own record, not a contact". The web board shows it as **You** (or **Board member**), puts you first in People, keeps members out of Today's follow-ups and the Pipeline, and "Copy for AI" says it is a member rather than asking for contact help.

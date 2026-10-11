@@ -52,7 +52,7 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 `ID` may be a task number such as `'#12'` (quote the `#`).
 
 ## 3. Rules
-- **Ask before anything wide or lossy:** renaming or deleting a label, client or stage, removing a member or agent, `task-rm`, `person-rm`, or `--force`.
+- **Ask before anything wide or lossy:** renaming or deleting a label, client or stage, removing a member or agent, `task-rm`, `person-rm`, `done --cancel`, or `--force`.
   Say what it touches (the commands print counts) and wait for a yes. Adding a label or retitling one card needs no ask.
 - A refusal is information, not an obstacle: it names what still depends on the thing. Fix that, or ask. Do not work
   round it by editing JSON.

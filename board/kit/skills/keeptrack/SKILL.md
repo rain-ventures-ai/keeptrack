@@ -123,7 +123,7 @@ $B agents | agent-add NAME | agent-rm NAME [--unassign]
 $B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)
 $B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW
 ```
-Ask the user before a rename, a delete, removing a member or `--force`; the commands print what they will touch.
+Ask the user before a rename, a delete, removing a member, `done --cancel` or `--force`; the commands print what they will touch.
 In a board repo the `board-admin` skill has the full table.
 
 The web board's Today rows and cinema cards can assign a task to the signed-in person's own Claude. That quick action
