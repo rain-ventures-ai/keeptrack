@@ -124,7 +124,8 @@ if (typeof window !== 'undefined') (() => {
   const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
-  function exportCode() { const o = {}; XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '') o[k] = v; }); return 'kbcfg1.' + xEnc(o); }
+  function exportCode() { stashBoard(); const o = {};   // stash first: kb_boards then has this board's latest per-board keys
+    XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '') o[k] = v; }); return 'kbcfg1.' + xEnc(o); }
   function parseCode(raw) {
     const m = /kbcfg1\.([A-Za-z0-9_-]+)/.exec(String(raw || '')); if (!m) throw new Error('That is not a board settings code.');
     const o = xDec(m[1]), out = {};
@@ -138,7 +139,11 @@ if (typeof window !== 'undefined') (() => {
     return out;
   }
   function applyCode(raw) { const o = parseCode(raw); // replace, not merge: a key the code leaves out must not keep this browser's old value (an old token, routine or cron key)
-    new Set(XFER.text.concat(BOARD_KEYS)).forEach(k => LS.del('kb_' + k)); Object.keys(o).forEach(k => LS.set('kb_' + k, o[k])); return o; }
+    new Set(XFER.text.concat(BOARD_KEYS)).forEach(k => LS.del('kb_' + k)); Object.keys(o).forEach(k => LS.set('kb_' + k, o[k]));
+    // the current board's own keys the code carries only inside boards (email_sync, claude_steps, claude_ok): load them the way
+    // activateBoard does, or the next stashBoard() would overwrite that entry with the empty top-level values
+    const mine = boardsMap()[LS.get('kb_repo')] || {}; BOARD_KEYS.forEach(k => { if (!(k in o) && mine[k]) LS.set('kb_' + k, mine[k]); });
+    return o; }
   // setup link: the code rides in the #fragment, which browsers never send to any server; it is stripped straight away
   (() => { const m = /[#&]kbcfg=([^&]+)/.exec(location.hash); if (!m) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch {}
@@ -2973,15 +2978,28 @@ if (typeof window !== 'undefined') (() => {
     return 'https://github.com/settings/personal-access-tokens/new?' + q; };
   $('sRepo').addEventListener('input', () => { $('patLink').href = patUrl(); });
   $('btnSettings').addEventListener('click', () => { $('patLink').href = patUrl(); });
-  $('sCancel').onclick = () => { fillConn(); showEdit(false); };   // put the saved values back and fold the form
+  // connGen: Cancel and closing Settings bump it, so a "Save & connect" still waiting for queued saves gives up instead of
+  // switching boards with the values it read before (or the reset ones after).
+  let connGen = 0;
+  const saveBtnIdle = () => { const b = $('sSave'); b.disabled = false; (b.querySelector('.ui-btn__label') || b).textContent = 'Save & connect'; };
+  $('sCancel').onclick = () => { connGen++; saveBtnIdle(); fillConn(); showEdit(false); };   // put the saved values back and fold the form
+  $('dlgSettings').addEventListener('close', () => { connGen++; saveBtnIdle(); });
   $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Token removed'); };
   $('sSave').onclick = async () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
     if (!REPO_RE.test(nr)) { toast('The repository must look like owner/name', true); return; }
-    if (moved) { await new Promise(res => whenSaved(res)); activateBoard(nr); }   // another repo = another board, with its own token; queued saves finish on the old one first
-    LS.set('kb_branch', $('sBranch').value.trim() || 'master'); LS.set('kb_path', $('sPath').value.trim() || 'board/tasks.json'); LS.set('kb_me', $('sMe').value.trim().replace(/^@/, ''));
-    const newTok = $('sToken').value.trim();
+    // every value is read now: Cancel or closing the dialog while queued saves finish resets the fields
+    const branch = $('sBranch').value.trim() || 'master', path = $('sPath').value.trim() || 'board/tasks.json', me = $('sMe').value.trim().replace(/^@/, ''), newTok = $('sToken').value.trim();
+    if (moved && saving) {   // another repo = another board, with its own token; queued saves finish on the old one first
+      const gen = ++connGen, b = $('sSave'); b.disabled = true;
+      (b.querySelector('.ui-btn__label') || b).textContent = `Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`;
+      while (saving) await saving;
+      if (gen !== connGen) return;   // cancelled or closed meanwhile
+      saveBtnIdle();
+    }
+    if (moved) activateBoard(nr);
+    LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
     if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();

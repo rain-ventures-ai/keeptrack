@@ -218,6 +218,51 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await shot(page, 'settings-390-demo-board');
       assert.deepEqual(page.errors, []); await page.close();
     }
+    // 13. "Save & connect" to another repo waits for queued saves (button disabled, says so); Cancel or closing Settings
+    // meanwhile abandons it, and an uninterrupted one switches with the values typed before the wait.
+    for (const how of ['cancel', 'esc', 'wait']) {
+      const page = await open(browser);
+      await page.route('https://api.test/**', async r => { if (r.request().method() !== 'GET') await new Promise(z => setTimeout(z, 1500)); return page.api.route(r); });
+      await page.evaluate(() => window.kbSettings.open('labels')); await page.locator('#labelBox .lbrow').first().waitFor();
+      await page.locator('#labelBox input[aria-label="New label name"]').fill('urgent'); await page.locator('#labelBox button', { hasText: 'Add label' }).click();
+      await page.evaluate(() => window.kbSettings.open('conn'));
+      await page.locator('#sRepo').fill('acme/other'); await page.locator('#sBranch').fill('dev'); await page.locator('#sToken').fill('tok2');
+      await page.locator('#sSave').click();
+      assert.equal(await page.locator('#sSave').isDisabled(), true, how + ': Save & connect is disabled while waiting');
+      assert.match(await page.locator('#sSave').textContent(), /^Waiting for 1 change to save…$/);
+      if (how === 'cancel') await page.locator('#sCancel').click();
+      if (how === 'esc') await page.keyboard.press('Escape');
+      if (how === 'wait') {
+        await page.waitForURL(/repo=acme\/other/, { timeout: 10000 }); await page.waitForTimeout(300);
+        const ls = await page.evaluate(() => ({ repo: localStorage.getItem('kb_repo'), boards: JSON.parse(localStorage.getItem('kb_boards')) }));
+        assert.equal(ls.repo, 'acme/other'); assert.equal(ls.boards['acme/other'].branch, 'dev'); assert.equal(ls.boards['acme/other'].token, 'tok2', 'the typed token is kept');
+        assert.equal(ls.boards['acme/board'].token, 'test', 'the old board keeps its token');
+        assert.ok(page.api.root().labels.some(l => l.name === 'urgent'), 'the queued save finished on the old board first');
+        await page.close(); continue;
+      }
+      await page.waitForTimeout(3000);   // the queued save has finished by now
+      const ls = await page.evaluate(() => ({ repo: localStorage.getItem('kb_repo'), branch: localStorage.getItem('kb_branch'), tok: localStorage.getItem('kb_token'), url: location.search }));
+      assert.deepEqual(ls, { repo: 'acme/board', branch: 'main', tok: 'test', url: '' }, how + ': nothing switched');
+      assert.ok(page.api.root().labels.some(l => l.name === 'urgent'), how + ': the queued save still finished');
+      assert.equal(await page.locator('#sSave').isDisabled(), false); assert.equal(await page.locator('#sSave').textContent(), 'Save & connect');
+      assert.deepEqual(page.errors, []); await page.close();
+    }
+
+    // 14. A settings code round trip keeps the current board's own keys (email sync, routine steps) that travel only inside kb_boards.
+    {
+      const page = await open(browser);
+      await page.evaluate(() => { localStorage.setItem('kb_email_sync', '1'); localStorage.setItem('kb_claude_steps', '3'); localStorage.setItem('kb_claude_ok', '1'); });
+      await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xCode').click();
+      await page.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click(); await page.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const code = await page.evaluate(() => window.__copied); await page.close();
+      const other = await open(browser);   // another device: same board, none of those keys
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xPaste').fill(code); await other.locator('#xImport').click();
+      const nav = other.waitForNavigation(); await other.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await nav; await other.waitForSelector('.card');
+      const got = await other.evaluate(() => ({ email: localStorage.getItem('kb_email_sync'), steps: localStorage.getItem('kb_claude_steps'), ok: localStorage.getItem('kb_claude_ok'), entry: JSON.parse(localStorage.getItem('kb_boards'))['acme/board'] }));
+      assert.deepEqual([got.email, got.steps, got.ok], ['1', '3', '1'], 'imported per-board keys are live');
+      assert.deepEqual([got.entry.email_sync, got.entry.claude_steps, got.entry.claude_ok], ['1', '3', '1'], 'and stay in kb_boards after the load-time stash');
+      assert.deepEqual(other.errors, []); await other.close();
+    }
     console.log('settings: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
