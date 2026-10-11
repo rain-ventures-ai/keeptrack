@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
+### [34] — 2026-10-11
+
+- Security: only the ONE CRM person with a board member's GitHub login counts as that member's own record. If two or more share it, all stay contacts (so a board writer can't hide real contacts from follow-ups by giving them a member's login) and `doctor` warns `MEMBER_PERSON_DUP`. `person-add`/`person-set`/`person-rm`/`sent` label a member's record like `people` does; a null `people[]` no longer breaks `today`. Same rule on the web board. From the relay-merge review of private-tasks#32.
+
 ### [33] — 2026-10-11
 
 - A CRM person whose GitHub login is a board member's is that member's own record, not a contact (worked out from `people[]`, nothing stored). `today` never lists it as a follow-up and `people`/`person` mark it "board member @login: own record, not a contact". The web board shows it as **You** (or **Board member**), puts you first in People, keeps members out of Today's follow-ups and the Pipeline, and "Copy for AI" says it is a member rather than asking for contact help.

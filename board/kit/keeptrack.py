@@ -66,7 +66,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, README.md, AGENTS.md, CLAUDE.md, empty tasks.json
 """
-import argparse, base64, contextlib, copy, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
+import argparse, base64, collections, contextlib, copy, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 try:
     import fcntl
 except ImportError:   # Windows
@@ -2048,6 +2048,10 @@ def doctor_board(fix=False):
             if not valid_email(e.strip() if isinstance(e, str) else e):
                 problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r} has an invalid email address {e!r}.")
         # The CRM person is optional: only suggest one while the board shows the CRM.
+        same = [p for p in data.get("contacts", []) if gh_user and str(p.get("github") or "").lower() == str(gh_user).lower()]
+        if len(same) > 1:
+            problem("MEMBER_PERSON_DUP", "tasks.json", f"{len(same)} CRM people share board member {gh_user!r}'s GitHub login, so none "
+                    "counts as their own record and all stay contacts; keep it on one (person-set <id> --github '').")
         if gh_user and "crm" in board_modes and not person_for_github(data, gh_user):
             problem("MEMBER_NO_PERSON", "tasks.json", f"Board member {gh_user!r} has no CRM person record (add a person with --github <login>).")
     for item in tasks + people:
@@ -2607,7 +2611,7 @@ def cmd_where(a):
 # "channel". A draft is never a contact: it counts only when it is marked sent (`sent`). Agents never send messages.
 CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
-DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "PROJECT", "SETTINGS"})
+DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS"})
 
 
 def person_for_github(data, github):
@@ -2721,17 +2725,27 @@ def last_touch(p):
     return max(ts) if ts else ""
 
 
+def member_map(data):
+    """{person id: board member} for each member's own CRM record (v33): the ONE person whose GitHub login is that
+    member's. Such a person is listed as a member, never as a follow-up. If two or more people share a member's login,
+    none of them counts (v34): a repo writer could otherwise hide real contacts by giving them a member's login.
+    `doctor` reports the duplicate. Worked out from people[], never stored."""
+    ppl = [m for m in (data.get("people") or []) if isinstance(m, dict) and m.get("github")]
+    contacts = [p for p in (data.get("contacts") or []) if isinstance(p, dict)]
+    members = {str(m["github"]).lower(): m for m in ppl}
+    logins = [str(p.get("github") or "").lower() for p in contacts]
+    n = collections.Counter(logins)
+    return {p.get("id"): members[g] for p, g in zip(contacts, logins) if g in members and n[g] == 1}
+
+
 def member_of(data, p):
-    """The board member whose GitHub login is this person's, or None. Such a person is that member's own record, not a
-    contact: it is listed as a member and never as a follow-up (v33). Worked out from people[], never stored."""
-    g = str((p or {}).get("github") or "").lower()
-    return next((m for m in data.get("people", []) if g and str(m.get("github") or "").lower() == g), None)
+    return member_map(data).get((p or {}).get("id"))
 
 
-def person_line(p, data=None):
-    m = member_of(data, p) if data else None
+def person_line(p, data=None, members=None):
+    m = (members if members is not None else member_map(data) if data else {}).get(p.get("id"))
     if m:
-        return f"{p['id']}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
+        return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
     due = p.get("next_due") or ""
     flag = " OVERDUE" if due and due < dt.date.today().isoformat() else (" TODAY" if due == dt.date.today().isoformat() else "")
     who = ", ".join(x for x in (p.get("role"), p.get("company")) if x)
@@ -2814,8 +2828,9 @@ def cmd_people(a):
         st = check_stage(data, a.stage); people = [p for p in people if p.get("stage") == st]
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
+    own = member_map(data)
     for p in sorted(people, key=lambda p: p.get("name", "").lower()):
-        print(person_line(p, data))
+        print(person_line(p, members=own))
     if not people: print("(nobody)")
 
 
@@ -2823,7 +2838,8 @@ def cmd_today(a):
     """Follow-ups: overdue, due today, the next 7 days, and open people with no next step."""
     data, _ = load(); t = dt.date.today(); ti = t.isoformat(); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
-    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not member_of(data, p)]   # members are never follow-ups
+    own = member_map(data)
+    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and p.get("id") not in own]   # members are never follow-ups
     groups = [("OVERDUE", [p for p in open_ if p.get("next_due") and p["next_due"] < ti]),
               ("TODAY", [p for p in open_ if p.get("next_due") == ti]),
               ("NEXT 7 DAYS", [p for p in open_ if p.get("next_due") and ti < p["next_due"] <= wk]),
@@ -2868,11 +2884,11 @@ def cmd_person_add(a):
                or (a.linkedin and any(_norm_url(x.get("url")) == _norm_url(a.linkedin) for x in person_links(p)))
                or (a.email and any(x["value"].lower() == a.email.lower() for x in person_methods(p, "email")))]
         if dup and not a.force:
-            print(f"already on the board: {person_line(dup[0])}  (nothing added; use person-set to change it, or --force)"); return
+            print(f"already on the board: {person_line(dup[0], data)}  (nothing added; use person-set to change it, or --force)"); return
         p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "", "github": "",
              "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
              "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": who_am_i()}
-        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p)}")
+        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p, data)}")
     mutate(fn, f"Add person: {a.name}")
 
 
@@ -2882,7 +2898,7 @@ def cmd_person_set(a):
         if not ch:
             print("nothing changed"); return
         for c in ch: hist(p, c)
-        p["updated"] = now(); print(person_line(p))
+        p["updated"] = now(); print(person_line(p, data))
     mutate(fn, f"Update person: {a.ref}")
 
 
@@ -2893,7 +2909,7 @@ def cmd_person_rm(a):
         p = find_person(data, a.ref)
         tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
         if not a.yes:
-            sys.exit(f"this deletes {person_line(p)} for good (notes and history included); rerun with --yes to confirm. "
+            sys.exit(f"this deletes {person_line(p, data)} for good (notes and history included); rerun with --yes to confirm. "
                      f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
         for t in tasks:
             t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
@@ -2933,7 +2949,7 @@ def cmd_sent(a):
         if p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
             hist(p, f"stage {p['stage']} -> {stages(data)[1]}"); p["stage"] = stages(data)[1]
         for x in set_fields(data, p, a): hist(p, x)
-        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p)}")
+        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p, data)}")
     mutate(fn, f"Sent: {a.ref}")
 
 

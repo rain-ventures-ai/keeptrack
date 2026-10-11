@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v34 (schema 4)
+A member's own CRM record is the ONE person with their GitHub login; if two or more share it, all stay contacts and `doctor` warns `MEMBER_PERSON_DUP`.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `keeptrack.py doctor` shows no `MEMBER_PERSON_DUP`; if it does, keep the login on one person (`person-set <id> --github ''` on the others).
+
 ### v33 (schema 4)
 A CRM person whose `github` matches a board member is that member's own record, not a contact: `today` skips it, `people` and `person` mark it as a board member, and the web board shows it as You or Board member, outside follow-ups and the pipeline. Nothing is stored; it follows `people[]`.
 - Run `kit-update` only. There is no board-data migration.

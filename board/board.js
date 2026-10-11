@@ -3239,7 +3239,9 @@ if (typeof window !== 'undefined') (() => {
   const memberPerson = () => { const meV = cfg().me; if (!meV) return null; return personByGithub(meV) || personByEmail(meV); };
   // A person whose GitHub login is a board member's is that member's own record, not a contact: it shows as "You" (or
   // "Board member") and stays out of follow-ups, the pipeline and "Help me with my contact". Worked out from people[], never stored.
-  const memberOf = p => { const g = String((p && p.github) || '').toLowerCase(); return g ? (state.people || []).find(m => String(m.github || '').toLowerCase() === g) || null : null; };
+  // only the ONE person with a member's login counts (v34): duplicates all stay contacts, so a member's login can't hide anyone
+  const memberOf = p => { const g = String((p && p.github) || '').toLowerCase(); if (!g) return null; const m = (state.people || []).find(x => String(x.github || '').toLowerCase() === g);
+    return m && state.contacts.filter(x => String(x.github || '').toLowerCase() === g).length === 1 ? m : null; };
   const isMe = p => { const m = memberOf(p), meV = String(cfg().me || '').toLowerCase(); return !!m && !!meV && String(m.github).toLowerCase() === meV; };
   const contactOnly = p => !memberOf(p);
   function memberPill(p) { const b = el('span', 'stagepill memberpill', isMe(p) ? 'You' : 'Board member'); b.title = `@${memberOf(p).github} is a member of this board: their own record, not a contact`; return b; }

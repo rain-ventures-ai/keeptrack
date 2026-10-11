@@ -980,6 +980,23 @@ class CrmProjects(unittest.TestCase):
         self.assertIn("p_me  Oliver  [board member @osouthgate: own record, not a contact]", out.getvalue())
         self.assertIn("[New]", out.getvalue())   # Bea is still a contact
 
+    def test_a_members_login_on_two_people_hides_neither(self):
+        """v34: only the ONE person with a member's login is their own record; a duplicate can't hide a real contact."""
+        d = read_json(self.file)
+        d.setdefault("people", []).append({"github": "osouthgate", "name": "Oliver"})
+        d["contacts"][0].update(github="osouthgate", next_due="2020-01-01")   # Bea, an overdue contact, given the member's login
+        d["contacts"].append({"id": "p_me", "name": "Oliver", "github": "osouthgate", "stage": "New", "links": [], "comments": [], "history": []})
+        write(self.file, d)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_today(Args())
+        self.assertIn("OVERDUE", out.getvalue()); self.assertIn("Bea", out.getvalue())
+        issues, _, _ = kt.doctor_board(False)
+        self.assertIn("MEMBER_PERSON_DUP", {x["code"] for x in issues})
+        d["people"] = None; write(self.file, d)   # a null people[] never crashes today
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_today(Args())
+
     def test_client_set_north_star_and_project_lifecycle(self):
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_client_set(Args(client="Acme", north_star="One view of orders"))
