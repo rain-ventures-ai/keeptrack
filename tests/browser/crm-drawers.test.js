@@ -251,6 +251,25 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     assert.deepEqual(errors, [], 'no page errors');
     await page.close();
 
+    // ---- a board member's own person record (v33): "You", never a follow-up, not in the pipeline, no contact help ----
+    {
+      const api2 = new Github(); api2.files['people/p_me.json'] = text({ ...person, id: 'p_me', name: 'Alex Member', company: 'Rain', role: '', github: 'ALEX', emails: [], next_due: '2020-01-01' });
+      const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } }); const errs = []; pg.on('pageerror', e => errs.push(e.message));
+      await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api2.route(r)); await pg.goto(base + '/board/index.html'); await pg.waitForSelector('.prow');
+      assert.deepEqual(await pg.locator('.prow b').allTextContents(), ['Alex Member', 'Casey Example'], 'you come first in People');
+      assert.equal(await pg.locator('.prow', { hasText: 'Alex Member' }).locator('.memberpill').textContent(), 'You');
+      await pg.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
+      await pg.locator('.prow', { hasText: 'Alex Member' }).click(); await pg.locator('#dlgContact[open]').waitFor();
+      assert.match(await pg.locator('#pMember').textContent(), /This is you \(@alex\)/);
+      await pg.locator('#pAgent').click(); await pg.waitForFunction(() => window.__copied);
+      const prompt = await pg.evaluate(() => window.__copied); assert.match(prompt, /is me .*not a contact/); assert.doesNotMatch(prompt, /Help me with my contact/);
+      await pg.keyboard.press('Escape'); await pg.locator('#dlgContact').waitFor({ state: 'hidden' });
+      for (const v of ['today', 'pipeline']) { await pg.locator(`#viewSw button[data-view="${v}"]`).click(); await pg.waitForTimeout(300);
+        assert.equal(await pg.locator('#board', { hasText: 'Casey Example' }).count(), 1, `${v} shows contacts`);
+        assert.equal(await pg.locator('#board', { hasText: 'Alex Member' }).count(), 0, `a member is not in ${v}`); }
+      assert.deepEqual(errs, []); await pg.close();
+    }
+
     // ---- read-only demo board: fields disabled, add and remove controls hidden, copy and navigation still work, no Delete ----
     for (const vp of [{ width: 390, height: 844 }, { width: 1280, height: 860 }]) {
       for (const scheme of SHOTS ? ['light', 'dark'] : ['light']) {

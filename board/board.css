@@ -841,6 +841,8 @@ header #filterBadge { background: var(--accent); }
 .card:has(.quickassign[open]), .ttoday:has(.quickassign[open]) { content-visibility: visible; contain: none; z-index: 20; }
 .ttoday:has(.quickassign[open]) { position: relative; }
 .cinemaactions { justify-content: flex-start; margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+.stagepill.memberpill { --h: 265; }
+.prow.pmember { opacity: .85; }
 .stagepill { --h: 210; display: inline-block; padding: 2px 9px; border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
   background: hsl(var(--h) 70% 50% / .16); color: hsl(var(--h) 55% 38%); }
 [data-theme="dark"] .stagepill, [data-theme="midnight"] .stagepill { color: hsl(var(--h) 70% 72%); }

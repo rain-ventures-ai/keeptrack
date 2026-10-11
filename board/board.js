@@ -3232,6 +3232,12 @@ if (typeof window !== 'undefined') (() => {
   const personByEmail = email => { const e = String(email || '').toLowerCase(); return state.contacts.find(p => (p.emails || []).some(x => String(x.value).toLowerCase() === e)); };
   const personByGithub = gh => { const g = String(gh || '').toLowerCase(); return state.contacts.find(p => String(p.github || '').toLowerCase() === g); };
   const memberPerson = () => { const meV = cfg().me; if (!meV) return null; return personByGithub(meV) || personByEmail(meV); };
+  // A person whose GitHub login is a board member's is that member's own record, not a contact: it shows as "You" (or
+  // "Board member") and stays out of follow-ups, the pipeline and "Help me with my contact". Worked out from people[], never stored.
+  const memberOf = p => { const g = String((p && p.github) || '').toLowerCase(); return g ? (state.people || []).find(m => String(m.github || '').toLowerCase() === g) || null : null; };
+  const isMe = p => { const m = memberOf(p), meV = String(cfg().me || '').toLowerCase(); return !!m && !!meV && String(m.github).toLowerCase() === meV; };
+  const contactOnly = p => !memberOf(p);
+  function memberPill(p) { const b = el('span', 'stagepill memberpill', isMe(p) ? 'You' : 'Board member'); b.title = `@${memberOf(p).github} is a member of this board: their own record, not a contact`; return b; }
   const clientInfo = name => (state.client_info || {})[name] || { links: [] };
   const doneCol = () => doneColId();
 
@@ -3710,6 +3716,7 @@ if (typeof window !== 'undefined') (() => {
   function personRow(p) {
     const row = el('div', 'prow'); row.tabIndex = 0; row.onclick = () => openContact(p.id); row.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
     const who = el('div', 'pwho'); who.append(el('b', null, p.name || '(no name)'), el('span', 'muted', [p.role, p.company].filter(Boolean).join(' · ')));
+    if (memberOf(p)) { row.classList.add('pmember'); row.append(who, memberPill(p), el('div', 'pnext muted', isMe(p) ? 'Your own record' : 'Board member'), el('span', 'plast muted', '@' + memberOf(p).github)); return row; }
     const nx = el('div', 'pnext'); nx.append(el('span', null, p.next || (closedStage(p.stage) ? '' : 'No next step')), personDue(p));
     const lt = lastTouch(p), ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
     row.append(who, stagePill(p.stage), nx, ago); return row;
@@ -3733,7 +3740,7 @@ if (typeof window !== 'undefined') (() => {
 
   function renderToday() {
     const board = $('board'), t = todayIso(), week = plusDays(7), m = modes(), hasCrm = m.includes('crm'), hasTasks = m.includes('tasks');
-    const open = hasCrm ? state.contacts.filter(p => !closedStage(p.stage) && crmFilter(p)) : [];
+    const open = hasCrm ? state.contacts.filter(p => !closedStage(p.stage) && crmFilter(p) && contactOnly(p)) : [];   // members are never follow-ups
     const groups = hasCrm ? [
       [['alarm-clock', 'People overdue'], open.filter(p => p.next_due && p.next_due < t)],
       [['pin', 'People today'], open.filter(p => p.next_due === t)],
@@ -3778,7 +3785,7 @@ if (typeof window !== 'undefined') (() => {
     bar.append(q, st); wrap.append(bar);
     const ql = peopleQ.toLowerCase();
     const items = state.contacts.filter(p => crmFilter(p) && (!peopleStage || p.stage === peopleStage) && (!ql || [p.name, p.company, p.role, p.notes, p.next, ...p.emails.map(x => x.value), ...p.phones.map(x => x.value), ...p.links.flatMap(x => [x.title, x.url])].join(' ').toLowerCase().includes(ql)))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => (isMe(b) - isMe(a)) || (!!memberOf(b) - !!memberOf(a)) || a.name.localeCompare(b.name));   // you, then members, then contacts
     capList('people', items, personRow, wrap);
     if (!items.length) wrap.append(ui.empty({ text: state.contacts.length ? 'Nobody matches.' : 'No people yet.', icon: 'users' }));
     wrap.append(addPersonBox()); board.append(wrap);
@@ -3788,7 +3795,7 @@ if (typeof window !== 'undefined') (() => {
     const board = $('board'); board.classList.add('pipe');
     const money = v => { const n = parseFloat(String(v).replace(/[^0-9.]/g, '')); return isFinite(n) ? n : 0; };
     stages().forEach(s => {
-      const items = state.contacts.filter(p => p.stage === s && crmFilter(p)), sum = items.reduce((a, p) => a + money(p.value), 0);
+      const items = state.contacts.filter(p => p.stage === s && crmFilter(p) && contactOnly(p)), sum = items.reduce((a, p) => a + money(p.value), 0);
       const c = el('section', 'col'); c.dataset.stage = s; const h = colHead(s, items.length);
       if (sum) h.append(el('span', 'psum', sum.toLocaleString('en-GB'))); c.append(h);
       const cards = el('div', 'cards');
@@ -3826,6 +3833,7 @@ if (typeof window !== 'undefined') (() => {
     const quick = [['0', 'Today'], ['1', 'Tomorrow'], ['7', '+1 week']].map(([d, l]) => { const b = ui.button({ label: l, size: 'sm', variant: 'ghost' }); b.dataset.due = d; b.classList.add('dquick'); return b; });
     const companies = el('datalist'); companies.id = 'pCompanies';
     const props = el('div', 'dprops'); props.id = 'pProps';
+    const memberNote = el('div'); memberNote.id = 'pMember'; memberNote.hidden = true; props.append(memberNote);
     props.append(ui.props([
       { label: 'Stage', icon: 'trending-up', value: drawerSelect('pStage', 'Stage') },
       { label: 'Next step', icon: 'arrow-right', value: dfield('pNext', 'Next step', { placeholder: 'For example: send a LinkedIn message' }) },
@@ -3888,6 +3896,8 @@ if (typeof window !== 'undefined') (() => {
     $('pCompanies').textContent = ''; [...new Set([...state.clients, ...state.contacts.map(x => x.company)].filter(Boolean))].forEach(c => { const o = el('option'); o.value = c; $('pCompanies').append(o); });
     if (!keep('pNotes')) $('pNotes').value = p.notes; autosize($('pNotes'));
     renderContactMethods(p);
+    { const n = $('pMember'), m = memberOf(p); n.textContent = ''; n.hidden = !m;
+      if (m) n.append(ui.banner({ tone: 'info', icon: 'user', text: isMe(p) ? `This is you (@${m.github}), a member of this board. Your own record stays out of follow-ups, the pipeline and contact help.` : `@${m.github} is a member of this board. Their record stays out of follow-ups, the pipeline and contact help.` })); }
     // links: this person's own, and the files of their company (client)
     renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); syncContactLegacy(x); }, `Links: ${p.name}`), false, 'profile/reference link');
     setCount('pLinkCount', p.links.length); $('pLinkSec').classList.toggle('is-empty', !p.links.length);
@@ -4030,6 +4040,7 @@ if (typeof window !== 'undefined') (() => {
     ui.menu(anchor, items, { label: `Actions for ${p.name || 'this person'}` });
   }
   function personPrompt(p) {
+    if (memberOf(p)) { const c = cfg(), m = memberOf(p); return [`${p.name} (@${m.github}) is ${isMe(p) ? 'me' : 'a member of my'} Keeptrack board (repo ${c.repo}), not a contact.`, `Their record (id ${p.id}) is a member's own record: do not draft outreach to it or add follow-ups. For their profile, run keeptrack.py ${isMe(p) ? 'me' : 'members'}.`].join('\n'); }
     const c = cfg(), lines = [`Help me with my contact ${p.name}${p.role ? ', ' + p.role : ''}${p.company ? ' at ' + p.company : ''}. Stage: ${p.stage}. Next step: ${p.next || 'none'}${p.next_due ? ' (due ' + p.next_due + ')' : ''}.`];
     if (p.emails.length) lines.push('Email addresses: ' + p.emails.map(x => `${x.label}: ${x.value}`).join('; '));
     if (p.phones.length) lines.push('Phone numbers: ' + p.phones.map(x => `${x.label}: ${x.value}`).join('; '));
