@@ -1612,6 +1612,23 @@ class ClaimLifecycle(unittest.TestCase):
         self.done(2, session="s1", force=True)
         self.assertEqual(self.card(2)["column"], "done")
 
+    def test_a_stale_placeholder_is_a_dead_run_any_session_can_release(self):
+        self.placeholder(1); self.make_stale(1)                 # the routine never started
+        self.release(1, session="s1")
+        self.assertIsNone(self.card(1)["claim"])
+        self.placeholder(2); self.make_stale(2)
+        self.assertIn("not this session's", self.refusal(self.done, 2, session="s1"))   # done still asserts the work was finished
+
+    def test_releasing_another_sessions_dead_run_keeps_this_clones_claim_record(self):
+        self.placeholder(2, session_id="s2"); self.make_stale(2)   # another session's run died on card 2
+        self.claim(1, "s1")                                        # this clone works on card 1
+        write(self.claim_file, {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False})   # (a --file board writes no record itself)
+        self.release(2, session="s1")
+        self.assertIsNone(self.card(2)["claim"])
+        self.assertEqual(json.load(open(self.claim_file))["id"], "t_c1")   # still remembered
+        self.done(1, session="s1")
+        self.assertFalse(os.path.exists(self.claim_file))
+
     def test_unclaimed_cards_need_no_ownership(self):
         self.release(1, session="s1")
         self.done(2, session="s1")

@@ -1353,8 +1353,8 @@ def claim_owner_check(data, t, a, action):
     placeholder = is_placeholder_claim(c)
     if not placeholder and c.get("session_id") == session_for(a, t["id"]):
         return
-    if action == "release" and not placeholder and state in ("stale", "stuck", "blocked"):
-        return
+    if action == "release" and state in ("stale", "stuck", "blocked"):
+        return   # a stale placeholder (the routine never started) is a dead run too
     sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')} session {c.get('session_id')} ({state}); "
              "it is not this session's (use --force if a person told you to)")
 
@@ -1558,8 +1558,18 @@ def cmd_heartbeat(a):
     mutate(fn, f"Agent heartbeat: {a.id}")
 
 
-def drop_claim_file():
+def drop_claim_file(task_id=None):
+    """Remove the local claim record. With task_id, only when the record is for that card: releasing someone else's
+    dead run must not forget the card this clone is working on."""
     try:
+        if task_id:
+            try:
+                with open(CLAIM_FILE) as f:
+                    info = json.load(f)
+            except (OSError, ValueError):
+                info = None
+            if isinstance(info, dict) and info.get("id") and info.get("id") != task_id:
+                return
         os.remove(CLAIM_FILE)
     except OSError:
         pass
@@ -1580,7 +1590,7 @@ def move_task_to_column(data, task, column):
 
 def cmd_release(a):
     def fn(data):
-        t = find(data, a.id); claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file()
+        t = find(data, a.id); claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file(t["id"])
         if a.column: move_task_to_column(data, t, a.column)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
@@ -1610,7 +1620,7 @@ def cmd_done(a):
         t["outcome"] = outcome
         link = (c or {}).get("session_url", "")
         hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
-        move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file()
+        move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(t["id"])
         print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
 
