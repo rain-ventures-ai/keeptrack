@@ -117,6 +117,6 @@ Comment with `@claude` → confirm dialog → comment saved with a claim on the 
 | Run starts, reads the board, but every write says `HTTP 403 Forbidden` (no mention of a proxy) | `BOARD_TOKEN` can read but not write: its **Contents** permission is Read-only. Edit the token (github.com/settings/personal-access-tokens → the token → Repository permissions → Contents: **Read and write**). The token value stays the same, so nothing to re-paste; for an organisation repo an owner may need to approve the change. Then Run now again |
 | Reads fail too (`404` or `401`) | Token missing, expired, owner/repository not selected, or not approved by the organisation |
 | Routine started but did nothing useful | The routine's saved prompt is not the loader, or the loader was edited so it no longer mentions the payload; paste `routine-loader.txt` again. To change behaviour, edit `routine-prompt.md` |
-| Card claim goes stale after 30 minutes | The routine ended without `done`; open the session link to see why, then Release claim |
+| Card claim goes stale after 30 minutes (12 hours for an attended claim) | The routine ended without `done`; open the session link to see why, then Release claim |
 
 Keep keys in the board's Settings only. If a key or token is ever pasted into chat or committed, revoke and regenerate it.
