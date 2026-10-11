@@ -1390,8 +1390,7 @@ def claim_owner_check(data, t, a, action):
     CLI session's claim. Releasing a stale, stuck or blocked claim is allowed: that is the recovery path for a dead
     or parked run (done never gets that: it asserts the work was finished). The refusal never prints the owning
     session's id: an id is the only proof of ownership there is, so it is not handed to whoever was refused."""
-    _MUT["recheck"] = True   # a lost race re-runs this check on the newer board: never a three-way merge against another claim
-    c = t.get("claim")
+    c = t.get("claim")   # a lost race on this card is caught by the save's own file check; a clash report shows ids only in part
     if not c or c.get("status") == "done" or getattr(a, "force", False):
         return   # no live claim (older cards kept a finished one)
     state = claim_state(data, c)
