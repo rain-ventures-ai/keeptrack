@@ -116,6 +116,33 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await page.locator('#colNew').fill('Review'); await page.locator('#colAdd').click(); await w;
       assert.deepEqual(page.api.root().columns.map(c => c.name), ['To do', 'In progress', 'Review', 'Done']);
 
+      // 3b. Members: rename, add and remove an email, set a time zone, add and remove a member. Bad input never saves.
+      assert.deepEqual(await page.locator('#memBox .memrow').first().locator('.memtags .ui-pill').allTextContents(), ['You', 'Upgrade owner']);
+      assert.equal(await page.locator('#memBox .memrow').first().getByRole('button', { name: 'Remove' }).isDisabled(), true, 'the upgrade owner cannot be removed');
+      const writes = () => page.api.writes, alex = () => page.locator('#memBox .memrow').first(), saved = () => page.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()));
+      w = saved(); await alex().locator('.memhead input').fill('Alex R'); await alex().locator('.memhead input').blur(); await w;
+      assert.equal(page.api.root().people[0].name, 'Alex R');
+      let before = writes();
+      await alex().getByRole('button', { name: 'Add email' }).click(); await alex().locator('.ui-addrow__input').fill('not-an-email'); await alex().locator('.ui-addrow__input').press('Enter');
+      await page.getByText('is not an email address').waitFor(); assert.equal(writes(), before, 'a bad address is not saved');
+      w = saved(); await alex().locator('.ui-addrow__input').fill('alex@work.example'); await alex().locator('.ui-addrow__input').press('Enter'); await w;
+      assert.deepEqual(page.api.root().people[0].emails, ['alex@work.example']);
+      await page.waitForFunction(() => document.querySelector('#memBox .memmail .ui-pill__text').textContent === 'alex@work.example');
+      before = writes(); await alex().getByLabel('Time zone of @alex').fill('Mars/Base'); await alex().getByLabel('Time zone of @alex').blur();
+      await page.getByText('is not a time zone').waitFor(); assert.equal(writes(), before, 'a bad time zone is not saved');
+      w = saved(); await alex().getByLabel('Time zone of @alex').fill('europe/london'); await alex().getByLabel('Time zone of @alex').blur(); await w;
+      assert.equal(page.api.root().people[0].timezone, 'Europe/London');
+      await page.locator('#memBox').getByRole('button', { name: 'Add a member' }).click(); w = saved();
+      await page.locator('#memBox .ui-addrow__input').last().fill('@bea'); await page.locator('#memBox .ui-addrow__input').last().press('Enter'); await w;
+      assert.deepEqual(page.api.root().people.map(p => p.github), ['alex', 'bea']); assert.equal(page.api.root().people[1].name, 'bea');
+      await page.waitForFunction(() => document.querySelectorAll('#memBox .memrow').length === 2);
+      w = saved(); await page.locator('#memBox .memrow').nth(1).getByRole('button', { name: 'Remove' }).click();
+      const rm = page.getByRole('alertdialog'); await rm.waitFor(); await rm.getByRole('button', { name: 'Remove', exact: true }).click(); await w;
+      assert.deepEqual(page.api.root().people.map(p => p.github), ['alex']);
+      await page.evaluate(() => window.kbSettings.open('members')); await settle(page);
+      assert.equal(await inView(page, 'memSec'), true, "'members' opens the Members section");
+      await shot(page, 'settings-board-members');
+
       // 4. Health runs inline: "Test these values" in the connection form stays on Connection and fills the Health list.
       await page.locator('#tabConn').click(); assert.equal(await page.locator('#bThisChip').textContent(), 'Connected');
       await page.locator('#bEditBtn').click(); await page.locator('#sTest').click();

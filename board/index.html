@@ -177,6 +177,9 @@
         <div data-row="People &amp; pipeline (CRM)" data-for="sModeCrm"><label class="schk"><input id="sModeCrm" type="checkbox"> On</label></div>
       </div>
     </div>
+    <div data-sec id="memSec" data-icon="users" data-title="Members" data-scope="board" data-learn="tasks.md" data-purpose="The people work can be assigned to. Their work email and time zone tell Claude, Codex and email sync who is who, and what “tomorrow” means for them.">
+      <div id="memBox"></div>
+    </div>
     <div data-sec id="colSet" data-icon="columns-3" data-title="Columns" data-scope="board" data-learn="tasks.md" data-purpose="Rename, reorder, add or remove Kanban columns. Each change saves at once and can be undone.">
       <div id="colList" class="collist"></div>
       <div class="coladd"><input id="colNew" aria-label="New column name" placeholder="New column name" maxlength="40"><button id="colAdd" type="button" class="primary"><i data-i="plus"></i> Add column</button></div>
@@ -434,7 +437,7 @@
    A board.js for another version is not run: kbStalePage refreshes this page and reloads once, then shows a message.
    board.js has the same check for an index.html from before the handshake. Bump both numbers together. */
 (function () {
-  var MARKUP = window.kbMarkup = 2;
+  var MARKUP = window.kbMarkup = 3;
   var done = false, reveal = function () { done = true; document.documentElement.classList.add('ready'); };
   setTimeout(function () { if (!done) reveal(); }, 6000);                                   // never leave the page blank
   function kbStalePage() {   // same as kbStalePage in board.js
