@@ -60,3 +60,6 @@ jobs:
       - name: Settings dialog (tabs, section template, deep links, saves, Health, confirms, phone layout)
         working-directory: tests/browser
         run: node settings.test.js
+      - name: Agent limit on the page, routine text, cancelled outcome
+        working-directory: tests/browser
+        run: node agent-limit.test.js
