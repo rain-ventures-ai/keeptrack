@@ -25,6 +25,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v29 (schema 4)
+The agent claim limit (v27) now holds when sessions race: a claim under a limit saves through a commit that fails if anyone else saved since it read the board, and a claim that loses that race is checked again on the newer board instead of being merged in. A `max_agent_claims` value that is not a whole number 1-100 is ignored and `doctor` warns (`SETTINGS`), so a bad hand edit can't stop every claim. Member names, addresses and time zones are printed without control characters; `init --email/--timezone` says so when it keeps an existing board.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `doctor` passes; `settings` shows the limit.
 ### v28 (schema 4)
 A member record (`people[]` in `tasks.json`) can hold the person's identity: `emails` (a list: work, personal, aliases) and `timezone` (an IANA name such as `Europe/London`). Both are optional, so older boards and the web board read the file unchanged. New: `member-set USER --email A --email B --remove-email C --timezone Area/City`, the same options on `member-add`, `init --email/--timezone` for the first person, and `me` (your record and what is missing). The upgrade owner's record can't be removed (as before), and `MEMBER_NO_PERSON` is now only a warning while the CRM section is on: turning the CRM off never touches a member. Skills and the AGENTS template tell agents to keep the owner's record current and to write cards with the what, why, next step and links.
 - Run `kit-update` only. There is no board-data migration.
