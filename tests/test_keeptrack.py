@@ -1454,6 +1454,39 @@ class AgentClaimLimit(unittest.TestCase):
         self.assertIn("limit is 2", str(e.exception))
         self.assertFalse(self.read()["tasks"][2].get("claim"))
 
+    def test_local_claim_record_is_written_only_after_the_save(self):
+        """v32: a claim refused after a lost race leaves no local record behind."""
+        written, old = [], kt.write_claim_record
+        kt.write_claim_record = lambda: written.append(kt._PENDING_CLAIM.get("rec"))
+        try:
+            self.claim("t_c1", "s1")
+            self.assertEqual("t_c1", written[0]["id"])
+            real, calls = kt.save, []
+            def racing(data, sha, msg):
+                if not calls:
+                    calls.append(1); d = self.read()
+                    d["tasks"][1]["claim"] = dict(d["tasks"][0]["claim"], session_id="s2"); write(self.file, d)
+                    return False
+                return real(data, sha, msg)
+            kt.save = racing
+            with self.assertRaises(SystemExit):
+                self.claim("t_c3", "s3")
+            self.assertEqual(1, len(written))
+        finally:
+            kt.write_claim_record = old
+
+    def test_heartbeat_reviving_a_stale_claim_respects_the_limit(self):
+        """v32: a heartbeat that brings a stale claim back to running counts like a new claim."""
+        self.claim("t_c1", "s1"); self.claim("t_c2", "s2")
+        d = self.read(); d["tasks"][0]["claim"]["heartbeat_at"] = d["tasks"][0]["claim"]["claimed_at"] = "2026-01-01T00:00:00Z"
+        write(self.file, d)
+        self.claim("t_c3", "s3")                                  # #1 is stale, so its slot was free
+        with self.assertRaises(SystemExit) as e:
+            self.quiet(kt.cmd_heartbeat, Args(id="t_c1", status=None, note=None))
+        self.assertIn("limit is 2", str(e.exception))
+        self.assertEqual("2026-01-01T00:00:00Z", self.read()["tasks"][0]["claim"]["heartbeat_at"])
+        self.quiet(kt.cmd_heartbeat, Args(id="t_c2", status=None, note="still going"))   # a running claim is never refused
+
     def test_api_claim_under_a_limit_saves_through_a_commit(self):
         # A one-file contents PUT only notices a change to that file; the claim limit reads every card, so its save
         # must go through the commit path, whose ref update fails if anyone else saved meanwhile.
