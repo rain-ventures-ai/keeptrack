@@ -374,3 +374,70 @@ class Columns(unittest.TestCase):
         self.assertEqual("done", first["column"])
         self.assertTrue(kt.valid_rank(first["rank"]))
         self.assertEqual("todo", read_json(os.path.join(board_dir, "cards", "t_second.json"))["column"])
+
+
+class Links(unittest.TestCase):
+    """links: classify every link around a scope, nearest first, de-duplicated."""
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.dir.name, "board"))
+        self.file = os.path.join(self.dir.name, "board", "tasks.json")
+        d = board()
+        d["clients"] = ["Acme", "Other"]
+        folder = "https://drive.google.com/drive/folders/FOLDER1?usp=drivesdk"
+        d["client_info"] = {"Acme": {"links": [{"title": "Acme folder", "url": folder}]},
+                            "Other": {"links": [{"title": "Other site", "url": "https://other.example"}]}}
+        d["projects"] = [{"id": "pr_roll", "name": "Rollout", "client": "Acme", "status": "active", "people": ["ops@acme.example"],
+                          "links": [{"title": "Same folder", "url": "https://drive.google.com/drive/folders/FOLDER1"},
+                                    {"title": "Brief", "url": "https://docs.google.com/document/d/DOC1/edit?usp=drivesdk&ouid=1"},
+                                    {"title": "Repo", "url": "https://github.com/acme/app"}]}]
+        d["contacts"] = [{"id": "p_1", "name": "Bea", "company": "Acme", "stage": "New", "comments": [], "history": [],
+                          "emails": [{"label": "Work", "value": "bea@acme.example"}],
+                          "links": [{"title": "LinkedIn", "url": "https://www.linkedin.com/in/bea"}]}]
+        d["tasks"][1].update(client="Acme", project="pr_roll", links=[{"title": "PR", "url": "https://github.com/acme/app/pull/7"},
+                                                                       {"title": "Local", "url": "~/work/acme/notes.md"}])
+        d["tasks"][1]["num"] = 2
+        write(self.file, d)
+        self.old = kt.FILE
+        kt.FILE = self.file
+
+    def tearDown(self):
+        kt.FILE = self.old
+        self.dir.cleanup()
+
+    def links(self, **kw):
+        out = run(kt.cmd_links, **{**dict(client=None, project=None, card=None, person=None, kind=None, json=True), **kw})
+        return json.loads(out)
+
+    def test_kinds(self):
+        cases = {
+            "https://drive.google.com/drive/u/0/folders/abc-1": ("drive-folder", "abc-1"),
+            "https://docs.google.com/spreadsheets/d/S1/edit#gid=0": ("drive-file", "S1"),
+            "https://drive.google.com/file/d/F1/view": ("drive-file", "F1"),
+            "https://github.com/o/r/pull/3": ("github", "o/r/pull/3"),
+            "https://www.dropbox.com/s/x": ("dropbox", ""),
+            "https://acme.sharepoint.com/sites/x": ("microsoft", ""),
+            "https://www.notion.so/page": ("notion", ""),
+            "/Users/o/acme": ("local", ""),
+            "https://acme.example/about": ("web", ""),
+            "mailto:x@example.com": ("email", "x@example.com"),
+        }
+        for url, want in cases.items():
+            self.assertEqual(want, kt.link_kind(url), url)
+
+    def test_card_scope_walks_out_to_project_client_and_people(self):
+        got = self.links(card="#2")
+        self.assertEqual(["card #2", "card #2"] + ["project Rollout"] * 4 + ["person Bea"] * 2,
+                         [l["source"] for l in got])
+        self.assertEqual([("email", "ops@acme.example"), ("email", "bea@acme.example")],
+                         [(l["kind"], l["id"]) for l in got if l["kind"] == "email"])
+        self.assertEqual("Same folder", got[2]["title"])            # the client's copy of the same folder is dropped
+        self.assertNotIn("https://other.example", [l["url"] for l in got])
+
+    def test_client_scope_and_kind_filter(self):
+        got = self.links(client="Acme", kind=["drive-folder", "drive-file"])
+        self.assertEqual([("drive-folder", "FOLDER1"), ("drive-file", "DOC1")], [(l["kind"], l["id"]) for l in got])
+
+    def test_needs_a_scope_and_a_real_client(self):
+        self.assertIn("say whose links", refuses(self, kt.cmd_links, client=None, project=None, card=None, person=None, kind=None, json=False))
+        self.assertIn("no client", refuses(self, kt.cmd_links, client="Nope", project=None, card=None, person=None, kind=None, json=False))

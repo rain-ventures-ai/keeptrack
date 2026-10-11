@@ -39,7 +39,7 @@ New task ids start with `t_`. New person ids start with `p_`. New project ids st
 
 The CLI writes only files that changed. Adding a task writes `tasks.json` and one new card file in one commit. A card edit writes only that card. When an API save changes several files, it uses one Git Data API commit. Local `--file` saves use the board folder that contains the selected `tasks.json`.
 
-API reads use the branch tree. Blobs are cached by Git blob SHA under `.board/cache/`. The cache is local and ignored by git.
+API reads use the branch tree. Blobs are cached by Git blob SHA under `.keeptrack/cache/` in a connected project (`.board/cache/` in a board repo). The cache is local and ignored by git.
 
 ### Migrate from schema 3
 
@@ -192,7 +192,9 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 
 **Auth without `gh`:** set `BOARD_TOKEN` (or `GH_TOKEN`/`GITHUB_TOKEN`) to a fine-grained token with Contents: Read and write on this repo and `keeptrack.py` calls the GitHub API directly with the standard library. If `BOARD_TOKEN` is set it is used even when `gh` exists. This is the route for cloud agent sandboxes.
 
-**Automatic heartbeat:** `claim` writes `.board-claim.json` (gitignored). `keeptrack.py auto-heartbeat` refreshes that claim at most every 5 minutes and silently does nothing if there is no active claim, it was released or finished, or another session took the task over. `.claude/settings.json` runs it as a Claude Code `PostToolUse` hook. Other agents call `keeptrack.py heartbeat` themselves.
+**Automatic heartbeat:** `claim` writes `.board-claim.json` in a board repo, or `.keeptrack/claim.json` at the top of any other git repo (both gitignored), so each repo has its own. `keeptrack.py auto-heartbeat` refreshes that claim at most every 5 minutes and silently does nothing if there is no active claim, it was released or finished, or another session took the task over. `.claude/settings.json` runs it as a Claude Code `PostToolUse` hook. Other agents call `keeptrack.py heartbeat` themselves.
+
+**Searching what is linked.** `links --client NAME | --project REF | --card ID | --person REF [--kind drive-folder ...] [--json]` lists every link around that scope, nearest first and de-duplicated, each classified (`drive-folder`, `drive-file`, `github`, `dropbox`, `microsoft`, `notion`, `linear`, `profile`, `local`, `web`, `other`) with its id where one exists. The `keeptrack-search` skill uses it to answer questions from a client's or project's files with whatever connectors the session has, walking Drive sub-folders itself because Drive search does not.
 
 **Changing the board itself.** Labels, clients, board members and settings live in `tasks.json`; tasks can be edited after creation. All of it has a command, so nothing needs a hand edit:
 

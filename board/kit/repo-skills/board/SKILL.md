@@ -1,6 +1,6 @@
 ---
 name: board
-description: Work from the team board in board/ via board/keeptrack.py. Use for task work and stuck agents, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
+description: Work from the board stored in THIS repo (a Keeptrack board repo, with board/tasks.json) via board/keeptrack.py. Use in the board repo itself for task work and stuck agents, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
 ---
 
 # Team board
@@ -9,6 +9,12 @@ The board lives in the `board/` folder; `board/tasks.json` is its entry point. C
 
 ## 1. Identify who you act for
 Use `BOARD_USER` (or `gh api user --jq .login`). Valid users: the `people` in `board/tasks.json`. Set `BOARD_AGENT=claude` and `BOARD_SESSION` to a short id for this session.
+
+**Cloud sessions** (a fresh clone, `CLAUDE_CODE_REMOTE=true`) get no plugin and no start-up line. If this board repo is
+attached beside a code repo, run its `keeptrack.py` by full path from the code repo and start with `keeptrack.py here`:
+it names the board, project and user, set by the environment's `BOARD_REPO`, `BOARD_PROJECT` and `BOARD_USER`.
+The heartbeat hook runs only when the board repo is the session's main repo, so otherwise run `heartbeat` yourself
+every ~10 minutes.
 
 ## 2. Find work
 ```bash
@@ -83,6 +89,10 @@ Run `python3 board/keeptrack.py doctor` after a migration or when the board show
 Natural requests such as “is my board accurate?”, “these say merged but not published”, “make the statuses truthful” or
 “check the board against the repos” belong to this skill. Do not ask the user to name Keeptrack or repeat this repo.
 Read [references/status-audits.md](references/status-audits.md) and follow it.
+
+## Searching a client's or project's linked material
+`python3 board/keeptrack.py links --client "<name>"` (or `--project`, `--card`, `--person`) lists every linked
+folder, file, repo and page with its kind. To answer a question from that material, use the `keeptrack-search` skill.
 
 ## People and follow-ups (Keeptrack CRM)
 If the board has CRM people, use:
