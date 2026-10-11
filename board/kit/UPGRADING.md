@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v26 (schema 4)
+Heartbeats are quieter. Automatic heartbeats come at most every 15 minutes (was 5). A claim made with `--attended`, or with `BOARD_ATTENDED=1` set, is for a session a person drives: it sends no heartbeats and shows as stale only after 12 hours. The web board reads the same `attended` flag.
+- Run `kit-update` only. There is no board-data migration; existing claims have no `attended` flag and behave as before.
+- **People:** set `BOARD_ATTENDED=1` once in your own environment (shell profile, or `env` in your personal Claude Code settings) on machines where you drive sessions. Never set it for routines, cloud threads or workers.
+- Check: `python3 board/keeptrack.py help agent-work` says "at most every 15 minutes".
+
 ### v25 (schema 4)
 The list of trusted configs (`~/.config/keeptrack/trusted`) is now JSON. In v23 and v24 it was one line per config, and a folder name containing a line break could add a line of its own.
 - Run `kit-update` only. There is no board-data migration.

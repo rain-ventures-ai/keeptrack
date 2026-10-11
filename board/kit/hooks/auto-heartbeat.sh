@@ -1,5 +1,5 @@
 #!/bin/sh
-# Claude Code PostToolUse hook: refresh the active task claim (at most every 5 minutes; no-op without a claim).
+# Claude Code PostToolUse hook: refresh the active task claim (at most every 15 minutes; no-op without a claim or for an attended claim).
 # Runs after every tool call in every project, so it first looks for a claim file with plain shell and starts
 # Python only when one exists. Projects without Keeptrack pay nothing.
 d=$PWD

@@ -18,7 +18,7 @@ export BOARD_SESSION=<short session id>
 
 python3 board/keeptrack.py list --assignee $BOARD_USER --column todo --unclaimed   # find work
 python3 board/keeptrack.py claim <id> --note "starting: <plan in one line>"        # claim (id prefix is fine)
-python3 board/keeptrack.py heartbeat <id> --note "<what you are doing now>"        # at least every 10 minutes
+python3 board/keeptrack.py heartbeat <id> --note "<what you are doing now>"        # at least every 15 minutes
 python3 board/keeptrack.py heartbeat <id> --status blocked --note "<why>"          # if you need a human
 python3 board/keeptrack.py done <id> --note "<result, PR or file link>"            # finished
 python3 board/keeptrack.py release <id> --column todo                              # giving up / handing back
@@ -37,7 +37,7 @@ Auth: `gh` logged in with access to this repo, or (cloud sandboxes, CI, no `gh`)
 
 **Comments:** cards have a comment stream for talking between people and agents. Read it (`show`/`comments`) before starting. Post a comment when you finish (what you did, links), when you have a question, or when you hand something back; if you need an answer, also set status `blocked`. Comments are append-only; do not try to edit them.
 
-**Heartbeats:** `claim` records your active task in a local, gitignored `.board-claim.json`. In Claude Code a project hook runs `keeptrack.py auto-heartbeat` after tool calls, which refreshes the claim at most every 5 minutes and does nothing when no claim is active. Codex and other agents have no hook, so run `keeptrack.py heartbeat <id>` yourself every ~10 minutes. `done` and `release` clear the local record.
+**Heartbeats:** `claim` records your active task in a local, gitignored `.board-claim.json`. In Claude Code a project hook runs `keeptrack.py auto-heartbeat` after tool calls, which refreshes the claim at most every 15 minutes and does nothing when no claim is active. Codex and other agents have no hook, so run `keeptrack.py heartbeat <id>` yourself every ~15 minutes. A session a person drives sends none: claim with `--attended`, or set `BOARD_ATTENDED=1` in your own environment. `done` and `release` clear the local record.
  Use `--file <copy.json>` to test safely against a local copy.
 
 Web board: https://rain-ventures-ai.github.io/keeptrack/board/?repo={repo}&path=board/tasks.json

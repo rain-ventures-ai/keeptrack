@@ -54,7 +54,7 @@ From any other project (Claude plugin "board"): name the board once, then use th
   keeptrack.py here                # this repo's board, project and your open cards; `help` lists commands by topic
   keeptrack.py where               # which board, from where, which auth (never prints a token)
 
-  keeptrack.py auto-heartbeat      # for a hook: refreshes your active claim at most every 5 minutes, silent no-op otherwise
+  keeptrack.py auto-heartbeat      # for a hook: refreshes your active claim at most every 15 minutes, silent no-op otherwise
 
 Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-check [--card]  # is this repo's kit older than the published one? --card adds an upgrade task for the upgrade owner
@@ -311,7 +311,8 @@ def write_private(path, text):
 # The active claim, for the heartbeat hook. A board repo keeps it at its root (gitignored there); any other project
 # keeps it in its own .keeptrack/ folder, so two projects never share one.
 CLAIM_FILE = (os.path.join(ROOT, ".board-claim.json") if ROOT and not PROJECT_DIR else os.path.join(_local_dir(), "claim.json"))
-HEARTBEAT_EVERY = 300  # seconds between automatic heartbeats
+HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats
+ATTENDED_STALE_MINUTES = 12 * 60  # an attended claim (a person drives the session) sends no heartbeats
 
 
 def token():
@@ -1255,6 +1256,18 @@ def find(data, tid):
     return m[0]
 
 
+def stale_limit(data, c):
+    """Minutes without a heartbeat before a running claim shows as stale."""
+    if c.get("attended"):
+        return ATTENDED_STALE_MINUTES
+    return data.get("settings", {}).get("stale_after_minutes", 30)
+
+
+def attended(a):
+    """A person is driving this session, so it sends no heartbeats: --attended, or BOARD_ATTENDED=1."""
+    return bool(getattr(a, "attended", False)) or os.environ.get("BOARD_ATTENDED", "").strip().lower() in ("1", "true", "yes")
+
+
 def claim_state(data, c):
     if not c:
         return None
@@ -1262,7 +1275,7 @@ def claim_state(data, c):
         return c["status"]
     last = parse(c.get("heartbeat_at") or c["claimed_at"])
     mins = (dt.datetime.now(dt.timezone.utc) - last).total_seconds() / 60
-    return "stale" if mins > data.get("settings", {}).get("stale_after_minutes", 30) else "running"
+    return "stale" if mins > stale_limit(data, c) else "running"
 
 
 def git_branch():
@@ -1369,6 +1382,8 @@ def do_claim(a, tid, data):
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
+    if attended(a):
+        t["claim"]["attended"] = True
     if t["column"] != "in-progress":
         move_task_to_column(data, t, "in-progress")
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
@@ -1377,7 +1392,8 @@ def do_claim(a, tid, data):
     if not FILE:
         try:
             ensure_local_dir(CLAIM_FILE)
-            write_private(CLAIM_FILE, json.dumps({"id": t["id"], "agent": agent, "user": user, "session": sid}))
+            write_private(CLAIM_FILE, json.dumps({"id": t["id"], "agent": agent, "user": user, "session": sid,
+                                                  "attended": attended(a)}))
         except OSError as e:
             print(f"note: no local claim record, so no automatic heartbeat ({e})", file=sys.stderr)
     return t["id"]
@@ -1623,6 +1639,8 @@ def cmd_auto_heartbeat(a):
         if time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
         info = json.load(open(CLAIM_FILE))
+        if info.get("attended"):
+            return  # a person drives this session: no automatic heartbeats
         os.utime(CLAIM_FILE)  # throttle even if the network call fails
 
         def fn(data):
@@ -1924,7 +1942,7 @@ def doctor_board(fix=False):
             if claim.get("status") == "running" and (claim.get("heartbeat_at") or claim.get("claimed_at")):
                 try:
                     age = (dt.datetime.now(dt.timezone.utc) - parse(claim.get("heartbeat_at") or claim["claimed_at"])).total_seconds() / 60
-                    limit = data.get("settings", {}).get("stale_after_minutes", 30)
+                    limit = stale_limit(data, claim)
                     if age > limit:
                         problem("STALE_CLAIM", path, f"The running claim has no heartbeat for {int(age)} minutes.")
                 except (ValueError, TypeError):
@@ -2459,7 +2477,7 @@ COMMAND_HELP = {   # one line each, for commands whose parser has none
     "heartbeat": "refresh your claim; --note what you are doing; --status blocked|stuck|running",
     "release": "give a card back without finishing it (--column to move it)",
     "done": "finish a claimed card (--note result and links)",
-    "auto-heartbeat": "for hooks: refresh the active claim at most every 5 minutes; silent otherwise",
+    "auto-heartbeat": "for hooks: refresh the active claim at most every 15 minutes (never for --attended claims); silent otherwise",
     "todo-add": "add a checklist item", "todo-done": "tick checklist item N", "todo-undo": "untick checklist item N",
     "todo-rm": "remove checklist item N", "comment": "post a comment on a card", "comments": "read a card's comments",
     "history": "a card's history log",
@@ -4137,6 +4155,8 @@ def main():
     def cl(sp):
         sp.add_argument("--for", dest="for_user"); sp.add_argument("--agent"); sp.add_argument("--session")
         sp.add_argument("--session-url"); sp.add_argument("--note"); sp.add_argument("--force", action="store_true")
+        sp.add_argument("--attended", action="store_true",
+                        help="a person drives this session: no automatic heartbeats, stale only after 12 hours (or BOARD_ATTENDED=1)")
 
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
     s.add_argument("--unclaimed", action="store_true"); s.add_argument("--attention", action="store_true")
