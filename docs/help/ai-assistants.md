@@ -13,7 +13,7 @@ Not sure which assistant to use, or whether you need Python? See [Where your ass
 - "Move Tom to Proposal." / "What is in my pipeline?"
 
 ## Connect the assistant
-The quickest way: in the web board open **⚙️ Settings → Agents → An assistant in your chat app**, select your tool, and copy the steps. Claude Code does not always need a plugin.
+The quickest way: in the web board open **⚙️ Settings → Agents & integrations → Claude or Codex in your chat app**, open **Set it up by hand**, select your tool, and copy the steps. Claude Code does not always need a plugin.
 
 Already installed? Check first: in the Claude app open **Customize → Plugins**. If **keeptrack** is listed, make sure it is switched on and skip the steps below. If only the **rain-ventures-ai/keeptrack** marketplace is listed, install **keeptrack** from it; do not add the marketplace again.
 
@@ -54,7 +54,7 @@ Locally, it needs access to your repo in one of these ways:
 - a token in an environment variable. Tell the assistant the **name** of the variable, never the token itself.
 
 ## @claude on the board
-Type **@claude** in a task comment and your own Claude routine starts work on that task. To set it up, open **⚙️ Settings → Agents** and tick **I use @claude**. Five steps with a ✓ for each, then a real test. Details: [ROUTINE-SETUP.md](../../board/kit/ROUTINE-SETUP.md).
+Type **@claude** in a task comment and your own Claude routine starts work on that task. To set it up, open **⚙️ Settings → Agents & integrations → @claude in task comments** and switch **Use @claude** on. Five steps with a ✓ for each, then a real test. Details: [ROUTINE-SETUP.md](../../board/kit/ROUTINE-SETUP.md).
 
 ## Rules the assistant follows
 - It never sends messages, emails or quotes. It writes drafts.

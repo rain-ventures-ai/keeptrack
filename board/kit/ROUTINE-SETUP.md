@@ -17,15 +17,15 @@ If you would like an agent to walk you through this, ask Claude Code in this rep
 | Item | Each person? | Where it lives |
 |---|---|---|
 | A routine (their own) | Yes | claude.ai (their account) |
-| Routine trigger URL + token | Yes, one per routine | Their browser (board Settings → Agents); also held by cron-job.org for the minute or two a send takes |
+| Routine trigger URL + token | Yes, one per routine | Their browser (board Settings → Agents & integrations); also held by cron-job.org for the minute or two a send takes |
 | `BOARD_TOKEN` (GitHub token, Contents read/write on this repo) | Yes, their own | The routine's cloud environment on claude.ai (never in the repo) |
-| cron-job.org API key | One per cron-job.org account. Each person can have their own free account (simplest), or share one key | Their browser (board Settings → Agents) |
-| GitHub token for the web board | Yes (already done) | Their browser (board Settings → Boards) |
+| cron-job.org API key | One per cron-job.org account. Each person can have their own free account (simplest), or share one key | Their browser (board Settings → Agents & integrations) |
+| GitHub token for the web board | Yes (already done) | Their browser (board Settings → Connection) |
 
 Nothing secret is ever committed to this repo. "Copy settings code" on the board moves your browser's values to your phone or another browser.
 
 ## Let Claude set it up for you
-You can ask Claude (Claude Code in this repo, the Claude desktop app, or claude.ai) to do the setup. In the board, open **Settings → Agents → tick Claude → Copy setup prompt for Claude** and paste it into a new chat. It points Claude at this guide and offers two modes: **guide me step by step**, or **do it in my browser** (Claude in Chrome or the built-in browser: you stay signed in, Claude does the clicking and the non-secret fields).
+You can ask Claude (Claude Code in this repo, the Claude desktop app, or claude.ai) to do the setup. In the board, open **Settings → Agents & integrations → @claude in task comments**, switch **Use @claude** on, then **Let Claude guide you instead → Copy setup prompt** and paste it into a new chat. It points Claude at this guide and offers two modes: **guide me step by step**, or **do it in my browser** (Claude in Chrome or the built-in browser: you stay signed in, Claude does the clicking and the non-secret fields).
 
 Whichever mode, Claude must never type, read back or store a secret. At each secret it stops, tells you where to click and what to paste, and waits. The secrets are the routine's trigger token, `BOARD_TOKEN`, and the cron-job.org key.
 
@@ -50,7 +50,7 @@ Rules: never type, paste, read back or store a secret (routine trigger token, BO
 ## What only you can do
 - Create the routine's **API trigger** and generate its token (claude.ai web only; the CLI cannot).
 - Create the **BOARD_TOKEN** value and paste it into the routine's environment.
-- Create the **cron-job.org** account and API key, and paste the three values into the board's Settings → Agents.
+- Create the **cron-job.org** account and API key, and paste the three values into the board's Settings → Agents & integrations.
 
 ## Steps
 
@@ -89,8 +89,8 @@ In the routine → Edit → **Add another trigger → API**. Save. Open the trig
 ### 4. cron-job.org
 Browsers cannot call a routine's URL directly (Anthropic's endpoint allows no cross-origin calls), but cron-job.org's API does. Create a free account at https://console.cron-job.org/, then Settings → API → enable → create a key. When you send something to Claude, the board creates a one-off job there that POSTs to your routine, reads the result, then deletes the job. cron-job.org sees your routine token and the task *number* (never the task's text) for about one to two minutes.
 
-### 5. Board Settings → Agents
-Tick **I use @claude**. The tab shows the same steps as this guide, with a ✓ for each step that is done. It saves each value as you paste it and checks the cron-job.org key at once. Step 5, **Send a test to Claude**, makes a small test task, sends it to your routine and shows when Claude starts and when it replies.
+### 5. Board Settings → Agents & integrations
+Under **@claude in task comments**, switch **Use @claude** on. The tab shows the same steps as this guide, with a ✓ for each step that is done. It saves each value as you paste it and checks the cron-job.org key at once. Step 5, **Send a test to Claude**, makes a small test task, sends it to your routine and shows when Claude starts and when it replies.
 
 **Test and fix problems** (under the steps):
 - **Test cron-job.org** makes a one-off job that opens the board page. It does not start Claude. It shows when cron-job.org ran it and the HTTP status.
@@ -109,7 +109,7 @@ Comment with `@claude` → confirm dialog → comment saved with a claim on the 
 ## Troubleshooting
 | Symptom | Likely cause |
 |---|---|
-| "To make @claude start your routine, set it up in Settings → Agents" | One of the three values is missing or the URL is malformed |
+| "To make @claude start your routine, set it up in Settings → Agents & integrations" | One of the three values is missing or the URL is malformed |
 | "cron-job.org rejected the API key" | Key typed wrongly or revoked; free accounts allow about 100 API calls a day |
 | Card shows "stuck: routine returned HTTP 401" | Routine token wrong or regenerated; generate a new one and update Settings |
 | A write says `HTTP 403 ... not permitted through this proxy` | Claude's cloud sandbox lets the GitHub API read but blocks its writes. Not a token problem. `keeptrack.py` switches to saving with `git push` by itself; if you see this, the routine is running an old `keeptrack.py` or has `BOARD_WRITE=api` set |

@@ -170,7 +170,7 @@ holds a local path. If it cannot access one, it must say so and ask the user rat
 
 ## Archive files (schema 3)
 Old items move out of the active card and person files so that the current board stays small. Legacy v3 boards keep their active items in `tasks.json` (the GitHub contents API sends no content above 1 MB; the web board and `keeptrack.py` can read it raw up to 100 MB, but legacy boards are fastest below about 600 KB).
-- `keeptrack.py archive` (or the web board: Settings → General → Archive) moves tasks in the done column with no change for `settings.archive.done_days` (default 90), people at stage Lost with no change for `lost_days` (180) and no future next step, and all but the last `keep_history` (20) history lines of each card.
+- `keeptrack.py archive` (or the web board: Settings → Board → Archive) moves tasks in the done column with no change for `settings.archive.done_days` (default 90), people at stage Lost with no change for `lost_days` (180) and no future next step, and all but the last `keep_history` (20) history lines of each card.
 - They go to `archive/<year>.json` next to `tasks.json`: `{ "version": 3, "archive": true, "year": "2025", "tasks": [...], "contacts": [...], "history": { "<card id>": [...] } }`. The year is the year of the item's last change (four digits; an item whose date has no valid year stays on the board, and any other archive key is refused); trimmed history goes to the current year.
 - `tasks.json` keeps an index: `"archive": { "files": { "2025": { "tasks": 120, "contacts": 8 } }, "last_run": "<ISO time>" }`.
 - Archive files are written first and merged by id, so a run that stops half way is safe to repeat. An item on the board and in an archive file at the same time counts as on the board.
@@ -240,14 +240,14 @@ Issues created with the board's "Create issue" button carry `<!-- board-task: id
 3. Need a person (decision, access, review)? `assign '#N' <github-user> --note "why"` and comment with `@username`; then stop and wait.
 4. Finish with `done '#N' --note "<result, PR link>"`. Set BOARD_USER and BOARD_AGENT; without a `gh` login set BOARD_TOKEN (or GH_TOKEN in GitHub Actions).
 
-## Which agents each person uses (Settings → Agents)
+## Which agents each person uses (Settings → Agents & integrations)
 Each person ticks the agents they use: **Claude**, **Codex** or both. The choice is kept in their browser (`kb_agents`) and moves with "Copy settings code". Typing `@` in the web page only offers the agents you have ticked; people are always offered. Before you choose, Claude counts as ticked if your routine is set up. The `agents` list in `tasks.json` is the shared set of names agents may claim under; it does not change per person.
 
 - **Claude:** `@claude` can start your own routine (below). In Today and a cinema lane, open a task's **Assign** menu and choose **Assign to Claude for @you** to create the visible request, claim it for your Claude and start that same routine immediately.
 - **Codex:** `@codex` cannot start Codex by itself: OpenAI only starts Codex cloud tasks from an `@codex` comment on a GitHub pull request and offers no trigger a web page can call. Instead, when a card's newest request is for `@codex` (and no Codex comment or running Codex claim has answered it), the card's **Copy for agent** button turns into a highlighted **Copy for Codex**. It copies instructions that tell Codex to do what the newest `@codex` comment asks, with `BOARD_AGENT=codex`. Paste them into Codex; it claims the card and reports back with `keeptrack.py`. The button only changes for people who ticked Codex.
 
 ## Assign to Claude or write `@claude`: your own routine
-Each person can connect their own Claude routine so that either the **Assign to Claude for @you** quick action or a comment containing `@claude` starts it (web page, Settings → **Agents**, tick Claude). Only that person's configured routine is offered. The values live only in that person's browser and move with "Copy settings code".
+Each person can connect their own Claude routine so that either the **Assign to Claude for @you** quick action or a comment containing `@claude` starts it (web page, Settings → **Agents & integrations** → **@claude in task comments**, switch **Use @claude** on). Only that person's configured routine is offered. The values live only in that person's browser and move with "Copy settings code".
 
 **How it works.** Browsers can't call a routine's trigger URL directly (Anthropic's endpoint sends no CORS headers), so the page creates a one-off job on the person's free cron-job.org account (its API does allow browsers) which POSTs to the routine's `/fire` URL. The page then reads the result, records the session link on the card (an agent claim by `claude`, working for that person) and deletes the job. cron-job.org only ever sees the routine token and the task *number* and requester, never the task's text; the routine reads the real content from the board. Starting takes one to two minutes.
 
