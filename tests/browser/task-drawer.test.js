@@ -77,7 +77,7 @@ async function assertFits(page, where) {
   try {
     const api = new Github();
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
-    await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board'); });
+    await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); if (![...Object.keys(localStorage)].some(k => k.startsWith('kb_context:'))) sessionStorage.setItem('kb_view', 'board'); });
     await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
     await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
     const saved = () => page.waitForResponse(r => ['PUT', 'PATCH', 'DELETE'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
@@ -159,8 +159,26 @@ async function assertFits(page, where) {
     w = saved(); await page.locator('#cCol').selectOption('done'); await w; assert.equal(api.card().column, 'done');
     await page.locator('#cCompletedBy').waitFor(); assert.match(await page.locator('#cCompletedBy').textContent(), /^Completed by /);
 
-    // description and comments still save; History opens
+    // description saves normally. An unfinished edit, the current view and the open card survive a recreated tab;
+    // if GitHub changed the same field, saving the recovered draft uses the normal three-way conflict screen.
     await page.locator('#cDescBtn').click(); await page.locator('#cDetails').fill('Some detail'); w = saved(); await page.locator('#cDescSave').click(); await w; assert.equal(api.card().details, 'Some detail');
+    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' }); await page.locator('#viewSw [data-view="list"]').click(); await page.locator('.trow:not(.thead)').first().waitFor();
+    await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor(); await page.locator('#cDescBtn').click(); await page.locator('#cDetails').fill('Recovered local draft');
+    await page.locator('#cTitle').evaluate(x => { x.value = 'Recovered title draft'; x.dispatchEvent(new Event('input', { bubbles: true })); });
+    { const theirs = api.card(); theirs.details = 'Changed by an agent'; api.files['cards/t_one.json'] = text(theirs); api.head = 'head-' + ++api.n; }
+    await page.evaluate(() => { sessionStorage.clear(); history.replaceState(null, '', location.pathname + location.search); location.reload(); });
+    await page.locator('#dlgCard[open]').waitFor(); assert.equal(await page.evaluate(() => document.body.dataset.view), 'list', 'a recreated tab restores the board view');
+    assert.equal(await page.locator('#cTitle').inputValue(), 'Recovered title draft', 'an unfinished title is restored too');
+    assert.equal(await page.locator('#cDetails').isVisible(), true, 'the recovered description opens in its editor'); assert.equal(await page.locator('#cDetails').inputValue(), 'Recovered local draft');
+    assert.match(await page.locator('#dSaved').textContent(), /Draft restored.*GitHub changed/, 'the recovered draft warns that GitHub also changed');
+    w = saved(); await page.locator('#cTitle').focus(); await page.locator('#cTitle').blur(); await w; assert.equal(api.card().title, 'Recovered title draft');
+    await page.locator('#cDescSave').click(); await page.locator('#dlgConflict[open]').waitFor(); const conflictText = await page.locator('#cfBody').textContent();
+    assert(conflictText.includes('Some detail') && conflictText.includes('Recovered local draft') && conflictText.includes('Changed by an agent'), 'draft conflict shows base, mine and GitHub');
+    await page.locator('#cfBody input[value="mine"]').check(); w = saved(); await page.locator('#cfApply').click(); await w; assert.equal(api.card().details, 'Recovered local draft');
+    // Undo history is per-board IndexedDB state, so the last save can still be undone after another tab recreation.
+    await page.evaluate(() => { sessionStorage.clear(); history.replaceState(null, '', location.pathname + location.search); location.reload(); }); await page.locator('#dlgCard[open]').waitFor();
+    await page.waitForFunction(() => !document.getElementById('cUndo').disabled); w = saved(); await page.locator('#cUndo').click(); await w; assert.equal(api.card().details, 'Changed by an agent', 'Undo survives reload and restores the prior GitHub value');
+    await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
     await page.locator('#cmText').fill('Looks good'); w = saved(); await page.locator('#cmPost').click(); await w; assert.equal(api.card().comments.at(-1).text, 'Looks good');
     assert.equal(await page.locator('#cmCount').textContent(), '1');
     await page.locator('#cHistWrap .ui-section__toggle').click(); assert.equal(await page.locator('#cHist').isVisible(), true);
@@ -189,7 +207,7 @@ async function assertFits(page, where) {
     w = saved(); await confirmSheet.locator('button.ui-btn--danger').click(); await w; await page.waitForFunction(() => !document.getElementById('dlgCard').open);
     for (let i = 0; i < 50 && api.card(); i++) await page.waitForTimeout(100);
     assert.equal(api.card(), null, 'the deleted card file is gone');
-    assert.deepEqual(await page.locator('.card .t').allTextContents(), ['Second']);
+    assert.deepEqual((await page.locator('.trow:not(.thead) .lt').allTextContents()).map(x => x.replace(/^#\d+/, '')), ['Second']);
     assert.deepEqual(errors, [], 'no page errors');
     await page.close();
 
