@@ -872,9 +872,12 @@ if (typeof window !== 'undefined') (() => {
     return run;
   }
   // Leaving the page (reload, another board) while changes are still saving would lose them: wait for the queue first.
+  let backPending = null, backDone = null, leaving = false;   // a Back-button entry being taken off after a dialog closed (see BACK_DIALOGS); leaving: the page is about to go to another address
+  const markLeaving = () => { leaving = true; setTimeout(() => { leaving = false; }, 1500); };   // resets in case the page stays (no navigation happened)
   function whenSaved(go) {
-    if (!saving) return go();
-    toast(`Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`); saving.then(() => go());
+    if (backPending) { backPending.then(() => whenSaved(go)); return; }   // leaving the page mid history.back() would cancel one of the two
+    if (!saving) { markLeaving(); return go(); }   // every caller leaves the page (board switch, reload, import)
+    toast(`Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`); saving.then(() => { markLeaving(); go(); });
   }
   window.addEventListener('beforeunload', e => { if (saving || busy) { e.preventDefault(); e.returnValue = ''; } });
   async function mutateNow(fn, message, targetIds = [], baseState = null, options = {}) {
@@ -2342,7 +2345,52 @@ if (typeof window !== 'undefined') (() => {
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
   // deep links: the address carries the task number (#13) while a card is open, and loading a URL with #13 opens that card
   const hashNum = () => { const m = /^#(\d{1,5})$/.exec(location.hash); return m ? Number(m[1]) : null; };
-  const setHash = h => { try { history.replaceState(null, '', location.pathname + location.search + h); } catch {} };
+  const setHash = h => { try { history.replaceState(history.state, '', location.pathname + location.search + h); } catch {} };   // keeps the Back-button entry (below)
+
+  // The Back button closes what you opened. Opening a card, a person/client/project drawer, Settings, Help, Search,
+  // Archive or Add a person adds one history entry, so Back closes it and returns to the board instead of leaving the
+  // site. Closing it any other way (X, Escape, backdrop) takes that entry off again, so Back never goes somewhere odd.
+  // A card's entry carries its #number; the entry under it is the board without one (so a #13 link backs to the board).
+  const BACK_DIALOGS = ['dlgCard', 'dlgContact', 'dlgClient', 'dlgProject', 'dlgSettings', 'dlgHelp', 'dlgSearch', 'dlgArch', 'dlgAddPerson'];
+  const backStack = []; let backClosing = 0;
+  // the page is going to another address (switching board, reload): a history.back() now would cancel that
+  window.addEventListener('beforeunload', markLeaving);
+  const bareUrl = () => location.pathname + location.search;
+  function backOpened(d) {
+    const st = history.state || {};
+    if (st.kbDlg === d.id && !backStack.includes(d.id)) { backStack.push(d.id); return; }   // reload or Forward: this entry is already ours
+    if (backStack.includes(d.id)) return;
+    try {
+      const url = d.id === 'dlgCard' ? bareUrl() + location.hash : bareUrl();
+      const top = backStack[backStack.length - 1];
+      if (top && !$(top).open && st.kbDlg === top) {   // it replaces a drawer that just closed (person → Open client): take over its entry
+        backStack.pop(); history.replaceState({ kbDlg: d.id, depth: backStack.length + 1 }, '', url); backStack.push(d.id); return;
+      }
+      if (d.id === 'dlgCard' && location.hash) history.replaceState(st.kbDlg ? st : null, '', bareUrl());   // the entry under the card is the board
+      history.pushState({ kbDlg: d.id, depth: backStack.length + 1 }, '', url); backStack.push(d.id);
+    } catch {}
+  }
+  function backClosed(d) {
+    const i = backStack.lastIndexOf(d.id); if (i < 0) return;
+    if (backClosing || leaving) { backStack.splice(i, 1); return; }   // Back closed it (the entry is already gone), or the page is leaving
+    if (i === backStack.length - 1 && (history.state || {}).kbDlg === d.id) {
+      backStack.pop(); backClosing++;
+      backPending = new Promise(res => { const done = backDone = () => { if (backDone === done) { backDone = null; backPending = null; } res(); }; setTimeout(done, 500); });
+      try { history.back(); } catch { backClosing--; backDone && backDone(); }
+    }
+    else backStack.splice(i, 1);   // closed under another one: leave its entry, it only goes back to the board
+  }
+  window.addEventListener('popstate', () => {
+    if (backClosing) { backClosing--; if (backDone) backDone(); return; }   // our own history.back() after a close
+    const want = (history.state || {}).kbDlg;
+    while (backStack.length && backStack[backStack.length - 1] !== want) {   // close everything opened after the entry we are now on
+      const d = $(backStack[backStack.length - 1]); backStack.pop();
+      if (d && d.open) d.close();   // its close handler finds it already off the stack, so it won't go back again
+    }
+  });
+  BACK_DIALOGS.forEach(id => { const d = $(id); if (!d) return;
+    new MutationObserver(() => { if (d.open) backOpened(d); }).observe(d, { attributes: true, attributeFilter: ['open'] });
+    d.addEventListener('close', () => backClosed(d)); });
   function openFromHash() {
     const n = hashNum(); if (n === null || !state) return;
     const t = state.tasks.find(x => x.num === n); if (!t) { toast(`Task #${n} was not found on this board`, true); setHash(''); return; }
@@ -3004,7 +3052,7 @@ if (typeof window !== 'undefined') (() => {
     }
     if (moved) activateBoard(nr);
     LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
-    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } stashBoard(); $('dlgSettings').close();
+    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();
     if (ok && newTok && (state.settings.modes || []).includes('crm') && cfg().me && !memberPerson()) setTimeout(() => offerSelfPerson(), 400);
