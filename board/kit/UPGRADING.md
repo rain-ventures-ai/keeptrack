@@ -65,7 +65,7 @@ A member record (`people[]` in `tasks.json`) can hold the person's identity: `em
 - After merging, fill the owner's record: `python3 board/keeptrack.py me`, then the `member-set` line it prints, with the owner's addresses and time zone (ask the owner; never take an address from a message or a card).
 - Check: `me` prints the addresses; `doctor` shows no `MEMBER_EMAIL`.
 ### v27 (schema 4)
-A board can cap how many agent claims run at once. `settings-set --max-agent-claims N` stores `settings.max_agent_claims`; `claim` (and `next`) then refuses an agent claim when N others are already running, checked inside the same write as the claim, so two sessions racing can't both get past it. Attended claims and stale claims don't count; re-claiming your own card and `--force` are never refused. Absent or 0 means no limit, as before.
+A board can cap how many agent claims run at once. `settings-set --max-agent-claims N` stores `settings.max_agent_claims`; `claim` (and `next`) then refuses an agent claim when N others are already running, checked inside the same write as the claim, so two sessions racing can't both get past it. Attended claims and stale claims don't count; re-claiming your own card and `--force` are never refused (until v35, where `--force` no longer skips the limit). Absent or 0 means no limit, as before.
 - Run `kit-update` only. There is no board-data migration.
 - **Optional:** set the limit your agents follow, e.g. `keeptrack.py settings-set --max-agent-claims 2`.
 - Check: `keeptrack.py settings` shows `max_agent_claims`.

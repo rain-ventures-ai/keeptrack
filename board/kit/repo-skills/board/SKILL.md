@@ -8,7 +8,7 @@ description: Work from the board stored in THIS repo (a Keeptrack board repo, wi
 The board lives in the `board/` folder; `board/tasks.json` is its entry point. Current boards keep tasks in `board/cards/` and CRM people in `board/people/`. Manage all of it only through `python3 board/keeptrack.py`. Read `AGENTS.md` for the rules; this is the procedure.
 
 ## 1. Identify who you act for
-Use `BOARD_USER` (or `gh api user --jq .login`). Valid users: the `people` in `board/tasks.json`. Set `BOARD_AGENT=claude` and `BOARD_SESSION` to a short id for this session.
+Use `BOARD_USER` (or `gh api user --jq .login`). Valid users: `python3 board/keeptrack.py members`. Set `BOARD_AGENT=claude` and `BOARD_SESSION` to a short random id you generate for this run (never your claude.ai session id).
 
 **Cloud sessions** (a fresh clone, `CLAUDE_CODE_REMOTE=true`) get no plugin and no start-up line. If this board repo is
 attached beside a code repo, run its `keeptrack.py` by full path from the code repo and start with `keeptrack.py here`:
@@ -121,7 +121,7 @@ Issues created with the board's "Create issue" button carry `<!-- board-task: id
 
 ## Fired from the board (a person assigned their Claude or typed `@claude`)
 A routine run starts with a `routine-fire-payload` naming a task number (`#N`) and the person (`@user`). The quick assign action writes a visible `@claude` request first, so both entry paths use the same protocol. The page has already put a claim on the card for this run, so:
-1. `export BOARD_USER=<user> BOARD_AGENT=claude BOARD_SESSION=<short id>`; `BOARD_TOKEN` is set in the routine's environment.
+1. `export BOARD_USER=<user> BOARD_AGENT=claude BOARD_SESSION=<a short random id you generate for this run; never your claude.ai session id>`; `BOARD_TOKEN` is set in the routine's environment.
 2. `python3 board/keeptrack.py claim '#N' --for <user> --agent claude --session "$BOARD_SESSION" --note "working"` (the page's placeholder claim for you is replaced; if the claim is refused because another session or the board's agent limit holds it, comment that on the card and stop).
 3. `keeptrack.py show '#N'` and `keeptrack.py comments '#N'`; do what the newest `@claude` comment from that user asks, and nothing beyond it.
 4. Keep the card honest while you work: `heartbeat '#N' --note "..."`, `todo-add` / `todo-done` for steps, `comment '#N'` for anything a human should read, `link '#N' <PR url> --title "PR"` for pull requests, `move '#N' <column>` for status.
@@ -129,7 +129,7 @@ A routine run starts with a `routine-fire-payload` naming a task number (`#N`) a
 6. Finish: `comment` the outcome, `assign '#N' <user>`, `done '#N' --note "<result>"`. `done` is refused while checklist items are open: tick them, or `done '#N' --cancel --note "<why>"` when they are being dropped.
 
 ### Command cheat sheet
-`list` (`--label X` for one label), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members remain in the `people` list in `board/tasks.json`; CRM people are separate records.
+`list` (`--label X` for one label), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members are listed by `keeptrack.py members`; CRM people are separate records.
 
 ## Archive (old items)
 Old done tasks, Lost people and long histories move to `board/archive/<year>.json` with `python3 board/keeptrack.py archive` (`--dry-run` first). Search them with `archived -q "<words>"`, and bring one back with `unarchive '#N'`. The board file keeps an index in `archive.files`; do not edit archive files by hand.

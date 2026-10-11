@@ -1748,6 +1748,14 @@ class ClaimLifecycle(unittest.TestCase):
         self.done(1, session="s1", force=True)
         self.assertEqual(self.card(1)["column"], "done")
 
+    def test_a_clash_report_never_prints_a_session_id(self):
+        base = {"tasks": [{"id": "t_c1", "claim": None}]}
+        mine = {"tasks": [{"id": "t_c1", "claim": {"agent": "claude", "session_id": "mine-secret-1", "status": "running"}}]}
+        theirs = {"tasks": [{"id": "t_c1", "claim": {"agent": "claude", "session_id": "their-secret-2", "status": "running"}}]}
+        clashes = kt.merge3(base, mine, theirs)["clashes"]
+        text = kt.describe_clashes(clashes)
+        self.assertTrue(clashes); self.assertNotIn("their-secret-2", text); self.assertNotIn("mine-secret-1", text)
+
     def test_unclaimed_cards_need_no_ownership(self):
         self.release(1, session="s1")
         self.done(2, session="s1")

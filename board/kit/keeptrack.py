@@ -1126,10 +1126,18 @@ def _merge_list(b, m, t, path, clashes):
 
 
 def describe_clashes(clashes, limit=12):
+    def scrub(path, v):   # a session id is a claim's proof of ownership: a clash report shows it only in part
+        if path and path[-1] == "session_id":
+            return redact_session(v)
+        if isinstance(v, dict):
+            return {k: (redact_session(x) if k == "session_id" else scrub((k,), x)) for k, x in v.items()}
+        if isinstance(v, list):
+            return [scrub((), x) for x in v]
+        return v
     def short(v):
         s = "(none)" if v is None else json.dumps(v, ensure_ascii=False)
         return s if len(s) <= 80 else s[:77] + "..."
-    lines = [f"  {'/'.join(map(str, c['path'])) or '(whole board)'}: yours {short(c['mine'])}, theirs {short(c['theirs'])}"
+    lines = [f"  {'/'.join(map(str, c['path'])) or '(whole board)'}: yours {short(scrub(c['path'], c['mine']))}, theirs {short(scrub(c['path'], c['theirs']))}"
              for c in clashes[:limit]]
     if len(clashes) > limit:
         lines.append(f"  ... and {len(clashes) - limit} more")
@@ -1338,10 +1346,11 @@ def session_id(args):
     return usable_session(given) or recorded_session() or uuid.uuid4().hex[:8]
 
 
-def session_for(a, task_id):
+def session_for(a, task_id=None):
     """The session id this run acts as on an existing card: --session, then the environment (same order as
-    session_id), then the local claim record when it is for this card (an attended session with no environment that
-    claimed earlier in this clone still owns its card). Only then a random id, which owns nothing."""
+    session_id), then the session in this clone's local claim record, whichever card it is for (one clone is one
+    session: an attended session with no environment that claimed earlier in this clone still owns its cards).
+    Only then a random id, which owns nothing. task_id is kept for callers; the record is not scoped by card."""
     sid = usable_session(getattr(a, "session", None) or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID")
                          or os.environ.get("CODEX_SESSION_ID"))
     return sid or recorded_session() or uuid.uuid4().hex[:8]
@@ -1376,6 +1385,7 @@ def claim_owner_check(data, t, a, action):
     CLI session's claim. Releasing a stale, stuck or blocked claim is allowed: that is the recovery path for a dead
     or parked run (done never gets that: it asserts the work was finished). The refusal never prints the owning
     session's id: an id is the only proof of ownership there is, so it is not handed to whoever was refused."""
+    _MUT["recheck"] = True   # a lost race re-runs this check on the newer board: never a three-way merge against another claim
     c = t.get("claim")
     if not c or c.get("status") == "done" or getattr(a, "force", False):
         return   # no live claim (older cards kept a finished one)
@@ -1522,6 +1532,7 @@ def do_claim(a, tid, data):
         sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
     cs = claim_state(data, t.get("claim"))
     # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
+    _MUT["recheck"] = True   # a lost race re-runs this on the newer board: never a three-way merge of two claims
     mine = {sid, recorded_session()} - {""}   # this run's id, and the session this clone's record holds (one clone is one session)
     if t.get("claim") and t["claim"].get("session_id") in mine:
         sid = t["claim"]["session_id"]   # re-claiming its own card keeps the id the claim already carries
@@ -2830,7 +2841,7 @@ def board_timezone(data):
     owner = str(((data or {}).get("settings") or {}).get("kit_owner") or "").lower()
     pick = [next((m for m in people if me and str(m.get("github") or "").lower() == me), None),
             next((m for m in people if owner and str(m.get("github") or "").lower() == owner), None),
-            people[0] if people else None]
+            next((m for m in people if valid_timezone(m.get("timezone"))), None)]   # last resort: any member with a zone
     for m in pick:
         tz = m.get("timezone") if m else None
         if valid_timezone(tz):

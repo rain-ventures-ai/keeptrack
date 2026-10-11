@@ -3625,7 +3625,7 @@ if (typeof window !== 'undefined') (() => {
       if (moving.length) {
         if (!to || !d.columns.some(c => c.id === to && c.id !== id)) return;   // the target went away: leave the column alone
         const ranks = d.tasks.filter(t => t.column === to && validRank(t.rank)).map(t => t.rank); let last = ranks.length ? ranks.reduce((a, b) => (a > b ? a : b)) : null;
-        moving.sort((a, b) => (validRank(a.rank) && validRank(b.rank) ? (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0) : 0)).forEach(t => { t.column = to; if (isSplit(d)) { t.rank = keyBetween(last, null); last = t.rank; } stamp(t); });
+        moving.sort((a, b) => (validRank(a.rank) && validRank(b.rank) ? (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0) : 0)).forEach(t => { reopenOutcome(d, t, id, to); t.column = to; if (isSplit(d)) { t.rank = keyBetween(last, null); last = t.rank; } stamp(t); });
       }
       d.columns = d.columns.filter(c => c.id !== id);
     }, `Remove column: ${col.name}`, ids);
