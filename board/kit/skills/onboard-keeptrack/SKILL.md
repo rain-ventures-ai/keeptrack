@@ -23,6 +23,13 @@ in an unrelated product repo.
 6. **Small batches and a resume file.** Big jobs run in batches (about 200 emails or 100 files). Write progress to `onboarding/state.json` after each batch.
 7. **Private repo only.** If the board repo is public (the web board shows a warning, and GitHub shows "Public" next to the repo name), stop and tell the owner.
 
+## Who you are, first
+Run `$B me`. If the owner's member record has no email addresses or time zone, ask once, in one message: **"Your name,
+every email address you use (work, personal, aliases) and your time zone?"** Save it with
+`$B member-set <github-user> --name ".." --email a@x --email b@y --timezone Area/City`. Skipping is fine; `$B me`
+reminds later. This record is the owner's identity on the board: email skills use it to recognise the owner's own mail.
+It is not a CRM person and stays when the CRM section is turned off.
+
 ## Choose the scope first
 Read the board's enabled modes. Ask one short question: **"What should I bring in: people and clients (CRM), tasks,
 or both?"** Recommend both when the board has both modes enabled; recommend the enabled mode when it has only one.

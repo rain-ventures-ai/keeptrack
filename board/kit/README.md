@@ -84,6 +84,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // optional "kit_owner": "github-user" = whose Claude upgrades the board kit (default: first person)
   "columns": [{ "id": "todo", "name": "To do" }, ...],
   "people":  [{ "github": "osouthgate", "name": "Oliver" }, { "github": "JezHub", "name": "Jez" }],
+                                                 // v28 optional on each member: "emails": ["a@work.example", "a@home.example"], "timezone": "Europe/London"
   "agents":  ["claude", "codex"],
   "clients": ["Acme", "Rain Ventures", "General"],
   "labels":  [{ "name": "call", "color": "#0c66e4" }],
@@ -208,7 +209,7 @@ Never edit board JSON files by hand; always go through `keeptrack.py` so conflic
 | Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |
 | Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links and open tasks), `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL [--title]`, `project-unlink REF URL` (URL or title, as `unlink`), `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
 | Columns | `columns` (with card counts), `column-add NAME [--after ID]`, `column-set ID --rename NAME` (the id stays), `column-move ID --before ID\|--after ID`, `column-rm ID [--move-to ID]` (refuses while the column has cards unless `--move-to` says where they go; never `todo`, `in-progress`, `done` or the last column). New ids are a slug of the name |
-| Board members | `members`, `member-add USER [--name]`, `member-set USER --name`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
+| Board members | `members`, `me`, `member-add USER [--name] [--email ..] [--timezone ..]`, `member-set USER [--name] [--email ..] [--remove-email ..] [--timezone ..]`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
 | Agents | `agents`, `agent-add NAME`, `agent-rm NAME [--unassign]` (the names the web board uses in filters and assignment; never one with an active claim) |
 | Delete by mistake | `task-rm ID --yes` (a card made by mistake; a finished one should go done and archive), `person-rm REF --yes` (a CRM person added by mistake, not a Lost one). Both refuse without `--yes`; `task-rm` also refuses an active claim. `person-rm` clears the person as a task contact |
 | Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW]` |

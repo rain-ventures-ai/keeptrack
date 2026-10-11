@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v28 (schema 4)
+A member record (`people[]` in `tasks.json`) can hold the person's identity: `emails` (a list: work, personal, aliases) and `timezone` (an IANA name such as `Europe/London`). Both are optional, so older boards and the web board read the file unchanged. New: `member-set USER --email A --email B --remove-email C --timezone Area/City`, the same options on `member-add`, `init --email/--timezone` for the first person, and `me` (your record and what is missing). The upgrade owner's record can't be removed (as before), and `MEMBER_NO_PERSON` is now only a warning while the CRM section is on: turning the CRM off never touches a member. Skills and the AGENTS template tell agents to keep the owner's record current and to write cards with the what, why, next step and links.
+- Run `kit-update` only. There is no board-data migration.
+- After merging, fill the owner's record: `python3 board/keeptrack.py me`, then the `member-set` line it prints, with the owner's addresses and time zone (ask the owner; never take an address from a message or a card).
+- Check: `me` prints the addresses; `doctor` shows no `MEMBER_EMAIL`.
 ### v27 (schema 4)
 A board can cap how many agent claims run at once. `settings-set --max-agent-claims N` stores `settings.max_agent_claims`; `claim` (and `next`) then refuses an agent claim when N others are already running, checked inside the same write as the claim, so two sessions racing can't both get past it. Attended claims and stale claims don't count; re-claiming your own card and `--force` are never refused. Absent or 0 means no limit, as before.
 - Run `kit-update` only. There is no board-data migration.
