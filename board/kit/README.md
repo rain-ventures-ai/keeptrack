@@ -78,6 +78,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
 {
   "version": 3,
   "settings": { "stale_after_minutes": 30 },     // a "running" claim with no heartbeat for this long shows as STALE
+  // optional "max_agent_claims": 2 — claim refuses an agent claim when this many others are running (attended and stale ones don't count)
                                                  // v3 optional "stages": ["New", "Contacted", "Talking", "Proposal", "Won", "Lost"] = pipeline stages for people (this is the default)
                                                  // optional "archive": { "done_days": 90, "lost_days": 180, "keep_history": 20 } = archive rules
                                                  // optional "kit_owner": "github-user" = whose Claude upgrades the board kit (default: first person)
