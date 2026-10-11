@@ -1132,6 +1132,8 @@ def _merge_list(b, m, t, path, clashes):
 
 def describe_clashes(clashes, limit=12):
     def scrub(path, v):   # a session id is a claim's proof of ownership: a clash report shows it only in part
+        if v is None:
+            return None
         if path and path[-1] == "session_id":
             return redact_session(v)
         if isinstance(v, dict):
