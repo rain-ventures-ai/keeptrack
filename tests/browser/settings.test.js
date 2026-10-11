@@ -227,10 +227,13 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
     // meanwhile abandons it, and an uninterrupted one switches with the values typed before the wait.
     for (const how of ['cancel', 'esc', 'wait']) {
       const page = await open(browser);
-      await page.route('https://api.test/**', async r => { if (r.request().method() !== 'GET') await new Promise(z => setTimeout(z, 1500)); return page.api.route(r); });
+      let writing = 0;   // writes started (each held 1.5s), so the label save below is still in flight when Save & connect is clicked
+      await page.route('https://api.test/**', async r => { if (r.request().method() !== 'GET') { writing++; await new Promise(z => setTimeout(z, 1500)); } return page.api.route(r); });
       await page.evaluate(() => window.kbSettings.open('labels')); await page.locator('#labelBox .lbrow').first().waitFor();
       await page.locator('#labelBox input[aria-label="New label name"]').fill('urgent'); await page.locator('#labelBox button', { hasText: 'Add label' }).click();
       await page.evaluate(() => window.kbSettings.open('conn'));
+      for (let i = 0; i < 100 && !writing; i++) await page.waitForTimeout(20);
+      assert.ok(writing, how + ': the label save is in flight');
       await page.locator('#sRepo').fill('acme/other'); await page.locator('#sBranch').fill('dev'); await page.locator('#sToken').fill('tok2');
       await page.locator('#sSave').click();
       assert.equal(await page.locator('#sSave').isDisabled(), true, how + ': Save & connect is disabled while waiting');
