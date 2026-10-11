@@ -844,6 +844,7 @@ header #filterBadge { background: var(--accent); }
 .stagepill { --h: 210; display: inline-block; padding: 2px 9px; border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
   background: hsl(var(--h) 70% 50% / .16); color: hsl(var(--h) 55% 38%); }
 [data-theme="dark"] .stagepill, [data-theme="midnight"] .stagepill { color: hsl(var(--h) 70% 72%); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .stagepill { color: hsl(var(--h) 70% 72%); } }   /* theme follows the device: no data-theme to match */
 .stagepill.closed { opacity: .7; }
 .pbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); margin-bottom: var(--sp-3); max-width: 100%; } .psearch { min-width: 0; width: 100%; }
 .padd { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); max-width: 100%; } .padd input { min-width: 0; width: 100%; }
