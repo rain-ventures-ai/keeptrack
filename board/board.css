@@ -99,6 +99,8 @@ header #btnCopy, header #btnRefresh, header #btnSettings, header #btnHelp, heade
 .card { position: relative; background: var(--card); border-radius: var(--r-md); padding: var(--sp-4) var(--sp-5) 9px; margin-bottom: 9px; box-shadow: var(--shadow); cursor: grab; border: 1px solid var(--border); transition: box-shadow .15s, transform .15s, background .15s; }
 .card:hover { box-shadow: var(--shadow-hover); background: var(--card-hover); transform: translateY(-1px); }
 .card.dragging { opacity: .35; transform: rotate(1.5deg); }
+.card.pending { opacity: .6; cursor: progress; }   /* a card still waiting in the save queue (render draws it before it is saved) */
+.card.pending .taskactions { pointer-events: none; }
 .card .top { display: flex; align-items: center; gap: 2px; margin-bottom: var(--sp-1); min-height: 26px; }
 .ico { border: 0; background: transparent; padding: 2px var(--sp-2); font-size: var(--fs-md); line-height: 1; border-radius: var(--r-sm); opacity: .7; } .ico:hover { opacity: 1; background: var(--panel); }
 .card .t { font-weight: 600; word-break: break-word; }

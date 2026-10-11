@@ -237,15 +237,24 @@ if (typeof window !== 'undefined') (() => {
     return assignNums(n);
   }
 
+  // Every GitHub call gives up after a while, so a request that never answers fails visibly and the save queue moves on.
+  // kb_fetch_timeout_ms (localStorage) shortens both limits for tests; the defaults are what users get.
+  const FETCH_TIMEOUT = { read: 20000, write: 30000 };
+  function ghSignal(method) {
+    let ms = method === 'GET' ? FETCH_TIMEOUT.read : FETCH_TIMEOUT.write;
+    try { const o = +localStorage.getItem('kb_fetch_timeout_ms'); if (o > 0) ms = o; } catch {}
+    return AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined;
+  }
+  const isTimeout = e => !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
   async function gh(method, body, cond, opt = {}) {   // opt: path (another file in the repo), accept, etag (for a conditional GET of that file)
     const c = cfg(), path = opt.path || c.path, tag = opt.path ? opt.etag : etag;
     const url = `${c.api}/repos/${c.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}` + (method === 'GET' ? `?ref=${encodeURIComponent(c.branch)}` : '');
-    return fetch(url, { method, cache: 'no-store', body: body ? JSON.stringify(body) : undefined,
+    return fetch(url, { method, cache: 'no-store', signal: ghSignal(method), body: body ? JSON.stringify(body) : undefined,
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cond && tag ? { 'If-None-Match': tag } : {}) } });
   }
   async function ghApi(method, endpoint, body, opt = {}, over) {
     const c = over || cfg();
-    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', body: body == null ? undefined : JSON.stringify(body),
+    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', signal: ghSignal(method), body: body == null ? undefined : JSON.stringify(body),
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
         ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
   }
@@ -558,7 +567,7 @@ if (typeof window !== 'undefined') (() => {
         return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       }
       try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra); }
-      catch (e) { console.error(e); return 'error:network'; }
+      catch (e) { console.error(e); return isTimeout(e) ? 'error:timeout' : 'error:network'; }
     }
     const body = { message, content: b64e(JSON.stringify(next, null, 2) + '\n'), branch: cfg().branch }; if (expectedSha) body.sha = expectedSha;
     const res = await gh('PUT', body);
@@ -708,15 +717,19 @@ if (typeof window !== 'undefined') (() => {
   }
   function rememberUndo(before, after, message) {
     if (sameJson(before, after)) return;
-    undoStack.push({ before: clone(before), after: clone(after), message, board: [cfg().repo, cfg().branch, cfg().path].join('|') });
-    if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); offerUndo(message);
+    // Keep the saved state as the next read of the board will see it: normalise fills in fields a new card or person was
+    // saved without (a card added here has no "project" until it is read back). Undo uses this as "what you saw"; without
+    // it, undoing "Add task" found the card changed on GitHub and asked about a conflict that was not there.
+    const saved = clone(after); normalise({ settings: saved.settings, people: saved.people, columns: saved.columns, tasks: saved.tasks, contacts: saved.contacts, projects: saved.projects, next_num: saved.next_num });
+    const entry = { before: clone(before), after: saved, message, board: [cfg().repo, cfg().branch, cfg().path].join('|') };
+    undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); offerUndo(message, entry);
   }
   // After every saved change, a short toast with Undo (ui.toast with an action; it sits above the dock).
   let undoToast = null, undoAt = 0;
   function hideUndo() { if (undoToast) { undoToast.dismiss(); undoToast = null; } }
-  function offerUndo(message) {
+  function offerUndo(message, entry) {   // the toast's Undo takes back this change (entry), never whatever happens to be newest
     if (ro) return; hideUndo();
-    undoAt = Date.now(); const t = undoToast = ui.toast(message, { action: { label: 'Undo', onClick: () => { if (undoToast === t) undoToast = null; undoLast(); } }, timeout: 6000 });
+    undoAt = Date.now(); const t = undoToast = ui.toast(message, { action: { label: 'Undo', onClick: () => { if (undoToast === t) undoToast = null; undoLast(entry); } }, timeout: 6000 });
     t.el.classList.add('kb-undo');
   }
   function applyInverse(target, entry) {
@@ -742,11 +755,14 @@ if (typeof window !== 'undefined') (() => {
       });
     }
   }
-  async function undoLast() {
+  async function undoLast(target) {   // target: the entry a toast's Undo button belongs to; Ctrl+Z and the Undo buttons pass none (the newest)
     hideUndo();
     // A save still in flight is the newest change: let it finish and record its own entry, then take back the newest one.
     // (Reading the stack first would undo the change before it, and the pop below would then drop the wrong entry.)
+    if (saving) toast('Undo will run after the current save.');
     while (saving) await saving;
+    if (target && undoStack[undoStack.length - 1] !== target) {   // a newer change was saved after the one this toast offered to undo
+      toast(undoStack.includes(target) ? 'A newer change was saved since; press Ctrl+Z to undo the latest.' : 'That change was already undone.'); return; }
     const entry = undoStack.pop(); if (!entry) { toast('Nothing to undo.'); return; }   // taken off now, so a second Ctrl+Z undoes the one before
     if (entry.board !== [cfg().repo, cfg().branch, cfg().path].join('|')) { undoStack.length = 0; syncUndo(); toast('Nothing to undo on this board.'); return; }
     syncUndo();
@@ -769,17 +785,35 @@ if (typeof window !== 'undefined') (() => {
   // flight (a background save such as the Claude relay recording its session link, or a second edit made before
   // the first one's commit returned) waits its turn. It used to be dropped with only "Busy, try again" in the status
   // line, so a quick second edit (a label added just after a recolour, an assignment while the relay saved) was lost.
-  let saving = null;   // settles when the save in flight, and every save queued behind it, has finished
-  function mutate(...args) {
-    const run = saving ? saving.then(() => mutateNow(...args)) : mutateNow(...args);   // idle: start now, so the optimistic render stays synchronous
+  // A queued change is shown at once (render() lays it over the board, see pendingView) and the status line says
+  // "Saving… (N waiting)" until the queue is empty. Every GitHub call has a timeout (ghSignal), so the queue cannot hang.
+  let saving = null, waiting = 0;   // saving settles when the save in flight, and every save queued behind it, has finished
+  const pendingView = [];           // queued changes that have not started yet: { fn }, oldest first
+  const savingStatus = () => setStatus('Saving…' + (waiting ? ` (${waiting} waiting)` : ''));
+  function mutate(fn, ...rest) {
+    let run;
+    if (!saving) run = mutateNow(fn, ...rest);   // idle: start now, so the optimistic render stays synchronous
+    else {
+      const job = { fn }; pendingView.push(job); waiting++; savingStatus(); render();
+      run = saving.then(() => { waiting--; const i = pendingView.indexOf(job); if (i >= 0) pendingView.splice(i, 1); return mutateNow(fn, ...rest); });
+    }
     const tail = run.then(() => {}, () => {}); saving = tail; tail.then(() => { if (saving === tail) saving = null; });
     return run;
   }
+  // Leaving the page (reload, another board) while changes are still saving would lose them: wait for the queue first.
+  function whenSaved(go) {
+    if (!saving) return go();
+    toast(`Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`); saving.then(() => go());
+  }
+  window.addEventListener('beforeunload', e => { if (saving || busy) { e.preventDefault(); e.returnValue = ''; } });
   async function mutateNow(fn, message, targetIds = [], baseState = null, options = {}) {
     if (ro) { roToast(); return false; }
     if (busy) { setStatus('Busy, try again', 'err'); return false; }
     if (fromSnap) { setStatus('Still loading the latest board, try again in a moment', 'err'); return false; }
     busy = true; syncUndo(); loadGen++; const before = clone(state); let base = baseState || before;
+    // A failure is also a toast: the status line alone is overwritten by the next queued save's "Saved".
+    const fail = msg => { setStatus(msg, 'err'); toast(msg, true); };
+    savingStatus();
     try {
       const o = clone(state); fn(o); ensureRanks(o); assignNums(o); state = o; render(); // optimistic
       let mine = clone(o);
@@ -789,7 +823,7 @@ if (typeof window !== 'undefined') (() => {
         if (isSplit(state) || splitMeta) { const got = await splitSnapshot(true); rawL = got.data; readSha = got.meta; viaTree = true;
           if (!isSplit(rawL)) { splitMeta = null; readSha = (got.meta.files.get('tasks.json') || {}).sha || null; } }   // no longer split: save it as one file
         else { res = await gh('GET');
-          if (!res.ok && res.status !== 404) { setStatus(`GitHub error ${res.status}`, 'err'); state = before; render(); return false; }
+          if (!res.ok && res.status !== 404) { fail(`Not saved: GitHub error ${res.status}`); state = before; render(); return false; }
           if (res.ok) { const got = await fileJson(res); readSha = got.d.sha; rawL = got.raw; boardSize = got.d.size || boardSize;
             if (isSplit(rawL)) { const sp = await splitSnapshot(true); rawL = sp.data; readSha = sp.meta; viaTree = true; } }   // migrated to split while this page was open
         }
@@ -803,7 +837,7 @@ if (typeof window !== 'undefined') (() => {
         // a choice covers only the revision that was shown, so a newer clash asks again
         const gone = deletedUnderMe(base, pre, targetIds), mg = merge3(base, mine, pre);
         if (gone.length && !mg.clashes.length) {
-          state = pre; render(); setStatus('That card was deleted by someone else; nothing changed', 'err'); return false;
+          state = pre; render(); fail('That card was deleted by someone else; nothing changed'); return false;
         }
         latest = clone(mg.merged);
         if (mg.clashes.length) {
@@ -816,12 +850,12 @@ if (typeof window !== 'undefined') (() => {
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
         const out = await save(latest, message, readSha);
-        if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
-        if (out !== 'conflict') { setStatus('Save failed (' + out + ')', 'err'); state = before; render(); return false; }
+        if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); if (waiting) savingStatus(); else setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
+        if (out !== 'conflict') { fail(out === 'error:timeout' ? 'Not saved: GitHub did not answer in time' : 'Save failed (' + out + ')'); state = before; render(); return false; }
         setStatus('Someone else changed the board, retrying…', 'err');
       }
-      setStatus('Could not save after retries', 'err'); state = before; render(); busy = false; await load(true); return false;
-    } catch (e) { console.error(e); setStatus('Save failed', 'err'); state = before; render(); return false; } finally { busy = false; syncUndo(); }
+      fail('Could not save after retries'); state = before; render(); busy = false; await load(true); return false;
+    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); state = before; render(); return false; } finally { busy = false; syncUndo(); }
   }
 
   function boardId(prefix) {
@@ -1012,7 +1046,7 @@ if (typeof window !== 'undefined') (() => {
     await Promise.all(urls.map(u => fetch(u, { cache: 'reload' }).catch(() => {})));
     try { if (window.caches) await Promise.all((await caches.keys()).map(k => caches.delete(k))); } catch {}
     try { if (navigator.serviceWorker) await Promise.all((await navigator.serviceWorker.getRegistrations()).map(r => r.unregister())); } catch {}
-    location.reload();
+    whenSaved(() => location.reload());
   }
   window.kbUpdate = { check: () => checkForUpdate(true), refresh: hardRefresh, version: loadedVersion };
   function showUpdateBar() {   // "Later" (the banner's dismiss) hides it and asks again in 30 minutes
@@ -1117,7 +1151,19 @@ if (typeof window !== 'undefined') (() => {
     cards.style.setProperty('--cinema-cols', columns); cards.style.setProperty('--cinema-rows', rows);
   }
 
+  // Queued changes (still waiting behind another save) are drawn on top of the board, so a second quick edit shows at once.
+  // They are applied to a copy used only for this render: event handlers and saves keep reading the real state, and the
+  // change itself is applied for real (and merged) when its turn comes. A card that exists only in the queue is drawn faded.
+  let viewPending = new Set();
   function render() {
+    if (!pendingView.length) { viewPending = new Set(); return renderNow(); }
+    const real = state; let v = clone(state);
+    pendingView.forEach(j => { try { j.fn(v); } catch (e) { console.error(e); } });
+    v = clone(v); try { ensureRanks(v); assignNums(v); } catch {}   // on a copy: never write a rank or number into the queued change's own objects
+    const ids = new Set(real.tasks.map(t => t.id)); viewPending = new Set(v.tasks.filter(t => !ids.has(t.id)).map(t => t.id));
+    state = v; try { renderNow(); } finally { state = real; }
+  }
+  function renderNow() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
     const scroll = boardScrollPosition();
     document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
@@ -1862,17 +1908,17 @@ if (typeof window !== 'undefined') (() => {
     const a = ui.avatar((p && p.name) || login, { key: login, title: '@' + login + (p && p.name ? ' (' + p.name + ')' : '') }); a.classList.add('av'); return a;
   }
 
-  function taskAssignControl(t, agentOnly = false) {
-    const claim = activeClaim(t), assign = el('details', 'quickassign' + (agentOnly ? ' drawerassign' : ''));
-    const summary = elI('summary', null, agentOnly ? 'bot' : 'user', agentOnly ? (claim ? agentLabel(claim) : 'Agent') : (t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign'));
-    summary.title = agentOnly ? `Assign task #${t.num} to your agent` : `Assign task #${t.num}`; assign.append(summary);
+  function taskAssignControl(t) {   // the board card's quick-assign menu: people, then the viewer's Claude routine
+    const assign = el('details', 'quickassign');
+    const summary = elI('summary', null, 'user', t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign');
+    summary.title = `Assign task #${t.num}`; assign.append(summary);
     const menu = el('div', 'quickassignmenu'); state.people.forEach(p => { const on = t.assignees.includes(p.github), b = el('button', 'quickperson' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.append(avatar(p.github), document.createTextNode(p.name || '@' + p.github));
-      b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); if (!agentOnly) menu.append(b); });
+      b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); menu.append(b); });
     if (myAgents().includes('claude')) { const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === cfg().me, b = el('button', 'quickagent' + (mine ? ' on' : '')); b.type = 'button'; b.disabled = !!claim || !claudeReady() || !cfg().me; b.setAttribute('aria-pressed', String(!!mine)); b.append(svgIcon('bot'), el('span', null, mine ? `Claude for @${cfg().me} · assigned` : claudeReady() && cfg().me ? `Assign to Claude for @${cfg().me}` : 'Claude · finish setup first'));
       b.title = mine ? 'This task is already assigned to your Claude routine' : claim ? `${agentLabel(claim)} already has this task` : 'Assign this card to your Claude routine; it starts automatically'; b.onclick = () => { assign.open = false; assignMyClaude(t.id); }; menu.append(b); }
     else { const setup = elI('button', 'quickagent setup', 'settings', 'Set up your Claude agent…'); setup.type = 'button'; setup.onclick = () => { assign.open = false; if ($('dlgCard').open) $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); }; menu.append(setup); }
-    if (!agentOnly && t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
-    if (!agentOnly && !state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); return assign;
+    if (t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
+    if (!state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); return assign;
   }
   function taskQuickActions(t) {
     const actions = el('div', 'taskactions'); actions.addEventListener('click', e => e.stopPropagation()); actions.addEventListener('dblclick', e => e.stopPropagation());
@@ -1884,7 +1930,7 @@ if (typeof window !== 'undefined') (() => {
   function numChip(t) { const b = el('button', 'numchip', '#' + t.num); b.type = 'button'; b.title = `Task #${t.num}: click to copy the reference`; b.setAttribute('aria-label', `Task number ${t.num}, copy`);
     b.onclick = e => { e.stopPropagation(); copyText('#' + t.num, `Copied #${t.num}`); }; return b; }
   function cardEl(t, ci, detailed = false) {
-    const c = el('div', 'card' + (detailed ? ' detailed' : '')); c.draggable = !phone(); paint(c, t);   // phones use hold-to-move instead: the browser's own drag would swallow the touch
+    const c = el('div', 'card' + (detailed ? ' detailed' : '') + (viewPending.has(t.id) ? ' pending' : '')); c.draggable = !phone(); paint(c, t); if (viewPending.has(t.id)) c.title = 'Saving…';   // phones use hold-to-move instead: the browser's own drag would swallow the touch
     c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); c.classList.add('dragging'); });
     c.addEventListener('dragend', () => c.classList.remove('dragging'));
     c.addEventListener('dragover', e => e.preventDefault());
@@ -1972,8 +2018,7 @@ if (typeof window !== 'undefined') (() => {
   const baseFor = key => { const b = clone(state), i = b.tasks.findIndex(x => x.id === editing); if (i >= 0) b.tasks[i][key] = fieldBase[key]; return b; };   // the text as it was when I started editing it
   async function saveField(fn, msg, baseKey) {     // every field saves on its own (no Save button); conflicts are checked per field
     const id = editing, sv = $('dSaved'); sv.textContent = 'Saving…'; sv.className = 'dsaved';
-    await mutate(fn, msg, [id], baseKey ? baseFor(baseKey) : null);
-    const ok = $('status').classList.contains('ok'); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
+    const ok = await mutate(fn, msg, [id], baseKey ? baseFor(baseKey) : null); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
     clearTimeout(saveTimer); saveTimer = setTimeout(() => { sv.textContent = ''; }, 2500);
   }
   const edit = (id, f, msg, baseKey) => saveField(n => { const t = n.tasks.find(x => x.id === id); if (t) { f(t, n); stamp(t); } }, msg, baseKey);
@@ -2650,7 +2695,7 @@ if (typeof window !== 'undefined') (() => {
     const score = r => { const [ro, rn] = r.toLowerCase().split('/'); return (ro === o ? 2 : 0) + words.filter(w => rn.includes(w)).length; };
     return all.filter(r => r.toLowerCase() !== String(repo).toLowerCase()).sort((a, b) => score(b) - score(a)).slice(0, 5);
   }
-  function switchRepo(r) { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Boards', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }
+  function switchRepo(r) { whenSaved(() => { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Boards', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }); }
   let lastReport = '';
   async function runChecks(over) {   // over: values typed in Connection but not saved yet
     const c = Object.assign(cfg(), over || {}), out = $('ckList'), rows = []; out.textContent = ''; $('ckRun').disabled = true;
@@ -2817,7 +2862,7 @@ if (typeof window !== 'undefined') (() => {
     if (cur) btn.textContent = boardInitials(cur); else setI(btn, 'square-kanban'); if (cur) btn.style.background = boardColour(cur); btn.title = cur ? `Board: ${cur} (click to switch)` : 'Board'; btn.setAttribute('aria-label', btn.title);
     pop.textContent = ''; pop.append(el('div', 'bphead', 'Boards'));
     repos.forEach(r => { const row = el('button', 'bprow' + (r === cur ? ' cur' : '')); row.type = 'button'; row.append(badge(r), el('span', 'bpname', r), el('span', 'bpmark', r === cur ? '✓' : ''));
-      row.onclick = () => { closePops(); if (r !== cur) { activateBoard(r); location.replace(boardUrl()); } }; pop.append(row); });
+      row.onclick = () => { closePops(); if (r !== cur) whenSaved(() => { activateBoard(r); location.replace(boardUrl()); }); }; pop.append(row); });
     const m = el('button', 'bpmanage', 'Manage boards…'); m.type = 'button'; m.onclick = () => { closePops(); $('btnSettings').click(); settingsTab('boards'); }; pop.append(m);
   }
   renderSwitcher(); popover($('boardBtn'), $('boardPop'));
@@ -4044,7 +4089,7 @@ if (typeof window !== 'undefined') (() => {
   $('qQ').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const f = $('qRes').querySelector('.qhit'); if (f) f.click(); } else if (e.key === 'ArrowDown') { const f = $('qRes').querySelector('.qhit'); if (f) { e.preventDefault(); f.focus(); } } });
   $('qRes').addEventListener('keydown', e => { const all = [...$('qRes').querySelectorAll('.qhit')], i = all.indexOf(document.activeElement); if (e.key === 'ArrowDown' && all[i + 1]) { e.preventDefault(); all[i + 1].focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); (all[i - 1] || $('qQ')).focus(); } });   // skips the section headings
   $('qArch').onchange = runSearch; $('qClose').onclick = () => $('dlgSearch').close(); $('btnSearch').onclick = openSearch;
-  ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { $(id).onclick = undoLast; }); syncUndo();
+  ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { $(id).onclick = () => undoLast(); }); syncUndo();
   document.addEventListener('keydown', e => {
     const t = e.target, typing = t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
     if (!typing && !e.altKey && e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); undoLast(); }

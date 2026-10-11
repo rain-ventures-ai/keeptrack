@@ -36,6 +36,9 @@ jobs:
       - name: Playwright split-storage tests
         working-directory: tests/browser
         run: npm test
+      - name: Save queue (order, waiting status, failures, timeouts, undo)
+        working-directory: tests/browser
+        run: node save-queue.test.js
       - name: Mixed kit / board.js version tests
         working-directory: tests/browser
         run: node mixed-versions.test.js
