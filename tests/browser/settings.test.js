@@ -207,10 +207,13 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
     // are for the current board, keeps its form folded, and offers a way back to it.
     {
       const page = await open(browser, { width: 390, height: 844, token: '', query: '?setup' });
+      assert.equal(await page.locator('#dlgSettings').getAttribute('open'), null, 'setup never opens Settings by itself');
       await page.evaluate(() => window.kbSettings.open('connect')); await settle(page);
       assert.equal(await page.locator('#bEditFold').getAttribute('open'), null, 'the old board form stays folded during setup');
       assert.match(await page.locator('#bState').textContent(), /setting up a new board.*acme\/board/);
       assert.match(await page.locator('#bState').textContent(), /Back to acme\/board/);
+      await page.locator('#bState button', { hasText: 'Back to acme/board' }).click(); await page.waitForURL(/repo=acme\/board/);
+      assert.equal(new URL(page.url()).searchParams.has('setup'), false, 'Back leaves setup');
       assert.deepEqual(page.errors, []); await page.close();
     }
 
@@ -261,7 +264,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       }
       await page.waitForTimeout(3000);   // the queued save has finished by now
       const ls = await page.evaluate(() => ({ repo: localStorage.getItem('kb_repo'), branch: localStorage.getItem('kb_branch'), tok: localStorage.getItem('kb_token'), url: location.search }));
-      assert.deepEqual(ls, { repo: 'acme/board', branch: 'main', tok: 'test', url: '' }, how + ': nothing switched');
+      assert.deepEqual(ls, { repo: 'acme/board', branch: 'main', tok: 'test', url: '?repo=acme/board&branch=main&path=board/tasks.json' }, how + ': nothing switched');   // the address bar names the board it opened
       assert.ok(page.api.root().labels.some(l => l.name === 'urgent'), how + ': the queued save still finished');
       assert.equal(await page.locator('#sSave').isDisabled(), false); assert.equal(await page.locator('#sSave').textContent(), 'Save & connect');
       assert.deepEqual(page.errors, []); await page.close();
