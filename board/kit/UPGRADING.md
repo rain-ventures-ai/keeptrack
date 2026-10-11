@@ -25,11 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v24 (schema 4)
-The list of trusted configs (`~/.config/keeptrack/trusted`) is now JSON. In v23 it was one line per config, and a folder name containing a line break could add a line of its own.
+### v25 (schema 4)
+The list of trusted configs (`~/.config/keeptrack/trusted`) is now JSON. In v23 and v24 it was one line per config, and a folder name containing a line break could add a line of its own.
 - Run `kit-update` only. There is no board-data migration.
-- **Rerun `keeptrack.py use <owner/board-repo> [--project <name>]` once in each folder that has a config:** the v23 file is not read, so those configs are ignored (with a note) until then.
+- **Rerun `keeptrack.py use <owner/board-repo> [--project <name>]` once in each folder that has a config:** the older file is not read, so those configs are ignored (with a note) until then.
 - Check: after `use`, `~/.config/keeptrack/trusted` is a JSON object, and `keeptrack.py where` shows the config.
+
+### v24 (schema 4)
+The web board's Settings has four tabs, and the kit guides use their names.
+- **Web board (served from keeptrack, nothing to install):** Settings is now **Preferences** (theme, card style, layout, notifications), **Board** (sections, columns, labels, archive), **Connection** (this board, Health checks, your boards, Advanced: version, moving settings, forget token, remove a board) and **Agents & integrations** (@claude in comments, Claude or Codex in your chat app, email contact sync). The old General, Boards, Agents, Alerts and Checks tabs are gone. The whole board UI now uses one set of components (`board/ui.js`, catalogue at `board/ui.html`).
+- **Kit files:** `ROUTINE-SETUP.md`, `README.md`, the `board-routine-setup` skill and `keeptrack.py`'s new-board message name the new tabs. A file copy (`kit-update`) is the whole upgrade; there is no board-data migration.
+- Check: `python3 board/keeptrack.py kit-check` says the kit is current; `grep -rn "Settings → Boards" board/ .claude/` finds nothing.
 
 ### v23 (schema 4)
 Search reaches email and copes with vague questions.

@@ -1,3 +1,7 @@
+// Markup handshake: the ids and page structure this file needs from index.html. index.html sets window.kbMarkup to the
+// version it carries (and its loader reads this line before running the file). Bump both together whenever board.js
+// starts to need markup an older index.html does not have, or index.html drops markup an older board.js needs.
+const KB_MARKUP = 2;
 // Fractional ranks. This is the same algorithm as board/kit/keeptrack.py.
 // Keep it outside the browser closure so the Python parity test can load it in Node.
 const RANK_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -55,8 +59,35 @@ function keyBetween(a, b) {
 const jsonText = o => JSON.stringify(o, null, 2) + '\n';
 if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText };
 
+// A page and a board.js from different deploys (GitHub Pages and browsers cache index.html for ~10 minutes) never wire up:
+// refresh the cached page and reload once, and if the server still has the other version, say so. index.html has the same
+// code for a board.js from before the handshake (kbStalePage there).
+function kbStalePage() {
+  if (document.getElementById('kbStale')) return;
+  let auto = false;
+  try { const k = 'kb_markup_reload', t = +sessionStorage.getItem(k) || 0;   // at most one automatic reload a minute, and none when storage is blocked
+    if (Date.now() - t > 60000) { const now = String(Date.now()); sessionStorage.setItem(k, now); auto = sessionStorage.getItem(k) === now; } } catch { auto = false; }
+  const reload = () => fetch(location.href, { cache: 'reload' }).catch(() => {}).then(() => location.reload());
+  const show = () => {
+    document.documentElement.classList.add('ready');
+    const box = document.createElement('div'), card = document.createElement('div'), p = document.createElement('p'), b = document.createElement('button');
+    box.id = 'kbStale'; box.setAttribute('role', 'alert');
+    box.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--paper,#f6f6f4);color:var(--ink,#1c1c1c);font:15px/1.5 system-ui,sans-serif';
+    card.style.cssText = 'max-width:360px;padding:20px;border:1px solid var(--line,#ddd);border-radius:12px;background:var(--surface,#fff);text-align:center';
+    p.textContent = 'A new version of the board is being published. Reload in a minute.'; p.style.margin = '0 0 12px';
+    b.type = 'button'; b.textContent = 'Reload'; b.style.cssText = 'font:inherit;padding:6px 16px;border-radius:8px;border:1px solid var(--line,#ccc);background:var(--hero,#2b59c3);color:var(--on-hero,#fff);cursor:pointer';
+    b.onclick = reload; card.append(p, b); box.append(card);
+    [...document.body.children].forEach(n => { n.inert = true; });   // keyboard focus stays on the message
+    document.body.append(box); b.focus();
+  };
+  if (document.body) show(); else document.addEventListener('DOMContentLoaded', show);
+  if (auto) reload();
+}
+
 if (typeof window !== 'undefined') (() => {
   'use strict';
+  window.kbBoardMarkup = KB_MARKUP;   // announced for index.html's check
+  if (window.kbMarkup !== KB_MARKUP) { kbStalePage(); return; }   // nothing below runs against markup it was not written for
   // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
   // tokens or routines. Only the look (theme, style) is shared.
   const SANDBOX = new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style|custom)$/, MEM = new Map();
@@ -74,7 +105,7 @@ if (typeof window !== 'undefined') (() => {
     token: LS.get('kb_token'), me: LS.get('kb_me', ''), api: LS.get('kb_api', 'https://api.github.com') // api override is for local testing only
   });
   // ---- several boards: each repo keeps its own branch, path, token and Claude routine in kb_boards (this browser only) ----
-  const BOARD_KEYS = ['branch', 'path', 'token', 'claude_url', 'claude_token', 'claude_steps', 'claude_ok'], REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+  const BOARD_KEYS = ['branch', 'path', 'token', 'claude_url', 'claude_token', 'claude_steps', 'claude_ok', 'email_sync'], REPO_RE = /^[\w.-]+\/[\w.-]+$/;
   const boardsMap = () => { try { const o = JSON.parse(LS.get('kb_boards', '{}')); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } };
   function stashBoard() { const repo = LS.get('kb_repo'); if (!repo) return; const m = boardsMap(), e = {};
     BOARD_KEYS.forEach(k => { const v = LS.get('kb_' + k); if (v) e[k] = v; }); m[repo] = e; LS.set('kb_boards', JSON.stringify(m)); }
@@ -95,7 +126,8 @@ if (typeof window !== 'undefined') (() => {
   const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
-  function exportCode() { const o = {}; XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '') o[k] = v; }); return 'kbcfg1.' + xEnc(o); }
+  function exportCode() { stashBoard(); const o = {};   // stash first: kb_boards then has this board's latest per-board keys
+    XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '') o[k] = v; }); return 'kbcfg1.' + xEnc(o); }
   function parseCode(raw) {
     const m = /kbcfg1\.([A-Za-z0-9_-]+)/.exec(String(raw || '')); if (!m) throw new Error('That is not a board settings code.');
     const o = xDec(m[1]), out = {};
@@ -109,13 +141,17 @@ if (typeof window !== 'undefined') (() => {
     return out;
   }
   function applyCode(raw) { const o = parseCode(raw); // replace, not merge: a key the code leaves out must not keep this browser's old value (an old token, routine or cron key)
-    new Set(XFER.text.concat(BOARD_KEYS)).forEach(k => LS.del('kb_' + k)); Object.keys(o).forEach(k => LS.set('kb_' + k, o[k])); return o; }
+    new Set(XFER.text.concat(BOARD_KEYS)).forEach(k => LS.del('kb_' + k)); Object.keys(o).forEach(k => LS.set('kb_' + k, o[k]));
+    // the current board's own keys the code carries only inside boards (email_sync, claude_steps, claude_ok): load them the way
+    // activateBoard does, or the next stashBoard() would overwrite that entry with the empty top-level values
+    const mine = boardsMap()[LS.get('kb_repo')] || {}; BOARD_KEYS.forEach(k => { if (!(k in o) && mine[k]) LS.set('kb_' + k, mine[k]); });
+    return o; }
   // setup link: the code rides in the #fragment, which browsers never send to any server; it is stripped straight away
   (() => { const m = /[#&]kbcfg=([^&]+)/.exec(location.hash); if (!m) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch {}
-    try { const o = parseCode('kbcfg1.' + m[1]);
-      if (confirm(`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?\n\nThis replaces the settings stored in this browser.`)) { applyCode('kbcfg1.' + m[1]); location.reload(); }
-    } catch (e) { alert('Could not import the settings link: ' + e.message); } })();
+    let o; try { o = parseCode('kbcfg1.' + m[1]); } catch (e) { setTimeout(() => toast('Could not import the settings link: ' + e.message, true)); return; }
+    setTimeout(() => ask('Import settings?', [`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?`, 'This replaces the settings stored in this browser.'], 'Import')
+      .then(yes => { if (!yes) return; try { applyCode('kbcfg1.' + m[1]); location.reload(); } catch (e) { toast('Could not import the settings link: ' + e.message, true); } })); })();
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
     columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }],
@@ -136,15 +172,73 @@ if (typeof window !== 'undefined') (() => {
   let newerSchema = 0;
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-  // Line icons from Lucide (lucide.dev, ISC licence, v0.544.0, see vendor/lucide-LICENSE.txt). They draw in the text colour, so every theme colours them.
-  const ICONS = {"alarm-clock":"<circle cx=\"12\" cy=\"13\" r=\"8\"/><path d=\"M12 9v4l2 2\"/><path d=\"M5 3 2 6\"/><path d=\"m22 6-3-3\"/><path d=\"M6.38 18.7 4 21\"/><path d=\"M17.64 18.67 20 21\"/>","archive":"<rect width=\"20\" height=\"5\" x=\"2\" y=\"3\" rx=\"1\"/><path d=\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8\"/><path d=\"M10 12h4\"/>","arrow-right":"<path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/>","arrow-up-right":"<path d=\"M7 7h10v10\"/><path d=\"M7 17 17 7\"/>","bell":"<path d=\"M10.268 21a2 2 0 0 0 3.464 0\"/><path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\"/>","bot":"<path d=\"M12 8V4H8\"/><rect width=\"16\" height=\"12\" x=\"4\" y=\"8\" rx=\"2\"/><path d=\"M2 14h2\"/><path d=\"M20 14h2\"/><path d=\"M15 13v2\"/><path d=\"M9 13v2\"/>","briefcase":"<path d=\"M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16\"/><rect width=\"20\" height=\"14\" x=\"2\" y=\"6\" rx=\"2\"/>","building-2":"<path d=\"M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z\"/><path d=\"M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2\"/><path d=\"M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2\"/><path d=\"M10 6h4\"/><path d=\"M10 10h4\"/><path d=\"M10 14h4\"/><path d=\"M10 18h4\"/>","calendar":"<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/>","calendar-days":"<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/><path d=\"M8 14h.01\"/><path d=\"M12 14h.01\"/><path d=\"M16 14h.01\"/><path d=\"M8 18h.01\"/><path d=\"M12 18h.01\"/><path d=\"M16 18h.01\"/>","check":"<path d=\"M20 6 9 17l-5-5\"/>","chevron-down":"<path d=\"m6 9 6 6 6-6\"/>","chevron-right":"<path d=\"m9 18 6-6-6-6\"/>","circle-help":"<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3\"/><path d=\"M12 17h.01\"/>","clipboard-copy":"<rect width=\"8\" height=\"4\" x=\"8\" y=\"2\" rx=\"1\" ry=\"1\"/><path d=\"M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2\"/><path d=\"M16 4h2a2 2 0 0 1 2 2v4\"/><path d=\"M21 14H11\"/><path d=\"m15 10-4 4 4 4\"/>","compass":"<path d=\"m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z\"/><circle cx=\"12\" cy=\"12\" r=\"10\"/>","copy":"<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/>","download":"<path d=\"M12 15V3\"/><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><path d=\"m7 10 5 5 5-5\"/>","eye":"<path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","eye-off":"<path d=\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49\"/><path d=\"M14.084 14.158a3 3 0 0 1-4.242-4.242\"/><path d=\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143\"/><path d=\"m2 2 20 20\"/>","file-text":"<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M10 9H8\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/>","flag":"<path d=\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\"/>","folder":"<path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"/>","folders":"<path d=\"M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z\"/><path d=\"M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1\"/>","github":"<path d=\"M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4\"/><path d=\"M9 18c-4.51 2-5-2-7-2\"/>","handshake":"<path d=\"m11 17 2 2a1 1 0 1 0 3-3\"/><path d=\"m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4\"/><path d=\"m21 3 1 11h-2\"/><path d=\"M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3\"/><path d=\"M3 4h8\"/>","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\"/><path d=\"M3 3v5h5\"/><path d=\"M12 7v5l4 2\"/>","laptop":"<path d=\"M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z\"/><path d=\"M20.054 15.987H3.946\"/>","link":"<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/>","list":"<path d=\"M3 5h.01\"/><path d=\"M3 12h.01\"/><path d=\"M3 19h.01\"/><path d=\"M8 5h13\"/><path d=\"M8 12h13\"/><path d=\"M8 19h13\"/>","lock":"<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>","menu":"<path d=\"M4 12h16\"/><path d=\"M4 18h16\"/><path d=\"M4 6h16\"/>","mail":"<path d=\"m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7\"/><rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/>","message-square":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\"/>","moon":"<path d=\"M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401\"/>","notebook-pen":"<path d=\"M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4\"/><path d=\"M2 6h4\"/><path d=\"M2 10h4\"/><path d=\"M2 14h4\"/><path d=\"M2 18h4\"/><path d=\"M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z\"/>","palette":"<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\"/><circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\"/><circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\"/><circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\"/><circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\"/>","pencil":"<path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"/><path d=\"m15 5 4 4\"/>","phone":"<path d=\"M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384\"/>","pin":"<path d=\"M12 17v5\"/><path d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"/>","plus":"<path d=\"M5 12h14\"/><path d=\"M12 5v14\"/>","pound-sterling":"<path d=\"M18 7c0-5.333-8-5.333-8 0\"/><path d=\"M10 7v14\"/><path d=\"M6 21h12\"/><path d=\"M6 13h10\"/>","puzzle":"<path d=\"M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z\"/>","refresh-cw":"<path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/><path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\"/><path d=\"M8 16H3v5\"/>","search":"<path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/>","settings":"<path d=\"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","sliders-horizontal":"<path d=\"M10 5H3\"/><path d=\"M12 19H3\"/><path d=\"M14 3v4\"/><path d=\"M16 17v4\"/><path d=\"M21 12h-9\"/><path d=\"M21 19h-5\"/><path d=\"M21 5h-7\"/><path d=\"M8 10v4\"/><path d=\"M8 12H3\"/>","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/>","square-check":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"m9 12 2 2 4-4\"/>","square-kanban":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"M8 7v7\"/><path d=\"M12 7v4\"/><path d=\"M16 7v9\"/>","stethoscope":"<path d=\"M11 2v2\"/><path d=\"M5 2v2\"/><path d=\"M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1\"/><path d=\"M8 15a6 6 0 0 0 12 0v-3\"/><circle cx=\"20\" cy=\"10\" r=\"2\"/>","sun":"<circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2\"/><path d=\"M12 20v2\"/><path d=\"m4.93 4.93 1.41 1.41\"/><path d=\"m17.66 17.66 1.41 1.41\"/><path d=\"M2 12h2\"/><path d=\"M20 12h2\"/><path d=\"m6.34 17.66-1.41 1.41\"/><path d=\"m19.07 4.93-1.41 1.41\"/>","tag":"<path d=\"M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z\"/><circle cx=\"7.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\"/>","trending-up":"<path d=\"M16 7h6v6\"/><path d=\"m22 7-8.5 8.5-5-5L2 17\"/>","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/>","undo-2":"<path d=\"M9 14 4 9l5-5\"/><path d=\"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11\"/>","upload":"<path d=\"M12 3v12\"/><path d=\"m17 8-5-5-5 5\"/><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/>","user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/>","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><path d=\"M16 3.128a4 4 0 0 1 0 7.744\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/>","x":"<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>"};
-  ICONS['maximize-2'] = '<path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/>';
-  ICONS['minimize-2'] = '<path d="m14 10 7-7"/><path d="M20 10h-6V4"/><path d="m3 21 7-7"/><path d="M4 14h6v6"/>';
-  const svgIcon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`; return t.content.firstChild; };
+  // Line icons live in icons.js and components in ui.js; index.html loads both before this file.
+  const { svgIcon, setI, fillIcons } = window.kbIcons;
   const elI = (tag, cls, icon, text) => { const e = el(tag, cls); if (icon) e.append(svgIcon(icon)); if (text != null && text !== '') e.append((icon ? ' ' : '') + text); return e; };   // el() with a leading icon
-  const setI = (e, icon, text) => { e.textContent = ''; e.append(svgIcon(icon)); if (text) e.append(' ' + text); };
-  const fillIcons = root => root.querySelectorAll('i[data-i]').forEach(i => i.replaceWith(svgIcon(i.dataset.i)));   // static markup: <i data-i="name"></i>
   fillIcons(document);
+  // ---- Settings (#dlgSettings): one section template ---------------------------------------------------------------------
+  // index.html marks each block with data-sec; buildSettings turns it into one ui.section: [icon] TITLE + status chip, then a
+  // muted line (scope tag "This browser" / "Shared board", the one-line purpose, Learn more), ui.props rows (data-props),
+  // ui.button buttons, ui.banner (data-banner) and the one "Copy setup prompt" helper (data-prompt). Runs once, before any
+  // handler is attached; ids stay on the same controls.
+  const SET_SCOPES = { browser: ['laptop', 'This browser', 'Saved in this browser only'], board: ['users', 'Shared board', 'Shared with everyone on the board'] };
+  const PROMPT_PASTE = { start: 'Paste it into a new chat with Claude, Codex or Cursor.', board: 'Paste it into a new chat with Claude.',
+    routine: 'Paste it into a new chat with Claude.', email: 'Paste it into Claude Code in your board repo.' };
+  const helpDoc = doc => HOME + '/docs/help/' + doc;
+  const setChip = (ch, text, tone) => { ch.textContent = text; ch.className = `schip ui-pill ui-pill--sm ui-pill--${tone || 'neutral'}`; };
+  function uiBtns(root) {   // plain <button>s (static markup, older builders) get the ui.button look: primary/danger → variant, small → size
+    root.querySelectorAll('button:not([class*="ui-"]):not(.cwh):not(.wcard):not(.agpick):not(.ico)').forEach(b => {
+      const s = b.classList.contains('small') ? 'sm' : 'md', red = b.classList.contains('danger'), v = b.classList.contains('primary') ? 'primary' : red && s === 'md' ? 'danger' : 'secondary';
+      b.classList.remove('primary', 'small'); if (v === 'danger') b.classList.remove('danger'); b.classList.add('ui-btn', 'ui-btn--' + v, 'ui-btn--' + s);   // a small destructive button keeps .danger: red text, not a red block
+      if (!b.getAttribute('type')) b.type = 'button';
+      b.querySelectorAll('svg.i').forEach(i => i.classList.add('ui-i'));
+    });
+  }
+  function buildSettings() {
+    const dlg = $('dlgSettings'); if (!dlg || !dlg.querySelector('[data-sec]')) return;
+    dlg.querySelectorAll('[data-props]').forEach(box => {
+      const rows = [...box.children].filter(r => r.dataset.row != null), dl = ui.props(rows.map(r => ({ label: r.dataset.row, value: [...r.childNodes] })));
+      [...dl.children].forEach((row, i) => { const r = rows[i]; if (r.id) row.id = r.id; row.hidden = r.hidden;
+        if (r.dataset.for) { const lab = el('label', null, r.dataset.row); lab.htmlFor = r.dataset.for; row.querySelector('.ui-props__label > span').replaceWith(lab); } });
+      box.replaceWith(dl);
+    });
+    dlg.querySelectorAll('[data-banner]').forEach(b => { const n = ui.banner({ tone: b.dataset.banner, text: b.textContent }); n.setAttribute('role', 'note'); b.replaceWith(n); });
+    dlg.querySelectorAll('[data-prompt]').forEach(p => { const kind = p.dataset.prompt, w = el('div', 'sprompt'), b = ui.button({ label: 'Copy setup prompt', icon: 'clipboard-copy', onClick: () => copyPrompt(kind) });
+      b.id = p.dataset.id; w.append(b, el('span', 'hint', PROMPT_PASTE[kind])); p.replaceWith(w); });
+    dlg.querySelectorAll('[data-sec]').forEach(src => {
+      const d = src.dataset, chip = src.querySelector(':scope > [data-chip]');
+      if (chip) { chip.removeAttribute('data-chip'); setChip(chip, chip.textContent); }
+      const sec = ui.section({ title: d.title, icon: d.icon, action: chip, collapsible: 'fold' in d, open: false }), meta = el('p', 'setsec__meta');
+      sec.classList.add('setsec'); sec.id = src.id; sec.hidden = src.hidden;
+      if (d.scope) { const [ic, t, tip] = SET_SCOPES[d.scope], tag = el('span', 'setsec__scope'); tag.title = tip; tag.append(ui.icon(ic), document.createTextNode(t), el('span', 'ui-sr', `: ${tip.toLowerCase()}. `)); meta.append(tag); }   // read as one phrase, not run into the purpose
+      if (d.purpose) meta.append(document.createTextNode(d.purpose + ' '));
+      if (d.learn) { const a = el('a', 'setsec__learn', 'Learn more'); a.href = helpDoc(d.learn); a.target = '_blank'; a.rel = 'noopener noreferrer'; meta.append(a); }
+      sec.body.append(meta, ...src.childNodes); src.replaceWith(sec);
+    });
+    uiBtns(dlg);
+  }
+  buildSettings();
+  // Board actions, defined once: the header buttons (wide screens), the ••• More menu (narrow headers) and the dock's Menu are built
+  // from this list. A menu item clicks the header button with the same id, so each action is wired in one place.
+  const HEAD_ACTIONS = [
+    { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
+    { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
+    { id: 'btnHelp', icon: 'circle-help', short: 'Help', menu: 'Help', title: 'Help' },
+    { tour: true, icon: 'compass', menu: 'Show me around' },
+    { id: 'btnSettings', icon: 'settings', short: 'Settings', menu: 'Settings', title: 'Settings' }
+  ];
+  (() => {
+    const utils = document.querySelector('header .hutils');
+    if (utils) HEAD_ACTIONS.filter(a => a.id).forEach(a => {
+      const b = el('button'); b.type = 'button'; b.id = a.id; b.title = a.title; b.setAttribute('aria-label', a.aria || a.title);
+      const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); utils.append(b);
+    });
+    ['morePop', 'dockPop'].forEach(id => {
+      const pop = $(id); if (!pop || pop.querySelector('[data-head-action], [data-tour-start]')) return;
+      const items = HEAD_ACTIONS.map(a => { const b = el('button'); b.type = 'button'; if (a.tour) b.dataset.tourStart = ''; else b.dataset.headAction = a.id; b.append(svgIcon(a.icon), ' ' + a.menu); return b; });
+      pop.prepend(...items);
+    });
+  })();
   const b64e = s => { const b = new TextEncoder().encode(s); let r = ''; b.forEach(x => r += String.fromCharCode(x)); return btoa(r); };
   const b64d = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -213,15 +307,24 @@ if (typeof window !== 'undefined') (() => {
     return assignNums(n);
   }
 
+  // Every GitHub call gives up after a while, so a request that never answers fails visibly and the save queue moves on.
+  // kb_fetch_timeout_ms (localStorage) shortens both limits for tests; the defaults are what users get.
+  const FETCH_TIMEOUT = { read: 20000, write: 30000 };
+  function ghSignal(method) {
+    let ms = method === 'GET' ? FETCH_TIMEOUT.read : FETCH_TIMEOUT.write;
+    try { const o = +localStorage.getItem('kb_fetch_timeout_ms'); if (o > 0) ms = o; } catch {}
+    return AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined;
+  }
+  const isTimeout = e => !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
   async function gh(method, body, cond, opt = {}) {   // opt: path (another file in the repo), accept, etag (for a conditional GET of that file)
     const c = cfg(), path = opt.path || c.path, tag = opt.path ? opt.etag : etag;
     const url = `${c.api}/repos/${c.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}` + (method === 'GET' ? `?ref=${encodeURIComponent(c.branch)}` : '');
-    return fetch(url, { method, cache: 'no-store', body: body ? JSON.stringify(body) : undefined,
+    return fetch(url, { method, cache: 'no-store', signal: ghSignal(method), body: body ? JSON.stringify(body) : undefined,
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cond && tag ? { 'If-None-Match': tag } : {}) } });
   }
   async function ghApi(method, endpoint, body, opt = {}, over) {
     const c = over || cfg();
-    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', body: body == null ? undefined : JSON.stringify(body),
+    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', signal: ghSignal(method), body: body == null ? undefined : JSON.stringify(body),
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
         ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
   }
@@ -316,7 +419,7 @@ if (typeof window !== 'undefined') (() => {
       keys: () => run('readonly', st => st.getAllKeys()).catch(() => []), del: k => run('readwrite', st => st.delete(k)).catch(() => {}) };
   })();
 
-  let lastProblem = '';   // shown in Settings → Checks
+  let lastProblem = '';   // shown in Settings → Connection → Health
   // ---- instant start: show the copy this browser loaded last time, then replace it with the live file ---------
   const snapKey = c => 'kb_snap:' + c.repo + ':' + c.branch + ':' + c.path;
   function snapSave(c, raw) { idb.set(snapKey(c), raw); }
@@ -396,7 +499,7 @@ if (typeof window !== 'undefined') (() => {
   let kitChecked = '';
   async function checkKit() {
     const c = cfg(), key = c.repo + '@' + c.branch, bar = $('kitBar'); if (!bar) return;
-    if (newerSchema) { bar.hidden = false; bar.dataset.schema = '1'; bar.textContent = `This board was saved by newer board tools (schema v${newerSchema}). It is read-only here until this page updates.`; return; }
+    if (newerSchema) { showBar('kitBar', { tone: 'warn', text: `This board was saved by newer board tools (schema v${newerSchema}). It is read-only here until this page updates.` }); bar.dataset.schema = '1'; return; }
     if (bar.dataset.schema) { delete bar.dataset.schema; bar.hidden = true; kitChecked = ''; }
     if (kitChecked === key) return; kitChecked = key;
     try {
@@ -409,13 +512,12 @@ if (typeof window !== 'undefined') (() => {
   }
   const kitOwner = () => (state.settings && state.settings.kit_owner) || ((state.people[0] || {}).github || '');
   function renderKitBar(have, want) {
-    const bar = $('kitBar'); bar.textContent = ''; bar.hidden = !(want > have); if (bar.hidden) return;
+    if (!(want > have)) { showBar('kitBar', null); return; }
     const owner = kitOwner(), title = `Upgrade board tools to kit v${want}`, card = state.tasks.find(t => t.title === title && t.column !== 'done');
-    bar.append(el('span', null, `Board tools are out of date (this repo v${have}, latest v${want}). `));
-    if (card) { const b = el('button', 'small', `Open #${card.num}`); b.onclick = () => openCard(card.id, 'comments'); bar.append(el('span', null, `Upgrade card #${card.num} is with @${owner}. `), b); return; }
-    if (!owner || (me() || '').toLowerCase() !== owner.toLowerCase()) { bar.append(el('span', null, `The upgrade owner is @${owner || '?'}.`)); return; }
-    const b = el('button', 'small primary', 'Make the upgrade card');
-    b.onclick = async () => {
+    const intro = `Board tools are out of date (this repo v${have}, latest v${want}). `, bar = o => showBar('kitBar', Object.assign({ tone: 'info', icon: 'puzzle' }, o));
+    if (card) { bar({ text: intro + `Upgrade card #${card.num} is with @${owner}.`, action: { label: `Open #${card.num}`, onClick: () => openCard(card.id, 'comments') } }); return; }
+    if (!owner || (me() || '').toLowerCase() !== owner.toLowerCase()) { bar({ text: intro + `The upgrade owner is @${owner || '?'}.` }); return; }
+    const make = async () => {
       const id = uid(), raw = HOME + '/board/kit/UPGRADING.md';
       await mutate(n => { if (n.tasks.some(t => t.title === title && t.column !== 'done')) return;
         n.tasks.push({ id, title, column: 'todo', client: '', priority: 'medium', due: '', labels: n.labels.some(l => l.name === 'board') ? ['board'] : [], assignees: [owner],
@@ -425,7 +527,14 @@ if (typeof window !== 'undefined') (() => {
       renderKitBar(have, want); const t = state.tasks.find(x => x.id === id);
       if (t) { openCard(id, 'comments'); $('cmText').value = '@claude upgrade the board kit'; autosize($('cmText')); }
     };
-    bar.append(el('span', null, 'You are the upgrade owner. '), b);
+    bar({ text: intro + 'You are the upgrade owner.', action: ui.button({ label: 'Make the upgrade card', variant: 'primary', size: 'sm', onClick: make }) });
+  }
+  // The strips under the header (#updateBar, #kitBar, #memberBar, #roBar, #sizeBar) each hold one ui.banner. opts null hides the strip;
+  // opts.onDismiss adds the banner's dismiss button, which hides the strip too.
+  function showBar(id, opts) {
+    const bar = $(id); if (!bar) return null; bar.textContent = ''; bar.hidden = !opts; if (!opts) return null;
+    const o = Object.assign({}, opts); if (opts.onDismiss) o.onDismiss = () => { bar.hidden = true; opts.onDismiss(); };
+    const b = ui.banner(o); bar.append(b); return b;
   }
 
   // GitHub answers 404 both for a missing file and for a repo your token cannot see, so check which.
@@ -442,10 +551,10 @@ if (typeof window !== 'undefined') (() => {
       setStatus(`${c.path} not found`, 'err'); lastProblem = `"${c.path}" not found on branch "${c.branch}"`;
       box.append(el('p', null, `The repo is reachable, but "${c.path}" does not exist on branch "${c.branch}".`), el('p', null, 'Check the file path and branch in Settings (the usual path is board/tasks.json).'));
       const b = el('button', null, 'Create a new empty board at this path…');
-      b.onclick = async () => { if (!confirm(`Create ${c.path} on ${c.branch} in ${c.repo}?`)) return; state = NEW_BOARD(); sha = null; await saveNewBoard(clone(state), 'Create board file'); render(); };
+      b.onclick = async () => { if (!(await ask('Create board file?', `Create ${c.path} on ${c.branch} in ${c.repo}?`, 'Create'))) return; state = NEW_BOARD(); sha = null; await saveNewBoard(clone(state), 'Create board file'); render(); };
       box.append(b);
     }
-    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); }; box.append(ck);
+    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); }; box.append(ck);
     board.append(box);
   }
   function noTokenBox() {   // e.g. a ?repo= link to a board this browser has no token for
@@ -455,7 +564,7 @@ if (typeof window !== 'undefined') (() => {
     const others = Object.keys(boardsMap()).filter(r => r !== c.repo && boardsMap()[r].token);
     if (others.length) { const p = el('p'); others.forEach(r => { const x = el('button', 'small', r); x.onclick = () => switchRepo(r); p.append(x, document.createTextNode(' ')); }); box.append(p); }
     const add = el('button', 'primary', 'Add a token for ' + c.repo); add.onclick = () => { $('btnSettings').click(); settingsTab('conn'); };
-    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); runChecks(); };
+    const ck = elI('button', null, 'stethoscope', 'Run checks'); ck.onclick = () => { $('btnSettings').click(); settingsTab('checks'); };
     box.append(add, document.createTextNode(' '), ck); board.append(box);
   }
   function offerCreate() {
@@ -528,7 +637,7 @@ if (typeof window !== 'undefined') (() => {
         return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       }
       try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra); }
-      catch (e) { console.error(e); return 'error:network'; }
+      catch (e) { console.error(e); return isTimeout(e) ? 'error:timeout' : 'error:network'; }
     }
     const body = { message, content: b64e(JSON.stringify(next, null, 2) + '\n'), branch: cfg().branch }; if (expectedSha) body.sha = expectedSha;
     const res = await gh('PUT', body);
@@ -678,15 +787,20 @@ if (typeof window !== 'undefined') (() => {
   }
   function rememberUndo(before, after, message) {
     if (sameJson(before, after)) return;
-    undoStack.push({ before: clone(before), after: clone(after), message, board: [cfg().repo, cfg().branch, cfg().path].join('|') });
-    if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); offerUndo(message);
+    // Keep the saved state as the next read of the board will see it: normalise fills in fields a new card or person was
+    // saved without (a card added here has no "project" until it is read back). Undo uses this as "what you saw"; without
+    // it, undoing "Add task" found the card changed on GitHub and asked about a conflict that was not there.
+    const saved = clone(after); normalise({ settings: saved.settings, people: saved.people, columns: saved.columns, tasks: saved.tasks, contacts: saved.contacts, projects: saved.projects, next_num: saved.next_num });
+    const entry = { before: clone(before), after: saved, message, board: [cfg().repo, cfg().branch, cfg().path].join('|') };
+    undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); offerUndo(message, entry);
   }
-  // After every saved change, a short message with Undo. Where it sits is up to the layout's CSS (in the dock, it replaces the tabs).
-  let undoSnackTimer = null;
-  function hideUndo() { clearTimeout(undoSnackTimer); $('undoSnack').hidden = true; }
-  function offerUndo(message) {
-    if (ro) return; $('undoMsg').textContent = message; $('undoSnack').hidden = false;
-    clearTimeout(undoSnackTimer); undoSnackTimer = setTimeout(hideUndo, 6000);
+  // After every saved change, a short toast with Undo (ui.toast with an action; it sits above the dock).
+  let undoToast = null, undoAt = 0;
+  function hideUndo() { if (undoToast) { undoToast.dismiss(); undoToast = null; } }
+  function offerUndo(message, entry) {   // the toast's Undo takes back this change (entry), never whatever happens to be newest
+    if (ro) return; hideUndo();
+    undoAt = Date.now(); const t = undoToast = ui.toast(message, { action: { label: 'Undo', onClick: () => { if (undoToast === t) undoToast = null; undoLast(entry); } }, timeout: 6000 });
+    t.el.classList.add('kb-undo');
   }
   function applyInverse(target, entry) {
     const { before, after } = entry;
@@ -711,22 +825,66 @@ if (typeof window !== 'undefined') (() => {
       });
     }
   }
-  async function undoLast() {
-    hideUndo(); const entry = undoStack[undoStack.length - 1]; if (!entry) { toast('Nothing to undo.'); return; }
+  async function undoLast(target) {   // target: the entry a toast's Undo button belongs to; Ctrl+Z and the Undo buttons pass none (the newest)
+    hideUndo();
+    // A save still in flight is the newest change: let it finish and record its own entry, then take back the newest one.
+    // (Reading the stack first would undo the change before it, and the pop below would then drop the wrong entry.)
+    if (saving) toast('Undo will run after the current save.');
+    while (saving) await saving;
+    if (target && undoStack[undoStack.length - 1] !== target) {   // a newer change was saved after the one this toast offered to undo
+      toast(undoStack.includes(target) ? 'A newer change was saved since; press Ctrl+Z to undo the latest.' : 'That change was already undone.'); return; }
+    const entry = undoStack.pop(); if (!entry) { toast('Nothing to undo.'); return; }   // taken off now, so a second Ctrl+Z undoes the one before
     if (entry.board !== [cfg().repo, cfg().branch, cfg().path].join('|')) { undoStack.length = 0; syncUndo(); toast('Nothing to undo on this board.'); return; }
+    syncUndo();
     const ids = KINDS.flatMap(k => [...new Set([...byId(entry.before, k).keys(), ...byId(entry.after, k).keys()])].filter(id => !sameJson(byId(entry.before, k).get(id), byId(entry.after, k).get(id))));
     const ok = await mutate(n => applyInverse(n, entry), `Undo: ${entry.message}`, ids, entry.after, { remember: false });
-    if (ok) { undoStack.pop(); syncUndo(); toast(`Undid: ${entry.message}`); }
+    if (ok) toast(`Undid: ${entry.message}`); else { undoStack.push(entry); if (undoStack.length > UNDO_LIMIT) undoStack.shift(); syncUndo(); }   // not saved: it can still be undone
   }
-  const confirmRemoval = what => confirm(`Remove ${what}?\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`);
+  // In-page confirmations (ui.confirm; never the browser's blocking confirm()). body: a string or a list of paragraphs.
+  const UNDO_HINT = 'This saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.';
+  function ask(title, body, confirmLabel = 'OK', danger = false) {
+    let node = null;
+    if (body != null) { node = el('div', 'kb-ask'); (Array.isArray(body) ? body : [body]).forEach(t => node.append(el('p', 'ui-sheet__text', t))); }
+    return ui.confirm({ title, body: node, confirmLabel, danger });
+  }
+  // The one removal confirmation: "Remove <what>?" as the title, or under a short title ("Remove column?") when one is given.
+  const askRemoval = (what, title) => ask(title || `Remove ${what}?`, title ? [`Remove ${what}?`, UNDO_HINT] : UNDO_HINT, 'Remove', true);
 
   // Apply an edit to the LATEST file on GitHub (never overwrite with stale state); retry on a SHA conflict.
   // Returns true only when the change is saved on GitHub.
-  async function mutate(fn, message, targetIds = [], baseState = null, options = {}) {
+  // Saves run one at a time, in the order they were asked for. A change asked for while another save is still in
+  // flight (a background save such as the Claude relay recording its session link, or a second edit made before
+  // the first one's commit returned) waits its turn. It used to be dropped with only "Busy, try again" in the status
+  // line, so a quick second edit (a label added just after a recolour, an assignment while the relay saved) was lost.
+  // A queued change is shown at once (render() lays it over the board, see pendingView) and the status line says
+  // "Saving… (N waiting)" until the queue is empty. Every GitHub call has a timeout (ghSignal), so the queue cannot hang.
+  let saving = null, waiting = 0;   // saving settles when the save in flight, and every save queued behind it, has finished
+  const pendingView = [];           // queued changes that have not started yet: { fn }, oldest first
+  const savingStatus = () => setStatus('Saving…' + (waiting ? ` (${waiting} waiting)` : ''));
+  function mutate(fn, ...rest) {
+    let run;
+    if (!saving) run = mutateNow(fn, ...rest);   // idle: start now, so the optimistic render stays synchronous
+    else {
+      const job = { fn }; pendingView.push(job); waiting++; savingStatus(); render();
+      run = saving.then(() => { waiting--; const i = pendingView.indexOf(job); if (i >= 0) pendingView.splice(i, 1); return mutateNow(fn, ...rest); });
+    }
+    const tail = run.then(() => {}, () => {}); saving = tail; tail.then(() => { if (saving === tail) saving = null; });
+    return run;
+  }
+  // Leaving the page (reload, another board) while changes are still saving would lose them: wait for the queue first.
+  function whenSaved(go) {
+    if (!saving) return go();
+    toast(`Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`); saving.then(() => go());
+  }
+  window.addEventListener('beforeunload', e => { if (saving || busy) { e.preventDefault(); e.returnValue = ''; } });
+  async function mutateNow(fn, message, targetIds = [], baseState = null, options = {}) {
     if (ro) { roToast(); return false; }
     if (busy) { setStatus('Busy, try again', 'err'); return false; }
     if (fromSnap) { setStatus('Still loading the latest board, try again in a moment', 'err'); return false; }
     busy = true; syncUndo(); loadGen++; const before = clone(state); let base = baseState || before;
+    // A failure is also a toast: the status line alone is overwritten by the next queued save's "Saved".
+    const fail = msg => { setStatus(msg, 'err'); toast(msg, true); };
+    savingStatus();
     try {
       const o = clone(state); fn(o); ensureRanks(o); assignNums(o); state = o; render(); // optimistic
       let mine = clone(o);
@@ -736,7 +894,7 @@ if (typeof window !== 'undefined') (() => {
         if (isSplit(state) || splitMeta) { const got = await splitSnapshot(true); rawL = got.data; readSha = got.meta; viaTree = true;
           if (!isSplit(rawL)) { splitMeta = null; readSha = (got.meta.files.get('tasks.json') || {}).sha || null; } }   // no longer split: save it as one file
         else { res = await gh('GET');
-          if (!res.ok && res.status !== 404) { setStatus(`GitHub error ${res.status}`, 'err'); state = before; render(); return false; }
+          if (!res.ok && res.status !== 404) { fail(`Not saved: GitHub error ${res.status}`); state = before; render(); return false; }
           if (res.ok) { const got = await fileJson(res); readSha = got.d.sha; rawL = got.raw; boardSize = got.d.size || boardSize;
             if (isSplit(rawL)) { const sp = await splitSnapshot(true); rawL = sp.data; readSha = sp.meta; viaTree = true; } }   // migrated to split while this page was open
         }
@@ -750,7 +908,7 @@ if (typeof window !== 'undefined') (() => {
         // a choice covers only the revision that was shown, so a newer clash asks again
         const gone = deletedUnderMe(base, pre, targetIds), mg = merge3(base, mine, pre);
         if (gone.length && !mg.clashes.length) {
-          state = pre; render(); setStatus('That card was deleted by someone else; nothing changed', 'err'); return false;
+          state = pre; render(); fail('That card was deleted by someone else; nothing changed'); return false;
         }
         latest = clone(mg.merged);
         if (mg.clashes.length) {
@@ -763,12 +921,12 @@ if (typeof window !== 'undefined') (() => {
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
         const out = await save(latest, message, readSha);
-        if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
-        if (out !== 'conflict') { setStatus('Save failed (' + out + ')', 'err'); state = before; render(); return false; }
+        if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); if (waiting) savingStatus(); else setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
+        if (out !== 'conflict') { fail(out === 'error:timeout' ? 'Not saved: GitHub did not answer in time' : 'Save failed (' + out + ')'); state = before; render(); return false; }
         setStatus('Someone else changed the board, retrying…', 'err');
       }
-      setStatus('Could not save after retries', 'err'); state = before; render(); busy = false; await load(true); return false;
-    } catch (e) { console.error(e); setStatus('Save failed', 'err'); state = before; render(); return false; } finally { busy = false; syncUndo(); }
+      fail('Could not save after retries'); state = before; render(); busy = false; await load(true); return false;
+    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); state = before; render(); return false; } finally { busy = false; syncUndo(); }
   }
 
   function boardId(prefix) {
@@ -821,11 +979,10 @@ if (typeof window !== 'undefined') (() => {
   const projectPickerLabel = p => { const st = p.status || 'active', mark = st === 'done' ? ' · done' : st === 'paused' ? ' · paused' : ''; return `${p.name}${p.client ? ' · ' + p.client : ''}${mark}`; };
   const sortedProjects = () => [...(state.projects || [])].sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || String(a.client || '').localeCompare(b.client || '') || String(a.name || '').localeCompare(b.name || ''));
   // ---- colour: a card's left edge is its client, its right edge is its urgency -------------------------------
-  // Any text can become a colour: hash it (FNV-1a), take the hash modulo 360 as a hue. Known clients are spaced by the golden angle
-  // (137.5 degrees) past the first six; the first six clients get hand-picked hues that avoid the urgency colours. Unknown text falls back to the hash.
-  function hashHue(str) { let x = 2166136261; for (const ch of String(str)) { x ^= ch.charCodeAt(0); x = Math.imul(x, 16777619); } return (x >>> 0) % 360; }
+  // Known clients are spaced by the golden angle (137.5 degrees) past the first six; the first six clients get hand-picked hues that
+  // avoid the urgency colours. Unknown text falls back to ui.hueFor, the one text-to-colour hash (avatars, stages and board badges use it too).
   const CLIENT_HUES = [270, 190, 315, 80, 48, 295];   // violet, cyan, magenta, lime, gold, purple: kept clear of the urgency colours (red, orange, blue, green)
-  function clientHue(name) { if (!name) return null; const i = state.clients.indexOf(name); return i >= 0 ? (i < CLIENT_HUES.length ? CLIENT_HUES[i] : Math.round((i * 137.508 + 215) % 360)) : hashHue(name); }
+  function clientHue(name) { if (!name) return null; const i = state.clients.indexOf(name); return i >= 0 ? (i < CLIENT_HUES.length ? CLIENT_HUES[i] : Math.round((i * 137.508 + 215) % 360)) : ui.hueFor(name); }
   const URG = [{ lvl: 0, color: '#30a46c', label: 'Low' }, { lvl: 1, color: '#3e63dd', label: 'Normal' }, { lvl: 2, color: '#f76b15', label: 'High' }, { lvl: 3, color: '#e5484d', label: 'Critical' }];
   function urgency(t) {   // priority sets the base; an approaching or missed due date raises it
     if (t.column === doneColId()) return { lvl: -1, color: '#8a94a6', label: 'Done' };
@@ -897,13 +1054,14 @@ if (typeof window !== 'undefined') (() => {
       const more = el('button', 'cpill more'); more.type = 'button'; more.setAttribute('aria-haspopup', 'true'); box.append(more);
       const label = () => { more.textContent = `+${rest.length} ▾`; };
       label(); while (box.scrollWidth > box.clientWidth + 1 && shown.length) { shown.pop().remove(); rest = order.slice(shown.length); label(); }
-      more.onclick = e => { e.stopPropagation(); const pop = $('clientPop'); if (!pop.hidden) { closePops(); return; } closePops();
-        pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), row = el('div', 'cmenurow');
+      more.setAttribute('aria-controls', 'clientPop'); more.setAttribute('aria-expanded', 'false');
+      if (popOpen && popOpen.pop === $('clientPop')) { popOpen.trigger = more; more.setAttribute('aria-expanded', 'true'); }   // the bar was redrawn under an open list
+      more.onclick = e => { e.stopPropagation(); togglePop(more, $('clientPop'), { place: false, fill: pop => { pop.textContent = ''; rest.forEach(c => { const on = clientValues().includes(c.name), row = el('div', 'cmenurow');
           const b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
           b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name);
           const det = el('button', 'cmenu detail', 'Details'); det.type = 'button'; det.title = 'Open client details'; det.onclick = () => { closePops(); openClient(c.name); };
           row.append(b, det); pop.append(row); });
-        pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; pop.hidden = false; };
+        pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; } }); };
     }
     const pq = $('peopleQ'); pq.textContent = ''; const w = $('fWho').value;
     state.people.forEach(p => { const on = w === p.github, b = el('button', 'pq' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Show everyone' : `Only @${p.github}'s tasks`;
@@ -912,35 +1070,61 @@ if (typeof window !== 'undefined') (() => {
       b.append(svgIcon('bot'), el('span', 'agentname', a.agent.slice(0, 1).toUpperCase() + a.agent.slice(1))); if (a.owner) b.append(avatar(a.owner)); b.append(el('span', 'agentcount', String(a.count)));
       b.onclick = () => { $('fWho').value = on ? '' : a.value; render(); }; pq.append(b); });
   }
-  function closePops() { ['clientPop', 'filterPop', 'boardPop', 'morePop', 'dockPop'].forEach(id => { $(id).hidden = true; }); $('dockMenu').setAttribute('aria-expanded', 'false'); $('btnFilter').setAttribute('aria-expanded', 'false'); $('boardBtn').setAttribute('aria-expanded', 'false'); $('btnMore').setAttribute('aria-expanded', 'false'); }
+  // ---- header popovers (board switcher, client overflow, filters, More, dock Menu): one open at a time ------------------------
+  // popover(trigger, pop) wires a trigger once; togglePop opens one (closing any other) or closes it. A click outside, Escape, or
+  // choosing an item closes it; Escape puts the focus back on the trigger.
+  let popOpen = null;   // { pop, trigger }
+  const POPS = new Set();
+  function closePops(refocus) {
+    POPS.forEach(p => { p.hidden = true; });
+    if (!popOpen) return; const { trigger } = popOpen; popOpen = null;
+    trigger.setAttribute('aria-expanded', 'false'); if (refocus === true && trigger.isConnected) trigger.focus();
+  }
   function placePop(pop) { if (window.matchMedia('(max-width: 760px)').matches) pop.style.top = (document.querySelector('header').getBoundingClientRect().bottom + 6) + 'px'; else pop.style.top = ''; }
+  function togglePop(trigger, pop, { fill, place = true } = {}) {
+    const wasOpen = !!popOpen && popOpen.pop === pop; closePops(); if (wasOpen) return;
+    POPS.add(pop); if (fill) fill(pop); if (place) placePop(pop);
+    pop.hidden = false; trigger.setAttribute('aria-expanded', 'true'); popOpen = { pop, trigger };
+  }
+  function popover(trigger, pop, opts) {
+    POPS.add(pop); trigger.setAttribute('aria-haspopup', 'true'); trigger.setAttribute('aria-expanded', 'false'); if (pop.id) trigger.setAttribute('aria-controls', pop.id);
+    trigger.addEventListener('click', e => { e.stopPropagation(); togglePop(trigger, pop, opts); });
+    pop.addEventListener('click', e => e.stopPropagation());
+  }
 
   // ---- keeping the app itself fresh -----------------------------------------------------------------------
   const hashStr = s => { let x = 2166136261; for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 16777619); } return (x >>> 0).toString(16).padStart(8, '0').slice(0, 6); };
-  const loadedVersion = () => window.__kbAssets ? hashStr(window.__kbAssets.css + window.__kbAssets.js) : 'unknown';
+  // __kbAssets (index.html): css = board.css, js = board.js, extra = ui.css, icons.js and ui.js joined with a newline, in that order.
+  const EXTRA_ASSETS = ['ui.css', 'icons.js', 'ui.js'];
+  const loadedVersion = () => window.__kbAssets ? hashStr(window.__kbAssets.css + window.__kbAssets.js + (window.__kbAssets.extra || '')) : 'unknown';
   const revalidate = u => fetch(u, { cache: 'no-cache' }).then(r => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))));
   let updateReady = false, lastUpdateCheck = Date.now();
   async function checkForUpdate(force) {
     if (updateReady || (!force && Date.now() - lastUpdateCheck < 120000)) return updateReady; lastUpdateCheck = Date.now();
     try {
-      const [css, js] = await Promise.all([revalidate('board.css'), revalidate('board.js')]);
-      let changed = !!window.__kbAssets && (css !== window.__kbAssets.css || js !== window.__kbAssets.js);
+      const A = window.__kbAssets, withExtra = !!A && typeof A.extra === 'string';
+      const [css, js, ...extra] = await Promise.all(['board.css', 'board.js', ...(withExtra ? EXTRA_ASSETS : [])].map(revalidate));
+      let changed = !!A && (css !== A.css || js !== A.js || (withExtra && extra.join('\n') !== A.extra));
       if (!changed && window.__kbHtml) { const html = await revalidate(location.href); changed = html !== window.__kbHtml; }
-      if (changed) { updateReady = true; $('updateBar').hidden = false; }
+      if (changed) { updateReady = true; showUpdateBar(); }
     } catch { /* offline or rate limited: try again next time */ }
     return updateReady;
   }
   async function hardRefresh() {   // bypass every cache, then reload
     toast('Updating to the latest version…');
     const here = new URL(location.href), bare = here.origin + here.pathname, base = bare.replace(/[^/]*$/, '');
-    const urls = [...new Set([location.href, bare, base, base + 'board.css', base + 'board.js', base + 'theme.js', base + 'designmd.js'])];
+    const urls = [...new Set([location.href, bare, base, base + 'board.css', base + 'ui.css', base + 'icons.js', base + 'ui.js', base + 'board.js', base + 'theme.js', base + 'designmd.js'])];
     await Promise.all(urls.map(u => fetch(u, { cache: 'reload' }).catch(() => {})));
     try { if (window.caches) await Promise.all((await caches.keys()).map(k => caches.delete(k))); } catch {}
     try { if (navigator.serviceWorker) await Promise.all((await navigator.serviceWorker.getRegistrations()).map(r => r.unregister())); } catch {}
-    location.reload();
+    whenSaved(() => location.reload());
   }
   window.kbUpdate = { check: () => checkForUpdate(true), refresh: hardRefresh, version: loadedVersion };
-  $('updNow').onclick = hardRefresh; $('updLater').onclick = () => { $('updateBar').hidden = true; setTimeout(() => { updateReady = false; }, 30 * 60000); };
+  function showUpdateBar() {   // "Later" (the banner's dismiss) hides it and asks again in 30 minutes
+    const bar = $('updateBar'); if (!bar) return; bar.textContent = ''; bar.hidden = false;
+    bar.append(ui.banner({ tone: 'accent', icon: 'refresh-cw', text: 'A new version of the board is available.', action: ui.button({ label: 'Update now', variant: 'primary', size: 'sm', onClick: hardRefresh }),
+      onDismiss: () => { bar.hidden = true; setTimeout(() => { updateReady = false; }, 30 * 60000); } }));
+  }
   $('sUpdate').onclick = hardRefresh;
   setInterval(() => { if (!document.hidden) checkForUpdate(); }, 10 * 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
@@ -979,7 +1163,7 @@ if (typeof window !== 'undefined') (() => {
     if (fw && !fw.startsWith('__') && !t.assignees.includes(fw)) return false;
     if (fd) { const who = completionOf(t); if (!who || completionFilterValue(who) !== fd) return false; }
     if (fl && !t.labels.includes(fl)) return false;
-    if (fprio && t.priority !== fprio) return false;
+    if (fprio && (t.priority || 'medium') !== fprio) return false;   // no priority shows (and filters) as Medium, as keeptrack.py treats it
     if ($('fAttn').checked && !needsAttention(t)) return false;
     return true;
   }
@@ -1038,7 +1222,19 @@ if (typeof window !== 'undefined') (() => {
     cards.style.setProperty('--cinema-cols', columns); cards.style.setProperty('--cinema-rows', rows);
   }
 
+  // Queued changes (still waiting behind another save) are drawn on top of the board, so a second quick edit shows at once.
+  // They are applied to a copy used only for this render: event handlers and saves keep reading the real state, and the
+  // change itself is applied for real (and merged) when its turn comes. A card that exists only in the queue is drawn faded.
+  let viewPending = new Set();
   function render() {
+    if (!pendingView.length) { viewPending = new Set(); return renderNow(); }
+    const real = state; let v = clone(state);
+    pendingView.forEach(j => { try { j.fn(v); } catch (e) { console.error(e); } });
+    v = clone(v); try { ensureRanks(v); assignNums(v); } catch {}   // on a copy: never write a rank or number into the queued change's own objects
+    const ids = new Set(real.tasks.map(t => t.id)); viewPending = new Set(v.tasks.filter(t => !ids.has(t.id)).map(t => t.id));
+    state = v; try { renderNow(); } finally { state = real; }
+  }
+  function renderNow() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
     const scroll = boardScrollPosition();
     document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
@@ -1056,13 +1252,18 @@ if (typeof window !== 'undefined') (() => {
       ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, today: renderToday, people: renderPeopleView, pipeline: renderPipeline })[view](); board.scrollTop = st; renderLegend(); renderStats();
       if ($('dlgCard').open) refreshDrawer(); return;
     }
-    const board = $('board'); board.className = ''; board.textContent = ''; const hideDone = $('fHideDone').checked;
+    const board = $('board');
+    // The lanes are rebuilt on every render (a save returning, a poll finding a change, the minute tick). Carry each lane's
+    // half-typed "Add a task…" text, focus and caret over to the new input, or a render mid-typing throws the text away.
+    const drafts = new Map([...board.querySelectorAll('.col .add input')].map(i => [i.closest('.col').dataset.col, { value: i.value, focus: i === document.activeElement, start: i.selectionStart, end: i.selectionEnd }]));
+    let refocus = null;
+    board.className = ''; board.textContent = ''; const hideDone = $('fHideDone').checked;
     if (cinemaCol && !state.columns.some(c => c.id === cinemaCol && !(hideDone && c.id === 'done'))) cinemaCol = '';
     document.body.classList.toggle('cinema', !!cinemaCol);
     state.columns.forEach((col, ci) => {
       if (hideDone && col.id === 'done') return;
       const focused = cinemaCol === col.id, raw = state.tasks.filter(t => t.column === col.id && filtered(t)), items = focused ? priorityTasks(raw) : displayTasks(raw);
-      const c = el('section', 'col' + (col.id === activeCol() ? ' active' : '') + (focused ? ' cinema-col' : '')); c.dataset.col = col.id; const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', col.name), el('span', 'count', String(items.length)));
+      const c = el('section', 'col' + (col.id === activeCol() ? ' active' : '') + (focused ? ' cinema-col' : '')); c.dataset.col = col.id; const h = colHead(col.name, items.length);
       if (focused) h.append(el('span', 'cinemaorder', 'High → low · Esc to exit'));
       const full = elI('button', 'hcinema', focused ? 'minimize-2' : 'maximize-2'); full.type = 'button'; full.title = focused ? 'Exit cinema mode' : `Show only ${col.name} in cinema mode`; full.setAttribute('aria-label', full.title);
       const hb = el('button', 'hadd', '＋'); hb.type = 'button'; hb.title = 'Add a task to ' + col.name; hb.setAttribute('aria-label', 'Add a task to ' + col.name); h.append(full, hb); c.append(h);
@@ -1070,27 +1271,26 @@ if (typeof window !== 'undefined') (() => {
       cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
       cards.addEventListener('dragleave', () => c.classList.remove('over'));
       cards.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); dropOn(e, col.id, null); });
-      capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(el('div', 'emptycol', 'Nothing here. Drop a card or add one below.')); c.append(cards);
+      capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(emptyNote('Nothing here. Drop a card or add one below.', 'square-kanban')); c.append(cards);
       const add = el('div', 'add'), inp = el('input'), btn = el('button', 'primary', 'Add'); inp.placeholder = 'Add a task…';
+      const draft = drafts.get(col.id); if (draft) { inp.value = draft.value; if (draft.focus) refocus = [inp, draft]; }
       const go = () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; addTask(v, col.id); };
       btn.onclick = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
       add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = () => { inp.scrollIntoView({ block: 'nearest' }); inp.focus(); }; board.append(c);
     });
+    if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
     renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
   const visibleCols = () => state.columns.filter(c => !($('fHideDone').checked && c.id === 'done'));
   function activeCol() { const v = visibleCols(), s = LS.get('kb_tab'); return (v.find(c => c.id === s) || v[0] || {}).id; }
-  function setTab(id) { LS.set('kb_tab', id); document.querySelectorAll('.col').forEach(c => c.classList.toggle('active', c.dataset.col === id)); renderTabs(); }
-  function renderTabs() {
-    const box = $('tabs'); box.textContent = ''; const act = activeCol();
-    visibleCols().forEach(col => {
-      const n = state.tasks.filter(t => t.column === col.id && filtered(t)).length;
-      const b = el('button', 'tab' + (col.id === act ? ' on' : ''), col.name); b.append(el('span', 'count', String(n))); b.dataset.col = col.id;
-      b.onclick = () => setTab(col.id); box.append(b);
-    });
-    const on = box.querySelector('.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+  function setTab(id) { LS.set('kb_tab', id); document.querySelectorAll('.col').forEach(c => c.classList.toggle('active', c.dataset.col === id)); const tl = $('tabs').firstChild; if (tl && tl.select) { tl.select(id); showTab(); } else renderTabs(); }
+  const showTab = () => { const on = $('tabs').querySelector('[aria-selected="true"]'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'center' }); };
+  function renderTabs() {   // phones: one tab per column (ui.tabs); arrow keys or a swipe on the board move between them
+    const box = $('tabs'); box.textContent = '';
+    const items = visibleCols().map(col => ({ value: col.id, label: col.name, count: state.tasks.filter(t => t.column === col.id && filtered(t)).length }));
+    box.append(ui.tabs({ items, value: activeCol(), style: 'underline', label: 'Columns', onChange: setTab })); showTab();
   }
   // ---- phones: hold a card to pick it up; a Move bar appears and you drop the card on another lane ----------------
   const lift = { active: false, timer: null, t: null, card: null, ghost: null, bar: null, over: null, x: 0, y: 0, dx: 0, dy: 0, justLifted: false };
@@ -1145,8 +1345,10 @@ if (typeof window !== 'undefined') (() => {
       try { document.execCommand('copy') ? done() : toast('Copy failed: select and copy manually', true); } catch { toast('Copy failed', true); } ta.remove(); };
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
   }
-  let toastTimer = null;
-  function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'show' + (bad ? ' bad' : ''); clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, 2600); }
+  // One toast system (ui.toast): a newer message replaces an older plain one. An error, or any message once the Undo toast has
+  // been up 1.5s, replaces the Undo toast too (Undo stays on the button and Ctrl+Z), so messages never wait behind it.
+  let lastToast = null;
+  function toast(msg, bad) { if (lastToast) lastToast.dismiss(); if (bad || Date.now() - undoAt > 1500) hideUndo(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: 4500 } : { timeout: 2600 }); }
   function boardInfo() {
     const c = cfg(), repoUrl = `https://github.com/${c.repo}`, rawBase = `${repoUrl}/blob/${c.branch}`;
     return { c, repoUrl, skill: `${rawBase}/.claude/skills/board/SKILL.md`, agents: `${rawBase}/AGENTS.md`,
@@ -1233,39 +1435,45 @@ if (typeof window !== 'undefined') (() => {
   function removeTodo(tid, did) {
     return mutate(n => { const t = n.tasks.find(x => x.id === tid); if (!t) return; t.todos = t.todos.filter(x => x.id !== did); stamp(t); }, `Remove to-do: ${titleOf(tid)}`, [tid]);
   }
-  function todoList(t, inDialog) {   // shared by the card (expanded) and the edit dialog
+  function todoList(t) {   // a card's expanded checklist (the drawer has its own, renderDlgTodos)
     const box = el('div', 'todos');
     t.todos.forEach(d => {
       const row = el('label', 'todo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
-      cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); if (inDialog) renderDlgTodos(); };
+      cb.onchange = () => toggleTodo(t.id, d.id, cb.checked);
       row.append(cb, el('span', null, d.text));
-      if (inDialog) { const x = el('button', 'x', '×'); x.type = 'button'; x.title = 'Remove'; x.onclick = async e => { e.preventDefault(); if (!confirmRemoval(`the checklist item “${d.text}”`)) return; await removeTodo(t.id, d.id); renderDlgTodos(); }; row.append(x); }
       box.append(row);
     });
     const add = el('input', 'todonew'); add.placeholder = 'Add a to-do and press Enter';
-    add.addEventListener('keydown', async e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = add.value; add.value = ''; await addTodo(t.id, v); if (inDialog) { renderDlgTodos(); const n = $('cTodos').querySelector('.todonew'); if (n) n.focus(); } });
+    add.addEventListener('keydown', async e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = add.value; add.value = ''; await addTodo(t.id, v); });
     box.append(add); return box;
   }
-  function renderDlgTodos(force) {
+  function renderDlgTodos(force) {   // the drawer's checklist; adding goes through the section's add row
     const t = state.tasks.find(x => x.id === editing), box = $('cTodos'); if (!t) return;
-    const sig = JSON.stringify(t.todos.map(d => [d.id, d.text, !!d.done])); if (!force && sig === todoSig && box.childNodes.length) return; todoSig = sig;
-    const typed = box.querySelector('.todonew') ? box.querySelector('.todonew').value : ''; box.textContent = ''; box.append(todoList(t, true));
-    $('cTodoCount').textContent = t.todos.length ? `(${t.todos.filter(d => d.done).length}/${t.todos.length})` : '';
-    if (typed) box.querySelector('.todonew').value = typed;
+    const sig = JSON.stringify(t.todos.map(d => [d.id, d.text, !!d.done])); if (!force && sig === todoSig) return; todoSig = sig;
+    box.textContent = '';
+    t.todos.forEach(d => {
+      const row = el('label', 'todo dtodo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
+      cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); renderDlgTodos(); };
+      const x = ui.iconButton({ icon: 'x', label: `Remove “${d.text}”`, size: 'sm', onClick: async e => { e.preventDefault(); if (!(await askRemoval(`the checklist item “${d.text}”`))) return; await removeTodo(t.id, d.id); renderDlgTodos(); } });
+      row.append(cb, el('span', null, d.text), x); box.append(row);
+    });
+    $('cTodoCount').textContent = t.todos.length ? `${t.todos.filter(d => d.done).length}/${t.todos.length}` : '';
   }
   const ago2 = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
-  function renderDlgHistory(t) {
-    const ol = $('cHist'); ol.textContent = ''; $('cHistSum').textContent = `History (${t.history.length})`;
-    t.history.slice().reverse().forEach(h => { const li = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li); });
-    if (!t.history.length) ol.append(el('li', null, 'No history yet.'));
+  // a history list (tasks and people): newest first, relative time, who, what
+  function renderHistory(ol, count, history) {
+    ol.textContent = ''; count.textContent = history.length || '';
+    history.slice().reverse().forEach(h => { const li = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li); });
+    if (!history.length) ol.append(el('li', null, 'No history yet.'));
   }
+  const renderDlgHistory = t => renderHistory($('cHist'), $('cHistCount'), t.history);
 
   // ---- comments: an append-only stream per card, shown in its own dialog -------------------------
   let commentsFor = null, cmSig = '', todoSig = '';
   function renderComments() {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
     const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length; if (sig === cmSig) return; cmSig = sig;
-    $('cmCount').textContent = t.comments.length ? `(${t.comments.length})` : ''; const box = $('cmStream'); box.textContent = '';
+    $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
     t.comments.slice().reverse().forEach(cm => {      // newest first, like Trello: the composer is always at the top
       if (cm.type === 'activity') {   // a one-line event (for example "Claude started a session"), not a message
         const row = el('div', 'cmact' + (/failed/i.test(cm.text) ? ' bad' : '')), url = safeUrl(cm.session_url);
@@ -1287,8 +1495,8 @@ if (typeof window !== 'undefined') (() => {
   }
   async function assignMyClaude(id) {
     const t = state.tasks.find(x => x.id === id), who = cfg().me; if (!t) return;
-    if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents first.', true); return; }
-    if (!claudeReady()) { toast('Finish your Claude routine setup in Settings → Agents first.', true); return; }
+    if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents & integrations first.', true); return; }
+    if (!claudeReady()) { toast('Finish your Claude routine setup in Settings → Agents & integrations first.', true); return; }
     if (!who) { toast('Set your GitHub username in Settings first.', true); return; }
     const live = activeClaim(t); if (live) { toast(`${agentLabel(live)} already has this task. Release that claim before assigning another agent.`, true); return; }
     const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
@@ -1301,10 +1509,10 @@ if (typeof window !== 'undefined') (() => {
     let send = false;
     if (wantsClaude(text)) {
       if (!myAgents().includes('claude')) { /* this person does not use Claude: a plain mention */ }
-      else if (!claudeReady()) toast('To make @claude start your routine, set it up in Settings → Agents. Posting as a normal comment.');
+      else if (!claudeReady()) toast('To make @claude start your routine, set it up in Settings → Agents & integrations. Posting as a normal comment.');
       else if (!cfg().me) toast('Set your GitHub username in Settings first. Posting as a normal comment.', true);
       else { const t0 = state.tasks.find(x => x.id === id), other = t0 && t0.claim && claimState(t0.claim) === 'running' && String(t0.claim.session_id || '').indexOf('pending-') !== 0;
-        if (other && !confirm(`${t0.claim.agent} already has a running session on this task. Send to Claude anyway?`)) { /* post only */ }
+        if (other && !(await ui.confirm({ title: 'Send to Claude anyway?', body: `${t0.claim.agent} already has a running session on this task. Cancel posts the comment without starting Claude.`, confirmLabel: 'Send to Claude' }))) { /* post only */ }
         else { const a = await askSend(t0 ? t0.num : '?'); if (a === 'cancel') return; send = a === 'send'; } }
     }
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
@@ -1331,28 +1539,41 @@ if (typeof window !== 'undefined') (() => {
   // Today is the home page: a new visit starts there. Within one tab the view survives reloads (app updates, refresh).
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
   let view = SS.get('kb_view') || 'today'; if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity'].includes(view)) view = 'today';
+  // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
+  // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
+  const VIEW_GROUPS = [
+    { grp: 'today', label: 'Today', views: [{ value: 'today', icon: 'alarm-clock', label: 'Today', title: 'Today: people to contact and tasks due' }] },
+    { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people by stage' }] },
+    { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'list', icon: 'list', label: 'List', title: 'List' },
+      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' }] }
+  ];
+  const tagViews = (tl, views) => { tl.querySelectorAll('.ui-tab').forEach((b, i) => { b.dataset.view = b.dataset.value; if (views[i].primary) b.classList.add('viewprimary'); }); return tl; };
+  const viewTabs = {};   // group -> its ui.tabs in #viewSw
+  VIEW_GROUPS.forEach(g => {
+    const tl = tagViews(ui.tabs({ items: g.views, value: '', label: g.label, onChange: v => setView(v) }), g.views);
+    tl.classList.add('viewgroup'); tl.dataset.grp = g.grp; viewTabs[g.grp] = tl; $('viewSw').append(tl);
+  });
   function applyModes() {   // Today combines every enabled section; settings.modes controls People and task-specific views
     const m = modes(), ok = v => v === 'today' || (CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks'));
-    document.querySelectorAll('#viewSw .viewgroup').forEach(g => { g.hidden = g.dataset.grp !== 'today' && !m.includes(g.dataset.grp); });
+    VIEW_GROUPS.forEach(g => { viewTabs[g.grp].hidden = g.grp !== 'today' && !m.includes(g.grp); });
     if (!ok(view)) view = 'today';
   }
   const setView = v => { view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); render(); };
-  const syncViewSw = () => { document.querySelectorAll('#viewSw button').forEach(b => { const on = b.dataset.view === view; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }); syncDock(); };
-  // The dock (layout "dock") is a fixed footer with one tab per #viewSw group, so views are defined once, in the header
-  // markup. A tab returns to the last view used in its group; the strip under the header (#subnav) switches views within it.
+  const syncViewSw = () => { Object.values(viewTabs).forEach(tl => tl.select(view)); syncDock(); };
+  // The dock (layout "dock") is a fixed footer with one tab per view group. A tab returns to the last view used in its group;
+  // the strip under the header (#subnav) switches views within it.
   const dockLast = { today: 'today', tasks: 'board', crm: 'people' };
-  const viewBtn = v => document.querySelector(`#viewSw button[data-view="${v}"]`);
-  const grpOf = v => { const b = viewBtn(v); return b ? b.closest('.viewgroup').dataset.grp : 'today'; };
+  const grpOf = v => (VIEW_GROUPS.find(g => g.views.some(x => x.value === v)) || VIEW_GROUPS[0]).grp;
   function syncDock() {
     const cur = grpOf(view); dockLast[cur] = view;
     document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => {
-      const g = document.querySelector(`#viewSw .viewgroup[data-grp="${t.dataset.grp}"]`), on = t.dataset.grp === cur;
+      const g = viewTabs[t.dataset.grp], on = t.dataset.grp === cur;
       t.hidden = !g || g.hidden; t.classList.toggle('on', on); if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
     });
-    const sub = $('subnav'), views = [...document.querySelectorAll(`#viewSw .viewgroup[data-grp="${cur}"] button`)];
+    const sub = $('subnav'), views = VIEW_GROUPS.find(g => g.grp === cur).views;
     sub.hidden = views.length < 2; if (sub.hidden) return;
-    if (sub.dataset.grp !== cur) { sub.textContent = ''; sub.dataset.grp = cur; views.forEach(b => { const it = el('button', null, b.textContent.trim()); it.type = 'button'; it.dataset.view = b.dataset.view; it.title = b.title; it.onclick = () => setView(b.dataset.view); sub.append(it); }); }
-    sub.querySelectorAll('button').forEach(it => { const on = it.dataset.view === view; it.classList.toggle('on', on); it.setAttribute('aria-pressed', String(on)); });
+    if (sub.dataset.grp !== cur) { sub.textContent = ''; sub.dataset.grp = cur; sub.append(tagViews(ui.tabs({ items: views.map(({ value, label, title }) => ({ value, label, title })), value: view, label: 'Views in this section', onChange: v => setView(v) }), views)); }
+    sub.firstChild.select(view);
   }
 
   // ---- "Show me around": a short tour that highlights one part of the real board at a time -------------------
@@ -1418,7 +1639,11 @@ if (typeof window !== 'undefined') (() => {
   const toggleDone = t => moveTo(t.id, t.column === doneColId() ? reopenColId() : doneColId());
   const DTF = {}, dfmt = (d, o) => { const k = JSON.stringify(o); return (DTF[k] || (DTF[k] = new Intl.DateTimeFormat('en-GB', o))).format(d); };   // one formatter per style: toLocaleDateString makes a new one on every call (slow on big boards)
   const dueMemo = new Map(), fmtDue = iso => { let v = dueMemo.get(iso); if (v === undefined) { v = dfmt(new Date(iso + 'T00:00:00'), { day: 'numeric', month: 'short' }); dueMemo.set(iso, v); } return v; };
-  const dueState = t => !t.due || t.column === doneColId() ? '' : t.due < todayIso() ? ' late' : t.due === todayIso() ? ' today' : '';
+  // One priority and one due-date rendering everywhere (ui.priority / ui.due); a task in the done column is never late.
+  const isDoneTask = t => t.column === doneColId();
+  const prioPill = (t, o) => ui.priority(t.priority, { size: 'sm', ...o });
+  const duePill = (t, o) => ui.due(t.due, { done: isDoneTask(t), size: 'sm', ...o });
+  const personDue = p => ui.due(p.next_due, { size: 'sm', empty: p.next ? 'No date' : '' }) || '';
 
   // floating ＋ (phones, board and list views): jump to the add box for the column you are looking at
   const fab = el('button', 'fab', '＋'); fab.type = 'button'; fab.id = 'fab'; fab.title = 'Add a task'; fab.setAttribute('aria-label', 'Add a task'); document.body.append(fab);
@@ -1431,32 +1656,51 @@ if (typeof window !== 'undefined') (() => {
 
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
   const firstLine = t => (t.details || '').split('\n').find(x => x.trim()) || '';
-  function chipTodo(t) { const tc = todoCount(t); if (!tc.all) return null; const b = elI('button', 'chip todochip' + (tc.done === tc.all ? ' full' : ''), 'square-check', `${tc.done}/${tc.all}`); b.title = 'Show or hide the checklist'; b.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; return b; }
-  function chipComments(t) { const n = t.comments.length; if (!n) return null; const fr = freshInfo(t); const b = elI('button', 'chip cmchip has' + (fr.unread ? ' unread' : ''), 'message-square', String(n)); if (fr.unread) b.append(newBadge(fr.unread)); b.title = `${n} comment${n > 1 ? 's' : ''}`; b.onclick = () => openCard(t.id, 'comments'); return b; }
+  // The chips a task shows in every view (kanban card, list row, schedule row). always: also show an empty checklist/comments chip (cards).
+  function chipTodo(t, always) {
+    const tc = todoCount(t); if (!tc.all && !always) return null;
+    const b = elI('button', 'chip todochip' + (tc.all && tc.done === tc.all ? ' full' : ''), 'square-check', tc.all ? `${tc.done}/${tc.all}` : '+'); b.type = 'button';
+    b.title = tc.all ? 'Show or hide the checklist' : 'Add a checklist'; b.setAttribute('aria-expanded', String(openLists.has(t.id)));
+    b.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; return b;
+  }
+  function chipComments(t, always) {
+    const n = t.comments.length; if (!n && !always) return null; const fr = freshInfo(t);
+    const b = elI('button', 'chip cmchip' + (n ? ' has' : '') + (fr.unread ? ' unread' : ''), 'message-square', n ? String(n) : ''); b.type = 'button'; if (fr.unread) b.append(newBadge(fr.unread));
+    b.title = n ? `${n} comment${n > 1 ? 's' : ''}${fr.unread ? ', ' + fr.unread + ' unread' : ''}` : 'Add a comment'; b.setAttribute('aria-label', b.title); b.onclick = () => openComments(t.id); return b;
+  }
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
   function chipCompleted(t) { const x = completionOf(t); if (!x) return null; const c = elI('span', 'chip doneby ' + (x.agent ? 'agent' : 'person'), x.agent ? 'bot' : 'user', x.label); c.title = `Completed by ${x.label}${x.at ? ' · ' + fmtStamp(x.at) : ''}`; return c; }
-  function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; out.push(a); }); return out; }
-  const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { out.push(paintLabel(el('span', 'tag label', l), l)); }); if (max && t.labels.length > max) out.push(el('span', 'tag', '+' + (t.labels.length - max))); return out; };
+  function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; out.push(a); }); return out; }
+  const labelTags = (t, max) => { const out = []; t.labels.slice(0, max || 99).forEach(l => { out.push(paintLabel(el('span', 'tag label', l), l)); }); if (max && t.labels.length > max) out.push(ui.pill({ text: '+' + (t.labels.length - max), size: 'sm' })); return out; };
+  const clientTag = t => (t.client ? ui.pill({ text: t.client, tone: 'accent', size: 'sm' }) : null);
+  const projectTag = t => { const pr = t.project && projectById(t.project); if (!pr) return null; const p = ui.pill({ text: pr.name, outline: true, size: 'sm' }); if (pr.status === 'done' || pr.status === 'paused') { p.classList.add('tag-quiet'); p.title = `Project ${pr.status}`; } return p; };
+  const changedDot = t => { if (!freshInfo(t).changed) return null; const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; return d; };
+  function doneCircle(t, cls = '') {   // mark done / reopen, in list and schedule rows
+    const done = isDoneTask(t), b = el('button', 'circ' + cls + (done ? ' is-done' : ''), done ? '✓' : ''); b.type = 'button'; b.title = done ? 'Reopen' : 'Mark done'; b.setAttribute('aria-label', b.title);
+    b.onclick = e => { e.stopPropagation(); toggleDone(t); }; return b;
+  }
+  const emptyNote = (text, icon) => ui.empty({ text, icon, size: 'sm' });   // a column, day or list with nothing in it
+  function colHead(name, count) {   // kanban and pipeline column header: dot, name, count (callers add their buttons)
+    const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', name), el('span', 'ui-count', String(count))); return h;
+  }
 
   function listRow(t) {
-    const isDone = t.column === doneColId(), row = paint(el('div', 'trow' + (isDone ? ' done' : '')), t);
-    const circ = el('button', 'circ p-' + (t.priority || 'medium'), isDone ? '✓' : ''); circ.title = isDone ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title);
-    circ.onclick = e => { e.stopPropagation(); toggleDone(t); };
-    const c0 = el('div', 'c-check'); c0.append(circ);
-    const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.prepend(d); } task.append(title);
+    const row = paint(el('div', 'trow' + (isDoneTask(t) ? ' done' : '')), t);
+    const c0 = el('div', 'c-check'); c0.append(doneCircle(t));
+    const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); { const d = changedDot(t); if (d) title.prepend(d); } task.append(title);
     const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title
-    if (t.due) mm.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
-    if (t.priority) mm.append(el('span', 'pr ' + t.priority, cap(t.priority)));
-    mm.append(...labelTags(t)); if (t.client) mm.append(el('span', 'tag client', t.client));
+    if (t.due) mm.append(duePill(t));
+    mm.append(prioPill(t));
+    mm.append(...labelTags(t)); { const c = clientTag(t); if (c) mm.append(c); }
     [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
-    if (openLists.has(t.id)) task.append(todoList(t, false));
+    if (openLists.has(t.id)) task.append(todoList(t));
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
     const ppl = el('div', 'c-people'); t.assignees.forEach(a => ppl.append(avatar(a)));
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
-    const due = el('div', 'c-due'); if (t.due) due.append(elI('span', 'chip due' + dueState(t), 'calendar', fmtDue(t.due)));
-    const pr = el('div', 'c-prio'); if (t.priority) pr.append(el('span', 'pr ' + t.priority, cap(t.priority)));
+    const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
+    const pr = el('div', 'c-prio'); pr.append(prioPill(t));
     const more = el('div', 'c-more'); [chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
@@ -1465,10 +1709,11 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- long lists: draw the first CAP items and a "Show more" button, so a huge board never builds 100,000s of elements ----
   const CAP = 150, shownMax = {};
+  const navBtn = (label, aria, onClick) => { const b = ui.button({ label, size: 'sm', onClick }); b.setAttribute('aria-label', aria); b.title = aria; return b; };   // calendar and schedule toolbars
   function capList(key, items, make, box) {
     const n = shownMax[key] || CAP; items.slice(0, n).forEach(x => box.append(make(x)));
-    if (items.length > n) { const b = el('button', 'showmore', `Show ${Math.min(500, items.length - n)} more (${items.length - n} not shown)`); b.type = 'button';
-      b.onclick = e => { e.stopPropagation(); shownMax[key] = n + 500; render(); }; box.append(b); }
+    if (items.length > n) { const b = ui.button({ label: `Show ${Math.min(500, items.length - n)} more (${items.length - n} not shown)`, variant: 'ghost', size: 'sm', onClick: e => { e.stopPropagation(); shownMax[key] = n + 500; render(); } });
+      b.classList.add('showmore'); box.append(b); }
   }
   function tableOf(items, key = 'tbl') {   // header row + rows; on a phone the header disappears and rows reflow
     const box = el('div', 'ttable'), hd = el('div', 'trow thead');
@@ -1483,10 +1728,10 @@ if (typeof window !== 'undefined') (() => {
       const items = state.tasks.filter(t => t.column === col.id && filtered(t)), shut = collapsed.has(col.id);
       const sec = el('section', 'lsec'); sec.dataset.col = col.id;
       const head = el('button', 'lhead'); head.setAttribute('aria-expanded', String(!shut));
-      head.append(el('span', 'spill', col.name), el('span', 'count', String(items.length)), el('span', 'spacer'), el('span', 'caret', shut ? '▸' : '▾'));
+      head.append(el('span', 'spill', col.name), el('span', 'ui-count', String(items.length)), el('span', 'spacer'), el('span', 'caret', shut ? '▸' : '▾'));
       head.onclick = () => { shut ? collapsed.delete(col.id) : collapsed.add(col.id); LS.set('kb_collapsed', JSON.stringify([...collapsed])); render(); };
       sec.append(head);
-      if (!shut) { const sc = el('div', 'tscroll'); if (items.length) sc.append(tableOf(items, 'l:' + col.id)); else sc.append(el('div', 'emptycol', 'Nothing here.')); sec.append(addRow(col.id), sc); }
+      if (!shut) { const sc = el('div', 'tscroll'); if (items.length) sc.append(tableOf(items, 'l:' + col.id)); else sc.append(emptyNote('Nothing here.', 'list')); sec.append(addRow(col.id), sc); }
       board.append(sec);
     });
   }
@@ -1498,23 +1743,22 @@ if (typeof window !== 'undefined') (() => {
     const dated = tasks.filter(t => t.due).sort(byDate), undated = tasks.filter(t => !t.due);
     const overdue = dated.filter(t => t.due < today && t.column !== dc), earlier = dated.filter(t => t.due < today && t.column === dc), upcoming = dated.filter(t => t.due >= today);
     const wrap = el('div', 'sched'), bar = el('div', 'calbar');
-    const todayBtn = el('button', 'calnav', 'Today'); todayBtn.onclick = () => { const x = wrap.querySelector('.sday.today'); if (x) x.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+    const todayBtn = navBtn('Today', 'Go to today', () => { const x = wrap.querySelector('.sday.today'); if (x) x.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
     bar.append(todayBtn, el('h2', 'caltitle', 'Schedule'), el('span', 'spacer')); wrap.append(bar);
 
-    const item = t => {
-      const done = t.column === dc, row = paint(el('div', 'sitem' + (done ? ' done' : '') + dueState(t)), t);
-      const circ = el('button', 'circ sm p-' + (t.priority || 'medium'), done ? '✓' : ''); circ.title = done ? 'Reopen' : 'Mark done'; circ.setAttribute('aria-label', circ.title); circ.onclick = e => { e.stopPropagation(); toggleDone(t); };
-      const title = el('div', 'stitle'); if (freshInfo(t).changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; title.append(d); } title.append(document.createTextNode(t.title));
+    const item = (t, showDue) => {
+      const row = paint(el('div', 'sitem' + (isDoneTask(t) ? ' done' : '')), t), circ = doneCircle(t, ' sm');
+      const title = el('div', 'stitle'); { const d = changedDot(t); if (d) title.append(d); } title.append(document.createTextNode(t.title));
       const sub = [t.client, ...t.labels].filter(Boolean).join(' · '); if (sub) title.append(el('span', 'ssub', sub));
       const avs = el('div', 'lavs'); t.assignees.forEach(a => avs.append(avatar(a)));
-      const extra = el('div', 'sx'); [chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && extra.append(x));
+      const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t)].forEach(x => x && extra.append(x));
       row.append(circ, el('div', 'stime', colName(t.column)), title, extra, avs); row.onclick = () => openCard(t.id); return row;
     };
     const day = (key, label, list, cls) => {
       const d = new Date(key + 'T00:00:00'), sec = el('section', 'sday' + (cls || ''));
       const dl = el('div', 'sdate');
       if (label) dl.append(el('span', 'sdn lbl', label)); else dl.append(el('span', 'sdn', String(d.getDate())), el('span', 'sdl', d.toLocaleDateString('en-GB', { month: 'short', weekday: 'short' }).replace(' ', ', ')));
-      const items = el('div', 'sitems'); capList('s:' + (key || label), list, item, items); if (!list.length) items.append(el('div', 'snone', 'Nothing due'));
+      const items = el('div', 'sitems'); capList('s:' + (key || label), list, t => item(t, !key), items); if (!list.length) items.append(emptyNote('Nothing due', 'calendar-days'));
       sec.append(dl, items); return sec;
     };
     if (overdue.length) wrap.append(day('', 'Overdue', overdue, ' overdue'));
@@ -1533,7 +1777,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- activity: what happened on the board in a day range, by whom (a person and their agents, or agents only) ----------
   // A card counts as worked on when someone logged a history entry or a comment on it in the range. History "by" is the
   // GitHub user for changes made on this page, and "agent@user" (e.g. claude@osouthgate) for changes made by that person's agent.
-  let actRange = LS.get('kb_act_range', 'today'), actDay = todayIso(), actWho = LS.get('kb_act_who', '__me'), actAgents = LS.get('kb_act_agents', '1') !== '';
+  let actRefocus = false, actRange = LS.get('kb_act_range', 'today'), actDay = todayIso(), actWho = LS.get('kb_act_who', '__me'), actAgents = LS.get('kb_act_agents', '1') !== '';
   const AGENT_BY = /@|^(claude|codex|cli)$/i;
   const fmtDay = iso => dfmt(new Date(iso + 'T00:00:00'), { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
   const fmtTime = iso => dfmt(new Date(iso), { hour: '2-digit', minute: '2-digit' });
@@ -1581,11 +1825,10 @@ if (typeof window !== 'undefined') (() => {
 
   function renderActivity() {
     const board = $('board'), wrap = el('div', 'act'), bar = el('div', 'calbar actbar');
-    const seg = el('div', 'seg actseg');
-    [['today', 'Today'], ['yday', 'Yesterday'], ['7d', '7 days'], ['day', 'Pick a day']].forEach(([v, l]) => {
-      const b = el('button', actRange === v ? 'on' : '', l); b.type = 'button'; b.setAttribute('aria-pressed', String(actRange === v));
-      b.onclick = () => { actRange = v; LS.set('kb_act_range', v); render(); }; seg.append(b); });
-    bar.append(seg);
+    const seg = ui.tabs({ items: [['today', 'Today'], ['yday', 'Yesterday'], ['7d', '7 days'], ['day', 'Pick a day']].map(([value, label]) => ({ value, label })), value: actRange, label: 'Range',
+      onChange: v => { actRange = v; LS.set('kb_act_range', v); actRefocus = true; render(); } });
+    seg.classList.add('actseg'); bar.append(seg);
+    if (actRefocus) { actRefocus = false; requestAnimationFrame(() => { const on = seg.querySelector('[aria-selected="true"]'); if (on && on.isConnected) on.focus(); }); }   // arrow keys re-render the view
     if (actRange === 'day') { const di = el('input'); di.type = 'date'; di.value = actDay; di.max = todayIso(); di.setAttribute('aria-label', 'Day'); di.onchange = () => { if (di.value) { actDay = di.value; render(); } }; bar.append(di); }
     const ws = el('select'); ws.setAttribute('aria-label', 'Whose activity');
     [['__me', 'Me' + (cfg().me ? ' (@' + cfg().me + ')' : '')], ['', 'Everyone'], ...state.people.filter(p => p.github.toLowerCase() !== (cfg().me || '').toLowerCase()).map(p => [p.github, '@' + p.github]), ['__agents', 'Agents only']]
@@ -1594,7 +1837,7 @@ if (typeof window !== 'undefined') (() => {
     ws.onchange = () => { actWho = ws.value; LS.set('kb_act_who', actWho); render(); };
     const ag = el('label', 'chk'), agc = el('input'); agc.type = 'checkbox'; agc.checked = actAgents; agc.disabled = actWho === '__agents';
     agc.onchange = () => { actAgents = agc.checked; LS.set('kb_act_agents', actAgents ? '1' : ''); render(); }; ag.append(agc, document.createTextNode(' Include agents'));
-    const cp = elI('button', 'primary', 'clipboard-copy', 'Copy as Markdown'); cp.type = 'button'; cp.onclick = copyMarkdown;
+    const cp = ui.button({ label: 'Copy as Markdown', icon: 'clipboard-copy', variant: 'primary', size: 'sm', onClick: copyMarkdown });
     bar.append(ws, ag, el('span', 'spacer'), cp); wrap.append(bar);
 
     const a = activityData();
@@ -1602,14 +1845,14 @@ if (typeof window !== 'undefined') (() => {
     const nums = el('div', 'actnums'); [[a.cards.length, 'cards worked on'], [a.done.length, 'completed'], [a.comments, 'comments']].forEach(([n, l]) => { const s = el('span', 'actnum'); s.append(el('b', null, String(n)), document.createTextNode(' ' + l)); nums.append(s); });
     sum.append(nums); wrap.append(sum);
     if (!cfg().me && actWho === '__me') wrap.append(el('div', 'snone', 'Set your GitHub username in Settings to see your own activity. Showing everyone.'));
-    if (!a.cards.length) { wrap.append(el('div', 'emptycol', 'No activity in this range' + (filterDesc() ? ' with these filters.' : '.'))); board.append(wrap); return; }
+    if (!a.cards.length) { wrap.append(ui.empty({ text: 'No activity in this range' + (filterDesc() ? ' with these filters.' : '.'), icon: 'history' })); board.append(wrap); return; }
     if (a.done.length) {
-      const sec = el('section', 'actsec actdone'); sec.append(el('h3', null, `✓ Completed (${a.done.length})`));
-      a.done.forEach(t => { const r = el('button', 'actcard'), who = completionOf(t); r.type = 'button'; r.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', [t.client, who && 'Completed by ' + who.label].filter(Boolean).join(' · '))); r.onclick = () => openCard(t.id); sec.append(r); });
+      const sec = ui.section({ title: 'Completed', count: a.done.length, icon: 'circle-check' }); sec.classList.add('actsec', 'actdone');
+      a.done.forEach(t => { const r = el('button', 'actcard'), who = completionOf(t); r.type = 'button'; r.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', [t.client, who && 'Completed by ' + who.label].filter(Boolean).join(' · '))); r.onclick = () => openCard(t.id); sec.body.append(r); });
       wrap.append(sec);
     }
     a.days.forEach(d => {
-      const sec = el('section', 'actsec'); sec.append(el('h3', null, fmtDay(d.day)));
+      const sec = ui.section({ title: fmtDay(d.day), count: d.cards.length }); sec.classList.add('actsec');
       d.cards.forEach(({ t, ev }) => {
         const box = el('div', 'actitem'), head = el('button', 'actcard'); head.type = 'button';
         head.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title), el('span', 'ssub', cardSub(t))); head.onclick = () => openCard(t.id);
@@ -1617,7 +1860,7 @@ if (typeof window !== 'undefined') (() => {
         ev.forEach(e => { const li = el('li', (e.comment ? 'cm' : '') + (e.done ? ' dn' : '')), tm = el('time', null, fmtTime(e.at)); tm.title = e.at;
           const who = el('b', AGENT_BY.test(String(e.by || '')) ? 'agent' : '', ' ' + (e.by || '?') + ' ');
           li.append(tm, who); if (e.comment) li.append(elI('span', 'cmic', 'message-square'), ' '); linkify(li, e.text); ol.append(li); });
-        box.append(head, ol); sec.append(box);
+        box.append(head, ol); sec.body.append(box);
       });
       wrap.append(sec);
     });
@@ -1693,7 +1936,7 @@ if (typeof window !== 'undefined') (() => {
     const tasks = state.tasks.filter(t => filtered(t) && !(hideDone && t.column === doneColId())), byDay = new Map(), undated = [];
     tasks.forEach(t => { if (t.due) { if (!byDay.has(t.due)) byDay.set(t.due, []); byDay.get(t.due).push(t); } else undated.push(t); });
     const wrap = el('div', 'cal'), bar = el('div', 'calbar');
-    const nav = (txt, label, fn) => { const b = el('button', 'calnav', txt); b.setAttribute('aria-label', label); b.onclick = fn; return b; };
+    const nav = navBtn;
     bar.append(nav('‹', 'Previous month', () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); render(); }),
       el('h2', 'caltitle', calMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })),
       nav('›', 'Next month', () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); render(); }),
@@ -1707,13 +1950,15 @@ if (typeof window !== 'undefined') (() => {
       cell.append(el('span', 'dn', String(d.getDate())));
       const pills = el('div', 'pills');
       list.slice(0, 3).forEach(t => {
-        const p = paint(el('button', 'pill p-' + (t.priority || 'medium') + (t.column === doneColId() ? ' done' : '') + dueState(t) + (isFresh(t) ? ' fresh' : ''), t.title), t); p.title = t.title; p.draggable = true;
+        const p = paint(el('button', 'pill' + (isDoneTask(t) ? ' done' : '') + (isFresh(t) ? ' fresh' : '')), t); p.title = t.title; p.draggable = true;
+        const st = (ui.dueInfo(t.due, { done: isDoneTask(t) }) || {}).state; if (st === 'overdue' || st === 'today') p.dataset.due = st;
+        p.append(prioPill(t, { compact: true }), el('span', 'ptext', t.title));
         p.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); });
         p.onclick = e => { e.stopPropagation(); openCard(t.id); }; pills.append(p);
       });
       if (list.length > 3) pills.append(el('span', 'more', `+${list.length - 3} more`));
       cell.append(pills);
-      const dots = el('div', 'dots'); list.slice(0, 5).forEach(t => dots.append(el('i', 'p-' + (t.priority || 'medium') + (t.column === doneColId() ? ' done' : '')))); cell.append(dots);
+      const dots = el('div', 'dots'); list.slice(0, 5).forEach(t => { const d = prioPill(t, { compact: true }); d.classList.toggle('done', isDoneTask(t)); dots.append(d); }); cell.append(dots);
       cell.onclick = () => { calSel = key; render(); };
       cell.addEventListener('dragover', e => { e.preventDefault(); cell.classList.add('over'); }); cell.addEventListener('dragleave', () => cell.classList.remove('over'));
       cell.addEventListener('drop', e => { e.preventDefault(); cell.classList.remove('over'); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
@@ -1721,31 +1966,29 @@ if (typeof window !== 'undefined') (() => {
       grid.append(cell);
     }
     wrap.append(grid);
-    const day = el('section', 'calday'), sel = byDay.get(calSel) || [];
-    const hd = el('h3', null, new Date(calSel + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })); hd.append(el('span', 'count', String(sel.length))); day.append(hd);
-    if (sel.length) { const sc = el('div', 'tscroll'); sc.append(tableOf(sel)); day.append(sc); } else day.append(el('div', 'emptycol', 'Nothing due this day.')); day.append(addRow(reopenColId(), calSel)); wrap.append(day);
+    const sel = byDay.get(calSel) || [], day = ui.section({ title: dfmt(new Date(calSel + 'T00:00:00'), { weekday: 'long', day: 'numeric', month: 'long' }), count: sel.length, icon: 'calendar' }); day.classList.add('calday');
+    if (sel.length) { const sc = el('div', 'tscroll'); sc.append(tableOf(sel)); day.body.append(sc); } else day.body.append(emptyNote('Nothing due this day.', 'calendar')); day.body.append(addRow(reopenColId(), calSel)); wrap.append(day);
     const und = el('details', 'calundated'); und.open = LS.get('kb_undated', '') === '1'; und.addEventListener('toggle', () => LS.set('kb_undated', und.open ? '1' : ''));
     und.append(el('summary', null, `No due date (${undated.length})`)); if (undated.length) { const sc = el('div', 'tscroll'); sc.append(tableOf(undated)); und.append(sc); } wrap.append(und);
     board.append(wrap);
   }
 
-  function avatar(login) {
+  function avatar(login) {   // ui.avatar coloured by the login, so a person has one colour in every view and in the drawer's person chips
     const p = state.people.find(x => x.github.toLowerCase() === String(login).toLowerCase());
-    const name = (p && p.name) || login; let h = 0; for (const ch of String(login).toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
-    const a = el('span', 'av', name.slice(0, 2).toUpperCase()); a.style.setProperty('--h', h); a.title = '@' + login + (p && p.name ? ' (' + p.name + ')' : ''); return a;
+    const a = ui.avatar((p && p.name) || login, { key: login, title: '@' + login + (p && p.name ? ' (' + p.name + ')' : '') }); a.classList.add('av'); return a;
   }
 
-  function taskAssignControl(t, agentOnly = false) {
-    const claim = activeClaim(t), assign = el('details', 'quickassign' + (agentOnly ? ' drawerassign' : ''));
-    const summary = elI('summary', null, agentOnly ? 'bot' : 'user', agentOnly ? (claim ? agentLabel(claim) : 'Agent') : (t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign'));
-    summary.title = agentOnly ? `Assign task #${t.num} to your agent` : `Assign task #${t.num}`; assign.append(summary);
+  function taskAssignControl(t) {   // the board card's quick-assign menu: people, then the viewer's Claude routine
+    const assign = el('details', 'quickassign');
+    const summary = elI('summary', null, 'user', t.assignees.length ? `Assign ${t.assignees.length}` : 'Assign');
+    summary.title = `Assign task #${t.num}`; assign.append(summary);
     const menu = el('div', 'quickassignmenu'); state.people.forEach(p => { const on = t.assignees.includes(p.github), b = el('button', 'quickperson' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.append(avatar(p.github), document.createTextNode(p.name || '@' + p.github));
-      b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); if (!agentOnly) menu.append(b); });
+      b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); menu.append(b); });
     if (myAgents().includes('claude')) { const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === cfg().me, b = el('button', 'quickagent' + (mine ? ' on' : '')); b.type = 'button'; b.disabled = !!claim || !claudeReady() || !cfg().me; b.setAttribute('aria-pressed', String(!!mine)); b.append(svgIcon('bot'), el('span', null, mine ? `Claude for @${cfg().me} · assigned` : claudeReady() && cfg().me ? `Assign to Claude for @${cfg().me}` : 'Claude · finish setup first'));
       b.title = mine ? 'This task is already assigned to your Claude routine' : claim ? `${agentLabel(claim)} already has this task` : 'Assign this card to your Claude routine; it starts automatically'; b.onclick = () => { assign.open = false; assignMyClaude(t.id); }; menu.append(b); }
     else { const setup = elI('button', 'quickagent setup', 'settings', 'Set up your Claude agent…'); setup.type = 'button'; setup.onclick = () => { assign.open = false; if ($('dlgCard').open) $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); }; menu.append(setup); }
-    if (!agentOnly && t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
-    if (!agentOnly && !state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); return assign;
+    if (t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
+    if (!state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); return assign;
   }
   function taskQuickActions(t) {
     const actions = el('div', 'taskactions'); actions.addEventListener('click', e => e.stopPropagation()); actions.addEventListener('dblclick', e => e.stopPropagation());
@@ -1757,7 +2000,7 @@ if (typeof window !== 'undefined') (() => {
   function numChip(t) { const b = el('button', 'numchip', '#' + t.num); b.type = 'button'; b.title = `Task #${t.num}: click to copy the reference`; b.setAttribute('aria-label', `Task number ${t.num}, copy`);
     b.onclick = e => { e.stopPropagation(); copyText('#' + t.num, `Copied #${t.num}`); }; return b; }
   function cardEl(t, ci, detailed = false) {
-    const c = el('div', 'card' + (t.priority ? ' p-' + t.priority : '') + (detailed ? ' detailed' : '')); c.draggable = !phone(); paint(c, t);   // phones use hold-to-move instead: the browser's own drag would swallow the touch
+    const c = el('div', 'card' + (detailed ? ' detailed' : '') + (viewPending.has(t.id) ? ' pending' : '')); c.draggable = !phone(); paint(c, t); if (viewPending.has(t.id)) c.title = 'Saving…';   // phones use hold-to-move instead: the browser's own drag would swallow the touch
     c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); c.classList.add('dragging'); });
     c.addEventListener('dragend', () => c.classList.remove('dragging'));
     c.addEventListener('dragover', e => e.preventDefault());
@@ -1765,8 +2008,7 @@ if (typeof window !== 'undefined') (() => {
     c.addEventListener('dblclick', () => openCard(t.id));
     c.addEventListener('click', e => { if (phone() && !lift.justLifted && !e.target.closest('button, a, input, select, textarea, .taskactions')) openCard(t.id); });   // phones: tap a card to open it (and change its status there)
     c.addEventListener('touchstart', e => liftStart(e, t, c), { passive: true });   // phones: hold to pick it up and drop it on another lane   // phones: tap a card to open it (and change its status there)
-    const fr = freshInfo(t);
-    const top = el('div', 'top'); top.append(numChip(t)); if (fr.changed) { const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; top.append(d); } if (t.priority) top.append(el('span', 'prio ' + t.priority, t.priority)); top.append(el('span', 'spacer'));
+    const top = el('div', 'top'); top.append(numChip(t)); { const d = changedDot(t); if (d) top.append(d); } top.append(prioPill(t), el('span', 'spacer'));
     const edit = elI('button', 'ico', 'pencil'), bot = elI('button', 'ico', 'bot');
     edit.title = 'Edit task'; edit.setAttribute('aria-label', 'Edit task'); edit.onclick = () => openCard(t.id);
     bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent');
@@ -1774,9 +2016,7 @@ if (typeof window !== 'undefined') (() => {
     c.append(el('div', 't', t.title));
     if (t.details) c.append(el('div', 'n', t.details));
     const tags = el('div', 'tags');
-    t.labels.forEach(l => { tags.append(paintLabel(el('span', 'tag label', l), l)); });
-    if (t.client) tags.append(el('span', 'tag client', t.client));
-    if (t.project) { const pr = projectById(t.project); if (pr) tags.append(el('span', 'tag project' + (pr.status === 'done' ? ' done' : pr.status === 'paused' ? ' paused' : ''), pr.name)); }
+    [...labelTags(t), clientTag(t), projectTag(t)].forEach(x => x && tags.append(x));
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
     if (detailed) { const actions = taskQuickActions(t); actions.classList.add('cinemaactions'); c.append(actions); }
@@ -1788,22 +2028,13 @@ if (typeof window !== 'undefined') (() => {
       const activity = t.history[t.history.length - 1]; if (activity) addContext('history', 'Latest activity', `${activity.by || 'someone'} · ${ago(activity.at)}`, activity.text);
       if (context.childNodes.length) c.append(context);
     }
-    const foot = el('div', 'foot'); { const mc = chipMention(t); if (mc) foot.append(mc); }
-    { const tc = todoCount(t), chip = elI('button', 'chip todochip' + (tc.all && tc.done === tc.all ? ' full' : ''), 'square-check', tc.all ? `${tc.done}/${tc.all}` : '+');
-      chip.title = tc.all ? 'Show or hide the checklist' : 'Add a checklist'; chip.setAttribute('aria-expanded', String(openLists.has(t.id)));
-      chip.onclick = () => { openLists.has(t.id) ? openLists.delete(t.id) : openLists.add(t.id); render(); }; foot.append(chip); }
-    { const n = t.comments.length, cm = elI('button', 'chip cmchip' + (n ? ' has' : ''), 'message-square', n ? String(n) : ''); cm.title = n ? `${n} comment${n > 1 ? 's' : ''}${fr.unread ? ', ' + fr.unread + ' unread' : ''}` : 'Add a comment'; if (fr.unread) { cm.classList.add('unread'); cm.append(newBadge(fr.unread)); } cm.setAttribute('aria-label', cm.title); cm.onclick = () => openComments(t.id); foot.append(cm); }
-    if (t.due) { const late = t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); foot.append(elI('span', 'chip' + (late ? ' late' : ''), 'calendar', t.due)); }
-    const other = [];
-    t.links.forEach(l => { const g = ghLink(l.url); if (!g) { other.push(l); return; }
-      const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; foot.append(a); });
-    if (other.length) foot.append(elI('span', 'chip', 'link', String(other.length)));
-    if (t.contacts.length) foot.append(elI('span', 'chip', 'user', String(t.contacts.length)));
-    { const dc = chipCompleted(t); if (dc) foot.append(dc); }
+    const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
+    [chipMention(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+      other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
     c.append(foot);
-    if (openLists.has(t.id)) c.append(todoList(t, false));
+    if (openLists.has(t.id)) c.append(todoList(t));
     if (t.claim) {
       const st = claimState(t.claim), k = t.claim;
       const b = el('div', 'claim ' + st); b.append(el('span', 'pulse'), el('strong', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`));
@@ -1857,11 +2088,92 @@ if (typeof window !== 'undefined') (() => {
   const baseFor = key => { const b = clone(state), i = b.tasks.findIndex(x => x.id === editing); if (i >= 0) b.tasks[i][key] = fieldBase[key]; return b; };   // the text as it was when I started editing it
   async function saveField(fn, msg, baseKey) {     // every field saves on its own (no Save button); conflicts are checked per field
     const id = editing, sv = $('dSaved'); sv.textContent = 'Saving…'; sv.className = 'dsaved';
-    await mutate(fn, msg, [id], baseKey ? baseFor(baseKey) : null);
-    const ok = $('status').classList.contains('ok'); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
+    const ok = await mutate(fn, msg, [id], baseKey ? baseFor(baseKey) : null); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
     clearTimeout(saveTimer); saveTimer = setTimeout(() => { sv.textContent = ''; }, 2500);
   }
   const edit = (id, f, msg, baseKey) => saveField(n => { const t = n.tasks.find(x => x.id === id); if (t) { f(t, n); stamp(t); } }, msg, baseKey);
+
+  // ---- the drawer frame: built once with ui.js (header, one property list, sections); fillDrawer() fills it per task ----
+  const drawerAddRows = [];
+  const roKeep = x => { x.dataset.roKeep = '1'; return x; };   // read-only boards keep the buttons that only read or copy
+  function ghostAdd(id, label, aria, onClick) { const b = el('button', 'ui-addrow__ghost'); b.type = 'button'; b.id = id; b.setAttribute('aria-label', aria); b.title = aria; b.append(ui.icon('plus'), el('span', null, label)); b.onclick = onClick; return b; }
+  function drawerSelect(id, label, options) { const w = ui.select({ label, options: options || [] }); w.control.id = id; return w; }
+  function drawerAddRow(id, opts) { const r = ui.addRow({ collapsed: true, buttonLabel: 'Add', ...opts }); r.input.id = id; drawerAddRows.push(r); return r; }
+  // A date property in a drawer: a pill that reads like every other date on the board (ui.dueInfo: "10 Oct", "Today",
+  // "9 Oct · overdue"), a button that opens the browser's date picker, the native <input type=date> (id, value and change
+  // event, kept for the saves) and a clear button. paintDate(id, value, opts) refreshes the pill after a change.
+  function datePill(id, label, clear) {
+    const pill = el('span', 'ui-pill ui-pill--neutral ddue'); pill.id = id + 'Pill'; pill.title = label;
+    const input = el('input', 'ddue__input'); input.type = 'date'; input.id = id; input.tabIndex = -1; input.setAttribute('aria-label', label);
+    const btn = el('button', 'ddue__btn'); btn.type = 'button'; btn.id = id + 'Btn';
+    btn.onclick = () => {
+      if (typeof input.showPicker === 'function') { try { input.showPicker(); return; } catch {} }
+      pill.classList.add('ddue--edit'); input.tabIndex = 0; input.focus();   // no showPicker: show the native field itself until it loses focus
+    };
+    input.addEventListener('blur', () => { pill.classList.remove('ddue--edit'); input.tabIndex = -1; });
+    const x = el('button', 'ui-pill__remove'); x.type = 'button'; x.id = id + 'Clear'; x.setAttribute('aria-label', clear); x.title = clear; x.append(ui.icon('x'));
+    pill.append(ui.icon('calendar'), btn, input, x);
+    return pill;
+  }
+  function paintDate(id, v, { done = false, empty = 'Add date' } = {}) {
+    const info = ui.dueInfo(v, { done }), tone = info ? info.tone : 'neutral', p = $(id + 'Pill'), btn = $(id + 'Btn'), label = $(id).getAttribute('aria-label');
+    ['danger', 'warn', 'accent', 'neutral'].forEach(t => p.classList.toggle('ui-pill--' + t, t === (tone === 'accent' ? 'neutral' : tone)));
+    p.classList.toggle('ddue--empty', !info); $(id + 'Clear').hidden = !v;
+    btn.textContent = info ? info.text : empty; btn.setAttribute('aria-label', `${label}: ${info ? info.text : 'none'}. Change`);
+    if (v) btn.title = v; else btn.removeAttribute('title');
+  }
+  function drawerSection(id, opts) { const s = ui.section(opts); s.id = id; s.classList.add('dsec2'); return s; }
+  function buildDrawer() {
+    // header: number pill (copies the link), undo, copy for agent, more actions, close
+    const num = ui.pill({ text: '#', icon: 'link', onClick: () => copyTaskLink() }); num.id = 'dNum'; num.classList.add('dnum'); roKeep(num);
+    const undo = ui.iconButton({ icon: 'undo-2', label: 'Undo last board change' }); undo.id = 'cUndo'; undo.disabled = true;
+    const agent = ui.iconButton({ icon: 'bot', label: 'Copy for agent', onClick: copyForAgent }); agent.id = 'cAgent'; roKeep(agent);
+    const more = ui.iconButton({ icon: 'ellipsis', label: 'More actions' }); more.id = 'dMore'; more.onclick = () => openDrawerMenu(more); roKeep(more);
+    const close = ui.iconButton({ icon: 'x', label: 'Close' }); close.id = 'cClose'; roKeep(close);
+    $('cHead').append(num, el('span', 'spacer'), $('dSaved'), undo, agent, more, close);
+    // properties
+    const status = el('span', 'dval'); status.id = 'cStatusVal'; status.append(drawerSelect('cCol', 'Status'));
+    const prio = drawerSelect('cPrio', 'Priority', [{ value: 'high', label: 'High' }, { value: 'medium', label: 'Medium' }, { value: 'low', label: 'Low' }]);
+    const due = datePill('cDue', 'Due date', 'Clear due date');
+    const who = el('span', 'dval'); who.id = 'cWho';
+    const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
+    const chips = el('span', 'dval'); chips.id = 'cLabelChips';
+    const labelAdd = ghostAdd('cLabelAdd', 'Add', 'Add a label', () => { labelAdd.hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); });
+    const labelNew = el('input', 'ui-input dlabelnew'); labelNew.id = 'cLabelNew'; labelNew.setAttribute('list', 'labelList'); labelNew.placeholder = 'Label name'; labelNew.setAttribute('aria-label', 'New label name'); labelNew.hidden = true;
+    const labelList = el('datalist'); labelList.id = 'labelList';
+    $('cProps').append(ui.props([
+      { label: 'Status', icon: 'square-kanban', value: status },
+      { label: 'Priority', icon: 'flag', value: prio },
+      { label: 'Due', icon: 'calendar', value: due },
+      { label: 'People', icon: 'users', value: [who, whoAdd] },
+      { label: 'Client', icon: 'building-2', value: drawerSelect('cClient', 'Client') },
+      { label: 'Project', icon: 'folder', value: drawerSelect('cProject', 'Project') },
+      { label: 'Labels', icon: 'tag', value: [chips, labelAdd, labelNew, labelList] }
+    ]));
+    // sections: Description, Checklist, Links, Contacts, Comments, History
+    const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
+    const todos = el('div', 'dtodos'); todos.id = 'cTodos';
+    const todoAdd = drawerAddRow('cTodoNew', { placeholder: 'Add a checklist item', ghostLabel: 'Add item', label: 'New checklist item', onAdd: v => { const id = editing; addTodo(id, v).then(() => { if (editing === id) renderDlgTodos(); }); } });
+    const links = el('div', 'dlist'); links.id = 'cLinkList';
+    const linkAdd = drawerAddRow('cLinkNew', { placeholder: 'URL or local path (Title | location)', ghostLabel: 'Add link', label: 'New link: a cloud URL or local path, optionally as Title | location', onAdd: addLinkLine });
+    const linkHint = el('p', 'hint dhint', 'Working Drive, Dropbox or local files/folders, issues, pull requests and other supporting pages for this task. Cloud access needs the matching connector/plugin/MCP and account; a local path needs an agent session on that computer. Profile links such as LinkedIn belong on the person.');
+    const contacts = el('div', 'dlist'); contacts.id = 'cContactList';
+    const contactAdd = drawerAddRow('cContactNew', { placeholder: 'Name | role | email | phone', ghostLabel: 'Add contact', label: 'New contact: Name | role | email | phone', onAdd: addContactLine });
+    const hist = el('ol', 'hist'); hist.id = 'cHist';
+    const secs = [
+      drawerSection('cDescSec', { title: 'Description', action: descBtn, body: $('cDescParts') }),
+      drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
+      drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint] }),
+      drawerSection('cContactSec', { title: 'Contacts', count: '', body: [contacts, contactAdd] }),
+      drawerSection('cmSec', { title: 'Comments', count: '', body: $('cmParts') }),
+      drawerSection('cHistWrap', { title: 'History', count: '', collapsible: true, open: false, body: hist })
+    ];
+    [['cTodoSec', 'todos', 'cTodoCount'], ['cLinkSec', 'links', 'cLinkCount'], ['cContactSec', 'contacts', 'cContactCount'], ['cmSec', '', 'cmCount'], ['cHistWrap', '', 'cHistCount']].forEach(([sid, k, cid]) => {
+      const s = secs.find(x => x.id === sid); if (k) { s.dataset.sec = k; s.classList.add('optsec'); } s.querySelector('.ui-count').id = cid; });
+    roKeep(secs[5].querySelector('.ui-section__toggle'));
+    $('cSecs').append(...secs);
+  }
+  buildDrawer();
 
   function renderDescView(t) {
     const v = $('cDescView'); v.textContent = ''; if (t.details) linkify(v, t.details); else v.append(el('span', 'ph', 'Add a more detailed description…'));
@@ -1891,88 +2203,98 @@ if (typeof window !== 'undefined') (() => {
   $('cTitle').addEventListener('input', () => autosize($('cTitle'))); $('cTitle').addEventListener('blur', commitTitle);
 
   $('cCol').onchange = e => { const id = editing, v = e.target.value; saveField(n => { place(n, id, v, null); }, `Move: ${titleOf(id)}`); };
-  $('cPrio').onchange = e => { const v = e.target.value; e.target.dataset.v = v; edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
-  $('cClient').onchange = e => {
-    let v = e.target.value;
+  function syncPrio(v) { const w = $('cPrio').parentElement; ['danger', 'warn', 'ok'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + ui.priorityTone(v)); }
+  $('cPrio').onchange = e => { const v = e.target.value; syncPrio(v); edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
+  $('cClient').onchange = async e => {
+    const sel = e.target, id = editing; let v = sel.value;
     if (v === '__new') {
-      const t0 = taskNow(); v = (prompt('New client name:') || '').replace(/\s+/g, ' ').trim();
-      if (!v) { e.target.value = (t0 && t0.client) || ''; return; }
+      const t0 = taskNow(); sel.value = (t0 && t0.client) || '';
+      v = ((await ui.promptText({ title: 'New client', label: 'Client name', confirmLabel: 'Add client' })) || '').replace(/\s+/g, ' ').trim();
+      if (!v || editing !== id) return;
       const known = state.clients.find(c => c.toLowerCase() === v.toLowerCase()); if (known) v = known;
-      edit(editing, (t, n) => { if (!n.clients.some(c => c.toLowerCase() === v.toLowerCase())) n.clients.push(v); t.client = v; }, `New client: ${v}`);
+      edit(id, (t, n) => { if (!n.clients.some(c => c.toLowerCase() === v.toLowerCase())) n.clients.push(v); t.client = v; }, `New client: ${v}`);
       return;
     }
-    edit(editing, t => { t.client = v; if (v && t.project) { const pr = projectById(t.project); if (pr && pr.client && pr.client !== v) t.project = ''; } }, `Client: ${titleOf(editing)}`);
+    edit(id, t => { t.client = v; if (v && t.project) { const pr = projectById(t.project); if (pr && pr.client && pr.client !== v) t.project = ''; } }, `Client: ${titleOf(id)}`);
   };
-  $('cProjNewAdd').onclick = () => {
-    const name = $('cProjNewName').value.trim(), client = $('cProjNew').dataset.client || '';
-    if (!name) { toast('Enter a project name.', true); return; }
-    const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
-    edit(editing, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
-    $('cProjNew').hidden = true; $('cProjNewName').value = '';
-  };
-  $('cProject').onchange = e => {
-    let v = e.target.value;
-    const t0 = taskNow();
+  $('cProject').onchange = async e => {
+    const sel = e.target, v = sel.value, t0 = taskNow(), id = editing;
     if (v === '__new') {
+      sel.value = (t0 && t0.project) || '';
       const client = (t0 && t0.client) || '';
-      $('cProjNew').hidden = false; $('cProjNewName').value = ''; $('cProjNewName').focus();
-      e.target.value = (t0 && t0.project) || '';
-      $('cProjNew').dataset.client = client;
+      const name = ((await ui.promptText({ title: 'New project', label: 'Project name', body: client ? `The project belongs to ${client}.` : undefined, confirmLabel: 'Add project' })) || '').replace(/\s+/g, ' ').trim();
+      if (!name || editing !== id) return;
+      const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
+      edit(id, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
       return;
     }
-    edit(editing, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(editing)}`);
+    edit(id, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(id)}`);
   };
-  $('cDue').onchange = e => { const v = e.target.value; $('cDueClear').hidden = !v; edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
-  $('cDueClear').onclick = () => { $('cDue').value = ''; $('cDueClear').hidden = true; edit(editing, t => { t.due = ''; }, `Clear due: ${titleOf(editing)}`); };
+  const syncDue = (v, t) => paintDate('cDue', v, { done: !!t && isDoneTask(t) });   // overdue is red, today amber; a done task is never late
+  $('cDue').onchange = e => { const v = e.target.value; syncDue(v, taskNow()); edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
+  $('cDueClear').onclick = () => { $('cDue').value = ''; syncDue(''); edit(editing, t => { t.due = ''; }, `Clear due: ${titleOf(editing)}`); };
 
+  // People: one pill per assignee (x unassigns), the agent working on it, and one "+ Add" menu for people and agents
   function renderPeople(t) {
     const box = $('cWho'); box.textContent = '';
-    state.people.map(p => ({ github: p.github, name: p.name || p.github })).concat(t.assignees.filter(a => !state.people.some(p => p.github === a)).map(a => ({ github: a, name: a }))).forEach(p => {
-      const on = t.assignees.includes(p.github), b = el('button', 'pchip' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = (on ? 'Remove @' : 'Assign @') + p.github;
-      b.append(avatar(p.github), document.createTextNode(p.name));
-      b.onclick = () => edit(editing, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(editing)}`); box.append(b);
+    t.assignees.forEach(gh => {
+      const p = state.people.find(x => x.github === gh), name = (p && p.name) || gh;
+      const chip = ui.person({ name, key: gh, removeLabel: `Unassign ${name}`, onRemove: () => edit(editing, x => { x.assignees = x.assignees.filter(a => a !== gh); }, `Assignees: ${titleOf(editing)}`) });
+      chip.title = '@' + gh; box.append(chip);
     });
-    box.append(taskAssignControl(t, true));
+    const claim = activeClaim(t); if (claim) { const a = ui.pill({ text: agentLabel(claim), icon: 'bot', tone: 'accent' }); a.title = 'This agent is working on the task'; box.append(a); }
+  }
+  function openPeopleMenu(anchor) {
+    const t = taskNow(); if (!t) return; const items = [], me = cfg().me;
+    const free = state.people.filter(p => !t.assignees.includes(p.github));
+    free.forEach(p => items.push({ label: p.name && p.name !== p.github ? `${p.name} (@${p.github})` : '@' + p.github, icon: 'user',
+      onSelect: () => edit(t.id, x => { if (!x.assignees.includes(p.github)) x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`) }));
+    if (!state.people.length) items.push({ label: 'Add people in Settings first', icon: 'users', disabled: true });
+    else if (!free.length) items.push({ label: 'Everyone on the board is assigned', icon: 'users', disabled: true });
+    items.push({ separator: true });
+    if (myAgents().includes('claude')) {
+      const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === me;
+      items.push({ label: mine ? `Claude for @${me} · assigned` : claim ? `${agentLabel(claim)} already has this task` : claudeReady() && me ? `Assign to Claude for @${me}` : 'Claude · finish setup first', icon: 'bot',
+        disabled: !!claim || !claudeReady() || !me, onSelect: () => assignMyClaude(t.id) });
+    } else items.push({ label: 'Set up your Claude agent…', icon: 'settings', onSelect: () => { $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); } });
+    ui.menu(anchor, items, { label: `Assign task #${t.num}` });
   }
   function renderLabelChips(t) {
     const box = $('cLabelChips'); box.textContent = ''; $('labelList').textContent = ''; state.labels.forEach(l => { const o = el('option'); o.value = l.name; $('labelList').append(o); });
-    t.labels.forEach(l => { const s = paintLabel(el('span', 'tag label lchip', l), l); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove label'; x.setAttribute('aria-label', 'Remove label ' + l);
-      x.onclick = () => { if (!confirmRemoval(`the “${l}” label`)) return; edit(editing, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(editing)}`); }; s.append(x); box.append(s); });
+    t.labels.forEach(l => box.append(ui.pill({ text: l, color: labelColor(l), removeLabel: 'Remove label ' + l,
+      onRemove: async () => { const id = editing; if (!(await askRemoval(`the “${l}” label`)) || editing !== id) return; edit(id, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(id)}`); } })));
   }
-  $('cLabelAdd').onclick = () => { $('cLabelAdd').hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); };
-  $('cLabelNew').addEventListener('blur', () => setTimeout(() => { if (!$('cLabelNew').value.trim()) { $('cLabelNew').hidden = true; $('cLabelAdd').hidden = false; } }, 150));
+  const closeLabelInput = () => { $('cLabelNew').value = ''; $('cLabelNew').hidden = true; $('cLabelAdd').hidden = false; };
+  $('cLabelNew').addEventListener('blur', () => setTimeout(() => { if (!$('cLabelNew').value.trim()) closeLabelInput(); }, 150));
   function addLabel() {
     const inp = $('cLabelNew'), v = inp.value.replace(/,/g, '').trim(); inp.value = ''; if (!v) return;
     edit(editing, (t, n) => { if (!t.labels.includes(v)) t.labels.push(v); if (!n.labels.some(x => x.name === v)) n.labels.push({ name: v, color: '#6b778c' }); }, `Labels: ${titleOf(editing)}`);
   }
-  $('cLabelNew').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addLabel(); } }); $('cLabelNew').addEventListener('change', addLabel);
+  $('cLabelNew').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addLabel(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLabelInput(); $('cLabelAdd').focus(); } }); $('cLabelNew').addEventListener('change', addLabel);
 
   const parseLine = txt => { const p = txt.split('|').map(x => x.trim()); const url = p.length > 1 ? p.slice(1).join('|').trim() : p[0]; return safeUrl(url) || localResource(url) ? { title: p.length > 1 && p[0] ? p[0] : url, url } : null; };
-  function renderLinkList(t) {
-    const box = $('cLinkList'); box.textContent = ''; $('cLinkCount').textContent = t.links.length ? `(${t.links.length})` : '';
-    t.links.forEach(l => {
-      const row = el('div', 'linkrow'), g = ghLink(l.url), href = safeUrl(l.url), local = localResource(l.url), main = href ? el('a', null, g ? g.label : (l.title || l.url)) : el('span', 'resourcepath', l.title || l.url); if (href) { main.href = href; main.target = '_blank'; main.rel = 'noopener noreferrer'; }
-      let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {} if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
-      const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.onclick = () => copyText(l.url, 'Path copied.'); }
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove link'; x.setAttribute('aria-label', 'Remove link');
-      x.onclick = () => { if (!confirmRemoval(`the task resource “${l.title || l.url}”`)) return; edit(editing, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(editing)}`); };
-      row.append(elI('span', 'li', g ? 'github' : local ? 'laptop' : 'link'), main, el('span', 'host', g && l.title && l.title !== l.url ? l.title : host)); if (cp) row.append(cp); row.append(x); box.append(row);
-    });
+  function addLinkLine(txt) {
+    const v = parseLine(txt); if (!v) { toast('Paste an http(s) cloud link or local path, optionally as: Title | location', true); return false; }
+    edit(editing, t => { if (!t.links.some(y => y.url === v.url)) t.links.push(v); }, `Links: ${titleOf(editing)}`);
   }
-  $('cLinkNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); const v = parseLine($('cLinkNew').value); if (!v) { toast('Paste an http(s) cloud link or local path, optionally as: Title | location', true); return; }
-    $('cLinkNew').value = ''; edit(editing, t => { if (!t.links.some(y => y.url === v.url)) t.links.push(v); }, `Links: ${titleOf(editing)}`); });
+  function renderLinkList(t) {   // the same list as the person, client and project drawers (renderLinkBox)
+    const id = editing; $('cLinkCount').textContent = t.links.length || '';
+    renderLinkBox($('cLinkList'), t.links, l => { if (editing === id) edit(id, tt => { tt.links = tt.links.filter(y => y.url !== l.url); }, `Links: ${titleOf(id)}`); }, true, 'task resource');
+  }
+  function addContactLine(txt) {
+    const p = txt.split('|').map(x => x.trim()); if (!p[0]) return false;
+    const k = { name: p[0], role: p[1] || '', email: p[2] || '', phone: p[3] || '' }; edit(editing, t => { t.contacts.push(k); }, `Contacts: ${titleOf(editing)}`);
+  }
   function renderContactList(t) {
-    const box = $('cContactList'); box.textContent = '';
+    const box = $('cContactList'); box.textContent = ''; $('cContactCount').textContent = t.contacts.length || '';
     t.contacts.forEach(k => {
-      const row = el('div', 'contact'), main = el('div', 'cmain'); main.append(el('b', null, k.name || '(no name)')); if (k.role) main.append(el('span', 'host', ' · ' + k.role));
-      const det = el('div', 'cdet'); if (k.email) { const a = el('a', null, k.email); a.href = 'mailto:' + k.email; det.append(a); } if (k.phone) { const a = el('a', null, k.phone); a.href = 'tel:' + k.phone.replace(/\s+/g, ''); det.append(a); }
-      main.append(det); const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove contact'; x.setAttribute('aria-label', 'Remove contact');
-      x.onclick = () => { if (!confirmRemoval(`the task contact “${k.name}”`)) return; edit(editing, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(editing)}`); };
-      row.append(el('span', 'avc', (k.name || '?').slice(0, 1).toUpperCase()), main, x); box.append(row);
+      const row = ui.listRow({ text: k.name || '(no name)', meta: k.role || '', icon: 'user', removeLabel: `Remove contact ${k.name}`,
+        onRemove: async () => { const id = editing; if (!(await askRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(id)}`); } });
+      [[k.email, 'mailto:' + k.email, 'mail', 'Email'], [k.phone, 'tel:' + String(k.phone).replace(/\s+/g, ''), 'phone', 'Call']].forEach(([v, href, ic, verb]) => {
+        if (!v) return; const a = el('a', 'ui-iconbtn ui-iconbtn--ghost ui-iconbtn--sm'); a.href = href; a.title = v; a.setAttribute('aria-label', `${verb} ${k.name}: ${v}`); a.append(ui.icon(ic)); row.insertBefore(a, row.lastChild); });
+      box.append(row);
     });
   }
-  $('cContactNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); const p = $('cContactNew').value.split('|').map(x => x.trim()); if (!p[0]) return;
-    const k = { name: p[0], role: p[1] || '', email: p[2] || '', phone: p[3] || '' }; $('cContactNew').value = ''; edit(editing, t => { t.contacts.push(k); }, `Contacts: ${titleOf(editing)}`); });
 
   function renderClaim(t) {
     // a finished run leaves no banner, just one "Last run" line with its link (older cards kept a claim with status done)
@@ -1983,45 +2305,41 @@ if (typeof window !== 'undefined') (() => {
       if (last.session_url && safeUrl(last.session_url)) { const a = el('a', 'sesslink', /\/routines\//.test(last.session_url) ? 'Routine runs ↗' : 'Open session ↗'); a.href = safeUrl(last.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; lr.append(document.createTextNode(' · '), a); }
       if (last.note) lr.title = last.note;
     }
-    const wrap = $('cClaimWrap'); wrap.hidden = !live; const dl = $('cClaim'); dl.textContent = ''; if (!live) return;
-    const k = t.claim, st = claimState(k); wrap.className = 'claimbanner ' + st;
-    const top = el('div', 'cltop'); top.append(el('span', 'pulse'), el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); dl.append(top);
-    if (k.note) dl.append(el('div', 'cnote', k.note));
-    dl.append(el('div', 'host', [k.session_id && 'session ' + k.session_id, k.host, k.branch].filter(Boolean).join(' · ')));
-    if (k.session_url && safeUrl(k.session_url)) { const sa = el('a', 'sesslink', /\/routines\//.test(k.session_url) ? 'Open the routine’s runs ↗' : 'Open the Claude session ↗'); sa.href = safeUrl(k.session_url); sa.target = '_blank'; sa.rel = 'noopener noreferrer'; dl.append(sa); }
+    const wrap = $('cClaimWrap'); if (!live) { wrap.textContent = ''; wrap.hidden = true; delete wrap.dataset.sig; return; } wrap.hidden = false;
+    const k = t.claim, st = claimState(k), tone = st === 'running' ? 'ok' : st === 'stuck' ? 'danger' : st === 'stale' || st === 'blocked' ? 'warn' : 'info';
+    const txt = el('div', 'dclaim__text'), top = el('div', 'cltop'); top.append(el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); txt.append(top);
+    if (k.note) txt.append(el('div', 'cnote', k.note));
+    const where = [k.session_id && 'session ' + k.session_id, k.host, k.branch].filter(Boolean).join(' · '); if (where) txt.append(el('div', 'host', where));
+    if (k.session_url && safeUrl(k.session_url)) { const sa = el('a', 'sesslink', /\/routines\//.test(k.session_url) ? 'Open the routine’s runs ↗' : 'Open the Claude session ↗'); sa.href = safeUrl(k.session_url); sa.target = '_blank'; sa.rel = 'noopener noreferrer'; txt.append(sa); }
+    // Same claim as last time: refresh only the text, so the buttons (and keyboard focus) and the banner node survive a board refresh.
+    const sig = JSON.stringify(k) + st, old = wrap.dataset.sig === sig && wrap.querySelector('.dclaim__text');
+    if (old) { old.replaceWith(txt); return; }
+    wrap.textContent = ''; wrap.dataset.sig = sig;
+    const acts = el('div', 'dclaim__acts');
+    const stuck = ui.button({ label: 'Mark stuck', size: 'sm', onClick: () => edit(editing, x => { if (x.claim) { x.claim.status = 'stuck'; x.claim.note = (x.claim.note ? x.claim.note + ' | ' : '') + `marked stuck by ${me() || 'human'}`; } }, `Mark stuck: ${titleOf(editing)}`) }); stuck.id = 'cStuck';
+    const rel = ui.button({ label: 'Release claim', size: 'sm', onClick: async () => { const id = editing, was = JSON.stringify(t.claim || null); if (!(await ui.confirm({ title: 'Release the agent claim?', body: 'The agent session may still be running.', confirmLabel: 'Release claim', danger: true })) || editing !== id) return; const now = state.tasks.find(x => x.id === id); if (!now || JSON.stringify(now.claim || null) !== was) { toast('The claim changed while you were deciding. Nothing was released.', true); return; } edit(id, x => { if (JSON.stringify(x.claim || null) === was) x.claim = null; }, `Release claim: ${titleOf(id)}`); } }); rel.id = 'cRelease';
+    acts.append(stuck, rel); wrap.className = 'dclaim ' + st;
+    wrap.append(ui.banner({ tone, icon: 'bot', text: [txt, acts] }));
   }
-  $('cStuck').onclick = () => edit(editing, t => { if (t.claim) { t.claim.status = 'stuck'; t.claim.note = (t.claim.note ? t.claim.note + ' | ' : '') + `marked stuck by ${me() || 'human'}`; } }, `Mark stuck: ${titleOf(editing)}`);
-  $('cRelease').onclick = () => { if (!confirm('Release the agent claim? The agent session may still be running.')) return; edit(editing, t => { t.claim = null; }, `Release claim: ${titleOf(editing)}`); };
 
   function fillDrawer(t, force) {
-    { $('dLink').onclick = () => copyText(`${location.origin}${location.pathname}${location.search}#${t.num}`, `Link to #${t.num} copied`); }
-    { const nb = $('dNum'); nb.textContent = '#' + t.num + '  ⧉'; nb.title = `Task #${t.num}: click to copy the reference`; nb.onclick = () => copyText('#' + t.num, `Copied #${t.num}`); }
+    { const nb = $('dNum'); nb.querySelector('.ui-pill__text').textContent = '#' + t.num; nb.title = `Task #${t.num}: copy a link to it`; nb.setAttribute('aria-label', `Task #${t.num}, copy link`); }
     const set = (x, v) => { if ((force || document.activeElement !== x) && x.value !== v) x.value = v; };
     const cl = [...new Set([...state.clients, t.client].filter(Boolean))];
     if (force || $('cClient').options.length !== cl.length + 2) fillSelect($('cClient'), [['', '(none)'], ...cl.map(c => [c, c]), ['__new', '＋ New client…']]);
     const prOpts = [['', '(none)'], ...sortedProjects().filter(p => !t.client || p.client === t.client).map(p => [p.id, projectPickerLabel(p)]), ['__new', '＋ New project…']];
     if (force || $('cProject').options.length !== prOpts.length) fillSelect($('cProject'), prOpts);
-    if (force) $('cProjNew').hidden = true;
     if (force) { fillSelect($('cCol'), state.columns.map(c => [c.id, c.name])); }
     set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cClient'), t.client || ''); set($('cProject'), t.project || ''); set($('cDue'), t.due || '');
-    { const who = completionOf(t), done = $('cCompletedBy'); done.hidden = !who; done.className = 'chip doneby' + (who && who.agent ? ' agent' : ' person'); done.textContent = who ? 'Completed by ' + who.label : ''; done.title = who && who.at ? fmtStamp(who.at) : ''; }
-    $('cPrio').dataset.v = $('cPrio').value; $('cDueClear').hidden = !$('cDue').value;
+    { const who = completionOf(t), old = $('cCompletedBy'); if (old) old.remove();
+      if (who) { const p = ui.pill({ text: 'Completed by ' + who.label, icon: 'circle-check', tone: who.agent ? 'accent' : 'ok' }); p.id = 'cCompletedBy'; p.title = who.at ? fmtStamp(who.at) : ''; $('cStatusVal').append(p); } }
+    syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (force || (document.activeElement !== ti && ti.value !== t.title)) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncIssueBtn(t); syncAgentBtn(t);
+    renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
-  // Checklist / Links / Contacts show only when they hold something (or were just opened from the add bar)
-  const openSecs = new Set();
-  function syncSections(t) {
-    const has = { todos: t.todos.length, links: t.links.length, contacts: t.contacts.length };
-    let hidden = 0;
-    document.querySelectorAll('.optsec').forEach(s => { const k = s.dataset.sec, show = !!has[k] || openSecs.has(k); s.hidden = !show; });
-    document.querySelectorAll('#addBar button').forEach(b => { const k = b.dataset.sec, show = !has[k] && !openSecs.has(k); b.hidden = !show; if (show) hidden++; });
-    $('addBar').hidden = !hidden;
-  }
-  document.querySelectorAll('#addBar button').forEach(b => { b.onclick = () => {
-    const k = b.dataset.sec; openSecs.add(k); const t = taskNow(); if (t) syncSections(t);
-    const f = k === 'todos' ? document.querySelector('#cTodos .todonew') : $(k === 'links' ? 'cLinkNew' : 'cContactNew'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }; });
+  // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
+  function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
   // deep links: the address carries the task number (#13) while a card is open, and loading a URL with #13 opens that card
   const hashNum = () => { const m = /^#(\d{1,5})$/.exec(location.hash); return m ? Number(m[1]) : null; };
   const setHash = h => { try { history.replaceState(null, '', location.pathname + location.search + h); } catch {} };
@@ -2034,15 +2352,29 @@ if (typeof window !== 'undefined') (() => {
   function refreshDrawer() { const t = taskNow(); if (!t) { $('dlgCard').close(); return; } fillDrawer(t, false); }   // board data changed underneath an open card
 
   function openCard(id, focus) {
-    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; openSecs.clear(); commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false;
+    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false;
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
+    drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
-    fillDrawer(t, true); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; $('cHistWrap').open = false;
+    fillDrawer(t, true); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; $('cHistWrap').toggle(false);
     markSeen(id); render();
     $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num);
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
   $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
+  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(`${location.origin}${location.pathname}${location.search}#${t.num}`, `Link to #${t.num} copied`); };
+  // the ⋯ menu: copy link or reference, the GitHub issue, Markdown, delete
+  function openDrawerMenu(anchor) {
+    const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
+    const items = [
+      { label: 'Copy link', icon: 'link', onSelect: copyTaskLink },
+      { label: `Copy reference #${t.num}`, icon: 'copy', onSelect: () => copyText('#' + t.num, `Copied #${t.num}`) },
+      { label: il ? `Open GitHub issue #${il.n}` : 'Create GitHub issue', icon: 'github', disabled: issueBusy || (!il && !!ro), onSelect: issueAction },
+      { label: 'Copy as Markdown', icon: 'clipboard-copy', onSelect: () => { const x = taskNow(); if (x) copyText(taskMarkdown(x), 'Card copied as Markdown'); } }
+    ];
+    if (!ro) items.push({ separator: true }, { label: 'Delete task', icon: 'trash-2', danger: true, onSelect: deleteTask });
+    ui.menu(anchor, items, { label: `Actions for task #${t.num}` });
+  }
   // ---- GitHub issue from a card: creates an issue that carries the task and tells automation how to report back ----
   const issueLinkOf = t => { const r = new RegExp('^https://github\\.com/' + cfg().repo.replace(/[.]/g, '\\.') + '/issues/(\\d+)$', 'i'); for (const l of t.links) { const m = r.exec(l.url); if (m) return { url: l.url, n: m[1] }; } return null; };
   // Codex can't be started from the board, so when a card's newest @codex request is unanswered the Copy button turns into "Copy for Codex"
@@ -2052,9 +2384,8 @@ if (typeof window !== 'undefined') (() => {
     for (let i = t.comments.length - 1; i >= 0; i--) { const m = t.comments[i]; if (/codex/i.test(m.by || '')) return false; if (mentionsCodex(m.text)) return true; }
     return false;
   }
-  function syncAgentBtn(t) { const b = $('cAgent'), on = codexWanted(t); b.classList.toggle('hot', on); b.querySelector('.atxt').textContent = on ? ' Copy for Codex' : ' Copy for agent';
+  function syncAgentBtn(t) { const b = $('cAgent'), on = codexWanted(t); b.classList.toggle('hot', on); b.setAttribute('aria-label', on ? 'Copy for Codex' : 'Copy for agent');
     b.title = on ? 'Codex was asked on this card. Copy its instructions, then paste them into Codex (the board cannot start Codex by itself)' : 'Copy instructions for an AI agent to work on this task: the card, how to claim it, and the skill link'; }
-  function syncIssueBtn(t) { const b = $('cIssue'), il = issueLinkOf(t); b.hidden = false; b.querySelector('.atxt').textContent = il ? ` Issue #${il.n}` : ' Create issue'; b.title = il ? 'Open the linked GitHub issue' : 'Create a GitHub issue for this task (so Claude or a teammate can work it from GitHub)'; }
   function issueBody(t) {
     const { c, skill, agents, web } = boardInfo(), L = [], ref = '#' + t.num;
     L.push(`**Board task ${ref}**: ${t.title}`, '', [t.client && `Client: ${t.client}`, `Priority: ${t.priority || 'medium'}`, t.due && `Due: ${t.due}`, t.assignees.length && `Assigned: ${t.assignees.map(a => '@' + a).join(' ')}`].filter(Boolean).join(' · '), '');
@@ -2069,32 +2400,39 @@ if (typeof window !== 'undefined') (() => {
       `keeptrack.py link '${ref}' <pr-or-url> --title "PR"  # attach the pull request`, '```', 'Never edit board/tasks.json by hand.');
     return L.join('\n');
   }
-  $('cIssue').onclick = async () => {
+  let issueBusy = false;
+  async function issueAction() {
     const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
     if (il) { window.open(il.url, '_blank', 'noopener'); return; }
     const c = cfg(); if (!c.token) { toast('Add your GitHub token in Settings first', true); return; }
-    if (!confirm(`Create a GitHub issue in ${c.repo} for task #${t.num}?\n\n"${t.title}"\n\nIt will include the description, checklist, recent comments and instructions for reporting back, and be labelled "board-task".`)) return;
-    const b = $('cIssue'); b.disabled = true;
+    if (!(await ui.confirm({ title: `Create a GitHub issue for task #${t.num}?`, body: `“${t.title}” goes to ${c.repo} with the description, checklist, recent comments and instructions for reporting back, labelled "board-task".`, confirmLabel: 'Create issue' }))) return;
+    issueBusy = true;
     try {
       const r = await fetch(`${c.api}/repos/${c.repo}/issues`, { method: 'POST', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: `[#${t.num}] ${t.title}`, body: issueBody(t), labels: ['board-task'] }) });
-      if (r.status === 403 || r.status === 404) { toast('GitHub refused: your token needs Issues: Read and write on this repo (Settings → Boards → create a new token)', true); return; }
+      if (r.status === 403 || r.status === 404) { toast('GitHub refused: your token needs Issues: Read and write on this repo (Settings → Connection → create a new token)', true); return; }
       if (!r.ok) { toast(`GitHub error ${r.status} creating the issue`, true); return; }
       const iss = await r.json(), id = t.id;
       await edit(id, x => { if (!x.links.some(l => l.url === iss.html_url)) x.links.push({ title: `Issue #${iss.number}`, url: iss.html_url }); }, `Issue #${iss.number} for task #${t.num}`);
       toast(`Created issue #${iss.number}`);
-    } catch (e) { toast('Could not reach GitHub', true); } finally { b.disabled = false; const t2 = taskNow(); if (t2) syncIssueBtn(t2); }
-  };
-  $('cAgent').onclick = () => { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); };
-  $('dlgCard').addEventListener('close', () => { if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; });   // closing never loses typed text
-  $('cDelete').onclick = () => { const id = editing, title = titleOf(id); if (!confirm(`Delete the task “${title}”?\n\nThis removes its details, checklist, comments and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) return; editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]); };
+    } catch (e) { toast('Could not reach GitHub', true); } finally { issueBusy = false; }
+  }
+  function copyForAgent() { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); }
+  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; });   // closing never loses typed text
+  async function deleteTask() {
+    const id = editing, title = titleOf(id);
+    if (!(await ui.confirm({ title: 'Delete this task?', body: `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`, confirmLabel: 'Delete task', danger: true })) || editing !== id) return;
+    editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
+  }
 
-  $('xCode').onclick = () => copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.');
-  $('xLink').onclick = () => copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.');
-  $('xImport').onclick = () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
+  // Settings → Connection → Advanced → Move settings: the code holds every saved token unencrypted, so each copy asks first
+  const askExport = what => ask(`Copy ${what}?`, [`The ${what} holds every board, GitHub token, routine token and cron-job.org key saved in this browser. It is not encrypted: anyone who has it can use them.`, 'Paste it only into your own devices, then delete the message you sent it in.'], `Copy ${what}`, true);
+  $('xCode').onclick = async () => { if (await askExport('settings code')) copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.'); };
+  $('xLink').onclick = async () => { if (await askExport('setup link')) copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.'); };
+  $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
-      if (!confirm(`Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ''}? This replaces this browser's settings.`)) return;
-      applyCode(m ? 'kbcfg1.' + m[1] : v); location.reload();
+      if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ''}? This replaces this browser's settings.`, 'Import'))) return;
+      await new Promise(res => whenSaved(res)); applyCode(m ? 'kbcfg1.' + m[1] : v); location.reload();   // queued saves finish before the settings change
     } catch (e) { toast(e.message); } };
   // ---- @ and # suggestions in comment/description boxes -----------------------------------------------------
   function attachSuggest(ta) {
@@ -2133,7 +2471,7 @@ if (typeof window !== 'undefined') (() => {
   const claudeCfg = () => ({ url: LS.get('kb_claude_url'), token: LS.get('kb_claude_token'), cron: LS.get('kb_cron_key') });
   const routinePage = () => { const m = /\/routines\/(trig_[A-Za-z0-9]+)\/fire$/.exec(claudeCfg().url); return m ? `https://claude.ai/code/routines/${m[1]}` : ''; };
   const claudeReady = () => { const c = claudeCfg(); return FIRE_RE.test(c.url) && !!c.token && !!c.cron; };
-  // which agents this person uses (Settings → Agents); before they choose, Claude counts as on if its routine is set up
+  // which agents this person uses (Settings → Agents & integrations); before they choose, Claude counts as on if its routine is set up
   const KNOWN_AGENTS = ['claude', 'codex'];
   const myAgents = () => { const v = LS.get('kb_agents', null); return v === null ? (claudeReady() ? ['claude'] : []) : v.split(',').filter(a => KNOWN_AGENTS.includes(a)); };
   const cronFetch = (method, path, body) => fetch(CRON + path, { method, headers: { Authorization: 'Bearer ' + claudeCfg().cron, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -2189,7 +2527,7 @@ if (typeof window !== 'undefined') (() => {
       }
     } catch (e) { err = 'could not read the result from cron-job.org'; }
     rlog(num, session ? 'Claude started' : 'Failed', session ? session.url : (err || 'no response from the routine after 6 minutes'), !!session);
-    await edit(taskId, t => {
+    await mutate(n => { const t = n.tasks.find(x => x.id === taskId); if (!t) return; stamp(t);   // a background save: not edit()/saveField, which report into whichever card's drawer is open
       // an activity line in the comments (shown smaller than a comment), and the session link on the comment that asked
       if (!t.comments.some(m => m.type === 'activity' && m.job === jobId)) {
         const ask = cid && t.comments.find(m => m.id === cid); if (ask && session && session.url && session.id !== 'started') { ask.session_url = session.url; ask.session_id = session.id; }
@@ -2204,7 +2542,7 @@ if (typeof window !== 'undefined') (() => {
         return; }
       if (session) { t.claim.session_id = session.id; t.claim.session_url = session.url; t.claim.note = `Claude is working for @${who}`; t.claim.heartbeat_at = nowIso(); }
       else { t.claim.status = 'stuck'; t.claim.note = `Send to Claude failed: ${err || 'no response from the routine'}`; }
-    }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed');   // save the result before the job (and its reply) is deleted
+    }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed', [taskId]);   // save the result before the job (and its reply) is deleted
     try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there
     if (!session) toast('Send to Claude failed: ' + (err || 'no response'), true); else { toast('Claude is working on it'); if (!claudeWorks()) markWorks(); }
   }
@@ -2238,7 +2576,7 @@ if (typeof window !== 'undefined') (() => {
     if (entered && entered !== saved) { text = tokenTyped ? 'Entered · not saved' : 'Value present · not saved'; kind = 'warn'; }
     else if (saved) { text = 'Saved for this board'; kind = 'ok'; }
     else { text = 'No token saved'; kind = 'warn'; }
-    chip.textContent = text; chip.className = 'agchip ' + kind; $('sTokenBtns').hidden = !(saved || entered);
+    setChip(chip, text, kind); $('sTokenBtns').hidden = !(saved || entered);
   }
   $('sToken').addEventListener('input', () => { tokenTyped = true; $('sTokenReuse').textContent = ''; syncTokenUi(); });
   $('sToken').addEventListener('change', syncTokenUi);
@@ -2270,22 +2608,36 @@ if (typeof window !== 'undefined') (() => {
     if (run === tokenReuseRun) { msg.textContent = 'None of the tokens already saved in this browser can access this board. Paste a PAT below or make a new one.'; syncTokenUi(); }
     return false;
   }
-  $('sClaudePrompt').onclick = () => {
+  function routinePrompt() {
     const c = cfg(), base = `https://github.com/${c.repo}/blob/${c.branch}`, who = c.me || '<your-github-username>';
-    copyText([`Please set up my Claude routine for the task board in ${c.repo}, so that typing @claude in a task comment starts it.`, '',
+    return [[`Please set up my Claude routine for the task board in ${c.repo}, so that typing @claude in a task comment starts it.`, '',
       `My GitHub username is ${who}. The board repo is ${c.repo}.`, 'Read these first:',
       `- ${base}/board/ROUTINE-SETUP.md (the runbook)`, `- ${base}/board/routine-loader.txt (the short prompt to paste into the routine; it points at routine-prompt.md in the repo)`, `- ${base}/.claude/skills/board-routine-setup/SKILL.md (what you may and may not do)`, '',
       'Then ask me which mode I want:', 'A) Guide me: walk me through each step in order and check each one.',
       'B) Do it for me in my browser: if you have a browser tool (Claude in Chrome or the built-in browser), open claude.ai/code/routines, GitHub\'s fine-grained token page and console.cron-job.org (I am already signed in) and do the clicking and the non-secret fields: routine name, the loader prompt from routine-loader.txt, the repository, a dedicated environment with Trusted network access, no connectors, and the API trigger.', '',
-      'Rules: never type, paste, read back or store a secret (routine trigger token, BOARD_TOKEN, cron-job.org API key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Remove all connectors from the routine. Finish by running the verification checklist and the first test from the runbook and tell me what passed and failed.'].join('\n'),
-      'Setup prompt copied. Paste it into a new chat with Claude.');
-  };
-  // ---- Settings → Agents: a guided "Connect Claude" checklist. Each step shows ✓ when it is done, values save as you
+      'Rules: never type, paste, read back or store a secret (routine trigger token, BOARD_TOKEN, cron-job.org API key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Remove all connectors from the routine. Finish by running the verification checklist and the first test from the runbook and tell me what passed and failed.'].join('\n'), 'Setup prompt copied. Paste it into a new chat with Claude.'];
+  }
+  // ---- Settings → Agents & integrations: a guided "Connect Claude" checklist. Each step shows ✓ when it is done, values save as you
   // type, and step 5 sends a real test task to the routine. Which steps are done is kept per board (BOARD_KEYS).
   const LOADER = "You work for the person named in the routine-fire-payload block that starts this run. It gives the task number (like #12)\nand who asked. Your full instructions live in this repository, which is already cloned: read board/routine-prompt.md now\nand follow it exactly, using the task number and requester from the payload. Do nothing else until you have read it.";   // the same text as board/kit/routine-loader.txt (a unit test checks this)
-  const showAgentBoxes = () => { $('boxClaude').hidden = !$('sUseClaude').checked; $('boxCodex').hidden = !$('sUseCodex').checked; };
+  const showAgentBoxes = () => { $('boxClaude').hidden = !$('sUseClaude').checked; $('boxCodex').hidden = !$('sUseCodex').checked; agentChips(); };
   const saveAgents = () => LS.set('kb_agents', KNOWN_AGENTS.filter(a => $(a === 'claude' ? 'sUseClaude' : 'sUseCodex').checked).join(','));
   $('sUseClaude').onchange = $('sUseCodex').onchange = () => { saveAgents(); showAgentBoxes(); cwRender(); };
+  $('sUseEmail').onchange = () => { LS.set('kb_email_sync', $('sUseEmail').checked ? '1' : ''); stashBoard(); agentChips(); };   // a marker per board: "I set this routine up"
+  // Settings → Agents & integrations: a chooser of the three integrations, each with the same status chip as its section
+  const AG_PICKS = [['agClaude', 'bot', '@claude in task comments', 'Your own Claude routine works on a task when you ask in a comment.'],
+    ['agLocal', 'laptop', 'Claude or Codex in your chat app', 'Chat with an assistant that reads and updates the board.'],
+    ['agEmail', 'mail', 'Email contact sync', 'A scheduled routine records contact history from Gmail or Outlook.']];
+  function agentChips() {
+    const codex = $('sUseCodex').checked; setChip($('agLocalChip'), codex ? '@codex on' : 'In your app', codex ? 'ok' : 'neutral');
+    const em = $('sUseEmail').checked; setChip($('agEmailChip'), em ? 'On' : 'Off', em ? 'ok' : 'neutral');
+    const box = $('agChooser'); box.textContent = '';
+    AG_PICKS.forEach(([id, ic, title, text]) => {
+      const b = el('button', 'agpick'), t = el('span', 'agpick__t'), chip = $(id + 'Chip').cloneNode(true); b.type = 'button'; chip.removeAttribute('id'); chip.removeAttribute('role');
+      t.append(el('b', null, title), el('span', 'muted', text)); b.append(ui.icon(ic), t, chip, ui.icon('chevron-right'));
+      b.onclick = () => $(id).scrollIntoView({ block: 'start', behavior: 'smooth' }); box.append(b);
+    });
+  }
   const khash = v => { let h = 5381; for (const ch of String(v)) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h.toString(36); };   // remembers which key was tested, without keeping the key twice
   const claudeFp = () => { const c = claudeCfg(); return khash([c.url, c.token, c.cron].join('|')); };
   const claudeWorks = () => { const v = LS.get('kb_claude_ok'); return !!v && (!v.includes('|') || v.split('|')[0] === claudeFp()); };   // a pass counts only for the same URL, token and key (old values had no fingerprint)
@@ -2300,8 +2652,8 @@ if (typeof window !== 'undefined') (() => {
   let cwOpen = 0;   // the step the person opened by hand (0: the first step that is not done, -1: none)
   function cwChip() {
     const ch = $('agClaudeChip'), st = cwState(), on = $('sUseClaude').checked, next = st.indexOf(false) + 1;
-    ch.textContent = !on ? 'Off' : st[4] ? '✓ Working' : next === 5 ? 'Ready to test' : st.some(Boolean) ? `Step ${next} of 5` : 'Not set up';
-    ch.className = 'agchip' + (!on ? '' : st[4] ? ' ok' : ' warn');
+    setChip(ch, !on ? 'Off' : st[4] ? '✓ Working' : next === 5 ? 'Ready to test' : st.some(Boolean) ? `Step ${next} of 5` : 'Not set up', !on ? 'neutral' : st[4] ? 'ok' : 'warn');
+    agentChips();
   }
   function cwRender() {
     const c = cfg(), st = cwState(), open = cwOpen || st.indexOf(false) + 1, owner = (c.repo || '').split('/')[0];
@@ -2315,8 +2667,11 @@ if (typeof window !== 'undefined') (() => {
   document.querySelectorAll('#cwSteps .cwh').forEach(h => { h.onclick = () => { const n = +h.parentNode.dataset.step; cwOpen = h.parentNode.classList.contains('open') ? -1 : n; cwRender(); }; });
   document.querySelectorAll('[data-cw-done]').forEach(b => { b.onclick = () => { cwMark(b.dataset.cwDone); cwOpen = 0; cwRender(); }; });
   document.querySelectorAll('[data-cw-copy]').forEach(b => { b.onclick = () => copyText($(b.dataset.cwCopy).textContent, 'Copied'); });
-  const ckRow = (box, ok, text, link) => { const d = el('div', 'wck ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'wait'), (ok === true ? '✓ ' : ok === false ? '✕ ' : '… ') + text);
-    if (link) { const a = el('a', null, link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; d.append(' ', a); } box.append(d); return d; };
+  // Check lines (ui.check): ok true → ✓, false → ✕, null → still checking, 'warn' → ⚠. ckState maps the same values for the other check lists.
+  const ckState = ok => (ok === true ? 'ok' : ok === false ? 'bad' : ok === 'warn' ? 'warn' : 'wait');
+  const ckLine = (ok, text, fix) => ui.check({ state: ckState(ok), text, fix });
+  const ckRow = (box, ok, text, link) => { const t = [text];
+    if (link) { const a = el('a', null, link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; t.push(' ', a); } const d = ckLine(ok, t); box.append(d); return d; };
   function cwTrigCheck() {
     const box = $('cwTrigCk'), u = $('sClaudeUrl').value.trim(), t = $('sClaudeTok').value.trim(); box.textContent = '';
     if (u) ckRow(box, FIRE_RE.test(u), FIRE_RE.test(u) ? 'The URL looks right' : 'The URL must look like https://api.anthropic.com/v1/claude_code/routines/trig_…/fire');
@@ -2338,11 +2693,11 @@ if (typeof window !== 'undefined') (() => {
   $('cwTest').onclick = async () => {
     const box = $('cwTestCk'), btn = $('cwTest'), who = cfg().me; box.textContent = '';
     if (!claudeReady()) { ckRow(box, false, 'Finish steps 3 and 4 first.'); return; }
-    if (!who) { ckRow(box, false, 'Add your GitHub username in Settings → Boards first.'); return; }
+    if (!who) { ckRow(box, false, 'Add your GitHub username in Settings → Connection first.'); return; }
     if (ro) { ckRow(box, false, 'This board is read-only here, so the test cannot make a task.'); return; }
     btn.disabled = true;
     const id = uid(), cid = 'c_' + Date.now().toString(36), at = nowIso(), title = 'Test: Claude says hello',
-      text = '@claude This is a test from Settings → Agents. Add a comment that says hello, then mark this task done.';
+      text = '@claude This is a test from Settings → Agents & integrations. Add a comment that says hello, then mark this task done.';
     await mutate(n => { n.tasks.push({ id, title, column: reopenColId(), client: '', priority: 'low', due: '', labels: [], assignees: [who], details: 'A test of the @claude connection. You can delete this task.', links: [], contacts: [], todos: [],
       comments: [{ id: cid, at, by: who, text }], history: [], created: at, updated: at, createdBy: who, updatedBy: who,
       claim: { agent: 'claude', on_behalf_of: who, session_id: 'pending-' + Date.now().toString(36), session_url: '', host: 'cron-job.org relay', status: 'running', note: `Sent to Claude by @${who}; waiting for the routine to start (about 1 to 2 minutes)`, claimed_at: at, heartbeat_at: at } }); }, `Add task: ${title}`);
@@ -2356,10 +2711,10 @@ if (typeof window !== 'undefined') (() => {
     const t0 = Date.now(), tick = setInterval(async () => {
       if (!busy && !document.hidden) await load(true);
       const x = state.tasks.find(y => y.id === id), k = x && (x.claim || x.last_run), url = k && k.session_url;
-      if (url && started.classList.contains('wait')) { started.replaceWith(ckRow(el('div'), true, 'Claude started.', ['Open the session', url])); }
+      if (url && started.classList.contains('ui-check--wait')) { started.replaceWith(ckRow(el('div'), true, 'Claude started.', ['Open the session', url])); }
       if (x && x.claim && x.claim.status === 'stuck') { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, x.claim.note || 'The routine did not start.')); btn.disabled = false; return; }
       const said = x && x.comments.find(m => m.type !== 'activity' && /^claude\b/i.test(m.by || '') && m.at > at);
-      if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); markWorks(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
+      if (said) { clearInterval(tick); if (started.isConnected && started.classList.contains('ui-check--wait')) started.replaceWith(ckRow(el('div'), true, 'Claude started.', url ? ['Open the session', url] : null)); replied.replaceWith(ckRow(el('div'), true, `Claude replied: "${String(said.text).slice(0, 80)}"`)); markWorks(); btn.disabled = false; cwRender(); toast('Claude is connected'); return; }
       if (Date.now() - t0 > 10 * 60000) { clearInterval(tick); replied.replaceWith(ckRow(el('div'), false, `No reply after 10 minutes. Open task #${x ? x.num : '?'} or your routine's recent runs to see why.`)); btn.disabled = false; }
     }, FAST ? 300 : 15000);
   };
@@ -2367,7 +2722,7 @@ if (typeof window !== 'undefined') (() => {
   function renderRelayLog() {
     const box = $('cwLog'), repo = cfg().repo, a = relayLog().filter(e => !e.repo || e.repo === repo); box.textContent = '';   // this board's sends only
     if (!a.length) { box.append(el('div', 'muted', 'Nothing sent from this browser yet.')); return; }
-    a.forEach(e => { const d = el('div', 'wck ' + (e.ok === false ? 'bad' : e.ok ? 'ok' : 'wait')); d.append(el('b', null, `${hhmm(e.at)} · #${e.num ?? '?'} · ${e.ev}`), el('div', 'muted', e.detail)); box.append(d); });
+    a.forEach(e => box.append(ckLine(e.ok === false ? false : e.ok ? true : null, el('b', null, `${hhmm(e.at)} · #${e.num ?? '?'} · ${e.ev}`), e.detail)));
   }
   $('cwDebug').addEventListener('toggle', () => { if ($('cwDebug').open) renderRelayLog(); });
   $('cwCronTest').onclick = async () => {
@@ -2394,7 +2749,7 @@ if (typeof window !== 'undefined') (() => {
       ours.forEach(j => { ckRow(box, null, `${j.title} · job ${j.jobId} · last result HTTP ${j.lastStatus || '-'}`); });
       if (ours.length) { const b = el('button', 'small danger', `Remove ${ours.length} Keeptrack job${ours.length === 1 ? '' : 's'}`); b.type = 'button';
         b.onclick = async () => { b.disabled = true; let n = 0; for (const j of ours) { const d = await cronFetch('DELETE', `/jobs/${j.jobId}`).catch(() => null); if (d && d.ok) n++; } box.textContent = ''; ckRow(box, n === ours.length, `Removed ${n} of ${ours.length} jobs.`); };
-        box.append(b); }
+        box.append(b); uiBtns(box); }
     } catch { ckRow(box, false, 'Could not reach cron-job.org.'); }
   };
   $('cwReport').onclick = () => {
@@ -2410,27 +2765,39 @@ if (typeof window !== 'undefined') (() => {
     code: ['Claude Code', [['Cloud: start a Code session with this board repo selected. If you are working in another code repo, add this board repo as the second repo. No plugin or PAT is needed.'], ['Local in this board repo: check your GitHub login, open the repo and start Claude. No Keeptrack plugin is needed.', 'gh auth status\ncd <board-repo>\ngit pull\nclaude'], ['Only for a local session in another project: install the plugin, then start a fresh session.', 'claude plugin marketplace add rain-ventures-ai/keeptrack\nclaude plugin install keeptrack@keeptrack']]],
     codex: ['Codex', [['Run in a terminal:', 'codex plugin marketplace add rain-ventures-ai/keeptrack'], ['Type /plugins and install keeptrack.']]],
     cursor: ['Cursor', [['In Agent chat, type:', '/add-plugin https://github.com/rain-ventures-ai/keeptrack']]] };
-  const copySetupPrompt = () => { const c = cfg();
-    copyText(`Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.` +
-      (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into your current chat with Claude or another assistant.'); };
-  ['agSetupPrompt', 'hSetupPrompt', 'sSetupPrompt'].forEach(id => { $(id).onclick = copySetupPrompt; });
-  $('agEmailPrompt').onclick = () => { const c = cfg(); copyText(
-    `Set up a separate scheduled Keeptrack contact-email routine for ${c.repo || 'my board repo'}. Read the keeptrack-email skill and its references/routines.md guide in the repo (or at https://github.com/rain-ventures-ai/keeptrack/tree/main/board/kit/skills/keeptrack-email). Guide me one step at a time. First ask whether I use Gmail or Outlook, what first-run date range I want, and what schedule I want. Use read-only mailbox access, keep it separate from the @claude task routine, never handle my secrets, and never send, draft, delete, move, label or mark email as read. The routine must use exact stored contact addresses, keep automation/contact-email-sync.json with its last successful run, and update the board only through keeptrack.py.`,
-    'Email-routine setup prompt copied. Paste it into Claude Code in your board repo.'); };
+  // The one "Copy setup prompt" helper: every setup prompt (Help, Connection, Agents) is built here and copied the same way;
+  // PROMPT_PASTE (top of the file) says where each one goes, under its button.
+  function setupPrompt(kind) {   // [text, toast]
+    const c = cfg(), who = c.me || '<your-github-username>';
+    if (kind === 'routine') return routinePrompt();
+    if (kind === 'email') return [`Set up a separate scheduled Keeptrack contact-email routine for ${c.repo || 'my board repo'}. Read the keeptrack-email skill and its references/routines.md guide in the repo (or at https://github.com/rain-ventures-ai/keeptrack/tree/main/board/kit/skills/keeptrack-email). Guide me one step at a time. First ask whether I use Gmail or Outlook, what first-run date range I want, and what schedule I want. Use read-only mailbox access, keep it separate from the @claude task routine, never handle my secrets, and never send, draft, delete, move, label or mark email as read. The routine must use exact stored contact addresses, keep automation/contact-email-sync.json with its last successful run, and update the board only through keeptrack.py.`,
+      'Email-routine setup prompt copied. Paste it into Claude Code in your board repo.'];
+    if (kind === 'board') return [['Please help me set up a new Keeptrack board (a private GitHub repo with the Keeptrack board kit).', '',
+      `My GitHub username is ${who}.`, 'Read this guide first and follow it step by step: ' + HOME + '/board/kit/NEW-BOARD.md', '',
+      'Start by asking me the basics from step 1 (repo owner and name, the people on the board, client or area names).',
+      'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
+      'New-board prompt copied. Paste it into a new chat with Claude.'];
+    return [`Set up Keeptrack with me in this conversation: read https://github.com/rain-ventures-ai/keeptrack/blob/main/START.md and follow it one step at a time. Do not just explain the options—start by asking me the first setup question.` +
+      (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into a new chat with Claude, Codex or Cursor.'];
+  }
+  function copyPrompt(kind) { const [text, msg] = setupPrompt(kind); copyText(text, msg); }
+  $('hSetupPrompt').onclick = () => copyPrompt('start');
   function renderTools() {
-    const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg(); bar.textContent = body.textContent = '';
-    Object.entries(TOOLS).forEach(([k, [name]]) => { const b = el('button', 'agpill' + (k === pick ? ' on' : ''), name); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(k === pick)); b.onclick = () => { LS.set('kb_tool', k); renderTools(); }; bar.append(b); });
+    const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg();
+    const refocus = bar.contains(document.activeElement); bar.textContent = body.textContent = '';   // arrow keys rebuild the strip: keep the focus on it
+    bar.append(ui.tabs({ items: Object.entries(TOOLS).map(([value, [label]]) => ({ value, label })), value: pick, label: 'Your AI tool', onChange: k => { LS.set('kb_tool', k); renderTools(); } }));
+    if (refocus) bar.querySelector('[aria-selected="true"]').focus();
     const ol = el('ol', 'wmini'), say = `Use my Keeptrack board ${c.repo || 'owner/repo'}. My GitHub username is ${c.me || 'my-username'}.`;
     const step = (text, code, link) => { const li = el('li', null, text); if (link) { const a = el('a', 'agl', link[0]); a.href = link[1]; a.target = '_blank'; a.rel = 'noopener noreferrer'; li.append(' ', a); } if (code) { const row = el('div', 'cprow'), cd = el('code', null, code), b = elI('button', 'small', 'clipboard-copy', 'Copy'); b.type = 'button'; b.onclick = () => copyText(code, 'Copied'); row.append(cd, b); li.append(row); } ol.append(li); };
     (TOOLS[pick] || TOOLS.desktop)[1].forEach(([t, code, link]) => step(t, code, link));
     step('Then say:', say);
     const hint = pick === 'phone' ? 'This is Claude Code cloud: it uses the board repo connection, so no plugin or PAT. Never paste a token into the chat.' : pick === 'code' ? 'Claude cloud uses the board repo connection. Local Claude uses your GitHub login. A PAT is only needed locally when there is no usable gh login; never paste one into chat.' : 'It needs a GitHub login on your computer (gh auth login) or a token in an environment variable. Never paste a token into the chat.';
-    body.append(ol, el('p', 'hint', hint));
+    body.append(ol, el('p', 'hint', hint)); uiBtns(body);
   }
   setTimeout(sweepClaudeJobs, 5000);
 
   // ---- settings ---------------------------------------------------------------
-  // ---- Settings → Checks: test each step of the connection and say what is wrong (never shows the token) ----------
+  // ---- Settings → Connection → Health: test each step of the connection and say what is wrong (never shows the token) ----------
   const ghGet = (path, accept, c = cfg()) => fetch(c.api + path, { cache: 'no-store', headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
   async function tokenRepos(c = cfg()) { try { const r = await ghGet('/user/repos?per_page=100&sort=updated', null, c); return r.ok ? (await r.json()).map(x => x.full_name) : []; } catch { return []; } }
   async function nearRepos(repo, c = cfg()) {   // repos this token can see, closest names first (same owner, then shared words)
@@ -2438,12 +2805,14 @@ if (typeof window !== 'undefined') (() => {
     const score = r => { const [ro, rn] = r.toLowerCase().split('/'); return (ro === o ? 2 : 0) + words.filter(w => rn.includes(w)).length; };
     return all.filter(r => r.toLowerCase() !== String(repo).toLowerCase()).sort((a, b) => score(b) - score(a)).slice(0, 5);
   }
-  function switchRepo(r) { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Boards', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }
+  function switchRepo(r) { whenSaved(() => { activateBoard(r); if (!cfg().token) { toast('Add a token for ' + r + ' in Settings → Connection', true); $('btnSettings').click(); settingsTab('conn'); return; } location.href = boardUrl(); }); }
   let lastReport = '';
+  let checkGen = 0;
   async function runChecks(over) {   // over: values typed in Connection but not saved yet
-    const c = Object.assign(cfg(), over || {}), out = $('ckList'), rows = []; out.textContent = ''; $('ckRun').disabled = true;
-    const add = (ok, title, detail, fix) => { rows.push({ ok, title, detail, fix }); const li = el('li', 'ck ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'warn'));
-      li.append(el('span', 'ckic', ok === true ? '✓' : ok === false ? '✗' : '!'), el('b', null, title)); if (detail) li.append(el('div', 'ckd', detail)); if (fix) li.append(fix); out.append(li); return li; };
+    const c = Object.assign(cfg(), over || {}), out = $('ckList'), rows = [], gen = ++checkGen; out.textContent = ''; $('ckRun').disabled = true; setChip($('ckChip'), 'Checking…', 'neutral');
+    const add = (ok, title, detail, fix) => { const st = ok === true ? 'ok' : ok === false ? 'bad' : 'warn', li = el('li', 'ck ' + st); if (gen !== checkGen) return li;   // a newer run took over the list
+      rows.push({ ok, title, detail, fix }); const more = [detail ? el('div', 'ckd', detail) : null, fix || null].filter(Boolean);
+      li.append(ui.check({ state: st, text: el('b', null, title), fix: more.length ? more : null })); uiBtns(li); out.append(li); return li; };
     try {
       add(REPO_RE.test(c.repo), 'Repository name', c.repo || '(empty)');
       add(c.path ? true : false, 'Branch and file', `${c.branch} · ${c.path}`);
@@ -2452,7 +2821,7 @@ if (typeof window !== 'undefined') (() => {
       let login = '';
       try { const r = await ghGet('/user', null, c); if (r.ok) { login = (await r.json()).login; const exp = r.headers.get('github-authentication-token-expiration');
           add(true, 'Token works', `Signed in as @${login}${exp ? ' · expires ' + exp : ''}`); if (c.me && login.toLowerCase() !== c.me.toLowerCase()) add(null, 'Username differs from token', `The token belongs to @${login}, but Settings says @${c.me}.`); }
-        else add(false, 'Token works', r.status === 401 ? 'GitHub rejected the token (401). It is wrong, revoked or expired. Make a new one in Settings → Boards.' : `GitHub said ${r.status}.`); } catch (e) { add(false, 'Reach GitHub', 'No connection to api.github.com: ' + (e.message || e)); return; }
+        else add(false, 'Token works', r.status === 401 ? 'GitHub rejected the token (401). It is wrong, revoked or expired. Make a new one in Settings → Connection.' : `GitHub said ${r.status}.`); } catch (e) { add(false, 'Reach GitHub', 'No connection to api.github.com: ' + (e.message || e)); return; }
       const rr = await ghGet(`/repos/${c.repo}`, null, c);
       if (!rr.ok) {
         const near = await nearRepos(c.repo, c), fix = el('div', 'cknext'), owner = c.repo.split('/')[0];
@@ -2462,7 +2831,7 @@ if (typeof window !== 'undefined') (() => {
         if (sameOwner) {
           ol.append(el('li', null, 'Open your GitHub token settings and edit this token.'), el('li', null, `Under Repository access, add “${c.repo}”.`), el('li', null, 'Confirm Contents is set to Read and write, then save the token.'), el('li', null, 'Come back here and select Run checks.'));
         } else {
-          ol.append(el('li', null, `Make a PAT with Resource owner “${owner}”.`), el('li', null, `Under Repository access, select “${c.repo}”.`), el('li', null, 'Set Contents to Read and write and generate the token.'), el('li', null, 'Return to Settings → Boards, paste it under Change connection, then select Save & connect.'));
+          ol.append(el('li', null, `Make a PAT with Resource owner “${owner}”.`), el('li', null, `Under Repository access, select “${c.repo}”.`), el('li', null, 'Set Contents to Read and write and generate the token.'), el('li', null, 'Return to Settings → Connection, paste it under Change connection, then select Save & connect.'));
         }
         fix.append(ol); const acts = el('div', 'ckactions');
         const make = el('a', 'btnlink', 'Make a correctly configured PAT'); make.href = patUrl(); make.target = '_blank'; make.rel = 'noopener noreferrer';
@@ -2479,7 +2848,7 @@ if (typeof window !== 'undefined') (() => {
       if (!br.ok) {
         if (c.branch === repo.default_branch) {   // GitHub just told us this branch exists, so this is a PAT scope problem rather than a spelling problem
           const fix = el('div', 'cknext'), owner = c.repo.split('/')[0]; fix.append(el('b', null, 'Do this next'));
-          const ol = el('ol'); ol.append(el('li', null, 'Open this PAT on GitHub, or make a correctly configured one below.'), el('li', null, 'Under Repository permissions, set Contents to Read and write, then save or generate the PAT.'), el('li', null, 'If you made a new PAT, paste it in Settings → Boards → Change connection and select Save & connect.'), el('li', null, 'Come back here and select Run checks.')); fix.append(ol);
+          const ol = el('ol'); ol.append(el('li', null, 'Open this PAT on GitHub, or make a correctly configured one below.'), el('li', null, 'Under Repository permissions, set Contents to Read and write, then save or generate the PAT.'), el('li', null, 'If you made a new PAT, paste it in Settings → Connection → Change connection and select Save & connect.'), el('li', null, 'Come back here and select Run checks.')); fix.append(ol);
           const acts = el('div', 'ckactions'), make = el('a', 'btnlink', 'Make a PAT with permissions prefilled'), edit = el('a', 'small', 'Edit an existing PAT'); make.href = patUrl(); edit.href = 'https://github.com/settings/personal-access-tokens'; [make, edit].forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; }); acts.append(make, edit); fix.append(acts, el('div', 'cknote', `The link pre-fills Resource owner “${owner}” and Contents/Issues: Read and write. GitHub still requires you to select “${c.repo}” yourself.`));
           add(false, 'PAT permissions — action needed', `The token can see “${c.repo}”, but it cannot read its default branch. It is missing Contents permission (GitHub said ${br.status}).`, fix);
         } else add(false, 'Branch', `Branch "${c.branch}" could not be read (GitHub said ${br.status}). The repo's default branch is "${repo.default_branch}". Check the branch name; if it is correct, give the PAT Contents: Read and write.`);
@@ -2493,7 +2862,7 @@ if (typeof window !== 'undefined') (() => {
           const total = files.reduce((n, [, x]) => n + (x.size || 0), 0), largest = files.reduce((a, b) => (b[1].size || 0) > (a[1].size || 0) ? b : a, ['', { size: 0 }]);
           add(total <= 5 * 1024 * 1024 && largest[1].size <= 200 * 1024 ? true : null, 'Split board size', `${files.filter(([p]) => p.startsWith('cards/')).length} card files · ${files.filter(([p]) => p.startsWith('people/')).length} person files · ${Math.round(total / 1024)} KB total · largest file ${Math.round((largest[1].size || 0) / 1024)} KB${total > 5 * 1024 * 1024 ? '. Warning: total size is above 5 MB.' : ''}${largest[1].size > 200 * 1024 ? `. Warning: ${largest[0]} is above 200 KB.` : ''}`);
           add(true, 'Board file', `schema v4 split (this page reads up to v${KNOWN_SCHEMA})`);
-        } else { add(kb < 600, 'Board size', `${kb} KB. GitHub's limit for this page is 100 MB, but the board stays fast below about 1 MB. ${kb >= 600 ? 'Archive old items: Settings → General → Archive.' : ''}`); add(Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? false : true, 'Board file', `${(raw.tasks || []).length} tasks · ${(raw.contacts || []).length} people · schema v${raw.version || 1} (this page reads up to v${KNOWN_SCHEMA}) · ${Math.round(d.size / 1024)} KB`); } }
+        } else { add(kb < 600, 'Board size', `${kb} KB. GitHub's limit for this page is 100 MB, but the board stays fast below about 1 MB. ${kb >= 600 ? 'Archive old items: Settings → Board → Archive.' : ''}`); add(Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? false : true, 'Board file', `${(raw.tasks || []).length} tasks · ${(raw.contacts || []).length} people · schema v${raw.version || 1} (this page reads up to v${KNOWN_SCHEMA}) · ${Math.round(d.size / 1024)} KB`); } }
       catch (e) { add(false, 'Board file', 'The file is not valid board JSON: ' + (e.message || e)); return; }
       const perm = repo.permissions || {}; add(perm.push ? true : null, 'Write access', perm.push ? 'Your account can write to this repo. The token also needs Contents: Read and write; a save shows "Token rejected" if it does not.' : 'Your account cannot push to this repo, so saves will fail.');
       try { const want = (await (await fetch('kit/manifest.json', { cache: 'no-store' })).json()).version, dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : '';
@@ -2503,11 +2872,13 @@ if (typeof window !== 'undefined') (() => {
     } finally {
       if (lastProblem && !over) add(null, 'Last problem on this page', lastProblem);
       const ua = navigator.userAgent; lastReport = [`Board checks · ${new Date().toISOString()} · page ${loadedVersion()}`, `repo ${c.repo} · branch ${c.branch} · path ${c.path} · user ${c.me || '-'}`, ...rows.map(r => `${r.ok === true ? 'OK  ' : r.ok === false ? 'FAIL' : 'WARN'} ${r.title}: ${r.detail || ''}`), `browser ${ua}`].join('\n');
-      $('ckCopy').hidden = false; $('ckRun').disabled = false;
+      if (gen === checkGen) { const bad = rows.filter(r => r.ok === false).length, warn = rows.filter(r => r.ok !== true && r.ok !== false).length, at = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setChip($('ckChip'), bad ? `${bad} problem${bad === 1 ? '' : 's'} · ${at}` : warn ? `${warn} warning${warn === 1 ? '' : 's'} · ${at}` : `All good · ${at}`, bad ? 'danger' : warn ? 'warn' : 'ok');
+        $('ckCopy').hidden = false; $('ckRun').disabled = false; }
     }
   }
   // ---- alerts: desktop notifications for changes made by other people (and by your own agents) ----------
-  // Works while the board is open in any tab (also a background tab). Settings → Alerts picks what to hear about.
+  // Works while the board is open in any tab (also a background tab). Settings → Preferences → Notifications picks what to hear about.
   const ALERT_KINDS = [['mention', '@ mentions of me'], ['assign', 'Cards assigned to me'], ['mine', 'Comments and changes on my cards'], ['agents', 'Updates from my agents'],
     ['blocked', 'An agent is blocked or stuck'], ['new', 'New cards'], ['comment', 'All new comments'], ['done', 'Cards completed'], ['all', 'Every other change']];
   const ALERT_PRESETS = { all: ALERT_KINDS.map(k => k[0]), me: ['mention', 'assign', 'mine', 'agents', 'blocked'], tagged: ['mention', 'assign'], off: [] };
@@ -2538,39 +2909,72 @@ if (typeof window !== 'undefined') (() => {
     try { const x = new Notification(title, { body: String(body).slice(0, 240), tag: id || 'board', icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') });
       x.onclick = () => { window.focus(); if (id) openCard(id); x.close(); }; } catch { toast(title + ': ' + body); }
   }
-  function renderAlerts() {
+  function renderAlerts() {   // Settings → Preferences → Notifications
     const ac = alertCfg(), perm = 'Notification' in window ? Notification.permission : 'unsupported', box = $('alKinds'); box.textContent = '';
-    $('alOn').checked = ac.on;
-    $('alPerm').textContent = perm === 'granted' ? '✓ Notifications are allowed in this browser.' : perm === 'denied' ? '✗ This browser blocks notifications from this page. Allow them in the site settings (the icon left of the address), then reload.' : perm === 'unsupported' ? 'This browser cannot show notifications. Alerts show as messages on the page.' : 'Notifications are not allowed yet. Switch alerts on to ask.';
-    ALERT_KINDS.forEach(([k, l]) => { const lab = el('label', 'chk'), i = el('input'); i.type = 'checkbox'; i.checked = ac.kinds.includes(k); i.disabled = !ac.on;
+    $('alOn').checked = ac.on; $('alPresetRow').hidden = $('alFold').hidden = !ac.on;
+    setChip($('alChip'), !ac.on ? 'Off' : perm === 'granted' ? 'On' : perm === 'denied' ? 'Blocked' : 'On · in the page', !ac.on ? 'neutral' : perm === 'granted' ? 'ok' : perm === 'denied' ? 'danger' : 'warn');
+    const pm = $('alPerm'); pm.textContent = '';
+    pm.append(ui.check(perm === 'granted' ? { state: 'ok', text: 'Notifications are allowed.' } : perm === 'denied' ? { state: 'bad', text: 'Notifications are blocked for this page.', fix: 'Allow them in the site settings (the icon left of the address), then reload.' }
+      : perm === 'unsupported' ? { state: 'warn', text: 'This browser cannot show notifications.', fix: 'Alerts show as messages on the page instead.' } : { state: 'warn', text: 'Not allowed yet.', fix: 'Switching alerts on asks the browser for permission.' }));
+    ALERT_KINDS.forEach(([k, l]) => { const lab = el('label', 'schk'), i = el('input'); i.type = 'checkbox'; i.checked = ac.kinds.includes(k);
       i.onchange = () => { const o = alertCfg(); o.kinds = ALERT_KINDS.map(x => x[0]).filter(x => x === k ? i.checked : o.kinds.includes(x)); saveAlertCfg(o); syncPreset(); }; lab.append(i, document.createTextNode(' ' + l)); box.append(lab); });
     syncPreset();
   }
-  function syncPreset() { const ks = alertCfg().kinds.slice().sort().join(); $('alPreset').value = Object.keys(ALERT_PRESETS).find(p => ALERT_PRESETS[p].slice().sort().join() === ks) || 'custom'; }
+  function syncPreset() { const ks = alertCfg().kinds.slice().sort().join(); $('alPreset').value = Object.keys(ALERT_PRESETS).find(p => ALERT_PRESETS[p].slice().sort().join() === ks) || 'custom'; if ($('alPreset').value === 'custom') $('alFold').open = true; }
   $('alOn').onchange = async () => { const o = alertCfg(); o.on = $('alOn').checked; saveAlertCfg(o);
     if (o.on && 'Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch {} } renderAlerts(); };
-  $('alPreset').onchange = async () => { const v = $('alPreset').value; if (!ALERT_PRESETS[v]) return; const o = alertCfg(); o.kinds = ALERT_PRESETS[v].slice(); o.on = v !== 'off'; saveAlertCfg(o);
+  $('alPreset').onchange = async () => { const v = $('alPreset').value; if (v === 'custom') { $('alFold').open = true; return; } if (!ALERT_PRESETS[v]) return; const o = alertCfg(); o.kinds = ALERT_PRESETS[v].slice(); o.on = v !== 'off'; saveAlertCfg(o);
     if (o.on && 'Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch {} } renderAlerts(); };
   $('alTest').onclick = () => notify('Test alert', 'Board alerts work in this browser.', null);
-  function settingsTab(name) {
-    let edit = false; if (name === 'conn') { name = 'boards'; edit = true; }   // the connection fields live in Boards → This board → Change connection
-    const ids = { general: ['panelGeneral', 'tabGeneral'], claude: ['panelClaude', 'tabClaude'], boards: ['panelBoards', 'tabBoards'], checks: ['panelChecks', 'tabChecks'], alerts: ['panelAlerts', 'tabAlerts'] };
-    Object.keys(ids).forEach(n => { const on = n === name; $(ids[n][0]).hidden = !on; $(ids[n][1]).setAttribute('aria-selected', String(on)); });
-    $('dlgSettings').scrollTop = 0;   // each tab starts at the top
-    if (name === 'boards') { renderBoards(); showEdit(edit || !cfg().token); if (edit) setTimeout(() => (cfg().repo ? $('sToken') : $('sRepo')).focus(), 30); }
-    if (name === 'alerts') renderAlerts();
-    if (name === 'claude') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key'); $('sClaudeMsg').textContent = '';
-      const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
+
+  // ---- Settings tabs: Preferences (this browser), Board (shared), Connection (this browser's link to it), Agents & integrations.
+  // Tabs keep tabPrefs/panelPrefs-style ids. settingsTab(name) is the deep link every other place uses: it also takes the
+  // names of the old tabs and of single sections, and opens or scrolls to the right one.
+  const SET_TABS = [['prefs', 'Preferences'], ['board', 'Board'], ['conn', 'Connection'], ['agents', 'Agents & integrations', 'Agents']];
+  const SET_LINKS = { general: ['prefs'], preferences: ['prefs'], appearance: ['prefs', 'secLook'], alerts: ['prefs', 'secAlerts'], notifications: ['prefs', 'secAlerts'],
+    modes: ['board', 'secModes'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], archive: ['board', 'secArchive'],
+    connect: ['conn'], conn: ['conn', 'bThis'], boards: ['conn', 'secBoards'], checks: ['conn', 'secHealth'], health: ['conn', 'secHealth'], move: ['conn', 'secMove'], advanced: ['conn', 'secAdv'],
+    claude: ['agents', 'agClaude'], codex: ['agents', 'agLocal'], chat: ['agents', 'agLocal'], email: ['agents', 'agEmail'] };
+  const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'prefs', style: 'underline', label: 'Settings sections', onChange: v => setPanel(v) });
+  setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach((b, i) => { const n = cap(b.dataset.value), short = SET_TABS[i][2]; b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n);
+    if (short) { const l = b.querySelector('.ui-tab__label'); l.textContent = ''; l.append(el('span', 'tl-long', SET_TABS[i][1]), el('span', 'tl-short', short)); } });   // phones: the short name, so all four fit
+  $('setTabs').replaceWith(setTabs);
+  const secTop = id => { const x = $(id); if (x) requestAnimationFrame(() => x.scrollIntoView({ block: 'start' })); };
+  { const list = setTabs.matches('[role=tablist]') ? setTabs : setTabs.querySelector('[role=tablist]'), wide = matchMedia('(min-width: 1000px)');   // from 1000px the tab list is a column (board.css)
+    const orient = () => list.setAttribute('aria-orientation', wide.matches ? 'vertical' : 'horizontal'); orient(); wide.addEventListener('change', orient); }
+  function setPanel(tab) {   // a tab chosen by hand: its panel, from the top
+    SET_TABS.forEach(([n]) => { $('panel' + cap(n)).hidden = n !== tab; }); setTabs.select(tab);
+    $('dlgSettings').scrollTop = 0;
+    if (tab === 'prefs') renderAlerts();
+    if (tab === 'board') renderBoardTab();
+    if (tab === 'conn') { renderBoards(); showEdit(!!cfg().repo && !cfg().token && !DEMO); autoCheck(); }
+    if (tab === 'agents') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key');
+      const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); $('sUseEmail').checked = !!LS.get('kb_email_sync'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
       $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
   }
-  document.querySelectorAll('.stabs button').forEach(b => { b.onclick = () => settingsTab(b.dataset.tab); });
+  function settingsTab(name, over) {   // a deep link: an old tab name, a tab, or a section (see SET_LINKS)
+    const [tab, sec] = SET_LINKS[name] || [SET_TABS.some(t => t[0] === name) ? name : 'prefs'];
+    setPanel(tab);
+    if (name === 'conn') { showEdit(true); setTimeout(() => (cfg().repo ? $('sToken') : $('sRepo')).focus(), 30); }
+    if (name === 'move' || name === 'advanced') $('secAdv').toggle(true);
+    if (name === 'checks' || name === 'health') runChecks(over);
+    if (name === 'archive') renderArchiveBox();
+    if (sec && name !== 'conn') secTop(sec);
+  }
+  window.kbSettings = Object.freeze({ open: name => { if (!$('dlgSettings').open) $('btnSettings').click(); settingsTab(name); } });   // the same deep links, for the console and the browser tests
+  let autoChecked = '';
+  function autoCheck() {   // Connection opened while the board is not connected: run the checks once per board, so the reason shows without a click
+    const c = cfg(); if (DEMO || !c.repo || !c.token || lastSyncOk || ro === 'demo' || autoChecked === c.repo) return;
+    autoChecked = c.repo; runChecks();
+  }
   $('pubOk').onclick = () => $('dlgPublic').close();
   $('ckRun').onclick = () => runChecks();
-  $('sTest').onclick = () => { const repo = $('sRepo').value.trim(), typed = $('sToken').value.trim(), same = repo === cfg().repo;
+  $('sTest').onclick = () => { const repo = $('sRepo').value.trim(), typed = $('sToken').value.trim(), same = repo === cfg().repo;   // checks the typed values here, in Health
     const over = { repo, branch: $('sBranch').value.trim() || 'master', path: $('sPath').value.trim() || 'board/tasks.json', me: $('sMe').value.trim(), token: typed || (same ? cfg().token : (boardsMap()[repo] || {}).token || '') };
-    settingsTab('checks'); runChecks(over); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
-  $('sClose').onclick = $('sDone').onclick = () => $('dlgSettings').close();
-  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); settingsTab(c.token ? 'general' : 'boards'); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
+    runChecks(over); secTop('secHealth'); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
+  $('sClose').onclick = () => $('dlgSettings').close();
+  const fillConn = () => { const c = cfg(); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); };
+  $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); fillConn(); setPanel('prefs'); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
@@ -2578,15 +2982,28 @@ if (typeof window !== 'undefined') (() => {
     return 'https://github.com/settings/personal-access-tokens/new?' + q; };
   $('sRepo').addEventListener('input', () => { $('patLink').href = patUrl(); });
   $('btnSettings').addEventListener('click', () => { $('patLink').href = patUrl(); });
-  $('sCancel').onclick = () => $('dlgSettings').close();
-  $('sForget').onclick = () => { if (!confirm('Forget this board token from this browser?\n\nThe board is not changed, but you will need to add a working token before you can save again.')) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; render(); setStatus('Token removed'); };
+  // connGen: Cancel and closing Settings bump it, so a "Save & connect" still waiting for queued saves gives up instead of
+  // switching boards with the values it read before (or the reset ones after).
+  let connGen = 0;
+  const saveBtnIdle = () => { const b = $('sSave'); b.disabled = false; (b.querySelector('.ui-btn__label') || b).textContent = 'Save & connect'; };
+  $('sCancel').onclick = () => { connGen++; saveBtnIdle(); fillConn(); showEdit(false); };   // put the saved values back and fold the form
+  $('dlgSettings').addEventListener('close', () => { connGen++; saveBtnIdle(); });
+  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Token removed'); };
   $('sSave').onclick = async () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
     if (!REPO_RE.test(nr)) { toast('The repository must look like owner/name', true); return; }
-    if (moved) activateBoard(nr);   // another repo = another board, with its own token
-    LS.set('kb_branch', $('sBranch').value.trim() || 'master'); LS.set('kb_path', $('sPath').value.trim() || 'board/tasks.json'); LS.set('kb_me', $('sMe').value.trim().replace(/^@/, ''));
-    const newTok = $('sToken').value.trim();
+    // every value is read now: Cancel or closing the dialog while queued saves finish resets the fields
+    const branch = $('sBranch').value.trim() || 'master', path = $('sPath').value.trim() || 'board/tasks.json', me = $('sMe').value.trim().replace(/^@/, ''), newTok = $('sToken').value.trim();
+    if (moved && saving) {   // another repo = another board, with its own token; queued saves finish on the old one first
+      const gen = ++connGen, b = $('sSave'); b.disabled = true;
+      (b.querySelector('.ui-btn__label') || b).textContent = `Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`;
+      while (saving) await saving;
+      if (gen !== connGen) return;   // cancelled or closed meanwhile
+      saveBtnIdle();
+    }
+    if (moved) activateBoard(nr);
+    LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
     if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();
@@ -2594,44 +3011,51 @@ if (typeof window !== 'undefined') (() => {
   };
   // The logo is the board switcher: a badge with the repo's initials (rain-ventures-ai/consulting → RVAC) in a colour of its own.
   const boardInitials = repo => String(repo || '').split('/').flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s_.-]+/)).filter(Boolean).map(w => w[0].toUpperCase()).join('').slice(0, 4) || '▦';
-  const boardColour = repo => { let h = 0; for (const ch of String(repo || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return `hsl(${h % 360} 58% 38%)`; };
+  const boardColour = repo => `hsl(${ui.hueFor(repo)} 58% 38%)`;
   function badge(repo, cls) { const b = el('span', cls || 'bbadge', boardInitials(repo)); b.style.background = boardColour(repo); return b; }
   function renderSwitcher() {
     const btn = $('boardBtn'), pop = $('boardPop'); if (!btn) return; const cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).sort();
     if (cur) btn.textContent = boardInitials(cur); else setI(btn, 'square-kanban'); if (cur) btn.style.background = boardColour(cur); btn.title = cur ? `Board: ${cur} (click to switch)` : 'Board'; btn.setAttribute('aria-label', btn.title);
     pop.textContent = ''; pop.append(el('div', 'bphead', 'Boards'));
     repos.forEach(r => { const row = el('button', 'bprow' + (r === cur ? ' cur' : '')); row.type = 'button'; row.append(badge(r), el('span', 'bpname', r), el('span', 'bpmark', r === cur ? '✓' : ''));
-      row.onclick = () => { closePops(); if (r !== cur) { activateBoard(r); location.replace(boardUrl()); } }; pop.append(row); });
+      row.onclick = () => { closePops(); if (r !== cur) whenSaved(() => { activateBoard(r); location.replace(boardUrl()); }); }; pop.append(row); });
     const m = el('button', 'bpmanage', 'Manage boards…'); m.type = 'button'; m.onclick = () => { closePops(); $('btnSettings').click(); settingsTab('boards'); }; pop.append(m);
-    btn.onclick = e => { e.stopPropagation(); const open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); } };
-    pop.onclick = e => e.stopPropagation();
   }
-  renderSwitcher();
-  // Settings → Boards: this board (status, change connection, checks), the other boards, and the "Add a board" wizard
-  const showEdit = on => { $('bEdit').hidden = !on; $('bEditBtn').setAttribute('aria-expanded', String(on)); };
-  $('bEditBtn').onclick = () => showEdit($('bEdit').hidden);
-  $('bCheck').onclick = () => { settingsTab('checks'); runChecks(); };
+  renderSwitcher(); popover($('boardBtn'), $('boardPop'));
+  // Settings → Connection: this board (status, the connection form, Test connection), Health, your boards and "Add a board",
+  // and Advanced (version, move settings, forget the token, remove a board). The form is a fold: open when a token is missing.
+  const showEdit = on => { $('bEditFold').open = !!on; };
   function renderThis() {
-    const c = cfg(), has = !!c.repo; $('bThisBadge').textContent = ''; if (has) $('bThisBadge').append(badge(c.repo));
-    $('bThisRepo').textContent = has ? c.repo : 'No board connected';
-    $('bThisSub').textContent = has ? `${c.branch} · ${c.path}${c.me ? ' · you are @' + c.me : ''}` : 'Add a board below, or fill in the connection.';
-    const [t, k] = !has ? ['Not set up', 'warn'] : !c.token ? ['No token', 'warn'] : ro === 'token' ? ['Read-only', 'warn'] : ro === 'demo' ? ['Demo', ''] : lastSyncOk ? ['Connected', 'ok'] : ['Not connected', 'warn'];
-    const ch = $('bThisChip'); ch.textContent = t; ch.className = 'agchip' + (k ? ' ' + k : '');
+    const c = cfg(), has = !!c.repo, setup = !has && !DEMO, st = $('bState'), p = $('panelConn'); $('bThisBadge').textContent = ''; if (has) $('bThisBadge').append(badge(c.repo));
+    $('bThisRepo').textContent = has ? c.repo : 'No board connected'; $('bThisSub').textContent = has ? `${c.branch} · ${c.path}` : '';
+    $('bThisMe').textContent = c.me ? '@' + c.me : 'Not set: edits show as “someone”'; $('bThisMe').classList.toggle('muted', !c.me);
+    const [t, k] = DEMO ? ['Demo', 'neutral'] : !has ? ['Not set up', 'warn'] : !c.token ? ['No token', 'warn'] : ro === 'token' ? ['Read-only', 'warn'] : ro === 'demo' ? ['Demo', 'neutral'] : lastSyncOk ? ['Connected', 'ok'] : ['Not connected', 'danger'];
+    setChip($('bThisChip'), t, k);
+    st.textContent = '';
+    if (DEMO) st.append(ui.banner({ tone: 'info', icon: 'lock', text: 'This is a read-only demo board with invented data. There is nothing to connect here, and nothing you do is saved.', action: { label: 'Create my own board', onClick: () => { location.href = location.pathname + '?setup'; } } }));
+    else if (setup) st.append(ui.banner({ tone: 'info', icon: 'compass', text: 'No board yet. Add one below: connect a board you already have, or make a new one. Each step checks itself.' }));
+    [...st.querySelectorAll('.ui-banner')].forEach(b => b.setAttribute('role', 'status'));
+    $('bThis').hidden = !!DEMO; $('secHealth').hidden = !!DEMO || setup; $('bThisInfo').hidden = setup; $('sForgetRow').hidden = !c.token;
+    $('bEditBtn').textContent = setup ? 'Enter the details by hand' : 'Change connection';
+    p.classList.toggle('is-setup', setup);
+    if (setup && $('secBoards').nextElementSibling !== $('bThis')) p.insertBefore($('secBoards'), $('bThis'));   // setup: the "Add a board" steps come first
+    if (!setup && $('secHealth').nextElementSibling !== $('secBoards')) $('secHealth').after($('secBoards'));
   }
+  function openAddWiz(step = 0) { Object.assign(AW, { step, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); }
   function renderBoards() {
-    renderThis(); if ($('bWiz').hidden) $('bAdd').hidden = false;
-    const box = $('bList'), cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).filter(r => r !== cur).sort(); box.textContent = '';
-    if (!repos.length) box.append(el('div', 'hint', cur ? 'No other boards yet.' : 'No board yet.'));
-    repos.forEach(r => { const row = el('div', 'brow'), name = el('span', 'bname', r); row.append(badge(r), name);
-      if (r === cur) row.append(el('span', 'bcur', 'this board'));
-      else { const o = el('button', 'small', 'Open'), x = el('button', 'small danger', 'Remove');
-        o.onclick = () => { activateBoard(r); location.replace(boardUrl()); };
-        x.onclick = () => { if (!confirm(`Remove ${r} from the boards in this browser?\n\nIts saved token and routine settings are deleted here. The repo itself is not changed.`)) return; forgetBoard(r); renderBoards(); renderSwitcher(); };
-        row.append(o, x); }
-      box.append(row); }); }
+    renderThis(); const cur = LS.get('kb_repo'), repos = Object.keys(boardsMap()).filter(r => r !== cur).sort(), box = $('bList'), rm = $('bRemoveList'); box.textContent = rm.textContent = '';
+    if (!cur && !DEMO && $('bWiz').hidden) openAddWiz();   // setup: the wizard is open from the start
+    if ($('bWiz').hidden) $('bAdd').hidden = false;
+    box.hidden = !cur && !repos.length;
+    if (cur) { const row = el('div', 'brow'); row.append(badge(cur), el('span', 'bname', cur), el('span', 'bcur', 'this board')); box.append(row); }
+    if (!repos.length) rm.append(el('span', 'hint', 'No other boards saved in this browser.'));
+    repos.forEach(r => {
+      const row = el('div', 'brow'); row.append(badge(r), el('span', 'bname', r), ui.button({ label: 'Open', size: 'sm', onClick: () => whenSaved(() => { activateBoard(r); location.replace(boardUrl()); }) })); box.append(row);
+      const x = el('div', 'brow'), rb = ui.button({ label: 'Remove', size: 'sm', onClick: async () => { if (!(await ask('Remove board?', [`Remove ${r} from the boards in this browser?`, 'Its saved token and routine settings are deleted here. The repo itself is not changed.'], 'Remove', true))) return; forgetBoard(r); renderBoards(); renderSwitcher(); } });
+      rb.classList.add('danger'); x.append(badge(r), el('span', 'bname', r), rb); rm.append(x); }); }
   // "Add a board": pick new or existing; for an existing one, paste a token, pick the repo, the page checks for the board file
   const AW = { step: 0, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null };
-  $('bAdd').onclick = () => { Object.assign(AW, { step: 0, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); $('bWiz').scrollIntoView({ block: 'nearest' }); };
+  $('bAdd').onclick = () => { openAddWiz(); $('bWiz').scrollIntoView({ block: 'nearest' }); };
   function renderAddWiz() {
     const w = $('bWiz'); w.textContent = ''; const s = AW.step, foot = el('div', 'wfoot'), back = el('button', null, s ? 'Back' : 'Cancel'), next = el('button', 'primary', 'Next');
     back.type = next.type = 'button'; back.onclick = () => { if (s) { AW.step--; renderAddWiz(); } else { w.hidden = true; $('bAdd').hidden = false; } };
@@ -2648,7 +3072,7 @@ if (typeof window !== 'undefined') (() => {
       const ol = el('ol', 'wmini'); ['Resource owner: the account or organisation that owns the board repo.', 'Repository access: Only select repositories, then the board repo.', 'Generate token, copy it, and paste it below.'].forEach(t => ol.append(el('li', null, t)));
       const tok = el('input'); tok.type = 'password'; tok.placeholder = 'github_pat_…'; tok.autocomplete = 'off'; tok.value = AW.tok; const lab = el('label', 'wlabel', 'Token'); lab.append(tok);
       const res = el('div', 'wchecks'); w.append(a, ol, lab, res, el('p', 'hint', 'The token stays in this browser and goes only to api.github.com.'));
-      const draw = () => { res.textContent = ''; AW.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === null ? 'wait' : 'bad'), (ok === true ? '✓ ' : ok === null ? '… ' : '✕ ') + t))); next.disabled = !AW.ok; };
+      const draw = () => { res.textContent = ''; AW.rows.forEach(([ok, t]) => res.append(ckLine(ok === true || ok === null ? ok : false, t))); next.disabled = !AW.ok; };
       const check = async () => { const t = AW.tok; AW.repos = []; AW.ok = false; if (!t) { AW.rows = []; draw(); return; } AW.rows = [[null, 'Checking the token…']]; draw();
         const api = cfg().api, u = await fetch(`${api}/user`, { headers: ghH(t) }).catch(() => null); if (t !== AW.tok) return;
         if (!u || !u.ok) { AW.rows = [[false, u && u.status === 401 ? 'GitHub did not accept this token. Copy it again.' : 'Could not reach GitHub. Check your connection.']]; draw(); return; }
@@ -2671,13 +3095,13 @@ if (typeof window !== 'undefined') (() => {
       const adv = el('details', 'wadv'), bin = el('input'), pin = el('input'); adv.append(el('summary', null, 'Branch and file (only if the board is not in the usual place)'));
       bin.placeholder = 'the repo’s default branch'; bin.value = AW.branch || ''; pin.value = AW.path || 'board/tasks.json'; bin.autocomplete = pin.autocomplete = 'off';
       const bl = el('label', 'wlabel', 'Branch'), pl = el('label', 'wlabel', 'File'); bl.append(bin); pl.append(pin); adv.append(bl, pl); adv.open = !!(AW.branch || (AW.path && AW.path !== 'board/tasks.json'));
-      const res = el('div', 'wchecks'), meBox = el('label', 'wck warn wme'), meCb = el('input'); meCb.type = 'checkbox'; meBox.hidden = true;
+      const res = el('div', 'wchecks'), meBox = el('label', 'wme'), meCb = el('input'); meCb.type = 'checkbox'; meBox.hidden = true;
       w.append(lab, rlab, adv, res, meBox);
       const draw = () => { res.textContent = ''; const f = AW.found; next.disabled = !(f && f.ok);
-        if (!f) return; if (f.busy) { res.append(el('div', 'wck wait', '… Looking for the board…')); return; }
-        res.append(el('div', 'wck ' + (f.ok ? 'ok' : 'bad'), (f.ok ? '✓ ' : '✕ ') + f.text));
-        if (f.ok && !f.push) res.append(el('div', 'wck warn', '⚠ This token can read the board but cannot save to it. The board opens read-only. To change that, edit the token on GitHub: Contents, Read and write.'));
-        if (f.ok && f.pub) res.append(el('div', 'wck warn', '⚠ This repo is PUBLIC: everybody can read the board.'));
+        if (!f) return; if (f.busy) { res.append(ckLine(null, 'Looking for the board…')); return; }
+        res.append(ckLine(!!f.ok, f.text));
+        if (f.ok && !f.push) res.append(ckLine('warn', 'This token can read the board but cannot save to it. The board opens read-only. To change that, edit the token on GitHub: Contents, Read and write.'));
+        if (f.ok && f.pub) res.append(ckLine('warn', 'This repo is PUBLIC: everybody can read the board.'));
         const me = cfg().me; meBox.textContent = ''; meBox.hidden = !(f.ok && AW.me && me && me.toLowerCase() !== AW.me.toLowerCase());
         if (!meBox.hidden) { meCb.checked = !!AW.useMe; meCb.onchange = () => { AW.useMe = meCb.checked; }; meBox.append(meCb, ` This token is for @${AW.me}, but your name in this browser is "${me}". Use @${AW.me} from now on.`); } };
       const look = async () => { const name = AW.repo, path = (pin.value.trim() || 'board/tasks.json'); AW.path = path; AW.branch = bin.value.trim();
@@ -2697,23 +3121,14 @@ if (typeof window !== 'undefined') (() => {
       sel.onchange = () => { const o = sel.value === other; rlab.hidden = !o; AW.repo = o ? rin.value.trim() : sel.value; if (o) setTimeout(() => rin.focus(), 30); look(); };
       rin.oninput = () => { AW.repo = rin.value.trim(); later(); }; bin.oninput = pin.oninput = later;
       next.textContent = 'Open this board'; next.onclick = () => { const f = AW.found; if (!f || !f.ok) return;
-        activateBoard(AW.repo, { token: AW.tok, branch: f.branch, path: f.path }); LS.del('kb_ro:' + AW.repo);
-        const me = cfg().me; if (AW.me && (!me || me.toLowerCase() === AW.me.toLowerCase() || AW.useMe)) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); };
+        whenSaved(() => { activateBoard(AW.repo, { token: AW.tok, branch: f.branch, path: f.path }); LS.del('kb_ro:' + AW.repo);
+          const me = cfg().me; if (AW.me && (!me || me.toLowerCase() === AW.me.toLowerCase() || AW.useMe)) LS.set('kb_me', AW.me); stashBoard(); location.href = boardUrl(); }); };
       look();
     }
-    foot.append(back, el('span', 'spacer'), next); w.append(foot);
+    foot.append(back, el('span', 'spacer'), next); w.append(foot); uiBtns(w);
   }
-  $('bNewPrompt').onclick = () => { const who = cfg().me || '<your-github-username>';
-    copyText(['Please help me set up a new Keeptrack board (a private GitHub repo with the Keeptrack board kit).', '',
-      `My GitHub username is ${who}.`, 'Read this guide first and follow it step by step: ' + HOME + '/board/kit/NEW-BOARD.md', '',
-      'Start by asking me the basics from step 1 (repo owner and name, the people on the board, client or area names).',
-      'Rules: never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step, stop, tell me exactly where to click and what to paste, and wait until I say it is done. Ask me before any step that cannot be undone. Finish with the checks in step 6 and tell me what passed and failed.'].join('\n'),
-      'New-board prompt copied. Paste it into your current chat with Claude.'); };
-  document.querySelectorAll('#viewSw button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
   document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => { t.onclick = e => { e.stopPropagation(); closePops(); setView(dockLast[t.dataset.grp]); }; });
-  $('dockMenu').onclick = e => { e.stopPropagation(); const pop = $('dockPop'), open = pop.hidden; closePops(); if (open) { pop.hidden = false; $('dockMenu').setAttribute('aria-expanded', 'true'); } };
-  $('dockPop').addEventListener('click', e => e.stopPropagation());
-  $('undoGo').onclick = () => undoLast();
+  popover($('dockMenu'), $('dockPop'), { place: false });   // the dock's menu opens upwards from the bar (CSS)
   document.querySelectorAll('[data-tour-start]').forEach(b => { b.onclick = e => { e.stopPropagation(); startTour(); }; });
   $('tourNext').onclick = () => { if (tour.i === tour.steps.length - 1) endTour(); else { tour.i++; showTourStep(); } };
   $('tourBack').onclick = () => { if (tour.i > 0) { tour.i--; showTourStep(); } }; $('tourSkip').onclick = endTour;
@@ -2729,12 +3144,10 @@ if (typeof window !== 'undefined') (() => {
   $('copyClose').onclick = () => $('dlgCopy').close();
   $('copyAgent').onclick = () => { $('dlgCopy').close(); copyText(agentPrompt(null), 'Board instructions copied for an agent'); };
   $('copyMarkdown').onclick = () => { $('dlgCopy').close(); copyMarkdown(); };
-  $('cCopyMd').onclick = () => { const t = taskNow(); if (t) copyText(taskMarkdown(t), 'Card copied as Markdown'); };
-  $('btnFilter').onclick = e => { e.stopPropagation(); const pop = $('filterPop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnFilter').setAttribute('aria-expanded', 'true'); } };
-  $('btnMore').onclick = e => { e.stopPropagation(); const pop = $('morePop'), open = pop.hidden; closePops(); if (open) { placePop(pop); pop.hidden = false; $('btnMore').setAttribute('aria-expanded', 'true'); } };
+  popover($('btnFilter'), $('filterPop')); popover($('btnMore'), $('morePop'));
   document.querySelectorAll('[data-head-action]').forEach(b => { b.onclick = () => { const target = $(b.dataset.headAction); closePops(); if (target) target.click(); }; });
-  $('filterPop').addEventListener('click', e => e.stopPropagation()); $('clientPop').addEventListener('click', e => e.stopPropagation()); $('morePop').addEventListener('click', e => e.stopPropagation());
-  document.addEventListener('click', closePops); document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePops(); if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
+  $('clientPop').addEventListener('click', e => e.stopPropagation()); POPS.add($('clientPop'));
+  document.addEventListener('click', () => closePops()); document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (popOpen) { closePops(true); return; } if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
   $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
@@ -2760,13 +3173,10 @@ if (typeof window !== 'undefined') (() => {
   const doneCol = () => doneColId();
 
   function renderMemberBar() {
-    const bar = $('memberBar'); if (!bar || ro === 'demo' || DEMO) { if (bar) bar.hidden = true; return; }
-    const meV = cfg().me; if (!meV || memberPerson() || LS.get('kb_member_nudge_off:' + cfg().repo)) { bar.hidden = true; return; }
-    bar.hidden = false; bar.textContent = '';
-    bar.append(document.createTextNode(`You are signed in as @${meV} but have no person record on this board. `));
-    const add = el('button', 'small primary', 'Add yourself as a person'); add.type = 'button'; add.onclick = () => offerSelfPerson();
-    const hide = el('button', 'small', 'Dismiss'); hide.type = 'button'; hide.onclick = () => { LS.set('kb_member_nudge_off:' + cfg().repo, '1'); bar.hidden = true; };
-    bar.append(add, hide);
+    const meV = cfg().me; if (ro === 'demo' || DEMO || !meV || memberPerson() || LS.get('kb_member_nudge_off:' + cfg().repo)) { showBar('memberBar', null); return; }
+    showBar('memberBar', { tone: 'info', icon: 'user', text: `You are signed in as @${meV} but have no person record on this board.`,
+      action: ui.button({ label: 'Add yourself as a person', variant: 'primary', size: 'sm', onClick: () => offerSelfPerson() }),
+      onDismiss: () => LS.set('kb_member_nudge_off:' + cfg().repo, '1') });
   }
 
   async function offerSelfPerson(prefill) {
@@ -2775,99 +3185,209 @@ if (typeof window !== 'undefined') (() => {
     if (!name && cfg().token) {
       try { const r = await fetch(`${cfg().api}/user`, { headers: { Authorization: 'Bearer ' + cfg().token, Accept: 'application/vnd.github+json' } }); if (r.ok) { const u = await r.json(); name = u.name || u.login; email = email || (u.email || ''); } } catch {}
     }
-    if (!name) name = prompt('Your display name on the board:', meV) || meV;
+    if (!name) { const v = await ui.promptText({ title: 'Your name', label: 'Your display name on the board:', value: meV, confirmLabel: 'Add me' }); if (v === null) return; name = v.trim() || meV; }
     const id = await addContact(name, { github: meV, email: email || '', company: '' });
     if (id) toast('Added you as a person on this board.');
   }
 
-  let editingClient = '';
+  // ==== person, client and project drawers: built once with ui.js on the task drawer's pattern ====
+  // a header (identity, undo, copy, the ⋯ menu, close), one property list, then sections whose empty state is one ghost "+ Add" row
+  const crmRows = { p: [], cl: [], pr: [] };
+  function resetCrmRows(k) { crmRows[k].forEach(r => { r.input.value = ''; if (r.label) r.label.value = ''; r.collapse(); }); }
+  function crmAddRow(k, id, opts) { const r = ui.addRow({ collapsed: true, buttonLabel: 'Add', ...opts }); r.input.id = id; crmRows[k].push(r); return r; }
+  // the two-field add row (a label, then the address or link) for emails, phones, links and files
+  function pairAddRow(k, { id, labelId, addId, labelPlaceholder, labelAria, type, onAdd, ...opts }) {
+    const lab = el('input', 'ui-input ui-addrow__label'); lab.id = labelId; lab.placeholder = labelPlaceholder; lab.setAttribute('aria-label', labelAria); lab.enterKeyHint = 'next';
+    const r = crmAddRow(k, id, { ...opts, onAdd: v => { const res = onAdd(lab.value.trim(), v, r.input); if (res !== false) lab.value = ''; return res; } });
+    if (type) r.input.type = type;
+    r.input.before(lab); r.label = lab; r.classList.add('dpair'); r.querySelector('button[type=submit]').id = addId;
+    const esc = e => { if (e.key !== 'Escape') return; e.preventDefault(); e.stopPropagation(); lab.value = ''; r.input.value = ''; r.collapse(); const g = r.querySelector('.ui-addrow__ghost'); if (g) g.focus(); };
+    lab.addEventListener('keydown', esc); r.input.addEventListener('keydown', e => { if (e.key === 'Escape') lab.value = ''; });
+    return r;
+  }
+  function iconTile(icon) { const t = el('span', 'dtile'); t.setAttribute('aria-hidden', 'true'); t.append(ui.icon(icon)); return t; }
+  function drawerHead(k, { kind, tile, more, extra = [] }) {
+    const who = el('span', 'didentity'); who.append(tile, el('span', 'didentity__kind', kind));
+    const moreBtn = ui.iconButton({ icon: 'ellipsis', label: 'More actions' }); moreBtn.id = k + 'More'; moreBtn.onclick = () => more(moreBtn); roKeep(moreBtn);
+    const close = ui.iconButton({ icon: 'x', label: 'Close' }); close.id = k + 'Close'; roKeep(close);
+    $(k + 'Head').append(who, el('span', 'spacer'), ...extra, moreBtn, close);
+  }
+  function dfield(id, label, { placeholder = '', type = 'text', list, autocomplete } = {}) {
+    const i = el('input', 'ui-input dfield'); i.id = id; i.type = type; i.placeholder = placeholder; i.setAttribute('aria-label', label);
+    if (list) i.setAttribute('list', list); if (autocomplete) i.autocomplete = autocomplete; return i;
+  }
+  function dnote(id, label, placeholder, rows = 3) { const t = el('textarea', 'ddesc'); t.id = id; t.rows = rows; t.placeholder = placeholder; t.setAttribute('aria-label', label); return t; }
+  function dtitle(id, label, placeholder) { const t = el('textarea', 'dtitle'); t.id = id; t.rows = 1; t.setAttribute('aria-label', label); t.placeholder = placeholder; t.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); t.blur(); } }); t.addEventListener('input', () => autosize(t)); return t; }
+  function crmSection(id, opts, countId, optional) {
+    const s = drawerSection(id, { ...opts, count: countId ? '' : undefined }); if (countId) s.querySelector('.ui-count').id = countId;
+    if (optional) s.classList.add('optsec'); if (opts.collapsible) roKeep(s.querySelector('.ui-section__toggle')); return s;
+  }
+  const dempty = text => el('p', 'dempty', text);
+  const dlist = id => { const d = el('div', 'dlist'); d.id = id; return d; };
+  const dhint = text => el('p', 'hint dhint', text);
+  const setCount = (id, n) => { $(id).textContent = n || ''; };
+  const FILES_HINT = 'Working material for this client in Drive, Dropbox, OneDrive, SharePoint, or a local folder. Agents need the matching connector/plugin/MCP for cloud links, or a session on the right computer for local paths. If they cannot access one, they should ask you.';
+  // a project in a list: the whole row opens it (navigation stays usable on read-only boards)
+  function projectNavRow(pr, onOpen) {
+    const b = el('button', 'ui-listrow dnav'); b.type = 'button'; b.append(ui.icon('flag'), el('span', 'ui-listrow__text', pr.name), el('span', 'ui-listrow__meta', pr.status || 'active'), ui.icon('chevron-right'));
+    b.setAttribute('aria-label', `Open project ${pr.name} (${pr.status || 'active'})`); b.onclick = onOpen; return roKeep(b);
+  }
+  // a task in a person or project drawer: tick it done (or reopen it), or open it
+  function drawerTaskRow(t) {
+    const isDone = t.column === doneColId(), row = el('div', 'dtask' + (isDone ? ' is-done' : ''));
+    const tick = ui.iconButton({ icon: isDone ? 'square-check' : 'square', label: isDone ? `Reopen #${t.num}` : `Mark #${t.num} done`, size: 'sm', onClick: () => toggleDone(t) });
+    const open = ui.taskRow({ num: t.num, title: t.title, priority: t.priority, due: isDone ? '' : t.due, labels: t.labels.map(l => ({ name: l, color: labelColor(l) })), todoTotal: t.todos.length, todoDone: t.todos.filter(d => d.done).length }, { density: 'compact', onOpen: () => openCard(t.id) });
+    roKeep(open); row.append(tick, open); return row;
+  }
+
+  // ---- client drawer ----
+  let editingClient = '', clSig = '';
+  function buildClientDrawer() {
+    const tile = iconTile('building-2'); tile.id = 'clTile';
+    drawerHead('cl', { kind: 'Client', tile, more: openClientMenu });
+    const name = el('h2', 'dtitle dtitle--static'); name.id = 'clName';
+    const people = el('span', 'dval'); people.id = 'clPeople';
+    const tasks = el('span', 'dval dmuted'); tasks.id = 'clTaskSum';
+    const props = el('div', 'dprops'); props.append(ui.props([{ label: 'People', icon: 'users', value: people }, { label: 'Tasks', icon: 'square-check', value: tasks }]));
+    const projAdd = crmAddRow('cl', 'clProjName', { placeholder: 'New project name', ghostLabel: 'Add project', label: 'New project name', onAdd: addClientProject });
+    projAdd.querySelector('button[type=submit]').id = 'clProjAdd';
+    const fileAdd = pairAddRow('cl', { id: 'clFileNew', labelId: 'clFileTitle', addId: 'clFileAdd', labelPlaceholder: 'Label', labelAria: 'New file label', placeholder: 'Cloud URL or local path', label: 'New file or folder: a cloud URL or local path', ghostLabel: 'Add file or folder',
+      onAdd: (title, url) => addClientFile(editingClient, title, url) });
+    const files = crmSection('clFilesSec', { title: 'Files and folders', body: [dlist('clFiles'), fileAdd, dhint(FILES_HINT)] }, 'clFileCount', true);
+    files.querySelector('.ui-section__text').id = 'clFilesH';
+    $('clBody').append(name, props,
+      crmSection('clNorthSec', { title: 'North star', body: dnote('clNorth', 'North star', 'What we are trying to solve and what success looks like.', 4) }),
+      crmSection('clProjSec', { title: 'Projects', body: [dlist('clProjects'), projAdd] }, 'clProjCount', true),
+      files);
+  }
+  buildClientDrawer();
   function openClient(name) {
-    editingClient = name; fillClientDrawer(true);
-    $('dlgClient').showModal();
+    editingClient = name; clSig = ''; resetCrmRows('cl'); fillClientDrawer(true);
+    $('dlgClient').showModal(); $('clBody').scrollTop = 0;
   }
   function fillClientDrawer(force) {
     const co = editingClient; if (!co) return;
-    $('clName').textContent = co;
-    const info = clientInfo(co);
+    const info = clientInfo(co), prs = projectsForClient(co), people = state.contacts.filter(p => p.company === co), tasks = state.tasks.filter(t => t.client === co);
+    const sig = JSON.stringify([co, info, prs, people.map(p => [p.id, p.name]), tasks.map(t => t.column === doneColId())]); if (!force && sig === clSig) return; clSig = sig;
+    $('clName').textContent = co; $('clTile').style.setProperty('--dtile-c', `hsl(${clientHue(co)} 72% 52%)`);
+    const pbox = $('clPeople'); pbox.textContent = '';
+    people.sort((a, b) => a.name.localeCompare(b.name)).forEach(p => pbox.append(roKeep(ui.person({ name: p.name || '(no name)', onClick: () => { $('dlgClient').close(); openContact(p.id); } }))));
+    if (!people.length) pbox.append(el('span', 'dmuted', 'Nobody yet'));
+    const open = tasks.filter(t => t.column !== doneColId()).length; $('clTaskSum').textContent = tasks.length ? `${open} open · ${tasks.length - open} done` : 'No tasks yet';
     if (force || document.activeElement !== $('clNorth')) $('clNorth').value = info.north_star || '';
     const box = $('clProjects'); box.textContent = '';
-    projectsForClient(co).sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => {
-      const row = el('button', 'prowbtn'); row.type = 'button';
-      row.append(el('b', null, pr.name), el('span', 'muted', ' · ' + (pr.status || 'active')));
-      row.onclick = () => { $('dlgClient').close(); openProject(pr.id); };
-      box.append(row);
-    });
-    if (!box.childNodes.length) box.append(el('div', 'muted small', 'No projects yet.'));
-    renderLinkBox($('clFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+    prs.sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => box.append(projectNavRow(pr, () => { $('dlgClient').close(); openProject(pr.id); })));
+    setCount('clProjCount', prs.length); $('clProjSec').classList.toggle('is-empty', !prs.length);
+    const links = info.links || [];
+    renderLinkBox($('clFiles'), links, l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+    setCount('clFileCount', links.length); $('clFilesSec').classList.toggle('is-empty', !links.length);
+  }
+  function openClientMenu(anchor) {
+    const co = editingClient; if (!co) return;
+    ui.menu(anchor, [
+      { label: 'Show only this client', icon: 'eye', onSelect: () => { setClientValues([co]); $('dlgClient').close(); } },
+      { label: 'Copy client name', icon: 'copy', onSelect: () => copyText(co, 'Client name copied') }
+    ], { label: `Actions for ${co}` });
   }
   $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
   $('clClose').onclick = () => $('dlgClient').close();
   $('dlgClient').addEventListener('close', () => { editingClient = ''; render(); });
-  function addClientProject() {
-    const co = editingClient, name = ($('clProjName').value || '').trim(); if (!name || !co) { if (!name) toast('Enter a project name.', true); return; }
+  function addClientProject(name) {
+    const co = editingClient; if (!co) return false;
     const pr = { id: boardId('pr_'), client: co, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
-    mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) { $('clProjName').value = ''; openProject(pr.id); } });
+    mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) openProject(pr.id); });
   }
-  $('clProjAdd').onclick = addClientProject;
-  $('clProjName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addClientProject(); } });
-  function addClientFile(co, title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return; }
-    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
-  $('clFileAdd').onclick = () => { const co = editingClient; if (!co) return; addClientFile(co, $('clFileTitle').value, $('clFileNew').value); $('clFileTitle').value = ''; $('clFileNew').value = ''; };
+  function addClientFile(co, title, url) {
+    if (!co) return false; const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return false; }
+    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`);
+  }
 
-  let editingProject = '';
-  function openProject(id) { editingProject = id; fillProjectDrawer(true); $('dlgProject').showModal(); }
+  // ---- project drawer ----
+  let editingProject = '', prSig = '';
+  const PROJECT_TONE = { active: 'ok', paused: 'warn', done: 'neutral' };
+  function buildProjectDrawer() {
+    drawerHead('pr', { kind: 'Project', tile: iconTile('flag'), more: openProjectMenu });
+    const status = drawerSelect('prStatus', 'Status', [{ value: 'active', label: 'Active' }, { value: 'paused', label: 'Paused' }, { value: 'done', label: 'Done' }]);
+    const client = el('span', 'dval'); client.id = 'prClient';
+    const tasks = el('span', 'dval dmuted'); tasks.id = 'prTaskSum';
+    const props = el('div', 'dprops'); props.append(ui.props([{ label: 'Status', icon: 'circle-check', value: status }, { label: 'Client', icon: 'building-2', value: client }, { label: 'Tasks', icon: 'square-check', value: tasks }]));
+    const sug = el('div', 'dsuggest'); sug.id = 'prSuggest';
+    const personAdd = crmAddRow('pr', 'prPersonEmail', { placeholder: 'email@example.com', ghostLabel: 'Add by email', label: 'Person email', onAdd: addProjectPerson });
+    personAdd.input.type = 'email'; personAdd.querySelector('button[type=submit]').id = 'prPersonAdd';
+    const linkAdd = pairAddRow('pr', { id: 'prLinkNew', labelId: 'prLinkTitle', addId: 'prLinkAdd', labelPlaceholder: 'Label', labelAria: 'New link label', placeholder: 'Cloud URL or local path', label: 'New link: a cloud URL or local path', ghostLabel: 'Add link', onAdd: addProjectLink });
+    const foot = el('div', 'dfoot2'); const created = el('span', 'dcreated'); created.id = 'prCreated'; foot.append(created);
+    $('prBody').append(dtitle('prName', 'Project name', 'Project name'), props,
+      crmSection('prGoalSec', { title: 'Goal', body: dnote('prNorth', 'Project goal', 'What this project should achieve.') }),
+      crmSection('prPeopleSec', { title: 'People', body: [dlist('prPeople'), sug, personAdd] }, 'prPeopleCount', true),
+      crmSection('prLinkSec', { title: 'Links', body: [dlist('prLinks'), linkAdd] }, 'prLinkCount', true),
+      crmSection('prTaskSec', { title: 'Open tasks', body: dlist('prTasks') }, 'prTaskCount'),
+      crmSection('prDoneSec', { title: 'Completed tasks', collapsible: true, open: false, body: dlist('prDoneTasks') }, 'prDoneCount'),
+      foot);
+  }
+  buildProjectDrawer();
+  function syncProjectStatus(v) { const w = $('prStatus').parentElement; ['ok', 'warn', 'neutral'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + (PROJECT_TONE[v] || 'neutral')); }
+  function openProject(id) {
+    editingProject = id; prSig = ''; resetCrmRows('pr'); $('prDoneSec').toggle(false); fillProjectDrawer(true);
+    $('dlgProject').showModal(); $('prBody').scrollTop = 0; autosize($('prName'));
+  }
   function fillProjectDrawer(force) {
     const pr = projectById(editingProject); if (!pr) { $('dlgProject').close(); return; }
-    if (force || document.activeElement !== $('prName')) $('prName').value = pr.name || '';
-    $('prStatus').value = pr.status || 'active';
+    const linked = state.tasks.filter(t => t.project === pr.id), mates = pr.client ? state.contacts.filter(p => p.company === pr.client) : [];
+    const sig = JSON.stringify([pr, linked, mates.map(p => [p.name, p.emails])]); if (!force && sig === prSig) return; prSig = sig;
+    if (force || document.activeElement !== $('prName')) $('prName').value = pr.name || ''; autosize($('prName'));
+    $('prStatus').value = pr.status || 'active'; syncProjectStatus($('prStatus').value);
+    const cbox = $('prClient'); cbox.textContent = '';
+    if (pr.client) { const c = ui.pill({ text: pr.client, icon: 'building-2', tone: 'accent', onClick: () => { $('dlgProject').close(); openClient(pr.client); } }); c.title = `Open client ${pr.client}`; cbox.append(roKeep(c)); }
+    else cbox.append(el('span', 'dmuted', 'No client'));
     if (force || document.activeElement !== $('prNorth')) $('prNorth').value = pr.north_star || '';
     const pbox = $('prPeople'); pbox.textContent = '';
     (pr.people || []).forEach(em => {
-      const person = personByEmail(em), row = el('div', 'methodrow');
-      row.append(el('span', null, person ? `${person.name} (${em})` : em));
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.onclick = () => projectEdit(pr.id, x => { x.people = (x.people || []).filter(e => e.toLowerCase() !== em.toLowerCase()); }, 'Project people');
-      row.append(x); pbox.append(row);
+      const person = personByEmail(em), who = person ? person.name : em;
+      pbox.append(ui.listRow({ text: who, meta: person ? em : '', icon: 'user', removeLabel: `Remove ${who} from the project`,
+        onRemove: async () => { const id = pr.id; if (!(await askRemoval(`${who} from the project`)) || editingProject !== id) return; projectEdit(id, x => { x.people = (x.people || []).filter(e => e.toLowerCase() !== em.toLowerCase()); }, 'Project people'); } }));
     });
     const sug = $('prSuggest'); sug.textContent = '';
-    if (pr.client) {
-      const on = new Set((pr.people || []).map(e => e.toLowerCase()));
-      state.contacts.filter(p => p.company === pr.client).forEach(p => {
-        (p.emails || []).forEach(em => { if (!em.value || on.has(em.value.toLowerCase())) return;
-          const b = el('button', 'small', `+ ${p.name}`); b.type = 'button'; b.title = em.value;
-          b.onclick = () => projectEdit(pr.id, x => { x.people = x.people || []; if (!x.people.some(e => e.toLowerCase() === em.value.toLowerCase())) x.people.push(em.value); }, `Add ${p.name} to project`);
-          sug.append(b); });
-      });
-    }
-    renderLinkBox($('prLinks'), pr.links || [], l => projectEdit(pr.id, x => { x.links = (x.links || []).filter(y => y.url !== l.url); }, `Project links`), true, 'project resource');
-    const tbox = $('prTasks'); tbox.textContent = '';
-    const dc = doneCol();
-    state.tasks.filter(t => t.project === pr.id && t.column !== dc).forEach(t => tbox.append(listRow(t)));
-    if (!tbox.childNodes.length) tbox.append(el('div', 'muted small', 'No open tasks linked to this project.'));
-    const doneBox = $('prDoneTasks'); doneBox.textContent = '';
-    state.tasks.filter(t => t.project === pr.id && t.column === dc).forEach(t => doneBox.append(listRow(t)));
-    if (!doneBox.childNodes.length) doneBox.append(el('div', 'muted small', 'No completed tasks linked to this project.'));
-    $('prDelete').hidden = !!ro;
+    const on = new Set((pr.people || []).map(e => e.toLowerCase()));
+    mates.forEach(p => (p.emails || []).forEach(em => {
+      if (!em.value || on.has(em.value.toLowerCase())) return;
+      const b = ui.pill({ text: p.name, icon: 'plus', outline: true, onClick: () => projectEdit(pr.id, x => { x.people = x.people || []; if (!x.people.some(e => e.toLowerCase() === em.value.toLowerCase())) x.people.push(em.value); }, `Add ${p.name} to project`) });
+      b.title = `Add ${p.name} (${em.value})`; sug.append(b);
+    }));
+    setCount('prPeopleCount', (pr.people || []).length); $('prPeopleSec').classList.toggle('is-empty', !(pr.people || []).length && !sug.childNodes.length);
+    renderLinkBox($('prLinks'), pr.links || [], l => projectEdit(pr.id, x => { x.links = (x.links || []).filter(y => y.url !== l.url); }, 'Project links'), true, 'project resource');
+    setCount('prLinkCount', (pr.links || []).length); $('prLinkSec').classList.toggle('is-empty', !(pr.links || []).length);
+    const dc = doneCol(), open = linked.filter(t => t.column !== dc), done = linked.filter(t => t.column === dc);
+    const tbox = $('prTasks'); tbox.textContent = ''; open.forEach(t => tbox.append(drawerTaskRow(t))); if (!open.length) tbox.append(dempty('No open tasks linked to this project.'));
+    const dbox = $('prDoneTasks'); dbox.textContent = ''; done.forEach(t => dbox.append(drawerTaskRow(t))); if (!done.length) dbox.append(dempty('No completed tasks linked to this project.'));
+    setCount('prTaskCount', open.length); setCount('prDoneCount', done.length);
+    $('prTaskSum').textContent = linked.length ? `${open.length} open · ${done.length} done` : 'No tasks yet';
+    $('prCreated').textContent = pr.created ? 'Created ' + new Date(pr.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   }
   const projectEdit = (id, fn, msg) => mutate(n => { const p = (n.projects || []).find(x => x.id === id); if (p) { fn(p); p.updated = nowIso(); } }, msg || 'Update project');
   $('prName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) projectEdit(editingProject, p => { p.name = v; }); });
-  $('prStatus').onchange = e => projectEdit(editingProject, p => { p.status = e.target.value; });
+  $('prStatus').onchange = e => { syncProjectStatus(e.target.value); projectEdit(editingProject, p => { p.status = e.target.value; }); };
   $('prNorth').addEventListener('change', e => projectEdit(editingProject, p => { p.north_star = e.target.value; }));
-  $('prPersonAdd').onclick = () => { const em = $('prPersonEmail').value.trim(); if (!em) return; projectEdit(editingProject, p => { p.people = p.people || []; if (!p.people.some(x => x.toLowerCase() === em.toLowerCase())) p.people.push(em); }); $('prPersonEmail').value = ''; };
-  $('prLinkAdd').onclick = () => { const l = parseNamedLink($('prLinkTitle').value, $('prLinkNew').value, true); if (!l) { toast('Enter a cloud URL or local path.', true); return; }
-    projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); $('prLinkTitle').value = ''; $('prLinkNew').value = ''; };
+  function addProjectPerson(em) { if (!editingProject) return false; projectEdit(editingProject, p => { p.people = p.people || []; if (!p.people.some(x => x.toLowerCase() === em.toLowerCase())) p.people.push(em); }); }
+  function addProjectLink(title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or local path.', true); return false; }
+    projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); }
   $('prClose').onclick = () => $('dlgProject').close();
-  $('prDelete').onclick = () => {
+  async function deleteProject() {
     const pr = projectById(editingProject); if (!pr || ro) return;
     const linked = state.tasks.filter(t => t.project === pr.id);
-    let clear = false;
-    if (linked.length) clear = confirm(`Remove project "${pr.name}" and clear it from ${linked.length} task(s)?\n\nOK clears task.project. Cancel keeps the project.`);
-    else if (!confirm(`Remove project "${pr.name}"?`)) return;
-    if (linked.length && !clear) return;
+    if (linked.length) { if (!(await ask('Remove project?', [`Remove project "${pr.name}" and clear it from ${linked.length} task(s)?`, 'Remove clears task.project. Cancel keeps the project.'], 'Remove', true))) return; }
+    else if (!(await ask('Remove project?', `Remove project "${pr.name}"?`, 'Remove', true))) return;
     mutate(n => {
       n.projects = (n.projects || []).filter(p => p.id !== pr.id);
-      if (clear) n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });
+      n.tasks.forEach(t => { if (t.project === pr.id) t.project = ''; });   // also tasks linked while the dialog was open
     }, `Remove project: ${pr.name}`).then(ok => { if (ok) $('dlgProject').close(); });
-  };
+  }
+  function openProjectMenu(anchor) {
+    const pr = projectById(editingProject); if (!pr) return; const items = [];
+    if (pr.client) items.push({ label: `Open client ${pr.client}`, icon: 'building-2', onSelect: () => { $('dlgProject').close(); openClient(pr.client); } });
+    items.push({ label: 'Copy project name', icon: 'copy', onSelect: () => copyText(pr.name, 'Project name copied') });
+    if (!ro) items.push({ separator: true }, { label: 'Delete project', icon: 'trash-2', danger: true, onSelect: deleteProject });
+    ui.menu(anchor, items, { label: `Actions for ${pr.name}` });
+  }
   $('dlgProject').addEventListener('close', () => { editingProject = ''; render(); });
 
   // ==== Keeptrack CRM: people (contacts) with a stage and a next step; Today, People and Pipeline views ====
@@ -2886,7 +3406,7 @@ if (typeof window !== 'undefined') (() => {
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
   }
-  // ---- Settings → General → Columns: one mutate per action, so each can be undone ---------------------------------
+  // ---- Settings → Board → Columns: one mutate per action, so each can be undone ---------------------------------
   const PROTECTED_COLS = ['todo', 'in-progress', 'done'];   // the agent commands put cards in these by id
   const colSlug = (name, used) => { const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'column'; let id = base, n = 2; while (used.has(id)) id = `${base}-${n++}`; return id; };   // same ids as keeptrack.py column-add
   let colRemoving = '';   // the column whose "move its cards to" row is open
@@ -2904,19 +3424,20 @@ if (typeof window !== 'undefined') (() => {
         b.onclick = () => mutate(d => { const k = d.columns.findIndex(y => y.id === c.id), o = k + dir; if (k < 0 || o < 0 || o >= d.columns.length) return; [d.columns[k], d.columns[o]] = [d.columns[o], d.columns[k]]; }, `Move column: ${c.name}`).then(renderColumnsBox); return b; };
       const x = el('button', 'small danger', 'Remove'); x.type = 'button'; x.disabled = locked || cols.length <= 1 || PROTECTED_COLS.includes(c.id) || c.id === dc;
       if (x.disabled && !locked) x.title = cols.length <= 1 ? 'A board needs at least one column' : 'Agents rely on this column';
-      x.onclick = () => { if (!n) { if (confirmRemoval(`the “${c.name}” column`)) removeColumn(c.id, ''); return; } colRemoving = colRemoving === c.id ? '' : c.id; renderColumnsBox(); };
+      x.onclick = async () => { if (!n) { if (await askRemoval(`the “${c.name}” column`, 'Remove column?')) removeColumn(c.id, ''); return; } colRemoving = colRemoving === c.id ? '' : c.id; renderColumnsBox(); };
       row.append(name, count, mv(-1, c.name), mv(1, c.name), x);
       if (colRemoving === c.id && n) {
         const box = el('div', 'colmove'), sel = el('select'), go = el('button', 'small danger', 'Move cards and remove'), no = el('button', 'small', 'Cancel');
         sel.setAttribute('aria-label', `Where to move the ${n} cards from ${c.name}`); cols.filter(y => y.id !== c.id).forEach(y => { const o = el('option', null, y.name); o.value = y.id; sel.append(o); });
         go.type = no.type = 'button'; no.onclick = () => { colRemoving = ''; renderColumnsBox(); };
-        go.onclick = () => { const to = sel.value, dest = colName(to);
-          if (!confirm(`Remove the “${c.name}” column and move its ${n} card${n === 1 ? '' : 's'} to “${dest}”?\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) return; removeColumn(c.id, to); };
+        go.onclick = async () => { const to = sel.value, dest = colName(to);
+          if (!(await ask('Remove column?', [`Remove the “${c.name}” column and move its ${n} card${n === 1 ? '' : 's'} to “${dest}”?`, UNDO_HINT], 'Move and remove', true))) return; removeColumn(c.id, to); };
         box.append(el('span', null, `Move its ${n} card${n === 1 ? '' : 's'} to`), sel, go, no); row.append(box);
       }
       list.append(row);
     });
     $('colNew').disabled = $('colAdd').disabled = locked;
+    uiBtns(list);
   }
   async function removeColumn(id, to) {
     const col = state.columns.find(c => c.id === id); if (!col) return;
@@ -2936,7 +3457,7 @@ if (typeof window !== 'undefined') (() => {
   $('colAdd').onclick = async () => {
     const v = $('colNew').value.trim(); if (!v) { $('colNew').focus(); return; }
     if (state.columns.some(c => c.name.toLowerCase() === v.toLowerCase())) { toast(`A column called “${v}” already exists.`, true); return; }
-    const ok = await mutate(d => { const at = d.columns.length && d.columns[d.columns.length - 1].id === (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1]).id ? d.columns.length - 1 : d.columns.length;
+    const ok = await mutate(d => { if (d.columns.some(c => c.name.toLowerCase() === v.toLowerCase())) return; const at = d.columns.length && d.columns[d.columns.length - 1].id === (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1]).id ? d.columns.length - 1 : d.columns.length;
       d.columns.splice(at, 0, { id: colSlug(v, new Set(d.columns.map(c => c.id))), name: v }); }, `Add column: ${v}`);
     if (ok) $('colNew').value = ''; renderColumnsBox();
   };
@@ -3000,6 +3521,27 @@ if (typeof window !== 'undefined') (() => {
   }
   const parsePerson = s => { const x = s.split('|').map(v => v.trim()); return [x[0], { company: x[1] || '', role: x[2] || '', email: x[3] || '' }]; };
 
+  // ---- the add-person form: a centred sheet with the name, then the optional details as one property list ----
+  function buildAddPersonForm() {
+    const head = el('header', 'ui-sheet__head'), title = el('h2', 'ui-sheet__title', 'Add a person'); title.id = 'apTitle';
+    const x = ui.iconButton({ icon: 'x', label: 'Close' }); x.id = 'apX'; head.append(title, x);
+    const body = el('div', 'ui-sheet__body'), nameLab = el('label', 'ui-field__label', 'Name'); nameLab.htmlFor = 'apName'; nameLab.append(el('span', 'required', 'Required'));
+    const name = el('input', 'ui-input apname'); name.id = 'apName'; name.name = 'name'; name.autocomplete = 'name'; name.required = true; name.setAttribute('aria-required', 'true');
+    const f = (id, nm, label, opts) => { const i = dfield(id, label, opts); i.name = nm; return i; };
+    const companies = el('datalist'); companies.id = 'apCompanies';
+    body.append(el('p', 'ui-sheet__text', 'Only their name is required. You can add more details now or later.'), nameLab, name, el('h3', 'apopt', 'Optional details'), ui.props([
+      { label: 'Client', icon: 'building-2', value: [f('apCompany', 'company', 'Client', { list: 'apCompanies', autocomplete: 'organization' }), companies] },
+      { label: 'Role', icon: 'briefcase', value: f('apRole', 'role', 'Role', { autocomplete: 'organization-title' }) },
+      { label: 'Email', icon: 'mail', value: f('apEmail', 'email', 'Email', { type: 'email', autocomplete: 'email' }) },
+      { label: 'Phone', icon: 'phone', value: f('apPhone', 'phone', 'Phone', { type: 'tel', autocomplete: 'tel' }) },
+      { label: 'LinkedIn', icon: 'link', value: f('apLinkedin', 'linkedin', 'LinkedIn', { type: 'url', placeholder: 'https://linkedin.com/in/…', autocomplete: 'url' }) },
+      { label: 'GitHub', icon: 'github', value: f('apGithub', 'github', 'GitHub', { placeholder: 'github-username', autocomplete: 'username' }) }
+    ]));
+    const foot = el('footer', 'ui-sheet__foot'), cancel = ui.button({ label: 'Cancel' }), save = ui.button({ label: 'Add person', variant: 'primary', type: 'submit' });
+    cancel.id = 'apCancel'; save.id = 'apSave'; foot.append(cancel, save);
+    $('apForm').append(head, body, foot);
+  }
+  buildAddPersonForm();
   let addPersonExtra = {};
   function openAddPersonForm(seed, extra) {
     const [name, parsed] = parsePerson(seed || ''), d = $('dlgAddPerson'); addPersonExtra = Object.assign({}, extra || {}); $('apForm').reset();
@@ -3018,25 +3560,20 @@ if (typeof window !== 'undefined') (() => {
   $('apCancel').onclick = $('apX').onclick = () => $('dlgAddPerson').close();
   $('dlgAddPerson').addEventListener('close', () => { addPersonExtra = {}; $('apSave').disabled = false; });
 
-  function stagePill(s) { const b = el('span', 'stagepill' + (closedStage(s) ? ' closed' : ''), s || '—'); b.style.setProperty('--h', hashHue(s || '')); return b; }
-  function dueBadge(p) {
-    if (!p.next_due) return el('span', 'pdue none', p.next ? 'no date' : '');
-    const t = todayIso(), cls = p.next_due < t ? ' late' : p.next_due === t ? ' today' : '';
-    return el('span', 'pdue' + cls, p.next_due < t ? `${fmtDue(p.next_due)} · overdue` : p.next_due === t ? 'today' : fmtDue(p.next_due));
-  }
+  function stagePill(s) { const b = el('span', 'stagepill' + (closedStage(s) ? ' closed' : ''), s || '—'); b.style.setProperty('--h', ui.hueFor(s || '')); return b; }
   function personRow(p) {
     const row = el('div', 'prow'); row.tabIndex = 0; row.onclick = () => openContact(p.id); row.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
     const who = el('div', 'pwho'); who.append(el('b', null, p.name || '(no name)'), el('span', 'muted', [p.role, p.company].filter(Boolean).join(' · ')));
-    const nx = el('div', 'pnext'); nx.append(el('span', null, p.next || (closedStage(p.stage) ? '' : 'No next step')), dueBadge(p));
+    const nx = el('div', 'pnext'); nx.append(el('span', null, p.next || (closedStage(p.stage) ? '' : 'No next step')), personDue(p));
     const lt = lastTouch(p), ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
     row.append(who, stagePill(p.stage), nx, ago); return row;
   }
   function taskTodayRow(t) {   // a task on Today, in the same layout as a person row
     const row = el('div', 'prow ttoday'); row.tabIndex = 0; row.onclick = e => { if (!e.target.closest('.todayactions')) openCard(t.id); }; row.onkeydown = e => { if (e.key === 'Enter' && e.target === row) openCard(t.id); };
     const who = el('div', 'pwho'); who.append(el('b', null, (t.num ? '#' + t.num + ' ' : '') + t.title), el('span', 'muted', [t.client, colName(t.column)].filter(Boolean).join(' · ')));
-    const pr = el('span', 'stagepill tprio', t.priority ? t.priority[0].toUpperCase() + t.priority.slice(1) : 'Task'); pr.dataset.v = t.priority || '';
+    const pr = prioPill(t);
     const done = t.todos.filter(d => d.done).length, nx = el('div', 'pnext');
-    nx.append(el('span', null, t.todos.length ? `Checklist ${done}/${t.todos.length}` : 'Task'), dueBadge({ next_due: t.due, next: 'x' }));
+    nx.append(el('span', null, t.todos.length ? `Checklist ${done}/${t.todos.length}` : 'Task'), duePill(t) || '');
     const tail = el('div', 'todaytail'), assigned = el('span', 'plast muted', t.assignees.length ? t.assignees.map(a => '@' + a).join(', ') : 'nobody assigned'), actions = taskQuickActions(t); actions.classList.add('todayactions');
     tail.append(assigned, actions); row.append(who, pr, nx, tail); return row;
   }
@@ -3076,13 +3613,13 @@ if (typeof window !== 'undefined') (() => {
     }
     if (go.childElementCount) wrap.append(go);
     const addGroups = list => list.forEach(([[ic, title], items]) => {
-      if (!items.length) return; const sec = el('section', 'tsec'); sec.append(elI('h3', null, ic, `${title} (${items.length})`));
-      items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec); wrap.append(sec);
+      if (!items.length) return; const sec = ui.section({ title, count: items.length, icon: ic }); sec.classList.add('tsec');
+      items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec.body); wrap.append(sec);
     });
     addGroups(groups.slice(0, 2));
-    if (dueTasks.length) { const sec = el('section', 'tsec'); sec.append(elI('h3', null, 'square-check', `Tasks due (${dueTasks.length})`)); dueTasks.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', dueTasks, taskTodayRow, sec); wrap.append(sec); }
+    if (dueTasks.length) { const sec = ui.section({ title: 'Tasks due', count: dueTasks.length, icon: 'square-check' }); sec.classList.add('tsec'); dueTasks.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', dueTasks, taskTodayRow, sec.body); wrap.append(sec); }
     addGroups(groups.slice(2));
-    if (hasCrm && !state.contacts.length) { const e = el('div', 'empty'); e.append(el('p', null, 'No people yet. Add the first person you want to keep track of.')); wrap.append(e); }
+    if (hasCrm && !state.contacts.length) wrap.append(ui.empty({ text: 'No people yet. Add the first person you want to keep track of.', icon: 'users' }));
     if (hasCrm) wrap.append(addPersonBox()); board.append(wrap);
   }
 
@@ -3097,7 +3634,7 @@ if (typeof window !== 'undefined') (() => {
     const items = state.contacts.filter(p => crmFilter(p) && (!peopleStage || p.stage === peopleStage) && (!ql || [p.name, p.company, p.role, p.notes, p.next, ...p.emails.map(x => x.value), ...p.phones.map(x => x.value), ...p.links.flatMap(x => [x.title, x.url])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => a.name.localeCompare(b.name));
     capList('people', items, personRow, wrap);
-    if (!items.length) wrap.append(el('div', 'emptycol', state.contacts.length ? 'Nobody matches.' : 'No people yet.'));
+    if (!items.length) wrap.append(ui.empty({ text: state.contacts.length ? 'Nobody matches.' : 'No people yet.', icon: 'users' }));
     wrap.append(addPersonBox()); board.append(wrap);
   }
 
@@ -3106,7 +3643,7 @@ if (typeof window !== 'undefined') (() => {
     const money = v => { const n = parseFloat(String(v).replace(/[^0-9.]/g, '')); return isFinite(n) ? n : 0; };
     stages().forEach(s => {
       const items = state.contacts.filter(p => p.stage === s && crmFilter(p)), sum = items.reduce((a, p) => a + money(p.value), 0);
-      const c = el('section', 'col'); c.dataset.stage = s; const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', s), el('span', 'count', String(items.length)));
+      const c = el('section', 'col'); c.dataset.stage = s; const h = colHead(s, items.length);
       if (sum) h.append(el('span', 'psum', sum.toLocaleString('en-GB'))); c.append(h);
       const cards = el('div', 'cards');
       cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
@@ -3119,11 +3656,11 @@ if (typeof window !== 'undefined') (() => {
         k.onclick = () => openContact(p.id); k.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
         k.append(el('div', 'ctitle', p.name || '(no name)'));
         if (p.company || p.role) k.append(el('div', 'muted small', [p.role, p.company].filter(Boolean).join(' · ')));
-        if (p.next || p.next_due) { const nx = el('div', 'pnext small'); nx.append(el('span', null, p.next || ''), dueBadge(p)); k.append(nx); }
+        if (p.next || p.next_due) { const nx = el('div', 'pnext small'); nx.append(el('span', null, p.next || ''), personDue(p)); k.append(nx); }
         if (p.value) k.append(el('div', 'pval', p.value));
         return k;
       }, cards);
-      if (!items.length) cards.append(el('div', 'emptycol', 'Drop a person here.'));
+      if (!items.length) cards.append(emptyNote('Drop a person here.', 'user'));
       c.append(cards);
       if (s === stages()[0]) c.append(addPersonBox('Add: Name | Client', { stage: s }));
       board.append(c);
@@ -3133,86 +3670,157 @@ if (typeof window !== 'undefined') (() => {
   // ---- person drawer --------------------------------------------------------
   let editingContact = null, pSig = '';
   const PF = [['pRole', 'role'], ['pCompany', 'company'], ['pValue', 'value'], ['pSource', 'source'], ['pGithub', 'github']];
-  function openContact(id) {
-    editingContact = id; pSig = ''; fillContact(true);
-    const d = $('dlgContact'); if (!d.open) d.showModal();
+  function buildPersonDrawer() {
+    const av = ui.avatar('', { size: 'lg' }); av.id = 'pAvatar';
+    const undo = ui.iconButton({ icon: 'undo-2', label: 'Undo last board change' }); undo.id = 'pUndo'; undo.disabled = true;
+    const agent = ui.iconButton({ icon: 'bot', label: 'Copy for AI' }); agent.id = 'pAgent'; agent.title = 'Copy this person and their recent contact for Claude, Codex or ChatGPT, for example to write a message'; roKeep(agent);
+    drawerHead('p', { kind: 'Person', tile: av, more: openPersonMenu, extra: [undo, agent] });
+    // properties: stage, next step and its date, then the person's details
+    const due = datePill('pNextDue', 'Next step date', 'No date'); due.querySelector('.ui-pill__remove').dataset.due = '';   // clears like the quick-date buttons
+    const quick = [['0', 'Today'], ['1', 'Tomorrow'], ['7', '+1 week']].map(([d, l]) => { const b = ui.button({ label: l, size: 'sm', variant: 'ghost' }); b.dataset.due = d; b.classList.add('dquick'); return b; });
+    const companies = el('datalist'); companies.id = 'pCompanies';
+    const props = el('div', 'dprops'); props.id = 'pProps';
+    props.append(ui.props([
+      { label: 'Stage', icon: 'trending-up', value: drawerSelect('pStage', 'Stage') },
+      { label: 'Next step', icon: 'arrow-right', value: dfield('pNext', 'Next step', { placeholder: 'For example: send a LinkedIn message' }) },
+      { label: 'Next date', icon: 'calendar', value: [due, ...quick] },
+      { label: 'Client', icon: 'building-2', value: [dfield('pCompany', 'Client', { list: 'pCompanies', autocomplete: 'off' }), companies] },
+      { label: 'Role', icon: 'briefcase', value: dfield('pRole', 'Role') },
+      { label: 'Value', icon: 'pound-sterling', value: dfield('pValue', 'Value', { placeholder: 'For example: 5000' }) },
+      { label: 'Source', icon: 'compass', value: dfield('pSource', 'Source', { placeholder: 'For example: weekly opportunity run' }) },
+      { label: 'GitHub', icon: 'github', value: dfield('pGithub', 'GitHub username', { placeholder: 'github-username', autocomplete: 'username' }) }
+    ]));
+    // sections
+    const emailAdd = pairAddRow('p', { id: 'pEmailNew', labelId: 'pEmailLabel', addId: 'pEmailAdd', type: 'email', labelPlaceholder: 'Label, e.g. Work', labelAria: 'New email label', placeholder: 'name@example.com', label: 'New email address', ghostLabel: 'Add email', onAdd: (lab, v, input) => addContactMethod('email', lab, v, input) });
+    const phoneAdd = pairAddRow('p', { id: 'pPhoneNew', labelId: 'pPhoneLabel', addId: 'pPhoneAdd', type: 'tel', labelPlaceholder: 'Label, e.g. Mobile', labelAria: 'New phone label', placeholder: 'Phone number', label: 'New phone number', ghostLabel: 'Add phone', onAdd: (lab, v, input) => addContactMethod('phone', lab, v, input) });
+    const methods = el('div', 'contactmethods');
+    methods.append(crmSection('pEmailSec', { title: 'Emails', body: [dlist('pEmails'), emailAdd] }, 'pEmailCount', true), crmSection('pPhoneSec', { title: 'Phones', body: [dlist('pPhones'), phoneAdd] }, 'pPhoneCount', true));
+    const touchText = el('textarea'); touchText.id = 'pTouchText'; touchText.rows = 2; touchText.placeholder = 'What did you send or talk about? Paste a draft message here too.'; touchText.setAttribute('aria-label', 'Contact log entry');
+    const draftWrap = el('label', 'chk ddraft'); draftWrap.id = 'pDraftWrap'; const draft = el('input'); draft.type = 'checkbox'; draft.id = 'pDraft'; draftWrap.append(draft, document.createTextNode(' Draft (not sent yet)'));
+    const post = ui.button({ label: 'Log it', variant: 'primary', size: 'sm' }); post.id = 'pTouchPost';
+    const composer = el('div', 'composer'), cbtns = el('div', 'cbtns'); cbtns.append(drawerSelect('pChan', 'Channel', CHANNELS.map(([value, , label]) => ({ value, label }))), draftWrap, post); composer.append(touchText, cbtns);
+    const touches = dlist('pTouches'); touches.classList.add('cmlist'); touches.setAttribute('aria-live', 'polite');
+    const taskAdd = crmAddRow('p', 'pTaskNew', { placeholder: 'Task title', ghostLabel: 'Add task', label: 'New task for this person', onAdd: addPersonTask });
+    const linkAdd = pairAddRow('p', { id: 'pLinkNew', labelId: 'pLinkTitle', addId: 'pLinkAdd', type: 'url', labelPlaceholder: 'Label (for example LinkedIn)', labelAria: 'New link label', placeholder: 'https://…', label: 'New link: an http(s) address', ghostLabel: 'Add link', onAdd: addPersonLink });
+    const fileAdd = pairAddRow('p', { id: 'pFileNew', labelId: 'pFileTitle', addId: 'pFileAdd', labelPlaceholder: 'Label (for example Client Drive)', labelAria: 'New file label', placeholder: 'Cloud URL or local path', label: 'New file or folder: a cloud URL or local path', ghostLabel: 'Add file or folder', onAdd: addCompanyFile });
+    const clientOpen = ui.button({ label: 'Open client', icon: 'arrow-right', variant: 'ghost', size: 'sm' }); clientOpen.id = 'pClientOpen'; roKeep(clientOpen);
+    const files = crmSection('pFilesSec', { title: 'Files and folders', body: [dlist('pFiles'), fileAdd, dhint(FILES_HINT)] }, 'pFileCount', true);
+    files.querySelector('.ui-section__text').id = 'pFilesH';
+    const hist = el('ol', 'hist'); hist.id = 'pHist';
+    const foot = el('div', 'dfoot2'), created = el('span', 'dcreated'); created.id = 'pCreated'; foot.append(created);
+    $('pBody').append(dtitle('pName', 'Name', 'Name'), props, methods,
+      crmSection('pTouchSec', { title: 'Contact log', body: [composer, touches] }, 'pTouchCount'),
+      crmSection('pNotesSec', { title: 'Notes', body: dnote('pNotes', 'Notes', 'Anything to remember about this person.') }),
+      crmSection('pTasksSec', { title: 'Tasks', body: [dlist('pTasks'), taskAdd] }, 'pTaskCount', true),
+      crmSection('pLinkSec', { title: 'Links', body: [dlist('pLinks'), linkAdd, dhint('LinkedIn, company website, blog, portfolio, or another page about this person.')] }, 'pLinkCount', true),
+      crmSection('pNorthSec', { title: 'Client north star', action: clientOpen, body: dnote('pNorthStar', 'Client north star', 'What we are trying to solve for this client and what success looks like.') }),
+      crmSection('pProjSec', { title: 'Projects', body: dlist('pProjList') }, 'pProjCount'),
+      files,
+      crmSection('pHistSec', { title: 'History', collapsible: true, open: false, body: hist }, 'pHistCount'),
+      foot);
   }
+  buildPersonDrawer();
+  function openContact(id) {
+    if (editingContact !== id) { const ta = $('pTouchText'); ta.value = ''; autosize(ta); $('pDraft').checked = false; $('pChan').value = CHANNELS[0][0]; }   // a half-written log entry never carries over to another person
+    editingContact = id; pSig = ''; resetCrmRows('p'); $('pHistSec').toggle(false);
+    fillContact(true);
+    const d = $('dlgContact'); if (!d.open) { d.showModal(); $('pBody').scrollTop = 0; }
+    autosize($('pName')); autosize($('pNotes'));
+  }
+  const STAGE_TONE = s => /^won$/i.test(s) ? 'ok' : /^lost$/i.test(s) ? 'neutral' : s === stages()[0] ? 'neutral' : 'info';
+  function syncStage(v) { const w = $('pStage').parentElement; ['ok', 'neutral', 'info'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + STAGE_TONE(v)); }
+  const syncNextDue = v => paintDate('pNextDue', v, { empty: 'No date' });   // overdue is red, today amber, like a task's due date
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
-    const sig = JSON.stringify([p, p.company && (state.client_info || {})[p.company], state.tasks.filter(t => t.contact === p.id)]); if (!force && sig === pSig) return; pSig = sig;
+    const sig = JSON.stringify([p, p.company && (state.client_info || {})[p.company], p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), modes()]); if (!force && sig === pSig) return; pSig = sig;
     const keep = id => document.activeElement === $(id);
-    if (!keep('pName')) $('pName').value = p.name;
-    const st = $('pStage'); st.textContent = ''; [...new Set([...stages(), p.stage])].forEach(s => { const o = el('option', null, s); o.value = s; st.append(o); }); st.value = p.stage;
-    if (!keep('pNext')) $('pNext').value = p.next; if (!keep('pNextDue')) $('pNextDue').value = p.next_due;
+    { const a = ui.avatar(p.name || '?', { size: 'lg' }); a.id = 'pAvatar'; $('pAvatar').replaceWith(a); }
+    if (!keep('pName')) $('pName').value = p.name; autosize($('pName'));
+    const st = $('pStage'); st.textContent = ''; [...new Set([...stages(), p.stage])].forEach(s => { const o = el('option', null, s); o.value = s; st.append(o); }); st.value = p.stage; syncStage(p.stage);
+    if (!keep('pNext')) $('pNext').value = p.next; if (!keep('pNextDue')) $('pNextDue').value = p.next_due; syncNextDue(p.next_due);
     PF.forEach(([fid, k]) => { if (!keep(fid)) $(fid).value = p[k] || ''; });
     $('pCompanies').textContent = ''; [...new Set([...state.clients, ...state.contacts.map(x => x.company)].filter(Boolean))].forEach(c => { const o = el('option'); o.value = c; $('pCompanies').append(o); });
-    if (!keep('pNotes')) { $('pNotes').value = p.notes; autosize($('pNotes')); }
+    if (!keep('pNotes')) $('pNotes').value = p.notes; autosize($('pNotes'));
     renderContactMethods(p);
     // links: this person's own, and the files of their company (client)
     renderLinkBox($('pLinks'), p.links, l => pedit(p.id, x => { x.links = x.links.filter(y => y.url !== l.url); syncContactLegacy(x); }, `Links: ${p.name}`), false, 'profile/reference link');
+    setCount('pLinkCount', p.links.length); $('pLinkSec').classList.toggle('is-empty', !p.links.length);
     const co = p.company, info = co ? clientInfo(co) : null;
-    $('pNorthSec').hidden = !co; $('pProjSec').hidden = !co; $('pClientOpen').hidden = !co;
+    $('pNorthSec').hidden = !co; $('pProjSec').hidden = !co; $('pClientOpen').hidden = !co; $('pFilesSec').hidden = !co;
     if (co) {
-      if (!document.activeElement || document.activeElement.id !== 'pNorthStar') $('pNorthStar').value = info.north_star || '';
-      const pl = $('pProjList'); pl.textContent = '';
-      projectsForClient(co).forEach(pr => { const b = el('button', 'prowbtn'); b.type = 'button'; b.append(el('b', null, pr.name), el('span', 'muted', ' · ' + (pr.status || 'active'))); b.onclick = () => openProject(pr.id); pl.append(b); });
-      if (!pl.childNodes.length) pl.append(el('div', 'muted small', 'No projects for this client.'));
+      if (!keep('pNorthStar')) $('pNorthStar').value = info.north_star || '';
+      const pl = $('pProjList'), prs = projectsForClient(co); pl.textContent = '';
+      prs.forEach(pr => pl.append(projectNavRow(pr, () => openProject(pr.id)))); if (!prs.length) pl.append(dempty('No projects for this client.')); setCount('pProjCount', prs.length);
+      const files = info.links || []; $('pFilesH').textContent = `Files and folders for ${co}`;
+      renderLinkBox($('pFiles'), files, l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+      setCount('pFileCount', files.length); $('pFilesSec').classList.toggle('is-empty', !files.length);
     }
-    $('pFilesSec').hidden = !co; if (co) { setI($('pFilesH'), 'folders', `Files and folders for ${co}`); renderLinkBox($('pFiles'), info.links || [], l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource'); }
     renderTouches(p); renderPersonTasks(p);
-    const ol = $('pHist'); ol.textContent = ''; $('pHistSum').textContent = `History (${p.history.length})`;
-    p.history.slice().reverse().forEach(h => { const li2 = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li2.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li2); });
+    renderHistory($('pHist'), $('pHistCount'), p.history);
     $('pCreated').textContent = p.created ? `Added ${new Date(p.created).toLocaleDateString('en-GB')}${p.createdBy ? ' by ' + p.createdBy : ''}` : '';
   }
-  function renderContactMethods(p) {
-    const draw = (box, items, kind) => {
-      box.textContent = '';
-      items.forEach(item => {
-        const row = el('div', 'methodrow'), label = el('input', 'methodlabel'), value = el('input', 'methodvalue'), go = el('a', 'methodgo'), x = el('button', 'lx', '×');
-        label.value = item.label || ''; label.placeholder = 'Label'; label.setAttribute('aria-label', `${kind} label`);
-        value.value = item.value || ''; value.type = kind === 'email' ? 'email' : 'tel'; value.setAttribute('aria-label', kind === 'email' ? 'Email address' : 'Phone number');
-        go.href = kind === 'email' ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = kind === 'email' ? 'Write email' : 'Call'; go.append(svgIcon(kind === 'email' ? 'mail' : 'phone'));
-        const save = () => { const lab = label.value.trim(), val = value.value.trim(), fallback = kind === 'email' ? 'Email' : 'Phone';
-          if (!val) { if (!confirmRemoval(`the ${item.label || fallback} ${kind} “${item.value}”`)) { label.value = item.label || ''; value.value = item.value || ''; return; } }
-          else if (val !== item.value && !confirm(`Change ${p.name}'s ${item.label || fallback} ${kind}?\n\nFrom: ${item.value}\nTo: ${val}\n\nThis saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`)) { label.value = item.label || ''; value.value = item.value || ''; return; }
-          pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || fallback; found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
-        label.addEventListener('change', save); value.addEventListener('change', save);
-        x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', `Remove ${kind}`); x.onclick = () => { if (!confirmRemoval(`the ${item.label || (kind === 'email' ? 'Email' : 'Phone')} ${kind} “${item.value}”`)) return; pedit(p.id, q => { const list = kind === 'email' ? q.emails : q.phones; const i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
-        row.append(label, value, go, x); box.append(row);
-      });
-      if (!items.length) box.append(el('div', 'muted small', kind === 'email' ? 'No email addresses yet.' : 'No phone numbers yet.'));
-    };
-    draw($('pEmails'), p.emails, 'email'); draw($('pPhones'), p.phones, 'phone');
+  // one row per email or phone: label and value edit in place (a change asks first), mail/call, remove
+  function methodRow(p, item, kind) {
+    const email = kind === 'email', fallback = email ? 'Email' : 'Phone', row = el('div', 'ui-listrow dmethod');
+    const label = el('input', 'ui-input dfield methodlabel'), value = el('input', 'ui-input dfield methodvalue');
+    label.value = item.label || ''; label.placeholder = 'Label'; label.setAttribute('aria-label', `${kind} label`);
+    value.value = item.value || ''; value.type = email ? 'email' : 'tel'; value.setAttribute('aria-label', email ? 'Email address' : 'Phone number');
+    const go = el('a', 'ui-iconbtn ui-iconbtn--ghost ui-iconbtn--sm'); go.href = email ? 'mailto:' + item.value : 'tel:' + item.value.replace(/[^+\d]/g, ''); go.title = email ? 'Write email' : 'Call';
+    go.setAttribute('aria-label', `${go.title}: ${item.value}`); go.append(ui.icon(email ? 'mail' : 'phone'));
+    const reset = () => { label.value = item.label || ''; value.value = item.value || ''; };
+    const what = `the ${item.label || fallback} ${kind} “${item.value}”`, title = email ? 'Remove email?' : 'Remove phone?';
+    const save = async () => { const lab = label.value.trim(), val = value.value.trim();
+      if (!val) { if (!(await askRemoval(what, title))) { reset(); return; } }
+      else if (val !== item.value && !(await ask(email ? 'Change email?' : 'Change phone?', [`Change ${p.name}'s ${item.label || fallback} ${kind}?`, `From: ${item.value}`, `To: ${val}`, UNDO_HINT], 'Change'))) { reset(); return; }
+      pedit(p.id, q => { const list = email ? q.emails : q.phones, found = list.find(y => y.id === item.id); if (!found) return; found.label = lab || fallback; found.value = val; if (!val) list.splice(list.indexOf(found), 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); };
+    label.addEventListener('change', save); value.addEventListener('change', save);
+    const x = ui.iconButton({ icon: 'x', label: email ? 'Remove email' : 'Remove phone', size: 'sm', onClick: async () => { if (!(await askRemoval(what, title))) return;
+      pedit(p.id, q => { const list = email ? q.emails : q.phones, i = list.findIndex(y => y.id === item.id); if (i >= 0) list.splice(i, 1); syncContactLegacy(q); }, `Contact details: ${p.name}`); } });
+    row.append(label, value, go, x); return row;
   }
+  function renderContactMethods(p) {
+    [['pEmails', 'pEmailSec', 'pEmailCount', p.emails, 'email'], ['pPhones', 'pPhoneSec', 'pPhoneCount', p.phones, 'phone']].forEach(([box, sec, count, items, kind]) => {
+      setCount(count, items.length); $(sec).classList.toggle('is-empty', !items.length);
+      const b = $(box);
+      if (b.contains(document.activeElement)) {   // the user is typing in a row: keep it, and redraw once focus leaves the list
+        if (!b.dataset.redraw) { b.dataset.redraw = '1'; b.addEventListener('focusout', () => setTimeout(() => { if (b.contains(document.activeElement)) return; delete b.dataset.redraw; const q = contactNow(); if (q) renderContactMethods(q); }), { once: true }); }
+        return;
+      }
+      b.textContent = ''; items.forEach(item => b.append(methodRow(p, item, kind)));
+    });
+  }
+  // one list design for every drawer's links (task resources, profile links, client files, project links):
+  // icon, title (a GitHub issue or pull request by its number), host or "Local path", copy for local paths, remove (asks first)
   function renderLinkBox(box, links, onRemove, resources, kind = 'link') {
     box.textContent = '';
-    links.forEach(l => { const row = el('div', 'linkrow'), href = safeUrl(l.url), local = resources && localResource(l.url), main = href ? el('a', null, l.title || l.url) : el('span', 'resourcepath', l.title || l.url);
-      if (href) { main.href = href; main.target = '_blank'; main.rel = 'noopener noreferrer'; } else if (local) { main.title = l.url; }
-      const host = local ? 'Local path' : (() => { try { return new URL(l.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
-      if (local && l.title && l.title !== l.url) main.append(el('span', 'muted small resourcevalue', l.url));
-      const cp = local ? elI('button', 'lx', 'copy') : null; if (cp) { cp.type = 'button'; cp.title = 'Copy local path'; cp.setAttribute('aria-label', 'Copy local path'); cp.onclick = () => copyText(l.url, 'Path copied.'); }
-      const x = el('button', 'lx', '×'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove link'); x.onclick = () => { if (confirmRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); };
-      row.append(elI('span', 'li', local ? 'laptop' : storeIcon(host)), main, el('span', 'host', host)); if (cp) row.append(cp); row.append(x); box.append(row); });
-    if (!links.length) box.append(el('div', 'muted small', 'No links yet.'));
+    links.forEach(l => {
+      const g = ghLink(l.url), local = resources && localResource(l.url); let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
+      const row = ui.listRow({ text: g ? g.label : (l.title || l.url), meta: g && l.title && l.title !== l.url ? l.title : host, href: safeUrl(l.url) || undefined, icon: g ? 'github' : local ? 'laptop' : storeIcon(host), removeLabel: `Remove link ${l.title || l.url}`,
+        onRemove: async () => { if (await askRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); } });
+      row.title = l.url;
+      if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
+      box.append(row);
+    });
   }
   const storeIcon = h => /drive\.google|docs\.google|dropbox|sharepoint|onedrive|office|live\.com/.test(h) ? 'folder' : /github/.test(h) ? 'github' : /notion/.test(h) ? 'file-text' : 'link';
   const parseNamedLink = (title, value, resources) => { const url = String(value || '').trim(); if (!(safeUrl(url) || (resources && localResource(url)))) return null; let fallback = url; try { fallback = new URL(url).hostname.replace(/^www\./, ''); } catch { fallback = url.split(/[\\/]/).filter(Boolean).pop() || url; } return { title: String(title || '').trim() || fallback, url }; };
 
   function renderTouches(p) {
-    const box = $('pTouches'); box.textContent = ''; $('pTouchCount').textContent = p.comments.length ? `(${p.comments.length})` : '';
+    const box = $('pTouches'); box.textContent = ''; setCount('pTouchCount', p.comments.length);
     p.comments.slice().reverse().forEach(cm => {
       const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
       head.append(elI('span', 'tchan', ic, label), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at;
-      if (cm.draft) { head.append(el('span', 'draftpill', 'Draft, not sent'));
-        const s = el('button', 'small primary', 'Mark sent'); s.type = 'button'; s.onclick = () => markSent(p.id, cm.id); head.append(s);
-        const cp = elI('button', 'small', 'clipboard-copy', 'Copy'); cp.type = 'button'; cp.onclick = () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.'); head.append(cp); }
+      if (cm.draft) { head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
+        const s = ui.button({ label: 'Mark sent', variant: 'primary', size: 'sm', onClick: () => markSent(p.id, cm.id) });
+        const cp = roKeep(ui.button({ label: 'Copy', icon: 'clipboard-copy', variant: 'ghost', size: 'sm', onClick: () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.') }));
+        const acts = el('div', 'cmacts'); acts.append(s, cp); head.append(acts); }
       const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
     });
   }
-  function markSent(pid, cmid) {
+  async function markSent(pid, cmid) {
     const p = state.contacts.find(x => x.id === pid); if (!p) return;
-    const nextDue = prompt('Marked as sent. When do you want to follow up? (YYYY-MM-DD, or empty for no date)', plusDays(5)); if (nextDue === null) return;
+    const nextDue = await ui.promptText({ title: 'Mark as sent', body: 'When do you want to follow up? Leave it empty for no date.', label: 'Follow up on', type: 'date', value: plusDays(5), confirmLabel: 'Mark sent' }); if (nextDue === null) return;
     pedit(pid, x => { const c = x.comments.find(y => y.id === cmid); if (!c) return; c.draft = false; c.sent_at = nowIso();
       if (x.stage === stages()[0]) x.stage = stages()[1] || x.stage;
       if (/^\d{4}-\d{2}-\d{2}$/.test(nextDue.trim())) { x.next_due = nextDue.trim(); if (!x.next) x.next = 'Follow up'; } }, `Sent: ${p.name}`);
@@ -3227,44 +3835,54 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderPersonTasks(p) {
     const sec = $('pTasksSec'); sec.hidden = !modes().includes('tasks'); if (sec.hidden) return;
-    const box = $('pTasks'); box.textContent = '';
-    state.tasks.filter(t => t.contact === p.id).forEach(t => box.append(listRow(t)));
-    if (!box.childNodes.length) box.append(el('div', 'muted small', 'No tasks for this person.'));
+    const box = $('pTasks'), list = state.tasks.filter(t => t.contact === p.id); box.textContent = '';
+    list.forEach(t => box.append(drawerTaskRow(t))); setCount('pTaskCount', list.length); sec.classList.toggle('is-empty', !list.length);
   }
-  $('pTaskNew').addEventListener('keydown', e => { if (e.key !== 'Enter') return; const v = e.target.value.trim(), p = contactNow(); if (!v || !p) return; e.target.value = '';
+  function addPersonTask(v) {
+    const p = contactNow(); if (!p) return false;
     const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
-    mutate(n => { n.tasks.push(t); }, `Add task: ${v}`); });
+    mutate(n => { n.tasks.push(t); }, `Add task: ${v}`);
+  }
 
   $('pName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) pedit(editingContact, x => { x.name = v; }); });
-  $('pName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
-  $('pStage').onchange = e => { const v = e.target.value; pedit(editingContact, x => { x.stage = v; }, `Stage ${v}: ${nameOf(editingContact)}`); };
+  $('pStage').onchange = e => { const v = e.target.value; syncStage(v); pedit(editingContact, x => { x.stage = v; }, `Stage ${v}: ${nameOf(editingContact)}`); };
   $('pNext').addEventListener('change', e => { const v = e.target.value.trim(); pedit(editingContact, x => { x.next = v; }); });
-  $('pNextDue').addEventListener('change', e => { const v = e.target.value; pedit(editingContact, x => { x.next_due = v; }); });
-  document.querySelectorAll('#dlgContact [data-due]').forEach(b => { b.onclick = () => { const v = b.dataset.due === '' ? '' : plusDays(+b.dataset.due); $('pNextDue').value = v; pedit(editingContact, x => { x.next_due = v; }); }; });
+  $('pNextDue').addEventListener('change', e => { const v = e.target.value; syncNextDue(v); pedit(editingContact, x => { x.next_due = v; }); });
+  document.querySelectorAll('#dlgContact [data-due]').forEach(b => { b.onclick = () => { const v = b.dataset.due === '' ? '' : plusDays(+b.dataset.due); $('pNextDue').value = v; syncNextDue(v); pedit(editingContact, x => { x.next_due = v; }); }; });
   PF.forEach(([fid, k]) => $(fid).addEventListener('change', e => { const v = e.target.value.trim(); pedit(editingContact, (x, n) => { x[k] = v; if (k === 'company' && v && !n.clients.includes(v)) n.clients.push(v); }); }));
   $('pNotes').addEventListener('input', () => autosize($('pNotes')));
   $('pNotes').addEventListener('change', e => { const v = e.target.value; pedit(editingContact, x => { x.notes = v; }); });
-  function addContactMethod(kind) { const p = contactNow(), value = $(kind === 'email' ? 'pEmailNew' : 'pPhoneNew'), label = $(kind === 'email' ? 'pEmailLabel' : 'pPhoneLabel'), v = value.value.trim(), lab = label.value.trim() || (kind === 'email' ? 'Email' : 'Phone'); if (!p || !v) return; if (kind === 'email' && !value.checkValidity()) { value.reportValidity(); return; }
-    const id = boardId(kind === 'email' ? 'e_' : 'ph_'); pedit(p.id, x => { const list = kind === 'email' ? x.emails : x.phones; if (!list.some(y => y.value.toLowerCase() === v.toLowerCase())) list.push({ id, label: lab, value: v }); syncContactLegacy(x); }, `Contact details: ${p.name}`); value.value = ''; label.value = ''; }
-  $('pEmailAdd').onclick = () => addContactMethod('email'); $('pPhoneAdd').onclick = () => addContactMethod('phone');
-  [['pEmailLabel', 'email'], ['pEmailNew', 'email'], ['pPhoneLabel', 'phone'], ['pPhoneNew', 'phone']].forEach(([id, kind]) => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addContactMethod(kind); } }));
-  function addPersonLink() { const p = contactNow(), l = parseNamedLink($('pLinkTitle').value, $('pLinkNew').value, false); if (!p) return; if (!l) { toast('Enter an http:// or https:// link.', true); return; } $('pLinkTitle').value = ''; $('pLinkNew').value = ''; pedit(p.id, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); syncContactLegacy(x); }, `Links: ${p.name}`); }
-  function addCompanyFile() { const p = contactNow(), l = parseNamedLink($('pFileTitle').value, $('pFileNew').value, true); if (!p || !p.company) return; if (!l) { toast('Enter a cloud URL or a local path.', true); return; } $('pFileTitle').value = ''; $('pFileNew').value = ''; const co = p.company;
-    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`); }
-  $('pLinkAdd').onclick = addPersonLink; $('pFileAdd').onclick = addCompanyFile;
+  function addContactMethod(kind, lab, v, input) {
+    const p = contactNow(); if (!p || !v) return false; if (kind === 'email' && !input.checkValidity()) { input.reportValidity(); return false; }
+    const label = lab || (kind === 'email' ? 'Email' : 'Phone'), id = boardId(kind === 'email' ? 'e_' : 'ph_');
+    pedit(p.id, x => { const list = kind === 'email' ? x.emails : x.phones; if (!list.some(y => y.value.toLowerCase() === v.toLowerCase())) list.push({ id, label, value: v }); syncContactLegacy(x); }, `Contact details: ${p.name}`);
+  }
+  function addPersonLink(title, url) { const p = contactNow(), l = parseNamedLink(title, url, false); if (!p) return false; if (!l) { toast('Enter an http:// or https:// link.', true); return false; } pedit(p.id, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); syncContactLegacy(x); }, `Links: ${p.name}`); }
+  function addCompanyFile(title, url) { const p = contactNow(); if (!p || !p.company) return false; return addClientFile(p.company, title, url); }
   $('pNorthStar').addEventListener('change', () => { const p = contactNow(), co = p && p.company, v = $('pNorthStar').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
-  $('pClientOpen').onclick = () => { const p = contactNow(); if (p && p.company) { $('dlgContact').close(); openClient(p.company); } };
-  ['pLinkTitle', 'pLinkNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addPersonLink(); } }));
-  ['pFileTitle', 'pFileNew'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCompanyFile(); } }));
+  const openPersonClient = () => { const p = contactNow(); if (p && p.company) { $('dlgContact').close(); openClient(p.company); } };
+  $('pClientOpen').onclick = openPersonClient;
   $('pTouchPost').onclick = logTouch;
   $('pTouchText').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); logTouch(); } });
   $('pTouchText').addEventListener('input', () => autosize($('pTouchText')));
   $('pChan').onchange = () => { $('pDraftWrap').hidden = $('pChan').value === 'note'; };
   $('pClose').onclick = () => $('dlgContact').close();
   $('dlgContact').addEventListener('close', () => { editingContact = null; render(); });
-  $('pDelete').onclick = () => { const p = contactNow(); if (!p || !confirm(`Delete the person “${p.name}”?\n\nThis removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.`)) return; const id = p.id; $('dlgContact').close();
-    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`); };
-  $('pAgent').onclick = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
+  async function deletePerson() {
+    const p = contactNow(); if (!p || ro || !(await ask('Delete person?', [`Delete the person “${p.name}”?`, 'This removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.'], 'Delete', true))) return;
+    const id = p.id; $('dlgContact').close();
+    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`);
+  }
+  const copyPerson = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
+  $('pAgent').onclick = copyPerson;
+  // the ⋯ menu: copy for AI, open the client, delete
+  function openPersonMenu(anchor) {
+    const p = contactNow(); if (!p) return;
+    const items = [{ label: 'Copy for AI', icon: 'bot', onSelect: copyPerson }];
+    if (p.company) items.push({ label: `Open client ${p.company}`, icon: 'building-2', onSelect: openPersonClient });
+    if (!ro) items.push({ separator: true }, { label: 'Delete person', icon: 'trash-2', danger: true, onSelect: deletePerson });
+    ui.menu(anchor, items, { label: `Actions for ${p.name || 'this person'}` });
+  }
   function personPrompt(p) {
     const c = cfg(), lines = [`Help me with my contact ${p.name}${p.role ? ', ' + p.role : ''}${p.company ? ' at ' + p.company : ''}. Stage: ${p.stage}. Next step: ${p.next || 'none'}${p.next_due ? ' (due ' + p.next_due + ')' : ''}.`];
     if (p.emails.length) lines.push('Email addresses: ' + p.emails.map(x => `${x.label}: ${x.value}`).join('; '));
@@ -3277,7 +3895,7 @@ if (typeof window !== 'undefined') (() => {
     lines.push('', `This person is on my Keeptrack board (repo ${c.repo}, file ${c.path}, record id ${p.id}). If you can use the Keeptrack skill or keeptrack.py, log any message you write as a draft touch, and never send anything yourself. I will send it and mark it sent.`);
     return lines.join('\n');
   }
-  const refreshContact = () => { if ($('dlgContact').open) fillContact(false); };
+  const refreshContact = () => { if ($('dlgContact').open) fillContact(false); if ($('dlgClient').open) fillClientDrawer(false); if ($('dlgProject').open) fillProjectDrawer(false); };   // board data changed underneath an open drawer
 
   // ---- first-run wizard: no repo or no token in this browser ----------------
   // ---- first-run wizard: one step per screen; the token tells us the username and the repos, so nothing else is typed ----
@@ -3321,7 +3939,7 @@ if (typeof window !== 'undefined') (() => {
         if (!c) return; if (c.busy) { res.append(el('div', 'muted', 'Checking…')); return; }
         if (WZ.repos.length > 1) { const sel = el('select'); WZ.repos.forEach(r => { const o = el('option', null, r.full_name + (r.private ? '' : ' (public)')); o.value = r.full_name; sel.append(o); }); sel.value = WZ.repo;
           sel.onchange = () => { WZ.repo = sel.value; check(); }; const l = el('label', 'wlabel', 'Repo'); l.append(sel); pickBox.append(l); }
-        c.rows.forEach(([ok, t]) => res.append(el('div', 'wck ' + (ok === true ? 'ok' : ok === 'warn' ? 'warn' : 'bad'), (ok === true ? '✓ ' : ok === 'warn' ? '⚠ ' : '✕ ') + t)));
+        c.rows.forEach(([ok, t]) => res.append(ckLine(ok === true || ok === 'warn' ? ok : false, t)));
       };
       const check = async () => {
         const t = WZ.tok; if (!t) { WZ.checks = null; draw(); return; }
@@ -3346,14 +3964,14 @@ if (typeof window !== 'undefined') (() => {
       next.textContent = 'Create my board'; next.onclick = () => wizardGo(next);
     }
     foot.append(back, el('span', 'spacer'), next); w.append(body, foot); board.append(w);
-    const have = $('wHave'); if (have) have.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('boards'); $('bAdd').click(); AW.step = 1; renderAddWiz(); };
-    const imp = $('wImport'); if (imp) imp.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('general'); setTimeout(() => { const t = document.querySelector('#panelGeneral textarea'); if (t) t.focus(); }, 60); };
+    const have = $('wHave'); if (have) have.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('boards'); openAddWiz(1); };
+    const imp = $('wImport'); if (imp) imp.onclick = e => { e.preventDefault(); $('btnSettings').click(); settingsTab('move'); setTimeout(() => $('xPaste').focus(), 60); };
   }
   function endSetup() { if (SETUP) { SETUP = false; history.replaceState(null, '', location.pathname); } $('board').className = ''; }
   async function wizardGo(btn) {
     const repo = WZ.repo, tok = WZ.tok, meV = WZ.me, title = WZ.title.trim() || 'Keeptrack', r = WZ.repos.find(x => x.full_name === repo);
     if (!r || !tok) return;
-    if (!r.private && !confirm(`${repo} is PUBLIC. Everybody can read names and contact details in it. Continue anyway?`)) return;
+    if (!r.private && !(await ask('Public repository', `${repo} is PUBLIC. Everybody can read names and contact details in it. Continue anyway?`, 'Continue anyway', true))) return;
     btn.disabled = true; btn.textContent = 'Creating…';
     LS.set('kb_repo', repo); LS.set('kb_token', tok); LS.del('kb_ro:' + repo); LS.set('kb_branch', r.default_branch || 'main'); LS.set('kb_path', 'board/tasks.json'); if (meV) LS.set('kb_me', meV); stashBoard && stashBoard();
     const ex = await gh('GET');
@@ -3452,7 +4070,8 @@ if (typeof window !== 'undefined') (() => {
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }
     const rules = archRules(); let n = archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
     const what = `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
-    if (!confirm(`Archive ${what}?\n\nThey move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`)) return;
+    if (!(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
+    if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
     if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
     // plan from the board as it is on GitHub now, not from this page's copy, so nobody's newer comment or edit is archived away
@@ -3523,7 +4142,7 @@ if (typeof window !== 'undefined') (() => {
     $('dlgArch').showModal();
   }
   $('aClose').onclick = () => $('dlgArch').close();
-  // ---- Settings → General → Labels: rename, recolour, delete and add; each action is one mutate (one Undo) ----------------
+  // ---- Settings → Board → Labels: rename, recolour, delete and add; each action is one mutate (one Undo) ----------------
   const LABEL_DEFAULT = '#6b778c', hex6 = c => { c = labelColorOf(c); return /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : /^#[0-9a-f]{3}$/i.test(c) ? '#' + [...c.slice(1)].map(x => x + x).join('').toLowerCase() : LABEL_DEFAULT; };
   const labelColorOf = c => typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : LABEL_DEFAULT;
   const labelUse = name => state.tasks.filter(t => t.labels.includes(name));
@@ -3539,7 +4158,7 @@ if (typeof window !== 'undefined') (() => {
   }
   async function labelRemove(l) {
     const used = labelUse(l.name), ids = used.map(t => t.id);
-    if (!confirmRemoval(`the “${l.name}” label${used.length ? ` from ${used.length} task${used.length === 1 ? '' : 's'}` : ''}`)) return;
+    if (!(await askRemoval(`the “${l.name}” label${used.length ? ` from ${used.length} task${used.length === 1 ? '' : 's'}` : ''}`, 'Remove label?'))) return;
     await mutate(n => { n.labels = n.labels.filter(x => x.name !== l.name); n.tasks.forEach(t => { if (t.labels.includes(l.name)) { t.labels = t.labels.filter(x => x !== l.name); stamp(t); } }); }, `Remove label: ${l.name}`, ids); renderLabelBox();
   }
   async function labelAdd(name, color) {
@@ -3565,23 +4184,37 @@ if (typeof window !== 'undefined') (() => {
     if (edit) {
       const add = el('div', 'lbrow lbnew'), name = el('input'), col = el('input'), b = elI('button', 'small', 'plus', 'Add label'); name.placeholder = 'New label name'; name.maxLength = 40; name.setAttribute('aria-label', 'New label name'); col.type = 'color'; col.value = LABEL_DEFAULT; col.title = 'Colour'; col.setAttribute('aria-label', 'Colour for the new label'); b.type = 'button';
       b.onclick = () => labelAdd(name.value, col.value); name.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); b.click(); } }; add.append(name, col, b); box.append(add);
-    }
+    }  uiBtns(box);
   }
-  function renderArchiveBox() {   // Settings → General → Archive
+  function renderArchiveBox() {   // Settings → Board → Archive
     const box = $('archBox'); if (!box) return; box.textContent = '';
     const kb = Math.round(boardSize / 1024), limit = isSplit(state) ? 5 * 1024 : SIZE_WARN / 1024, files = (state.archive || {}).files || {}, r = archRules(), n = archiveCounts();
-    const tot = Object.values(files).reduce((m, f) => ({ t: m.t + (f.tasks || 0), p: m.p + (f.contacts || 0) }), { t: 0, p: 0 });
-    box.append(el('div', 'hint', `Board ${isSplit(state) ? 'files' : 'file'}: ${kb ? kb + ' KB' : 'size not known yet'}${kb > limit ? ' (large: archive old items)' : ''}. In the archive: ${tot.t} tasks and ${tot.p} people${Object.keys(files).length ? ' (' + Object.keys(files).sort().join(', ') + ')' : ''}.`));
-    box.append(el('div', 'hint', `Archive moves tasks that have been done for more than ${r.done_days} days, Lost people with no change for ${r.lost_days} days, and all but the last ${r.keep_history} history lines of each card. Search still finds them, and you can bring any of them back.`));
-    const b = elI('button', null, 'archive', n.tasks + n.contacts + n.history ? `Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : 'Nothing to archive yet'); b.type = 'button'; b.disabled = !!ro || !(n.tasks + n.contacts + n.history); b.onclick = archiveNow; box.append(b);
+    const tot = Object.values(files).reduce((m, f) => ({ t: m.t + (f.tasks || 0), p: m.p + (f.contacts || 0) }), { t: 0, p: 0 }), years = Object.keys(files).sort();
+    const size = el('span', kb > limit ? 'warntext' : null, kb ? `${kb} KB${kb > limit ? ' · large: archive old items' : ''}` : 'Not known yet');
+    box.append(ui.props([{ label: isSplit(state) ? 'Board files' : 'Board file', value: size },
+      { label: 'In the archive', value: `${tot.t} task${tot.t === 1 ? '' : 's'} and ${tot.p} ${tot.p === 1 ? 'person' : 'people'}${years.length ? ' (' + years.join(', ') + ')' : ''}` },
+      { label: 'What moves', value: el('span', 'hint', `Tasks done over ${r.done_days} days ago, Lost people unchanged for ${r.lost_days} days, and all but the last ${r.keep_history} history lines of a card.`) }]));
+    const todo = n.tasks + n.contacts + n.history;
+    box.append(ui.button({ icon: 'archive', label: todo ? `Archive ${n.tasks} task${n.tasks === 1 ? '' : 's'}, ${n.contacts} ${n.contacts === 1 ? 'person' : 'people'}${n.history ? ', ' + n.history + ' history lines' : ''} now` : 'Nothing to archive yet', disabled: !!ro || !todo, onClick: archiveNow }));
+  }
+  // Settings → Board: a read-only note when this browser cannot change the shared board, then the sections; Advanced shows the file
+  function renderBoardTab() {
+    const box = $('sBoardRo'), c = cfg(); box.textContent = '';
+    const why = DEMO || ro === 'demo' ? 'Demo board: you can look at these settings, but nothing you change is saved.' : !c.repo ? 'No board connected yet. Connect one under Connection first.'
+      : ro === 'public' || !c.token ? 'Read-only: this browser has no token for this board, so its shared settings cannot change here.' : ro === 'token' ? 'Read-only: your token can read this board but cannot change it.'
+      : newerSchema ? 'Read-only: the board file is newer than this page. Reload to update.' : '';
+    if (why) { const b = ui.banner({ tone: 'warn', icon: 'lock', text: why }); b.setAttribute('role', 'status'); box.append(b); }
+    syncModeSettings(); renderColumnsBox(); renderLabelBox(); renderArchiveBox();
+    const info = $('bInfo'); info.textContent = '';
+    info.append(ui.props([{ label: 'Repository', value: c.repo || '—' }, { label: 'Branch', value: c.repo ? c.branch : '—' }, { label: 'File', value: c.repo ? c.path : '—' },
+      { label: 'Format', value: !c.repo ? '—' : `${isSplit(state) ? 'Split: one file per card and person' : 'One file'} · this page reads up to schema v${KNOWN_SCHEMA}` }]));
   }
   function sizeBar() {   // a quiet nudge once the board file gets large
-    const bar = $('sizeBar'); if (!bar) return; const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
-    bar.hidden = !big; if (!big) return; bar.textContent = '';
-    const a = el('button', 'small', 'Archive old items'), x = el('button', 'small', 'Later'); a.type = x.type = 'button';
-    a.onclick = () => { $('btnSettings').click(); settingsTab('general'); renderArchiveBox(); $('archBox').scrollIntoView({ block: 'center' }); };
-    x.onclick = () => { LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))); bar.hidden = true; };
-    bar.append(elI('span', null, 'archive', `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`), a, x);
+    const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
+    if (!big) { showBar('sizeBar', null); return; }
+    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
+      action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('archive'); } },
+      onDismiss: () => LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))) });
   }
 
   // ---- search everything: people, tasks, notes, comments and (on request) the archive, with MiniSearch ---------------
@@ -3604,10 +4237,10 @@ if (typeof window !== 'undefined') (() => {
     const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, prefix: true, fuzzy: 0.2, combineWith: 'AND' } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
     res.textContent = '';
     // Views are part of search: an empty box lists them all ("Go to"), and typing "cal" offers Calendar first
-    const ql = q.toLowerCase(), goes = [...document.querySelectorAll('#viewSw .viewgroup:not([hidden]) button')].filter(b => !ql || b.textContent.trim().toLowerCase().startsWith(ql));
+    const ql = q.toLowerCase(), goes = VIEW_GROUPS.filter(g => !viewTabs[g.grp].hidden).flatMap(g => g.views).filter(v => !ql || v.label.toLowerCase().startsWith(ql));
     if (goes.length) { const grid = el('div', 'qgos'); res.append(el('div', 'qhead', 'Go to'), grid);
-      goes.forEach(b => { const g = el('button', 'qhit qgo'); g.type = 'button'; g.title = b.title; const svg = b.querySelector('.vi svg'); if (svg) g.append(svg.cloneNode(true)); g.append(el('span', null, b.textContent.trim()));
-        g.onclick = () => { $('dlgSearch').close(); setView(b.dataset.view); }; grid.append(g); }); }
+      goes.forEach(v => { const g = el('button', 'qhit qgo'); g.type = 'button'; g.title = v.title; g.append(svgIcon(v.icon), el('span', null, v.label));
+        g.onclick = () => { $('dlgSearch').close(); setView(v.value); }; grid.append(g); }); }
     if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} people and tasks` + (matchMedia('(pointer: fine)').matches ? ' · press / anywhere to search' : ''); if (res.firstElementChild) res.querySelector('.qhit').classList.add('first'); return; }
     const hits = msIndex.search(q).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
     $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
@@ -3624,7 +4257,7 @@ if (typeof window !== 'undefined') (() => {
   $('qQ').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const f = $('qRes').querySelector('.qhit'); if (f) f.click(); } else if (e.key === 'ArrowDown') { const f = $('qRes').querySelector('.qhit'); if (f) { e.preventDefault(); f.focus(); } } });
   $('qRes').addEventListener('keydown', e => { const all = [...$('qRes').querySelectorAll('.qhit')], i = all.indexOf(document.activeElement); if (e.key === 'ArrowDown' && all[i + 1]) { e.preventDefault(); all[i + 1].focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); (all[i - 1] || $('qQ')).focus(); } });   // skips the section headings
   $('qArch').onchange = runSearch; $('qClose').onclick = () => $('dlgSearch').close(); $('btnSearch').onclick = openSearch;
-  ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { $(id).onclick = undoLast; }); syncUndo();
+  ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { $(id).onclick = () => undoLast(); }); syncUndo();
   document.addEventListener('keydown', e => {
     const t = e.target, typing = t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
     if (!typing && !e.altKey && e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); undoLast(); }
@@ -3640,18 +4273,18 @@ if (typeof window !== 'undefined') (() => {
   };
   function roToast() { toast((RO_TEXT[ro] || ['Read-only'])[0], true); }
   function applyRo() {
-    document.body.classList.toggle('ro', !!ro); syncUndo(); const bar = $('roBar'); bar.hidden = !ro; bar.textContent = ''; if (!ro) return;
-    const [msg, label, go] = RO_TEXT[ro], b = el('button', 'small', label); b.type = 'button'; b.onclick = go; bar.append(elI('span', null, 'lock', msg));
-    if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; bar.append(a); }
-    bar.append(b); lockDrawers();
+    document.body.classList.toggle('ro', !!ro); syncUndo(); if (!ro) { showBar('roBar', null); return; }
+    const [msg, label, go] = RO_TEXT[ro], text = [msg];
+    if (ro === 'demo') { const a = el('a', 'morelink', 'View the repository for more details'); a.href = 'https://github.com/rain-ventures-ai/keeptrack'; a.target = '_blank'; a.rel = 'noopener noreferrer'; text.push(' ', a); }
+    showBar('roBar', { tone: 'warn', icon: 'lock', text, action: { label, onClick: go } }).setAttribute('role', 'status'); lockDrawers();   // shown on every load: polite, not an alert
   }
-  const RO_KEEP = new Set(['cClose', 'pClose', 'cCopyMd', 'cAgent', 'pAgent', 'dLink']);   // buttons that only read or copy
-  function lockDrawers() {
+  const DRAWERS = ['dlgCard', 'dlgContact', 'dlgClient', 'dlgProject'];
+  function lockDrawers() {   // buttons that only read, copy or navigate say so with data-ro-keep (roKeep) and stay usable
     if (!ro) return;
-    document.querySelectorAll('#dlgCard, #dlgContact').forEach(d => d.querySelectorAll('input, select, textarea, button').forEach(x => { if (!RO_KEEP.has(x.id) && !x.disabled) { x.disabled = true; x.dataset.ro = '1'; } }));
+    DRAWERS.forEach(id => $(id).querySelectorAll('input, select, textarea, button').forEach(x => { if (!x.dataset.roKeep && !x.closest('.ui-menu') && !x.disabled) { x.disabled = true; x.dataset.ro = '1'; } }));
   }
   let lockQueued = false; const lockObs = new MutationObserver(() => { if (!ro || lockQueued) return; lockQueued = true; queueMicrotask(() => { lockQueued = false; lockDrawers(); }); });
-  ['dlgCard', 'dlgContact'].forEach(id => lockObs.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] }));
+  DRAWERS.forEach(id => lockObs.observe($(id), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] }));
   $('btnHelp').onclick = () => $('dlgHelp').showModal(); $('hClose').onclick = () => $('dlgHelp').close();
   $('hAgentSetup').onclick = () => { $('dlgHelp').close(); $('btnSettings').click(); settingsTab('claude'); };
   $('dlgHelp').querySelectorAll('a[data-doc]').forEach(a => { a.href = HOME + '/docs/help/' + a.dataset.doc; a.target = '_blank'; a.rel = 'noopener noreferrer'; });
@@ -3675,5 +4308,5 @@ if (typeof window !== 'undefined') (() => {
   };
   $('sThemeExport').onclick = () => { if (window.kbDesignMd) copyText(window.kbDesignMd.exportCurrent(), 'Theme copied as DESIGN.md'); };
   applyRo(); render();
-  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); } })();
+  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // no token for this board yet: the app opens Settings itself, on Connection with the form open (a click on Settings opens Preferences)
 })();

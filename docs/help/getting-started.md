@@ -34,7 +34,7 @@ The board opens on **Today**: who to contact, what is due, and two shortcuts to 
 
 New to Keeptrack? Tap **Show me around** on Today, or choose **Menu → Show me around** at any time, for a one-minute tour.
 
-Prefer everything in the top bar? Choose **Settings → General → Layout → Classic**. The layout is saved in this browser only.
+Prefer everything in the top bar? Choose **Settings → Preferences → Appearance → Layout → Classic**. The layout is saved in this browser only.
 
 ## 4. Add your first people
 Type in the box at the bottom of **Today** or **People**:
@@ -46,7 +46,7 @@ The order is name, company, role and email. Only the name is necessary. Press En
 Have a spreadsheet of contacts? Ask your AI assistant to add them (see [AI assistants](ai-assistants.md)). It checks for duplicates.
 
 ## 5. Use it on another device
-In **⚙️ Settings → General**, click **Copy setup link** and open the link on your other device. The link holds your token, so send it only to yourself. To use Claude on your phone too, see [On your phone](where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser).
+In **⚙️ Settings → Connection → Advanced**, click **Copy setup link** (it asks first) and open the link on your other device. The link holds your token, so send it only to yourself. To use Claude on your phone too, see [On your phone](where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser).
 
 ## Next
 - [People and follow-ups](people-and-follow-ups.md)

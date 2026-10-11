@@ -1,6 +1,6 @@
 # Browser tests
 
-Run the browser suite from this folder (split-storage flows plus mixed kit/board.js version checks):
+Run the browser suite from this folder (split-storage flows, mixed kit/board.js version checks and the ui.js component catalogue in `board/ui.html`):
 
 ```sh
 npm ci

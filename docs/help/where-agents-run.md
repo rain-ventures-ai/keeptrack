@@ -52,7 +52,7 @@ You can do everything without a computer. You use two things:
 2. Follow the three steps of the wizard (see [Getting started](getting-started.md)). The repo and token pages open in
    the browser. Copy the token and paste it into the wizard, never into a chat.
 
-Already have a board on your computer? There, open **⚙️ Settings → General → Copy setup link**, send the link to
+Already have a board on your computer? There, open **⚙️ Settings → Connection → Advanced → Copy setup link**, send the link to
 yourself and open it on your phone. The link holds your token, so send it only to yourself. Tip: use your browser's
 **Add to Home Screen** to open the board like an app.
 

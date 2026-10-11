@@ -20,8 +20,9 @@ For a one-line shortcut, type **Name | Company | Role | Email** in the add box a
 
 ## A person's card
 - **Name** and **stage** at the top.
-- **Next step** and its **date**. Use **Today**, **Tomorrow** or **+1 week** to set the date quickly. Always give a date: Today uses it.
-- **Company, role, email, phone, LinkedIn, value, source.** The ↗ next to email and LinkedIn opens them.
+- **Next step** and its **date**. Use **Today**, **Tomorrow** or **+1 week** to set the date quickly, or **×** on the date for no date. Always give a date: Today uses it.
+- **Client, role, value, source and GitHub** in the same list.
+- **Emails** and **Phones:** as many as you need, each with a label. Click **+ Add email** or **+ Add phone**. The mail and phone icons write an email or call.
 - **Contact log:** each message, email, call and meeting.
 - **Notes**, **Tasks**, **Links** and the company's **Files**.
 - **History:** who changed what, and when.
@@ -43,10 +44,10 @@ A draft is a message that you have not sent yet. It does **not** count as contac
 4. Click **Mark sent**. Type the date for the follow-up, or leave it empty.
 
 ## Copy for AI
-**🤖 Copy for AI** at the top of a card copies the person, their stage, their next step and their recent contact log. Paste it into Claude, ChatGPT or another assistant and ask for a message. See [AI assistants](ai-assistants.md).
+**🤖 Copy for AI** at the top of a card (also in its **⋯** menu) copies the person, their stage, their next step and their recent contact log. Paste it into Claude, ChatGPT or another assistant and ask for a message. See [AI assistants](ai-assistants.md).
 
 ## Search
 **People** lists everyone. Search by name, company, notes or next step, or select a stage.
 
 ## Delete a person
-Click **Delete person** at the bottom of the card and confirm the warning. Use the **Undo** button, **Ctrl+Z** on Windows/Linux, or **⌘Z** on a Mac if you change your mind during the same board session. See [Privacy and security](privacy-and-security.md) for what stays in the repo history.
+Open the **⋯** (More actions) menu at the top of the card, select **Delete person** and confirm the warning. Use the **Undo** button, **Ctrl+Z** on Windows/Linux, or **⌘Z** on a Mac if you change your mind during the same board session. See [Privacy and security](privacy-and-security.md) for what stays in the repo history.

@@ -13,7 +13,7 @@ A board gets slower when the file gets large. The archive moves old items to oth
 - people at the stage **Lost** with no change for 180 days and no next step,
 - old history lines (each card keeps its last 20). The trimmed lines are kept in the archive file, not deleted.
 
-Open **⚙️ Settings → General → Archive** to see the board size and to archive now. When the board file is larger than 600 KB, a bar at the top asks you to archive.
+Open **⚙️ Settings → Board → Archive** to see the board size and to archive now. When the board file is larger than 600 KB, a bar at the top asks you to archive.
 
 Archived items are not deleted. Search finds them when you tick **Include archive**. Open one to read it, and click **Put back on the board** to bring it back.
 

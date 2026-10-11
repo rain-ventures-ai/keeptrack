@@ -24,5 +24,5 @@ Read `board/ROUTINE-SETUP.md` (the runbook), `board/routine-loader.txt` (the sho
 1. Routine exists, repo is this board's repo, no connectors, saved prompt equals `board/routine-loader.txt` (the full instructions live in `board/routine-prompt.md`, not in the routine).
 2. Environment has `BOARD_TOKEN` (ask; you cannot read it).
 3. API trigger exists (ask the person to confirm they copied URL and token).
-4. Board Settings → Agents saved; "Test cron-job.org key" says it works.
+4. Board Settings → Agents & integrations saved; "Test cron-job.org key" says it works.
 5. First run: a comment `@claude add a comment saying hello` on a low-stakes task ends with a claude comment on the card and the task assigned back.

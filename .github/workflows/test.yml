@@ -36,6 +36,27 @@ jobs:
       - name: Playwright split-storage tests
         working-directory: tests/browser
         run: npm test
+      - name: Save queue (order, waiting status, failures, timeouts, undo)
+        working-directory: tests/browser
+        run: node save-queue.test.js
       - name: Mixed kit / board.js version tests
         working-directory: tests/browser
         run: node mixed-versions.test.js
+      - name: UI component catalogue and board boot
+        working-directory: tests/browser
+        run: node ui-catalogue.test.js
+      - name: Feedback components (in-page confirm, toasts with Undo, no native dialogs)
+        working-directory: tests/browser
+        run: node feedback.test.js
+      - name: Task drawer
+        working-directory: tests/browser
+        run: node task-drawer.test.js
+      - name: Person, client and project drawers
+        working-directory: tests/browser
+        run: node crm-drawers.test.js
+      - name: Main views on the shared components (tabs, priority/due pills, avatars, popovers)
+        working-directory: tests/browser
+        run: node views.test.js
+      - name: Settings dialog (tabs, section template, deep links, saves, Health, confirms, phone layout)
+        working-directory: tests/browser
+        run: node settings.test.js

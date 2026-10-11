@@ -21,9 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
-### [24] — 2026-10-10
+### [25] — 2026-10-11
 
-- The trusted-config list is JSON, so a path cannot add entries; rerun `use` once ([#59](https://github.com/rain-ventures-ai/keeptrack/pull/59) follow-up).
+- The trusted-config list is JSON, so a path cannot add entries; rerun `use` once ([#60](https://github.com/rain-ventures-ai/keeptrack/pull/60)).
+
+### [24] — 2026-10-11
+
+- Kit guides (`ROUTINE-SETUP.md`, `README.md`, `board-routine-setup` skill) and `keeptrack.py`'s new-board message use the web board's new Settings tabs: Preferences, Board, Connection, Agents & integrations. No data change. The web board itself was rebuilt on shared components (`board/ui.js`).
 
 ### [23] — 2026-10-10
 
