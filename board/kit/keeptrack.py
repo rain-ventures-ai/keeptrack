@@ -1340,7 +1340,7 @@ def session_for(a, task_id):
 def redact_session(sid):
     """A session id shown to whoever did not claim the card: enough to recognise it, not enough to pass as it."""
     sid = str(sid or "")
-    return sid if sid.startswith("pending-") or len(sid) <= 4 else sid[:4] + "…"
+    return sid if not sid or sid.startswith("pending-") else sid[:4 if len(sid) > 4 else 1] + "…"
 
 
 def is_placeholder_claim(c):
@@ -1424,8 +1424,9 @@ def cmd_show(a):
     t = find(data, a.id)
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
     hs = t.pop("history", []); cms = t.pop("comments", [])
-    if t.get("claim") and t["claim"].get("session_id"):   # the id is the claim's proof of ownership: shown only in part
-        t["claim"] = dict(t["claim"]); t["claim"]["session_id"] = redact_session(t["claim"]["session_id"])
+    for k in ("claim", "last_run"):   # a session id is a claim's proof of ownership (and a session may hold other cards): shown only in part
+        if t.get(k) and t[k].get("session_id"):
+            t[k] = dict(t[k]); t[k]["session_id"] = redact_session(t[k]["session_id"])
     print(json.dumps(t, indent=2, ensure_ascii=False))
     if t.get("outcome") == "cancelled" and t.get("column") == "done":
         why = next((h["text"][len("cancelled: "):] for h in reversed(hs) if str(h.get("text", "")).startswith("cancelled: ")), "")
@@ -1514,7 +1515,7 @@ def do_claim(a, tid, data):
                  "stop and tell the person (never pass --session with an id you did not generate)")
     ts = now()
     old = t.get("claim") or {}
-    # keep a link the board already found for this run (it sends the routine, then the routine re-claims with --force)
+    # keep a link the board already found for this run (it sends the routine, then the routine's own claim replaces the placeholder)
     keep = old.get("session_url", "") if old.get("agent") == agent and (old.get("on_behalf_of") or "").lower() == (user or "").lower() else ""
     url = a.session_url or cloud_session_url() or keep
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
@@ -1603,6 +1604,8 @@ def move_task_to_column(data, task, column):
     old = task.get("column")
     if old == column:
         return old
+    if old == "done":
+        task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
     if data.get("layout") == "split":
         ranks = [x.get("rank") for x in data.get("tasks", [])
                  if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
@@ -1686,7 +1689,7 @@ def cmd_move(a):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
-            t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
+            t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
         n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
         if column == "done" and old != "done" and n_open:
             print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)

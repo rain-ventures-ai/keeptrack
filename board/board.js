@@ -1691,7 +1691,7 @@ if (typeof window !== 'undefined') (() => {
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
   const cancelledRun = t => t && t.column === doneColId() && t.outcome === 'cancelled' ? (t.last_run || {}) : null;   // v35 done always sets the card's outcome
-  const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') || s.length <= 4 ? s : s.slice(0, 4) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
+  const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') ? s : s.slice(0, s.length > 4 ? 4 : 1) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
   function chipOutcome(t) { const r = cancelledRun(t); if (!r) return null; const c = el('span', 'chip cancelledchip', 'cancelled'); c.title = 'Closed as cancelled' + (r.note ? ': ' + r.note : ''); return c; }
   function chipCompleted(t) { const x = completionOf(t); if (!x) return null; const c = elI('span', 'chip doneby ' + (x.agent ? 'agent' : 'person'), x.agent ? 'bot' : 'user', x.label); c.title = `Completed by ${x.label}${x.at ? ' · ' + fmtStamp(x.at) : ''}`; return c; }
   function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; out.push(a); }); return out; }
@@ -2618,7 +2618,7 @@ if (typeof window !== 'undefined') (() => {
         const k = t.claim && t.claim.agent === 'claude' ? t.claim : (t.last_run && t.last_run.agent === 'claude' ? t.last_run : null);
         if (session && session.url && k && !k.session_url) k.session_url = session.url;
         return; }
-      if (session) { t.claim.session_id = session.id; t.claim.session_url = session.url; t.claim.note = `Claude is working for @${who}`; t.claim.heartbeat_at = nowIso(); }
+      if (session) { t.claim.session_id = 'pending-' + session.id; t.claim.session_url = session.url; t.claim.note = `Claude is working for @${who}`; t.claim.heartbeat_at = nowIso(); }   // still the page's placeholder: the routine's own claim replaces it, and the link's id is never the owning session id
       else { t.claim.status = 'stuck'; t.claim.note = `Send to Claude failed: ${err || 'no response from the routine'}`; }
     }, session ? `Claude session started for #${(state.tasks.find(x => x.id === taskId) || {}).num}` : 'Send to Claude failed', [taskId]);   // save the result before the job (and its reply) is deleted
     try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there

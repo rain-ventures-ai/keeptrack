@@ -1625,6 +1625,8 @@ class ClaimLifecycle(unittest.TestCase):
         write(self.file, d)
         self.done(3, session="s1", note="finished after all")                # no claim this time
         self.assertEqual((self.card(3)["outcome"], self.card(3)["last_run"]["outcome"]), ("completed", "completed"))
+        self.release(3, session="s1", column="todo")                        # reopening by release clears it too
+        self.assertNotIn("outcome", self.card(3)); self.assertNotIn("outcome", self.card(3)["last_run"])
 
     def test_session_for_order(self):
         os.environ["CODEX_SESSION_ID"] = "codex"
@@ -1695,6 +1697,11 @@ class ClaimLifecycle(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             kt.cmd_show(Args(id="t_c1"))
         self.assertNotIn("secret-s1", out.getvalue()); self.assertIn("secr…", out.getvalue())
+        self.done(1, session="secret-s1"); out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_show(Args(id="t_c1"))
+        self.assertNotIn("secret-s1", out.getvalue())                 # the run record keeps the id, show does not print it
+        self.assertEqual(kt.redact_session("abc"), "a…"); self.assertEqual(kt.redact_session("pending-x"), "pending-x")
 
     def test_a_claim_with_no_session_id_belongs_to_nobody(self):
         self.placeholder(1, session_id="")

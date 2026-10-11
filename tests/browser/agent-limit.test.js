@@ -68,6 +68,7 @@ class Github {
 
 let base;
 const errors = [];
+let cronSession = null;   // when set, the mocked cron-job.org reports the routine's reply with this claude.ai session link
 async function openBoard(browser, api, cron) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   page.on('pageerror', e => errors.push(e.message));
@@ -82,7 +83,8 @@ async function openBoard(browser, api, cron) {
     const req = route.request(), u = new URL(req.url()), send = x => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(x) });
     cron.push({ method: req.method(), path: u.pathname });
     if (req.method() === 'PUT' && u.pathname === '/jobs') return send({ jobId: 77 });
-    if (u.pathname.endsWith('/history')) return send({ history: [] });
+    if (u.pathname.endsWith('/history')) return send({ history: cronSession ? [{ identifier: 'h1', status: 1, httpStatus: 200, date: Math.floor(Date.now() / 1000) }] : [] });
+    if (u.pathname.endsWith('/history/h1')) return send({ jobHistoryDetails: { body: cronSession || '' } });
     return send({});
   });
   await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
@@ -129,10 +131,18 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       await page.locator('.col[data-col="todo"] .hcinema').click();
       const first = page.locator('.cinema-col .card', { hasText: 'First' }); await first.locator('.quickassign summary').click();
       assert.equal(await first.locator('.quickagent').isDisabled(), false, 'quick-assign works with room under the limit');
-      const saved = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')), relay = page.waitForRequest(r => r.method() === 'PUT' && r.url() === 'https://cron.test/jobs');
+      cronSession = 'https://claude.ai/code/session_ABC123';   // the routine's reply is already there when the page first polls: before the routine has claimed
+      const saved = page.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/')), relay = page.waitForRequest(r => r.method() === 'PUT' && r.url() === 'https://cron.test/jobs');
       await first.locator('.quickagent').click(); const [, req] = await Promise.all([saved, relay]);
       assert.equal(api.card('t_one').claim.agent, 'claude'); assert.match(api.card('t_one').claim.session_id, /^pending-/);
       assert.deepEqual(api.card('t_one').assignees, ['alex'], 'the card is assigned to the person whose routine will claim it');
+      { // the routine's reply arrives before the routine has claimed: the page records the link but keeps its placeholder, so the routine's own claim still replaces it
+        const deadline = Date.now() + 15000; while (Date.now() < deadline && !(api.card('t_one').claim || {}).session_url) await new Promise(r => setTimeout(r, 200));
+        const c = api.card('t_one').claim; assert.equal(c.session_url, cronSession, 'the session link is recorded on the claim');
+        assert.match(c.session_id, /^pending-/, 'the claim stays a placeholder: the link id is never the owning session id');
+        assert.ok(api.card('t_one').comments.some(m => m.type === 'activity' && /session_ABC123/.test(m.text)), 'the activity line carries the link');
+        cronSession = null;
+      }
       const routine = JSON.parse(req.postDataJSON().job.extendedData.body).text;
       assert.doesNotMatch(routine, /--force/, 'the routine no longer claims with --force');
       assert.match(routine, /keeptrack\.py claim '#1' --for alex --agent claude --session <your session id> --note "working"/);
