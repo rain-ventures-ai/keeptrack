@@ -3477,17 +3477,23 @@ if (typeof window !== 'undefined') (() => {
   function checkZone(v) {   // a name like Europe/London (any case); '' when it is not a time zone
     v = v.trim(); if (!/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+)*$/.test(v)) return '';
     try { new Intl.DateTimeFormat('en', { timeZone: v }); } catch { return ''; }
-    return zoneList().find(z => z.toLowerCase() === v.toLowerCase()) || v;
+    const known = zoneList().find(z => z.toLowerCase() === v.toLowerCase()); if (known) return known;
+    const canon = new Intl.DateTimeFormat('en', { timeZone: v }).resolvedOptions().timeZone;   // Python's zoneinfo is case-sensitive: store the canonical spelling
+    return canon && canon.toLowerCase() === v.toLowerCase() ? canon : '';
   }
-  const memberEdit = (gh, fn, msg) => mutate(d => { const m = d.people.find(x => x.github === gh); if (m) fn(m); }, msg).then(renderMembersBox);
+  // Redraw after a save, unless the person has already moved on to type in another member field (that would wipe it).
+  const memberRedraw = gh => { const a = document.activeElement; if (a && a.matches && a.matches('#memBox .memhead input, #memBox .memzone')) return; renderMembersBox(); const g = document.querySelector(`#memBox .memrow[data-gh="${gh}"] .ui-addrow__ghost`); if (g && (!a || a === document.body)) g.focus(); };
+  const memberEdit = (gh, fn, msg) => mutate(d => { const m = d.people.find(x => x.github === gh); if (m) fn(m); }, msg).then(() => memberRedraw(gh));
+  const memberNow = gh => state.people.find(x => x.github === gh) || {};
   const memberTasks = gh => state.tasks.filter(t => (t.assignees || []).includes(gh) && t.column !== doneColId());
   const memberClaims = gh => state.tasks.filter(t => { const c = activeClaim(t); return c && c.on_behalf_of === gh; });
-  async function memberAdd(gh, name) {
-    gh = gh.trim().replace(/^@/, ''); if (!gh) return false;
+  function memberAdd(gh, name) {   // validates at once (false keeps what was typed); the save runs on its own
+    gh = gh.trim().replace(/^@+/, ''); if (!gh) return false;
     if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(gh)) { toast(`“${gh}” is not a GitHub username.`, true); return false; }
     if (state.people.some(p => p.github.toLowerCase() === gh.toLowerCase())) { toast(`@${gh} is already a member.`, true); return false; }
-    await mutate(d => { if (!d.people.some(p => p.github.toLowerCase() === gh.toLowerCase())) d.people.push({ github: gh, name: (name || '').trim() || gh }); }, `Add member: ${gh}`);
-    renderMembersBox(); return true;
+    mutate(d => { if (!d.people.some(p => p.github.toLowerCase() === gh.toLowerCase())) d.people.push({ github: gh, name: (name || '').trim() || gh }); }, `Add member: ${gh}`)
+      .then(() => { renderMembersBox(); const n = document.querySelector('#memBox .memrow:last-of-type .memhead input'); if (n && (!document.activeElement || document.activeElement === document.body || $('memBox').contains(document.activeElement))) n.focus(); });
+    return true;
   }
   async function memberRemove(m) {
     const claims = memberClaims(m.github), open = memberTasks(m.github);
@@ -3500,34 +3506,35 @@ if (typeof window !== 'undefined') (() => {
       d.tasks.forEach(t => { if ((t.assignees || []).includes(u.github) && t.column !== doneColId()) t.assignees = t.assignees.filter(x => x !== u.github); });
       d.people = d.people.filter(x => x !== u);
     }, `Remove member: ${m.github}`);
-    renderMembersBox();
+    renderMembersBox(); const first = document.querySelector('#memBox .memhead input'); if (first) first.focus();
   }
   function memberCard(m, edit) {
     const gh = m.github, card = el('div', 'memrow'), you = (cfg().me || '').toLowerCase() === gh.toLowerCase(), owner = kitOwner() === gh;
     const name = el('input'); name.value = m.name || ''; name.placeholder = gh; name.maxLength = 60; name.disabled = !edit; name.setAttribute('aria-label', `Name of @${gh}`);
-    name.onchange = () => { const v = name.value.trim() || gh; if (v === (m.name || gh)) { name.value = m.name || ''; return; } memberEdit(gh, x => { x.name = v; }, `Rename member: ${gh}`); };
-    name.onkeydown = e => { if (e.key === 'Enter') name.blur(); else if (e.key === 'Escape') { name.value = m.name || ''; name.blur(); } };
-    const head = el('div', 'memhead'), tags = el('span', 'memtags');
+    name.onchange = () => { const cur = memberNow(gh), v = name.value.trim() || gh; if (v === (cur.name || gh)) { name.value = cur.name || ''; return; } memberEdit(gh, x => { x.name = v; }, `Rename member: ${gh}`); };
+    name.onkeydown = e => { if (e.key === 'Enter') name.blur(); else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); name.value = memberNow(gh).name || ''; name.blur(); } };
+    card.dataset.gh = gh; const head = el('div', 'memhead'), tags = el('span', 'memtags');
     if (you) tags.append(ui.pill({ text: 'You', tone: 'info' })); if (owner) tags.append(ui.pill({ text: 'Upgrade owner', tone: 'neutral' }));
     head.append(ui.avatar(m.name || gh, { key: gh }), name, tags);
     if (edit) {
       const why = owner ? 'This member is the upgrade owner. Give that to someone else first (keeptrack.py kit-owner).' : state.people.length <= 1 ? 'A board needs at least one member.' : '';
-      head.append(ui.button({ label: 'Remove', variant: 'ghost', size: 'sm', icon: 'user-minus', disabled: !!why, title: why || `Remove @${gh} from this board`, onClick: () => memberRemove(m) }));
+      const rb = ui.button({ label: 'Remove', variant: 'ghost', size: 'sm', icon: 'user-minus', disabled: !!why, title: why || `Remove @${gh} from this board`, onClick: () => memberRemove(memberNow(gh)) }); rb.setAttribute('aria-label', `Remove @${gh}`); head.append(rb);
+      if (why) head.append(el('span', 'hint memwhy', why));
     }
     const emails = el('div', 'memmail');
     (Array.isArray(m.emails) ? m.emails : []).filter(e => typeof e === 'string').forEach(e => emails.append(ui.pill({ text: e, icon: 'mail', onRemove: edit ? () => memberEdit(gh, x => { x.emails = (x.emails || []).filter(y => y !== e); if (!x.emails.length) delete x.emails; }, `Remove email: ${gh}`) : undefined, removeLabel: `Remove ${e}` })));
     if (edit) emails.append(ui.addRow({ placeholder: 'name@work.example', buttonLabel: 'Add', collapsed: true, ghostLabel: 'Add email', label: `New email address for @${gh}`,
       onAdd: v => { v = v.trim(); if (!EMAIL_RE.test(v)) { toast(`“${v}” is not an email address.`, true); return false; }
-        if ((m.emails || []).some(y => String(y).toLowerCase() === v.toLowerCase())) { toast('That address is already there.', true); return false; }
+        if ((memberNow(gh).emails || []).some(y => String(y).toLowerCase() === v.toLowerCase())) { toast('That address is already there.', true); return false; }
         memberEdit(gh, x => { x.emails = Array.isArray(x.emails) ? x.emails : []; if (!x.emails.some(y => String(y).toLowerCase() === v.toLowerCase())) x.emails.push(v); }, `Add email: ${gh}`); return true; } }));
     else if (!emails.children.length) emails.append(el('span', 'muted', 'None'));
     const zone = el('input'); zone.value = m.timezone || ''; zone.placeholder = 'Area/City, e.g. Europe/London'; zone.disabled = !edit; zone.setAttribute('aria-label', `Time zone of @${gh}`); zone.autocomplete = 'off';
-    zone.setAttribute('list', 'memZones'); zone.setAttribute('autocapitalize', 'off'); zone.spellcheck = false;
-    const setZone = raw => { const v = raw.trim(); if (v === (m.timezone || '')) return; const z = v ? checkZone(v) : ''; if (v && !z) { toast(`“${v}” is not a time zone. Use a name like Europe/London or America/New_York.`, true); zone.value = m.timezone || ''; return; }
+    zone.classList.add('memzone'); zone.setAttribute('list', 'memZones'); zone.setAttribute('autocapitalize', 'off'); zone.spellcheck = false;
+    const setZone = raw => { const v = raw.trim(), cur = memberNow(gh).timezone || ''; if (v === cur) return; const z = v ? checkZone(v) : ''; if (v && !z) { toast(`“${v}” is not a time zone. Use a name like Europe/London or America/New_York.`, true); zone.value = cur; return; }
       memberEdit(gh, x => { if (z) x.timezone = z; else delete x.timezone; }, `Time zone: ${gh}`); };
-    zone.onchange = () => setZone(zone.value); zone.onkeydown = e => { if (e.key === 'Enter') zone.blur(); else if (e.key === 'Escape') { zone.value = m.timezone || ''; zone.blur(); } };
+    zone.onchange = () => setZone(zone.value); zone.onkeydown = e => { if (e.key === 'Enter') zone.blur(); else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); zone.value = memberNow(gh).timezone || ''; zone.blur(); } };
     const zoneRow = [zone]; const dz = deviceZone();
-    if (edit && !m.timezone && dz) zoneRow.push(ui.button({ label: `Use ${dz}`, variant: 'ghost', size: 'sm', title: 'The time zone this browser is set to', onClick: () => setZone(dz) }));
+    if (edit && !m.timezone && dz) zoneRow.push((() => { const b = ui.button({ label: `Use ${dz}`, variant: 'ghost', size: 'sm', title: 'The time zone this browser is set to', onClick: () => setZone(dz) }); b.setAttribute('aria-label', `Use ${dz} for @${gh}`); return b; })());
     card.append(head, ui.props([{ label: 'GitHub', icon: 'github', value: '@' + gh }, { label: 'Emails', icon: 'mail', value: emails }, { label: 'Time zone', icon: 'globe', value: zoneRow }]));
     return card;
   }
