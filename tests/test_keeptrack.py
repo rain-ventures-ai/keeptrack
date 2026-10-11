@@ -251,6 +251,17 @@ class SplitStorage(unittest.TestCase):
             kt._local_path("cards/../../../x.json")
         self.assertTrue(kt._local_path("cards/t_ok.json").endswith(os.path.join("board", "cards", "t_ok.json")))
 
+    def test_a_symlinked_folder_is_never_followed(self):
+        # A board repo can carry a committed symlink: cards -> a folder elsewhere on the member's machine.
+        outside = os.path.join(self.temp.name, "outside"); os.makedirs(outside)
+        shutil.move(os.path.join(self.board_dir, "cards"), os.path.join(outside, "cards"))
+        os.symlink(os.path.join(outside, "cards"), os.path.join(self.board_dir, "cards"))
+        before = tree_bytes(outside)
+        with self.assertRaises(SystemExit) as e:
+            kt.load_board()
+        self.assertIn("outside the board folder", str(e.exception))
+        self.assertEqual(before, tree_bytes(outside))
+
     def test_add_changes_settings_and_one_new_card(self):
         before = tree_bytes(self.board_dir)
         self.quiet(kt.cmd_add, Args(title="New", column="todo", client=None, priority="medium", due=None,

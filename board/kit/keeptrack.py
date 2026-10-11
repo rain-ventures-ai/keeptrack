@@ -678,10 +678,12 @@ def _remote_path(rel):
 
 
 def _local_path(rel):
-    base = os.path.dirname(os.path.abspath(FILE))
+    # A file name from board data, or a symlink committed to the board repo, must never lead outside the board folder:
+    # compare real paths, so a link (cards -> ~/somewhere) is caught for reads and writes alike.
+    base = os.path.realpath(os.path.dirname(os.path.abspath(FILE)))
     path = os.path.normpath(os.path.join(base, *rel.split("/")))
-    if os.path.commonpath([base, path]) != base:   # a file name from board data must never leave the board folder
-        sys.exit(f"refused: {rel!r} is outside the board folder; nothing was written")
+    if os.path.commonpath([base, os.path.realpath(path)]) != base:
+        sys.exit(f"refused: board/{rel} is outside the board folder (a '..' or a symlink); nothing was read or written")
     return path
 
 
@@ -731,18 +733,17 @@ def _wanted_rel(rel):
 
 def _local_snapshot():
     files = {}
-    board_dir = os.path.dirname(os.path.abspath(FILE))
     for rel in ["tasks.json"]:
         path = _local_path(rel)
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 files[rel] = {"text": f.read(), "sha": None, "size": os.path.getsize(path)}
     for folder in ("cards", "people", "projects", "archive"):
-        path = os.path.join(board_dir, folder)
+        path = _local_path(folder)
         if not os.path.isdir(path):
             continue
         for name in sorted(os.listdir(path)):
-            full = os.path.join(path, name)
+            full = _local_path(f"{folder}/{name}")
             if os.path.isfile(full):
                 rel = f"{folder}/{name}"
                 with open(full, encoding="utf-8", errors="replace") as f:

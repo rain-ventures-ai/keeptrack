@@ -26,7 +26,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Versions
 ### v30 (schema 4)
-Security fixes. On a split board, card, person and project ids name files (`cards/<id>.json`). An id is now used as a file name only if it is a plain token (letters, digits, `-`, `_`); anything else, such as an id containing `../` written into the board by someone with access to the repo, stops the save before anything is written, and `doctor` reports it as `BAD_ID`. Local writes also refuse any path outside the board folder. The session-start `here` line strips control characters from the project name and from error text.
+Security fixes. On a split board, card, person and project ids name files (`cards/<id>.json`). An id is now used as a file name only if it is a plain token (letters, digits, `-`, `_`); anything else, such as an id containing `../` written into the board by someone with access to the repo, stops the save before anything is written, and `doctor` reports it as `BAD_ID`. Local reads and writes also refuse any path whose real location is outside the board folder, so a `..` or a symlink committed to the board repo (say `cards` -> a folder elsewhere) is never followed. The session-start `here` line strips control characters from the project name and from error text.
 - Run `kit-update` only. There is no board-data migration; ids keeptrack and the web board create already pass.
 - Check: `doctor` shows no `BAD_ID`.
 ### v29 (schema 4)
