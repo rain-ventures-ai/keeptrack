@@ -840,7 +840,8 @@ if (typeof window !== 'undefined') (() => {
     if (body != null) { node = el('div', 'kb-ask'); (Array.isArray(body) ? body : [body]).forEach(t => node.append(el('p', 'ui-sheet__text', t))); }
     return ui.confirm({ title, body: node, confirmLabel, danger });
   }
-  const askRemoval = (what, title = 'Remove?') => ask(title, [`Remove ${what}?`, UNDO_HINT], 'Remove', true);
+  // The one removal confirmation: "Remove <what>?" as the title, or under a short title ("Remove column?") when one is given.
+  const askRemoval = (what, title) => ask(title || `Remove ${what}?`, title ? [`Remove ${what}?`, UNDO_HINT] : UNDO_HINT, 'Remove', true);
 
   // Apply an edit to the LATEST file on GitHub (never overwrite with stale state); retry on a SHA conflict.
   // Returns true only when the change is saved on GitHub.
@@ -1446,7 +1447,7 @@ if (typeof window !== 'undefined') (() => {
     t.todos.forEach(d => {
       const row = el('label', 'todo dtodo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
       cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); renderDlgTodos(); };
-      const x = ui.iconButton({ icon: 'x', label: `Remove “${d.text}”`, size: 'sm', onClick: async e => { e.preventDefault(); if (!(await confirmDrawerRemoval(`the checklist item “${d.text}”`))) return; await removeTodo(t.id, d.id); renderDlgTodos(); } });
+      const x = ui.iconButton({ icon: 'x', label: `Remove “${d.text}”`, size: 'sm', onClick: async e => { e.preventDefault(); if (!(await askRemoval(`the checklist item “${d.text}”`))) return; await removeTodo(t.id, d.id); renderDlgTodos(); } });
       row.append(cb, el('span', null, d.text), x); box.append(row);
     });
     $('cTodoCount').textContent = t.todos.length ? `${t.todos.filter(d => d.done).length}/${t.todos.length}` : '';
@@ -2088,7 +2089,6 @@ if (typeof window !== 'undefined') (() => {
   // ---- the drawer frame: built once with ui.js (header, one property list, sections); fillDrawer() fills it per task ----
   const drawerAddRows = [];
   const roKeep = x => { x.dataset.roKeep = '1'; return x; };   // read-only boards keep the buttons that only read or copy
-  const confirmDrawerRemoval = what => ui.confirm({ title: `Remove ${what}?`, body: 'This saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.', confirmLabel: 'Remove', danger: true });
   function ghostAdd(id, label, aria, onClick) { const b = el('button', 'ui-addrow__ghost'); b.type = 'button'; b.id = id; b.setAttribute('aria-label', aria); b.title = aria; b.append(ui.icon('plus'), el('span', null, label)); b.onclick = onClick; return b; }
   function drawerSelect(id, label, options) { const w = ui.select({ label, options: options || [] }); w.control.id = id; return w; }
   function drawerAddRow(id, opts) { const r = ui.addRow({ collapsed: true, buttonLabel: 'Add', ...opts }); r.input.id = id; drawerAddRows.push(r); return r; }
@@ -2239,7 +2239,7 @@ if (typeof window !== 'undefined') (() => {
   function renderLabelChips(t) {
     const box = $('cLabelChips'); box.textContent = ''; $('labelList').textContent = ''; state.labels.forEach(l => { const o = el('option'); o.value = l.name; $('labelList').append(o); });
     t.labels.forEach(l => box.append(ui.pill({ text: l, color: labelColor(l), removeLabel: 'Remove label ' + l,
-      onRemove: async () => { const id = editing; if (!(await confirmDrawerRemoval(`the “${l}” label`)) || editing !== id) return; edit(id, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(id)}`); } })));
+      onRemove: async () => { const id = editing; if (!(await askRemoval(`the “${l}” label`)) || editing !== id) return; edit(id, tt => { tt.labels = tt.labels.filter(y => y !== l); }, `Labels: ${titleOf(id)}`); } })));
   }
   const closeLabelInput = () => { $('cLabelNew').value = ''; $('cLabelNew').hidden = true; $('cLabelAdd').hidden = false; };
   $('cLabelNew').addEventListener('blur', () => setTimeout(() => { if (!$('cLabelNew').value.trim()) closeLabelInput(); }, 150));
@@ -2266,7 +2266,7 @@ if (typeof window !== 'undefined') (() => {
     const box = $('cContactList'); box.textContent = ''; $('cContactCount').textContent = t.contacts.length || '';
     t.contacts.forEach(k => {
       const row = ui.listRow({ text: k.name || '(no name)', meta: k.role || '', icon: 'user', removeLabel: `Remove contact ${k.name}`,
-        onRemove: async () => { const id = editing; if (!(await confirmDrawerRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(id)}`); } });
+        onRemove: async () => { const id = editing; if (!(await askRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(id)}`); } });
       [[k.email, 'mailto:' + k.email, 'mail', 'Email'], [k.phone, 'tel:' + String(k.phone).replace(/\s+/g, ''), 'phone', 'Call']].forEach(([v, href, ic, verb]) => {
         if (!v) return; const a = el('a', 'ui-iconbtn ui-iconbtn--ghost ui-iconbtn--sm'); a.href = href; a.title = v; a.setAttribute('aria-label', `${verb} ${k.name}: ${v}`); a.append(ui.icon(ic)); row.insertBefore(a, row.lastChild); });
       box.append(row);
@@ -3306,7 +3306,7 @@ if (typeof window !== 'undefined') (() => {
     (pr.people || []).forEach(em => {
       const person = personByEmail(em), who = person ? person.name : em;
       pbox.append(ui.listRow({ text: who, meta: person ? em : '', icon: 'user', removeLabel: `Remove ${who} from the project`,
-        onRemove: async () => { const id = pr.id; if (!(await confirmDrawerRemoval(`${who} from the project`)) || editingProject !== id) return; projectEdit(id, x => { x.people = (x.people || []).filter(e => e.toLowerCase() !== em.toLowerCase()); }, 'Project people'); } }));
+        onRemove: async () => { const id = pr.id; if (!(await askRemoval(`${who} from the project`)) || editingProject !== id) return; projectEdit(id, x => { x.people = (x.people || []).filter(e => e.toLowerCase() !== em.toLowerCase()); }, 'Project people'); } }));
     });
     const sug = $('prSuggest'); sug.textContent = '';
     const on = new Set((pr.people || []).map(e => e.toLowerCase()));
@@ -3765,7 +3765,7 @@ if (typeof window !== 'undefined') (() => {
     links.forEach(l => {
       const g = ghLink(l.url), local = resources && localResource(l.url); let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
       const row = ui.listRow({ text: g ? g.label : (l.title || l.url), meta: g && l.title && l.title !== l.url ? l.title : host, href: safeUrl(l.url) || undefined, icon: g ? 'github' : local ? 'laptop' : storeIcon(host), removeLabel: `Remove link ${l.title || l.url}`,
-        onRemove: async () => { if (await confirmDrawerRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); } });
+        onRemove: async () => { if (await askRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); } });
       row.title = l.url;
       if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
       box.append(row);
