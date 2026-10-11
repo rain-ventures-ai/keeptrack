@@ -1874,7 +1874,7 @@ def cmd_auto_heartbeat(a):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
             t = find(data, info["id"]); c = t.get("claim")
             if not c or c.get("status") == "done" or c.get("session_id") != info.get("session"):
-                drop_claim_file(); return  # released, finished, or taken over by another session
+                drop_claim_file(info["id"]); return  # released, finished, or taken over: forget the card, keep the clone's session
             if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
                 print(f"keeptrack: claim {info['id']} is stale and the board's agent limit is full; it stays stale "
                       "(another session may take the card)", file=sys.stderr)
