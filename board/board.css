@@ -1122,6 +1122,12 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .lbdel { margin-left: auto; color: var(--danger); } .lbnew { padding-top: var(--sp-1); border-top: 1px dashed var(--border); }
 @media (max-width: 520px) { .lbprev { display: none; } }
 
+.memlist { display: flex; flex-direction: column; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+.memrow { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--card); }
+.memhead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); } .memhead input { flex: 1 1 140px; min-width: 0; font-weight: 600; }
+.memtags { display: inline-flex; gap: var(--sp-1); flex-wrap: wrap; }
+.memmail { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; } .memmail .ui-pill { max-width: 100%; overflow-wrap: anywhere; }
+.memrow .ui-props__value input { width: 100%; max-width: 22rem; min-width: 0; }
 .collist { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-3); } .colrow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); } .colrow input { flex: 1 1 80px; min-width: 0; } .colrow .colcount { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; } .colrow .colmove { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: var(--fs-base); } .colrow .colmove select { flex: 1 1 140px; min-width: 0; }
 .coladd { display: flex; gap: var(--sp-2); } .coladd input { flex: 1; min-width: 0; }
 

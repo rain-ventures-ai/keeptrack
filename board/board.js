@@ -1,7 +1,7 @@
 // Markup handshake: the ids and page structure this file needs from index.html. index.html sets window.kbMarkup to the
 // version it carries (and its loader reads this line before running the file). Bump both together whenever board.js
 // starts to need markup an older index.html does not have, or index.html drops markup an older board.js needs.
-const KB_MARKUP = 2;
+const KB_MARKUP = 3;
 // Fractional ranks. This is the same algorithm as board/kit/keeptrack.py.
 // Keep it outside the browser closure so the Python parity test can load it in Node.
 const RANK_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -1248,7 +1248,7 @@ if (typeof window !== 'undefined') (() => {
     fillProjectSelect(sortedProjects().map(p => [p.id, projectPickerLabel(p)]));
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
-    applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox();
+    applyModes(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
     if (view !== 'board') {
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
@@ -2990,7 +2990,7 @@ if (typeof window !== 'undefined') (() => {
   // names of the old tabs and of single sections, and opens or scrolls to the right one.
   const SET_TABS = [['prefs', 'Preferences'], ['board', 'Board'], ['conn', 'Connection'], ['agents', 'Agents & integrations', 'Agents']];
   const SET_LINKS = { general: ['prefs'], preferences: ['prefs'], appearance: ['prefs', 'secLook'], alerts: ['prefs', 'secAlerts'], notifications: ['prefs', 'secAlerts'],
-    modes: ['board', 'secModes'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], archive: ['board', 'secArchive'],
+    modes: ['board', 'secModes'], members: ['board', 'memSec'], people: ['board', 'memSec'], team: ['board', 'memSec'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], archive: ['board', 'secArchive'],
     connect: ['conn'], conn: ['conn', 'bThis'], boards: ['conn', 'secBoards'], checks: ['conn', 'secHealth'], health: ['conn', 'secHealth'], move: ['conn', 'secMove'], advanced: ['conn', 'secAdv'],
     claude: ['agents', 'agClaude'], codex: ['agents', 'agLocal'], chat: ['agents', 'agLocal'], email: ['agents', 'agEmail'] };
   const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'prefs', style: 'underline', label: 'Settings sections', onChange: v => setPanel(v) });
@@ -3468,6 +3468,82 @@ if (typeof window !== 'undefined') (() => {
   const PROTECTED_COLS = ['todo', 'in-progress', 'done'];   // the agent commands put cards in these by id
   const colSlug = (name, used) => { const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'column'; let id = base, n = 2; while (used.has(id)) id = `${base}-${n++}`; return id; };   // same ids as keeptrack.py column-add
   let colRemoving = '';   // the column whose "move its cards to" row is open
+  // ---- Settings → Board → Members: the people work can be assigned to (state.people). Each has a name, the work email
+  // address(es) and a time zone (kit v28); keeptrack.py member-add / member-set / member-rm change the same fields.
+  const EMAIL_BAD = '@\\s<>,;\\x00-\\x1f\\x7f-\\x9f\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff';
+  const EMAIL_RE = new RegExp(`^[^${EMAIL_BAD}]+@[^${EMAIL_BAD}]+\\.[^${EMAIL_BAD}]+$`);
+  const deviceZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } };
+  const zoneList = () => { try { return Intl.supportedValuesOf('timeZone'); } catch { return []; } };
+  function checkZone(v) {   // a name like Europe/London (any case); '' when it is not a time zone
+    v = v.trim(); if (!/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+)*$/.test(v)) return '';
+    try { new Intl.DateTimeFormat('en', { timeZone: v }); } catch { return ''; }
+    return zoneList().find(z => z.toLowerCase() === v.toLowerCase()) || v;
+  }
+  const memberEdit = (gh, fn, msg) => mutate(d => { const m = d.people.find(x => x.github === gh); if (m) fn(m); }, msg).then(renderMembersBox);
+  const memberTasks = gh => state.tasks.filter(t => (t.assignees || []).includes(gh) && t.column !== doneColId());
+  const memberClaims = gh => state.tasks.filter(t => { const c = activeClaim(t); return c && c.on_behalf_of === gh; });
+  async function memberAdd(gh, name) {
+    gh = gh.trim().replace(/^@/, ''); if (!gh) return false;
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(gh)) { toast(`“${gh}” is not a GitHub username.`, true); return false; }
+    if (state.people.some(p => p.github.toLowerCase() === gh.toLowerCase())) { toast(`@${gh} is already a member.`, true); return false; }
+    await mutate(d => { if (!d.people.some(p => p.github.toLowerCase() === gh.toLowerCase())) d.people.push({ github: gh, name: (name || '').trim() || gh }); }, `Add member: ${gh}`);
+    renderMembersBox(); return true;
+  }
+  async function memberRemove(m) {
+    const claims = memberClaims(m.github), open = memberTasks(m.github);
+    if (claims.length) { toast(`@${m.github} has active claims on ${claims.map(t => '#' + t.num).join(', ')}. Release them first.`, true); return; }
+    const body = [`@${m.github} will no longer be offered when assigning work. Their name stays in card history.`];
+    if (open.length) body.unshift(`They are assigned ${open.length} open task${open.length === 1 ? '' : 's'} (${open.slice(0, 6).map(t => '#' + t.num).join(', ')}${open.length > 6 ? ', …' : ''}). Those will become unassigned.`);
+    if (!(await ask(`Remove ${m.name || '@' + m.github}?`, [...body, UNDO_HINT], 'Remove', true))) return;
+    await mutate(d => {
+      const u = d.people.find(x => x.github === m.github); if (!u || d.people.length <= 1) return;
+      d.tasks.forEach(t => { if ((t.assignees || []).includes(u.github) && t.column !== doneColId()) t.assignees = t.assignees.filter(x => x !== u.github); });
+      d.people = d.people.filter(x => x !== u);
+    }, `Remove member: ${m.github}`);
+    renderMembersBox();
+  }
+  function memberCard(m, edit) {
+    const gh = m.github, card = el('div', 'memrow'), you = (cfg().me || '').toLowerCase() === gh.toLowerCase(), owner = kitOwner() === gh;
+    const name = el('input'); name.value = m.name || ''; name.placeholder = gh; name.maxLength = 60; name.disabled = !edit; name.setAttribute('aria-label', `Name of @${gh}`);
+    name.onchange = () => { const v = name.value.trim() || gh; if (v === (m.name || gh)) { name.value = m.name || ''; return; } memberEdit(gh, x => { x.name = v; }, `Rename member: ${gh}`); };
+    name.onkeydown = e => { if (e.key === 'Enter') name.blur(); else if (e.key === 'Escape') { name.value = m.name || ''; name.blur(); } };
+    const head = el('div', 'memhead'), tags = el('span', 'memtags');
+    if (you) tags.append(ui.pill({ text: 'You', tone: 'info' })); if (owner) tags.append(ui.pill({ text: 'Upgrade owner', tone: 'neutral' }));
+    head.append(ui.avatar(m.name || gh, { key: gh }), name, tags);
+    if (edit) {
+      const why = owner ? 'This member is the upgrade owner. Give that to someone else first (keeptrack.py kit-owner).' : state.people.length <= 1 ? 'A board needs at least one member.' : '';
+      head.append(ui.button({ label: 'Remove', variant: 'ghost', size: 'sm', icon: 'user-minus', disabled: !!why, title: why || `Remove @${gh} from this board`, onClick: () => memberRemove(m) }));
+    }
+    const emails = el('div', 'memmail');
+    (Array.isArray(m.emails) ? m.emails : []).filter(e => typeof e === 'string').forEach(e => emails.append(ui.pill({ text: e, icon: 'mail', onRemove: edit ? () => memberEdit(gh, x => { x.emails = (x.emails || []).filter(y => y !== e); if (!x.emails.length) delete x.emails; }, `Remove email: ${gh}`) : undefined, removeLabel: `Remove ${e}` })));
+    if (edit) emails.append(ui.addRow({ placeholder: 'name@work.example', buttonLabel: 'Add', collapsed: true, ghostLabel: 'Add email', label: `New email address for @${gh}`,
+      onAdd: v => { v = v.trim(); if (!EMAIL_RE.test(v)) { toast(`“${v}” is not an email address.`, true); return false; }
+        if ((m.emails || []).some(y => String(y).toLowerCase() === v.toLowerCase())) { toast('That address is already there.', true); return false; }
+        memberEdit(gh, x => { x.emails = Array.isArray(x.emails) ? x.emails : []; if (!x.emails.some(y => String(y).toLowerCase() === v.toLowerCase())) x.emails.push(v); }, `Add email: ${gh}`); return true; } }));
+    else if (!emails.children.length) emails.append(el('span', 'muted', 'None'));
+    const zone = el('input'); zone.value = m.timezone || ''; zone.placeholder = 'Area/City, e.g. Europe/London'; zone.disabled = !edit; zone.setAttribute('aria-label', `Time zone of @${gh}`); zone.autocomplete = 'off';
+    zone.setAttribute('list', 'memZones'); zone.setAttribute('autocapitalize', 'off'); zone.spellcheck = false;
+    const setZone = raw => { const v = raw.trim(); if (v === (m.timezone || '')) return; const z = v ? checkZone(v) : ''; if (v && !z) { toast(`“${v}” is not a time zone. Use a name like Europe/London or America/New_York.`, true); zone.value = m.timezone || ''; return; }
+      memberEdit(gh, x => { if (z) x.timezone = z; else delete x.timezone; }, `Time zone: ${gh}`); };
+    zone.onchange = () => setZone(zone.value); zone.onkeydown = e => { if (e.key === 'Enter') zone.blur(); else if (e.key === 'Escape') { zone.value = m.timezone || ''; zone.blur(); } };
+    const zoneRow = [zone]; const dz = deviceZone();
+    if (edit && !m.timezone && dz) zoneRow.push(ui.button({ label: `Use ${dz}`, variant: 'ghost', size: 'sm', title: 'The time zone this browser is set to', onClick: () => setZone(dz) }));
+    card.append(head, ui.props([{ label: 'GitHub', icon: 'github', value: '@' + gh }, { label: 'Emails', icon: 'mail', value: emails }, { label: 'Time zone', icon: 'globe', value: zoneRow }]));
+    return card;
+  }
+  function renderMembersBox() {
+    const box = $('memBox'); if (!box) return; box.textContent = '';
+    const edit = !ro && !newerSchema, list = el('div', 'memlist');
+    state.people.forEach(m => list.append(memberCard(m, edit)));
+    if (!state.people.length) list.append(el('div', 'hint', 'No members yet. Add the people who can be assigned work.'));
+    box.append(list);
+    if (state.people.length && state.people.some(m => !(Array.isArray(m.emails) && m.emails.length) || !m.timezone)) box.append(el('p', 'hint', 'Work email addresses help email sync match messages to the right person. A time zone makes “today” and “tomorrow” mean the right thing for them. Use work addresses only.'));
+    if (edit) {
+      const dl = el('datalist'); dl.id = 'memZones'; zoneList().forEach(z => { const o = el('option'); o.value = z; dl.append(o); }); box.append(dl);
+      box.append(ui.addRow({ placeholder: 'GitHub username', buttonLabel: 'Add member', collapsed: true, ghostLabel: 'Add a member', label: 'GitHub username of the new member', onAdd: v => memberAdd(v, '') }));
+    }
+    uiBtns(box);
+  }
   function renderColumnsBox() {
     const list = $('colList'); if (!list) return; list.textContent = '';
     const locked = !!ro || !!newerSchema, dc = doneColId(), cols = state.columns;
@@ -4262,7 +4338,7 @@ if (typeof window !== 'undefined') (() => {
       : ro === 'public' || !c.token ? 'Read-only: this browser has no token for this board, so its shared settings cannot change here.' : ro === 'token' ? 'Read-only: your token can read this board but cannot change it.'
       : newerSchema ? 'Read-only: the board file is newer than this page. Reload to update.' : '';
     if (why) { const b = ui.banner({ tone: 'warn', icon: 'lock', text: why }); b.setAttribute('role', 'status'); box.append(b); }
-    syncModeSettings(); renderColumnsBox(); renderLabelBox(); renderArchiveBox();
+    syncModeSettings(); renderMembersBox(); renderColumnsBox(); renderLabelBox(); renderArchiveBox();
     const info = $('bInfo'); info.textContent = '';
     info.append(ui.props([{ label: 'Repository', value: c.repo || '—' }, { label: 'Branch', value: c.repo ? c.branch : '—' }, { label: 'File', value: c.repo ? c.path : '—' },
       { label: 'Format', value: !c.repo ? '—' : `${isSplit(state) ? 'Split: one file per card and person' : 'One file'} · this page reads up to schema v${KNOWN_SCHEMA}` }]));
