@@ -235,6 +235,22 @@ class SplitStorage(unittest.TestCase):
         v4 = kt.load_board()
         self.assertEqual(without_v4_fields(v3), without_v4_fields(v4))
 
+    def test_an_id_that_is_a_path_never_becomes_a_file_outside_the_board(self):
+        # Board data comes from anyone who can write the repo: a card whose id is a path must not make keeptrack write
+        # outside the board folder on another member's machine.
+        path = os.path.join(self.board_dir, "cards", "t_first.json")
+        card = read_json(path); card["id"] = "../../escape"; write(path, card)
+        before = tree_bytes(self.temp.name)
+        with self.assertRaises(SystemExit) as e:
+            self.quiet(kt.cmd_add, Args(title="New", column="todo", client=None, priority="medium", due=None,
+                                        label=None, assign=None, details=None, todo=None))
+        self.assertIn("can't be a file name", str(e.exception))
+        self.assertEqual(before, tree_bytes(self.temp.name))
+        self.assertFalse(os.path.exists(os.path.join(self.temp.name, "escape.json")))
+        with self.assertRaises(SystemExit):
+            kt._local_path("cards/../../../x.json")
+        self.assertTrue(kt._local_path("cards/t_ok.json").endswith(os.path.join("board", "cards", "t_ok.json")))
+
     def test_add_changes_settings_and_one_new_card(self):
         before = tree_bytes(self.board_dir)
         self.quiet(kt.cmd_add, Args(title="New", column="todo", client=None, priority="medium", due=None,
