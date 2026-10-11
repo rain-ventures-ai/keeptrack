@@ -991,9 +991,22 @@ class CrmProjects(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             kt.cmd_today(Args())
         self.assertIn("OVERDUE", out.getvalue()); self.assertIn("Bea", out.getvalue())
+        self.assertIn("p_me  Oliver  [New]", out.getvalue(), "the member's own record is a contact again too")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_people(Args(stage=None, q=None))
+        self.assertNotIn("board member", out.getvalue())
         issues, _, _ = kt.doctor_board(False)
         self.assertIn("MEMBER_PERSON_DUP", {x["code"] for x in issues})
-        d["people"] = None; write(self.file, d)   # a null people[] never crashes today
+        # ids play no part: the member's record and other contacts saved with no id hide nothing (security review of #77)
+        d = read_json(self.file); d["contacts"] = [{"name": "Me", "github": "osouthgate", "stage": "New"},
+                                                  {"name": "Ghost", "stage": "New", "next_due": "2020-01-01"}]
+        write(self.file, d)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_today(Args())
+        self.assertIn("Ghost", out.getvalue()); self.assertNotIn("Me ", out.getvalue())
+        d["people"] = None; write(self.file, d)   # a null people[] never crashes today or doctor
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_today(Args())
 

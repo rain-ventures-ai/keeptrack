@@ -2040,7 +2040,7 @@ def doctor_board(fix=False):
         problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
                 "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
     board_modes = (data.get("settings") or {}).get("modes") or ["tasks", "crm"]
-    for m in data.get("people", []):
+    for m in [x for x in (data.get("people") or []) if isinstance(x, dict)]:
         gh_user = m.get("github")
         if m.get("emails") is not None and not isinstance(m.get("emails"), list):
             problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r}: emails must be a list.")
@@ -2725,31 +2725,36 @@ def last_touch(p):
     return max(ts) if ts else ""
 
 
-def member_map(data):
-    """{person id: board member} for each member's own CRM record (v33): the ONE person whose GitHub login is that
-    member's. Such a person is listed as a member, never as a follow-up. If two or more people share a member's login,
-    none of them counts (v34): a repo writer could otherwise hide real contacts by giving them a member's login.
-    `doctor` reports the duplicate. Worked out from people[], never stored."""
+def member_logins(data):
+    """(members by lower-case GitHub login, how many CRM people carry each login): built once, read per person."""
     ppl = [m for m in (data.get("people") or []) if isinstance(m, dict) and m.get("github")]
     contacts = [p for p in (data.get("contacts") or []) if isinstance(p, dict)]
-    members = {str(m["github"]).lower(): m for m in ppl}
-    logins = [str(p.get("github") or "").lower() for p in contacts]
-    n = collections.Counter(logins)
-    return {p.get("id"): members[g] for p, g in zip(contacts, logins) if g in members and n[g] == 1}
+    return {str(m["github"]).lower(): m for m in ppl}, collections.Counter(str(p.get("github") or "").lower() for p in contacts)
+
+
+def own_member(p, ml):
+    """The board member whose own CRM record p is, or None (v33, v34). Decided from p's OWN GitHub login, never its id
+    (which a writer could blank or reuse): p counts only if it is the ONE person carrying a member's login. If two or
+    more share it, all stay contacts and `doctor` warns MEMBER_PERSON_DUP, so a member's login can't hide anyone.
+    Limit: a writer who moves the login from the member's real record to one contact can still mark that one contact;
+    nothing is stored to tell them apart. Worked out from people[], never stored."""
+    members, n = ml
+    g = str((p or {}).get("github") or "").lower()
+    return members[g] if g and g in members and n[g] == 1 else None
 
 
 def member_of(data, p):
-    return member_map(data).get((p or {}).get("id"))
+    return own_member(p, member_logins(data))
 
 
-def person_line(p, data=None, members=None):
-    m = (members if members is not None else member_map(data) if data else {}).get(p.get("id"))
+def person_line(p, data=None, ml=None):
+    m = own_member(p, ml if ml is not None else member_logins(data)) if (data or ml) else None
     if m:
         return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
     due = p.get("next_due") or ""
     flag = " OVERDUE" if due and due < dt.date.today().isoformat() else (" TODAY" if due == dt.date.today().isoformat() else "")
     who = ", ".join(x for x in (p.get("role"), p.get("company")) if x)
-    return f"{p['id']}  {p['name']}{' (' + who + ')' if who else ''}  [{p.get('stage', '')}]  next: {p.get('next') or '-'}{' ' + due if due else ''}{flag}"
+    return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}{' (' + who + ')' if who else ''}  [{p.get('stage', '')}]  next: {p.get('next') or '-'}{' ' + due if due else ''}{flag}"
 
 
 def person_methods(p, kind):
@@ -2828,9 +2833,9 @@ def cmd_people(a):
         st = check_stage(data, a.stage); people = [p for p in people if p.get("stage") == st]
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
-    own = member_map(data)
+    ml = member_logins(data)
     for p in sorted(people, key=lambda p: p.get("name", "").lower()):
-        print(person_line(p, members=own))
+        print(person_line(p, ml=ml))
     if not people: print("(nobody)")
 
 
@@ -2838,8 +2843,8 @@ def cmd_today(a):
     """Follow-ups: overdue, due today, the next 7 days, and open people with no next step."""
     data, _ = load(); t = dt.date.today(); ti = t.isoformat(); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
-    own = member_map(data)
-    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and p.get("id") not in own]   # members are never follow-ups
+    ml = member_logins(data)
+    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not own_member(p, ml)]   # members are never follow-ups
     groups = [("OVERDUE", [p for p in open_ if p.get("next_due") and p["next_due"] < ti]),
               ("TODAY", [p for p in open_ if p.get("next_due") == ti]),
               ("NEXT 7 DAYS", [p for p in open_ if p.get("next_due") and ti < p["next_due"] <= wk]),
