@@ -224,6 +224,29 @@ async function assertFits(page, where) {
       await page.close();
     }
 
+
+    // The Back button closes what was opened and returns to the board, never to the page before it.
+    {
+      const p = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }); await p.addInitScript(() => { try { localStorage.setItem('kb_tour_seen', '1'); } catch {} });
+      await p.goto(base + '/board/ui.html'); await p.goto(base + '/board/index.html?demo=board'); await p.locator('#roBar').waitFor({ state: 'visible' });
+      const at = () => p.evaluate(() => ({ page: location.pathname.split('/').pop(), hash: location.hash, card: document.getElementById('dlgCard').open, len: history.length }));
+      const openCard = async () => { await p.getByText('Fix the broken link on the pricing page').first().click(); await p.locator('#dlgCard[open]').waitFor(); };
+      const len0 = (await at()).len;
+      await openCard(); assert.match((await at()).hash, /^#\d+$/, 'an open card is in the address');
+      await p.goBack(); await p.locator('#dlgCard').waitFor({ state: 'hidden' });
+      assert.deepEqual(await at(), { page: 'index.html', hash: '', card: false, len: len0 + 1 }, 'Back closes the card and stays on the board');
+      await openCard(); await p.keyboard.press('Escape'); await p.locator('#dlgCard').waitFor({ state: 'hidden' });
+      await p.waitForFunction(() => !history.state);
+      await openCard(); await p.locator('#cClose').click(); await p.locator('#dlgCard').waitFor({ state: 'hidden' }); await p.waitForFunction(() => !history.state);
+      assert.equal((await at()).len, len0 + 1, 'closing with Escape or X leaves no extra history entries');
+      await p.evaluate(() => document.getElementById('btnSettings').click()); await p.locator('#dlgSettings[open]').waitFor();
+      await p.goBack(); await p.locator('#dlgSettings').waitFor({ state: 'hidden' }); assert.equal((await at()).page, 'index.html', 'Back closes Settings');
+      await p.goto(base + '/board/index.html?demo=board#2'); await p.locator('#dlgCard[open]').waitFor();
+      await p.goBack(); await p.locator('#dlgCard').waitFor({ state: 'hidden' });
+      const d = await at(); assert.ok(d.page === 'index.html' && d.hash === '', 'Back from a #2 link goes to the board');
+      await p.close();
+    }
+
     console.log('task-drawer: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

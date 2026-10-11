@@ -349,7 +349,7 @@ button.ui-task--button:hover:not(:disabled) { background: var(--card-hover); bor
   .ui-select__control { height: var(--touch, 44px); font-size: var(--fs-md, 14px); }
   .ui-input { height: var(--touch, 44px); font-size: var(--fs-lg, 16px); }   /* 16px stops iOS zooming into the field */
   .ui-addrow__ghost { min-height: var(--touch, 44px); font-size: var(--fs-base, 13px); }
-  .ui-menu { inset: auto var(--sp-3, 8px) calc(var(--dock-top, env(safe-area-inset-bottom, 0px)) + var(--sp-3, 8px)) var(--sp-3, 8px); width: auto; max-width: none; max-height: 70dvh; border-radius: var(--r-xl, 12px); padding: var(--sp-2, 6px); }
+  .ui-menu { min-width: min(260px, calc(100vw - 16px)); border-radius: var(--r-xl, 12px); padding: var(--sp-2, 6px); }
   .ui-menu__item { min-height: var(--touch, 44px); font-size: var(--fs-lg, 16px); }
   .ui-section__toggle { min-height: var(--touch, 44px); }
   .ui-tab { min-height: var(--touch, 44px); }
