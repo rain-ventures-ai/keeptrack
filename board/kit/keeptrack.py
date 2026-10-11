@@ -1319,6 +1319,46 @@ def session_id(args):
         or os.environ.get("CODEX_SESSION_ID") or uuid.uuid4().hex[:8]
 
 
+def session_for(a, task_id):
+    """The session id this run acts as on an existing card: --session, then the environment (same order as
+    session_id), then the local claim record when it is for this card (an attended session with no environment that
+    claimed earlier in this clone still owns its card). Only then a random id, which owns nothing."""
+    sid = getattr(a, "session", None) or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") \
+        or os.environ.get("CODEX_SESSION_ID")
+    if sid:
+        return sid
+    try:
+        with open(CLAIM_FILE) as f:
+            info = json.load(f)
+        if isinstance(info, dict) and info.get("id") == task_id and info.get("session"):
+            return info["session"]
+    except (OSError, ValueError):
+        pass
+    return uuid.uuid4().hex[:8]
+
+
+def is_placeholder_claim(c):
+    """The page writes a claim with a session_id starting 'pending-' before its routine starts."""
+    return str((c or {}).get("session_id") or "").startswith("pending-")
+
+
+def claim_owner_check(data, t, a, action):
+    """Refuse to done/release/heartbeat a card whose claim belongs to another session, unless --force. A page
+    placeholder is no CLI session's claim. Releasing a stale, stuck or blocked claim is allowed: that is the
+    recovery path for a dead or parked run (done never gets that: it asserts the work was finished)."""
+    c = t.get("claim")
+    if not c or getattr(a, "force", False):
+        return
+    state = claim_state(data, c)
+    placeholder = is_placeholder_claim(c)
+    if not placeholder and c.get("session_id") == session_for(a, t["id"]):
+        return
+    if action == "release" and not placeholder and state in ("stale", "stuck", "blocked"):
+        return
+    sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')} session {c.get('session_id')} ({state}); "
+             "it is not this session's (use --force if a person told you to)")
+
+
 def line(data, t):
     cs = claim_state(data, t.get("claim"))
     who = ",".join("@" + a for a in t.get("assignees", [])) or "-"
@@ -1367,6 +1407,11 @@ def cmd_show(a):
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
     hs = t.pop("history", []); cms = t.pop("comments", [])
     print(json.dumps(t, indent=2, ensure_ascii=False))
+    if t.get("outcome") == "cancelled" and t.get("column") == "done":
+        why = next((h["text"][len("cancelled: "):] for h in reversed(hs) if str(h.get("text", "")).startswith("cancelled: ")), "")
+        if why.endswith(")") and " (session " in why:
+            why = why.rsplit(" (session ", 1)[0]
+        print("\noutcome: cancelled" + (f" ({why})" if why else ""))
     if t.get("links"):
         print("\nresource access: cloud links need the matching connector/plugin/MCP and signed-in account; local paths need a session on the computer that holds them. Ask the user if access fails.")
     if t.get("todos"):
@@ -1434,17 +1479,22 @@ def do_claim(a, tid, data):
         sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
     cs = claim_state(data, t.get("claim"))
     # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
-    if not attended(a) and not a.force and not (t.get("claim") and t["claim"].get("session_id") == sid and cs == "running"):
+    if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") == sid and cs == "running"):
         busy = busy_over_limit(data, t)
         if busy:
-            sys.exit(f"refused: {limit_message(data, busy)} (or --force)")
-    if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force:
+            sys.exit(f"refused: {limit_message(data, busy)} (raise settings.max_agent_claims, or use --attended for a session a person drives)")
+    old_c = t.get("claim") or {}
+    # the page's placeholder for this same agent and user is this run's own: the routine replaces it without --force
+    mine_pending = is_placeholder_claim(old_c) and old_c.get("agent") == agent \
+        and (old_c.get("on_behalf_of") or "").lower() == (user or "").lower()
+    if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force \
+            and not mine_pending:
         c = t["claim"]
         sys.exit(f"refused: already claimed by {c['agent']} session {c.get('session_id')} ({cs}, last beat {c.get('heartbeat_at')})")
     ts = now()
     old = t.get("claim") or {}
     # keep a link the board already found for this run (it sends the routine, then the routine re-claims with --force)
-    keep = old.get("session_url", "") if old.get("agent") == agent and old.get("on_behalf_of") == user else ""
+    keep = old.get("session_url", "") if old.get("agent") == agent and (old.get("on_behalf_of") or "").lower() == (user or "").lower() else ""
     url = a.session_url or cloud_session_url() or keep
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
@@ -1494,6 +1544,7 @@ def must_claim(t):
 def cmd_heartbeat(a):
     def fn(data):
         t = find(data, a.id); c = must_claim(t)
+        claim_owner_check(data, t, a, "heartbeat")
         if claim_state(data, c) != "running" and (a.status or c.get("status")) == "running" and not c.get("attended"):
             busy = busy_over_limit(data, t)   # reviving a stale, stuck or blocked claim counts like a new claim
             if busy:
@@ -1529,7 +1580,7 @@ def move_task_to_column(data, task, column):
 
 def cmd_release(a):
     def fn(data):
-        t = find(data, a.id); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file()
+        t = find(data, a.id); claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file()
         if a.column: move_task_to_column(data, t, a.column)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
@@ -1538,14 +1589,29 @@ def cmd_release(a):
 def cmd_done(a):
     def fn(data):
         t = find(data, a.id)
+        claim_owner_check(data, t, a, "done")
+        cancel = bool(getattr(a, "cancel", False))
+        note = (a.note or "").strip()
+        if not note:
+            sys.exit("refused: " + ("done --cancel needs --note with why the card is closed" if cancel
+                                    else "done needs --note with the result (what was delivered, where it is)"))
+        open_todos = [d for d in t.get("todos") or [] if not d.get("done")]
+        if open_todos and not cancel:
+            first = ", ".join(str(d.get("text", "")) for d in open_todos[:3]) + (", ..." if len(open_todos) > 3 else "")
+            sys.exit(f"refused: {t['id']} has {len(open_todos)} open to-dos ({first}); tick them with todo-done, "
+                     "remove them, or close the card with --cancel --note \"why\"")
+        outcome = "cancelled" if cancel else "completed"
         c = t.get("claim")
         if c:  # the claim banner goes away; the card keeps a one-line record of the run, with its link
             t["last_run"] = {"agent": c.get("agent", ""), "on_behalf_of": c.get("on_behalf_of", ""), "session_id": c.get("session_id", ""),
                              "session_url": c.get("session_url", ""), "started_at": c.get("claimed_at", ""), "finished_at": now(),
-                             "note": a.note or c.get("note", "")}
+                             "note": note, "outcome": outcome}
             t["claim"] = None
+        t["outcome"] = outcome
         link = (c or {}).get("session_url", "")
-        hist(t, "done" + (f": {a.note}" if a.note else "") + (f" (session {link})" if link else "")); move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(); print(f"done {t['id']}: {t['title']}")
+        hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
+        move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file()
+        print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
 
 
@@ -1584,6 +1650,9 @@ def cmd_move(a):
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
         old = t["column"]; t["column"] = column
+        n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
+        if column == "done" and old != "done" and n_open:
+            print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)
         hist(t, f"moved {old} -> {column}" + (f": {a.note}" if a.note else "")); t["updated"] = now()
         print(f"#{t['num']} {t['title']}: {old} -> {column}")
     mutate(fn, f"Agent move: {a.id}")
@@ -4423,9 +4492,13 @@ def main():
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
     s.add_argument("--project"); s.add_argument("--all", action="store_true", help="ignore this repo's default project"); s.set_defaults(f=cmd_next)
     s = sub.add_parser("heartbeat"); s.add_argument("id"); s.add_argument("--note")
-    s.add_argument("--status", choices=["running", "blocked", "stuck"]); s.set_defaults(f=cmd_heartbeat)
-    s = sub.add_parser("release"); s.add_argument("id"); s.add_argument("--column"); s.set_defaults(f=cmd_release)
-    s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--note"); s.set_defaults(f=cmd_done)
+    s.add_argument("--status", choices=["running", "blocked", "stuck"]); s.add_argument("--session")
+    s.add_argument("--force", action="store_true", help="act on a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_heartbeat)
+    s = sub.add_parser("release"); s.add_argument("id"); s.add_argument("--column"); s.add_argument("--session")
+    s.add_argument("--force", action="store_true", help="release a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_release)
+    s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--note", help="the result: what was delivered, where it is (required)"); s.add_argument("--session")
+    s.add_argument("--cancel", action="store_true", help="close the card without finishing it (needs --note; open to-dos are dropped)")
+    s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_done)
     s = sub.add_parser("auto-heartbeat"); s.set_defaults(f=cmd_auto_heartbeat)
     s = sub.add_parser("todo-add"); s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_todo_add)
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
