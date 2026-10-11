@@ -14,7 +14,7 @@ This repo holds the task board `{repo}` (`board/`). People on the board: {people
 # who am I acting for? set once per session
 export BOARD_USER=<github-user>      # one of: {people}
 export BOARD_AGENT=<claude|codex>
-export BOARD_SESSION=<short session id>
+export BOARD_SESSION=<a short random id you generate for this run; never your claude.ai session id>
 
 python3 board/keeptrack.py list --assignee $BOARD_USER --column todo --unclaimed   # find work
 python3 board/keeptrack.py claim <id> --note "starting: <plan in one line>"        # claim (id prefix is fine)

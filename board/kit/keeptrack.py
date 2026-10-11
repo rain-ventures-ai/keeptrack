@@ -1869,6 +1869,7 @@ def cmd_auto_heartbeat(a):
         os.utime(CLAIM_FILE)  # throttle even if the network call fails
 
         def fn(data):
+            _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
             t = find(data, info["id"]); c = t.get("claim")
             if not c or c.get("status") == "done" or c.get("session_id") != info.get("session"):
                 drop_claim_file(); return  # released, finished, or taken over by another session

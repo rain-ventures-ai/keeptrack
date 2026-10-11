@@ -97,7 +97,7 @@ and ask the user. Never imply that you read it.
 
 ## 3. Tasks
 ```bash
-export BOARD_AGENT=<claude|codex|cursor> BOARD_SESSION=<short session id>
+export BOARD_AGENT=<claude|codex|cursor> BOARD_SESSION=<a short random id you generate for this run; never your claude.ai session id>
 $B list --assignee <user> --column todo --unclaimed
 $B list -q "not published"                       # find text in titles, details, labels, links, comments or history
 $B show '#12'                                    # read the comments before you start

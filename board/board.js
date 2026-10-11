@@ -2340,7 +2340,7 @@ if (typeof window !== 'undefined') (() => {
     const where = [k.session_id && 'session ' + shortSid(k.session_id), k.host, k.branch].filter(Boolean).join(' · '); if (where) txt.append(el('div', 'host', where));
     if (k.session_url && safeUrl(k.session_url)) { const sa = el('a', 'sesslink', /\/routines\//.test(k.session_url) ? 'Open the routine’s runs ↗' : 'Open the Claude session ↗'); sa.href = safeUrl(k.session_url); sa.target = '_blank'; sa.rel = 'noopener noreferrer'; txt.append(sa); }
     // Same claim as last time: refresh only the text, so the buttons (and keyboard focus) and the banner node survive a board refresh.
-    const sig = JSON.stringify(k) + st, old = wrap.dataset.sig === sig && wrap.querySelector('.dclaim__text');
+    const sig = JSON.stringify({ ...k, session_id: shortSid(k.session_id) }) + st, old = wrap.dataset.sig === sig && wrap.querySelector('.dclaim__text');
     if (old) { old.replaceWith(txt); return; }
     wrap.textContent = ''; wrap.dataset.sig = sig;
     const acts = el('div', 'dclaim__acts');
