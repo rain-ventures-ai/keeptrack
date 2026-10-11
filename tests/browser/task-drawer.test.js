@@ -176,7 +176,7 @@ async function assertFits(page, where) {
     await page.locator('#cAgent').click(); await page.waitForFunction(() => /You are working from the Keeptrack board|#1/.test(window.__copied) && !/^#/.test(window.__copied));
 
     // Escape closes the drawer and clears the address; the hash opens it again
-    await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' }); assert.equal(await page.evaluate(() => location.hash), '');
+    await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' }); await page.waitForFunction(() => location.hash === '');   // the close event clears it a moment after the drawer hides
     await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(await page.locator('#cTodoSec .ui-addrow__form').isVisible(), false, 'add rows start closed on every open');
 
@@ -236,8 +236,8 @@ async function assertFits(page, where) {
       await p.goBack(); await p.locator('#dlgCard').waitFor({ state: 'hidden' });
       assert.deepEqual(await at(), { page: 'index.html', hash: '', card: false, len: len0 + 1 }, 'Back closes the card and stays on the board');
       await openCard(); await p.keyboard.press('Escape'); await p.locator('#dlgCard').waitFor({ state: 'hidden' });
-      await p.waitForFunction(() => !history.state);
-      await openCard(); await p.locator('#cClose').click(); await p.locator('#dlgCard').waitFor({ state: 'hidden' }); await p.waitForFunction(() => !history.state);
+      await p.waitForFunction(() => !(history.state || {}).kbDlg);
+      await openCard(); await p.locator('#cClose').click(); await p.locator('#dlgCard').waitFor({ state: 'hidden' }); await p.waitForFunction(() => !(history.state || {}).kbDlg);
       assert.equal((await at()).len, len0 + 1, 'closing with Escape or X leaves no extra history entries');
       await p.evaluate(() => document.getElementById('btnSettings').click()); await p.locator('#dlgSettings[open]').waitFor();
       await p.goBack(); await p.locator('#dlgSettings').waitFor({ state: 'hidden' }); assert.equal((await at()).page, 'index.html', 'Back closes Settings');
