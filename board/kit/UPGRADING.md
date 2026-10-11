@@ -25,11 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v34 (schema 4)
+### v35 (schema 4)
 Claims, launch checks, done evidence and time zones, from the external review of private-tasks. `done`, `release` and `heartbeat` refuse a claim that belongs to another session (`--force` only on a person's say-so); releasing a stale, stuck or blocked claim works from any session. `--force` no longer skips `max_agent_claims`. A card sent to Claude from the web page gets a placeholder claim, which the routine's `claim` replaces without `--force`. `done` needs `--note` and refuses open checklist items; `done --cancel --note "why"` closes a card as `outcome: cancelled`. `--due today`, the OVERDUE/TODAY flags and `today` use the member's time zone.
 - Run `kit-update` only. There is no board-data migration.
 - After upgrading, agents must pass `--note` to `done`. Routines no longer need `--force` on their first claim. An older web page that still sends `--force` keeps working.
 - Check: `keeptrack.py today` starts with `Today is YYYY-MM-DD (<zone>)`; `keeptrack.py done '#N'` without `--note` is refused.
+
+### v34 (schema 4)
+A member's own CRM record is the ONE person with their GitHub login; if two or more share it, all stay contacts and `doctor` warns `MEMBER_PERSON_DUP`.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `keeptrack.py doctor` shows no `MEMBER_PERSON_DUP`; if it does, keep the login on one person (`person-set <id> --github ''` on the others).
 
 ### v33 (schema 4)
 A CRM person whose `github` matches a board member is that member's own record, not a contact: `today` skips it, `people` and `person` mark it as a board member, and the web board shows it as You or Board member, outside follow-ups and the pipeline. Nothing is stored; it follows `people[]`.

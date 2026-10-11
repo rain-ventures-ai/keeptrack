@@ -66,7 +66,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, README.md, AGENTS.md, CLAUDE.md, empty tasks.json
 """
-import argparse, base64, contextlib, copy, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
+import argparse, base64, collections, contextlib, copy, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 try:
     import fcntl
 except ImportError:   # Windows
@@ -2063,7 +2063,7 @@ def doctor_board(fix=False):
 
     columns = {x.get("id") for x in data.get("columns", [])}
     labels = {x.get("name") for x in data.get("labels", [])}
-    assignees = {x.get("github") for x in data.get("people", [])}
+    assignees = {x.get("github") for x in (data.get("people") or []) if isinstance(x, dict)}
     valid_stages = set(stages(data))
     bad_rank_columns = set()
     ranks = {}
@@ -2119,7 +2119,7 @@ def doctor_board(fix=False):
         problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
                 "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
     board_modes = (data.get("settings") or {}).get("modes") or ["tasks", "crm"]
-    for m in data.get("people", []):
+    for m in [x for x in (data.get("people") or []) if isinstance(x, dict)]:
         gh_user = m.get("github")
         if m.get("emails") is not None and not isinstance(m.get("emails"), list):
             problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r}: emails must be a list.")
@@ -2127,6 +2127,10 @@ def doctor_board(fix=False):
             if not valid_email(e.strip() if isinstance(e, str) else e):
                 problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r} has an invalid email address {e!r}.")
         # The CRM person is optional: only suggest one while the board shows the CRM.
+        same = [p for p in data.get("contacts", []) if gh_user and str(p.get("github") or "").lower() == str(gh_user).lower()]
+        if len(same) > 1:
+            problem("MEMBER_PERSON_DUP", "tasks.json", f"{len(same)} CRM people share board member {gh_user!r}'s GitHub login, so none "
+                    "counts as their own record and all stay contacts; keep it on one (person-set <id> --github '').")
         if gh_user and "crm" in board_modes and not person_for_github(data, gh_user):
             problem("MEMBER_NO_PERSON", "tasks.json", f"Board member {gh_user!r} has no CRM person record (add a person with --github <login>).")
     for item in tasks + people:
@@ -2686,7 +2690,7 @@ def cmd_where(a):
 # "channel". A draft is never a contact: it counts only when it is marked sent (`sent`). Agents never send messages.
 CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
-DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "PROJECT", "SETTINGS"})
+DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS"})
 
 
 def person_for_github(data, github):
@@ -2825,22 +2829,37 @@ def last_touch(p):
     return max(ts) if ts else ""
 
 
-def member_of(data, p):
-    """The board member whose GitHub login is this person's, or None. Such a person is that member's own record, not a
-    contact: it is listed as a member and never as a follow-up (v33). Worked out from people[], never stored."""
+def member_logins(data):
+    """(members by lower-case GitHub login, how many CRM people carry each login): built once, read per person."""
+    ppl = [m for m in (data.get("people") or []) if isinstance(m, dict) and m.get("github")]
+    contacts = [p for p in (data.get("contacts") or []) if isinstance(p, dict)]
+    return {str(m["github"]).lower(): m for m in ppl}, collections.Counter(str(p.get("github") or "").lower() for p in contacts)
+
+
+def own_member(p, ml):
+    """The board member whose own CRM record p is, or None (v33, v34). Decided from p's OWN GitHub login, never its id
+    (which a writer could blank or reuse): p counts only if it is the ONE person carrying a member's login. If two or
+    more share it, all stay contacts and `doctor` warns MEMBER_PERSON_DUP, so a member's login can't hide anyone.
+    Limit: at most one contact per member login can be marked this way, and members come from people[] (which board
+    writers can edit); such a contact still shows in People with a "Board member" pill. Nothing is stored to tell it apart. Worked out from people[], never stored."""
+    members, n = ml
     g = str((p or {}).get("github") or "").lower()
-    return next((m for m in data.get("people", []) if g and str(m.get("github") or "").lower() == g), None)
+    return members[g] if g and g in members and n[g] == 1 else None
 
 
-def person_line(p, data=None, today=None):
-    m = member_of(data, p) if data else None
+def member_of(data, p):
+    return own_member(p, member_logins(data))
+
+
+def person_line(p, data=None, ml=None, today=None):
+    m = own_member(p, ml if ml is not None else member_logins(data)) if (data or ml) else None
     if m:
-        return f"{p['id']}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
+        return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
     due = p.get("next_due") or ""
     ti = (today or board_today(data)).isoformat() if due else ""
     flag = " OVERDUE" if due and due < ti else (" TODAY" if due == ti else "")
-    who = ", ".join(x for x in (p.get("role"), p.get("company")) if x)
-    return f"{p['id']}  {p['name']}{' (' + who + ')' if who else ''}  [{p.get('stage', '')}]  next: {p.get('next') or '-'}{' ' + due if due else ''}{flag}"
+    who = ", ".join(clean(x, 80) for x in (p.get("role"), p.get("company")) if x)
+    return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}{' (' + who + ')' if who else ''}  [{clean(p.get('stage', ''), 40)}]  next: {clean(p.get('next') or '-', 160)}{' ' + clean(due, 20) if due else ''}{flag}"
 
 
 def person_methods(p, kind):
@@ -2919,9 +2938,9 @@ def cmd_people(a):
         st = check_stage(data, a.stage); people = [p for p in people if p.get("stage") == st]
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
-    t = board_today(data)
+    ml = member_logins(data); t = board_today(data)
     for p in sorted(people, key=lambda p: p.get("name", "").lower()):
-        print(person_line(p, data, t))
+        print(person_line(p, ml=ml, today=t))
     if not people: print("(nobody)")
 
 
@@ -2931,7 +2950,8 @@ def cmd_today(a):
     zone = board_timezone(data)
     print(f"Today is {ti} ({zone.key})" if zone else f"Today is {ti} (host clock; set a time zone with member-set --timezone Area/City)"); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
-    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not member_of(data, p)]   # members are never follow-ups
+    ml = member_logins(data)
+    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not own_member(p, ml)]   # members are never follow-ups
     groups = [("OVERDUE", [p for p in open_ if p.get("next_due") and p["next_due"] < ti]),
               ("TODAY", [p for p in open_ if p.get("next_due") == ti]),
               ("NEXT 7 DAYS", [p for p in open_ if p.get("next_due") and ti < p["next_due"] <= wk]),
@@ -2976,11 +2996,11 @@ def cmd_person_add(a):
                or (a.linkedin and any(_norm_url(x.get("url")) == _norm_url(a.linkedin) for x in person_links(p)))
                or (a.email and any(x["value"].lower() == a.email.lower() for x in person_methods(p, "email")))]
         if dup and not a.force:
-            print(f"already on the board: {person_line(dup[0], today=board_today(data))}  (nothing added; use person-set to change it, or --force)"); return
+            print(f"already on the board: {person_line(dup[0], data, today=board_today(data))}  (nothing added; use person-set to change it, or --force)"); return
         p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "", "github": "",
              "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
              "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": who_am_i()}
-        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p, today=board_today(data))}")
+        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p, data, today=board_today(data))}")
     mutate(fn, f"Add person: {a.name}")
 
 
@@ -2990,7 +3010,7 @@ def cmd_person_set(a):
         if not ch:
             print("nothing changed"); return
         for c in ch: hist(p, c)
-        p["updated"] = now(); print(person_line(p, today=board_today(data)))
+        p["updated"] = now(); print(person_line(p, data, today=board_today(data)))
     mutate(fn, f"Update person: {a.ref}")
 
 
@@ -3001,7 +3021,7 @@ def cmd_person_rm(a):
         p = find_person(data, a.ref)
         tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
         if not a.yes:
-            sys.exit(f"this deletes {person_line(p, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
+            sys.exit(f"this deletes {person_line(p, data, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
                      f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
         for t in tasks:
             t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
@@ -3041,7 +3061,7 @@ def cmd_sent(a):
         if p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
             hist(p, f"stage {p['stage']} -> {stages(data)[1]}"); p["stage"] = stages(data)[1]
         for x in set_fields(data, p, a): hist(p, x)
-        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p, today=board_today(data))}")
+        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p, data, today=board_today(data))}")
     mutate(fn, f"Sent: {a.ref}")
 
 

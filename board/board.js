@@ -2982,15 +2982,20 @@ if (typeof window !== 'undefined') (() => {
   function notify(title, body, id) {
     const n = 'Notification' in window && Notification.permission === 'granted';
     if (!n) { if (!document.hidden) toast(title + ': ' + body); return; }
-    try { const x = new Notification(title, { body: String(body).slice(0, 240), tag: id || 'board', icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') });
-      x.onclick = () => { window.focus(); if (id) openCard(id); x.close(); }; } catch { toast(title + ': ' + body); }
+    const opts = { body: String(body).slice(0, 240), tag: id || 'board', data: { card: id || '' }, icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') };
+    try { const x = new Notification(title, opts); x.onclick = () => { window.focus(); if (id) openCard(id); x.close(); }; }
+    catch {   // Android browsers only allow a service worker to show one (sw.js)
+      if (!navigator.serviceWorker) { toast(title + ': ' + body); return; }
+      navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(r => r.showNotification(title, opts)).catch(() => toast(title + ': ' + body));
+    }
   }
+  if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', e => { const id = e.data && e.data.kbOpenCard; window.focus(); if (id) openCard(id); });   // a tap on a phone alert
   function renderAlerts() {   // Settings → Preferences → Notifications
     const ac = alertCfg(), perm = 'Notification' in window ? Notification.permission : 'unsupported', box = $('alKinds'); box.textContent = '';
     $('alOn').checked = ac.on; $('alPresetRow').hidden = $('alFold').hidden = !ac.on;
     setChip($('alChip'), !ac.on ? 'Off' : perm === 'granted' ? 'On' : perm === 'denied' ? 'Blocked' : 'On · in the page', !ac.on ? 'neutral' : perm === 'granted' ? 'ok' : perm === 'denied' ? 'danger' : 'warn');
     const pm = $('alPerm'); pm.textContent = '';
-    pm.append(ui.check(perm === 'granted' ? { state: 'ok', text: 'Notifications are allowed.' } : perm === 'denied' ? { state: 'bad', text: 'Notifications are blocked for this page.', fix: 'Allow them in the site settings (the icon left of the address), then reload.' }
+    pm.append(ui.check(perm === 'granted' ? { state: 'ok', text: 'Notifications are allowed.' } : perm === 'denied' ? { state: 'bad', text: 'Notifications are blocked for this page.', fix: 'Your browser is blocking them, and the board cannot ask again. Tap the padlock beside the address, open Permissions or Site settings, set Notifications to Allow, then reload. On Android also check Settings → Apps → your browser → Notifications is on.' }
       : perm === 'unsupported' ? { state: 'warn', text: 'This browser cannot show notifications.', fix: 'Alerts show as messages on the page instead.' } : { state: 'warn', text: 'Not allowed yet.', fix: 'Switching alerts on asks the browser for permission.' }));
     ALERT_KINDS.forEach(([k, l]) => { const lab = el('label', 'schk'), i = el('input'); i.type = 'checkbox'; i.checked = ac.kinds.includes(k);
       i.onchange = () => { const o = alertCfg(); o.kinds = ALERT_KINDS.map(x => x[0]).filter(x => x === k ? i.checked : o.kinds.includes(x)); saveAlertCfg(o); syncPreset(); }; lab.append(i, document.createTextNode(' ' + l)); box.append(lab); });
@@ -3245,10 +3250,12 @@ if (typeof window !== 'undefined') (() => {
   const projectsForClient = client => projectsOf().filter(p => p.client === client);
   const personByEmail = email => { const e = String(email || '').toLowerCase(); return state.contacts.find(p => (p.emails || []).some(x => String(x.value).toLowerCase() === e)); };
   const personByGithub = gh => { const g = String(gh || '').toLowerCase(); return state.contacts.find(p => String(p.github || '').toLowerCase() === g); };
-  const memberPerson = () => { const meV = cfg().me; if (!meV) return null; return personByGithub(meV) || personByEmail(meV); };
+  const memberPerson = () => { const meV = cfg().me; if (!meV) return null; return personByGithub(meV) || personByEmail(meV); };   // any person with your login: never offer to add another (isMe decides display only)
   // A person whose GitHub login is a board member's is that member's own record, not a contact: it shows as "You" (or
   // "Board member") and stays out of follow-ups, the pipeline and "Help me with my contact". Worked out from people[], never stored.
-  const memberOf = p => { const g = String((p && p.github) || '').toLowerCase(); return g ? (state.people || []).find(m => String(m.github || '').toLowerCase() === g) || null : null; };
+  // only the ONE person with a member's login counts (v34): duplicates all stay contacts, so a member's login can't hide anyone
+  const memberOf = p => { const g = String((p && p.github) || '').toLowerCase(); if (!g) return null; const m = (state.people || []).find(x => String(x.github || '').toLowerCase() === g);
+    return m && state.contacts.filter(x => String(x.github || '').toLowerCase() === g).length === 1 ? m : null; };
   const isMe = p => { const m = memberOf(p), meV = String(cfg().me || '').toLowerCase(); return !!m && !!meV && String(m.github).toLowerCase() === meV; };
   const contactOnly = p => !memberOf(p);
   function memberPill(p) { const b = el('span', 'stagepill memberpill', isMe(p) ? 'You' : 'Board member'); b.title = `@${memberOf(p).github} is a member of this board: their own record, not a contact`; return b; }
