@@ -61,7 +61,7 @@ class Github {
 let base;
 const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); } };
 const TABS = ['Prefs', 'Board', 'Conn', 'Agents'];
-async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board' } = {}) {
+async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board', query = '' } = {}) {
   const api = new Github(), page = await browser.newPage({ viewport: { width, height } }), errors = [];
   page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { errors.push('native dialog: ' + d.message()); d.dismiss(); });
   await page.addInitScript(([token, repo]) => {
@@ -71,7 +71,7 @@ async function open(browser, { width = 1280, height = 860, token = 'test', demo 
     window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } });
   }, [token, demo ? '' : repo]);
   await page.route('https://api.test/**', r => api.route(r));
-  await page.goto(base + '/board/index.html' + (demo ? '?demo=board' : ''));
+  await page.goto(base + '/board/index.html' + (demo ? '?demo=board' : query));
   if (token && !demo) await page.waitForSelector('.card'); else await page.waitForTimeout(800);
   page.errors = errors; page.api = api; return page;
 }
@@ -200,6 +200,17 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(await selected(page), 'tabConn'); assert.equal(await page.locator('#bEditFold').getAttribute('open'), ''); assert.equal(await page.locator('#bThisChip').textContent(), 'No token');
       assert.equal(await page.locator('#sTokenReuse').count(), 1);
       await page.locator('#sClose').click(); await page.evaluate(() => document.getElementById('btnSettings').click()); assert.equal(await selected(page), 'tabPrefs', 'a click on Settings still opens Preferences');
+      assert.deepEqual(page.errors, []); await page.close();
+    }
+
+    // 10b. ?setup ("Create my own board") in a browser that already has a board with no token: Connection says the settings
+    // are for the current board, keeps its form folded, and offers a way back to it.
+    {
+      const page = await open(browser, { width: 390, height: 844, token: '', query: '?setup' });
+      await page.evaluate(() => window.kbSettings.open('connect')); await settle(page);
+      assert.equal(await page.locator('#bEditFold').getAttribute('open'), null, 'the old board form stays folded during setup');
+      assert.match(await page.locator('#bState').textContent(), /setting up a new board.*acme\/board/);
+      assert.match(await page.locator('#bState').textContent(), /Back to acme\/board/);
       assert.deepEqual(page.errors, []); await page.close();
     }
 
