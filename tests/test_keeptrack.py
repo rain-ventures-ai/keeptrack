@@ -1547,3 +1547,102 @@ class AgentClaimLimit(unittest.TestCase):
         self.assertNotIn("max_agent_claims", self.read()["settings"])
         for i in range(1, 6):
             self.claim(f"t_c{i}", f"s{i}")                        # no limit
+
+
+class TimeZoneDates(LocalBoard):
+    """Date shortcuts (today, +N, OVERDUE/TODAY flags, the today view) run on the member's own clock, not the host's."""
+
+    def set_tz(self, tz, owner_tz=None, owner=False):
+        d = read_json(self.file)
+        d["people"] = [{"github": "osouthgate", "name": "O"}]
+        if tz:
+            d["people"][0]["timezone"] = tz
+        if owner:   # a second member is the kit owner; the acting user is osouthgate
+            d["people"].append({"github": "bea", "name": "Bea", "timezone": owner_tz})
+            d["settings"]["kit_owner"] = "bea"
+        write(self.file, d)
+
+    def zone_today(self, tz):
+        import datetime as dt, zoneinfo
+        return dt.datetime.now(zoneinfo.ZoneInfo(tz)).date()
+
+    def add(self, due):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_add(Args(title="Dated", column="todo", client="Acme", project=None, priority="medium",
+                            due=due, assign=None, label=None, details=None, todo=None, all=True))
+        return next(t for t in read_json(self.file)["tasks"] if t["title"] == "Dated")["due"]
+
+    def test_board_today_uses_the_members_zone(self):
+        for tz in ("Pacific/Kiritimati", "Pacific/Pago_Pago"):
+            self.set_tz(tz)
+            self.assertEqual(kt.board_today(read_json(self.file)), self.zone_today(tz))
+
+    def test_add_due_today_and_plus_n_use_the_member_zone(self):
+        import datetime as dt
+        self.set_tz("Pacific/Kiritimati")
+        today = self.zone_today("Pacific/Kiritimati")
+        self.assertEqual(self.add("today"), today.isoformat())
+        write(self.file, board()); self.set_tz("Pacific/Kiritimati")
+        self.assertEqual(self.add("+1"), (today + dt.timedelta(days=1)).isoformat())
+
+    def test_invalid_zone_falls_back_to_the_host_date(self):
+        import datetime as dt
+        self.set_tz("Not/AZone")
+        data = read_json(self.file)
+        self.assertIsNone(kt.board_timezone(data))
+        self.assertEqual(kt.board_today(data), dt.date.today())
+
+    def test_no_zone_on_record_uses_the_host_clock(self):
+        import datetime as dt
+        self.assertIsNone(kt.board_timezone(read_json(self.file)))
+        self.assertEqual(kt.board_today(read_json(self.file)), dt.date.today())
+        self.assertEqual(kt.board_today({}), dt.date.today())
+
+    def test_kit_owners_zone_is_used_when_the_acting_user_has_none(self):
+        self.set_tz(None, owner_tz="Pacific/Kiritimati", owner=True)
+        data = read_json(self.file)
+        self.assertEqual(str(kt.board_timezone(data)), "Pacific/Kiritimati")
+        self.assertEqual(kt.board_today(data), self.zone_today("Pacific/Kiritimati"))
+
+    def test_acting_users_zone_wins_over_the_owners(self):
+        self.set_tz("Pacific/Pago_Pago", owner_tz="Pacific/Kiritimati", owner=True)
+        self.assertEqual(str(kt.board_timezone(read_json(self.file))), "Pacific/Pago_Pago")
+
+    def test_first_member_is_the_last_resort(self):
+        d = read_json(self.file)
+        d["people"] = [{"github": "zed", "name": "Z", "timezone": "Pacific/Pago_Pago"}, {"github": "amy", "name": "A"}]
+        self.assertEqual(str(kt.board_timezone(d)), "Pacific/Pago_Pago")
+
+    def test_overdue_and_today_flags_follow_the_board_clock(self):
+        import datetime as dt
+        self.set_tz("Pacific/Kiritimati")
+        today = self.zone_today("Pacific/Kiritimati")
+        d = read_json(self.file)
+        p = {"id": "p_x", "name": "Pat", "stage": "New", "next": "Call", "next_due": today.isoformat()}
+        self.assertTrue(kt.person_line(p, d).endswith(" TODAY"))
+        p["next_due"] = (today - dt.timedelta(days=1)).isoformat()
+        self.assertTrue(kt.person_line(p, d).endswith(" OVERDUE"))
+
+    def test_today_prints_the_date_and_zone_first(self):
+        self.set_tz("Pacific/Kiritimati")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_today(Args())
+        self.assertEqual(out.getvalue().splitlines()[0],
+                         f"Today is {self.zone_today('Pacific/Kiritimati').isoformat()} (Pacific/Kiritimati)")
+        self.set_tz(None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_today(Args())
+        self.assertEqual(out.getvalue().splitlines()[0],
+                         f"Today is {kt.board_today({}).isoformat()} (host clock; set a time zone with member-set --timezone Area/City)")
+
+    def test_archive_plan_defaults_to_the_board_clock(self):
+        import datetime as dt
+        self.set_tz("Pacific/Kiritimati")
+        d = read_json(self.file)
+        rules = {"done_days": 0, "lost_days": 0, "keep_history": 0}
+        today = self.zone_today("Pacific/Kiritimati")
+        d["tasks"] = [{"id": "t_k", "title": "K", "column": "done", "history": [], "todos": [],
+                       "updated": (today - dt.timedelta(days=1)).isoformat() + "T12:00:00Z"}]
+        self.assertEqual(kt.archive_plan(copy.deepcopy(d), rules).keys(), kt.archive_plan(copy.deepcopy(d), rules, today).keys())

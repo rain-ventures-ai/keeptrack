@@ -1733,7 +1733,7 @@ def cmd_add(a):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
         t = {"id": new_board_id(data, "t_", "cards"), "title": a.title, "column": column,
-             "client": a.client or "", "project": "", "priority": a.priority, "due": check_date(a.due) or "",
+             "client": a.client or "", "project": "", "priority": a.priority, "due": check_date(a.due, data) or "",
              "labels": [], "assignees": a.assign or [], "details": a.details or "", "links": [],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": x, "done": False} for x in (a.todo or [])],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
@@ -2682,14 +2682,39 @@ def check_stage(data, s):
     sys.exit(f"unknown stage '{s}'; stages are: {', '.join(stages(data))}")
 
 
-def check_date(d):
+def board_timezone(data):
+    """The board's clock: the acting user's member time zone, else the kit owner's, else the first member's, else None."""
+    people = [m for m in ((data or {}).get("people") or []) if isinstance(m, dict)]
+    me = (default_user() or "").lower()
+    owner = str(((data or {}).get("settings") or {}).get("kit_owner") or "").lower()
+    pick = [next((m for m in people if me and str(m.get("github") or "").lower() == me), None),
+            next((m for m in people if owner and str(m.get("github") or "").lower() == owner), None),
+            people[0] if people else None]
+    for m in pick:
+        tz = m.get("timezone") if m else None
+        if valid_timezone(tz):
+            try:
+                import zoneinfo
+                return zoneinfo.ZoneInfo(tz)
+            except Exception:
+                return None
+    return None
+
+
+def board_today(data):
+    """Today's date on the board's clock (see board_timezone); the host clock when no time zone is on record."""
+    zone = board_timezone(data)
+    return dt.datetime.now(zone).date() if zone else dt.date.today()
+
+
+def check_date(d, data=None):
     if d in (None, ""):
         return d
     if d == "today":
-        return dt.date.today().isoformat()
+        return board_today(data).isoformat()
     m = re.fullmatch(r"\+(\d+)d?", d)
     if m:
-        return (dt.date.today() + dt.timedelta(days=int(m.group(1)))).isoformat()
+        return (board_today(data) + dt.timedelta(days=int(m.group(1)))).isoformat()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
         sys.exit(f"date '{d}' must be YYYY-MM-DD, 'today' or +N (days from today)")
     return d
@@ -2728,12 +2753,13 @@ def member_of(data, p):
     return next((m for m in data.get("people", []) if g and str(m.get("github") or "").lower() == g), None)
 
 
-def person_line(p, data=None):
+def person_line(p, data=None, today=None):
     m = member_of(data, p) if data else None
     if m:
         return f"{p['id']}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
     due = p.get("next_due") or ""
-    flag = " OVERDUE" if due and due < dt.date.today().isoformat() else (" TODAY" if due == dt.date.today().isoformat() else "")
+    ti = (today or board_today(data)).isoformat() if due else ""
+    flag = " OVERDUE" if due and due < ti else (" TODAY" if due == ti else "")
     who = ", ".join(x for x in (p.get("role"), p.get("company")) if x)
     return f"{p['id']}  {p['name']}{' (' + who + ')' if who else ''}  [{p.get('stage', '')}]  next: {p.get('next') or '-'}{' ' + due if due else ''}{flag}"
 
@@ -2800,7 +2826,7 @@ def set_fields(data, p, a):
     st = check_stage(data, getattr(a, "stage", None))
     if st and st != p.get("stage"):
         changed.append(f"stage {p.get('stage') or 'none'} -> {st}"); p["stage"] = st
-    due = check_date(getattr(a, "due", None))
+    due = check_date(getattr(a, "due", None), data)
     if due is not None and due != p.get("next_due", ""):
         p["next_due"] = due; changed.append(f"next step date: {due or 'cleared'}")
     if p.get("company") and p["company"] not in data.setdefault("clients", []):
@@ -2814,14 +2840,17 @@ def cmd_people(a):
         st = check_stage(data, a.stage); people = [p for p in people if p.get("stage") == st]
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
+    t = board_today(data)
     for p in sorted(people, key=lambda p: p.get("name", "").lower()):
-        print(person_line(p, data))
+        print(person_line(p, data, t))
     if not people: print("(nobody)")
 
 
 def cmd_today(a):
     """Follow-ups: overdue, due today, the next 7 days, and open people with no next step."""
-    data, _ = load(); t = dt.date.today(); ti = t.isoformat(); wk = (t + dt.timedelta(days=7)).isoformat()
+    data, _ = load(); t = board_today(data); ti = t.isoformat()
+    zone = board_timezone(data)
+    print(f"Today is {ti} ({zone.key})" if zone else f"Today is {ti} (host clock; set a time zone with member-set --timezone Area/City)"); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
     open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not member_of(data, p)]   # members are never follow-ups
     groups = [("OVERDUE", [p for p in open_ if p.get("next_due") and p["next_due"] < ti]),
@@ -2832,7 +2861,7 @@ def cmd_today(a):
         if ps:
             print(f"{title} ({len(ps)})")
             for p in sorted(ps, key=lambda p: (p.get("next_due") or "", p.get("name", ""))):
-                print("  " + person_line(p))
+                print("  " + person_line(p, today=t))
     tasks = [x for x in data.get("tasks", []) if x.get("due") and x["due"] <= ti and x.get("column") != "done"]
     if tasks:
         print(f"TASKS DUE ({len(tasks)})")
@@ -2868,11 +2897,11 @@ def cmd_person_add(a):
                or (a.linkedin and any(_norm_url(x.get("url")) == _norm_url(a.linkedin) for x in person_links(p)))
                or (a.email and any(x["value"].lower() == a.email.lower() for x in person_methods(p, "email")))]
         if dup and not a.force:
-            print(f"already on the board: {person_line(dup[0])}  (nothing added; use person-set to change it, or --force)"); return
+            print(f"already on the board: {person_line(dup[0], today=board_today(data))}  (nothing added; use person-set to change it, or --force)"); return
         p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "", "github": "",
              "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
              "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": who_am_i()}
-        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p)}")
+        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p, today=board_today(data))}")
     mutate(fn, f"Add person: {a.name}")
 
 
@@ -2882,7 +2911,7 @@ def cmd_person_set(a):
         if not ch:
             print("nothing changed"); return
         for c in ch: hist(p, c)
-        p["updated"] = now(); print(person_line(p))
+        p["updated"] = now(); print(person_line(p, today=board_today(data)))
     mutate(fn, f"Update person: {a.ref}")
 
 
@@ -2893,7 +2922,7 @@ def cmd_person_rm(a):
         p = find_person(data, a.ref)
         tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
         if not a.yes:
-            sys.exit(f"this deletes {person_line(p)} for good (notes and history included); rerun with --yes to confirm. "
+            sys.exit(f"this deletes {person_line(p, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
                      f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
         for t in tasks:
             t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
@@ -2933,7 +2962,7 @@ def cmd_sent(a):
         if p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
             hist(p, f"stage {p['stage']} -> {stages(data)[1]}"); p["stage"] = stages(data)[1]
         for x in set_fields(data, p, a): hist(p, x)
-        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p)}")
+        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p, today=board_today(data))}")
     mutate(fn, f"Sent: {a.ref}")
 
 
@@ -3103,7 +3132,7 @@ def cmd_task_set(a):
         if getattr(a, "priority", None) and a.priority != t.get("priority"):
             t["priority"] = a.priority; changed.append(f"priority: {a.priority}")
         if getattr(a, "due", None) is not None:
-            due = check_date(a.due) or ""
+            due = check_date(a.due, data) or ""
             if due != t.get("due", ""):
                 t["due"] = due; changed.append(f"due: {due or 'cleared'}")
         add = [check_label_name(x) for x in getattr(a, "label", None) or []]
@@ -4178,7 +4207,7 @@ def done_col(data):
 
 def archive_plan(data, rules, today=None):
     """Take what can be archived out of data. Returns {year: {"tasks": [], "contacts": [], "history": {id: [...]}}}."""
-    today = today or dt.date.today()
+    today = today or board_today(data)
     cut_t = (today - dt.timedelta(days=rules["done_days"])).isoformat()
     cut_p = (today - dt.timedelta(days=rules["lost_days"])).isoformat()
     dc, plan = done_col(data), {}
