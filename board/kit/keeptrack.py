@@ -1632,6 +1632,7 @@ def drop_claim_file(task_id=None):
     if FILE:
         return
     try:
+        ensure_local_dir(CLAIM_FILE)   # the same guard as the write: a committed or redirected record is left alone
         if task_id:
             try:
                 with open(CLAIM_FILE) as f:
@@ -1735,6 +1736,8 @@ def cmd_move(a):
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
+        if column == "done" and t["column"] != "done" and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
+            claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
@@ -4645,7 +4648,8 @@ def main():
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
     s = sub.add_parser("todo-edit", help="change the text of checklist item N in place"); s.add_argument("id"); s.add_argument("n"); s.add_argument("text"); s.set_defaults(f=cmd_todo_edit)
-    s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column")
+    s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column"); s.add_argument("--session")
+    s.add_argument("--force", action="store_true", help="move a card another session holds to done (a person told you to)")
     s.add_argument("--before"); s.add_argument("--after"); s.add_argument("--top", action="store_true")
     s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); s.set_defaults(f=cmd_move)
     s = sub.add_parser("assign"); s.add_argument("id"); s.add_argument("users", nargs="+"); s.add_argument("--add", action="store_true")

@@ -741,7 +741,8 @@ if (typeof window !== 'undefined') (() => {
         box.append(el('strong', null, nameOf(c) + (field ? ' · ' + field : '')));
         if (isItem(c) && c.path.length === 2) { if (c.theirs === undefined) box.append(el('div', 'cfnote', 'Someone else deleted it.')); else if (c.mine === undefined) box.append(el('div', 'cfnote', 'You deleted it.')); }
         const tb = el('table', 'cftable'), hr = el('tr'); ['You saw', 'Mine', 'Theirs (now on GitHub)'].forEach(h => hr.append(el('th', null, h))); tb.append(hr);
-        const r = el('tr'); [c.base, c.mine, c.theirs].forEach(v => r.append(el('td', null, show(v)))); tb.append(r); box.append(tb);
+        const leafSid = c.path[c.path.length - 1] === 'session_id', scrubIds = v => v && typeof v === 'object' ? (Array.isArray(v) ? v.map(scrubIds) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'session_id' ? shortSid(x) : scrubIds(x)]))) : v;   // a session id is shown only in part
+        const r = el('tr'); [c.base, c.mine, c.theirs].forEach(v => r.append(el('td', null, show(leafSid ? shortSid(v) : scrubIds(v))))); tb.append(r); box.append(tb);
         const row = el('div', 'cfpick'), ta = el('textarea', 'cfedit'); ta.hidden = true; ta.rows = 2; ta.value = typeof c.theirs === 'string' ? c.theirs : JSON.stringify(c.theirs === undefined ? null : c.theirs);
         [['theirs', 'Keep theirs'], ['mine', 'Keep mine'], ['edit', 'Edit…']].forEach(([side, label]) => {
           const lab = el('label'), rb = el('input'); rb.type = 'radio'; rb.name = 'cf' + i; rb.value = side; rb.checked = side === 'theirs';

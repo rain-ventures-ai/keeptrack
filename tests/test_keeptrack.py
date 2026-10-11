@@ -1791,6 +1791,14 @@ class ClaimLifecycle(unittest.TestCase):
         self.assertEqual(self.card(1)["column"], "done")
         self.assertEqual(kt.recorded_session("t_c1"), ""); self.assertEqual(kt.recorded_session(), "s1")
 
+    def test_move_to_done_on_another_sessions_live_claim_is_refused(self):
+        self.claim(1, "s1")
+        mv = lambda **kw: self.quiet(kt.cmd_move, Args(id="t_c1", column="done", note=None, priority=None, before=None, after=None, top=False, **kw))
+        self.assertIn("not this session's", self.refusal(mv, session="s2"))
+        mv(session="s1"); self.assertEqual(self.card(1)["column"], "done")   # its own session may
+        self.claim(2, "s1"); mv2 = lambda **kw: self.quiet(kt.cmd_move, Args(id="t_c2", column="done", note=None, priority=None, before=None, after=None, top=False, **kw))
+        mv2(session="s2", force=True); self.assertEqual(self.card(2)["column"], "done")   # a person's say-so
+
     def test_unclaimed_cards_need_no_ownership(self):
         self.release(1, session="s1")
         self.done(2, session="s1")
