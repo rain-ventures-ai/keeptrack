@@ -962,6 +962,24 @@ class CrmProjects(unittest.TestCase):
         kt.FILE = self.old
         self.dir.cleanup()
 
+    def test_member_person_is_listed_as_member_and_never_a_follow_up(self):
+        """v33: a CRM person whose GitHub login is a board member's is that member's own record, not a contact."""
+        d = read_json(self.file)
+        d.setdefault("people", []).append({"github": "osouthgate", "name": "Oliver"})
+        d["contacts"].append({"id": "p_me", "name": "Oliver", "company": "Rain Ventures", "github": "OSouthgate", "stage": "New",
+                              "links": [], "comments": [], "history": []})
+        write(self.file, d)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_today(Args())
+        self.assertIn("Bea", out.getvalue())
+        self.assertNotIn("Oliver", out.getvalue(), "a member is never a follow-up")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_people(Args(stage=None, q=None))
+        self.assertIn("p_me  Oliver  [board member @osouthgate: own record, not a contact]", out.getvalue())
+        self.assertIn("[New]", out.getvalue())   # Bea is still a contact
+
     def test_client_set_north_star_and_project_lifecycle(self):
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_client_set(Args(client="Acme", north_star="One view of orders"))

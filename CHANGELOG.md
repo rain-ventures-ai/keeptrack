@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
+### [33] — 2026-10-11
+
+- A CRM person whose GitHub login is a board member's is that member's own record, not a contact (worked out from `people[]`, nothing stored). `today` never lists it as a follow-up and `people`/`person` mark it "board member @login: own record, not a contact". The web board shows it as **You** (or **Board member**), puts you first in People, keeps members out of Today's follow-ups and the Pipeline, and "Copy for AI" says it is a member rather than asking for contact help.
+
 ### [32] — 2026-10-11
 
 - Output hardening: the sanitizer and `EMAIL_RE` also cover U+2028/2029, U+2060-2064 and tag characters; `identity_line` shows only a valid time zone and addresses of 254 characters or fewer; `members` cleans the agents line; `set_identity` refuses a non-list `emails`. Claims: the local claim record is written after the save; reviving a stale, stuck or blocked claim (by heartbeat or by re-claiming it in the same session) respects `max_agent_claims`. The sanitizer and email check go by Unicode category (control, format, separators, private-use, unassigned, variation selectors, fillers); `members` shows only valid addresses and time zones. From the relay-merge review of private-tasks#28 (card #12 there).

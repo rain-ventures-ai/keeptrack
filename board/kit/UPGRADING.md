@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v33 (schema 4)
+A CRM person whose `github` matches a board member is that member's own record, not a contact: `today` skips it, `people` and `person` mark it as a board member, and the web board shows it as You or Board member, outside follow-ups and the pipeline. Nothing is stored; it follows `people[]`.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `keeptrack.py people` marks your own record "board member @<you>".
+
 ### v32 (schema 4)
 Hardening from the relay-merge reviews of private-tasks#28. Output: the sanitizer and `EMAIL_RE` also strip line and paragraph separators (U+2028/2029), invisible operators (U+2060-2064) and tag characters; `identity_line` shows a time zone only if it is a real one; an address over 254 characters is not an address; `members` cleans the agents line; `member-set` refuses a member whose `emails` value isn't a list. Claims: the local `.board-claim.json` is written only after the claim is saved, so a claim refused after a lost save race leaves no record behind; a heartbeat that brings a stale, stuck or blocked claim back to running counts against `max_agent_claims` like a new claim, and so does the same session re-claiming it (the automatic heartbeat leaves such a claim stale and says so on stderr). The sanitizer and email check now go by Unicode category; `members` shows only valid addresses and time zones.
 - Run `kit-update` only. There is no board-data migration.

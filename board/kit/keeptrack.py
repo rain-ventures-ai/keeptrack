@@ -2721,7 +2721,17 @@ def last_touch(p):
     return max(ts) if ts else ""
 
 
-def person_line(p):
+def member_of(data, p):
+    """The board member whose GitHub login is this person's, or None. Such a person is that member's own record, not a
+    contact: it is listed as a member and never as a follow-up (v33). Worked out from people[], never stored."""
+    g = str((p or {}).get("github") or "").lower()
+    return next((m for m in data.get("people", []) if g and str(m.get("github") or "").lower() == g), None)
+
+
+def person_line(p, data=None):
+    m = member_of(data, p) if data else None
+    if m:
+        return f"{p['id']}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
     due = p.get("next_due") or ""
     flag = " OVERDUE" if due and due < dt.date.today().isoformat() else (" TODAY" if due == dt.date.today().isoformat() else "")
     who = ", ".join(x for x in (p.get("role"), p.get("company")) if x)
@@ -2805,7 +2815,7 @@ def cmd_people(a):
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
     for p in sorted(people, key=lambda p: p.get("name", "").lower()):
-        print(person_line(p))
+        print(person_line(p, data))
     if not people: print("(nobody)")
 
 
@@ -2813,7 +2823,7 @@ def cmd_today(a):
     """Follow-ups: overdue, due today, the next 7 days, and open people with no next step."""
     data, _ = load(); t = dt.date.today(); ti = t.isoformat(); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
-    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed]
+    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not member_of(data, p)]   # members are never follow-ups
     groups = [("OVERDUE", [p for p in open_ if p.get("next_due") and p["next_due"] < ti]),
               ("TODAY", [p for p in open_ if p.get("next_due") == ti]),
               ("NEXT 7 DAYS", [p for p in open_ if p.get("next_due") and ti < p["next_due"] <= wk]),
@@ -2832,7 +2842,7 @@ def cmd_today(a):
 
 def cmd_person(a):
     data, _ = load(); p = find_person(data, a.ref)
-    print(person_line(p))
+    print(person_line(p, data))
     for k in ("role", "company", "value", "source"):
         if p.get(k): print(f"  {k}: {p[k]}")
     for x in person_methods(p, "email"): print(f"  email ({x['label']}): {x['value']}")
