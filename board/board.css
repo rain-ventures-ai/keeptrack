@@ -135,9 +135,7 @@ dialog input:not([type=checkbox]), dialog textarea, dialog select { width: 100%;
 .actions { display: flex; gap: var(--sp-3); margin-top: 18px; justify-content: flex-end; }
 .hint { font-size: var(--fs-sm); color: var(--muted); margin-top: var(--sp-2); } .hint a { color: var(--accent); }
 .preview { font-size: var(--fs-base); background: var(--panel); border-radius: var(--r-sm); padding: 7px 9px; margin-top: var(--sp-1); white-space: pre-wrap; word-break: break-word; }
-.preview a, .lnk a { color: var(--accent); }
-.claimbox { background: var(--panel); border-radius: var(--r-sm); padding: 9px 11px; font-size: var(--fs-sm); margin-top: var(--sp-1); }
-.claimbox dt { color: var(--muted); float: left; clear: left; width: 110px; } .claimbox dd { margin: 0 0 2px 110px; word-break: break-all; }
+.preview a { color: var(--accent); }
 .cfcard { border: 1px solid var(--border); border-radius: var(--r-md); padding: 9px 11px; margin: var(--sp-3) 0; } .cfnote { color: var(--danger); font-size: var(--fs-sm); margin: var(--sp-1) 0; }
 .cfpick { display: flex; gap: 14px; margin-top: var(--sp-3); font-size: var(--fs-base); } .cfpick label { display: flex; align-items: center; gap: var(--sp-1); cursor: pointer; } .cfedit { width: 100%; margin-top: var(--sp-2); font: inherit; font-size: var(--fs-base); box-sizing: border-box; }
 .cftable { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); margin-top: var(--sp-2); }
@@ -214,16 +212,12 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: var(--fs-sm)
 
 /* ---- comments ------------------------------------------------------------ */
 button.cmchip.has { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
-#dlgComments { display: none; flex-direction: column; } #dlgComments[open] { display: flex; }
-.cmtop { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-3); }
-.cmstream { display: flex; flex-direction: column; gap: var(--sp-4); overflow-y: auto; min-height: 120px; max-height: 52vh; padding: var(--sp-1) 2px; }
 .cm { background: var(--panel); border-radius: var(--r-lg); padding: var(--sp-3) 11px; max-width: 92%; align-self: flex-start; }
 .cm.mine { align-self: flex-end; background: var(--accent-soft); }
 .cmhead { display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); } .cmhead .av { margin-left: 0; width: 20px; height: 20px; font-size: 9px; border: 0; } .cmhead time { color: var(--muted); margin-left: auto; }
 .cmbody { margin-top: var(--sp-1); font-size: var(--fs-md); white-space: pre-wrap; word-break: break-word; } .cmbody a { color: var(--accent); }
-.cmempty { color: var(--muted); text-align: center; padding: 30px var(--sp-4); font-size: var(--fs-base); }
 #cmText { width: 100%; margin-top: var(--sp-4); }
-@media (max-width: 760px) { .cmstream { max-height: none; flex: 1; } #dlgComments[open] { display: flex; } .cm { max-width: 96%; } }
+@media (max-width: 760px) { .cm { max-width: 96%; } }
 
 /* ---- view switcher ------------------------------------------------------- */
 .viewnav { display: flex; align-items: flex-end; gap: var(--sp-2); flex: 0 0 auto; }
@@ -577,7 +571,7 @@ header .badge { top: -6px; right: -6px; }
 @media (max-width: 760px) { body[data-view="board"] .fab, body[data-view="list"] .fab { display: grid; place-items: center; } body:has(dialog[open]) .fab { display: none !important; } }
 
 /* ---- drawer: title first ------------------------------------------------------------------ */
-.dbody .dtitle { margin-top: 2px; } .dchips { margin-top: var(--sp-2); }
+.dbody .dtitle { margin-top: 2px; }
 .dfoot2 { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); } .dfoot2 .dcreated { font-size: var(--fs-sm); }
 
 /* ---- drawers (task #dlgCard, person #dlgContact, client #dlgClient, project #dlgProject): ui.js header, one property list,
@@ -788,7 +782,6 @@ header .boardwrap { order: 0; }
 .cklist { list-style: none; padding: 0; margin: var(--sp-4) 0; display: grid; gap: var(--sp-2); }
 .ck { padding: var(--sp-1) var(--sp-4); border-radius: var(--r-md); background: var(--panel); }
 .ckd { overflow-wrap: anywhere; }
-.ckfix { margin: var(--sp-2) 0 0 var(--sp-8); display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .cknext { margin: var(--sp-3) 0 2px; font-size: var(--fs-base); padding: var(--sp-4) var(--sp-5); border-left: 3px solid var(--accent); background: var(--card); border-radius: 0 var(--r-md) var(--r-md) 0; }
 .cknext > b { display: block; margin: 0 0 5px; color: var(--text); }
 .cknext ol { margin: 0 0 9px; padding-left: var(--sp-7); color: var(--text); line-height: 1.5; }
@@ -848,12 +841,8 @@ header #filterBadge { background: var(--accent); }
 .personform .required { color: var(--danger); font-size: 10px; margin-left: 5px; text-transform: uppercase; letter-spacing: .04em; }
 #board.pipe .col h2 .psum { margin-left: auto; font-size: var(--fs-sm); color: var(--muted); font-weight: 600; }
 .pcard { cursor: grab; } .pcard .ctitle { font-weight: 600; } .pcard .small { font-size: var(--fs-sm); margin-top: 3px; } .pcard .pval { font-size: var(--fs-sm); margin-top: var(--sp-1); font-weight: 600; }
-.inwrap { display: flex; gap: var(--sp-2); align-items: center; } .inwrap a { text-decoration: none; }
 .touch .tchan { font-weight: 600; } .touch.draft { border-style: dashed; }
 .welcome { max-width: 640px; margin: var(--sp-4) auto; line-height: 1.5; } .welcome h2 { margin-top: 0; }
-.wsteps { padding-left: var(--sp-7); } .wsteps > li { margin: var(--sp-5) 0; }
-.wform { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); } .wform label { display: flex; flex-direction: column; font-size: var(--fs-base); gap: 3px; }
-.wform fieldset { border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-3) var(--sp-4); } .wform .chk { flex-direction: row; align-items: center; gap: var(--sp-2); }
 @media (max-width: 760px) {
   #board.v-today, #board.v-people, #board.v-welcome { padding: var(--sp-3) var(--sp-5) 90px; }
   .prow { grid-template-columns: 1fr auto; } .prow .pnext { grid-column: 1 / -1; } .prow .plast { display: none; }
@@ -1128,6 +1117,5 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .coladd { display: flex; gap: var(--sp-2); } .coladd input { flex: 1; min-width: 0; }
 
 /* ---- utilities (last, so they win over a component's own margin) --------------------------------------------------
-   Spacing utilities are numbered by --sp step: .mt-3 = var(--sp-3). */
-.mt-0 { margin-top: 0; } .mt-3 { margin-top: var(--sp-3); } .mt-5 { margin-top: var(--sp-5); }
-.w-full { width: 100%; } .fs-base { font-size: var(--fs-base); }
+   Spacing utilities are numbered by --sp step: .mt-0 = no top margin. */
+.mt-0 { margin-top: 0; } .fs-base { font-size: var(--fs-base); }
