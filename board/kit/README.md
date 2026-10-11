@@ -190,6 +190,8 @@ You work from the team board in `board/` using `board/keeptrack.py` (`board/task
 4. Finish:         keeptrack.py done <id> --note "<result, PR link>"            # or: keeptrack.py release <id> --column todo
 Never edit board JSON files by hand; always go through `keeptrack.py` so conflicts are handled.
 ```
+Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them.
+
 **In Claude's cloud sandbox** (routines, Claude Code on the web) the GitHub API is read-only: writes come back `403 ... not permitted through this proxy`. `keeptrack.py` then commits the changed board files on top of the latest `master` and runs `git push` from its clone (retrying if someone else pushed first), without touching your working tree. `BOARD_WRITE=git` forces this, `BOARD_WRITE=api` disables it.
 
 **Auth without `gh`:** set `BOARD_TOKEN` (or `GH_TOKEN`/`GITHUB_TOKEN`) to a fine-grained token with Contents: Read and write on this repo and `keeptrack.py` calls the GitHub API directly with the standard library. If `BOARD_TOKEN` is set it is used even when `gh` exists. This is the route for cloud agent sandboxes.

@@ -1619,7 +1619,7 @@ class ClaimLifecycle(unittest.TestCase):
         self.claim(3, "s1"); self.done(3, session="s1", cancel=True, note="dropped")
         self.assertEqual((self.card(3)["outcome"], self.card(3)["last_run"]["outcome"]), ("cancelled", "cancelled"))
         self.quiet(kt.cmd_move, Args(id="t_c3", column="todo", note=None, priority=None, before=None, after=None, top=False))
-        self.assertNotIn("outcome", self.card(3))
+        self.assertNotIn("outcome", self.card(3)); self.assertNotIn("outcome", self.card(3)["last_run"])   # the run record too
         d = self.read()
         for x in d["tasks"][2]["todos"]: x["done"] = True
         write(self.file, d)
@@ -1687,6 +1687,21 @@ class ClaimLifecycle(unittest.TestCase):
         self.placeholder(1, session_id="old-run", status="done")   # older cards kept a claim with status done
         self.release(1, session="s9"); self.assertIsNone(self.card(1)["claim"])
 
+    def test_no_output_hands_out_the_owning_session_id(self):
+        self.claim(1, "secret-s1")
+        msg = self.refusal(self.claim, 1, "run-2")                 # a second run's claim is refused without the id
+        self.assertNotIn("secret-s1", msg); self.assertIn("another session", msg)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_show(Args(id="t_c1"))
+        self.assertNotIn("secret-s1", out.getvalue()); self.assertIn("secr…", out.getvalue())
+
+    def test_a_claim_with_no_session_id_belongs_to_nobody(self):
+        self.placeholder(1, session_id="")
+        self.assertIn("not this session's", self.refusal(self.done, 1, session="s1"))
+        self.done(1, session="s1", force=True)
+        self.assertEqual(self.card(1)["column"], "done")
+
     def test_unclaimed_cards_need_no_ownership(self):
         self.release(1, session="s1")
         self.done(2, session="s1")
@@ -1704,9 +1719,9 @@ class ClaimLifecycle(unittest.TestCase):
 
     def test_placeholder_of_another_user_or_agent_is_still_a_live_claim(self):
         self.placeholder(1, on_behalf_of="alice")
-        self.assertIn("already claimed by claude session pending-ab12", self.refusal(self.claim, 1, "run-1"))
+        self.assertIn("already claimed by claude, another session", self.refusal(self.claim, 1, "run-1"))
         self.placeholder(2)                                    # same user, but a different agent
-        self.assertIn("already claimed by claude session pending-ab12", self.refusal(self.claim, 2, "run-2", agent="codex"))
+        self.assertIn("already claimed by claude, another session", self.refusal(self.claim, 2, "run-2", agent="codex"))
         self.assertEqual(self.card(1)["claim"]["session_id"], "pending-ab12")
         self.claim(1, "run-1", force=True)                     # --force still takes a live claim over
         self.assertEqual(self.card(1)["claim"]["session_id"], "run-1")
@@ -1720,7 +1735,7 @@ class ClaimLifecycle(unittest.TestCase):
 
     def test_a_running_claim_by_a_real_session_is_still_refused(self):
         self.claim(1, "s1")
-        self.assertIn("already claimed by claude session s1", self.refusal(self.claim, 1, "s2"))
+        self.assertIn("already claimed by claude, another session", self.refusal(self.claim, 1, "s2"))
 
     def limited(self, n):
         d = self.read(); d["settings"] = {"max_agent_claims": n}; write(self.file, d)

@@ -1386,7 +1386,7 @@ if (typeof window !== 'undefined') (() => {
       if (t.comments.length) L.push('- comments (newest last):', ...t.comments.slice(-10).map(m => `    [${m.at.slice(0, 16)}] ${m.by}: ${String(m.text).replace(/\n/g, ' ')}`));
       if (t.links.length) L.push('- task resources and reference links:', ...t.links.map(l => `    ${l.title}: ${l.url}`), '    Access note: cloud resources need the matching connector/plugin/MCP and signed-in account; local paths need a session on the computer that holds them. If access fails, ask the user.');
       if (t.contacts.length) L.push('- contacts:', ...t.contacts.map(k => `    ${[k.name, k.role, k.email, k.phone].filter(Boolean).join(' | ')}`));
-      if (t.claim) L.push(`- NOTE: already claimed by ${t.claim.agent} (session ${t.claim.session_id || '?'}, ${claimState(t.claim)}). Do not take it over unless the user says so.`);
+      if (t.claim) L.push(`- NOTE: already claimed by ${t.claim.agent} (session ${shortSid(t.claim.session_id) || '?'}, ${claimState(t.claim)}). Do not take it over unless the user says so.`);
       if (agent === 'codex') L.push('', `You are Codex, asked by @${who}. Do what the newest comment mentioning @codex asks, and nothing beyond it. Pass --agent codex when you claim.`);
       L.push('', 'Do this, in order:',
         `1. python3 board/keeptrack.py show ${t.id}   (re-read the latest card first)`,
@@ -1512,7 +1512,7 @@ if (typeof window !== 'undefined') (() => {
     const live = activeClaim(t); if (live) { toast(`${agentLabel(live)} already has this task. Release that claim before assigning another agent.`, true); return; }
     { const full = agentLimitFull(id); if (full) { toast(full, true); rlog(t.num, 'Not sent', full, false); return; } }
     const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
-    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); card.claim = pendingClaudeClaim(who); stamp(card); }, `Assign #${t.num} to Claude`, [id]);
+    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); stamp(card); }, `Assign #${t.num} to Claude`, [id]);
     const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) await triggerClaude(current, who, cid);
   }
   async function postComment() {
@@ -1530,7 +1530,7 @@ if (typeof window !== 'undefined') (() => {
     }
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
     await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return; t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text });
-      if (send) t.claim = pendingClaudeClaim(who);
+      if (send) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); }   // the routine claims only cards assigned to its person
       stamp(t); }, `Comment: ${titleOf(id)}`, [id]);
     $('cmPost').disabled = false;
     { const t2 = state.tasks.find(x => x.id === id); if (t2) syncAgentBtn(t2);
@@ -1690,7 +1690,8 @@ if (typeof window !== 'undefined') (() => {
   }
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
-  const cancelledRun = t => t && t.column === doneColId() && (t.outcome ? t.outcome === 'cancelled' : !!(t.last_run && t.last_run.outcome === 'cancelled')) ? (t.last_run || {}) : null;   // the run record of a card that was closed as cancelled
+  const cancelledRun = t => t && t.column === doneColId() && t.outcome === 'cancelled' ? (t.last_run || {}) : null;   // v35 done always sets the card's outcome
+  const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') || s.length <= 4 ? s : s.slice(0, 4) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
   function chipOutcome(t) { const r = cancelledRun(t); if (!r) return null; const c = el('span', 'chip cancelledchip', 'cancelled'); c.title = 'Closed as cancelled' + (r.note ? ': ' + r.note : ''); return c; }
   function chipCompleted(t) { const x = completionOf(t); if (!x) return null; const c = elI('span', 'chip doneby ' + (x.agent ? 'agent' : 'person'), x.agent ? 'bot' : 'user', x.label); c.title = `Completed by ${x.label}${x.at ? ' · ' + fmtStamp(x.at) : ''}`; return c; }
   function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; out.push(a); }); return out; }
@@ -2062,15 +2063,17 @@ if (typeof window !== 'undefined') (() => {
       const st = claimState(t.claim), k = t.claim;
       const b = el('div', 'claim ' + st); b.append(el('span', 'pulse'), el('strong', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`));
       if (k.note) b.append(el('div', 'cnote', k.note));
-      b.title = `session ${k.session_id || '?'} on ${k.host || '?'}\n${k.cwd || ''}\n${k.branch || ''}`; c.append(b);
+      b.title = `session ${shortSid(k.session_id) || '?'} on ${k.host || '?'}\n${k.cwd || ''}\n${k.branch || ''}`; c.append(b);
     }
     return c;   // no move buttons (too easy to hit by accident): drag the card, or open it and change its status
   }
 
+  // a card leaving Done is decided again at its next done: its outcome (and the run record's) goes, as keeptrack.py move does
+  function reopenOutcome(n, t, from, to) { const d = doneColId(); if (from === d && to !== d) { delete t.outcome; if (t.last_run) delete t.last_run.outcome; } }
   function place(n, id, colId, beforeId) {
     const i = n.tasks.findIndex(x => x.id === id); if (i < 0) return;
     if (isSplit(n)) {
-      const t = n.tasks[i], mode = sortMode(), from = t.column; t.column = colId;
+      const t = n.tasks[i], mode = sortMode(), from = t.column; t.column = colId; if (from !== colId) reopenOutcome(n, t, from, colId);
       if (mode === 'due' || mode === 'newest') { if (from !== colId) stamp(t); return; }   // these orders ignore rank: a drop in the same column changes nothing
       const target = beforeId && n.tasks.find(x => x.id === beforeId);
       if (mode === 'smart' && target && target.priority !== t.priority) t.priority = target.priority;
@@ -2081,7 +2084,7 @@ if (typeof window !== 'undefined') (() => {
       let a = lower && validRank(lower.rank) ? lower.rank : null, b = upper && validRank(upper.rank) ? upper.rank : null; if (a !== null && b !== null && a >= b) a = null;
       t.rank = keyBetween(a, b); stamp(t); return;
     }
-    const [t] = n.tasks.splice(i, 1); t.column = colId; stamp(t);
+    const [t] = n.tasks.splice(i, 1); const from = t.column; t.column = colId; reopenOutcome(n, t, from, colId); stamp(t);
     let at = beforeId ? n.tasks.findIndex(x => x.id === beforeId) : -1;
     if (at < 0) { let last = -1; n.tasks.forEach((x, k) => { if (x.column === colId) last = k; }); at = last + 1; }
     n.tasks.splice(at, 0, t);
@@ -2333,7 +2336,7 @@ if (typeof window !== 'undefined') (() => {
     const k = t.claim, st = claimState(k), tone = st === 'running' ? 'ok' : st === 'stuck' ? 'danger' : st === 'stale' || st === 'blocked' ? 'warn' : 'info';
     const txt = el('div', 'dclaim__text'), top = el('div', 'cltop'); top.append(el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); txt.append(top);
     if (k.note) txt.append(el('div', 'cnote', k.note));
-    const where = [k.session_id && 'session ' + k.session_id, k.host, k.branch].filter(Boolean).join(' · '); if (where) txt.append(el('div', 'host', where));
+    const where = [k.session_id && 'session ' + shortSid(k.session_id), k.host, k.branch].filter(Boolean).join(' · '); if (where) txt.append(el('div', 'host', where));
     if (k.session_url && safeUrl(k.session_url)) { const sa = el('a', 'sesslink', /\/routines\//.test(k.session_url) ? 'Open the routine’s runs ↗' : 'Open the Claude session ↗'); sa.href = safeUrl(k.session_url); sa.target = '_blank'; sa.rel = 'noopener noreferrer'; txt.append(sa); }
     // Same claim as last time: refresh only the text, so the buttons (and keyboard focus) and the banner node survive a board refresh.
     const sig = JSON.stringify(k) + st, old = wrap.dataset.sig === sig && wrap.querySelector('.dclaim__text');

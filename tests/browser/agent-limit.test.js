@@ -124,6 +124,7 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
     // ---- 2. room under the limit: the same board with max_agent_claims 3 sends, and the routine text matches the new CLI rules ----
     {
       const api = new Github(), cron = []; { const r = JSON.parse(api.files['tasks.json']); r.settings.max_agent_claims = 3; api.files['tasks.json'] = text(r); }
+      { const c = api.card('t_one'); c.assignees = []; api.files['cards/t_one.json'] = text(c); }   // not yet assigned: sending it to Claude assigns it to the sender
       const page = await openBoard(browser, api, cron);
       await page.locator('.col[data-col="todo"] .hcinema').click();
       const first = page.locator('.cinema-col .card', { hasText: 'First' }); await first.locator('.quickassign summary').click();
@@ -131,6 +132,7 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       const saved = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/t_one.json')), relay = page.waitForRequest(r => r.method() === 'PUT' && r.url() === 'https://cron.test/jobs');
       await first.locator('.quickagent').click(); const [, req] = await Promise.all([saved, relay]);
       assert.equal(api.card('t_one').claim.agent, 'claude'); assert.match(api.card('t_one').claim.session_id, /^pending-/);
+      assert.deepEqual(api.card('t_one').assignees, ['alex'], 'the card is assigned to the person whose routine will claim it');
       const routine = JSON.parse(req.postDataJSON().job.extendedData.body).text;
       assert.doesNotMatch(routine, /--force/, 'the routine no longer claims with --force');
       assert.match(routine, /keeptrack\.py claim '#1' --for alex --agent claude --session <your session id> --note "working"/);
@@ -150,6 +152,12 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       await page.locator('#cHead [aria-label="More actions"]').click(); await page.locator('.ui-menu [role=menuitem]', { hasText: 'Copy as Markdown' }).click();
       await page.waitForFunction(() => window.__copied); const md = await page.evaluate(() => window.__copied);
       assert.match(md, /- \*\*Outcome:\*\* cancelled · "Dropped: duplicate of #1"/);
+      { // reopening the card from the drawer clears its outcome, on the card and in its run record, as keeptrack.py move does
+        const w = page.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));   // a move may save through the git data API
+        await page.locator('#cCol').selectOption('todo'); await w;
+        const c = api.card('t_four'); assert.equal(c.column, 'todo'); assert.equal(c.outcome, undefined, 'reopening clears the outcome'); assert.equal((c.last_run || {}).outcome, undefined, 'and the run record');
+        assert.equal(await page.locator('.col[data-col="todo"] .chip.cancelledchip').count(), 0);
+      }
       await page.locator('#dlgCard').evaluate(d => d.close());
       await six.dblclick(); await page.locator('#dlgCard[open]').waitFor(); assert.doesNotMatch(await page.locator('#cLastRun').textContent(), /Outcome: cancelled/);
       await page.close();

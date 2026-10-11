@@ -1337,6 +1337,12 @@ def session_for(a, task_id):
     return uuid.uuid4().hex[:8]
 
 
+def redact_session(sid):
+    """A session id shown to whoever did not claim the card: enough to recognise it, not enough to pass as it."""
+    sid = str(sid or "")
+    return sid if sid.startswith("pending-") or len(sid) <= 4 else sid[:4] + "…"
+
+
 def is_placeholder_claim(c):
     """The page writes a claim with a session_id starting 'pending-' before its routine starts."""
     return str((c or {}).get("session_id") or "").startswith("pending-")
@@ -1362,8 +1368,9 @@ def claim_owner_check(data, t, a, action):
     if not c or c.get("status") == "done" or getattr(a, "force", False):
         return   # no live claim (older cards kept a finished one)
     state = claim_state(data, c)
-    if not is_placeholder_claim(c) and c.get("session_id") in (session_for(a, t["id"]), recorded_session(t["id"]) or None):
-        return
+    own = c.get("session_id")
+    if own and not is_placeholder_claim(c) and own in {session_for(a, t["id"]), recorded_session(t["id"])}:
+        return   # a claim with no session id is nobody's: only --force finishes it
     if action == "release" and state in ("stale", "stuck", "blocked"):
         return   # a stale placeholder (the routine never started) is a dead run too
     sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')}, another session ({state}); it is not this session's "
@@ -1417,6 +1424,8 @@ def cmd_show(a):
     t = find(data, a.id)
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
     hs = t.pop("history", []); cms = t.pop("comments", [])
+    if t.get("claim") and t["claim"].get("session_id"):   # the id is the claim's proof of ownership: shown only in part
+        t["claim"] = dict(t["claim"]); t["claim"]["session_id"] = redact_session(t["claim"]["session_id"])
     print(json.dumps(t, indent=2, ensure_ascii=False))
     if t.get("outcome") == "cancelled" and t.get("column") == "done":
         why = next((h["text"][len("cancelled: "):] for h in reversed(hs) if str(h.get("text", "")).startswith("cancelled: ")), "")
@@ -1501,7 +1510,8 @@ def do_claim(a, tid, data):
     if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force \
             and not mine_pending:
         c = t["claim"]
-        sys.exit(f"refused: already claimed by {c['agent']} session {c.get('session_id')} ({cs}, last beat {c.get('heartbeat_at')})")
+        sys.exit(f"refused: already claimed by {c['agent']}, another session ({cs}, last beat {c.get('heartbeat_at')}); "
+                 "stop and tell the person (never pass --session with an id you did not generate)")
     ts = now()
     old = t.get("claim") or {}
     # keep a link the board already found for this run (it sends the routine, then the routine re-claims with --force)
@@ -1676,7 +1686,7 @@ def cmd_move(a):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
-            t.pop("outcome", None)   # reopened: its outcome is decided again at the next done
+            t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
         n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
         if column == "done" and old != "done" and n_open:
             print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)

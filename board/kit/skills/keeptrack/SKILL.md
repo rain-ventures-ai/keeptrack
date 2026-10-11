@@ -109,6 +109,8 @@ $B comment '#12' "<question or update>"          # questions also need: heartbea
 $B done '#12' --note "<result, link>"            # or: release '#12' --column todo
 $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "<text>"
 ```
+
+Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them.
 Only work on tasks assigned to the user you act for.
 
 Change a task or the board's structure with commands too, never by editing JSON:
