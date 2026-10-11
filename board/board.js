@@ -1690,7 +1690,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
-  const cancelledRun = t => t && t.column === doneColId() && (t.outcome === 'cancelled' || (t.last_run && t.last_run.outcome === 'cancelled')) ? (t.last_run || {}) : null;   // the run record of a card that was closed as cancelled
+  const cancelledRun = t => t && t.column === doneColId() && (t.outcome ? t.outcome === 'cancelled' : !!(t.last_run && t.last_run.outcome === 'cancelled')) ? (t.last_run || {}) : null;   // the run record of a card that was closed as cancelled
   function chipOutcome(t) { const r = cancelledRun(t); if (!r) return null; const c = el('span', 'chip cancelledchip', 'cancelled'); c.title = 'Closed as cancelled' + (r.note ? ': ' + r.note : ''); return c; }
   function chipCompleted(t) { const x = completionOf(t); if (!x) return null; const c = elI('span', 'chip doneby ' + (x.agent ? 'agent' : 'person'), x.agent ? 'bot' : 'user', x.label); c.title = `Completed by ${x.label}${x.at ? ' · ' + fmtStamp(x.at) : ''}`; return c; }
   function chipsGh(t) { const out = []; t.links.forEach(l => { const g = ghLink(l.url); if (!g) return; const a = el('a', 'chip gh ' + g.kind, g.label); a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.title || l.url; out.push(a); }); return out; }

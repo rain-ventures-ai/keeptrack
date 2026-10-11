@@ -1342,21 +1342,32 @@ def is_placeholder_claim(c):
     return str((c or {}).get("session_id") or "").startswith("pending-")
 
 
+def recorded_session(task_id):
+    """The session in this clone's local claim record when the record is for this card, else ''."""
+    try:
+        with open(CLAIM_FILE) as f:
+            info = json.load(f)
+        return info.get("session") or "" if isinstance(info, dict) and info.get("id") == task_id else ""
+    except (OSError, ValueError):
+        return ""
+
+
 def claim_owner_check(data, t, a, action):
-    """Refuse to done/release/heartbeat a card whose claim belongs to another session, unless --force. A page
-    placeholder is no CLI session's claim. Releasing a stale, stuck or blocked claim is allowed: that is the
-    recovery path for a dead or parked run (done never gets that: it asserts the work was finished)."""
+    """Refuse to done/release/heartbeat a card whose claim belongs to another session, unless --force. The owner is
+    the session that claimed it (its id, or this clone's local claim record for the card). A page placeholder is no
+    CLI session's claim. Releasing a stale, stuck or blocked claim is allowed: that is the recovery path for a dead
+    or parked run (done never gets that: it asserts the work was finished). The refusal never prints the owning
+    session's id: an id is the only proof of ownership there is, so it is not handed to whoever was refused."""
     c = t.get("claim")
-    if not c or getattr(a, "force", False):
-        return
+    if not c or c.get("status") == "done" or getattr(a, "force", False):
+        return   # no live claim (older cards kept a finished one)
     state = claim_state(data, c)
-    placeholder = is_placeholder_claim(c)
-    if not placeholder and c.get("session_id") == session_for(a, t["id"]):
+    if not is_placeholder_claim(c) and c.get("session_id") in (session_for(a, t["id"]), recorded_session(t["id"]) or None):
         return
     if action == "release" and state in ("stale", "stuck", "blocked"):
         return   # a stale placeholder (the routine never started) is a dead run too
-    sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')} session {c.get('session_id')} ({state}); "
-             "it is not this session's (use --force if a person told you to)")
+    sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')}, another session ({state}); it is not this session's "
+             "(use --force only if a person told you to; never pass --session with an id you did not generate)")
 
 
 def line(data, t):
@@ -1508,6 +1519,8 @@ def do_claim(a, tid, data):
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
     # a save that loses a race re-runs this on the newer board and may refuse: write the local record after the save
     _PENDING_CLAIM["rec"] = {"id": t["id"], "agent": agent, "user": user, "session": sid, "attended": attended(a)}
+    if FILE and not (a.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")):
+        print(f"note: a --file board keeps no local claim record; pass --session {sid} (or export BOARD_SESSION) to heartbeat, done or release it")
     return t["id"]
 
 
@@ -1618,6 +1631,8 @@ def cmd_done(a):
                              "note": note, "outcome": outcome}
             t["claim"] = None
         t["outcome"] = outcome
+        if t.get("last_run"):
+            t["last_run"]["outcome"] = outcome   # the run record never disagrees with the card
         link = (c or {}).get("session_url", "")
         hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
         move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(t["id"])
@@ -1660,6 +1675,8 @@ def cmd_move(a):
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
         old = t["column"]; t["column"] = column
+        if old == "done" and column != "done":
+            t.pop("outcome", None)   # reopened: its outcome is decided again at the next done
         n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
         if column == "done" and old != "done" and n_open:
             print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)
@@ -2766,9 +2783,12 @@ def check_stage(data, s):
 
 
 def board_timezone(data):
-    """The board's clock: the acting user's member time zone, else the kit owner's, else the first member's, else None."""
+    """The board's clock: the acting user's member time zone (BOARD_USER only: this never asks gh or the network),
+    else the kit owner's, else the first member's, else None."""
     people = [m for m in ((data or {}).get("people") or []) if isinstance(m, dict)]
-    me = (default_user() or "").lower()
+    if not any(valid_timezone(m.get("timezone")) for m in people):
+        return None
+    me = (os.environ.get("BOARD_USER") or "").lower()
     owner = str(((data or {}).get("settings") or {}).get("kit_owner") or "").lower()
     pick = [next((m for m in people if me and str(m.get("github") or "").lower() == me), None),
             next((m for m in people if owner and str(m.get("github") or "").lower() == owner), None),
@@ -2946,8 +2966,7 @@ def cmd_people(a):
 
 def cmd_today(a):
     """Follow-ups: overdue, due today, the next 7 days, and open people with no next step."""
-    data, _ = load(); t = board_today(data); ti = t.isoformat()
-    zone = board_timezone(data)
+    data, _ = load(); zone = board_timezone(data); t = dt.datetime.now(zone).date() if zone else dt.date.today(); ti = t.isoformat()
     print(f"Today is {ti} ({zone.key})" if zone else f"Today is {ti} (host clock; set a time zone with member-set --timezone Area/City)"); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
     ml = member_logins(data)

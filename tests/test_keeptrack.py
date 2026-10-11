@@ -1530,8 +1530,8 @@ class ClaimLifecycle(unittest.TestCase):
     def test_another_session_cannot_finish_a_claimed_card(self):
         self.claim(1, "s1")
         msg = self.refusal(self.done, 1, session="s2")
-        self.assertEqual(msg, "refused: t_c1 is claimed by claude session s1 (running); it is not this session's "
-                              "(use --force if a person told you to)")
+        self.assertEqual(msg, "refused: t_c1 is claimed by claude, another session (running); it is not this session's "
+                         "(use --force only if a person told you to; never pass --session with an id you did not generate)")
         self.assertEqual(self.card(1)["claim"]["session_id"], "s1")
         self.assertEqual(self.card(1)["column"], "in-progress")
         self.done(1, session="s2", force=True)
@@ -1610,10 +1610,21 @@ class ClaimLifecycle(unittest.TestCase):
         self.claim(3, "s3")
         self.assertIn("not this session's", self.refusal(self.release, 3))
 
-    def test_an_explicit_session_wins_over_the_local_record(self):
+    def test_the_local_record_for_another_card_grants_nothing(self):
         self.claim(1, "s1")
-        write(self.claim_file, {"id": "t_c1", "session": "s1"})
+        write(self.claim_file, {"id": "t_c2", "session": "s1"})   # this clone's record is for a different card
         self.assertIn("not this session's", self.refusal(self.beat, 1, session="s2"))
+
+    def test_outcome_never_disagrees_with_the_last_run_and_clears_on_reopen(self):
+        self.claim(3, "s1"); self.done(3, session="s1", cancel=True, note="dropped")
+        self.assertEqual((self.card(3)["outcome"], self.card(3)["last_run"]["outcome"]), ("cancelled", "cancelled"))
+        self.quiet(kt.cmd_move, Args(id="t_c3", column="todo", note=None, priority=None, before=None, after=None, top=False))
+        self.assertNotIn("outcome", self.card(3))
+        d = self.read()
+        for x in d["tasks"][2]["todos"]: x["done"] = True
+        write(self.file, d)
+        self.done(3, session="s1", note="finished after all")                # no claim this time
+        self.assertEqual((self.card(3)["outcome"], self.card(3)["last_run"]["outcome"]), ("completed", "completed"))
 
     def test_session_for_order(self):
         os.environ["CODEX_SESSION_ID"] = "codex"
@@ -1633,7 +1644,7 @@ class ClaimLifecycle(unittest.TestCase):
 
     def test_a_page_placeholder_needs_force_for_done_release_and_heartbeat(self):
         self.placeholder(1)
-        self.assertIn("pending-ab12", self.refusal(self.beat, 1, session="pending-ab12"))   # even by its own id
+        self.assertIn("not this session's", self.refusal(self.beat, 1, session="pending-ab12"))   # even by its own id
         self.assertIn("not this session's", self.refusal(self.release, 1, session="s1"))
         self.assertIn("not this session's", self.refusal(self.done, 1, session="s1"))
         self.beat(1, session="s1", force=True)
@@ -1659,6 +1670,22 @@ class ClaimLifecycle(unittest.TestCase):
         self.assertEqual(json.load(open(self.claim_file))["id"], "t_c1")   # still remembered
         self.done(1, session="s1")
         self.assertFalse(os.path.exists(self.claim_file))
+
+    def test_a_refusal_never_prints_the_owning_session_id(self):
+        self.claim(1, "secret-s1")
+        msg = self.refusal(self.done, 1, session="s2")
+        self.assertNotIn("secret-s1", msg); self.assertIn("another session", msg)
+
+    def test_the_local_claim_record_owns_the_card_even_when_the_environment_names_another_session(self):
+        self.claim(1, "abc")                                       # claim ID --session ABC, as the usage text shows
+        write(self.claim_file, {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "abc", "attended": True})
+        os.environ["CLAUDE_SESSION_ID"] = "harness-id"             # later calls carry the harness's own id
+        self.beat(1); self.done(1)
+        self.assertEqual(self.card(1)["column"], "done")
+
+    def test_an_old_finished_claim_blocks_nobody(self):
+        self.placeholder(1, session_id="old-run", status="done")   # older cards kept a claim with status done
+        self.release(1, session="s9"); self.assertIsNone(self.card(1)["claim"])
 
     def test_unclaimed_cards_need_no_ownership(self):
         self.release(1, session="s1")
@@ -2047,3 +2074,14 @@ class TimeZoneDates(LocalBoard):
         d["tasks"] = [{"id": "t_k", "title": "K", "column": "done", "history": [], "todos": [],
                        "updated": (today - dt.timedelta(days=1)).isoformat() + "T12:00:00Z"}]
         self.assertEqual(kt.archive_plan(copy.deepcopy(d), rules).keys(), kt.archive_plan(copy.deepcopy(d), rules, today).keys())
+
+    def test_board_timezone_never_asks_gh_for_the_user(self):
+        d = self.read(); d["people"] = [{"github": "osouthgate", "name": "O", "timezone": "Europe/London"}]; write(self.file, d)
+        old = os.environ.pop("BOARD_USER", None); saved = kt.default_user
+        kt.default_user = lambda: (_ for _ in ()).throw(AssertionError("gh was asked"))
+        try:
+            self.assertEqual(kt.board_timezone(d).key, "Europe/London")   # falls through to the first member
+            self.assertIsNone(kt.board_timezone({"people": [{"github": "x"}]}))
+        finally:
+            kt.default_user = saved
+            if old is not None: os.environ["BOARD_USER"] = old
