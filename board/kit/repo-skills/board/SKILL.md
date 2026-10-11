@@ -36,7 +36,7 @@ python3 board/keeptrack.py claim <id> --note "starting: <one-line plan>"
 python3 board/keeptrack.py heartbeat <id> --note "<current step>"     # at each milestone
 ```
 In Claude Code a project hook sends a quiet heartbeat automatically (at most every 5 min) while a claim is active, so the claim does not go stale during long work. The manual heartbeat is for updating the note. Without `gh`, set `BOARD_TOKEN` (fine-grained, Contents read/write on this repo).
-If a claim is refused because another session holds it, stop and tell the human. Do not use `--force` unless they say so. The same holds for `done`, `release` and `heartbeat` on another session's claim; releasing a stale, stuck or blocked claim needs no `--force`. Never pass `--session` with an id you did not generate for this run.
+If a claim is refused because another session holds it, stop and tell the human. Do not use `--force` unless they say so. The same holds for `done`, `release` and `heartbeat` on another session's claim; releasing a stale, stuck or blocked claim needs no `--force`. Never pass `--session` with an id you did not generate for this run, and never open the board JSON files directly (they hold every claim's session id): read the board only through `keeptrack.py`.
 
 ## 3b. Checklist
 If `show` lists to-dos, work through them in order and tick each one as soon as it is done. Add steps you discover.

@@ -1322,8 +1322,8 @@ def public_session_tail():
 
 def usable_session(sid):
     """A session id a run may act as: not empty, not the page's placeholder prefix, not the public link id."""
-    sid = str(sid or "")
-    return sid if sid and not sid.startswith("pending-") and sid != public_session_tail() else ""
+    sid = str(sid or ""); tail = public_session_tail()
+    return sid if sid and not sid.startswith("pending-") and not (tail and tail in sid) else ""   # the raw env value, session_<tail> and a pasted link all contain the tail
 
 
 def session_id(args):
@@ -1522,7 +1522,10 @@ def do_claim(a, tid, data):
         sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
     cs = claim_state(data, t.get("claim"))
     # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
-    if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") == sid and cs == "running"):
+    mine = {sid, recorded_session()} - {""}   # this run's id, and the session this clone's record holds (one clone is one session)
+    if t.get("claim") and t["claim"].get("session_id") in mine:
+        sid = t["claim"]["session_id"]   # re-claiming its own card keeps the id the claim already carries
+    if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") in mine and cs == "running"):
         busy = busy_over_limit(data, t)
         if busy:
             sys.exit(f"refused: {limit_message(data, busy)} (raise settings.max_agent_claims, or use --attended for a session a person drives)")
@@ -1530,7 +1533,7 @@ def do_claim(a, tid, data):
     # the page's placeholder for this same agent and user is this run's own: the routine replaces it without --force
     mine_pending = is_placeholder_claim(old_c) and old_c.get("agent") == agent \
         and (old_c.get("on_behalf_of") or "").lower() == (user or "").lower()
-    if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force \
+    if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") not in mine and not a.force \
             and not mine_pending:
         c = t["claim"]
         sys.exit(f"refused: already claimed by {c['agent']}, another session ({cs}, last beat {c.get('heartbeat_at')}); "

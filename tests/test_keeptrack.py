@@ -1620,6 +1620,12 @@ class ClaimLifecycle(unittest.TestCase):
         self.beat(1)                                                  # with no id in the environment it still owns card 1
         self.assertEqual(self.card(1)["claim"]["session_id"], "s1")
         self.claim(3, None); self.assertEqual(self.card(3)["claim"]["session_id"], "s1")   # and a new claim reuses its session
+        os.environ["CLAUDE_SESSION_ID"] = "harness-id"
+        try:
+            self.claim(1, None)                                           # re-claiming its own card under a harness id is not a takeover
+        finally:
+            os.environ.pop("CLAUDE_SESSION_ID", None)
+        self.assertEqual(self.card(1)["claim"]["session_id"], "s1")
 
     def test_outcome_never_disagrees_with_the_last_run_and_clears_on_reopen(self):
         self.claim(3, "s1"); self.done(3, session="s1", cancel=True, note="dropped")
@@ -1717,6 +1723,9 @@ class ClaimLifecycle(unittest.TestCase):
                 self.claim(1, "PUBLIC123")                                       # the id in the session link
             self.assertNotEqual(self.card(1)["claim"]["session_id"], "PUBLIC123")
             self.assertIn("not this session's", self.refusal(self.done, 1, session="PUBLIC123"))
+            for copied in ("session_PUBLIC123", "https://claude.ai/code/session_PUBLIC123"):   # the raw env value, a pasted link
+                self.assertEqual(kt.usable_session(copied), "")
+                self.assertIn("not this session's", self.refusal(self.done, 1, session=copied))
             write(self.claim_file, {"id": "t_c1", "session": self.card(1)["claim"]["session_id"]})   # the record the routine's clone keeps
             self.done(1, session="PUBLIC123"); self.assertEqual(self.card(1)["column"], "done")
         finally:

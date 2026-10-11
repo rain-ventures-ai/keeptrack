@@ -1374,7 +1374,7 @@ if (typeof window !== 'undefined') (() => {
       'How the board works:',
       `- Clone the repo if you have not (gh repo clone ${c.repo}) and run everything from its root. Never edit ${c.path} by hand; use python3 board/keeptrack.py so edits merge safely with other people and agents.`,
       '- Auth: `gh` logged in, or set BOARD_TOKEN to a fine-grained token (Contents: read/write on the repo).',
-      `- Act for GitHub user @${who}:  export BOARD_USER=${who} BOARD_AGENT=${ag} BOARD_SESSION=<short session id>`,
+      `- Act for GitHub user @${who}:  export BOARD_USER=${who} BOARD_AGENT=${ag} BOARD_SESSION=<a short random id you generate for this run; never your claude.ai session id>`,
       '- Only work on tasks assigned to that user. Client material lives in clients/<client>/; keep confidential detail out of task cards. Do not contact anyone or share prices without the user approving.', '');
     if (t) {
       L.push('YOUR TASK', `- number: #${t.num}   id: ${t.id}   (people refer to it as #${t.num}; keeptrack.py accepts either)`, `- title: ${t.title}`, `- column: ${t.column}   priority: ${t.priority || 'medium'}${t.due ? '   due: ' + t.due : ''}`);

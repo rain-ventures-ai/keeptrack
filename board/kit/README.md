@@ -190,7 +190,7 @@ You work from the team board in `board/` using `board/keeptrack.py` (`board/task
 4. Finish:         keeptrack.py done <id> --note "<result, PR link>"            # or: keeptrack.py release <id> --column todo
 Never edit board JSON files by hand; always go through `keeptrack.py` so conflicts are handled.
 ```
-Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them. A clone is one trust domain: the local claim record it wrote owns the card for every process in that clone, so give each agent its own clone.
+Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them. A clone is one trust domain: the local claim record it wrote owns the card for every process in that clone, so give each agent its own clone. Known limits: the board files themselves hold every claim's session id, so the rules above tell agents to read the board only through `keeptrack.py`; and while the web page's placeholder claim is pending, any session may claim that card for the same agent and person without `--force` (the same as claiming an unclaimed card; the agent limit still applies).
 
 **In Claude's cloud sandbox** (routines, Claude Code on the web) the GitHub API is read-only: writes come back `403 ... not permitted through this proxy`. `keeptrack.py` then commits the changed board files on top of the latest `master` and runs `git push` from its clone (retrying if someone else pushed first), without touching your working tree. `BOARD_WRITE=git` forces this, `BOARD_WRITE=api` disables it.
 
