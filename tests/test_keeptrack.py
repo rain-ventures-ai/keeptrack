@@ -1485,6 +1485,9 @@ class AgentClaimLimit(unittest.TestCase):
             self.quiet(kt.cmd_heartbeat, Args(id="t_c1", status=None, note=None))
         self.assertIn("limit is 2", str(e.exception))
         self.assertEqual("2026-01-01T00:00:00Z", self.read()["tasks"][0]["claim"]["heartbeat_at"])
+        with self.assertRaises(SystemExit):                       # nor can the same session re-claim it past the limit
+            self.claim("t_c1", "s1")
+        self.assertEqual("2026-01-01T00:00:00Z", self.read()["tasks"][0]["claim"]["heartbeat_at"])
         self.quiet(kt.cmd_heartbeat, Args(id="t_c2", status=None, note="still going"))   # a running claim is never refused
 
     def test_api_claim_under_a_limit_saves_through_a_commit(self):
