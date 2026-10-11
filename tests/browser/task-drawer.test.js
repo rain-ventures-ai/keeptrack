@@ -87,15 +87,16 @@ async function assertFits(page, where) {
     await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(await page.locator('#cTitle').inputValue(), 'First');
     assert.equal(await page.locator('#dNum').textContent(), '#1');
+    // the page was opened with no ?repo=: the address bar gets it, and a copied card link names the board
+    assert.equal(await page.evaluate(() => location.search), '?repo=acme/board&branch=main&path=board/tasks.json');
+    await page.evaluate(() => { window.__copied = ''; }); await page.locator('#dNum').click(); await page.waitForFunction(() => window.__copied);
+    assert.match(await page.evaluate(() => window.__copied), /\/board\/index\.html\?repo=acme\/board&branch=main&path=board\/tasks\.json#1$/);
     assert.deepEqual(await page.locator('#cHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['Task #1, copy link', 'Undo last board change', 'Copy for agent', 'More actions', 'Close']);
     assert.deepEqual(await page.locator('#cProps .ui-props__label').allTextContents(), ['Status', 'Priority', 'Due', 'People', 'Client', 'Project', 'Labels']);
     assert.deepEqual(await page.locator('#cSecs .ui-section__text').allTextContents(), ['Description', 'Checklist', 'Links', 'Contacts', 'Comments', 'History']);
     assert.equal(await page.locator('#cHist').isVisible(), false, 'History starts closed');
     await assertFits(page, 'opened'); await shot(page, 'phone-writable-top');
 
-    // number pill copies a link to the card
-    await page.locator('#dNum').click(); await page.waitForFunction(() => window.__copied);
-    assert.match(await page.evaluate(() => window.__copied), /\/board\/index\.html#1$/);
 
     // priority (with its colour), due date (overdue is red), then clear it
     let w = saved(); await page.locator('#cPrio').selectOption('low'); await w; assert.equal(api.card().priority, 'low');

@@ -112,7 +112,8 @@ if (typeof window !== 'undefined') (() => {
   function activateBoard(repo, over = {}) { // keep the current board's values, then load the saved ones for repo (never carry a token across)
     stashBoard(); const e = Object.assign({}, boardsMap()[repo] || {}, over); LS.set('kb_repo', repo);
     BOARD_KEYS.forEach(k => { if (e[k]) LS.set('kb_' + k, e[k]); else LS.del('kb_' + k); }); stashBoard(); }
-  const boardUrl = () => `${location.pathname}?repo=${LS.get('kb_repo')}&branch=${LS.get('kb_branch', 'master')}&path=${LS.get('kb_path', 'board/tasks.json')}`;
+  const qv = v => encodeURIComponent(v).replace(/%2F/gi, '/');   // keep owner/name and board/tasks.json readable
+  const boardUrl = () => `${location.pathname}?repo=${qv(LS.get('kb_repo'))}&branch=${qv(LS.get('kb_branch', 'master'))}&path=${qv(LS.get('kb_path', 'board/tasks.json'))}`;
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
     const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {}); }   // also drop the cached copy of its cards
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
@@ -2397,6 +2398,8 @@ if (typeof window !== 'undefined') (() => {
     const v = (history.state || {}).kbView;   // Back/Forward between views
     if (v && v !== view && !backStack.length) setView(v, true);
   });
+  // the address bar names the board too: a page opened without ?repo= (a bookmark, a home-screen icon) gets it, keeping the #N
+  try { if (!DEMO && !SETUP && LS.get('kb_repo') && !new URLSearchParams(location.search).get('repo')) history.replaceState(history.state, '', boardUrl() + location.hash); } catch {}
   try { if (!(history.state || {}).kbView) history.replaceState({ ...(history.state || {}), kbView: view }, ''); } catch {}   // the first entry knows its view
   BACK_DIALOGS.forEach(id => { const d = $(id); if (!d) return;
     new MutationObserver(() => { if (d.open) backOpened(d); }).observe(d, { attributes: true, attributeFilter: ['open'] });
@@ -2420,7 +2423,8 @@ if (typeof window !== 'undefined') (() => {
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
   $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
-  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(`${location.origin}${location.pathname}${location.search}#${t.num}`, `Link to #${t.num} copied`); };
+  // a card link always names its board (?repo=…), whatever the address bar holds, so whoever opens it lands on the right repo
+  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(`${location.origin}${DEMO ? location.pathname + location.search : boardUrl()}#${t.num}`, `Link to #${t.num} copied`); };
   // the ⋯ menu: copy link or reference, the GitHub issue, Markdown, delete
   function openDrawerMenu(anchor) {
     const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
@@ -3092,7 +3096,7 @@ if (typeof window !== 'undefined') (() => {
     st.textContent = '';
     if (DEMO) st.append(ui.banner({ tone: 'info', icon: 'lock', text: 'This is a read-only demo board with invented data. There is nothing to connect here, and nothing you do is saved.', action: { label: 'Create my own board', onClick: () => { location.href = location.pathname + '?setup'; } } }));
     else if (setup) st.append(ui.banner({ tone: 'info', icon: 'compass', text: 'No board yet. Add one below: connect a board you already have, or make a new one. Each step checks itself.' }));
-    else if (SETUP) st.append(ui.banner({ tone: 'info', icon: 'compass', text: `You're setting up a new board. This browser's current board is ${c.repo}; the settings below are for that board, not the new one. To make the new board, close Settings and follow the steps on the page.`, action: { label: `Back to ${c.repo}`, onClick: () => { location.href = boardUrl(); } } }));
+    else if (SETUP) st.append(ui.banner({ tone: 'info', icon: 'compass', text: `You're setting up a new board. This browser's current board is ${c.repo}; the settings below are for that board, not the new one. To make the new board, use the steps on the page; to connect another board you have, use Add a board below.`, action: { label: `Back to ${c.repo}`, onClick: () => { location.href = boardUrl(); } } }));
     [...st.querySelectorAll('.ui-banner')].forEach(b => b.setAttribute('role', 'status'));
     $('bThis').hidden = !!DEMO; $('secHealth').hidden = !!DEMO || setup; $('bThisInfo').hidden = setup; $('sForgetRow').hidden = !c.token;
     $('bEditBtn').textContent = setup ? 'Enter the details by hand' : 'Change connection';
@@ -4367,5 +4371,5 @@ if (typeof window !== 'undefined') (() => {
   };
   $('sThemeExport').onclick = () => { if (window.kbDesignMd) copyText(window.kbDesignMd.exportCurrent(), 'Theme copied as DESIGN.md'); };
   applyRo(); render();
-  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo) load(); else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // no token for this board yet: the app opens Settings itself, on Connection with the form open (a click on Settings opens Preferences)
+  (async () => { await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo || SETUP) load(); else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // no token for this board yet: the app opens Settings itself, on Connection with the form open (a click on Settings opens Preferences)
 })();
