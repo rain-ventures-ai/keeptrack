@@ -441,8 +441,12 @@ dialog.settings[open] { animation: slidein .22s ease; }
 .agpick__t { display: grid; gap: 2px; min-width: 0; } .agpick__t b { font-size: var(--fs-md); } .agpick__t .muted { font-size: var(--fs-sm); line-height: 1.35; }
 @media (max-width: 760px) {
   dialog.settings { width: 100vw; border-radius: 0; border: 0; }
-  .stabs .ui-tab { flex: 1 0 auto; padding: 0 var(--sp-3); }
+  .ui-tabs.stabs { gap: 0; padding: 0 var(--sp-3); margin: 0 -20px var(--sp-1); }   /* four tabs share a phone's width whatever the system font */
+  .stabs .ui-tab { flex: 1 1 auto; min-width: 0; padding: 0 var(--sp-2); }
   .stabs .tl-long { display: none; } .stabs .tl-short { display: inline; }
+}
+@media (max-width: 380px) {
+  .stabs .ui-tab { padding: 0 var(--sp-1); font-size: var(--fs-sm); }
   .setsec .ui-props__row { grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); padding: var(--sp-3) 0; }
   .setsec .ui-props__label { font-size: var(--fs-sm); font-weight: 600; }
   .setsec .ui-props__row:has(> .ui-props__value > .schk) { grid-template-columns: minmax(0, 1fr) auto; }   /* an on/off switch stays on the label's line */
