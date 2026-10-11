@@ -10,9 +10,9 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py show ID
   keeptrack.py next --for osouthgate --agent claude --session ABC     # claim the first claimable todo task
   keeptrack.py claim ID --for osouthgate --agent claude --session ABC [--note ...] [--force]
-  keeptrack.py heartbeat ID [--note ...] [--status running|blocked|stuck]
-  keeptrack.py release ID [--column todo]
-  keeptrack.py done ID [--note ...]
+  keeptrack.py heartbeat ID [--note ...] [--status running|blocked|stuck]      # from the session that holds the claim
+  keeptrack.py release ID [--column todo]                                      # anyone may release a stale, stuck or blocked claim
+  keeptrack.py done ID --note "result"  |  done ID --cancel --note "why"       # done refuses open to-dos; --cancel drops them
   keeptrack.py add "Title" [--assign osouthgate] [--label x] [--due 2026-10-20] [--client "Acme"] [--details ...] [--todo "step 1" --todo "step 2"]
   keeptrack.py todo-add ID "text"      # add a checklist item
   keeptrack.py todo-done ID N          # tick item N (1-based, as shown by `show`); todo-undo / todo-rm work the same way
