@@ -31,7 +31,7 @@ git clone https://github.com/<owner>/<name> && cd <name>
 git checkout -b master            # the web board and keeptrack.py use the master branch by default
 mkdir -p board
 curl -fsSL https://raw.githubusercontent.com/rain-ventures-ai/keeptrack/main/board/kit/keeptrack.py -o board/keeptrack.py
-python3 board/keeptrack.py init --person <user>:<Name> [--person <user2>:<Name2>] [--email you@work.example --email you@home.example] [--timezone Europe/London] [--client "<area>"] [--visibility-alarm]
+python3 board/keeptrack.py init --person <user>:<Name> [--person <user2>:<Name2>] [--email you@example.com --email you@example.org] [--timezone Europe/London] [--client "<area>"] [--visibility-alarm]
 python3 board/keeptrack.py --file board/tasks.json list   # empty board, no error
 python3 board/keeptrack.py kit-check                      # says the kit is current
 git add -A && git commit -m "Set up task board (board kit)" && git push -u origin master

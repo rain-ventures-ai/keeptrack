@@ -84,7 +84,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // optional "kit_owner": "github-user" = whose Claude upgrades the board kit (default: first person)
   "columns": [{ "id": "todo", "name": "To do" }, ...],
   "people":  [{ "github": "osouthgate", "name": "Oliver" }, { "github": "JezHub", "name": "Jez" }],
-                                                 // v28 optional on each member: "emails": ["a@work.example", "a@home.example"], "timezone": "Europe/London"
+                                                 // v28 optional on each member: "emails": ["a@example.com", "a@example.org"], "timezone": "Europe/London"
   "agents":  ["claude", "codex"],
   "clients": ["Acme", "Rain Ventures", "General"],
   "labels":  [{ "name": "call", "color": "#0c66e4" }],

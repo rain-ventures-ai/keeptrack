@@ -928,7 +928,9 @@ def _api_error(rc, out, err):
 
 def _api_save_changes(changes, deletes, state, message):
     paths = set(changes) | set(deletes)
-    if len(paths) == 1:
+    # One file: a contents PUT, which only notices a change to that file. A whole-board check (the claim limit) needs
+    # the commit path below, whose ref update fails when anyone else saved since this command read the board.
+    if len(paths) == 1 and not _MUT["recheck"]:
         rel = next(iter(paths)); old = state.get("files", {}).get(rel)
         if rel in deletes:
             body = {"message": message, "branch": BRANCH, "sha": old["sha"]}
@@ -1005,7 +1007,8 @@ class UseGit(Exception):
     """The API refused the write because of the sandbox proxy: switch to the git transport and retry."""
 
 
-_MUT = {"base": None, "extra": {}}   # while fn runs inside mutate: the board state it reads and the extra files it wants saved with it
+_MUT = {"base": None, "extra": {}, "recheck": False}   # while fn runs inside mutate: the board state it reads, the extra files it wants saved with it,
+# and whether its checks read the whole board (then a lost race re-runs fn on the newer board instead of merging)
 
 
 def rewrite_archives(data, edit):
@@ -1131,7 +1134,10 @@ def _renumber(merged, theirs):
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
-        return _mutate(fn, message)
+        try:
+            return _mutate(fn, message)
+        finally:
+            _MUT["recheck"] = False
 
 
 def _mutate(fn, message):
@@ -1145,11 +1151,11 @@ def _mutate(fn, message):
         # migration because it creates many files and first makes a backup tag.
         migrate_data(data, min(SCHEMA, 3))
         if lost is None or lost[2]:
-            # First attempt, or a command that also rewrites archive files (renames): those run again on the
-            # latest board, because their archive edits are read from and written next to that revision.
+            # First attempt, or a command that also rewrites archive files (renames) or checks the whole board (the
+            # agent claim limit): those run again on the latest board, because what they read may have changed.
             base = copy.deepcopy(data)
             out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
-            _MUT["base"], _MUT["extra"] = sha, {}
+            _MUT["base"], _MUT["extra"], _MUT["recheck"] = sha, {}, False
             with contextlib.redirect_stdout(out):
                 result = fn(data)
             assign_nums(data)
@@ -1176,7 +1182,7 @@ def _mutate(fn, message):
         if ok:
             print(out.getvalue(), end="")
             return result
-        lost = (base, copy.deepcopy(data), bool(extra))
+        lost = (base, copy.deepcopy(data), bool(extra) or _MUT["recheck"])
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not save after retries (board busy)")
 
@@ -1363,6 +1369,13 @@ def cloud_session_url():
     return f"https://claude.ai/code/session_{tail}" if tail.isalnum() else ""
 
 
+def claim_limit(data):
+    """settings.max_agent_claims as a positive int, or 0 for no limit. A value that is not a whole number 1-100 is
+    ignored here (doctor reports it), so a bad hand edit can't stop every claim."""
+    v = (data.get("settings") or {}).get("max_agent_claims")
+    return v if isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 100 else 0
+
+
 def do_claim(a, tid, data):
     t = find(data, tid)
     user = a.for_user or default_user()
@@ -1371,11 +1384,12 @@ def do_claim(a, tid, data):
     if not a.force and user and user.lower() not in [x.lower() for x in t.get("assignees", [])]:
         sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
     cs = claim_state(data, t.get("claim"))
-    limit = (data.get("settings") or {}).get("max_agent_claims")
+    limit = claim_limit(data)
     if limit and not attended(a) and not a.force and not (t.get("claim") and t["claim"].get("session_id") == sid):
+        _MUT["recheck"] = True   # the count reads other cards: a save that lost a race re-counts on the newer board
         busy = [x for x in data["tasks"] if x is not t and (x.get("claim") or {}) and not x["claim"].get("attended")
                 and claim_state(data, x["claim"]) == "running"]
-        if len(busy) >= int(limit):
+        if len(busy) >= limit:
             sys.exit(f"refused: {len(busy)} agent claims already running, the board's limit is {limit} "
                      f"({', '.join('#' + str(x.get('num')) for x in busy)}); wait for one to finish (or --force)")
     if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force:
@@ -1966,6 +1980,10 @@ def doctor_board(fix=False):
         st = pr.get("status", "active")
         if st not in PROJECT_STATUSES:
             problem("PROJECT_STATUS", ppath, f"Status {st!r} must be one of: {', '.join(PROJECT_STATUSES)}.")
+    mac = (data.get("settings") or {}).get("max_agent_claims")
+    if mac is not None and not claim_limit(data):
+        problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
+                "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
     board_modes = (data.get("settings") or {}).get("modes") or ["tasks", "crm"]
     for m in data.get("people", []):
         gh_user = m.get("github")
@@ -2350,6 +2368,8 @@ def cmd_init(a):
     tj = os.path.join(ROOT, PATH)
     if os.path.exists(tj):
         print(f"kept existing {PATH}")
+        if getattr(a, "email", None) or getattr(a, "timezone", None):
+            print(f"note: --email/--timezone were not applied to the existing board; use keeptrack.py member-set {people[0]['github']} ...")
     else:
         # Existing v3 boards migrate explicitly with a backup; brand-new boards need no legacy layout.
         data = {"version": 4, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
@@ -2530,7 +2550,7 @@ def cmd_where(a):
 # "channel". A draft is never a contact: it counts only when it is marked sent (`sent`). Agents never send messages.
 CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
-DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "PROJECT"})
+DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "PROJECT", "SETTINGS"})
 
 
 def person_for_github(data, github):
@@ -3369,14 +3389,15 @@ def cmd_members(a):
         n = sum(1 for t in data.get("tasks", []) if m.get("github") in t.get("assignees", []) and t.get("column") != "done")
         print(f"{m.get('github')}  {m.get('name', '')}  ({n} open tasks)" + ("  [upgrade owner]" if m.get("github") == owner else ""))
         if m.get("emails") or m.get("timezone"):
-            print("    " + "  ".join(x for x in [", ".join(m.get("emails") or []), m.get("timezone") or ""] if x))
+            ident = "  ".join(x for x in [", ".join(map(str, m.get("emails") or [])), str(m.get("timezone") or "")] if x)
+            print("    " + re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", ident))
     print("agents: " + (", ".join(data.get("agents", [])) or "-"))
 
 
 # A member record is the person's identity on the board: GitHub login, name, every email address they use and a time
 # zone. It is not a CRM person (those are optional and come and go with the CRM section); the upgrade owner's record
 # can't be removed. Agents read it to recognise the owner's own mail and to read times in their zone.
-EMAIL_RE = re.compile(r"[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+")
+EMAIL_RE = re.compile(r"[^@\s<>,;\x00-\x1f\x7f-\x9f]+@[^@\s<>,;\x00-\x1f\x7f-\x9f]+\.[^@\s<>,;\x00-\x1f\x7f-\x9f]+")
 
 
 def check_email(e):
@@ -3430,9 +3451,9 @@ def identity_line(m):
     if not m:
         return ""
     bits = [m.get("name") or m.get("github"), f"@{m.get('github')}"]
-    bits.append(", ".join(m["emails"]) if m.get("emails") else "no email addresses on record")
+    bits.append(", ".join(map(str, m["emails"])) if isinstance(m.get("emails"), list) and m["emails"] else "no email addresses on record")
     bits.append(m.get("timezone") or "no time zone on record")
-    return " · ".join(bits)
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", " · ".join(map(str, bits)))   # board data never drives the terminal
 
 
 def cmd_me(a):

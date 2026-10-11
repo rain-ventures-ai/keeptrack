@@ -1410,6 +1410,52 @@ class AgentClaimLimit(unittest.TestCase):
         self.claim("t_c2", "s2")                                  # re-claiming your own card is never refused
         self.claim("t_c5", "s5", force=True)                      # --force overrides
 
+    def test_limit_is_rechecked_when_a_save_loses_a_race(self):
+        # Two sessions read the board with one claim running and claim different cards. The second save loses the
+        # race; a plain three-way merge would keep both claims (they touch different cards) and run 3 under a limit of 2.
+        self.claim("t_c1", "s1")
+        real, calls = kt.save, []
+        def racing(data, sha, msg):
+            if not calls:
+                calls.append(1); d = self.read()
+                d["tasks"][1]["claim"] = dict(d["tasks"][0]["claim"], session_id="s2"); write(self.file, d)
+                return False
+            return real(data, sha, msg)
+        kt.save = racing
+        with self.assertRaises(SystemExit) as e:
+            self.claim("t_c3", "s3")
+        self.assertIn("limit is 2", str(e.exception))
+        self.assertFalse(self.read()["tasks"][2].get("claim"))
+
+    def test_api_claim_under_a_limit_saves_through_a_commit(self):
+        # A one-file contents PUT only notices a change to that file; the claim limit reads every card, so its save
+        # must go through the commit path, whose ref update fails if anyone else saved meanwhile.
+        calls = []
+        def gh(*args, body=None):
+            calls.append(args[1:3])
+            return 0, json.dumps({"sha": "abc"}), ""
+        old_gh, old_rec = kt.gh, kt._MUT["recheck"]
+        kt.gh = gh
+        try:
+            state = {"files": {"cards/t.json": {"sha": "s"}}, "head": "h", "base_tree": "bt"}
+            kt._MUT["recheck"] = False
+            kt._api_save_changes({"cards/t.json": "{}"}, set(), state, "m")
+            self.assertIn("PUT", calls[0][0])
+            calls.clear(); kt._MUT["recheck"] = True
+            kt._api_save_changes({"cards/t.json": "{}"}, set(), state, "m")
+            self.assertTrue(any("git/blobs" in str(c) for c in calls) and any("git/refs" in str(c) for c in calls))
+        finally:
+            kt.gh, kt._MUT["recheck"] = old_gh, old_rec
+
+    def test_bad_limit_value_is_ignored_and_reported(self):
+        d = self.read(); d["settings"]["max_agent_claims"] = "two"; write(self.file, d)
+        for i in range(1, 4):
+            self.claim(f"t_c{i}", f"s{i}")                        # not a crash, and no limit
+        self.assertEqual(kt.claim_limit({"settings": {"max_agent_claims": -1}}), 0)
+        self.assertEqual(kt.claim_limit({"settings": {"max_agent_claims": True}}), 0)
+        self.assertEqual(kt.claim_limit({"settings": {"max_agent_claims": 2}}), 2)
+        self.assertIn("SETTINGS", kt.DOCTOR_WARNINGS)
+
     def test_settings_set_max_agent_claims(self):
         self.quiet(kt.cmd_settings_set, Args(title=None, stale_minutes=None, stages=None, rename_stage=None,
                                              max_agent_claims=0))
