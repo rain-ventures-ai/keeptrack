@@ -2968,15 +2968,20 @@ if (typeof window !== 'undefined') (() => {
   function notify(title, body, id) {
     const n = 'Notification' in window && Notification.permission === 'granted';
     if (!n) { if (!document.hidden) toast(title + ': ' + body); return; }
-    try { const x = new Notification(title, { body: String(body).slice(0, 240), tag: id || 'board', icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') });
-      x.onclick = () => { window.focus(); if (id) openCard(id); x.close(); }; } catch { toast(title + ': ' + body); }
+    const opts = { body: String(body).slice(0, 240), tag: id || 'board', data: { card: id || '' }, icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') };
+    try { const x = new Notification(title, opts); x.onclick = () => { window.focus(); if (id) openCard(id); x.close(); }; }
+    catch {   // Android browsers only allow a service worker to show one (sw.js)
+      if (!navigator.serviceWorker) { toast(title + ': ' + body); return; }
+      navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(r => r.showNotification(title, opts)).catch(() => toast(title + ': ' + body));
+    }
   }
+  if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', e => { const id = e.data && e.data.kbOpenCard; window.focus(); if (id) openCard(id); });   // a tap on a phone alert
   function renderAlerts() {   // Settings → Preferences → Notifications
     const ac = alertCfg(), perm = 'Notification' in window ? Notification.permission : 'unsupported', box = $('alKinds'); box.textContent = '';
     $('alOn').checked = ac.on; $('alPresetRow').hidden = $('alFold').hidden = !ac.on;
     setChip($('alChip'), !ac.on ? 'Off' : perm === 'granted' ? 'On' : perm === 'denied' ? 'Blocked' : 'On · in the page', !ac.on ? 'neutral' : perm === 'granted' ? 'ok' : perm === 'denied' ? 'danger' : 'warn');
     const pm = $('alPerm'); pm.textContent = '';
-    pm.append(ui.check(perm === 'granted' ? { state: 'ok', text: 'Notifications are allowed.' } : perm === 'denied' ? { state: 'bad', text: 'Notifications are blocked for this page.', fix: 'Allow them in the site settings (the icon left of the address), then reload.' }
+    pm.append(ui.check(perm === 'granted' ? { state: 'ok', text: 'Notifications are allowed.' } : perm === 'denied' ? { state: 'bad', text: 'Notifications are blocked for this page.', fix: 'Your browser is blocking them, and the board cannot ask again. Tap the padlock beside the address, open Permissions or Site settings, set Notifications to Allow, then reload. On Android also check Settings → Apps → your browser → Notifications is on.' }
       : perm === 'unsupported' ? { state: 'warn', text: 'This browser cannot show notifications.', fix: 'Alerts show as messages on the page instead.' } : { state: 'warn', text: 'Not allowed yet.', fix: 'Switching alerts on asks the browser for permission.' }));
     ALERT_KINDS.forEach(([k, l]) => { const lab = el('label', 'schk'), i = el('input'); i.type = 'checkbox'; i.checked = ac.kinds.includes(k);
       i.onchange = () => { const o = alertCfg(); o.kinds = ALERT_KINDS.map(x => x[0]).filter(x => x === k ? i.checked : o.kinds.includes(x)); saveAlertCfg(o); syncPreset(); }; lab.append(i, document.createTextNode(' ' + l)); box.append(lab); });
