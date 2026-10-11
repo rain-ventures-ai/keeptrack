@@ -10,9 +10,9 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py show ID
   keeptrack.py next --for osouthgate --agent claude --session ABC     # claim the first claimable todo task
   keeptrack.py claim ID --for osouthgate --agent claude --session ABC [--note ...] [--force]
-  keeptrack.py heartbeat ID [--note ...] [--status running|blocked|stuck]
-  keeptrack.py release ID [--column todo]
-  keeptrack.py done ID [--note ...]
+  keeptrack.py heartbeat ID [--note ...] [--status running|blocked|stuck]      # from the session that holds the claim
+  keeptrack.py release ID [--column todo]                                      # anyone may release a stale, stuck or blocked claim
+  keeptrack.py done ID --note "result"  |  done ID --cancel --note "why"       # done refuses open to-dos; --cancel drops them
   keeptrack.py add "Title" [--assign osouthgate] [--label x] [--due 2026-10-20] [--client "Acme"] [--details ...] [--todo "step 1" --todo "step 2"]
   keeptrack.py todo-add ID "text"      # add a checklist item
   keeptrack.py todo-done ID N          # tick item N (1-based, as shown by `show`); todo-undo / todo-rm work the same way
@@ -294,11 +294,16 @@ def ensure_local_dir(path):
     if os.path.islink(d):
         raise OSError(f"{d} is a symlink; Keeptrack will not write through it")
     os.makedirs(d, exist_ok=True)
-    tracked = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True).stdout.strip()
-    if tracked:
-        raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
-    if os.path.basename(d) in CONFIG_DIRS and not os.path.lexists(os.path.join(d, ".gitignore")):
-        write_private(os.path.join(d, ".gitignore"), "# personal Keeptrack settings for this project; never committed\n*\n")
+    if os.path.basename(d) in CONFIG_DIRS:   # Keeptrack's own folder: nothing in it may be committed
+        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True).stdout.strip()
+        if tracked:
+            raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
+        if not os.path.lexists(os.path.join(d, ".gitignore")):
+            write_private(os.path.join(d, ".gitignore"), "# personal Keeptrack settings for this project; never committed\n*\n")
+    else:   # a board repo's root (.board-claim.json): the file itself must not be committed (the kit's gitignore lists it)
+        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", os.path.basename(path)], capture_output=True, text=True).stdout.strip()
+        if tracked:
+            raise OSError(f"{path} is committed to git; Keeptrack keeps its personal files out of git (add it to .gitignore)")
 
 
 def write_private(path, text):
@@ -1126,10 +1131,20 @@ def _merge_list(b, m, t, path, clashes):
 
 
 def describe_clashes(clashes, limit=12):
+    def scrub(path, v):   # a session id is a claim's proof of ownership: a clash report shows it only in part
+        if v is None:
+            return None
+        if path and path[-1] == "session_id":
+            return redact_session(v)
+        if isinstance(v, dict):
+            return {k: (redact_session(x) if k == "session_id" else scrub((k,), x)) for k, x in v.items()}
+        if isinstance(v, list):
+            return [scrub((), x) for x in v]
+        return v
     def short(v):
         s = "(none)" if v is None else json.dumps(v, ensure_ascii=False)
         return s if len(s) <= 80 else s[:77] + "..."
-    lines = [f"  {'/'.join(map(str, c['path'])) or '(whole board)'}: yours {short(c['mine'])}, theirs {short(c['theirs'])}"
+    lines = [f"  {'/'.join(map(str, c['path'])) or '(whole board)'}: yours {short(scrub(c['path'], c['mine']))}, theirs {short(scrub(c['path'], c['theirs']))}"
              for c in clashes[:limit]]
     if len(clashes) > limit:
         lines.append(f"  ... and {len(clashes) - limit} more")
@@ -1314,9 +1329,80 @@ def default_user():
     return out.strip() if rc == 0 else ""
 
 
+def public_session_tail():
+    """The id in this run's claude.ai session link (CLAUDE_CODE_REMOTE_SESSION_ID): public, so never a claim id."""
+    v = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")
+    return v.split("_", 1)[1] if "_" in v else v
+
+
+def usable_session(sid):
+    """A session id a run may act as: not empty, not the page's placeholder prefix, not the public link id."""
+    sid = str(sid or ""); tail = public_session_tail()
+    return sid if sid and not sid.startswith("pending-") and not (tail and tail in sid) else ""   # the raw env value, session_<tail> and a pasted link all contain the tail
+
+
 def session_id(args):
-    return args.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") \
-        or os.environ.get("CODEX_SESSION_ID") or uuid.uuid4().hex[:8]
+    """The id a new claim records: --session, else the environment, else the session this clone's local claim record
+    already holds (one clone is one session, whichever card it claimed last), else a random id. A value that is
+    public in the session link, or that copies the page's placeholder prefix, is not used (a random id is, and the
+    local record keeps it for the later done or release)."""
+    given = args.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")
+    if given and not usable_session(given):
+        print("note: that session id is public (it is in the session link) or a placeholder prefix; this run's claim uses this clone's "
+              "recorded session or a random id, kept in the local claim record", file=sys.stderr)
+    return usable_session(given) or recorded_session() or uuid.uuid4().hex[:8]
+
+
+def session_for(a, task_id=None):
+    """The session id this run acts as on an existing card: --session, then the environment (same order as
+    session_id), then the session in this clone's local claim record, whichever card it is for (one clone is one
+    session: an attended session with no environment that claimed earlier in this clone still owns its cards).
+    Only then a random id, which owns nothing. task_id is kept for callers; the record is not scoped by card."""
+    sid = usable_session(getattr(a, "session", None) or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID")
+                         or os.environ.get("CODEX_SESSION_ID"))
+    return sid or recorded_session() or uuid.uuid4().hex[:8]
+
+
+def redact_session(sid):
+    """A session id shown to whoever did not claim the card: enough to recognise it, not enough to pass as it."""
+    sid = str(sid or "")
+    return sid if not sid or sid.startswith("pending-") else sid[:min(3, len(sid) // 2)] + "…"
+
+
+def is_placeholder_claim(c):
+    """The page writes a claim with a session_id starting 'pending-' before its routine starts."""
+    return str((c or {}).get("session_id") or "").startswith("pending-")
+
+
+def recorded_session(task_id=None):
+    """The session in this clone's local claim record (for this card when task_id is given), else ''. A clone is one
+    trust domain: the record it wrote is its session, whichever card it claimed last."""
+    try:
+        with open(CLAIM_FILE) as f:
+            info = json.load(f)
+        ok = isinstance(info, dict) and usable_session(info.get("session")) and (task_id is None or info.get("id") == task_id)
+        return info["session"] if ok else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def claim_owner_check(data, t, a, action):
+    """Refuse to done/release/heartbeat a card whose claim belongs to another session, unless --force. The owner is
+    the session that claimed it (its id, or this clone's local claim record for the card). A page placeholder is no
+    CLI session's claim. Releasing a stale, stuck or blocked claim is allowed: that is the recovery path for a dead
+    or parked run (done never gets that: it asserts the work was finished). The refusal never prints the owning
+    session's id: an id is the only proof of ownership there is, so it is not handed to whoever was refused."""
+    c = t.get("claim")   # a lost race on this card is caught by the save's own file check; a clash report shows ids only in part
+    if not c or c.get("status") == "done" or getattr(a, "force", False):
+        return   # no live claim (older cards kept a finished one)
+    state = claim_state(data, c)
+    own = c.get("session_id")
+    if own and not is_placeholder_claim(c) and own in {session_for(a, t["id"]), recorded_session()}:
+        return   # a claim with no session id is nobody's: only --force finishes it
+    if action == "release" and state in ("stale", "stuck", "blocked"):
+        return   # a stale placeholder (the routine never started) is a dead run too
+    sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')}, another session ({state}); it is not this session's "
+             "(use --force only if a person told you to; never pass --session with an id you did not generate)")
 
 
 def line(data, t):
@@ -1337,13 +1423,23 @@ def _default_scope(a, data=None):
     print(f"(project {DEFAULT_PROJECT}, this repo's default; --all for the whole board)", file=sys.stderr)
 
 
+def searchable(t):
+    """A card as text search sees it: without the claim's and the run record's session ids (a query could otherwise
+    extend a redacted prefix one character at a time)."""
+    out = {k: v for k, v in t.items() if k not in ("claim", "last_run")}
+    for k in ("claim", "last_run"):
+        if isinstance(t.get(k), dict):
+            out[k] = {x: y for x, y in t[k].items() if x != "session_id"}
+    return out
+
+
 def cmd_list(a):
     _default_scope(a)
     data, _ = load()
     ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
     query = (getattr(a, "q", None) or "").casefold()
     for t in ordered:
-        if query and query not in json.dumps(t, ensure_ascii=False).casefold(): continue
+        if query and query not in json.dumps(searchable(t), ensure_ascii=False).casefold(): continue   # never a substring oracle for a session id
         if a.column and t["column"] != a.column: continue
         if a.assignee and a.assignee.lower() not in [x.lower() for x in t.get("assignees", [])]: continue
         if a.unclaimed and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): continue
@@ -1366,7 +1462,15 @@ def cmd_show(a):
     t = find(data, a.id)
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
     hs = t.pop("history", []); cms = t.pop("comments", [])
+    for k in ("claim", "last_run"):   # a session id is a claim's proof of ownership (and a session may hold other cards): shown only in part
+        if t.get(k) and t[k].get("session_id"):
+            t[k] = dict(t[k]); t[k]["session_id"] = redact_session(t[k]["session_id"])
     print(json.dumps(t, indent=2, ensure_ascii=False))
+    if t.get("outcome") == "cancelled" and t.get("column") == "done":
+        why = next((h["text"][len("cancelled: "):] for h in reversed(hs) if str(h.get("text", "")).startswith("cancelled: ")), "")
+        if why.endswith(")") and " (session " in why:
+            why = why.rsplit(" (session ", 1)[0]
+        print("\noutcome: cancelled" + (f" ({why})" if why else ""))
     if t.get("links"):
         print("\nresource access: cloud links need the matching connector/plugin/MCP and signed-in account; local paths need a session on the computer that holds them. Ask the user if access fails.")
     if t.get("todos"):
@@ -1434,17 +1538,27 @@ def do_claim(a, tid, data):
         sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
     cs = claim_state(data, t.get("claim"))
     # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
-    if not attended(a) and not a.force and not (t.get("claim") and t["claim"].get("session_id") == sid and cs == "running"):
+    _MUT["recheck"] = True   # a lost race re-runs this on the newer board: never a three-way merge of two claims
+    mine = {sid, recorded_session()} - {""}   # this run's id, and the session this clone's record holds (one clone is one session)
+    if t.get("claim") and t["claim"].get("session_id") in mine:
+        sid = t["claim"]["session_id"]   # re-claiming its own card keeps the id the claim already carries
+    if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") in mine and cs == "running"):
         busy = busy_over_limit(data, t)
         if busy:
-            sys.exit(f"refused: {limit_message(data, busy)} (or --force)")
-    if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") != sid and not a.force:
+            sys.exit(f"refused: {limit_message(data, busy)} (raise settings.max_agent_claims, or use --attended for a session a person drives)")
+    old_c = t.get("claim") or {}
+    # the page's placeholder for this same agent and user is this run's own: the routine replaces it without --force
+    mine_pending = is_placeholder_claim(old_c) and old_c.get("agent") == agent \
+        and (old_c.get("on_behalf_of") or "").lower() == (user or "").lower()
+    if t.get("claim") and cs in ("running", "blocked", "stuck") and t["claim"].get("session_id") not in mine and not a.force \
+            and not mine_pending:
         c = t["claim"]
-        sys.exit(f"refused: already claimed by {c['agent']} session {c.get('session_id')} ({cs}, last beat {c.get('heartbeat_at')})")
+        sys.exit(f"refused: already claimed by {c['agent']}, another session ({cs}, last beat {c.get('heartbeat_at')}); "
+                 "stop and tell the person (never pass --session with an id you did not generate)")
     ts = now()
     old = t.get("claim") or {}
-    # keep a link the board already found for this run (it sends the routine, then the routine re-claims with --force)
-    keep = old.get("session_url", "") if old.get("agent") == agent and old.get("on_behalf_of") == user else ""
+    # keep a link the board already found for this run (it sends the routine, then the routine's own claim replaces the placeholder)
+    keep = old.get("session_url", "") if old.get("agent") == agent and (old.get("on_behalf_of") or "").lower() == (user or "").lower() else ""
     url = a.session_url or cloud_session_url() or keep
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
@@ -1458,6 +1572,8 @@ def do_claim(a, tid, data):
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
     # a save that loses a race re-runs this on the newer board and may refuse: write the local record after the save
     _PENDING_CLAIM["rec"] = {"id": t["id"], "agent": agent, "user": user, "session": sid, "attended": attended(a)}
+    if FILE and not (a.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")):
+        print(f"note: a --file board keeps no local claim record; pass --session {sid} (or export BOARD_SESSION) to heartbeat, done or release it")
     return t["id"]
 
 
@@ -1494,6 +1610,7 @@ def must_claim(t):
 def cmd_heartbeat(a):
     def fn(data):
         t = find(data, a.id); c = must_claim(t)
+        claim_owner_check(data, t, a, "heartbeat")
         if claim_state(data, c) != "running" and (a.status or c.get("status")) == "running" and not c.get("attended"):
             busy = busy_over_limit(data, t)   # reviving a stale, stuck or blocked claim counts like a new claim
             if busy:
@@ -1507,8 +1624,25 @@ def cmd_heartbeat(a):
     mutate(fn, f"Agent heartbeat: {a.id}")
 
 
-def drop_claim_file():
+def drop_claim_file(task_id=None):
+    """Forget the card in the local claim record. With task_id, only when the record is for that card (releasing
+    someone else's dead run must not forget the card this clone is working on), and the clone keeps its session
+    (one clone is one session: its other claimed cards stay its own). Without task_id the record goes entirely.
+    A --file board writes no record, so it never touches one either."""
+    if FILE:
+        return
     try:
+        ensure_local_dir(CLAIM_FILE)   # the same guard as the write: a committed or redirected record is left alone
+        if task_id:
+            try:
+                with open(CLAIM_FILE) as f:
+                    info = json.load(f)
+            except (OSError, ValueError):
+                info = None
+            if isinstance(info, dict) and info.get("id") and info.get("id") != task_id:
+                return
+            if isinstance(info, dict) and usable_session(info.get("session")):
+                write_private(CLAIM_FILE, json.dumps({"session": info["session"]})); return
         os.remove(CLAIM_FILE)
     except OSError:
         pass
@@ -1519,6 +1653,8 @@ def move_task_to_column(data, task, column):
     old = task.get("column")
     if old == column:
         return old
+    if old == "done":
+        task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
     if data.get("layout") == "split":
         ranks = [x.get("rank") for x in data.get("tasks", [])
                  if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
@@ -1529,7 +1665,7 @@ def move_task_to_column(data, task, column):
 
 def cmd_release(a):
     def fn(data):
-        t = find(data, a.id); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file()
+        t = find(data, a.id); claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file(t["id"])
         if a.column: move_task_to_column(data, t, a.column)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
@@ -1538,14 +1674,31 @@ def cmd_release(a):
 def cmd_done(a):
     def fn(data):
         t = find(data, a.id)
+        claim_owner_check(data, t, a, "done")
+        cancel = bool(getattr(a, "cancel", False))
+        note = (a.note or "").strip()
+        if not note:
+            sys.exit("refused: " + ("done --cancel needs --note with why the card is closed" if cancel
+                                    else "done needs --note with the result (what was delivered, where it is)"))
+        open_todos = [d for d in t.get("todos") or [] if not d.get("done")]
+        if open_todos and not cancel:
+            first = ", ".join(str(d.get("text", "")) for d in open_todos[:3]) + (", ..." if len(open_todos) > 3 else "")
+            sys.exit(f"refused: {t['id']} has {len(open_todos)} open to-dos ({first}); tick them with todo-done, "
+                     "remove them, or close the card with --cancel --note \"why\"")
+        outcome = "cancelled" if cancel else "completed"
         c = t.get("claim")
         if c:  # the claim banner goes away; the card keeps a one-line record of the run, with its link
             t["last_run"] = {"agent": c.get("agent", ""), "on_behalf_of": c.get("on_behalf_of", ""), "session_id": c.get("session_id", ""),
                              "session_url": c.get("session_url", ""), "started_at": c.get("claimed_at", ""), "finished_at": now(),
-                             "note": a.note or c.get("note", "")}
+                             "note": note, "outcome": outcome}
             t["claim"] = None
+        t["outcome"] = outcome
+        if t.get("last_run"):
+            t["last_run"]["outcome"] = outcome   # the run record never disagrees with the card
         link = (c or {}).get("session_url", "")
-        hist(t, "done" + (f": {a.note}" if a.note else "") + (f" (session {link})" if link else "")); move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(); print(f"done {t['id']}: {t['title']}")
+        hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
+        move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(t["id"])
+        print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
 
 
@@ -1583,7 +1736,14 @@ def cmd_move(a):
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
+        if column == "done" and t["column"] != "done" and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
+            claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
         old = t["column"]; t["column"] = column
+        if old == "done" and column != "done":
+            t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
+        n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
+        if column == "done" and old != "done" and n_open:
+            print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)
         hist(t, f"moved {old} -> {column}" + (f": {a.note}" if a.note else "")); t["updated"] = now()
         print(f"#{t['num']} {t['title']}: {old} -> {column}")
     mutate(fn, f"Agent move: {a.id}")
@@ -1709,14 +1869,15 @@ def cmd_auto_heartbeat(a):
         if time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
         info = json.load(open(CLAIM_FILE))
-        if info.get("attended"):
-            return  # a person drives this session: no automatic heartbeats
-        os.utime(CLAIM_FILE)  # throttle even if the network call fails
+        os.utime(CLAIM_FILE)  # throttle even if the network call fails, and even when there is nothing to beat
+        if info.get("attended") or not info.get("id"):
+            return  # a person drives this session, or no card is active: no automatic heartbeats
 
         def fn(data):
+            _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
             t = find(data, info["id"]); c = t.get("claim")
             if not c or c.get("status") == "done" or c.get("session_id") != info.get("session"):
-                drop_claim_file(); return  # released, finished, or taken over by another session
+                drop_claim_file(info["id"]); return  # released, finished, or taken over: forget the card, keep the clone's session
             if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
                 print(f"keeptrack: claim {info['id']} is stale and the board's agent limit is full; it stays stale "
                       "(another session may take the card)", file=sys.stderr)
@@ -1733,7 +1894,7 @@ def cmd_add(a):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
         t = {"id": new_board_id(data, "t_", "cards"), "title": a.title, "column": column,
-             "client": a.client or "", "project": "", "priority": a.priority, "due": check_date(a.due) or "",
+             "client": a.client or "", "project": "", "priority": a.priority, "due": check_date(a.due, data) or "",
              "labels": [], "assignees": a.assign or [], "details": a.details or "", "links": [],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": x, "done": False} for x in (a.todo or [])],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
@@ -2686,14 +2847,42 @@ def check_stage(data, s):
     sys.exit(f"unknown stage '{s}'; stages are: {', '.join(stages(data))}")
 
 
-def check_date(d):
+def board_timezone(data):
+    """The board's clock: the acting user's member time zone (BOARD_USER only: this never asks gh or the network),
+    else the kit owner's, else the first member's, else None."""
+    people = [m for m in ((data or {}).get("people") or []) if isinstance(m, dict)]
+    if not any(valid_timezone(m.get("timezone")) for m in people):
+        return None
+    me = (os.environ.get("BOARD_USER") or "").lower()
+    owner = str(((data or {}).get("settings") or {}).get("kit_owner") or "").lower()
+    pick = [next((m for m in people if me and str(m.get("github") or "").lower() == me), None),
+            next((m for m in people if owner and str(m.get("github") or "").lower() == owner), None),
+            next((m for m in people if valid_timezone(m.get("timezone"))), None)]   # last resort: any member with a zone
+    for m in pick:
+        tz = m.get("timezone") if m else None
+        if valid_timezone(tz):
+            try:
+                import zoneinfo
+                return zoneinfo.ZoneInfo(tz)
+            except Exception:
+                return None
+    return None
+
+
+def board_today(data):
+    """Today's date on the board's clock (see board_timezone); the host clock when no time zone is on record."""
+    zone = board_timezone(data)
+    return dt.datetime.now(zone).date() if zone else dt.date.today()
+
+
+def check_date(d, data=None):
     if d in (None, ""):
         return d
     if d == "today":
-        return dt.date.today().isoformat()
+        return board_today(data).isoformat()
     m = re.fullmatch(r"\+(\d+)d?", d)
     if m:
-        return (dt.date.today() + dt.timedelta(days=int(m.group(1)))).isoformat()
+        return (board_today(data) + dt.timedelta(days=int(m.group(1)))).isoformat()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
         sys.exit(f"date '{d}' must be YYYY-MM-DD, 'today' or +N (days from today)")
     return d
@@ -2747,12 +2936,13 @@ def member_of(data, p):
     return own_member(p, member_logins(data))
 
 
-def person_line(p, data=None, ml=None):
+def person_line(p, data=None, ml=None, today=None):
     m = own_member(p, ml if ml is not None else member_logins(data)) if (data or ml) else None
     if m:
         return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
     due = p.get("next_due") or ""
-    flag = " OVERDUE" if due and due < dt.date.today().isoformat() else (" TODAY" if due == dt.date.today().isoformat() else "")
+    ti = (today or board_today(data)).isoformat() if due else ""
+    flag = " OVERDUE" if due and due < ti else (" TODAY" if due == ti else "")
     who = ", ".join(clean(x, 80) for x in (p.get("role"), p.get("company")) if x)
     return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}{' (' + who + ')' if who else ''}  [{clean(p.get('stage', ''), 40)}]  next: {clean(p.get('next') or '-', 160)}{' ' + clean(due, 20) if due else ''}{flag}"
 
@@ -2819,7 +3009,7 @@ def set_fields(data, p, a):
     st = check_stage(data, getattr(a, "stage", None))
     if st and st != p.get("stage"):
         changed.append(f"stage {p.get('stage') or 'none'} -> {st}"); p["stage"] = st
-    due = check_date(getattr(a, "due", None))
+    due = check_date(getattr(a, "due", None), data)
     if due is not None and due != p.get("next_due", ""):
         p["next_due"] = due; changed.append(f"next step date: {due or 'cleared'}")
     if p.get("company") and p["company"] not in data.setdefault("clients", []):
@@ -2833,15 +3023,16 @@ def cmd_people(a):
         st = check_stage(data, a.stage); people = [p for p in people if p.get("stage") == st]
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
-    ml = member_logins(data)
+    ml = member_logins(data); t = board_today(data)
     for p in sorted(people, key=lambda p: p.get("name", "").lower()):
-        print(person_line(p, ml=ml))
+        print(person_line(p, ml=ml, today=t))
     if not people: print("(nobody)")
 
 
 def cmd_today(a):
     """Follow-ups: overdue, due today, the next 7 days, and open people with no next step."""
-    data, _ = load(); t = dt.date.today(); ti = t.isoformat(); wk = (t + dt.timedelta(days=7)).isoformat()
+    data, _ = load(); zone = board_timezone(data); t = dt.datetime.now(zone).date() if zone else dt.date.today(); ti = t.isoformat()
+    print(f"Today is {ti} ({zone.key})" if zone else f"Today is {ti} (host clock; set a time zone with member-set --timezone Area/City)"); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
     ml = member_logins(data)
     open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not own_member(p, ml)]   # members are never follow-ups
@@ -2853,7 +3044,7 @@ def cmd_today(a):
         if ps:
             print(f"{title} ({len(ps)})")
             for p in sorted(ps, key=lambda p: (p.get("next_due") or "", p.get("name", ""))):
-                print("  " + person_line(p))
+                print("  " + person_line(p, today=t))
     tasks = [x for x in data.get("tasks", []) if x.get("due") and x["due"] <= ti and x.get("column") != "done"]
     if tasks:
         print(f"TASKS DUE ({len(tasks)})")
@@ -2889,11 +3080,11 @@ def cmd_person_add(a):
                or (a.linkedin and any(_norm_url(x.get("url")) == _norm_url(a.linkedin) for x in person_links(p)))
                or (a.email and any(x["value"].lower() == a.email.lower() for x in person_methods(p, "email")))]
         if dup and not a.force:
-            print(f"already on the board: {person_line(dup[0], data)}  (nothing added; use person-set to change it, or --force)"); return
+            print(f"already on the board: {person_line(dup[0], data, today=board_today(data))}  (nothing added; use person-set to change it, or --force)"); return
         p = {"id": new_board_id(data, "p_", "people"), "name": a.name, "company": "", "role": "", "email": "", "phone": "", "linkedin": "", "github": "",
              "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "", "next_due": "", "source": "", "notes": "", "links": [],
              "comments": [], "history": [], "created": now(), "updated": now(), "createdBy": who_am_i()}
-        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p, data)}")
+        set_fields(data, p, a); hist(p, "added"); people.append(p); print(f"added {person_line(p, data, today=board_today(data))}")
     mutate(fn, f"Add person: {a.name}")
 
 
@@ -2903,7 +3094,7 @@ def cmd_person_set(a):
         if not ch:
             print("nothing changed"); return
         for c in ch: hist(p, c)
-        p["updated"] = now(); print(person_line(p, data))
+        p["updated"] = now(); print(person_line(p, data, today=board_today(data)))
     mutate(fn, f"Update person: {a.ref}")
 
 
@@ -2914,7 +3105,7 @@ def cmd_person_rm(a):
         p = find_person(data, a.ref)
         tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
         if not a.yes:
-            sys.exit(f"this deletes {person_line(p, data)} for good (notes and history included); rerun with --yes to confirm. "
+            sys.exit(f"this deletes {person_line(p, data, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
                      f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
         for t in tasks:
             t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
@@ -2954,7 +3145,7 @@ def cmd_sent(a):
         if p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
             hist(p, f"stage {p['stage']} -> {stages(data)[1]}"); p["stage"] = stages(data)[1]
         for x in set_fields(data, p, a): hist(p, x)
-        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p, data)}")
+        p["updated"] = now(); print(f"marked sent: {c['id']}  {person_line(p, data, today=board_today(data))}")
     mutate(fn, f"Sent: {a.ref}")
 
 
@@ -3124,7 +3315,7 @@ def cmd_task_set(a):
         if getattr(a, "priority", None) and a.priority != t.get("priority"):
             t["priority"] = a.priority; changed.append(f"priority: {a.priority}")
         if getattr(a, "due", None) is not None:
-            due = check_date(a.due) or ""
+            due = check_date(a.due, data) or ""
             if due != t.get("due", ""):
                 t["due"] = due; changed.append(f"due: {due or 'cleared'}")
         add = [check_label_name(x) for x in getattr(a, "label", None) or []]
@@ -4199,7 +4390,7 @@ def done_col(data):
 
 def archive_plan(data, rules, today=None):
     """Take what can be archived out of data. Returns {year: {"tasks": [], "contacts": [], "history": {id: [...]}}}."""
-    today = today or dt.date.today()
+    today = today or board_today(data)
     cut_t = (today - dt.timedelta(days=rules["done_days"])).isoformat()
     cut_p = (today - dt.timedelta(days=rules["lost_days"])).isoformat()
     dc, plan = done_col(data), {}
@@ -4344,7 +4535,7 @@ def cmd_archived(a):
     for y in archive_years(data):
         cur, _ = read_archive(y, base)
         for t in (cur or {}).get("tasks", []):
-            if not q or q in json.dumps(t).lower():
+            if not q or q in json.dumps(searchable(t)).lower():
                 print(f"{y}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
         for p in (cur or {}).get("contacts", []):
             if not q or q in json.dumps(p).lower():
@@ -4444,16 +4635,21 @@ def main():
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
     s.add_argument("--project"); s.add_argument("--all", action="store_true", help="ignore this repo's default project"); s.set_defaults(f=cmd_next)
     s = sub.add_parser("heartbeat"); s.add_argument("id"); s.add_argument("--note")
-    s.add_argument("--status", choices=["running", "blocked", "stuck"]); s.set_defaults(f=cmd_heartbeat)
-    s = sub.add_parser("release"); s.add_argument("id"); s.add_argument("--column"); s.set_defaults(f=cmd_release)
-    s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--note"); s.set_defaults(f=cmd_done)
+    s.add_argument("--status", choices=["running", "blocked", "stuck"]); s.add_argument("--session")
+    s.add_argument("--force", action="store_true", help="act on a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_heartbeat)
+    s = sub.add_parser("release"); s.add_argument("id"); s.add_argument("--column"); s.add_argument("--session")
+    s.add_argument("--force", action="store_true", help="release a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_release)
+    s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--note", help="the result: what was delivered, where it is (required)"); s.add_argument("--session")
+    s.add_argument("--cancel", action="store_true", help="close the card without finishing it (needs --note; open to-dos are dropped)")
+    s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_done)
     s = sub.add_parser("auto-heartbeat"); s.set_defaults(f=cmd_auto_heartbeat)
     s = sub.add_parser("todo-add"); s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_todo_add)
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
     s = sub.add_parser("todo-edit", help="change the text of checklist item N in place"); s.add_argument("id"); s.add_argument("n"); s.add_argument("text"); s.set_defaults(f=cmd_todo_edit)
-    s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column")
+    s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column"); s.add_argument("--session")
+    s.add_argument("--force", action="store_true", help="move a card another session holds to done (a person told you to)")
     s.add_argument("--before"); s.add_argument("--after"); s.add_argument("--top", action="store_true")
     s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); s.set_defaults(f=cmd_move)
     s = sub.add_parser("assign"); s.add_argument("id"); s.add_argument("users", nargs="+"); s.add_argument("--add", action="store_true")

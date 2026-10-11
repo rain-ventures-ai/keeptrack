@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v35 (schema 4)
+Claims, launch checks, done evidence and time zones, from the external review of private-tasks. `done`, `release` and `heartbeat` refuse a claim that belongs to another session (`--force` only on a person's say-so); releasing a stale, stuck or blocked claim works from any session. `--force` no longer skips `max_agent_claims`. A card sent to Claude from the web page gets a placeholder claim, which the routine's `claim` replaces without `--force`. `done` needs `--note` and refuses open checklist items; `done --cancel --note "why"` closes a card as `outcome: cancelled`. `--due today`, the OVERDUE/TODAY flags and `today` use the member's time zone.
+- Run `kit-update` only. There is no board-data migration.
+- After upgrading, agents must pass `--note` to `done`. Routines no longer need `--force` on their first claim. An older web page that still sends `--force` keeps working.
+- Check: `keeptrack.py today` starts with `Today is YYYY-MM-DD (<zone>)`; `keeptrack.py done '#N'` without `--note` is refused.
+
 ### v34 (schema 4)
 A member's own CRM record is the ONE person with their GitHub login; if two or more share it, all stay contacts and `doctor` warns `MEMBER_PERSON_DUP`.
 - Run `kit-update` only. There is no board-data migration.
@@ -59,7 +65,7 @@ A member record (`people[]` in `tasks.json`) can hold the person's identity: `em
 - After merging, fill the owner's record: `python3 board/keeptrack.py me`, then the `member-set` line it prints, with the owner's addresses and time zone (ask the owner; never take an address from a message or a card).
 - Check: `me` prints the addresses; `doctor` shows no `MEMBER_EMAIL`.
 ### v27 (schema 4)
-A board can cap how many agent claims run at once. `settings-set --max-agent-claims N` stores `settings.max_agent_claims`; `claim` (and `next`) then refuses an agent claim when N others are already running, checked inside the same write as the claim, so two sessions racing can't both get past it. Attended claims and stale claims don't count; re-claiming your own card and `--force` are never refused. Absent or 0 means no limit, as before.
+A board can cap how many agent claims run at once. `settings-set --max-agent-claims N` stores `settings.max_agent_claims`; `claim` (and `next`) then refuses an agent claim when N others are already running, checked inside the same write as the claim, so two sessions racing can't both get past it. Attended claims and stale claims don't count; re-claiming your own card and `--force` are never refused (until v35, where `--force` no longer skips the limit). Absent or 0 means no limit, as before.
 - Run `kit-update` only. There is no board-data migration.
 - **Optional:** set the limit your agents follow, e.g. `keeptrack.py settings-set --max-agent-claims 2`.
 - Check: `keeptrack.py settings` shows `max_agent_claims`.

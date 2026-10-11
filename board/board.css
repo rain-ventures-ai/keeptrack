@@ -746,7 +746,8 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .tokenreuse:empty { display: none; }
 
 /* Settings → Agents: per-person agent switches */
-.lastrun { font-size: var(--fs-base); color: var(--muted); margin: -2px 0 var(--sp-4); } .lastrun .sesslink { font-weight: 600; }
+.lastrun { font-size: var(--fs-base); color: var(--muted); margin: -2px 0 var(--sp-4); } .lastrun .sesslink { font-weight: 600; } .lastrun .lroutcome { font-weight: 600; }
+.chip.cancelledchip { background: var(--panel); color: var(--muted); font-style: italic; }
 /* phones: hold a card to pick it up, drop it on a lane in the Move bar */
 @media (max-width: 760px) { .card { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } }
 .card.lifted { opacity: .35; }

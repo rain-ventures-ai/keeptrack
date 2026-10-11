@@ -97,7 +97,7 @@ and ask the user. Never imply that you read it.
 
 ## 3. Tasks
 ```bash
-export BOARD_AGENT=<claude|codex|cursor> BOARD_SESSION=<short session id>
+export BOARD_AGENT=<claude|codex|cursor> BOARD_SESSION=<a short random id you generate for this run; never your claude.ai session id>
 $B list --assignee <user> --column todo --unclaimed
 $B list -q "not published"                       # find text in titles, details, labels, links, comments or history
 $B show '#12'                                    # read the comments before you start
@@ -109,6 +109,8 @@ $B comment '#12' "<question or update>"          # questions also need: heartbea
 $B done '#12' --note "<result, link>"            # or: release '#12' --column todo
 $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "<text>"
 ```
+
+Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them.
 Only work on tasks assigned to the user you act for.
 
 Change a task or the board's structure with commands too, never by editing JSON:
@@ -123,7 +125,7 @@ $B agents | agent-add NAME | agent-rm NAME [--unassign]
 $B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)
 $B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW
 ```
-Ask the user before a rename, a delete, removing a member or `--force`; the commands print what they will touch.
+Ask the user before a rename, a delete, removing a member, `done --cancel` or `--force`; the commands print what they will touch.
 In a board repo the `board-admin` skill has the full table.
 
 The web board's Today rows and cinema cards can assign a task to the signed-in person's own Claude. That quick action
