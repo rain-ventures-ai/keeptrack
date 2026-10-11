@@ -3236,7 +3236,7 @@ if (typeof window !== 'undefined') (() => {
   const projectsForClient = client => projectsOf().filter(p => p.client === client);
   const personByEmail = email => { const e = String(email || '').toLowerCase(); return state.contacts.find(p => (p.emails || []).some(x => String(x.value).toLowerCase() === e)); };
   const personByGithub = gh => { const g = String(gh || '').toLowerCase(); return state.contacts.find(p => String(p.github || '').toLowerCase() === g); };
-  const memberPerson = () => { const meV = cfg().me; if (!meV) return null; return state.contacts.find(p => isMe(p)) || (personByGithub(meV) ? null : personByEmail(meV)); };   // with duplicates of your login, none is yours
+  const memberPerson = () => { const meV = cfg().me; if (!meV) return null; return personByGithub(meV) || personByEmail(meV); };   // any person with your login: never offer to add another (isMe decides display only)
   // A person whose GitHub login is a board member's is that member's own record, not a contact: it shows as "You" (or
   // "Board member") and stays out of follow-ups, the pipeline and "Help me with my contact". Worked out from people[], never stored.
   // only the ONE person with a member's login counts (v34): duplicates all stay contacts, so a member's login can't hide anyone

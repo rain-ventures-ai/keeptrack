@@ -1009,6 +1009,7 @@ class CrmProjects(unittest.TestCase):
         d["people"] = None; write(self.file, d)   # a null people[] never crashes today or doctor
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_today(Args())
+        kt.doctor_board(False)
 
     def test_client_set_north_star_and_project_lifecycle(self):
         with contextlib.redirect_stdout(io.StringIO()):

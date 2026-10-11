@@ -273,9 +273,11 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       const p3 = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errs3 = []; p3.on('pageerror', e => errs3.push(e.message)); await p3.addInitScript(INIT); await p3.route('https://api.test/**', r => api3.route(r));
       await p3.goto(base + '/board/index.html'); await p3.waitForSelector('.prow');
       assert.equal(await p3.locator('.memberpill').count(), 0, 'a duplicated member login marks nobody as the member');
+      const peopleFiles = () => Object.keys(api3.files).filter(f => f.startsWith('people/')).length; const before = peopleFiles();
+      assert.equal(await p3.locator('#memberBar').isVisible().catch(() => false) && /no person record/.test(await p3.locator('#memberBar').textContent()), false, 'no "add yourself" offer when your login is on people already');
       for (const v of ['today', 'pipeline']) { await p3.locator(`#viewSw button[data-view="${v}"]`).click(); await p3.waitForTimeout(300);
         for (const who of ['Casey Example', 'Alex Member']) assert.equal(await p3.locator('#board', { hasText: who }).count(), 1, `${who} stays a contact in ${v}`); }
-      assert.deepEqual(errs3, []); await p3.close();
+      assert.equal(peopleFiles(), before, 'loading never adds another copy of your record'); assert.deepEqual(errs3, []); await p3.close();
     }
 
     // ---- read-only demo board: fields disabled, add and remove controls hidden, copy and navigation still work, no Delete ----

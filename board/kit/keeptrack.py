@@ -1984,7 +1984,7 @@ def doctor_board(fix=False):
 
     columns = {x.get("id") for x in data.get("columns", [])}
     labels = {x.get("name") for x in data.get("labels", [])}
-    assignees = {x.get("github") for x in data.get("people", [])}
+    assignees = {x.get("github") for x in (data.get("people") or []) if isinstance(x, dict)}
     valid_stages = set(stages(data))
     bad_rank_columns = set()
     ranks = {}
@@ -2736,8 +2736,8 @@ def own_member(p, ml):
     """The board member whose own CRM record p is, or None (v33, v34). Decided from p's OWN GitHub login, never its id
     (which a writer could blank or reuse): p counts only if it is the ONE person carrying a member's login. If two or
     more share it, all stay contacts and `doctor` warns MEMBER_PERSON_DUP, so a member's login can't hide anyone.
-    Limit: a writer who moves the login from the member's real record to one contact can still mark that one contact;
-    nothing is stored to tell them apart. Worked out from people[], never stored."""
+    Limit: at most one contact per member login can be marked this way, and members come from people[] (which board
+    writers can edit); such a contact still shows in People with a "Board member" pill. Nothing is stored to tell it apart. Worked out from people[], never stored."""
     members, n = ml
     g = str((p or {}).get("github") or "").lower()
     return members[g] if g and g in members and n[g] == 1 else None
@@ -2753,8 +2753,8 @@ def person_line(p, data=None, ml=None):
         return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
     due = p.get("next_due") or ""
     flag = " OVERDUE" if due and due < dt.date.today().isoformat() else (" TODAY" if due == dt.date.today().isoformat() else "")
-    who = ", ".join(x for x in (p.get("role"), p.get("company")) if x)
-    return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}{' (' + who + ')' if who else ''}  [{p.get('stage', '')}]  next: {p.get('next') or '-'}{' ' + due if due else ''}{flag}"
+    who = ", ".join(clean(x, 80) for x in (p.get("role"), p.get("company")) if x)
+    return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}{' (' + who + ')' if who else ''}  [{clean(p.get('stage', ''), 40)}]  next: {clean(p.get('next') or '-', 160)}{' ' + clean(due, 20) if due else ''}{flag}"
 
 
 def person_methods(p, kind):
