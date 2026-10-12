@@ -2422,20 +2422,22 @@ if (typeof window !== 'undefined') (() => {
     const wait = el('span', 'dval dwait'); wait.id = 'cWaitVal';
     const who = el('span', 'dval'); who.id = 'cWho';
     const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
+    const work = el('button', 'dworkpick'); work.type = 'button'; work.id = 'cWorkPick'; work.onclick = openTaskWorkPicker;
     const chips = el('span', 'dval'); chips.id = 'cLabelChips';
     const labelAdd = ghostAdd('cLabelAdd', 'Add', 'Add a label', () => { labelAdd.hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); });
     const labelNew = el('input', 'ui-input dlabelnew'); labelNew.id = 'cLabelNew'; labelNew.setAttribute('list', 'labelList'); labelNew.placeholder = 'Label name'; labelNew.setAttribute('aria-label', 'New label name'); labelNew.hidden = true;
     const labelList = el('datalist'); labelList.id = 'labelList';
-    $('cProps').append(ui.props([
+    const props = ui.props([
       { label: 'Status', icon: 'square-kanban', value: status },
       { label: 'Priority', icon: 'flag', value: prio },
-      { label: 'Due', icon: 'calendar', value: due },
-      { label: 'Waiting', icon: 'alarm-clock', value: wait },
+      { label: 'Due date', icon: 'calendar', value: due },
+      { label: 'Waiting for', icon: 'alarm-clock', value: wait },
       { label: 'People', icon: 'users', value: [who, whoAdd] },
-      { label: 'Client', icon: 'building-2', value: drawerSelect('cClient', 'Client') },
-      { label: 'Project', icon: 'folder', value: drawerSelect('cProject', 'Project') },
+      { label: 'Client & project', icon: 'building-2', value: work },
       { label: 'Labels', icon: 'tag', value: [chips, labelAdd, labelNew, labelList] }
-    ]));
+    ]);
+    [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
+    $('cProps').append(props);
     // sections: Description, Checklist, Links, Contacts, Comments, History
     const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
     const todos = el('div', 'dtodos'); todos.id = 'cTodos';
@@ -2503,31 +2505,63 @@ if (typeof window !== 'undefined') (() => {
   $('cCol').onchange = e => { const id = editing, v = e.target.value; saveField(n => { place(n, id, v, null); }, `Move: ${titleOf(id)}`); };
   function syncPrio(v) { const w = $('cPrio').parentElement; ['danger', 'warn', 'ok'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + ui.priorityTone(v)); }
   $('cPrio').onchange = e => { const v = e.target.value; syncPrio(v); edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
-  $('cClient').onchange = async e => {
-    const sel = e.target, id = editing; let v = sel.value;
-    if (v === '__new') {
-      const t0 = taskNow(); sel.value = (t0 && t0.client) || '';
-      v = ((await ui.promptText({ title: 'New client', label: 'Client name', confirmLabel: 'Add client' })) || '').replace(/\s+/g, ' ').trim();
-      if (!v || editing !== id) return;
-      const known = state.clients.find(c => c.toLowerCase() === v.toLowerCase()); if (known) v = known;
-      edit(id, (t, n) => { if (!n.clients.some(c => c.toLowerCase() === v.toLowerCase())) n.clients.push(v); t.client = v; }, `New client: ${v}`);
-      return;
-    }
-    edit(id, t => { t.client = v; if (v && t.project) { const pr = projectById(t.project); if (pr && pr.client && pr.client !== v) t.project = ''; } }, `Client: ${titleOf(id)}`);
-  };
-  $('cProject').onchange = async e => {
-    const sel = e.target, v = sel.value, t0 = taskNow(), id = editing;
-    if (v === '__new') {
-      sel.value = (t0 && t0.project) || '';
-      const client = (t0 && t0.client) || '';
-      const name = ((await ui.promptText({ title: 'New project', label: 'Project name', body: client ? `The project belongs to ${client}.` : undefined, confirmLabel: 'Add project' })) || '').replace(/\s+/g, ' ').trim();
-      if (!name || editing !== id) return;
-      const pr = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
-      edit(id, (t, n) => { n.projects = n.projects || []; n.projects.push(pr); if (client && !n.clients.includes(client)) n.clients.push(client); t.project = pr.id; if (client) t.client = client; }, `New project: ${name}`);
-      return;
-    }
-    edit(id, t => { t.project = v; const pr = projectById(v); if (pr && pr.client && !t.client) t.client = pr.client; }, `Project: ${titleOf(id)}`);
-  };
+  function renderTaskWork(t) {
+    const b = $('cWorkPick'), pr = projectById(t.project); b.textContent = '';
+    const text = el('span', 'dworkpick__text');
+    text.append(el('strong', null, t.client || (pr && pr.client) || 'No client'), el('span', null, pr ? pr.name : 'No project'));
+    b.append(text, ui.icon('chevron-right'));
+    b.setAttribute('aria-label', `Client and project: ${t.client || (pr && pr.client) || 'none'}, ${pr ? pr.name : 'none'}. Change`);
+  }
+  let taskWorkSheet = null;
+  function openTaskWorkPicker() {
+    const t0 = taskNow(); if (!t0 || taskWorkSheet) return;
+    const id = t0.id, original = { client: t0.client || '', project: t0.project || '' };
+    let client = original.client, project = original.project, newClient = '', newProject = null;
+    const intro = el('p', 'ui-sheet__text', 'Choose a client first, then choose one of its projects.');
+    const clients = el('div', 'dworkchoices'), projects = el('div', 'dworkchoices');
+    const clientCol = el('section', 'dworkcol'), projectCol = el('section', 'dworkcol');
+    clientCol.append(el('h3', null, 'Client'), clients); projectCol.append(el('h3', null, 'Project'), projects);
+    const cols = el('div', 'dworkcols'); cols.append(clientCol, projectCol);
+    const body = el('div', 'dworkpicker'); body.append(intro, cols);
+    const choice = (label, meta, selected, click) => {
+      const b = el('button', 'dworkchoice' + (selected ? ' selected' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(selected)); b.onclick = click;
+      b.append(el('strong', null, label)); if (meta) b.append(el('span', null, meta)); return b;
+    };
+    const render = () => {
+      clients.textContent = ''; projects.textContent = '';
+      clients.append(choice('No client', '', !client, () => { client = ''; const p = projectById(project) || (newProject && newProject.id === project ? newProject : null); if (p && p.client) project = ''; render(); }));
+      [...new Set([...state.clients, newClient].filter(Boolean))].sort((a, b) => a.localeCompare(b)).forEach(name => clients.append(choice(name, '', client === name, () => { client = name; const p = projectById(project) || (newProject && newProject.id === project ? newProject : null); if (p && p.client && p.client !== client) project = ''; render(); })));
+      const addClient = choice('Add a new client', '', false, async () => {
+        let name = ((await ui.promptText({ title: 'New client', label: 'Client name', confirmLabel: 'Add client' })) || '').replace(/\s+/g, ' ').trim();
+        if (!name || editing !== id || !taskWorkSheet) return; const known = state.clients.find(c => c.toLowerCase() === name.toLowerCase()); if (known) name = known;
+        newClient = name; client = name; project = ''; render();
+      }); addClient.classList.add('dworkchoice--add'); addClient.prepend(ui.icon('plus')); clients.append(addClient);
+      projects.append(choice('No project', '', !project, () => { project = ''; render(); }));
+      const available = sortedProjects().filter(p => !client || p.client === client); if (newProject && (!client || newProject.client === client)) available.push(newProject);
+      available.forEach(p => projects.append(choice(p.name, [p.client, p.status && p.status !== 'active' ? p.status : ''].filter(Boolean).join(' · '), project === p.id, () => { project = p.id; if (p.client) client = p.client; render(); })));
+      const addProject = choice('Add a new project', '', false, async () => {
+        const name = ((await ui.promptText({ title: 'New project', label: 'Project name', body: client ? `The project belongs to ${client}.` : 'You can add a client first, or create a project without one.', confirmLabel: 'Add project' })) || '').replace(/\s+/g, ' ').trim();
+        if (!name || editing !== id || !taskWorkSheet) return;
+        newProject = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() }; project = newProject.id; render();
+      }); addProject.classList.add('dworkchoice--add'); addProject.prepend(ui.icon('plus')); projects.append(addProject);
+    };
+    const cancel = ui.button({ label: 'Cancel', variant: 'secondary', onClick: () => taskWorkSheet && taskWorkSheet.close() });
+    const apply = ui.button({ label: 'Apply', variant: 'primary' }); apply.id = 'cWorkDone';
+    taskWorkSheet = ui.sheet({ title: 'Client and project', body, footer: [cancel, apply], side: 'center', removeOnClose: true, onClose: () => { taskWorkSheet = null; } });
+    taskWorkSheet.el.classList.add('dworksheet');
+    apply.onclick = async () => {
+      if (editing !== id) { taskWorkSheet.close(); return; }
+      const keepNewProject = !!(newProject && project === newProject.id), keepNewClient = !!(newClient && (client === newClient || (keepNewProject && newProject.client === newClient)));
+      if (client === original.client && project === original.project && !keepNewClient && !keepNewProject) { taskWorkSheet.close(); return; }
+      const ok = await edit(id, (t, n) => {
+        if (keepNewClient && !n.clients.some(c => c.toLowerCase() === newClient.toLowerCase())) n.clients.push(newClient);
+        if (keepNewProject) { n.projects = n.projects || []; if (!n.projects.some(p => p.id === newProject.id)) n.projects.push(newProject); }
+        t.client = client; t.project = project;
+      }, `Client and project: ${titleOf(id)}`);
+      if (ok && taskWorkSheet) taskWorkSheet.close();
+    };
+    render(); taskWorkSheet.open();
+  }
   const syncDue = (v, t) => paintDate('cDue', v, { done: !!t && isDoneTask(t) });   // overdue is red, today amber; a done task is never late
   $('cDue').onchange = e => { const v = e.target.value; syncDue(v, taskNow()); edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
   $('cDueClear').onclick = () => { $('cDue').value = ''; syncDue(''); edit(editing, t => { t.due = ''; }, `Clear due: ${titleOf(editing)}`); };
@@ -2542,32 +2576,43 @@ if (typeof window !== 'undefined') (() => {
     });
     const claim = activeClaim(t); if (claim) { const a = ui.pill({ text: agentLabel(claim), icon: 'bot', tone: 'accent' }); a.title = 'This agent is working on the task'; box.append(a); }
   }
-  // Waiting (kit v43): one small editor in the drawer. Set: what or whom it waits on, optionally a member and a chase day.
+  // Waiting (kit v43): a concise summary in the drawer opens a focused sheet. Set what or whom it waits on,
+  // optionally a member and a follow-up day. Keeping this out of the property grid stops a phone keyboard crushing it.
   // Clear ends it as keeptrack.py unwait does: a claim the wait blocked runs again, or goes back to To do once it is stale.
-  let waitForm = '';   // the card whose wait form is open, so a background sync does not wipe what is being typed
-  function renderWaiting(t, force) {
-    const box = $('cWaitVal'); if (!force && waitForm === t.id) return; waitForm = ''; box.textContent = ''; const w = waitingOf(t);
+  let waitSheet = null;
+  function renderWaiting(t) {
+    const box = $('cWaitVal'); box.textContent = ''; const w = waitingOf(t);
     if (w) {
       const chase = chaseDate(w), p = ui.pill({ text: `${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} · since ${w.since || '?'}${chase ? ' · chase ' + chase : ''}`, icon: 'alarm-clock',
-        tone: chaseNow(t) ? 'warn' : 'neutral', removeLabel: 'Clear the wait', onRemove: () => clearWait(t.id) });
+        tone: chaseNow(t) ? 'warn' : 'neutral', onClick: () => openWaitSheet(t), removeLabel: 'Clear the wait', onRemove: () => clearWait(t.id) });
       p.id = 'cWaitPill'; if (w.note) p.title = w.note; box.append(p); return;
     }
     if (t.column === doneColId()) { box.append(el('span', 'muted', '—')); return; }
-    box.append(ghostAdd('cWaitAdd', 'Add', 'Mark this task as waiting on someone or something', () => {
-      waitForm = t.id; box.textContent = '';
-      const on = el('input', 'ui-input'); on.id = 'cWaitOn'; on.placeholder = 'Waiting on (e.g. Acme finance)'; on.setAttribute('aria-label', 'Waiting on'); on.maxLength = 200;
-      const who = el('select', 'ui-input'); who.id = 'cWaitWho'; who.setAttribute('aria-label', 'Who (optional)'); fillSelect(who, [['', 'Who (optional)'], ...state.people.map(p => [p.github, p.name || '@' + p.github])]);
-      const nudge = el('input', 'ui-input'); nudge.id = 'cWaitNudge'; nudge.type = 'date'; nudge.setAttribute('aria-label', 'Chase on (optional)'); nudge.title = `Chase on (optional; default ${waitingDays() ? waitingDays() + ' days from today' : 'none'})`;
-      const set = ui.button({ label: 'Set', size: 'sm' }); set.id = 'cWaitSet'; const cancel = ui.button({ label: 'Cancel', variant: 'ghost', size: 'sm' });
-      set.onclick = () => { const id = t.id; waitForm = ''; setWait(id, on.value, who.value, nudge.value); };
-      cancel.onclick = () => { waitForm = ''; renderWaiting(taskNow() || t, true); };
-      on.addEventListener('keydown', e => { if (e.key === 'Enter') set.click(); if (e.key === 'Escape') { e.stopPropagation(); cancel.click(); } });
-      box.append(on, who, nudge, set, cancel); on.focus();
-    }));
+    box.append(ghostAdd('cWaitAdd', 'Add wait', 'Mark this task as waiting for someone or something', () => openWaitSheet(t)));
+  }
+  function openWaitSheet(t) {
+    if (waitSheet) return; const id = t.id, w = waitingOf(t) || {};
+    const intro = el('p', 'ui-sheet__text', 'Use this when progress depends on a person, decision, or event. The task keeps its current status.');
+    const form = el('form', 'dwaitform'); form.noValidate = true;
+    const field = (label, input) => { const f = el('label', 'ui-field'), lab = el('span', 'ui-field__label', label); f.append(lab, input); return f; };
+    const on = el('input', 'ui-input'); on.id = 'cWaitOn'; on.placeholder = 'e.g. Acme finance to confirm'; on.setAttribute('aria-label', 'Waiting for'); on.maxLength = 200; on.value = w.on || ''; on.enterKeyHint = 'done';
+    const who = el('select', 'ui-input'); who.id = 'cWaitWho'; who.setAttribute('aria-label', 'Person (optional)'); fillSelect(who, [['', 'No person'], ...state.people.map(p => [p.github, p.name || '@' + p.github])]); who.value = w.who || '';
+    const nudge = el('input', 'ui-input'); nudge.id = 'cWaitNudge'; nudge.type = 'date'; nudge.setAttribute('aria-label', 'Follow up on (optional)'); nudge.value = w.nudge || ''; nudge.title = `Optional; otherwise ${waitingDays() ? waitingDays() + ' days from today' : 'there is no automatic follow-up day'}`;
+    form.append(intro, field('Waiting for', on), field('Person (optional)', who), field('Follow up on (optional)', nudge));
+    const cancel = ui.button({ label: 'Cancel', variant: 'secondary', onClick: () => waitSheet && waitSheet.close() });
+    const set = ui.button({ label: w.on ? 'Update wait' : 'Set waiting', variant: 'primary', type: 'submit' }); set.id = 'cWaitSet';
+    waitSheet = ui.sheet({ title: 'What is this task waiting for?', body: form, footer: [cancel, set], side: 'center', removeOnClose: true, onClose: () => { waitSheet = null; } });
+    waitSheet.el.classList.add('dwaitsheet');
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); if (!on.value.trim()) { toast('Say what or whom the task is waiting for', true); on.focus(); return; }
+      const ok = await setWait(id, on.value, who.value, nudge.value); if (ok && waitSheet) waitSheet.close();
+    });
+    set.onclick = () => form.requestSubmit();
+    waitSheet.open(); on.focus(); on.select();
   }
   function setWait(id, on, who, nudge) {
-    on = String(on || '').replace(/\s+/g, ' ').trim().slice(0, 200); if (!on) { toast('Say what or whom the task is waiting on', true); renderWaiting(taskNow(), true); return; }
-    edit(id, (t, n) => {
+    on = String(on || '').replace(/\s+/g, ' ').trim().slice(0, 200); if (!on) return false;
+    return edit(id, (t, n) => {
       const old = waitingOf(t);
       t.waiting = { on, who: who || '', since: (old && old.since) || todayIso(), nudge: DAY_RE.test(nudge || '') ? nudge : '', note: (old && old.note) || '', by: cfg().me || 'someone', by_session: '' };
       if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= WAITING_KIT)) n.settings.min_kit = WAITING_KIT;   // tells v43+ tools (doctor, relay) a card relies on it
@@ -2714,18 +2759,14 @@ if (typeof window !== 'undefined') (() => {
   function fillDrawer(t, force) {
     { const nb = $('dNum'); nb.querySelector('.ui-pill__text').textContent = '#' + t.num; nb.title = `Task #${t.num}: copy a link to it`; nb.setAttribute('aria-label', `Task #${t.num}, copy link`); }
     const set = (x, v) => { if ((force || document.activeElement !== x) && x.value !== v) x.value = v; };
-    const cl = [...new Set([...state.clients, t.client].filter(Boolean))];
-    if (force || $('cClient').options.length !== cl.length + 2) fillSelect($('cClient'), [['', '(none)'], ...cl.map(c => [c, c]), ['__new', '＋ New client…']]);
-    const prOpts = [['', '(none)'], ...sortedProjects().filter(p => !t.client || p.client === t.client).map(p => [p.id, projectPickerLabel(p)]), ['__new', '＋ New project…']];
-    if (force || $('cProject').options.length !== prOpts.length) fillSelect($('cProject'), prOpts);
     if (force) { fillSelect($('cCol'), state.columns.map(c => [c.id, c.name])); }
-    set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cClient'), t.client || ''); set($('cProject'), t.project || ''); set($('cDue'), t.due || '');
+    set($('cCol'), t.column); set($('cPrio'), t.priority || 'medium'); set($('cDue'), t.due || '');
     { const who = completionOf(t), old = $('cCompletedBy'); if (old) old.remove();
       if (who) { const p = ui.pill({ text: 'Completed by ' + who.label, icon: 'circle-check', tone: who.agent ? 'accent' : 'ok' }); p.id = 'cCompletedBy'; p.title = who.at ? fmtStamp(who.at) : ''; $('cStatusVal').append(p); } }
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderWaiting(t, force); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
+    renderWaiting(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
