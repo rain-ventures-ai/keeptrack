@@ -63,6 +63,19 @@ python3 board/keeptrack.py heartbeat <id> --status blocked --note "<exactly what
 ```
 Then tell the human in your reply.
 
+## 4b. Waiting on a person or an event
+When the work is parked on someone (a decision, an approval, a reply) or on an event (DNS, a release), park the card
+instead of guessing: `wait`, a comment with `@<owner>` and the question, `assign` it to them, then stop.
+```bash
+python3 board/keeptrack.py wait <id> --on "Oliver: approve the quote" --who <login-or-p_id> [--nudge +3] [--note "<asked how>"]
+python3 board/keeptrack.py comment <id> "@<owner> <the question>"
+python3 board/keeptrack.py assign <id> <owner> --note "waiting on your decision"
+```
+`wait` blocks your own claim in the same save. A waiting card can't be claimed (`--force` does not change that), and
+`heartbeat --status running` is refused while it waits. Never `unwait` a wait you did not set in this session, or one
+on someone else (`--who`): a person ends those. Never clear a wait to get past a refusal: comment and stop. Never
+message the other party yourself. `list --waiting` lists waiting cards; `list --waiting-on me` those waiting on you.
+
 ## 5. Finish
 ```bash
 python3 board/keeptrack.py done <id> --note "<result and link to the file/PR>"
@@ -81,7 +94,8 @@ To change a task after it exists (title, details, priority, due, labels, client,
 `unlink`. To change the board's labels, clients, members or settings, use the `board-admin` skill. Never edit JSON.
 
 ## Checking on others
-`python3 board/keeptrack.py list --attention` lists stale, stuck and blocked claims.
+`python3 board/keeptrack.py list --attention` lists stale, stuck and blocked claims, waiting cards due for a chase and
+cards where an agent run cleared or overrode a wait this week. `today` shows a CHASE NOW group.
 
 ## Check the board
 Run `python3 board/keeptrack.py doctor` after a migration or when the board shows an error. Use the `board-doctor` skill before you run `doctor --fix`.
@@ -125,11 +139,11 @@ A routine run starts with a `routine-fire-payload` naming a task number (`#N`) a
 2. `python3 board/keeptrack.py claim '#N' --for <user> --agent claude --session "$BOARD_SESSION" --note "working"` (the page's placeholder claim for you is replaced; if the claim is refused because another session or the board's agent limit holds it, comment that on the card and stop).
 3. `keeptrack.py show '#N'` and `keeptrack.py comments '#N'`; do what the newest `@claude` comment from that user asks, and nothing beyond it.
 4. Keep the card honest while you work: `heartbeat '#N' --note "..."`, `todo-add` / `todo-done` for steps, `comment '#N'` for anything a human should read, `link '#N' <PR url> --title "PR"` for pull requests, `move '#N' <column>` for status.
-5. Need a decision, access or review? `comment` with `@<user>` and the question, `assign '#N' <user> --note "why"`, then stop. Never guess.
+5. Need a decision, access or review? `wait '#N' --on "<who: what>" --who <user>`, `comment` with `@<user>` and the question, `assign '#N' <user> --note "why"`, then stop. Never guess, and never `unwait` a wait you did not set.
 6. Finish: `comment` the outcome, `assign '#N' <user>`, `done '#N' --note "<result>"`. `done` is refused while checklist items are open: tick them, or `done '#N' --cancel --note "<why>"` when they are being dropped.
 
 ### Command cheat sheet
-`list` (`--label X` for one label), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members are listed by `keeptrack.py members`; CRM people are separate records.
+`list` (`--label X` for one label, `--waiting`, `--waiting-on me`), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `wait`, `unwait`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members are listed by `keeptrack.py members`; CRM people are separate records.
 
 ## Archive (old items)
 Old done tasks, Lost people and long histories move to `board/archive/<year>.json` with `python3 board/keeptrack.py archive` (`--dry-run` first). Search them with `archived -q "<words>"`, and bring one back with `unarchive '#N'`. The board file keeps an index in `archive.files`; do not edit archive files by hand.

@@ -14,7 +14,7 @@ Every CLI and web-board write re-reads the latest board files and retries on a c
 2. Settings → check the file path is `board/tasks.json`, add your GitHub username and a **fine-grained token** limited to this repo with **Contents: Read and write**; the Settings dialog links to GitHub's token page with the name, expiry and permission pre-filled.
 3. Drag cards between columns, or use ◀ ▶. Double-click or **Edit** for the full card.
 
-Filters: client, **project**, assignee (including "Claimed by an agent"), label, priority, **Needs attention** (overdue, or an agent claim that is stale/stuck/blocked), hide done.
+Filters: client, **project**, assignee (including "Claimed by an agent"), label, priority, **Needs attention** (overdue, or an agent claim that is stale/stuck/blocked), **Waiting** (cards parked on a person or event), hide done.
 
 ## Split storage (schema 4)
 
@@ -82,6 +82,8 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // v3 optional "stages": ["New", "Contacted", "Talking", "Proposal", "Won", "Lost"] = pipeline stages for people (this is the default)
                                                  // optional "archive": { "done_days": 90, "lost_days": 180, "keep_history": 20 } = archive rules
                                                  // optional "kit_owner": "github-user" = whose Claude upgrades the board kit (default: first person)
+                                                 // v43 optional "waiting_days": 7 = chase a wait with no nudge date this many days after it began (0 = off)
+                                                 // v43 optional "min_kit": 43 = the oldest kit that understands every field on the cards (set by the first `wait`; only rises)
   "columns": [{ "id": "todo", "name": "To do" }, ...],
   "people":  [{ "github": "osouthgate", "name": "Oliver" }, { "github": "JezHub", "name": "Jez" }],
                                                  // v28 optional on each member: "emails": ["a@example.com", "a@example.org"], "timezone": "Europe/London"
@@ -116,6 +118,8 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
     "contacts": [{ "name": "…", "role": "…", "email": "…", "phone": "…" }],
     "claim": null,                                 // see below
     "last_run": null,                              // set by `done`: the finished claim, shown as one "Last run" line
+    "waiting": null,                               // v43, see "Waiting for" below
+    "agent_cleared": [],                           // v43, optional: newest 20 {what, by, session, at} where an agent run ended or overrode a wait
     "created": "…", "createdBy": "osouthgate", "updated": "…", "updatedBy": "osouthgate"
   }]
 }
@@ -164,6 +168,26 @@ When an agent picks up a task it writes (and keeps refreshing) a `claim`, so any
 The board shows each claim on the card (green running, amber stale/blocked, red stuck) and the card's edit dialog shows every field. A human can **Mark stuck** or **Release claim** from the board.
 
 When the agent runs `done`, the claim is removed (no banner is left on the card) and kept as `last_run`: `{agent, on_behalf_of, session_id, session_url, started_at, finished_at, note}`. The card's drawer shows it as a single "Last run" line with the session link; the history also records it. `session_url` is filled automatically in Claude cloud sessions (from `CLAUDE_CODE_REMOTE_SESSION_ID`) or by the web page when it started the run; older claims with `status: "done"` are shown the same way.
+
+### Waiting for (kit v43)
+A card parked on a person or an event carries `waiting` (null or absent when it is not waiting):
+```jsonc
+"waiting": { "on": "Acme finance (quote approval)",   // free text, always shown
+             "who": "p_ab12cd34",                     // optional: a CRM person id, a board member's login or an agent name
+             "since": "2026-10-12", "nudge": "2026-10-16",   // nudge = the day to chase; none: since + settings.waiting_days
+             "note": "asked by email on the 12th", "by": "claude@osouthgate",
+             "by_session": "9f2a41c07b3d" }           // first 12 hex of a sha256 of the session id that set it (not a secret)
+```
+`wait ID --on .. [--who ..] [--nudge +3|date] [--note ..]` sets it and `unwait ID --note ..` ends it; `done` and
+`move ID done` end it too, and history keeps it. The card stays in its column and `due` is untouched. A waiting card is
+not claimable: `claim` refuses it and `next` skips it, with or without `--force`. If the card has a running claim,
+`wait` blocks that claim (`blocked_by_wait: true`, heartbeat time untouched) when it is the claim's own session or a
+person (no `BOARD_AGENT`); such a claim never goes stale, and only its own session, a person or `--force` releases it.
+`unwait` runs a young blocked claim again (counted against `max_agent_claims` unless attended) and releases one older
+than the stale limit to To do. An agent run may `unwait` only a wait it set in the same session whose `who` is empty or
+the agent itself. These rules are advisory: anything with write access to the repo can edit a card, so the kit records
+what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `CLAIM_BLOCKED`, `KIT_OLD` and
+`MIN_KIT_LOWERED`. The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.
 
 ## People (schema 3)
 Schema 3 (migration step 2 to 3) adds the Keeptrack CRM: `contacts` (default `[]`), `client_info` (default `{}`) and `settings.stages` (default New, Contacted, Talking, Proposal, Won, Lost). A person in `contacts`:
@@ -220,6 +244,8 @@ You work from the team board in `board/` using `board/keeptrack.py` (`board/task
    - You may only claim tasks assigned to the human you work for. A fresh claim by another session is refused.
 3. While working:  keeptrack.py heartbeat <id> --note "<what you are doing>"      # at least every 15 minutes (not for --attended)
    If blocked:     keeptrack.py heartbeat <id> --status blocked --note "<why>"
+   Need a person:  keeptrack.py wait <id> --on "<who: what>" --who <user>; comment @<user> with the question; assign <id> <user>; stop
+                   (never unwait a wait you did not set in this session, or one on someone else: a person ends it)
 4. Finish:         keeptrack.py done <id> --note "<result, PR link>"            # or: keeptrack.py release <id> --column todo
 Never edit board JSON files by hand; always go through `keeptrack.py` so conflicts are handled.
 ```

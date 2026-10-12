@@ -187,6 +187,29 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(expected_widgets, read_json(os.path.join(board_dir, "widgets.json")))
         self.assertEqual(expected_person["comments"], read_json(os.path.join(board_dir, "people", "p_acme.json"))["comments"])
 
+    def test_v43_waiting_and_min_kit_survive_kit_update_save_and_doctor(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit43", "fixture.json"))
+        board_dir, _ = self.use_fixture("v4_kit43", meta)
+        card = read_json(os.path.join(board_dir, "cards", "t_first.json"))
+        settings = read_json(os.path.join(board_dir, "tasks.json"))["settings"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        first = next(t for t in data["tasks"] if t["id"] == "t_first")
+        for field in ("waiting", "agent_cleared", "claim"):
+            self.assertEqual(card[field], first[field], field)
+        first["details"] += " Updated fixture."
+        self.assertTrue(kt.save_changes(data, message="Waiting fixture roundtrip"))
+        saved = read_json(os.path.join(board_dir, "cards", "t_first.json"))
+        for field in ("waiting", "agent_cleared", "claim"):
+            self.assertEqual(card[field], saved[field], field)
+        self.assertEqual(settings, read_json(os.path.join(board_dir, "tasks.json"))["settings"])
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual(0, code, issues)
+        codes = {x["code"] for x in issues}
+        self.assertFalse(codes & {"KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "WAITING"}, issues)
+        self.assertIn("AGENT_CLEARED", codes)   # the fixture's override stays visible to doctor
+
 
 if __name__ == "__main__":
     unittest.main()

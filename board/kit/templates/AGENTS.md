@@ -20,6 +20,7 @@ python3 board/keeptrack.py list --assignee $BOARD_USER --column todo --unclaimed
 python3 board/keeptrack.py claim <id> --note "starting: <plan in one line>"        # claim (id prefix is fine)
 python3 board/keeptrack.py heartbeat <id> --note "<what you are doing now>"        # at least every 15 minutes
 python3 board/keeptrack.py heartbeat <id> --status blocked --note "<why>"          # if you need a human
+python3 board/keeptrack.py wait <id> --on "<who: what>" --who <user>               # parked on a person or event: then comment @user, assign, stop
 python3 board/keeptrack.py done <id> --note "<result, PR or file link>"            # finished
 python3 board/keeptrack.py release <id> --column todo                              # giving up / handing back
 python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM-DD --client "<client>" --details "<text>"
@@ -29,7 +30,7 @@ python3 board/keeptrack.py todo-edit <id> <N> "reworded step"                   
 python3 board/keeptrack.py comment <id> "text"                                     # talk to the team on the card
 python3 board/keeptrack.py comments <id>                                           # read the comment stream
 python3 board/keeptrack.py history <id>                                            # who did what on the card
-python3 board/keeptrack.py list --attention                                        # stale / stuck / blocked claims
+python3 board/keeptrack.py list --attention                                        # stale / stuck / blocked claims, waits to chase
 ```
 Auth: `gh` logged in with access to this repo, or (cloud sandboxes, CI, no `gh`) set `BOARD_TOKEN` to a fine-grained token with Contents: Read and write on this repo; `keeptrack.py` then calls the GitHub API directly.
 

@@ -25,6 +25,27 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v43 (schema 4)
+Adds **waiting-for**: a card can be parked on a person or an event (`waiting`: on, who, since, nudge, note, by,
+by_session), and a board flag, `settings.min_kit`. No data migration: the board stays on schema 4, and older tools read
+every card and keep the new fields when they save. The first `wait` (or a wait set in the v43 web page) sets
+`settings.min_kit` to 43. From v43, `doctor` warns `KIT_OLD` when a copy's kit is older than that, `MIN_KIT_LOWERED`
+when the value is lower than the cards need, `CLAIM_BLOCKED` when a waiting card holds a claim `wait` did not block,
+and `AGENT_CLEARED` when an agent run cleared or overrode someone else's wait. Two kits writing `min_kit` at once keep
+the higher value (it merges as a maximum, in `keeptrack.py` and in the page).
+- Run `kit-update` only. There is no migration, and no `min_kit` is written by the upgrade itself.
+- **Upgrade every copy before anyone uses `wait`:** this repo (`board-upgrade`), plugin copies, relay, routines' clones
+  and a hard refresh of the hosted page. An older `claim` or `next` does not know that a waiting card is not claimable,
+  and an older page offers "Assign to Claude" on one. The flag detects this after the fact (`doctor`); it does not
+  prevent it.
+- Agents: when a human decision is needed, `wait` the card, comment with `@owner`, `assign` it to them and stop. Never
+  `unwait` a wait you did not set in the same session, or one on someone else; a person ends those (web page, or a
+  shell with no `BOARD_AGENT`). The new routine prompt and board skill say so; check any repo-specific prompt that
+  copies older wording.
+- Optional: `settings-set --waiting-days N` (default 7; 0 turns the automatic chase off).
+- Check: `keeptrack.py help tasks` lists `wait` and `unwait`; `keeptrack.py settings` shows `waiting_days` and
+  `min_kit`; `keeptrack.py doctor` shows no `KIT_OLD`.
+
 ### v42 (schema 4)
 Adds the Review Inbox. No data change. The Inbox is off until a board turns it on, and it needs split storage
 (schema 4). Turning it on does not create, change or start any routine or schedule.
