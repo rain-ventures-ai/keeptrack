@@ -60,6 +60,7 @@ class Github {
     if (p === '/user') return json({ login: 'alex' });
     if (p.startsWith('/user/repos')) return json([]);
     if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
+    if (p === '/contents/board/KIT_VERSION' && method === 'GET') return route.fulfill({ status: 200, body: '42\n' });
     if (p.startsWith('/contents/board/tasks.json') && method === 'GET') return json({ sha: this.sha('tasks.json'), size: this.files['tasks.json'].length, encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') });
     if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON();
       if ((b.sha || null) !== (this.files[rel] ? this.sha(rel) : null)) return json({ message: 'sha does not match' }, 409);
@@ -140,13 +141,25 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
 
     await inbox(page);
     const groups = await page.locator('.inbox__src').allTextContents();
-    assert.equal(groups.length, 2, 'grouped by source: the meeting and the email'); assert(groups.some(g => /Meeting: Acme weekly/.test(g))); assert(groups.some(g => /Email: an email/.test(g)));
-    assert.equal(await page.locator('.inbox__run').count(), 2, 'and by extraction run');
+    assert.equal(groups.length, 2, 'grouped by source: the meeting and the email'); assert(groups.some(g => /Acme weekly/.test(g))); assert(groups.some(g => /Email/.test(g)));
+    assert.equal(await page.locator('.inbox__technical').filter({ hasText: 'Source revision: 7' }).getAttribute('open'), null, 'revision retained behind collapsed import details');
+    if (process.env.INBOX_REVIEW_SCREENSHOT) await page.screenshot({ path: process.env.INBOX_REVIEW_SCREENSHOT, fullPage: true });
     const createCard = propCard(page, 'r_create0001');
     assert.match(await createCard.textContent(), /Owner\s*alex/); assert.match(await createCard.textContent(), /Due\s*2026-10-20/);
-    assert.match(await propCard(page, 'r_editme0001').textContent(), /OwnerNot stated/, 'an owner that the source did not state is shown as not stated');
+    assert.match(await propCard(page, 'r_editme0001').textContent(), /OwnerUnassigned/, 'new tasks explicitly unassigned');
+    assert.match(await propCard(page, 'r_update0001').textContent(), /OwnerUnchanged/, 'omitted update owner stays unchanged');
     assert.match(await propCard(page, 'r_merge00001').textContent(), /Looks like: Second/);
     assert.match(await propCard(page, 'r_update0001').locator('table').textContent(), /priority\s*medium\s*high/, 'updates show current against proposed');
+    api.edit('proposals/r_update0001.json', p => { p.source.revision = 'long-technical-revision-' + 'x'.repeat(120); p.change.comments = [{ text: 'Share the revised client summary with the team.' }]; });
+    api.edit('cards/t_first.json', t => { t.comments = [{ text: 'Earlier context remains available. '.repeat(30) }]; });
+    await page.locator('#btnRefresh').click(); await page.waitForTimeout(250); await inbox(page);
+    const addition = propCard(page, 'r_update0001');
+    assert.match(await addition.textContent(), /Add comments/); assert.match(await addition.textContent(), /Existing entries are kept/);
+    assert.equal(await addition.locator('.prop__context').getAttribute('open'), null);
+    if (process.env.INBOX_REVIEW_SCREENSHOT) {
+      await addition.scrollIntoViewIfNeeded(); await page.screenshot({ path: process.env.INBOX_REVIEW_SCREENSHOT, fullPage: true });
+      await page.evaluate(() => window.kbTheme.set('dark')); await page.waitForTimeout(250); await page.screenshot({ path: process.env.INBOX_REVIEW_SCREENSHOT.replace('.png', '-dark.png'), fullPage: true }); await page.evaluate(() => window.kbTheme.set('light'));
+    }
     // Filters: type and source.
     await page.selectOption('[data-filter="kind"]', 'contact.touch'); assert.equal(await page.locator('article.prop').count(), 1); await page.selectOption('[data-filter="kind"]', '');
     await page.selectOption('[data-filter="source"]', 'email'); assert.equal(await page.locator('article.prop').count(), 1); await page.selectOption('[data-filter="source"]', '');
@@ -245,12 +258,23 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       await a.close(); await b.close(); }
 
     // Phone width: no sideways scrolling, buttons large enough to tap, every control named.
-    const phoneApi = new Github(fixture()), phone = await openBoard(browser, phoneApi, { viewport: { width: 390, height: 800 }, mobile: true, view: 'inbox' });
+    const phoneFiles = fixture(); phoneFiles['people/p_alex.json'] = text({ ...person, id: 'p_alex', name: 'Alex Example', github: 'alex' });
+    const update = JSON.parse(phoneFiles['proposals/r_update0001.json']); update.change.comments = [{ text: 'Share the revised client summary with the team.' }]; update.change.links = [{ title: 'Meeting notes', url: 'https://example.invalid/notes/team' }]; phoneFiles['proposals/r_update0001.json'] = text(update);
+    const oldCard = JSON.parse(phoneFiles['cards/t_first.json']); oldCard.comments = [{ text: 'Earlier context remains available. '.repeat(30) }]; phoneFiles['cards/t_first.json'] = text(oldCard);
+    const phoneApi = new Github(phoneFiles), phone = await openBoard(browser, phoneApi, { viewport: { width: 390, height: 800 }, mobile: true, view: 'inbox' });
     await phone.waitForSelector('article.prop');
     await phone.evaluate(() => window.kbLayout.set('dock'));
     await phone.locator('#dock [data-grp="today"]').click();
     await phone.waitForSelector('.treview');
     await phone.locator('#btnInbox').click(); await phone.waitForSelector('article.prop');
+    await phone.setViewportSize({ width: 350, height: 800 });
+    assert(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'Inbox fits 350px');
+    if (process.env.INBOX_REVIEW_PHONE_SCREENSHOT) {
+      await phone.screenshot({ path: process.env.INBOX_REVIEW_PHONE_SCREENSHOT.replace('.png', '-header.png') });
+      await propCard(phone, 'r_update0001').evaluate(e => document.querySelector('#board').scrollTop += e.getBoundingClientRect().top - document.querySelector('#board').getBoundingClientRect().top - 12);
+      await phone.screenshot({ path: process.env.INBOX_REVIEW_PHONE_SCREENSHOT }); await phone.evaluate(() => window.kbTheme.set('dark')); await phone.waitForTimeout(250); await phone.screenshot({ path: process.env.INBOX_REVIEW_PHONE_SCREENSHOT.replace('.png', '-dark.png') });
+      await propCard(phone, 'r_update0001').locator('.prop__actions').scrollIntoViewIfNeeded(); await phone.screenshot({ path: process.env.INBOX_REVIEW_PHONE_SCREENSHOT.replace('.png', '-actions-dark.png') }); await phone.evaluate(() => window.kbTheme.set('light'));
+    }
     await phone.getByRole('button', { name: 'Back to Today', exact: true }).click();
     await phone.waitForSelector('.treview');
     await phone.locator('#btnInbox').click(); await phone.waitForSelector('article.prop');
