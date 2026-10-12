@@ -1198,17 +1198,24 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .inbox__head h2 { margin: 0; font-size: var(--fs-xl); }
 .inbox__count { color: var(--muted); }
 .inbox__hint { margin: 6px 0 12px; }
-.inbox__filters { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 16px; }
+.inbox__filters { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 20px 0; padding: 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg, 10px); }
 .inbox__filter { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
 .inbox__filter select { min-height: 36px; }
 .inbox__group { margin: 0 0 22px; }
-.inbox__src { font-size: var(--fs-lg); margin: 0 0 4px; overflow-wrap: anywhere; }
+.inbox__src { font-size: var(--fs-lg); margin: 0 0 8px; overflow-wrap: anywhere; line-height: 1.4; }
+.inbox__technical { color: var(--muted); font-size: var(--fs-sm); margin: 8px 0 16px; overflow-wrap: anywhere; }
+.inbox__technical summary, .prop__context summary { cursor: pointer; padding: 8px 0; }
+.prop__context { margin-top: 6px; color: var(--muted); }
+.prop__context div { white-space: pre-wrap; max-height: 240px; overflow: auto; padding: 8px; background: var(--bg); border-radius: var(--r-sm, 6px); }
+.prop__changes h5 { font-size: var(--fs-sm); margin: 20px 0 8px; }
 .inbox__gcount { color: var(--muted); font-weight: 400; }
 .inbox__srclink { font-size: var(--fs-sm); }
 .inbox__run { font-size: var(--fs-sm); font-weight: 600; margin: 10px 0 6px; }
 .inbox__list { display: grid; gap: 10px; }
-.prop { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg, 10px); padding: 12px 14px; min-width: 0; }
+.prop { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg, 10px); padding: 20px; min-width: 0; }
 .prop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inbox .ui-btn--ghost { color: var(--text); }
+.prop > .ui-btn { text-align: left; white-space: normal; height: auto; overflow-wrap: anywhere; }
 .prop--accepted, .prop--ignored { opacity: .85; }
 .prop__top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .prop__title { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
@@ -1239,7 +1246,13 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
   .prop__actions .ui-btn { min-height: var(--touch, 44px); flex: 1 1 auto; }
   .inbox__filters { display: grid; grid-template-columns: 1fr 1fr; }
   .inbox__filter { display: grid; }
-  .proptbl tbody th { width: 30%; }
+  .inbox__filter select { min-height: 44px; width: 100%; }
+  .prop { padding: 16px; }
+  .proptbl thead { display: none; }
+  .proptbl tr, .proptbl tbody, .proptbl th, .proptbl td { display: block; width: auto; }
+  .proptbl tbody th { width: auto; padding-top: 14px; }
+  .proptbl td { border: 0; padding: 8px 6px; }
+  .proptbl td::before { content: attr(data-label); display: block; color: var(--muted); font-size: var(--fs-xs); margin-bottom: 4px; }
 }
 /* Today → To review (Review Inbox) */
 .treview__hint { margin: 0 0 12px; font-size: var(--fs-sm); }

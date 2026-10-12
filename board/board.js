@@ -4220,14 +4220,15 @@ if (typeof window !== 'undefined') (() => {
     });
   }
   function proposalChange(p) {   // rows of field / current / proposed
-    const c = p.change || {}, rec = p.target ? findRef(state, p.target) : null, tbl = el('table', 'proptbl');
+    const c = p.change || {}, rec = p.target ? findRef(state, p.target) : null, wrap = el('section', 'prop__changes'), tbl = el('table', 'proptbl');
+    wrap.append(el('h5', null, 'What will change'));
     const hd = el('tr'); hd.append(el('th', null, 'Field')); if (rec) hd.append(el('th', null, 'Current')); hd.append(el('th', null, 'Proposed'));
     const th = el('thead'); th.append(hd); tbl.append(th); const tb = el('tbody');
-    Object.keys(c).forEach(k => { const tr = el('tr'); tr.append(el('th', null, k)); if (rec) tr.append(el('td', null, fmtVal(rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k])));
-      const td = el('td', null, fmtVal(c[k])); if (rec && !LIST_FIELDS.includes(k) && !sameJson(rec[k], c[k])) td.classList.add('propchanged'); tr.append(td); tb.append(tr); });
+    Object.keys(c).forEach(k => { const tr = el('tr'); tr.append(el('th', null, LIST_FIELDS.includes(k) ? 'Add ' + k : k)); if (rec) { const current = el('td'); if (LIST_FIELDS.includes(k)) { current.append(el('span', 'muted', 'Existing entries are kept')); if ((rec[k] || []).length) { const details = el('details', 'prop__context'); details.append(el('summary', null, 'View existing ' + k), el('div', null, fmtVal(rec[k]))); current.append(details); } } else current.textContent = fmtVal(rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k]); tr.append(current); }
+      const td = el('td', null, fmtVal(c[k])); td.dataset.label = LIST_FIELDS.includes(k) ? 'To add' : 'Proposed'; if (rec) tr.children[1].dataset.label = 'Current'; if (rec && !LIST_FIELDS.includes(k) && !sameJson(rec[k], c[k])) td.classList.add('propchanged'); tr.append(td); tb.append(tr); });
     tbl.append(tb);
     if (!Object.keys(c).length) return el('p', 'muted', 'The details of this decided proposal were removed after 30 days.');
-    return tbl;
+    wrap.append(tbl); return wrap;
   }
   const SCALAR_INPUT = { due: 'date', next_due: 'date' };
   function proposalEditForm(p) {
@@ -4281,15 +4282,13 @@ if (typeof window !== 'undefined') (() => {
     top.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm' }), t);
     if (p.status !== 'pending') top.append(ui.pill({ text: p.status === 'accepted' ? 'Accepted' : 'Ignored', tone: p.status === 'accepted' ? 'ok' : 'neutral', size: 'sm' }));
     art.append(top);
-    if (p.target) { const r = findRef(state, p.target); art.append(el('p', 'prop__for', `For: ${r ? (r.title || r.name) : p.target.id + ' (not on the board)'}`)); }
+    if (p.target) { const r = findRef(state, p.target); const link = ui.button({ label: r ? `View ${p.target.type === 'task' && r.num ? '#' + r.num + ' · ' : ''}${r.title || r.name}` : 'Record no longer on board', variant: 'ghost', size: 'sm', onClick: () => { if (r) p.target.type === 'task' ? openCard(r.id) : openContact(r.id); } }); link.disabled = !r; art.append(link); }
     if (p.reason) art.append(el('p', 'prop__reason', p.reason));
     if (p.evidence) art.append(el('p', 'prop__evidence muted', 'Evidence: ' + p.evidence));
     const meta = el('dl', 'prop__meta'), add = (k, v) => { meta.append(el('dt', null, k)); const dd = el('dd'); if (v instanceof Node) dd.append(v); else dd.textContent = v; meta.append(dd); };
-    const s = p.source || {}, srcText = `${SRC_LABEL[s.kind] || 'Source'}${s.title ? ': ' + s.title : ''}${s.date ? ', ' + s.date : ''}`;
-    if (s.url && /^https?:\/\//i.test(s.url)) { const a = el('a', null, srcText); a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; add('Source', a); } else add('Source', srcText);
     const c = p.change || {};
-    if (p.kind.startsWith('task.')) { const who = c.owner || (Array.isArray(c.assignees) ? c.assignees.join(', ') : ''); add('Owner', who || 'Not stated'); add('Due', c.due || 'Not stated'); }
-    else add('Follow-up', c.next_due || c.due || 'Not stated');
+    if (p.kind.startsWith('task.')) { const who = c.owner || (Array.isArray(c.assignees) ? c.assignees.join(', ') : ''); add('Owner', who || (p.kind === 'task.update' && !('owner' in c) && !('assignees' in c) ? 'Unchanged' : 'Unassigned')); add('Due', c.due || (p.kind === 'task.update' && !('due' in c) ? 'Unchanged' : 'No date')); }
+    else add('Follow-up', c.next_due || c.due || (p.target && !('next_due' in c) && !('due' in c) ? 'Unchanged' : 'No date'));
     if (p.reviewer) add('Reviewer', '@' + p.reviewer);
     art.append(meta);
     const flags = el('ul', 'prop__flags');
@@ -4312,13 +4311,14 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderInbox() {
     const board = $('board'), wrap = el('section', 'inbox'); wrap.setAttribute('aria-label', 'Review Inbox'); board.append(wrap);
-    wrap.append(ui.button({ label: 'Back to Today', icon: 'arrow-left', variant: 'secondary', size: 'sm', onClick: () => setView('today') }));
+    wrap.append(ui.button({ label: 'Back to Today', icon: 'arrow-left', variant: 'ghost', size: 'sm', onClick: () => setView('today') }));
     if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }   // outside #board: a re-render must not drop what it announces
     if (!isSplit(state)) { wrap.append(ui.empty({ text: 'The Review Inbox needs split storage (schema 4). See UPGRADING.md.', icon: 'inbox' })); return; }
     if (!inboxOn()) { wrap.append(ui.empty({ text: 'The Review Inbox is off for this board. Turn it on in Settings → Board.', icon: 'inbox' })); return; }
     const all = inboxAll(), head = el('div', 'inbox__head');
     head.append(el('h2', null, 'Review Inbox'), el('span', 'inbox__count', `${all.filter(p => p.status === 'pending').length} pending`)); wrap.append(head);
-    wrap.append(el('p', 'inbox__hint muted', 'Proposals from meetings, email and routines. Nothing here is on the board until you accept it. Keys: j and k move, a accepts, e edits, m merges, i ignores.'));
+    wrap.append(el('p', 'inbox__hint muted', 'Review the evidence and proposed changes. Nothing changes on the board until you accept.'));
+    const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · e edits · m merges · i ignores')); wrap.append(keys);
     const filters = el('div', 'inbox__filters'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', 'Filter proposals');
     const sel = (key, label, opts) => { const l = el('label', 'inbox__filter'), s = el('select'); s.dataset.filter = key; l.append(el('span', null, label), s);
       opts.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; s.append(o); }); s.value = inboxF[key]; if (s.value !== inboxF[key]) s.value = '';
@@ -4336,10 +4336,12 @@ if (typeof window !== 'undefined') (() => {
       if (!g.runs.has(rk)) g.runs.set(rk, { run: p.run, by: p.createdBy, items: [] }); g.runs.get(rk).items.push(p); });
     groups.forEach(g => {
       const sec = el('section', 'inbox__group'), s = g.source, n = [...g.runs.values()].reduce((m, r) => m + r.items.filter(p => p.status === 'pending').length, 0);
-      const h = el('h3', 'inbox__src'); h.append(`${SRC_LABEL[s.kind] || 'Source'}: ${s.title || (s.kind === 'email' ? 'an email' : 'untitled')}${s.date ? ' · ' + s.date : ''}${s.revision ? ' · revision ' + s.revision : ''}`);
+      const h = el('h3', 'inbox__src'); h.append(s.title || (s.kind === 'email' ? 'Email' : 'Untitled source'));
       if (n) h.append(el('span', 'inbox__gcount', ` (${n} pending)`)); sec.append(h);
       if (s.url && /^https?:\/\//i.test(s.url)) { const a = el('a', 'inbox__srclink', 'Open the source'); a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; sec.append(a); }
-      g.runs.forEach(r => { const sub = el('h4', 'inbox__run muted', r.run ? `Run ${r.run.routine || 'routine'}${r.run.at ? ' · ' + whenText(r.run.at) : ''}` : `Added by ${r.by || 'someone'}`); sec.append(sub);
+      sec.append(el('p', 'inbox__run muted', `${SRC_LABEL[s.kind] || 'Source'}${s.date ? ' · ' + s.date : ''}`));
+      const technical = el('details', 'inbox__technical'); technical.append(el('summary', null, 'Import details')); if (s.revision) technical.append(el('p', null, 'Source revision: ' + s.revision)); sec.append(technical);
+      g.runs.forEach(r => { const sub = el('p', 'inbox__run muted', r.run ? `Run ${r.run.routine || 'routine'}${r.run.at ? ' · ' + whenText(r.run.at) : ''}` : `Added by ${r.by || 'someone'}`); technical.append(sub);
         const list = el('div', 'inbox__list'); r.items.forEach(p => list.append(proposalCard(p))); sec.append(list); });
       wrap.append(sec);
     });
