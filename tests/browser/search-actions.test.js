@@ -19,8 +19,14 @@ const server = http.createServer((req, res) => {
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => { localStorage.setItem('kb_tour_seen', '1'); localStorage.setItem('kb_theme', 'sand');
       localStorage.setItem('kb_repo', 'acme/search'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_api', 'https://api.test'); sessionStorage.setItem('kb_view', 'board'); });
+    const makeTask = (id, num, title) => ({ id, num, title, column: 'todo', priority: 'medium', assignees: [], labels: [], comments: [], todos: [], history: [], links: [] });
     const board = { version: 3, columns: [{ id: 'todo', name: 'To do' }], people: [], contacts: [], clients: [], agents: [], labels: [], settings: {},
-      tasks: [{ id: 't_search', num: 1, title: 'Search example card', column: 'todo', priority: 'medium', assignees: [], labels: [], comments: [], todos: [], history: [], links: [] }] };
+      tasks: [makeTask('t_search', 1, 'Search example card'),
+        makeTask('t_new_1', 2, 'Research: personal AI benchmark for testing new models'),
+        makeTask('t_new_2', 3, 'Review new follow-ups from the latest Keeptrack release and record reads'),
+        makeTask('t_new_3', 4, 'Prepare a new proposal with the full heartbeat and feature plan'),
+        makeTask('t_new_4', 5, 'Upgrade the new board tools after checking every shared workspace'),
+        makeTask('t_new_5', 6, 'Plan the next new family bike trip with train and weather options')] };
     await page.route('https://api.test/**', route => { if (route.request().method() !== 'GET') writes++;
       const url = route.request().url();
       if (url.includes('/contents/board/tasks.json')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sha: 'one', encoding: 'base64', content: Buffer.from(JSON.stringify(board)).toString('base64') }) });
@@ -58,6 +64,17 @@ const server = http.createServer((req, res) => {
     await search(''); assert.equal(await page.locator('.qgo').count() > 0, true);
     await page.locator('#qQ').press('ArrowDown'); assert.equal(await page.locator('.qhit:focus').count(), 1);
     await page.locator('#qClose').click();
+    // A phone keyboard leaves little vertical space. Results must retain their content height and scroll, rather than
+    // flex-shrinking until wrapped titles and metadata paint over the next result.
+    await page.setViewportSize({ width: 390, height: 460 }); await search('new');
+    const mobileLayout = await page.locator('#qRes').evaluate(res => {
+      const rows = [...res.querySelectorAll('.qhit')].map(row => { const r = row.getBoundingClientRect(), title = row.querySelector('.qt')?.getBoundingClientRect(), sub = row.querySelector('.qsub')?.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height, contentBottom: Math.max(title?.bottom || 0, sub?.bottom || 0) }; });
+      return { rows, clientHeight: res.clientHeight, scrollHeight: res.scrollHeight };
+    });
+    assert.equal(mobileLayout.rows.length >= 6, true); assert.equal(mobileLayout.scrollHeight > mobileLayout.clientHeight, true, 'phone results scroll when they exceed the available height');
+    mobileLayout.rows.forEach((row, i) => assert.equal(row.contentBottom <= row.bottom, true, `search result ${i + 1} contains its wrapped title and metadata`));
+    mobileLayout.rows.slice(1).forEach((row, i) => assert.equal(row.top >= mobileLayout.rows[i].bottom, true, `search result ${i + 2} does not overlap the previous result`));
+    await page.locator('#qClose').click(); await page.setViewportSize({ width: 1280, height: 720 });
     await search('example card'); await page.getByRole('button', { name: /Search example card/ }).click();
     assert.equal(await page.locator('#dlgCard').evaluate(dialog => dialog.open), true);
     assert.equal(writes, 0); assert.deepEqual(errors, []);
