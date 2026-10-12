@@ -928,6 +928,7 @@ dialog.qsearch[open] { display: flex; }
 @media (max-width: 760px) { dialog.qsearch { margin: 0; width: 100vw; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; } .qhit { padding: 11px 9px; } }
 
 .qres { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 var(--sp-3) 14px; }
+.qres > * { flex: 0 0 auto; }   /* a phone keyboard makes this pane short: scroll full-height rows instead of shrinking their text over each other */
 .qhit { display: grid; grid-template-columns: 22px 1fr auto; gap: 2px var(--sp-3); text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--r-md); padding: 7px 9px; }
 .qhit:hover, .qhit:focus, .qhit.first { background: var(--panel); border-color: var(--border); }
 .qhit .qic { grid-row: span 2; } .qhit .qt { font-weight: 600; } .qhit .qsub { grid-column: 2 / -1; font-size: var(--fs-sm); color: var(--muted); }
