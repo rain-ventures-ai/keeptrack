@@ -296,16 +296,25 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.equal(await inlineSource.getAttribute('href'), meeting.url, 'expanded evidence links to its source');
       assert.match(await inlineSource.getAttribute('rel'), /noopener/, 'new-tab source links cannot control the board');
       await row(second).locator('[data-act="accept"]').focus();
-      const beforeRefresh = await today.evaluate(() => ({ scroll: document.querySelector('#board').scrollTop, id: document.activeElement.closest('.trow').dataset.id, act: document.activeElement.dataset.act }));
+      await today.evaluate(() => {
+        const b = document.querySelector('#board'); window.refreshTrace = [];
+        window.refreshSnapshot = phase => ({ phase, at: performance.now(), scroll: b.scrollTop, height: b.clientHeight, extent: b.scrollHeight,
+          focus: document.activeElement.id || document.activeElement.dataset.act || document.activeElement.tagName,
+          rows: [...b.querySelectorAll('.treview .trow')].map(r => ({ id: r.dataset.id, top: r.getBoundingClientRect().top, height: r.getBoundingClientRect().height, expanded: !!r.querySelector('article.prop') })) });
+        document.querySelector('#btnRefresh').addEventListener('click', () => window.refreshTrace.push(window.refreshSnapshot('click-capture')), true);
+        b.addEventListener('scroll', () => window.refreshTrace.push(window.refreshSnapshot('scroll')));
+      });
+      const beforeRefresh = await today.evaluate(() => window.refreshSnapshot('before-click'));
       todayApi.files['proposals/r_newer0001.json'] = text(prop('r_newer0001', 'task.create', 'New arrival should not displace the current review', { source: { ...meeting, date: '2026-10-13' } })); todayApi.bump();
       await today.locator('#btnRefresh').click();
+      await today.evaluate(() => window.refreshTrace.push(window.refreshSnapshot('after-click')));
       await today.waitForFunction(() => document.querySelector('#inboxBadge')?.textContent === '11');
       await today.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.deepEqual(await order(), initial, 'a newer remote proposal does not reorder the five displayed rows');
       assert.equal(await row(second).locator('article.prop').count(), 1, 'refresh preserves a second expanded review');
-      const afterRefresh = await today.evaluate(() => ({ scroll: document.querySelector('#board').scrollTop, id: document.activeElement.closest('.trow')?.dataset.id, act: document.activeElement.dataset.act }));
+      const afterRefresh = await today.evaluate(() => window.refreshSnapshot('after-render'));
       // The explicit Refresh click owns focus, while the viewport remains on the same reading position.
-      assert(Math.abs(afterRefresh.scroll - beforeRefresh.scroll) < 40, `remote refresh preserves the reading position (${beforeRefresh.scroll} → ${afterRefresh.scroll})`);
+      assert(Math.abs(afterRefresh.scroll - beforeRefresh.scroll) < 40, `remote refresh preserves the reading position: ${JSON.stringify({ beforeRefresh, afterRefresh, trace: await today.evaluate(() => window.refreshTrace.slice(-12)) })}`);
       if (process.env.TODAY_INLINE_SCREENSHOT) {
         for (const width of [1280, 350]) {
           await today.setViewportSize({ width, height: 850 });
