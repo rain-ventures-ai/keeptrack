@@ -4775,6 +4775,8 @@ def _all_proposals(data):
 
 def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
     require_review_storage(data)
+    if not ((data.get("settings") or {}).get("review_inbox") or {}).get("enabled"):
+        proposal_error("The Review Inbox is off for this board. A person can turn it on with: keeptrack.py settings-set review_inbox.enabled true")
     every = _all_proposals(data)
     existing_ids = {p.get("id") for p in every}
     action = {p.get("action_key"): p for p in every}

@@ -85,6 +85,57 @@ meeting is an update or another source for the existing task, not a new task. A 
 link never makes the action new by itself. If the evidence does not distinguish repeated work from a genuinely new
 instance, leave it unchanged and ask rather than creating a possible duplicate.
 
+## When the board has the Review Inbox on
+
+Run `$B settings`. If it shows `review_inbox.enabled: true`, every change from notes goes to the Review Inbox as a
+proposal. Do not write tasks, people or contact logs directly. Proposals are not live work: they are stored in
+`board/proposals/`, and a person accepts them in the web board or with `proposal-accept`. When the setting is off,
+use "Preview, then write" below as before.
+
+Build one JSON list of proposals and add them in one command:
+
+```bash
+$B proposal-add proposals.json --dry-run
+$B proposal-add proposals.json
+```
+
+Each proposal (fictional example):
+
+```json
+{
+  "kind": "task.create",
+  "title": "Send Acme the revised plan",
+  "source": {"kind": "meeting", "id": "<stable document id>", "revision": "<source revision>",
+             "title": "Acme weekly", "date": "2026-10-08", "url": "<link to the notes>"},
+  "run": {"routine": "meeting-notes-<github-owner>", "run_id": "<run id>", "at": "<ISO time>"},
+  "action_key": "<sha256 of document id + normalised outcome + normalised owner>",
+  "work_key": "<sha256 of normalised outcome + owner + client/project>",
+  "reason": "Casey asked for the revised plan and Alex agreed to send it.",
+  "change": {"title": "Send Acme the revised plan", "client": "Acme", "owner": "alex", "due": "2026-10-15"}
+}
+```
+
+- Kinds: `task.create`, `task.update` (with `target: {"type": "task", "id": "<task id>", "base": {<field>: <current value>}}`),
+  `person.upsert` (a new person, or with a person `target` to change fields) and `contact.touch` (a meeting log or
+  follow-up on an existing person; `change.text` is one line).
+- `base` holds the current value of every field the proposal changes. The page uses it to show a conflict if the
+  record changed before someone accepts.
+- Use the same `action_key` and `work_key` as the ingestion log in [references/routines.md](references/routines.md). The
+  action key has no revision or date in it, so an ignored action does not return when the same notes are edited.
+- Prefer explicit commitments over discussion. Search current and archived tasks and people first. When the work
+  already exists, propose a `task.update` or `contact.touch` for that record, not a new task. `proposal-add` also flags
+  records with the same title (and client) or the same email as likely duplicates. Combine one action said several times
+  in one meeting into one proposal.
+- Put `owner`, `assignees` and `due` in `change` only when the notes state them. Never invent an owner, deadline or
+  commitment. Resolve a relative date from the meeting date.
+- `reason` and `evidence` are one short line each (at most 300 characters). Never paste transcript text.
+- `proposal-add` prints `exists <id> <status>` for an action already proposed, accepted or ignored. That is not an error.
+  It never re-adds it. A later meeting that repeats ignored work gets a new proposal that says it was ignored before.
+
+In a chat, show the proposals you added. If the person then says which ones to accept now, run
+`$B proposal-accept <id>` (or `proposal-merge`, `proposal-ignore`) for those only. A scheduled routine never accepts,
+merges or ignores proposals.
+
 ## Preview, then write
 
 First show a compact proposal grouped as:

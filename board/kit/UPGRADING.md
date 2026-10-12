@@ -25,6 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v41 (schema 4)
+Adds the Review Inbox. No data change. The Inbox is off until a board turns it on, and it needs split storage
+(schema 4). Turning it on does not create, change or start any routine or schedule.
+- Run `kit-update` only.
+- To use it, run `python3 board/keeptrack.py settings-set review_inbox.enabled true`, or tick Settings → Board →
+  Review Inbox in the web board. Use the v41 web page: older pages ignore proposal files and show no Inbox.
+- With it on, the notes and email skills add proposals instead of writing to the board. Existing routines keep their
+  register, checkpoint and schedule. Read docs/help/review-inbox.md before turning it on for a shared board.
+- Check: `keeptrack.py help review-inbox` lists the proposal commands, and `keeptrack.py settings` shows
+  `review_inbox.enabled`.
+
 ### v40 (schema 4)
 Board members may explicitly link multiple existing companies with optional `own_companies` in their member record.
 These identity links are never inferred from CRM employers. Linked companies and members are protected from removal

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Review Inbox: a header Inbox button with a pending count (only when the board turns it on) opens a
+  review view grouped by source and run, with filters, current-against-proposed values, Accept, Edit & accept, Merge,
+  Ignore, Leave pending, Undo and Reopen, keyboard keys and a phone layout. Settings → Board has the switch.
+
 - **2026-10-12** — Routine reports distinguish recorded setup, observed completion and unfinished attempts, with
   source/scope/management details and local-time display. A configurable routine setup form copies safe, board-scoped
   prompts without scheduling work. Members can explicitly link their own companies, protected from removal while
@@ -36,6 +40,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [41] — 2026-10-12
+
+- Review Inbox: agents and routines can propose a new task, a task change, a new or changed CRM person, or a contact
+  interaction or follow-up. Proposals live in `board/proposals/<id>.json` (split storage only) and are never live
+  records. New CLI commands: `proposal-add`, `proposals`, `proposal-show`, `proposal-accept`, `proposal-merge`,
+  `proposal-ignore`, `proposal-reopen`, `proposal-undo`. Accept, merge and ignore write the record and the decision in
+  one commit and never apply a proposal twice; a changed target stops for review. Email proposals hold no summary or
+  subject without `--recipients-confirmed`. Decided proposals are slimmed after 30 days and archived by the sweep.
+- The meeting-notes and email skills and their routine guides write proposals when the board turns the Inbox on.
+  The Inbox is off by default; turning it on does not create, change or start any routine or schedule.
 
 ### [40] — 2026-10-12
 

@@ -141,6 +141,15 @@ $B unarchive '#12'            # put a task (or a person id) back on the board
 ```
 Run `archive` when the board file is large (the web board warns at 600 KB), or when the user asks. Before you say a person or task does not exist, also check `archived -q`.
 
+## 5. Review Inbox (when `settings` shows `review_inbox.enabled: true`)
+```bash
+$B proposal-add proposals.json --dry-run   # suggested changes from notes, email or a routine; never live records
+$B proposals --status pending              # what waits for a person's decision
+$B proposal-accept <id>                    # only after the user chose it; also proposal-merge / -ignore / -reopen / -undo
+```
+Proposals are not tasks: never count them, claim them or work on them. Only a person decides. A routine never accepts.
+See docs/help/review-inbox.md (privacy: no email summary or subject without `--recipients-confirmed`).
+
 ## Rules
 - Save the board only with `keeptrack.py`. Never save it with a GitHub connector or MCP tool. If `keeptrack.py` cannot reach GitHub here, tell the user to make the change in the web board, or in Claude Code (web, or the Claude app's Code tab) in a session on the board repo.
 - Do not send anything outside the repo (messages, emails, quotes) without the user's explicit say-so. Drafts are logged with `--draft`.

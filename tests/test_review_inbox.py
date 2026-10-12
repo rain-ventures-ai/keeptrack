@@ -33,6 +33,9 @@ class ReviewInbox(unittest.TestCase):
         self.board = os.path.join(self.tmp.name, "board")
         shutil.copytree(os.path.join(HERE, "fixtures", "v4"), self.board)
         self.file = os.path.join(self.board, "tasks.json")
+        with open(self.file, encoding="utf-8") as src: root = json.load(src)
+        root.setdefault("settings", {})["review_inbox"] = {"enabled": True}
+        with open(self.file, "w", encoding="utf-8") as dst: dst.write(json.dumps(root, indent=2, ensure_ascii=False) + "\n")
         self.old_file = kt.FILE
         kt.FILE = self.file
         self.old_user = os.environ.get("BOARD_USER")

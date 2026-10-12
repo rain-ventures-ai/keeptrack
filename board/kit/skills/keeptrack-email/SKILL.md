@@ -56,5 +56,37 @@ least-privilege routine, incremental checkpoint, last-run log and copyable promp
 - Never send, draft, delete, archive, label, move or mark mail as read. Never log a Keeptrack draft for a message that
   already exists in the mailbox.
 
+## When the board has the Review Inbox on
+
+Run `keeptrack.py settings`. If it shows `review_inbox.enabled: true`, do not run `touch` or `touch-source`. Propose
+each exchange instead, with `keeptrack.py proposal-add <file> --dry-run` and then `proposal-add <file>`:
+
+```json
+{
+  "kind": "contact.touch",
+  "title": "Email from Casey Example, 9 Oct",
+  "source": {"kind": "email", "id": "<full output of email-key for the RFC822 Message-ID>", "revision": "1",
+             "title": "", "date": "2026-10-09", "url": ""},
+  "run": {"routine": "contact-email-sync-<github-owner>", "run_id": "<run id>", "at": "<ISO time>"},
+  "action_key": "<the touch source id>", "work_key": "<the touch source id>",
+  "reason": "", "evidence": "",
+  "target": {"type": "person", "id": "<person id>", "base": {}},
+  "change": {"text": "", "channel": "email", "at": "<actual event time>",
+             "source_id": "email:<sha256 as for touch>", "source_message_ids": ["rfc822:<hash>"]}
+}
+```
+
+- Keep `source_id` and `source_message_ids` exactly as for `touch`. Accepting the proposal logs the touch with them,
+  so a later scan or another mailbox still recognises the message.
+- Privacy on a shared board: a summary (`change.text`, `reason`, `evidence`) or the subject (`source.title`) is allowed
+  only when every intended reader of the board received that specific message. On a board shared by two people, both
+  must be recipients of that message. Being on another reply in the same thread is not enough. Only then pass
+  `--recipients-confirmed`. Without it, `proposal-add` refuses any summary or subject, and the proposal holds only the
+  sender's name, the date and the message key. Never store a body, a private reply or an attachment.
+- An explicit follow-up goes in `change.next` and `change.due`. A profile change for an existing person is a
+  `person.upsert` proposal with that person as `target` and the current values in `target.base`.
+- A one-off scan in a chat may offer to accept the proposals the person names, with `proposal-accept <id>`. A
+  scheduled routine never accepts, merges or ignores them.
+
 Report the requested window, contacts considered, messages matched, touches written, explicit follow-ups updated,
 unmatched addresses, ambiguities, skipped automated mail and failures. Do not expose message text in the report.
