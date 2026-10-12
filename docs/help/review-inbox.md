@@ -97,7 +97,7 @@ You can add a note to any answer. **Dismiss** closes a question without an answe
 - A proposal stores a short reason, at most 300 characters. It never stores a transcript, an email body or attachments.
 - An email proposal on a shared board can hold a summary only when every intended reader of the board received that specific email. For example, on a board shared by two people, both must have received it. Being on another reply in the same thread is not enough.
 - Otherwise an email proposal can only log that an email happened. It holds who it was from, the date and a message key. The subject line is left out too. It cannot be edited into a summary, and it cannot propose a task or a change to a person.
-- After 30 days, decided proposals keep only their keys, title, source, decision and result. The reason and details are removed. For a question, the choice or approval stays and any written answer or note is removed. The archive sweep later moves old decided proposals into `board/archive/<year>.json`.
+- After 30 days, decided proposals keep only their keys, title, source, decision and result. The reason and details are removed. For a question, this waits until the agent has acted on the answer; then the choice or approval stays and any written answer or note is removed. The archive sweep later moves old decided proposals into `board/archive/<year>.json`.
 
 ## Limits
 
@@ -142,7 +142,8 @@ python3 board/keeptrack.py proposal-done <id> --answered-at <at from proposal-re
 python3 board/keeptrack.py proposal-answer <id> --choose b | --other "…" | --approve | --reject | --text "…" [--note "…"]   # a person only
 ```
 
-Agents never answer, dismiss or reopen questions (refused when `BOARD_AGENT` is set). Run `proposal-done` just before
+Agents never answer or reopen questions, and dismiss only their own pending question (to withdraw it after asking
+again with a new one); this is refused for anything else when `BOARD_AGENT` is set. Run `proposal-done` just before
 you act: it records the answer as acted on, once, and prints the answer it locked. Act on that printed answer only: a
 person may have changed the answer since you read it (`--answered-at` refuses when it changed). Exit code 3 means someone already acted, or, for an approval, the
 content hash differs from the approved one; then do not act, and ask again with a new question if needed.

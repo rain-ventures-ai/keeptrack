@@ -5540,9 +5540,12 @@ def _apply_update(data, record, proposal, change):
     hist(record, f"accepted proposal {proposal['id']}")
 
 
-def _ask_person(proposal, verb):
-    """Questions are a person's: agents never dismiss, reopen or answer one, and a named decider is the only one who does."""
+def _ask_person(proposal, verb, own_ok=False):
+    """Questions are a person's: agents never dismiss, reopen or answer one, and a named decider is the only one who does.
+    own_ok: the agent that asked may withdraw (dismiss) its own pending question, e.g. after asking again."""
     if proposal.get("kind") not in ASK_KINDS:
+        return
+    if own_ok and agent_run() and proposal.get("status") == "pending" and proposal.get("createdBy") == who_am_i():
         return
     if agent_run():
         proposal_error(f"agents never {verb} Inbox questions; a person does, on the board or with no BOARD_AGENT set")
@@ -5658,7 +5661,7 @@ def cmd_proposal_merge(a):
 def cmd_proposal_ignore(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal); _ask_person(proposal, "dismiss")
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _ask_person(proposal, "dismiss", own_ok=True)
         _decide(proposal, "ignore")
         if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": _one_line(a.reason, "ignore reason", 300)})
         print(f"ignored {proposal['id']}")
@@ -5784,6 +5787,8 @@ def cmd_proposal_done(a):
         if agent_run() and proposal.get("createdBy") != who_am_i():
             proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy')}; only that agent acts on its answer")
         d = proposal["decision"]
+        if not d.get("answer"):
+            proposal_error("this answer is empty (slimmed or damaged): do not act on it; ask again")
         if a.answered_at and a.answered_at != d.get("at"):
             proposal_conflict("not done: the answer changed after you read it (answered_at differs). Read proposal-result again")
         if d.get("done"):
@@ -5887,6 +5892,8 @@ def archive_plan(data, rules, today=None):
                 decision_day = parse(decision_at).date() if decision_at else None
             except (ValueError, TypeError):
                 decision_day = None
+            if proposal.get("status") == "answered" and not (proposal.get("decision") or {}).get("done"):
+                keep_r.append(proposal); continue   # the asking agent has not acted yet: keep the whole answer
             if proposal.get("status") in DECIDED_STATUSES and decision_day and decision_day < slim_cut:
                 for field in ("reason", "evidence", "change"):
                     proposal.pop(field, None)

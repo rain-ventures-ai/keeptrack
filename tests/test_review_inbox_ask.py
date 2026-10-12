@@ -122,7 +122,8 @@ class AskItems(unittest.TestCase):
     def test_only_a_person_and_the_decider_dismiss_or_reopen(self):
         self.add(APPROVE, QUESTION)
         ids = self.ids()
-        self.assertEqual(2, self.kt("proposal-ignore", ids["question-1"], env=self.agent, ok=False).returncode)
+        self.assertEqual(2, self.kt("proposal-ignore", ids["question-1"], env=dict(self.agent, BOARD_AGENT="codex"), ok=False).returncode,
+                         "another agent cannot dismiss it")
         jo = dict(self.env, BOARD_USER="jo")
         self.assertEqual(2, self.kt("proposal-ignore", ids["approve-1"], env=jo, ok=False).returncode)
         self.kt("proposal-ignore", ids["question-1"])
@@ -141,6 +142,27 @@ class AskItems(unittest.TestCase):
     def test_asker_is_this_run_not_the_input(self):
         self.add(dict(QUESTION, createdBy="someone@else"))
         self.assertEqual("claude@alex", json.loads(self.kt("proposals", "--json").stdout)[0]["createdBy"])
+
+    def test_agent_withdraws_only_its_own_pending_question(self):
+        self.add(QUESTION)
+        rid = self.ids()["question-1"]
+        other = dict(self.agent, BOARD_USER="jo")
+        self.assertEqual(2, self.kt("proposal-ignore", rid, env=other, ok=False).returncode)
+        self.kt("proposal-ignore", rid, "--reason", "asked again", env=self.agent)
+
+    def test_slimming_keeps_an_answer_not_yet_acted_on(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("kt_slim", KT); kt = importlib.util.module_from_spec(spec); spec.loader.exec_module(kt)
+        import datetime as dt
+        old = {"decision": {"at": "2026-01-01T00:00:00Z", "answer": {"text": "Use 12,000"}}, "change": {"question": "Budget?"}}
+        waiting = dict(old, id="r_wait000001", status="answered", decision=dict(old["decision"]))
+        acted = dict(old, id="r_done000001", status="answered", decision=dict(old["decision"], answer={"text": "Use 9,000"}, done={"at": "x"}))
+        data = {"tasks": [], "contacts": [], "proposals": [waiting, acted], "columns": [{"id": "done"}]}
+        kt.archive_plan(data, dict(kt.ARCHIVE_DEFAULTS), today=dt.date(2026, 10, 12))
+        kept = {p["id"]: p for p in data["proposals"]}
+        self.assertEqual({"text": "Use 12,000"}, kept["r_wait000001"]["decision"]["answer"])
+        self.assertIn("change", kept["r_wait000001"])
+        self.assertNotIn("r_done000001", kept, "an acted-on answer is slimmed and archived as usual")
 
     def test_rejected_approval_cannot_be_acted_on(self):
         self.add(APPROVE)
