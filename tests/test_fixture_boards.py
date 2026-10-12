@@ -171,6 +171,22 @@ class FixtureBoards(unittest.TestCase):
         self.assertTrue(kt.save_changes(data, message="Identity fixture roundtrip"))
         self.assertEqual(expected, read_json(os.path.join(board_dir, "tasks.json"))["people"])
 
+    def test_v41_widget_config_and_source_keys_survive_kit_update(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit41", "fixture.json"))
+        board_dir, _ = self.use_fixture("v4_kit41", meta)
+        expected_widgets = read_json(os.path.join(board_dir, "widgets.json"))
+        expected_person = read_json(os.path.join(board_dir, "people", "p_acme.json"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(expected_widgets, read_json(os.path.join(board_dir, "widgets.json")))
+        data = kt.load_board()
+        person = next(p for p in data["contacts"] if p["id"] == "p_acme")
+        self.assertEqual(expected_person["comments"], person["comments"])
+        data["tasks"][0]["details"] += " Updated fixture."
+        self.assertTrue(kt.save_changes(data, message="Weather fixture roundtrip"))
+        self.assertEqual(expected_widgets, read_json(os.path.join(board_dir, "widgets.json")))
+        self.assertEqual(expected_person["comments"], read_json(os.path.join(board_dir, "people", "p_acme.json"))["comments"])
+
 
 if __name__ == "__main__":
     unittest.main()

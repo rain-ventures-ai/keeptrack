@@ -1,5 +1,5 @@
 """Tests for board/kit/keeptrack.py against a local --file board. Run: python3 -m unittest discover tests"""
-import contextlib, copy, importlib.util, inspect, io, json, os, random, re, shutil, subprocess, tempfile, unittest
+import contextlib, copy, importlib.util, inspect, io, json, os, random, re, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("keeptrack", os.path.join(HERE, "..", "board", "kit", "keeptrack.py"))
@@ -231,6 +231,7 @@ class LocalBoard(unittest.TestCase):
         self.assertEqual(key, kt.email_key('shared-123@example.test'))
         for bad in ['no-id', '<a@b>\nInjected: value', 'a b@example.test', 'a@b@c', 'é@b', 'x' * 999 + '@b']:
             with self.assertRaises(SystemExit): kt.email_key(bad)
+
         p = self.read()['contacts'][0]; c = p['comments'][0]
         before = copy.deepcopy(c)
         self.quiet(kt.cmd_touch_source, Args(ref='p_casey', touch_id=c['id'], source_message_id=[key]))
@@ -255,6 +256,28 @@ class LocalBoard(unittest.TestCase):
         self.assertEqual('claude@jezhub', self.read()['contacts'][0]['comments'][-1]['by'])
         args.draft = True
         with self.assertRaises(SystemExit): self.quiet(kt.cmd_touch, args)
+
+    def test_email_key_stdin_is_bounded_data_not_executable_text(self):
+        script = os.path.abspath(os.path.join(HERE, "..", "board", "kit", "keeptrack.py"))
+        before = open(self.file, "rb").read()
+        header = '<quo\'te`id";$HOME@EXAMPLE.test>'
+        command = [sys.executable, script, "--file", self.file, "email-key"]
+        result = subprocess.run(command + ["--stdin"], input=header, text=True, capture_output=True, shell=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(kt.email_key(header), result.stdout.strip())
+        self.assertNotIn(header, result.stdout + result.stderr)
+        legacy = subprocess.run(command + [header], text=True, capture_output=True, shell=False)
+        self.assertEqual(result.stdout, legacy.stdout)
+        sentinel = os.path.join(self.dir.name, "header-command-must-not-run")
+        for bad in [f"<x';touch {sentinel};#@example.test>", f"<$(touch {sentinel})@example.test>", '<x@example.test>\nInjected: y', "x" * 10000]:
+            rejected = subprocess.run(command + ["--stdin"], input=bad, text=True, capture_output=True, shell=False)
+            self.assertNotEqual(0, rejected.returncode)
+            self.assertFalse(os.path.exists(sentinel))
+            self.assertNotIn(bad, rejected.stdout + rejected.stderr)
+        for options in [[], [header, "--stdin"]]:
+            invalid = subprocess.run(command + options, input=header, text=True, capture_output=True, shell=False)
+            self.assertNotEqual(0, invalid.returncode)
+        self.assertEqual(before, open(self.file, "rb").read(), "hashing never writes the board")
 
     def test_email_overlap_rechecks_after_save_race(self):
         self.test_email_touch_keeps_source_time_and_is_idempotent()

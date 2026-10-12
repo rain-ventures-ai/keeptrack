@@ -3029,7 +3029,13 @@ def email_key(value):
 
 
 def cmd_email_key(a):
-    print(email_key(a.message_id))
+    stdin = getattr(a, "stdin", False)
+    if stdin == (getattr(a, "message_id", None) is not None):
+        sys.exit("provide either a Message-ID argument or --stdin, not both")
+    value = sys.stdin.read(1001) if stdin else a.message_id
+    if stdin and len(value) > 1000:
+        sys.exit("Message-ID input is too long (maximum header value: 998 characters)")
+    print(email_key(value))
 
 
 def cmd_touch_source(a):
@@ -4991,7 +4997,9 @@ def main():
     s = sub.add_parser("person-add", help="add a person (refuses duplicates)"); s.add_argument("name"); pf(s); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_person_add)
     s = sub.add_parser("person-set", help="change a person's fields, stage or next step"); s.add_argument("ref"); s.add_argument("--name"); pf(s); s.set_defaults(f=cmd_person_set)
     s = sub.add_parser("person-rm", help="delete a person added by mistake (needs --yes)"); s.add_argument("ref"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_person_rm)
-    s = sub.add_parser("email-key", help="hash an RFC822 Message-ID without storing the raw header"); s.add_argument("message_id"); s.set_defaults(f=cmd_email_key)
+    s = sub.add_parser("email-key", help="hash an RFC822 Message-ID without storing the raw header")
+    s.add_argument("message_id", nargs="?", help="header as one non-shell argv value; never interpolate it into shell text")
+    s.add_argument("--stdin", action="store_true", help="read the header value safely from stdin (bounded; no shell substitution)"); s.set_defaults(f=cmd_email_key)
     s = sub.add_parser("touch-source", help="bind verified message keys to an existing email touch"); s.add_argument("ref"); s.add_argument("touch_id")
     s.add_argument("--source-message-id", action="append", required=True); s.set_defaults(f=cmd_touch_source)
     s = sub.add_parser("touch", help="log a contact; --draft for a message that is not sent yet"); s.add_argument("ref"); s.add_argument("text")
