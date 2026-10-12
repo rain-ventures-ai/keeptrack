@@ -107,11 +107,14 @@ $B todo-done '#12' <N>                           # tick each checklist item when
 $B todo-edit '#12' <N> "<text>"                  # reword an item in place (keeps its place)
 $B comment '#12' "<question or update>"          # questions also need: heartbeat --status blocked
 $B done '#12' --note "<result, link>"            # or: release '#12' --column todo
+$B wait '#12' --on "<who: what>" --who <login-or-p_id>   # parked on a person or event; then comment @owner, assign, stop
 $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "<text>"
 ```
 
 Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them.
 Only work on tasks assigned to the user you act for.
+Heartbeat at least every 15 minutes while you work (the Claude Code hook does it for you); a claim with none for 30 minutes (the default) shows as stale. `done` is refused while checklist items are open: tick them, or `done '#12' --cancel --note "<why>"`.
+Waiting on a person (a decision, an approval, a reply) or an event: `wait`, a comment with `@<owner>` and the question, `assign` it to them, then stop. A waiting card can't be claimed. Never `unwait` a wait you did not set in this session, or one on someone else (`--who`): a person ends those. Never clear a wait to get past a refusal, and never message the other party yourself. `list --waiting-on me` lists cards waiting on you.
 
 Change a task or the board's structure with commands too, never by editing JSON:
 ```bash
