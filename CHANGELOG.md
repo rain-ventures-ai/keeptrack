@@ -90,9 +90,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   falling back to the official kit. `kit-check` warns about template drift in `AGENTS.md` (rule 1 on split boards,
   heartbeat minutes), and the upgrade card links `blob/main`.
 - `.board-claim.json` records each claimed card with its session, so two sessions in one clone keep separate claims.
-  With `--session` or `BOARD_SESSION`, a run owns only that session's claims. The automatic heartbeat beats every card
-  the record holds (only `BOARD_SESSION`'s cards when the hook has it set), and a failed beat is tried again at the
-  next tool call. `release`, `done` and `unwait` forget the local claim only after the save worked.
+  With `--session` or `BOARD_SESSION`, a run owns only that session's claims. Every rewrite of the record re-reads it
+  under a lock and changes only that command's own cards, written atomically. Each entry keeps a hash of the Claude
+  Code session that claimed it (`claimant`) and its own beat time (`beat_at`): the automatic heartbeat beats only its
+  own Claude session's cards (entries without a claimant, and a hook that cannot name its session, beat as before;
+  only `BOARD_SESSION`'s cards when the hook has it set), and a failed beat is tried again about a minute later, not
+  at every tool call. `release`, `done` and `unwait` forget the local claim only after the save worked.
 - `add` and `kit-check --card` print the #number the card has after saving; before, a save that lost a race could print
   a number that belonged to someone else's card.
 - Ranks appended to a column get a short random tail, so concurrent saves no longer create `DUPLICATE_RANK`, and

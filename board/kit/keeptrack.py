@@ -77,6 +77,10 @@ try:
     import msvcrt
 except ImportError:   # POSIX
     msvcrt = None
+try:
+    import select as select_mod
+except ImportError:
+    select_mod = None
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -341,7 +345,8 @@ def write_private(path, text):
 # The active claim, for the heartbeat hook. A board repo keeps it at its root (gitignored there); any other project
 # keeps it in its own .keeptrack/ folder, so two projects never share one.
 CLAIM_FILE = (os.path.join(ROOT, ".board-claim.json") if ROOT and not PROJECT_DIR else os.path.join(_local_dir(), "claim.json"))
-HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats
+HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats of one card
+HEARTBEAT_RETRY = 60   # seconds before the hook looks again (after a failed beat too)
 ATTENDED_STALE_MINUTES = 12 * 60  # an attended claim (a person drives the session) sends no heartbeats
 
 
@@ -1595,6 +1600,94 @@ def record_json(cards, session):
     return rec
 
 
+@contextlib.contextmanager
+def record_lock():
+    """An exclusive lock (<record>.lock, beside it) around one re-read and rewrite of the local claim record, so parallel
+    sessions in one clone never write over each other's entries. Never follows a symlink at the lock's path."""
+    fd = os.open(CLAIM_FILE + ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "a+b") as f:   # closing the file releases the lock
+        if fcntl:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        elif msvcrt:
+            f.seek(0); msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        yield
+
+
+def _record_on_disk():
+    """The record as it is on disk now (no cached read, no git probe: the caller's own read or ensure_local_dir vouched
+    for it), or None. A symlinked record raises OSError: it is nobody's, so it is never rewritten either."""
+    try:
+        with os.fdopen(os.open(CLAIM_FILE, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))) as f:
+            info = json.load(f)
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def rewrite_claim_record(change, session=None):
+    """Re-read the record under record_lock(), let change(cards) edit only this command's own card entries (it returns
+    False for "nothing to change"), and write it back atomically (a temp file renamed over it). The record goes when
+    no card and no usable session is left. Returns the record now on disk."""
+    with record_lock():
+        info = _record_on_disk()
+        cards = record_cards(info)
+        if change(cards) is False:
+            return info
+        session = session or (info or {}).get("session")
+        if not cards and not usable_session(session):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(CLAIM_FILE)
+            _record_changed(None); return None
+        rec = record_json(cards, session)
+        if os.path.islink(CLAIM_FILE):
+            raise OSError(f"{CLAIM_FILE} is a symlink; Keeptrack will not replace it")
+        fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".part", dir=os.path.dirname(os.path.abspath(CLAIM_FILE)))   # 0600
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(rec)); f.flush(); os.fsync(f.fileno())
+            os.replace(tmp, CLAIM_FILE)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            raise
+        _record_changed(rec); return rec
+
+
+def claimant_key():
+    """Which Claude Code session made a claim, as the heartbeat hook can tell it: a short hash of the Claude session id
+    (CLAUDE_CODE_SESSION_ID, else CLAUDE_SESSION_ID), or '' outside Claude Code. Only matches a hook to its own cards;
+    it is never a claim id and proves no ownership."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or ""
+    return session_hash(sid) if sid else ""
+
+
+def hook_claimant_key():
+    """The heartbeat hook's own Claude session, hashed like claimant_key(): from its environment, else the session_id in
+    the hook's JSON input on stdin. '' when neither says (the hook then beats every card of the clone, as before)."""
+    key = claimant_key()
+    if key:
+        return key
+    try:
+        sid = json.loads(hook_input() or "{}").get("session_id")
+    except (ValueError, AttributeError):
+        return ""
+    return session_hash(sid) if isinstance(sid, str) and sid else ""
+
+
+def hook_input():
+    """The JSON Claude Code hands a hook on stdin, or '' (a terminal, nothing within a second, or no stdin)."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return ""
+        if select_mod and not select_mod.select([sys.stdin], [], [], 1)[0]:
+            return ""
+        return sys.stdin.read(65536)
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def recorded_session(task_id=None):
     """The session in this clone's local claim record (the one recorded for this card when task_id is given), else ''.
     Without an explicit id a clone is one trust domain: the record it wrote is its session, whichever card it claimed last."""
@@ -1954,12 +2047,15 @@ def write_claim_record():
     rec = _PENDING_CLAIM.pop("rec", None)
     if not rec or FILE:
         return
+    entry = {"session": rec["session"], "agent": rec["agent"], "user": rec["user"], "by_person": bool(rec["attended"]),
+             "beat_at": int(time.time())}   # the claim was this card's beat
+    if claimant_key():
+        entry["claimant"] = claimant_key()   # the hook of this Claude session beats this card; other sessions' hooks leave it
+    def change(cards):
+        cards.pop(rec["id"], None); cards[rec["id"]] = entry   # parallel sessions in one clone: one entry per card, the others kept
     try:
         ensure_local_dir(CLAIM_FILE)
-        cards = record_cards(claim_record()); cards.pop(rec["id"], None)   # parallel sessions in one clone: one entry per card
-        cards[rec["id"]] = {"session": rec["session"], "agent": rec["agent"], "user": rec["user"], "by_person": bool(rec["attended"])}
-        info = record_json(cards, rec["session"])
-        write_private(CLAIM_FILE, json.dumps(info)); _record_changed(info)
+        rewrite_claim_record(change, rec["session"])
     except OSError as e:
         print(f"note: no local claim record, so no automatic heartbeat ({e}); pass --session {rec.get('session')} "
               "(or export BOARD_SESSION) to heartbeat, done or release the card", file=sys.stderr)
@@ -2113,12 +2209,12 @@ def drop_claim_file(task_id=None):
             return   # nothing read this command (no record, one git did not vouch for, or one that appeared meanwhile): not ours to forget
         ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=info is None)   # the same guard as the write (the read already asked git when it found a record)
         if task_id:
-            cards = record_cards(info)
-            if cards and task_id not in cards:
-                return
-            cards.pop(task_id, None)
-            if cards or (info and usable_session(info.get("session"))):
-                rec = record_json(cards, (info or {}).get("session")); write_private(CLAIM_FILE, json.dumps(rec)); _record_changed(rec); return
+            def change(cards):   # the record as it is now: another session in this clone may have written since this command read it
+                if cards and task_id not in cards:
+                    return False
+                cards.pop(task_id, None)
+            rewrite_claim_record(change)
+            return
         os.remove(CLAIM_FILE); _record_changed(None)
     except OSError:
         pass
@@ -2454,27 +2550,34 @@ def cmd_history(a):
 
 
 def cmd_auto_heartbeat(a):
-    """Hook entry point. Never fails loudly: a hook must not break the agent's session."""
+    """Hook entry point. Never fails loudly: a hook must not break the agent's session. The record's mtime is a cheap gate
+    (at most one look a minute); each card entry keeps its own beat time (beat_at), so every session in the clone gets its
+    beats, and a failed beat is tried again about a minute later, not at every tool call."""
     try:
         if os.path.islink(os.path.dirname(CLAIM_FILE)):
             return   # lstat/utime follow symlinks in parent components; reject the personal folder before touching its target
         st = os.lstat(CLAIM_FILE)   # a symlinked record is nobody's: its target is never read, touched or followed
-        if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_EVERY:
+        if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_RETRY:
             return
+        os.utime(CLAIM_FILE, follow_symlinks=False)   # before the save: a beat that fails (refused, offline, rate limited, the
+        # hook's timeout) is tried again after HEARTBEAT_RETRY, and the next tool calls meanwhile skip the read
         _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
         info = claim_record()   # None for a record git tracks: it came with the repo, so it names no card of this clone's
         only = explicit_session()   # BOARD_SESSION in the hook's environment: that session's cards only
+        key = hook_claimant_key()   # this Claude session's own cards only; entries with no claimant (older kits, no Claude
+        # session at claim time) are beaten by any hook in the clone, as before
+        due = time.time() - HEARTBEAT_EVERY
         cards = {k: v for k, v in record_cards(info).items() if not v.get("by_person") and usable_session(v.get("session"))
-                 and (not only or v.get("session") == only)}
+                 and (not only or v.get("session") == only) and (not key or not v.get("claimant") or v.get("claimant") == key)
+                 and not (isinstance(v.get("beat_at"), (int, float)) and v["beat_at"] > due)}
         if not cards:
-            os.utime(CLAIM_FILE, follow_symlinks=False)   # nothing to write: the next tool calls skip the read
-            return  # a person drives this session, or no card is active: no automatic heartbeats
-        gone = []
+            return  # a person drives this session, no card is active, or this session's cards had their beat
+        gone, beaten = [], []
 
         def fn(data):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
-            gone.clear()
-            for tid, v in cards.items():   # every card this clone's sessions (or BOARD_SESSION) claimed and still holds
+            gone.clear(); beaten.clear()
+            for tid, v in cards.items():   # every card this session (or the clone's, or BOARD_SESSION's) claimed and still holds
                 t = next((x for x in data.get("tasks", []) if x.get("id") == tid), None); c = (t or {}).get("claim")
                 if not c or c.get("status") == "done" or c.get("session_id") != v.get("session"):
                     gone.append(tid); continue  # released, finished, taken over or deleted: forget the card, keep the clone's session
@@ -2482,12 +2585,22 @@ def cmd_auto_heartbeat(a):
                     print(f"keeptrack: claim {tid} is stale and the board's agent limit is full; it stays stale "
                           "(another session may take the card)", file=sys.stderr)
                     continue
-                c["heartbeat_at"] = now(); t["updated"] = now()
+                c["heartbeat_at"] = now(); t["updated"] = now(); beaten.append(tid)
         mutate(fn, "Agent heartbeat: " + ", ".join(cards))
-        for tid in gone:
-            drop_claim_file(tid)
-        with contextlib.suppress(OSError):
-            os.utime(CLAIM_FILE, follow_symlinks=False)  # throttle only after the beat saved: a failed one is tried again at the next tool call
+        at = int(time.time())
+
+        def change(entries):   # the record as it is now: only the entries this beat saw, and only while they are the same claim
+            for tid in gone + beaten:
+                v = entries.get(tid)
+                if not v or v.get("session") != cards[tid].get("session"):
+                    continue   # claimed again meanwhile (by this clone or another session): that entry is not this beat's
+                if tid in gone:
+                    entries.pop(tid)
+                else:
+                    v["beat_at"] = at   # the full throttle, for this card only
+        if gone or beaten:
+            ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=False)   # the read above asked git
+            rewrite_claim_record(change)
     except BaseException:
         return
     finally:

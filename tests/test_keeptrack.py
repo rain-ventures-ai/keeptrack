@@ -1,5 +1,5 @@
 """Tests for board/kit/keeptrack.py against a local --file board. Run: python3 -m unittest discover tests"""
-import contextlib, copy, importlib.util, inspect, io, json, os, random, re, shutil, subprocess, sys, tempfile, unittest
+import contextlib, copy, importlib.util, inspect, io, json, os, random, re, shutil, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("keeptrack", os.path.join(HERE, "..", "board", "kit", "keeptrack.py"))
@@ -1918,7 +1918,7 @@ class ClaimLifecycle(unittest.TestCase):
 
     read = LocalBoard.read
     quiet = LocalBoard.quiet
-    SESSION_ENV = ("BOARD_SESSION", "CLAUDE_SESSION_ID", "CODEX_SESSION_ID", "BOARD_ATTENDED")
+    SESSION_ENV = ("BOARD_SESSION", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "BOARD_ATTENDED")
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -1928,6 +1928,8 @@ class ClaimLifecycle(unittest.TestCase):
         self.old = kt.FILE, kt.save, kt.CLAIM_FILE, kt.cloud_session_url
         kt.FILE, kt.CLAIM_FILE, kt.cloud_session_url = self.file, self.claim_file, lambda: ""   # not the real cloud session
         self.old_env = {k: os.environ.pop(k, None) for k in self.SESSION_ENV}
+        self.hook_stdin = ""; old_input = kt.hook_input; kt.hook_input = lambda: self.hook_stdin   # the hook's JSON on stdin
+        self.addCleanup(setattr, kt, "hook_input", old_input)
         self.old_user = os.environ.get("BOARD_USER")
         os.environ["BOARD_USER"] = "osouthgate"
         d = board()
@@ -2535,29 +2537,100 @@ class ClaimLifecycle(unittest.TestCase):
         self.assertNotIn('"attended": true', text)                         # the hook's grep: card 2 still gets beats
         self.assertEqual(json.loads(text)["id"], "t_c2")
 
+    def age_record(self):
+        """Every card in the record had its last beat long ago, and the hook's gate is open."""
+        rec = json.load(open(self.claim_file))
+        for v in rec.get("cards", {}).values():
+            v["beat_at"] = 0
+        write(self.claim_file, rec); os.utime(self.claim_file, (0, 0))
+
+    def hook(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            kt.cmd_auto_heartbeat(Args())
+
+    def beaten(self, *nums):
+        return [self.card(n)["claim"]["heartbeat_at"] > "2026-01-02" for n in nums]
+
     def test_auto_heartbeat_beats_every_card_of_this_session(self):
         self.real_record()
         self.claim(1, "s1"); self.claim(2, "s2"); self.make_stale(1); self.make_stale(2)
-        os.utime(self.claim_file, (0, 0))
-        with contextlib.redirect_stderr(io.StringIO()):
-            kt.cmd_auto_heartbeat(Args())                                  # no BOARD_SESSION in the hook: every card this clone holds
-        self.assertEqual([self.card(n)["claim"]["heartbeat_at"] > "2026-01-02" for n in (1, 2)], [True, True])
-        self.make_stale(1); self.make_stale(2); os.utime(self.claim_file, (0, 0))
+        self.age_record()
+        self.hook()                                                        # no BOARD_SESSION in the hook: every card this clone holds
+        self.assertEqual(self.beaten(1, 2), [True, True])
+        self.make_stale(1); self.make_stale(2); self.age_record()
         os.environ["BOARD_SESSION"] = "s2"
-        with contextlib.redirect_stderr(io.StringIO()):
-            kt.cmd_auto_heartbeat(Args())
-        self.assertEqual([self.card(n)["claim"]["heartbeat_at"] > "2026-01-02" for n in (1, 2)], [False, True])
+        self.hook()
+        self.assertEqual(self.beaten(1, 2), [False, True])
 
-    def test_auto_heartbeat_throttles_only_after_a_saved_beat(self):
+    def test_auto_heartbeat_beats_only_the_cards_of_its_own_claude_session(self):
         self.real_record()
-        self.claim(1, "s1"); self.make_stale(1); os.utime(self.claim_file, (0, 0))
-        kt.save = lambda *a: sys.exit("write failed: offline")
-        kt.cmd_auto_heartbeat(Args())
-        self.assertLess(os.stat(self.claim_file).st_mtime, 1)              # not throttled: the next tool call tries again
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-a"; self.claim(1, "s1")
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-b"; self.claim(2, "s2")
+        os.environ.pop("CLAUDE_CODE_SESSION_ID"); self.claim(3, "s3")      # no Claude session at claim time: no claimant
+        cards = json.load(open(self.claim_file))["cards"]
+        self.assertEqual(cards["t_c1"]["claimant"], kt.session_hash("claude-a")); self.assertNotIn("claimant", cards["t_c3"])
+        self.assertNotIn("claude-a", open(self.claim_file).read())          # only a hash is kept
+        stale = lambda: [self.make_stale(n) for n in (1, 2, 3)] and self.age_record()
+        stale(); os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-a"; self.hook()
+        self.assertEqual(self.beaten(1, 2, 3), [True, False, True])        # its own card, and the one with no claimant
+        stale(); os.environ.pop("CLAUDE_CODE_SESSION_ID"); self.hook_stdin = json.dumps({"session_id": "claude-b", "hook_event_name": "PostToolUse"})
+        self.hook()
+        self.assertEqual(self.beaten(1, 2, 3), [False, True, True])        # the hook's stdin names its session
+        stale(); self.hook_stdin = ""; self.hook()
+        self.assertEqual(self.beaten(1, 2, 3), [True, True, True])         # a hook that cannot tell: every card, as before
+
+    def test_two_sessions_beat_their_own_cards_through_one_record(self):
+        self.real_record()
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-a"; self.claim(1, "s1")
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-b"; self.claim(2, "s2")
+        for n in (1, 2): self.make_stale(n)
+        self.age_record()
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-a"; self.hook()     # session A beats; its beat does not starve B
+        self.assertEqual(self.beaten(1, 2), [True, False])
+        os.utime(self.claim_file, (0, 0))                                  # a minute later, B's hook looks
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-b"; self.hook()
+        self.assertEqual(self.beaten(1, 2), [True, True])
+        self.make_stale(1); os.utime(self.claim_file, (0, 0))
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-a"; self.hook()     # A's card had its beat: nothing due for 15 minutes
+        self.assertEqual(self.beaten(1), [False])
+
+    def test_auto_heartbeat_retries_a_failed_beat_after_about_a_minute(self):
+        self.real_record()
+        self.claim(1, "s1"); self.make_stale(1); self.age_record()
+        saves = []
+        kt.save = lambda *a: saves.append(1) or sys.exit("write failed: offline")
+        self.hook()
+        self.assertEqual(len(saves), 1)
+        self.hook(); self.hook()                                           # the next tool calls within the minute: no new try
+        self.assertEqual(len(saves), 1)
+        mtime = os.stat(self.claim_file).st_mtime
+        self.assertLess(time.time() - mtime, kt.HEARTBEAT_RETRY)
+        self.assertEqual(kt.HEARTBEAT_RETRY, 60)
+        os.utime(self.claim_file, (mtime - kt.HEARTBEAT_RETRY - 1,) * 2)   # a minute on: tried again (not after 15 minutes)
         kt.save = self.old[1]
-        kt.cmd_auto_heartbeat(Args())
-        self.assertGreater(os.stat(self.claim_file).st_mtime, 1)
-        self.assertGreater(self.card(1)["claim"]["heartbeat_at"], "2026-01-02")
+        self.hook()
+        self.assertEqual(self.beaten(1), [True])
+        self.assertGreater(json.load(open(self.claim_file))["cards"]["t_c1"]["beat_at"], time.time() - 60)   # the full throttle
+        self.make_stale(1); os.utime(self.claim_file, (0, 0)); kt.save = lambda *a: saves.append(1) or sys.exit("no save expected")
+        self.hook()
+        self.assertEqual((len(saves), self.beaten(1)), (1, [False]))      # a saved beat throttles that card for 15 minutes
+
+    def test_record_rewrites_keep_entries_another_session_wrote_meanwhile(self):
+        self.real_record()
+        self.claim(1, "s1")
+        kt._REC.clear(); kt._REC["on"] = True                               # session A's command reads the record once ...
+        self.addCleanup(kt._REC.clear)
+        self.assertEqual(list(kt.record_cards(kt.claim_record())), ["t_c1"])
+        rec = json.load(open(self.claim_file))                             # ... session B claims card 2 in the same clone ...
+        rec["cards"]["t_c2"] = {"session": "s2", "agent": "claude", "user": "osouthgate", "by_person": False}
+        write(self.claim_file, rec)
+        kt._PENDING_CLAIM["rec"] = {"id": "t_c3", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False}
+        kt.write_claim_record()                                            # ... and A writes its next claim, then drops card 1
+        self.assertEqual(sorted(json.load(open(self.claim_file))["cards"]), ["t_c1", "t_c2", "t_c3"])
+        kt.drop_claim_file("t_c1")
+        self.assertEqual(sorted(json.load(open(self.claim_file))["cards"]), ["t_c2", "t_c3"])
+        self.assertEqual(oct(os.stat(self.claim_file).st_mode & 0o777), "0o600")
+        self.assertEqual([n for n in os.listdir(self.dir.name) if n.endswith(".part")], [])   # written atomically: no temp file left
 
     def test_done_and_release_keep_the_record_when_the_save_fails(self):
         self.real_record()
