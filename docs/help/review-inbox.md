@@ -26,7 +26,7 @@ When it is on, the meeting-notes and email workflows send their suggestions to t
 
 ## Review proposals
 
-1. Click **Inbox** at the top. The number shows how many proposals are waiting.
+1. Open **Today**. When proposals are waiting, **To review** lists the newest five with **Accept**, **Ignore** and **Review**, and the heading says how many there are. The **Review Inbox** tile and **Review all** open the full Inbox. While proposals wait, an **Inbox** button with a count also shows at the top.
 2. Proposals are grouped by source (a meeting or an email) and then by the run that found them.
 3. Use the filters to show one type, one source, one reviewer, or decided proposals.
 

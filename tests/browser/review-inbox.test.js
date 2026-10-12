@@ -106,6 +106,8 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     // Off by default: no Inbox button, and proposal files never become cards.
     { const api = new Github(fixture({ enabled: false })), page = await openBoard(browser, api);
       assert.equal(await page.locator('#btnInbox').isHidden(), true, 'the Inbox stays hidden while the board has it off');
+      await page.locator('#viewSw [data-view="today"]').first().click(); await page.waitForSelector('.todayhead');
+      assert.equal(await page.locator('.treview, .tgo[data-go="inbox"]').count(), 0, 'Today shows nothing of the Inbox while it is off'); await page.locator('#viewSw [data-view="board"]').first().click(); await page.waitForSelector('.card');
       assert.deepEqual((await page.locator('.card .t').allTextContents()).sort(), ['First', 'Second']);
       await page.close(); }
 
@@ -114,6 +116,13 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.deepEqual((await page.locator('.card .t').allTextContents()).sort(), ['First', 'Second']);
     assert.equal(await page.locator('.col[data-col="todo"] h2 .ui-count').first().textContent(), '2');
     assert.equal(await page.locator('#btnInbox').isVisible(), true);
+    // Today carries the Inbox: a tile, a "to review" count in the heading and a short list with Accept / Ignore / Review.
+    await page.locator('#viewSw [data-view="today"]').first().click(); await page.waitForSelector('.today .treview');
+    assert.match(await page.locator('.todayhead h2').textContent(), /6 to review/);
+    assert.equal(await page.locator('.treview .trow').count(), 5, 'Today lists the five newest proposals');
+    assert.match(await page.locator('.tgo[data-go="inbox"]').textContent(), /6 to review/);
+    await page.locator('.treview button', { hasText: /Review all 6/ }).click(); await page.waitForSelector('#board.v-inbox');
+    await page.locator('#viewSw [data-view="board"]').first().click();
     assert.equal(await page.locator('#inboxBadge').textContent(), '6', 'six proposals are pending');
     assert(!api.calls.some(c => /git\/trees\/root-.*recursive/.test(c.path)), 'never reads the whole repository tree');
 

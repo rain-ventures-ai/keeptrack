@@ -1233,3 +1233,12 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
   .inbox__filter { display: grid; }
   .proptbl tbody th { width: 30%; }
 }
+/* Today → To review (Review Inbox) */
+.treview .trow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.treview .trow:first-child { border-top: 0; }
+.trow__text { display: grid; min-width: 0; flex: 1 1 220px; }
+.trow__title { overflow-wrap: anywhere; font-weight: 600; }
+.trow__meta { font-size: var(--fs-sm); }
+.trow__acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.trow__foot { padding-top: 8px; }
+@media (max-width: 640px) { .trow__acts .ui-btn { min-height: var(--touch, 44px); } }

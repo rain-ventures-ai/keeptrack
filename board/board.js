@@ -4028,9 +4028,28 @@ if (typeof window !== 'undefined') (() => {
     if (typeof v === 'object') return JSON.stringify(v);
     return String(v);
   }
+  // Today → "To review": the newest pending proposals with Accept / Ignore, and a way into the full Inbox.
+  function todayReview(items) {
+    const sec = ui.section({ title: 'To review', count: items.length, icon: 'inbox' }); sec.classList.add('tsec', 'treview');
+    const list = items.slice().sort((a, b) => String((b.source || {}).date || '').localeCompare(String((a.source || {}).date || '')) || String(b.created || '').localeCompare(String(a.created || ''))).slice(0, 5);
+    list.forEach(p => {
+      const row = el('div', 'trow'), s = p.source || {}; row.dataset.id = p.id;
+      const txt = el('div', 'trow__text'); txt.append(el('span', 'trow__title', p.title || '(no title)'), el('span', 'trow__meta muted', [KIND_LABEL[p.kind] || p.kind, SRC_LABEL[s.kind] || '', s.date || ''].filter(Boolean).join(' · ')));
+      const acts = el('div', 'trow__acts'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide: ' + (p.title || p.id));
+      const act = (label, variant, fn) => { const b = ui.button({ label, variant, size: 'sm', onClick: fn }); if (ro) b.disabled = true; acts.append(b); };
+      act('Accept', 'primary', async () => { if (await decideProposal(p.id, 'accept')) { inboxSay('Accepted.'); render(); } });
+      act('Ignore', 'secondary', async () => { if (await decideProposal(p.id, 'ignore')) { inboxSay('Ignored. It will not come back for this source.'); render(); } });
+      act('Review', 'ghost', () => { inboxFocus = p.id; setView('inbox'); });
+      row.append(txt, acts); sec.body.append(row);
+    });
+    const all = ui.button({ label: items.length > list.length ? `Review all ${items.length}` : 'Open the Review Inbox', variant: 'secondary', size: 'sm', onClick: () => setView('inbox') });
+    const foot = el('div', 'trow__foot'); foot.append(all); sec.body.append(foot);
+    if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }
+    return sec;
+  }
   function syncInboxButton() {
     const on = inboxOn(), n = on ? inboxPending().length : 0, b = $('btnInbox'), bd = $('inboxBadge');
-    if (b) { b.hidden = !on; const t = n ? `Review Inbox: ${n} pending` : 'Review Inbox'; b.title = t; b.setAttribute('aria-label', t); b.classList.toggle('on', view === 'inbox'); }
+    if (b) { b.hidden = !on || (!n && view !== 'inbox'); const t = n ? `Review Inbox: ${n} pending` : 'Review Inbox'; b.title = t; b.setAttribute('aria-label', t); b.classList.toggle('on', view === 'inbox'); }
     if (bd) { bd.hidden = !n; bd.textContent = n > 99 ? '99+' : String(n); }
     document.querySelectorAll('[data-head-action="btnInbox"]').forEach(x => { x.hidden = !on; });
   }
@@ -4586,12 +4605,14 @@ if (typeof window !== 'undefined') (() => {
     const wrap = el('div', 'today'), head = el('div', 'todayhead');
     const peopleDue = groups.slice(0, 2).reduce((n, x) => n + x[1].length, 0), due = [];
     if (peopleDue) due.push(`${peopleDue} ${peopleDue === 1 ? 'person' : 'people'} to contact`); if (dueTasks.length) due.push(`${dueTasks.length} ${dueTasks.length === 1 ? 'task' : 'tasks'}`);
+    const toReview = inboxOn() ? inboxPending() : []; if (toReview.length) due.push(`${toReview.length} to review`);
     head.append(el('h2', null, due.length ? due.join(' · ') : 'Nothing due today'), el('span', 'muted', new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })));
     wrap.append(head);
     // Shortcuts to the two halves of the board, so Today works as the home page
     const go = el('div', 'todaygo'), goCard = (ic, title, sub, v) => { const b = el('button', 'tgo'); b.type = 'button'; b.append(svgIcon(ic), el('span', 'tgt', title), el('span', 'tgs', sub), svgIcon('chevron-right')); b.dataset.go = v; b.onclick = () => setView(v); return b; };
     if (hasTasks) { const live = state.tasks.filter(x => x.column !== doneColId()), doing = live.filter(x => x.column === 'in-progress').length;
       go.append(goCard('square-kanban', 'Tasks · Kanban', `${live.length} open` + (doing ? ` · ${doing} in progress` : ''), 'board')); }
+    if (inboxOn()) go.append(goCard('inbox', 'Review Inbox', toReview.length ? `${toReview.length} to review` : 'Nothing to review', 'inbox'));
     if (hasCrm) go.append(goCard('user', 'People · CRM', peopleDue ? `${peopleDue} to contact today` : `${state.contacts.length} ${state.contacts.length === 1 ? 'person' : 'people'}`, 'people'));
     if (!LS.get('kb_tour', '') && go.childElementCount) {   // offered until the tour is finished, skipped or dismissed
       const inv = el('div', 'tourinvite'), start = el('button', 'primary', 'Show me around'), x = el('button', 'tix'); start.type = x.type = 'button';
@@ -4600,6 +4621,7 @@ if (typeof window !== 'undefined') (() => {
     }
     if (go.childElementCount) wrap.append(go);
     renderTodayWidgets(wrap);
+    if (toReview.length) wrap.append(todayReview(toReview));
     const addGroups = list => list.forEach(([[ic, title], items]) => {
       if (!items.length) return; const sec = ui.section({ title, count: items.length, icon: ic }); sec.classList.add('tsec');
       items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec.body); wrap.append(sec);
