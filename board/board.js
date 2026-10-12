@@ -4255,6 +4255,7 @@ if (typeof window !== 'undefined') (() => {
     top.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm' }), t);
     if (p.status !== 'pending') top.append(ui.pill({ text: p.status === 'accepted' ? 'Accepted' : 'Ignored', tone: p.status === 'accepted' ? 'ok' : 'neutral', size: 'sm' }));
     art.append(top);
+    if (options.today && p.source && /^https?:\/\//i.test(p.source.url || '')) { const source = el('a', 'inbox__srclink', 'Open the source'); source.href = p.source.url; source.target = '_blank'; source.rel = 'noopener noreferrer'; art.append(source); }
     if (p.target) { const r = findRef(state, p.target); const link = ui.button({ label: r ? `View ${p.target.type === 'task' && r.num ? '#' + r.num + ' · ' : ''}${r.title || r.name}` : 'Record no longer on board', variant: 'ghost', size: 'sm', onClick: () => { if (r) p.target.type === 'task' ? openCard(r.id) : openContact(r.id); } }); link.disabled = !r; art.append(link); }
     if (p.reason) art.append(el('p', 'prop__reason', p.reason));
     if (p.evidence) art.append(el('p', 'prop__evidence muted', 'Evidence: ' + p.evidence));

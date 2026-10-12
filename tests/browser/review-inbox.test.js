@@ -292,15 +292,20 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       await row(second).locator('article.prop').waitFor();
       assert.equal(await today.locator('#board.v-inbox').count(), 0, 'both cards expand without leaving Today');
       assert.equal(todayApi.writes().length, 0, 'expansion is read-only');
+      const inlineSource = row(second).locator('a', { hasText: 'Open the source' });
+      assert.equal(await inlineSource.getAttribute('href'), meeting.url, 'expanded evidence links to its source');
+      assert.match(await inlineSource.getAttribute('rel'), /noopener/, 'new-tab source links cannot control the board');
       await row(second).locator('[data-act="accept"]').focus();
       const beforeRefresh = await today.evaluate(() => ({ scroll: document.querySelector('#board').scrollTop, id: document.activeElement.closest('.trow').dataset.id, act: document.activeElement.dataset.act }));
       todayApi.files['proposals/r_newer0001.json'] = text(prop('r_newer0001', 'task.create', 'New arrival should not displace the current review', { source: { ...meeting, date: '2026-10-13' } })); todayApi.bump();
-      await today.locator('#btnRefresh').click(); await today.waitForTimeout(300);
+      await today.locator('#btnRefresh').click();
+      await today.waitForFunction(() => document.querySelector('#inboxBadge')?.textContent === '11');
+      await today.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.deepEqual(await order(), initial, 'a newer remote proposal does not reorder the five displayed rows');
       assert.equal(await row(second).locator('article.prop').count(), 1, 'refresh preserves a second expanded review');
       const afterRefresh = await today.evaluate(() => ({ scroll: document.querySelector('#board').scrollTop, id: document.activeElement.closest('.trow')?.dataset.id, act: document.activeElement.dataset.act }));
       // The explicit Refresh click owns focus, while the viewport remains on the same reading position.
-      assert(Math.abs(afterRefresh.scroll - beforeRefresh.scroll) < 40, 'remote refresh preserves the reading position');
+      assert(Math.abs(afterRefresh.scroll - beforeRefresh.scroll) < 40, `remote refresh preserves the reading position (${beforeRefresh.scroll} → ${afterRefresh.scroll})`);
       if (process.env.TODAY_INLINE_SCREENSHOT) {
         for (const width of [1280, 350]) {
           await today.setViewportSize({ width, height: 850 });
