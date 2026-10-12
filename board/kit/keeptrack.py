@@ -286,7 +286,7 @@ def _local_dir():
     return os.path.join(os.getcwd(), CONFIG_DIRS[0])
 
 
-def ensure_local_dir(path, warn=True):
+def ensure_local_dir(path, warn=True, check_tracked=True):
     """Create the folder holding `path` and keep it out of git (a .gitignore of `*`), for any project. Refuses a
     folder that is a symlink or holds files git tracks: that folder came with the repo, not from Keeptrack, and
     writing into it could be redirected anywhere. A board repo's root record that is not ignored is written anyway,
@@ -302,10 +302,9 @@ def ensure_local_dir(path, warn=True):
         if not os.path.lexists(os.path.join(d, ".gitignore")):
             write_private(os.path.join(d, ".gitignore"), "# personal Keeptrack settings for this project; never committed\n*\n")
     else:   # a board repo's root (.board-claim.json): the file itself must not be committed (the kit's gitignore lists it)
-        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", os.path.basename(path)], capture_output=True, text=True).stdout.strip()
-        if tracked:
-            raise OSError(f"{path} is committed to git; Keeptrack keeps its personal files out of git (add it to .gitignore)")
-        if warn and subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True).returncode == 1:
+        if check_tracked and _tracked_by_git(path) is not False:   # tracked, or git could not say: the same answer as the read
+            raise OSError(f"{path} is committed to git, or git cannot vouch for it; Keeptrack keeps its personal files out of git (add it to .gitignore)")
+        if warn and subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True, timeout=10).returncode == 1:
             print(f"warning: {os.path.basename(path)} is not in .gitignore, so `git add -A` would commit this session's id; "
                   "add it to .gitignore (the kit's template lists it)", file=sys.stderr)
 
@@ -1420,15 +1419,18 @@ def claim_record():
 
 
 def _record_tracked():
-    """Whether git tracks the local claim record: True, False, or None when git could not say (a stalled or refusing git,
-    say a repo whose ownership git doubts), which trusts nothing. Without git at all nothing can be tracked. Asked for a
-    --file board too: that board writes no record, but the clone it runs in may hold one."""
+    return _tracked_by_git(CLAIM_FILE)
+
+
+def _tracked_by_git(path):
+    """Whether git tracks `path`: True, False, or None when git could not say (no git, a stalled or refusing git, say a
+    repo whose ownership git doubts), which trusts nothing: the kit's own write needs git, so a record found where git
+    cannot answer was not this clone's. Asked for a --file board too: that board writes no record, but the clone it
+    runs in may hold one."""
     try:
-        r = subprocess.run(["git", "-C", os.path.dirname(CLAIM_FILE) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(CLAIM_FILE)],
+        r = subprocess.run(["git", "-C", os.path.dirname(path) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(path)],
                            capture_output=True, text=True, timeout=10)
-    except OSError:
-        return False   # no git here: nothing to be tracked in
-    except subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode == 0:
         return True
@@ -1705,7 +1707,7 @@ def drop_claim_file(task_id=None):
         info = claim_record()
         if info is None and not os.path.lexists(CLAIM_FILE):
             return   # no record: nothing to forget, and nothing to create a folder for
-        ensure_local_dir(CLAIM_FILE, warn=False)   # the same guard as the write: a committed or redirected record is left alone
+        ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=info is None)   # the same guard as the write (the read already asked git when it found a record)
         if task_id:
             if info and info.get("id") and info.get("id") != task_id:
                 return
@@ -1804,8 +1806,8 @@ def cmd_move(a):
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
-        if column == "done" and t["column"] != "done" and t.get("claim"):
-            _MUT["rerun"] = True   # a lost race re-runs this: a claim that was stale here may be live on the newer board
+        if column == "done" and t["column"] != "done":
+            _MUT["rerun"] = True   # a lost race re-runs this: a claim absent or stale here may be live on the newer board
             if claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
                 claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
         old = t["column"]; t["column"] = column
@@ -1935,8 +1937,8 @@ def cmd_history(a):
 def cmd_auto_heartbeat(a):
     """Hook entry point. Never fails loudly: a hook must not break the agent's session."""
     try:
-        st = os.stat(CLAIM_FILE)
-        if time.time() - st.st_mtime < HEARTBEAT_EVERY:
+        st = os.lstat(CLAIM_FILE)   # a symlinked record is nobody's: its target is never read, touched or followed
+        if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
         os.utime(CLAIM_FILE)  # throttle first: even if git or the network call stalls, the next tool calls skip this
         _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
