@@ -256,6 +256,13 @@ class HooksAndHelp(unittest.TestCase):
         self.hook("auto-heartbeat.sh", os.path.join(repo, "src"))
         self.assertEqual("here --hook\nauto-heartbeat\n", self.ran())
 
+    def test_heartbeat_hook_never_reads_through_a_symlinked_personal_folder(self):
+        repo = git_repo(os.path.join(self.tmp.name, "linked-claim"))
+        victim = os.path.join(self.tmp.name, "victim"); os.makedirs(victim); write(os.path.join(victim, "claim.json"), {"id": "t_1"})
+        os.symlink(victim, os.path.join(repo, ".keeptrack"))
+        self.hook("auto-heartbeat.sh", repo)
+        self.assertEqual("", self.ran())
+
     def test_board_repo_in_the_environment_counts_as_connected(self):
         self.hook("session-start.sh", self.tmp.name, {"BOARD_REPO": "o/b"})
         self.assertEqual("here --hook\n", self.ran())

@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v36 (schema 4)
+Claim-ownership follow-ups from the review of v35. The local claim record is read once per command; a record git tracks is ignored with a note, and writing one at a board repo's root warns when `.gitignore` does not list it. A `heartbeat`, `done` or `release` whose save loses a race re-runs on the newer board, so it never lands on another session's fresh claim. The web page computes its agent-limit check once per render.
+- Run `kit-update` only. There is no board-data migration.
+- Check: `.board-claim.json` is in the board repo's `.gitignore` (the kit's template lists it); `keeptrack.py claim` prints no "not in .gitignore" warning.
+
 ### v35 (schema 4)
 Claims, launch checks, done evidence and time zones, from the external review of private-tasks. `done`, `release` and `heartbeat` refuse a claim that belongs to another session (`--force` only on a person's say-so); releasing a stale, stuck or blocked claim works from any session. `--force` no longer skips `max_agent_claims`. A card sent to Claude from the web page gets a placeholder claim, which the routine's `claim` replaces without `--force`. `done` needs `--note` and refuses open checklist items; `done --cancel --note "why"` closes a card as `outcome: cancelled`. `--due today`, the OVERDUE/TODAY flags and `today` use the member's time zone.
 - Run `kit-update` only. There is no board-data migration.

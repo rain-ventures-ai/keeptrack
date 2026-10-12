@@ -286,24 +286,43 @@ def _local_dir():
     return os.path.join(os.getcwd(), CONFIG_DIRS[0])
 
 
-def ensure_local_dir(path):
+def ensure_local_dir(path, warn=True, check_tracked=True):
     """Create the folder holding `path` and keep it out of git (a .gitignore of `*`), for any project. Refuses a
     folder that is a symlink or holds files git tracks: that folder came with the repo, not from Keeptrack, and
-    writing into it could be redirected anywhere."""
+    writing into it could be redirected anywhere. A board repo's root record that is not ignored is written anyway,
+    with a warning (a .gitignore from before the kit's template would let `git add -A` commit the session id)."""
     d = os.path.dirname(path)
     if os.path.islink(d):
         raise OSError(f"{d} is a symlink; Keeptrack will not write through it")
     os.makedirs(d, exist_ok=True)
     if os.path.basename(d) in CONFIG_DIRS:   # Keeptrack's own folder: nothing in it may be committed
-        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True).stdout.strip()
-        if tracked:
-            raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
+        if check_tracked:
+            try:
+                r = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True, timeout=10, env=_git_c_env())
+            except (OSError, subprocess.SubprocessError):
+                raise OSError(f"git cannot vouch for {d} (no git, or it did not answer); Keeptrack keeps its personal files out of git")
+            if r.returncode != 0 and "not a git repository" not in r.stderr:
+                raise OSError(f"git cannot vouch for {d} (it refused to answer); Keeptrack keeps its personal files out of git")
+            if r.stdout.strip():
+                raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
         if not os.path.lexists(os.path.join(d, ".gitignore")):
             write_private(os.path.join(d, ".gitignore"), "# personal Keeptrack settings for this project; never committed\n*\n")
     else:   # a board repo's root (.board-claim.json): the file itself must not be committed (the kit's gitignore lists it)
-        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", os.path.basename(path)], capture_output=True, text=True).stdout.strip()
-        if tracked:
-            raise OSError(f"{path} is committed to git; Keeptrack keeps its personal files out of git (add it to .gitignore)")
+        if check_tracked:
+            tracked = _tracked_by_git(path)   # the same answer as the read: tracked, or git could not say, is not ours
+            if tracked:
+                raise OSError(f"{path} is committed to git; Keeptrack keeps its personal files out of git (add it to .gitignore)")
+            if tracked is None:
+                raise OSError(f"git cannot vouch for {path} (no git here, or it did not answer), so Keeptrack writes no personal file")
+        if warn:
+            try:
+                ignored = subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True, timeout=10,
+                                         env=_git_c_env()).returncode != 1
+            except (OSError, subprocess.SubprocessError):
+                ignored = True   # no answer: no warning either
+            if not ignored:
+                print(f"warning: {os.path.basename(path)} is not in .gitignore, so `git add -A` would commit this session's id; "
+                      "add it to .gitignore (the kit's template lists it)", file=sys.stderr)
 
 
 def write_private(path, text):
@@ -1030,8 +1049,11 @@ class UseGit(Exception):
     """The API refused the write because of the sandbox proxy: switch to the git transport and retry."""
 
 
-_MUT = {"base": None, "extra": {}, "recheck": False}   # while fn runs inside mutate: the board state it reads, the extra files it wants saved with it,
-# and whether its checks read the whole board (then a lost race re-runs fn on the newer board instead of merging)
+_MUT = {"base": None, "extra": {}, "recheck": False, "rerun": False}   # while fn runs inside mutate: the board state it reads, the extra files it wants saved with it,
+# whether its checks read the whole board (recheck: a lost race re-runs fn on the newer board instead of merging, and an API
+# save takes the commit path, whose ref update notices any save), and whether a check on one card must hold on the newer
+# board (rerun: the same re-run after a lost race, with the save path unchanged: a one-file contents PUT already fails
+# when that card's file changed)
 
 
 def rewrite_archives(data, edit):
@@ -1167,10 +1189,15 @@ def _renumber(merged, theirs):
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
+        owner = not _REC.get("on")   # the local claim record is read once for this command, across its retries (a caller that
+        if owner:                    # already holds the one read, the heartbeat hook, keeps it)
+            _REC.clear(); _REC["on"] = True
         try:
             return _mutate(fn, message)
         finally:
-            _MUT["recheck"] = False
+            _MUT["recheck"] = _MUT["rerun"] = False
+            if owner:
+                _REC.clear()
 
 
 def _mutate(fn, message):
@@ -1184,11 +1211,12 @@ def _mutate(fn, message):
         # migration because it creates many files and first makes a backup tag.
         migrate_data(data, min(SCHEMA, 3))
         if lost is None or lost[2]:
-            # First attempt, or a command that also rewrites archive files (renames) or checks the whole board (the
-            # agent claim limit): those run again on the latest board, because what they read may have changed.
+            # First attempt, or a command that also rewrites archive files (renames), checks the whole board (the agent
+            # claim limit) or checks who owns a card's claim: those run again on the latest board, because what they
+            # read may have changed.
             base = copy.deepcopy(data)
             out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
-            _MUT["base"], _MUT["extra"], _MUT["recheck"] = sha, {}, False
+            _MUT["base"], _MUT["extra"], _MUT["recheck"], _MUT["rerun"] = sha, {}, False, False
             with contextlib.redirect_stdout(out):
                 result = fn(data)
             assign_nums(data)
@@ -1215,7 +1243,7 @@ def _mutate(fn, message):
         if ok:
             print(out.getvalue(), end="")
             return result
-        lost = (base, copy.deepcopy(data), bool(extra) or _MUT["recheck"])
+        lost = (base, copy.deepcopy(data), bool(extra) or _MUT["recheck"] or _MUT["rerun"])
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not save after retries (board busy)")
 
@@ -1347,17 +1375,18 @@ def session_id(args):
     public in the session link, or that copies the page's placeholder prefix, is not used (a random id is, and the
     local record keeps it for the later done or release)."""
     given = args.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")
-    if given and not usable_session(given):
+    usable = usable_session(given)
+    if given and not usable:
         print("note: that session id is public (it is in the session link) or a placeholder prefix; this run's claim uses this clone's "
               "recorded session or a random id, kept in the local claim record", file=sys.stderr)
-    return usable_session(given) or recorded_session() or uuid.uuid4().hex[:8]
+    return usable or recorded_session() or uuid.uuid4().hex[:8]
 
 
-def session_for(a, task_id=None):
+def session_for(a):
     """The session id this run acts as on an existing card: --session, then the environment (same order as
     session_id), then the session in this clone's local claim record, whichever card it is for (one clone is one
     session: an attended session with no environment that claimed earlier in this clone still owns its cards).
-    Only then a random id, which owns nothing. task_id is kept for callers; the record is not scoped by card."""
+    Only then a random id, which owns nothing. The record is not scoped by card."""
     sid = usable_session(getattr(a, "session", None) or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID")
                          or os.environ.get("CODEX_SESSION_ID"))
     return sid or recorded_session() or uuid.uuid4().hex[:8]
@@ -1374,16 +1403,79 @@ def is_placeholder_claim(c):
     return str((c or {}).get("session_id") or "").startswith("pending-")
 
 
+_REC = {}   # while a command runs inside mutate(): its one read of the local claim record ("info", for the file "path")
+
+
+def claim_record():
+    """The local claim record as a dict, or None when there is none, it is not a JSON object, or git tracks it. It is
+    read once per command (mutate keeps the read across its retries; outside a command every call reads again). A
+    tracked record came with the repo, not from this clone's own claim, so a board writer who commits one cannot
+    hand every pulling clone a known session id: it is ignored, with one note. Not checked for a --file board
+    (which keeps no record) or outside a git repo."""
+    if _REC.get("on") and _REC.get("path") == CLAIM_FILE and "info" in _REC:
+        return _REC["info"]
+    info, tracked = None, None
+    if os.path.islink(os.path.dirname(CLAIM_FILE)):
+        pass   # a symlinked folder is never written through (ensure_local_dir), so nothing in it is this clone's record
+    elif os.path.lexists(CLAIM_FILE):
+        tracked = _record_tracked()   # asked before the file is opened: a committed record is never read, whatever it holds
+        if tracked is False:
+            try:
+                with os.fdopen(os.open(CLAIM_FILE, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))) as f:   # a symlinked record is nobody's
+                    info = json.load(f)
+                if not isinstance(info, dict):
+                    info = None
+            except ValueError:
+                info = None   # untracked but not a record: a later drop may remove it
+            except OSError:
+                info, tracked = None, None   # a symlinked or unreadable file is nobody's: never removed either
+        elif tracked:
+            print(f"note: {CLAIM_FILE} is committed to git, so it is not this clone's own record; ignoring it", file=sys.stderr)
+        else:
+            print(f"note: git could not say whether {CLAIM_FILE} is committed, so it is not trusted as this clone's record", file=sys.stderr)
+    if _REC.get("on"):
+        _REC.update(path=CLAIM_FILE, info=info, tracked=tracked)
+    return info
+
+
+def _record_tracked():
+    return _tracked_by_git(CLAIM_FILE)
+
+
+def _git_c_env():
+    """The environment for a git probe whose stderr text is matched: git translates its messages, so the C locale."""
+    return {**os.environ, "LC_ALL": "C", "LANGUAGE": "C"}
+
+
+def _tracked_by_git(path):
+    """Whether git tracks `path`: True, False, or None when git could not say (no git, a stalled or refusing git, say a
+    repo whose ownership git doubts), which trusts nothing: the kit's own write needs git, so a record found where git
+    cannot answer was not this clone's. Asked for a --file board too: that board writes no record, but the clone it
+    runs in may hold one."""
+    try:
+        r = subprocess.run(["git", "-C", os.path.dirname(path) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(path)],
+                           capture_output=True, text=True, timeout=10, env=_git_c_env())   # the stderr text is matched below
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode == 0:
+        return True
+    if r.returncode == 1 or "not a git repository" in r.stderr:
+        return False
+    return None
+
+
+def _record_changed(info):
+    """The record on disk now holds `info` (None: it is gone); keep this command's one read in step."""
+    if _REC.get("on") and _REC.get("path") == CLAIM_FILE:
+        _REC["info"] = info
+
+
 def recorded_session(task_id=None):
     """The session in this clone's local claim record (for this card when task_id is given), else ''. A clone is one
     trust domain: the record it wrote is its session, whichever card it claimed last."""
-    try:
-        with open(CLAIM_FILE) as f:
-            info = json.load(f)
-        ok = isinstance(info, dict) and usable_session(info.get("session")) and (task_id is None or info.get("id") == task_id)
-        return info["session"] if ok else ""
-    except (OSError, ValueError):
-        return ""
+    info = claim_record()
+    ok = info is not None and usable_session(info.get("session")) and (task_id is None or info.get("id") == task_id)
+    return info["session"] if ok else ""
 
 
 def claim_owner_check(data, t, a, action):
@@ -1392,12 +1484,17 @@ def claim_owner_check(data, t, a, action):
     CLI session's claim. Releasing a stale, stuck or blocked claim is allowed: that is the recovery path for a dead
     or parked run (done never gets that: it asserts the work was finished). The refusal never prints the owning
     session's id: an id is the only proof of ownership there is, so it is not handed to whoever was refused."""
-    c = t.get("claim")   # a lost race on this card is caught by the save's own file check; a clash report shows ids only in part
-    if not c or c.get("status") == "done" or getattr(a, "force", False):
+    if getattr(a, "force", False):
+        return
+    _MUT["rerun"] = True   # a save that loses a race re-runs this on the newer board, never a merge: another session may have
+    # taken the card over meanwhile. Not "recheck": that would send every API save of these commands through the 4-call
+    # commit path, and the contents PUT's per-file SHA already fails when this card's file changed (the claim is on it).
+    c = t.get("claim")   # a clash report shows ids only in part
+    if not c or c.get("status") == "done":
         return   # no live claim (older cards kept a finished one)
     state = claim_state(data, c)
     own = c.get("session_id")
-    if own and not is_placeholder_claim(c) and own in {session_for(a, t["id"]), recorded_session()}:
+    if own and not is_placeholder_claim(c) and own in {session_for(a), recorded_session()}:
         return   # a claim with no session id is nobody's: only --force finishes it
     if action == "release" and state in ("stale", "stuck", "blocked"):
         return   # a stale placeholder (the routine never started) is a dead run too
@@ -1526,7 +1623,8 @@ def write_claim_record():
         ensure_local_dir(CLAIM_FILE)
         write_private(CLAIM_FILE, json.dumps(rec))
     except OSError as e:
-        print(f"note: no local claim record, so no automatic heartbeat ({e})", file=sys.stderr)
+        print(f"note: no local claim record, so no automatic heartbeat ({e}); pass --session {rec.get('session')} "
+              "(or export BOARD_SESSION) to heartbeat, done or release the card", file=sys.stderr)
 
 
 def do_claim(a, tid, data):
@@ -1632,18 +1730,16 @@ def drop_claim_file(task_id=None):
     if FILE:
         return
     try:
-        ensure_local_dir(CLAIM_FILE)   # the same guard as the write: a committed or redirected record is left alone
+        info = claim_record()
+        if info is None and (not os.path.lexists(CLAIM_FILE) or (task_id and _REC.get("tracked") is not False)):
+            return   # nothing read this command (no record, one git did not vouch for, or one that appeared meanwhile): not ours to forget
+        ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=info is None)   # the same guard as the write (the read already asked git when it found a record)
         if task_id:
-            try:
-                with open(CLAIM_FILE) as f:
-                    info = json.load(f)
-            except (OSError, ValueError):
-                info = None
-            if isinstance(info, dict) and info.get("id") and info.get("id") != task_id:
+            if info and info.get("id") and info.get("id") != task_id:
                 return
-            if isinstance(info, dict) and usable_session(info.get("session")):
-                write_private(CLAIM_FILE, json.dumps({"session": info["session"]})); return
-        os.remove(CLAIM_FILE)
+            if info and usable_session(info.get("session")):
+                write_private(CLAIM_FILE, json.dumps({"session": info["session"]})); _record_changed({"session": info["session"]}); return
+        os.remove(CLAIM_FILE); _record_changed(None)
     except OSError:
         pass
 
@@ -1736,8 +1832,10 @@ def cmd_move(a):
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
-        if column == "done" and t["column"] != "done" and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
-            claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
+        if column == "done" and t["column"] != "done":
+            _MUT["rerun"] = True   # a lost race re-runs this: a claim absent or stale here may be live on the newer board
+            if claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
+                claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
@@ -1865,12 +1963,15 @@ def cmd_history(a):
 def cmd_auto_heartbeat(a):
     """Hook entry point. Never fails loudly: a hook must not break the agent's session."""
     try:
-        st = os.stat(CLAIM_FILE)
-        if time.time() - st.st_mtime < HEARTBEAT_EVERY:
+        if os.path.islink(os.path.dirname(CLAIM_FILE)):
+            return   # lstat/utime follow symlinks in parent components; reject the personal folder before touching its target
+        st = os.lstat(CLAIM_FILE)   # a symlinked record is nobody's: its target is never read, touched or followed
+        if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
-        info = json.load(open(CLAIM_FILE))
-        os.utime(CLAIM_FILE)  # throttle even if the network call fails, and even when there is nothing to beat
-        if info.get("attended") or not info.get("id"):
+        os.utime(CLAIM_FILE, follow_symlinks=False)  # throttle first: even if git or the network call stalls, the next tool calls skip this
+        _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
+        info = claim_record()   # None for a record git tracks: it came with the repo, so it names no card of this clone's
+        if not info or info.get("attended") or not info.get("id"):
             return  # a person drives this session, or no card is active: no automatic heartbeats
 
         def fn(data):
@@ -1886,6 +1987,8 @@ def cmd_auto_heartbeat(a):
         mutate(fn, f"Agent heartbeat: {info['id']}")
     except BaseException:
         return
+    finally:
+        _REC.clear()
 
 
 def cmd_add(a):

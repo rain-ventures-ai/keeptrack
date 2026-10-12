@@ -6,6 +6,8 @@ d=$PWD
 while :; do
   for f in .keeptrack/claim.json .board/claim.json .board-claim.json; do
     if [ -f "$d/$f" ]; then
+      p=${f%/*}; [ "$p" != "$f" ] && [ -L "$d/$p" ] && exit 0   # never grep through a symlinked personal folder
+      [ -L "$d/$f" ] && exit 0   # a symlinked record is nobody's: never followed, never beaten
       grep -q '"id"' "$d/$f" 2>/dev/null || exit 0   # a record with no card (the session only) costs no python
       grep -q '"attended": true' "$d/$f" 2>/dev/null && exit 0   # a person drives this session: no beats, no python
       command -v python3 >/dev/null 2>&1 || exit 0

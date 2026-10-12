@@ -979,9 +979,14 @@ if (typeof window !== 'undefined') (() => {
   const ago = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
   // The board's agent-capacity rule (settings.max_agent_claims, whole number 1-100): running, non-attended agent claims on OTHER cards count,
   // the page's own pending placeholders included (same count as keeptrack.py's claim). Returns '' when there is room, else the message to show.
+  let renderBusy = null;   // inside a render: { list } caches the busy claims so each card does not re-filter every task; null outside, where the click paths compute fresh
+  function agentBusy() {
+    if (renderBusy && renderBusy.list) return renderBusy.list;
+    const list = state.tasks.filter(x => x.claim && !x.claim.attended && claimState(x.claim) === 'running').sort((a, b) => a.num - b.num); if (renderBusy) renderBusy.list = list; return list;
+  }
   function agentLimitFull(exceptId) {
     const lim = (state.settings || {}).max_agent_claims; if (!Number.isInteger(lim) || lim < 1 || lim > 100) return '';
-    const busy = state.tasks.filter(x => x.id !== exceptId && x.claim && !x.claim.attended && claimState(x.claim) === 'running').sort((a, b) => a.num - b.num); if (busy.length < lim) return '';
+    const busy = agentBusy().filter(x => x.id !== exceptId); if (busy.length < lim) return '';
     return `${busy.length} agent run${busy.length === 1 ? '' : 's'} already going (${busy.map(x => '#' + x.num).join(', ')}); the board's limit is ${lim}. Wait for one to finish, or raise it with keeptrack.py settings-set --max-agent-claims N.`;
   }
   const needsAttention = t => { const cs = claimState(t.claim); const late = t.due && t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); return late || cs === 'stale' || cs === 'stuck' || cs === 'blocked'; };
@@ -1266,7 +1271,8 @@ if (typeof window !== 'undefined') (() => {
     const ids = new Set(real.tasks.map(t => t.id)); viewPending = new Set(v.tasks.filter(t => !ids.has(t.id)).map(t => t.id));
     state = v; try { renderNow(); } finally { state = real; }
   }
-  function renderNow() {
+  function renderNow() { renderBusy = {}; try { renderPass(); } finally { renderBusy = null; } }
+  function renderPass() {
     if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
     const scroll = boardScrollPosition();
     document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
@@ -1542,10 +1548,11 @@ if (typeof window !== 'undefined') (() => {
     if (busy) { toast('Busy, try again in a moment', true); return; }
     let send = false;
     if (wantsClaude(text)) {
+      const full = agentLimitFull(id);
       if (!myAgents().includes('claude')) { /* this person does not use Claude: a plain mention */ }
       else if (!claudeReady()) toast('To make @claude start your routine, set it up in Settings → Agents & integrations. Posting as a normal comment.');
       else if (!cfg().me) toast('Set your GitHub username in Settings first. Posting as a normal comment.', true);
-      else if (agentLimitFull(id)) { const full = agentLimitFull(id), t0 = state.tasks.find(x => x.id === id); toast(full + ' Posting as a normal comment.', true); rlog(t0 ? t0.num : '?', 'Not sent', full, false); }   // no dialog, no claim, no cron job: the comment is posted alone
+      else if (full) { const t0 = state.tasks.find(x => x.id === id); toast(full + ' Posting as a normal comment.', true); rlog(t0 ? t0.num : '?', 'Not sent', full, false); }   // no dialog, no claim, no cron job: the comment is posted alone
       else { const t0 = state.tasks.find(x => x.id === id), other = t0 && t0.claim && claimState(t0.claim) === 'running' && String(t0.claim.session_id || '').indexOf('pending-') !== 0;
         if (other && !(await ui.confirm({ title: 'Send to Claude anyway?', body: `${t0.claim.agent} already has a running session on this task. Cancel posts the comment without starting Claude.`, confirmLabel: 'Send to Claude' }))) { /* post only */ }
         else { const a = await askSend(t0 ? t0.num : '?'); if (a === 'cancel') return; send = a === 'send'; } }
