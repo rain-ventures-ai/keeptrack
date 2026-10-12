@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **2026-10-12** — Inbox questions closed with `proposal-done --not-acted` show "Closed without acting by …" (kit v45).
 
+- **2026-10-12** — Kanban cards show compact relative creation and last-activity ages, progressing from hours through
+  days, weeks, months and years, with exact timestamps on hover. Activity includes task edits, comments, history and
+  agent runs.
+
 - **2026-10-12** — Mobile Find results keep the full height of wrapped titles and metadata when the on-screen keyboard
   reduces the available space, scrolling the result list instead of overlapping adjacent rows.
 

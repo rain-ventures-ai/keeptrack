@@ -19,14 +19,16 @@ const server = http.createServer((req, res) => {
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => { localStorage.setItem('kb_tour_seen', '1'); localStorage.setItem('kb_theme', 'sand');
       localStorage.setItem('kb_repo', 'acme/search'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_api', 'https://api.test'); sessionStorage.setItem('kb_view', 'board'); });
-    const makeTask = (id, num, title) => ({ id, num, title, column: 'todo', priority: 'medium', assignees: [], labels: [], comments: [], todos: [], history: [], links: [] });
+    const HOUR = 60 * 60 * 1000, DAY = 24 * HOUR;
+    const before = ms => new Date(Date.now() - ms).toISOString();
+    const makeTask = (id, num, title, created, updated, extra = {}) => ({ id, num, title, column: 'todo', priority: 'medium', assignees: [], labels: [], comments: [], todos: [], history: [], links: [], created, updated, ...extra });
     const board = { version: 3, columns: [{ id: 'todo', name: 'To do' }], people: [], contacts: [], clients: [], agents: [], labels: [], settings: {},
-      tasks: [makeTask('t_search', 1, 'Search example card'),
-        makeTask('t_new_1', 2, 'Research: personal AI benchmark for testing new models'),
-        makeTask('t_new_2', 3, 'Review new follow-ups from the latest Keeptrack release and record reads'),
-        makeTask('t_new_3', 4, 'Prepare a new proposal with the full heartbeat and feature plan'),
-        makeTask('t_new_4', 5, 'Upgrade the new board tools after checking every shared workspace'),
-        makeTask('t_new_5', 6, 'Plan the next new family bike trip with train and weather options')] };
+      tasks: [makeTask('t_search', 1, 'Search example card', before(800 * DAY), before(90 * DAY)),
+        makeTask('t_new_1', 2, 'Research: personal AI benchmark for testing new models', before(22 * DAY), before(3 * HOUR)),
+        makeTask('t_new_2', 3, 'Review new follow-ups from the latest Keeptrack release and record reads', before(20 * DAY), before(8 * DAY), { comments: [{ by: 'ollie', at: before(2 * HOUR), text: 'Latest note' }] }),
+        makeTask('t_new_3', 4, 'Prepare a new proposal with the full heartbeat and feature plan', before(90 * DAY), before(15 * DAY)),
+        makeTask('t_new_4', 5, 'Upgrade the new board tools after checking every shared workspace', before(3 * DAY), before(2 * DAY)),
+        makeTask('t_new_5', 6, 'Plan the next new family bike trip with train and weather options', before(5 * HOUR), before(2 * HOUR))] };
     await page.route('https://api.test/**', route => { if (route.request().method() !== 'GET') writes++;
       const url = route.request().url();
       if (url.includes('/contents/board/tasks.json')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sha: 'one', encoding: 'base64', content: Buffer.from(JSON.stringify(board)).toString('base64') }) });
@@ -34,6 +36,11 @@ const server = http.createServer((req, res) => {
       return route.fulfill({ status: 404, body: '{}' }); });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?repo=acme/search&branch=main&path=board/tasks.json`);
     await page.waitForSelector('.card');
+    assert.deepEqual(await page.locator('.card').nth(0).locator('.cardage span').allTextContents(), ['Created 2y ago', 'Active 3mo ago']);
+    assert.deepEqual(await page.locator('.card').nth(1).locator('.cardage span').allTextContents(), ['Created 3w ago', 'Active 3h ago']);
+    assert.deepEqual(await page.locator('.card').nth(2).locator('.cardage span').allTextContents(), ['Created 2w ago', 'Active 2h ago'], 'a newer comment is the latest activity');
+    assert.equal(await page.locator('.card').nth(0).locator('.cardage time').first().getAttribute('datetime'), board.tasks[0].created);
+    assert.match(await page.locator('.card').nth(0).locator('.cardage time').first().getAttribute('title'), /\d{4}/, 'the exact date is available on hover');
     const search = async query => { await page.evaluate(() => document.getElementById('btnSearch').click()); await page.locator('#qQ').fill(query); await page.waitForTimeout(150); };
     await search('HELP'); await page.getByRole('button', { name: 'Open Help', exact: true }).click();
     assert.equal(await page.locator('#dlgHelp').evaluate(dialog => dialog.open), true);
