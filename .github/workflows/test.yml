@@ -75,3 +75,6 @@ jobs:
       - name: Search help, settings and theme actions
         working-directory: tests/browser
         run: node search-actions.test.js
+      - name: Page safety (tab-bound board, min_kit, agent-limit recheck, proposal allow-list, undo cap, settings code, CSP)
+        working-directory: tests/browser
+        run: node page-safety.test.js

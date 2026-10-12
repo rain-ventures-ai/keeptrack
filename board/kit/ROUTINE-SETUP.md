@@ -22,7 +22,7 @@ If you would like an agent to walk you through this, ask Claude Code in this rep
 | cron-job.org API key | One per cron-job.org account. Each person can have their own free account (simplest), or share one key | Their browser (board Settings → Agents & integrations) |
 | GitHub token for the web board | Yes (already done) | Their browser (board Settings → Connection) |
 
-Nothing secret is ever committed to this repo. "Copy settings code" on the board moves your browser's values to your phone or another browser.
+Nothing secret is ever committed to this repo. "Copy settings code" on the board moves your browser's values to your phone or another browser (tick "Include tokens and keys" to take the tokens too).
 
 ## Let Claude set it up for you
 You can ask Claude (Claude Code in this repo, the Claude desktop app, or claude.ai) to do the setup. In the board, open **Settings → Agents & integrations → @claude in task comments**, switch **Use @claude** on, then **Let Claude guide you instead → Copy setup prompt** and paste it into a new chat. It points Claude at this guide and offers two modes: **guide me step by step**, or **do it in my browser** (Claude in Chrome or the built-in browser: you stay signed in, Claude does the clicking and the non-secret fields).

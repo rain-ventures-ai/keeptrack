@@ -96,10 +96,17 @@ if (typeof window !== 'undefined') (() => {
     set(k, v) { if (SHARED.test(k)) { try { localStorage.setItem(k, v); } catch {} } else MEM.set(k, String(v)); },
     del(k) { if (SHARED.test(k)) { try { localStorage.removeItem(k); } catch {} } else MEM.delete(k); }
   } : {
-    get(k, d = '') { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
-    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
-    del(k) { try { localStorage.removeItem(k); } catch {} }
+    get(k, d = '') { if (tabKey(k)) return TAB.has(k) ? TAB.get(k) : d; try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+    set(k, v) { if (tabKey(k)) { const ours = tabShared(k); TAB.set(k, String(v)); if (!ours) return; } try { localStorage.setItem(k, v); } catch {} },
+    del(k) { if (tabKey(k)) { const ours = tabShared(k); TAB.delete(k); if (!ours) return; } try { localStorage.removeItem(k); } catch {} }
   };
+  // Each tab keeps its own board: kb_repo and the per-board keys (BOARD_KEYS) are read once at start-up into TAB, so another
+  // tab switching boards can never make this one save into the wrong repo. A write here also updates localStorage (the
+  // board a new tab opens) only while localStorage still names this tab's repo; kb_boards keeps every board's values.
+  let TAB = null;   // null until the start-up snapshot below (and always in a demo sandbox)
+  const tabKey = k => !!TAB && (k === 'kb_repo' || BOARD_KEYS.includes(k.slice(3)));
+  const rawRepo = () => { try { return localStorage.getItem('kb_repo') || ''; } catch { return ''; } };
+  const tabShared = k => k === 'kb_repo' || rawRepo() === (TAB.get('kb_repo') || '');
   const cfg = () => ({
     repo: LS.get('kb_repo', ''), branch: LS.get('kb_branch', 'master'), path: LS.get('kb_path', 'board/tasks.json'),
     token: LS.get('kb_token'), me: LS.get('kb_me', ''), api: LS.get('kb_api', 'https://api.github.com') // api override is for local testing only
@@ -125,6 +132,9 @@ if (typeof window !== 'undefined') (() => {
     if (repo && REPO_RE.test(repo) && cur && repo !== cur) activateBoard(repo, boardsMap()[repo] ? {} : over);
     else { if (repo && REPO_RE.test(repo) && !cur) LS.set('kb_repo', repo); Object.keys(over).forEach(k => { if (!LS.get('kb_' + k)) LS.set('kb_' + k, over[k]); }); }
     stashBoard(); })();
+  if (!SANDBOX) { TAB = new Map(); ['kb_repo', ...BOARD_KEYS.map(k => 'kb_' + k)].forEach(k => { try { const v = localStorage.getItem(k); if (v !== null) TAB.set(k, v); } catch {} });
+    // another tab changed a key: follow it only for this tab's own board (a new token for it); a switch to another board is ignored
+    window.addEventListener('storage', e => { if (!e.key || e.key === 'kb_repo' || !tabKey(e.key) || !tabShared(e.key)) return; if (e.newValue === null) TAB.delete(e.key); else TAB.set(e.key, e.newValue); }); }
   const boardStoreId = (c = cfg()) => `${c.repo}:${c.branch}:${c.path}`;
   if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
   const localBoardJson = kind => { try { const x = JSON.parse(LS.get(`kb_${kind}:${boardStoreId()}`, '{}')); return x && typeof x === 'object' && !Array.isArray(x) ? x : {}; } catch { return {}; } };
@@ -135,8 +145,11 @@ if (typeof window !== 'undefined') (() => {
   const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
-  function exportCode() { stashBoard(); const o = {};   // stash first: kb_boards then has this board's latest per-board keys
-    XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '') o[k] = v; }); return 'kbcfg1.' + xEnc(o); }
+  const XFER_SECRETS = ['token', 'claude_token', 'cron_key'];   // left out of a code unless the person ticks "Include tokens and keys"
+  function exportCode(secrets = false) { stashBoard(); const o = {};   // stash first: kb_boards then has this board's latest per-board keys
+    XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '' && (secrets || !XFER_SECRETS.includes(k))) o[k] = v; });
+    if (!secrets && o.boards) { const b = boardsMap(); Object.values(b).forEach(e => XFER_SECRETS.forEach(k => delete e[k])); o.boards = JSON.stringify(b); }
+    return 'kbcfg1.' + xEnc(o); }
   function parseCode(raw) {
     const m = /kbcfg1\.([A-Za-z0-9_-]+)/.exec(String(raw || '')); if (!m) throw new Error('That is not a board settings code.');
     const o = xDec(m[1]), out = {};
@@ -175,11 +188,21 @@ if (typeof window !== 'undefined') (() => {
   let widgets = [], widgetMeta = { key: '', etag: '', problem: '' };
   const weatherCache = new Map();
   let loadGen = 0, fileDemo = false;   // loadGen: a newer load, a save or "Forget token" makes older in-flight loads drop their result; fileDemo: the board file has demo_base
-  // read-only: 'demo' (an example board: ?demo=crm or ?demo=board, or any file with demo_base), 'public' (a public repo read with no token), 'token' (the token can read but not write)
+  // read-only: 'demo' (an example board: ?demo=crm or ?demo=board, or any file with demo_base), 'public' (a public repo read with no token), 'token' (the token can read but not write),
+  // 'kit' (settings.min_kit names a newer kit than this page: an older tool must not save rules it does not know)
   const DEMO = (() => { const q = new URLSearchParams(location.search); if (!q.has('demo')) return ''; const v = q.get('demo'); return /^[a-z0-9-]+$/.test(v) && v !== '1' ? v : 'crm'; })();
   let ro = DEMO ? 'demo' : '';
   const roKey = () => 'kb_ro:' + cfg().repo;
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
+  // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
+  // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
+  const PAGE_KIT = 43;
+  let needKit = 0;
+  const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
+  function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
+    needKit = minKitOf(raw); if (ro === 'demo' || ro === 'public') return;
+    const want = needKit ? 'kit' : ro === 'kit' ? (LS.get(roKey()) ? 'token' : '') : ro; if (want !== ro) { ro = want; applyRo(); }
+  }
   let newerSchema = 0;
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -530,14 +553,14 @@ if (typeof window !== 'undefined') (() => {
       if (ro === 'public') { ro = ''; applyRo(); }
     }
     if (!c.token) { widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; setStatus('Not connected', 'err'); if ($('board').className !== 'v-welcome') render(); if (c.repo) noTokenBox(); else if ($('board').className !== 'v-welcome') renderWelcome(); return false; }
-    { const want = fileDemo ? 'demo' : LS.get(roKey()) ? 'token' : ''; if (ro !== want) { ro = want; applyRo(); } }   // a 304 keeps the last file's demo status
+    { const want = fileDemo ? 'demo' : needKit ? 'kit' : LS.get(roKey()) ? 'token' : ''; if (ro !== want) { ro = want; applyRo(); } }   // a 304 keeps the last file's demo and kit status
     if (!quiet) setStatus(fromSnap ? 'Showing the last copy, syncing…' : 'Loading…');
     try {
       if (splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`) {
         const got = await splitSnapshot(false); if (stale()) return false;
         if (!isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
         if (got.unchanged) { const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
-        const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); state = normalise(got.data);
+        const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); setKitRo(got.data); state = normalise(got.data);
         if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
       }
       const res = await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
@@ -552,7 +575,7 @@ if (typeof window !== 'undefined') (() => {
       else if (ro === 'demo') { ro = LS.get(roKey()) ? 'token' : ''; applyRo(); }
       if (isSplit(raw)) { const got = await splitSnapshot(true); if (stale()) return false; splitMeta = got.meta; raw = got.data; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); }
       else splitMeta = null;
-      newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkPublic(); lastSyncOk = true; initSeen();
+      newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; setKitRo(raw); const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkPublic(); lastSyncOk = true; initSeen();
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
     } catch (e) { console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
@@ -858,9 +881,13 @@ if (typeof window !== 'undefined') (() => {
 
   // Undo restores only the fields touched by a saved operation. Unrelated newer work is left alone, and mutate's
   // normal conflict screen still protects a field if somebody else changed that same field after our save.
-  const undoStack = [], UNDO_LIMIT = 20, UNDO_PERSIST_LIMIT = 5; let undoPersist = Promise.resolve();
+  // Each entry holds two whole-board copies, so memory keeps 5 and IndexedDB keeps the newest that fit in about 1 MB (none on a bigger board; kb_undo_bytes overrides it for tests).
+  const undoStack = [], UNDO_LIMIT = 5, UNDO_PERSIST_LIMIT = 5, UNDO_PERSIST_BYTES = (() => { try { return +localStorage.getItem('kb_undo_bytes') || 1e6; } catch { return 1e6; } })(); let undoPersist = Promise.resolve();
   const undoKey = () => 'kb_undo:' + boardStoreId();
-  const persistUndo = () => { if (SANDBOX || !cfg().repo) return Promise.resolve(); const saved = clone(undoStack.slice(-UNDO_PERSIST_LIMIT)); return undoPersist = undoPersist.then(() => idb.set(undoKey(), saved)); };
+  function undoToPersist() { const out = []; let bytes = 0;
+    for (let i = undoStack.length - 1; i >= 0 && out.length < UNDO_PERSIST_LIMIT; i--) { bytes += JSON.stringify(undoStack[i]).length; if (bytes > UNDO_PERSIST_BYTES) break; out.unshift(clone(undoStack[i])); }
+    return out; }
+  const persistUndo = () => { if (SANDBOX || !cfg().repo) return Promise.resolve(); const saved = undoToPersist(); return undoPersist = undoPersist.then(() => idb.set(undoKey(), saved)); };
   async function restoreUndo() {
     if (SANDBOX || !cfg().repo) return;
     const saved = await idb.get(undoKey()); if (!Array.isArray(saved)) return;
@@ -1001,10 +1028,13 @@ if (typeof window !== 'undefined') (() => {
           if (rawL.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); state = before; render(); roToast(); return false; }   // a demo file is never written
           latest = normalise(rawL); }
         else if (rawL) latest = normalise(rawL);
+        if (rawL && minKitOf(rawL)) { setKitRo(rawL); state = before; render(); roToast(); return false; }   // the board now needs a newer kit than this page
         const pre = clone(latest);
         // Archival is conditional on an unchanged snapshot. Re-evaluate that condition against
         // each current revision rather than merging a stale optimistic task deletion.
-        if (options.recheckArchive) { base = pre; mine = clone(pre); fn(mine); }
+        // options.recheck: a decision that depends on other cards (the agent-claim limit) is made again on this revision, and the
+        // save is one commit on the head that was read (a whole-board compare-and-swap, as keeptrack.py's recheck), never a one-file PUT
+        if (options.recheckArchive || options.recheck) { base = pre; mine = clone(pre); fn(mine); }
         // three-way merge: what I saw (base), my change (mine), what is on GitHub now (pre). Checked on every attempt:
         // a choice covers only the revision that was shown, so a newer clash asks again
         const gone = deletedUnderMe(base, pre, targetIds), mg = merge3(base, mine, pre);
@@ -1027,8 +1057,8 @@ if (typeof window !== 'undefined') (() => {
         fixNums(latest, pre); ensureRanks(latest);
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
-        let extra = {}, tree = false;   // options.extra: more files for the same commit (the Review Inbox writes the proposal with its record), checked on this revision
-        if (options.extra) { const r = options.extra(pre, readSha, latest); if (r && r.abort) { state = pre; render(); fail(r.abort); if (options.onAbort) options.onAbort(r.abort); return false; } extra = (r && r.files) || {}; tree = !!(r && r.tree); }
+        let extra = {}, tree = !!options.recheck;   // options.extra: more files for the same commit (the Review Inbox writes the proposal with its record), checked on this revision
+        if (options.extra) { const r = options.extra(pre, readSha, latest); if (r && r.abort) { state = pre; render(); fail(r.abort); if (options.onAbort) options.onAbort(r.abort); return false; } extra = (r && r.files) || {}; tree = tree || !!(r && r.tree); }
         const out = await save(latest, message, readSha, extra, tree);
         if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); if (waiting) savingStatus(); else setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
         if (out !== 'conflict') { fail(out === 'error:timeout' ? 'Not saved: GitHub did not answer in time' : 'Save failed (' + out + ')'); state = before; render(); return false; }
@@ -1054,23 +1084,23 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- claims -----------------------------------------------------------
-  function claimState(c) {
+  function claimState(c, board = state) {
     if (!c) return null;
     if (c.status === 'done' || c.status === 'stuck' || c.status === 'blocked') return c.status;
     const mins = (Date.now() - Date.parse(c.heartbeat_at || c.claimed_at)) / 60000;
-    return mins > (c.attended ? 12 * 60 : (state.settings.stale_after_minutes || 30)) ? 'stale' : 'running';
+    return mins > (c.attended ? 12 * 60 : ((board.settings || {}).stale_after_minutes || 30)) ? 'stale' : 'running';
   }
   const ago = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
   // The board's agent-capacity rule (settings.max_agent_claims, whole number 1-100): running, non-attended agent claims on OTHER cards count,
   // the page's own pending placeholders included (same count as keeptrack.py's claim). Returns '' when there is room, else the message to show.
   let renderBusy = null;   // inside a render: { list } caches the busy claims so each card does not re-filter every task; null outside, where the click paths compute fresh
-  function agentBusy() {
-    if (renderBusy && renderBusy.list) return renderBusy.list;
-    const list = state.tasks.filter(x => x.claim && !x.claim.attended && claimState(x.claim) === 'running').sort((a, b) => a.num - b.num); if (renderBusy) renderBusy.list = list; return list;
+  function agentBusy(board = state) {   // board: the board a change function is running on (a save re-runs it on the newer board)
+    const own = board === state; if (own && renderBusy && renderBusy.list) return renderBusy.list;
+    const list = board.tasks.filter(x => x.claim && !x.claim.attended && claimState(x.claim, board) === 'running').sort((a, b) => a.num - b.num); if (own && renderBusy) renderBusy.list = list; return list;
   }
-  function agentLimitFull(exceptId) {
-    const lim = (state.settings || {}).max_agent_claims; if (!Number.isInteger(lim) || lim < 1 || lim > 100) return '';
-    const busy = agentBusy().filter(x => x.id !== exceptId); if (busy.length < lim) return '';
+  function agentLimitFull(exceptId, board = state) {
+    const lim = (board.settings || {}).max_agent_claims; if (!Number.isInteger(lim) || lim < 1 || lim > 100) return '';
+    const busy = agentBusy(board).filter(x => x.id !== exceptId); if (busy.length < lim) return '';
     return `${busy.length} agent run${busy.length === 1 ? '' : 's'} already going (${busy.map(x => '#' + x.num).join(', ')}); the board's limit is ${lim}. Wait for one to finish, or raise it with keeptrack.py settings-set --max-agent-claims N.`;
   }
   const needsAttention = t => { const cs = claimState(t.claim); const late = t.due && t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); return late || cs === 'stale' || cs === 'stuck' || cs === 'blocked' || chaseNow(t); };   // a wait past its chase day too (as list --attention)
@@ -1636,9 +1666,10 @@ if (typeof window !== 'undefined') (() => {
     if (waitingOf(t)) { toast(waitingBlock(t), true); return; }
     { const full = agentLimitFull(id); if (full) { toast(full, true); rlog(t.num, 'Not sent', full, false); return; } }
     const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
-    let ph = '';
-    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card || waitingOf(card) || activeClaim(card)) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); ph = card.claim.session_id; stamp(card); }, `Assign #${t.num} to Claude`, [id]);
+    let ph = '', full = '';
+    const saved = await mutate(n => { full = ''; const card = n.tasks.find(x => x.id === id); if (!card || waitingOf(card) || activeClaim(card)) return; if ((full = agentLimitFull(id, n))) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); ph = card.claim.session_id; stamp(card); }, `Assign #${t.num} to Claude`, [id], null, { recheck: true });   // the limit is checked again on the board as saved
     const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) { if (!(await waitArrived(id, ph))) await triggerClaude(current, who, cid); }
+    else if (saved && full) { toast(full, true); rlog(t.num, 'Not sent', full, false); }   // another agent claim arrived meanwhile
     else if (saved && current && (waitingOf(current) || activeClaim(current))) toast(waitingOf(current) ? waitingBlock(current) : 'Someone took this task meanwhile; Claude was not started.', true);   // the newer board won
   }
   async function postComment() {
@@ -1659,10 +1690,10 @@ if (typeof window !== 'undefined') (() => {
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
     let sent = send, why = '', ph = '';
     await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return; t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text });
-      const live = activeClaim(t); sent = send && !waitingOf(t) && !(live && live.session_id !== seen);   // the newer board may wait, or someone took it meanwhile
-      why = send && !sent ? (waitingOf(t) ? waitingBlock(t) + ' Posted as a normal comment.' : 'Someone took this task meanwhile; posted as a normal comment.') : '';
+      const live = activeClaim(t), full = send && !waitingOf(t) ? agentLimitFull(id, n) : ''; sent = send && !waitingOf(t) && !(live && live.session_id !== seen) && !full;   // the newer board may wait, be at the agent limit, or someone took it meanwhile
+      why = send && !sent ? (waitingOf(t) ? waitingBlock(t) + ' Posted as a normal comment.' : full ? full + ' Posted as a normal comment.' : 'Someone took this task meanwhile; posted as a normal comment.') : '';
       if (sent) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); ph = t.claim.session_id; }   // the routine claims only cards assigned to its person
-      stamp(t); }, `Comment: ${titleOf(id)}`, [id]);
+      stamp(t); }, `Comment: ${titleOf(id)}`, [id], null, send ? { recheck: true } : {});
     $('cmPost').disabled = false;
     { const t2 = state.tasks.find(x => x.id === id); if (t2) syncAgentBtn(t2);
       if (mentionsCodex(text) && myAgents().includes('codex')) toast('Codex can’t be started from the board. Press Copy for Codex at the top of the card, then paste it into Codex.'); }
@@ -2307,13 +2338,13 @@ if (typeof window !== 'undefined') (() => {
     if (notices.length) { const sv = $('dSaved'); sv.textContent = notices.some(x => x.includes('GitHub')) ? 'Draft restored · GitHub changed too' : 'Draft restored'; sv.className = 'dsaved ' + (notices.some(x => x.includes('GitHub')) ? 'bad' : 'ok'); }
   }
   const baseFor = key => { const b = clone(state), i = b.tasks.findIndex(x => x.id === editing); if (i >= 0) b.tasks[i][key] = fieldBase[key]; return b; };   // the text as it was when I started editing it
-  async function saveField(fn, msg, baseKey, baseState = null) {     // every field saves on its own (no Save button); conflicts are checked per field
+  async function saveField(fn, msg, baseKey, baseState = null, options = {}) {     // every field saves on its own (no Save button); conflicts are checked per field
     const id = editing, sv = $('dSaved'); sv.textContent = 'Saving…'; sv.className = 'dsaved';
-    const ok = await mutate(fn, msg, [id], baseState || (baseKey ? baseFor(baseKey) : null)); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
+    const ok = await mutate(fn, msg, [id], baseState || (baseKey ? baseFor(baseKey) : null), options); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
     clearTimeout(saveTimer); saveTimer = setTimeout(() => { sv.textContent = ''; }, 2500);
     return ok;
   }
-  const edit = (id, f, msg, baseKey, baseState) => saveField(n => { const t = n.tasks.find(x => x.id === id); if (t) { f(t, n); stamp(t); } }, msg, baseKey, baseState);
+  const edit = (id, f, msg, baseKey, baseState, options) => saveField(n => { const t = n.tasks.find(x => x.id === id); if (t) { f(t, n); stamp(t); } }, msg, baseKey, baseState, options);   // options.recheck: f reads other cards
 
   // ---- the drawer frame: built once with ui.js (header, one property list, sections); fillDrawer() fills it per task ----
   const drawerAddRows = [];
@@ -2514,8 +2545,9 @@ if (typeof window !== 'undefined') (() => {
   }
   async function clearWait(id) {
     let full = '';
+    const t0 = state.tasks.find(x => x.id === id), dep = !!(t0 && t0.claim && t0.claim.blocked_by_wait);   // waking a blocked claim counts other cards' claims
     const ok = await edit(id, (t, n) => {
-      full = ''; t.waiting = null; const c = t.claim;   // a retry runs this again on the newer board
+      full = ''; t.waiting = null; const c = t.claim;   // with recheck, every save attempt runs this again on the newer board
       if (c && c.status === 'blocked' && c.blocked_by_wait) {
         if (claimState({ ...c, status: 'running' }) === 'stale') {   // its session is gone: release the claim, back to To do (at the end)
           delete c.blocked_by_wait; t.claim = null;
@@ -2525,10 +2557,10 @@ if (typeof window !== 'undefined') (() => {
           }
         }
         else if (c.before_wait === 'stuck') { delete c.blocked_by_wait; delete c.before_wait; c.status = 'stuck'; }   // it still needs help: the wait did not fix that
-        else if (c.attended || !agentLimitFull(id)) { delete c.blocked_by_wait; c.status = 'running'; c.heartbeat_at = nowIso(); }
-        else full = agentLimitFull(id);   // keeps blocked_by_wait: still live, as `unwait` does
+        else if (c.attended || !agentLimitFull(id, n)) { delete c.blocked_by_wait; c.status = 'running'; c.heartbeat_at = nowIso(); }
+        else full = agentLimitFull(id, n);   // keeps blocked_by_wait: still live, as `unwait` does
       }
-    }, `Wait cleared: ${titleOf(id)}`);
+    }, `Wait cleared: ${titleOf(id)}`, undefined, undefined, dep ? { recheck: true } : {});
     if (ok && full) toast(`The wait is cleared, but the claim stays blocked: ${full}`, true);
   }
   function openPeopleMenu(anchor) {
@@ -2860,13 +2892,16 @@ if (typeof window !== 'undefined') (() => {
     editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
   }
 
-  // Settings → Connection → Advanced → Move settings: the code holds every saved token unencrypted, so each copy asks first
-  const askExport = what => ask(`Copy ${what}?`, [`The ${what} holds every board, GitHub token, routine token and cron-job.org key saved in this browser. It is not encrypted: anyone who has it can use them.`, 'Paste it only into your own devices, then delete the message you sent it in.'], `Copy ${what}`, true);
-  $('xCode').onclick = async () => { if (await askExport('settings code')) copyText(exportCode(), 'Settings code copied. It contains your token, so paste it only into your own devices.'); };
-  $('xLink').onclick = async () => { if (await askExport('setup link')) copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode().slice(7)}`, 'Setup link copied. It contains your token, so open it only on your own devices.'); };
+  // Settings → Connection → Advanced → Move settings: tokens and keys go in only when "Include tokens and keys" is ticked; each copy asks first
+  const xSecrets = () => !!($('xSecrets') && $('xSecrets').checked);
+  const askExport = what => xSecrets() ? ask(`Copy ${what}?`, [`The ${what} holds every board, GitHub token, routine token and cron-job.org key saved in this browser. It is not encrypted: anyone who has it can use them.`, 'Paste it only into your own devices, then delete the message you sent it in.'], `Copy ${what}`, true)
+    : ask(`Copy ${what}?`, [`The ${what} holds your boards and settings, but no GitHub token, routine token or cron-job.org key: add them again on the other device, or tick “Include tokens and keys”. It is not encrypted.`], `Copy ${what}`);
+  const copiedMsg = what => xSecrets() ? `${what} copied. It contains your tokens, so use it only on your own devices.` : `${what} copied, without tokens or keys.`;
+  $('xCode').onclick = async () => { if (await askExport('settings code')) copyText(exportCode(xSecrets()), copiedMsg('Settings code')); };
+  $('xLink').onclick = async () => { if (await askExport('setup link')) copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode(xSecrets()).slice(7)}`, copiedMsg('Setup link')); };
   $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
-      if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ''}? This replaces this browser's settings.`, 'Import'))) return;
+      if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ' (it holds no tokens: add yours again afterwards)'}? This replaces this browser's settings.`, 'Import'))) return;
       await new Promise(res => whenSaved(res)); applyCode(m ? 'kbcfg1.' + m[1] : v); location.reload();   // queued saves finish before the settings change
     } catch (e) { toast(e.message); } };
   // ---- @ and # suggestions in comment/description boxes -----------------------------------------------------
@@ -3559,7 +3594,7 @@ if (typeof window !== 'undefined') (() => {
     const c = cfg(), has = !!c.repo, setup = !has && !DEMO, st = $('bState'), p = $('panelConn'); $('bThisBadge').textContent = ''; if (has) $('bThisBadge').append(badge(c.repo));
     $('bThisRepo').textContent = has ? c.repo : 'No board connected'; $('bThisSub').textContent = has ? `${c.branch} · ${c.path}` : '';
     $('bThisMe').textContent = c.me ? '@' + c.me : 'Not set: edits show as “someone”'; $('bThisMe').classList.toggle('muted', !c.me);
-    const [t, k] = DEMO ? ['Demo', 'neutral'] : !has ? ['Not set up', 'warn'] : !c.token ? ['No token', 'warn'] : ro === 'token' ? ['Read-only', 'warn'] : ro === 'demo' ? ['Demo', 'neutral'] : lastSyncOk ? ['Connected', 'ok'] : ['Not connected', 'danger'];
+    const [t, k] = DEMO ? ['Demo', 'neutral'] : !has ? ['Not set up', 'warn'] : !c.token ? ['No token', 'warn'] : ro === 'token' || ro === 'kit' ? ['Read-only', 'warn'] : ro === 'demo' ? ['Demo', 'neutral'] : lastSyncOk ? ['Connected', 'ok'] : ['Not connected', 'danger'];
     setChip($('bThisChip'), t, k);
     st.textContent = '';
     if (DEMO) st.append(ui.banner({ tone: 'info', icon: 'lock', text: 'This is a read-only demo board with invented data. There is nothing to connect here, and nothing you do is saved.', action: { label: 'Create my own board', onClick: () => { location.href = location.pathname + '?setup'; } } }));
@@ -3983,6 +4018,19 @@ if (typeof window !== 'undefined') (() => {
   const KIND_LABEL = { 'task.create': 'New task', 'task.update': 'Task update', 'person.upsert': 'Person', 'contact.touch': 'Interaction' };
   const SRC_LABEL = { meeting: 'Meeting', email: 'Email', other: 'Other' };
   const LIST_FIELDS = ['comments', 'todos', 'links'];
+  // The fields a proposal may change, the same lists as keeptrack.py (TASK_CHANGE_FIELDS, PERSON_CHANGE_FIELDS, TOUCH_CHANGE_FIELDS).
+  // `propose` checks them, but a proposal file can be written by hand: accept checks them again and refuses anything else (claim, num, id…).
+  const CHANGE_FIELDS = {
+    task: ['title', 'column', 'client', 'project', 'contact', 'priority', 'due', 'labels', 'owner', 'assignees', 'details', 'links', 'contacts', 'todos', 'comments'],
+    person: ['name', 'company', 'role', 'email', 'phone', 'linkedin', 'github', 'emails', 'phones', 'stage', 'value', 'source', 'notes', 'next', 'due', 'next_due', 'links', 'comments'],
+    touch: ['text', 'channel', 'at', 'source_id', 'source_message_ids', 'next', 'due', 'next_due'] };
+  const PROPOSAL_KINDS = ['task.create', 'task.update', 'person.upsert', 'contact.touch'];
+  function proposalRefusal(p, change) {   // '' when the proposal may be applied, else why not
+    const kind = String(p.kind || ''); if (!PROPOSAL_KINDS.includes(kind)) return `Not saved: unknown proposal kind ${JSON.stringify(kind)}.`;
+    if (!change || typeof change !== 'object' || Array.isArray(change)) return 'Not saved: the proposal has no valid change.';
+    const ok = CHANGE_FIELDS[kind.startsWith('task.') ? 'task' : kind === 'person.upsert' ? 'person' : 'touch'], bad = Object.keys(change).filter(k => !ok.includes(k));
+    return bad.length ? `Not saved: a ${kind} proposal may not set ${bad.join(', ')}. Ignore it, or fix the proposal file.` : '';
+  }
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
   const inboxOpen = {};   // proposal id -> 'edit' | 'merge' (the inline form that is open)
   let todayQueue = { key: '', order: [], visible: [], reviewed: new Map(), busy: new Set() };
@@ -4037,6 +4085,7 @@ if (typeof window !== 'undefined') (() => {
   // The change a decision makes to the board model n. ctx: { resultId, into, fields }.
   function applyProposal(n, p, action, change, ctx) {
     if (action === 'ignore') return;
+    { const why = proposalRefusal(p, change); if (why) throw new Error(why); }   // decideProposal refuses first; this is the last guard
     const ts = nowIso();
     if (action === 'merge') {
       const rec = findRef(n, ctx.into); if (!rec) return;
@@ -4124,6 +4173,7 @@ if (typeof window !== 'undefined') (() => {
       todayQueue.reviewed.delete(id); await load(true); inboxSay('Not saved: this proposal changed. Expand Review again to read the latest evidence.', true); return false;
     }
     const fresh = normalise(got.data), change = clone(opts.change || p.change || {});
+    if (action !== 'ignore') { const why = proposalRefusal(p, change); if (why) { inboxSay(why, true); return false; } }
     const edited = opts.change ? Object.fromEntries(Object.entries(opts.change).filter(([k, v]) => !sameJson((p.change || {})[k], v))) : null;
     let expect = {}, note = '';
     if (action !== 'ignore' && p.target) {
@@ -5484,6 +5534,7 @@ if (typeof window !== 'undefined') (() => {
     const box = $('sBoardRo'), c = cfg(); box.textContent = '';
     const why = DEMO || ro === 'demo' ? 'Demo board: you can look at these settings, but nothing you change is saved.' : !c.repo ? 'No board connected yet. Connect one under Connection first.'
       : ro === 'public' || !c.token ? 'Read-only: this browser has no token for this board, so its shared settings cannot change here.' : ro === 'token' ? 'Read-only: your token can read this board but cannot change it.'
+      : ro === 'kit' ? RO_TEXT.kit[0]
       : newerSchema ? 'Read-only: the board file is newer than this page. Reload to update.' : '';
     if (why) { const b = ui.banner({ tone: 'warn', icon: 'lock', text: why }); b.setAttribute('role', 'status'); box.append(b); }
     syncModeSettings(); renderMembersBox(); renderColumnsBox(); renderLabelBox(); renderArchiveBox();
@@ -5577,7 +5628,8 @@ if (typeof window !== 'undefined') (() => {
   const RO_TEXT = {
     demo: ['Demo board: read-only, with invented data. Nothing you do here is saved.', 'Create my own board', () => { location.href = location.pathname + '?setup'; }],
     public: ['Read-only: this is a public board and this browser has no token for it.', 'Add a token', () => { $('btnSettings').click(); settingsTab('conn'); }],
-    token: ['Read-only: your token can read this board but cannot change it. Give the token "Contents: Read and write" to edit.', 'Change the token', () => { $('btnSettings').click(); settingsTab('conn'); }]
+    token: ['Read-only: your token can read this board but cannot change it. Give the token "Contents: Read and write" to edit.', 'Change the token', () => { $('btnSettings').click(); settingsTab('conn'); }],
+    get kit() { return [`Read-only: this board needs board tools kit v${needKit} or newer (settings.min_kit), and this page is kit v${PAGE_KIT}. Reload to get the newer page; if it stays, upgrade the board kit.`, 'Reload', () => location.reload()]; }
   };
   function roToast() { toast((RO_TEXT[ro] || ['Read-only'])[0], true); }
   function applyRo() {
