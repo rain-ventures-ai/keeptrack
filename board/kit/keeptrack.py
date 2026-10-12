@@ -307,7 +307,7 @@ def ensure_local_dir(path, warn=True):
             raise OSError(f"{path} is committed to git; Keeptrack keeps its personal files out of git (add it to .gitignore)")
         if warn and subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True).returncode == 1:
             print(f"warning: {os.path.basename(path)} is not in .gitignore, so `git add -A` would commit this session's id; "
-                  "add it to .gitignore (board/KIT_VERSION's upgrade adds it)", file=sys.stderr)
+                  "add it to .gitignore (the kit's template lists it)", file=sys.stderr)
 
 
 def write_private(path, text):
