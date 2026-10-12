@@ -1429,7 +1429,7 @@ def _tracked_by_git(path):
     runs in may hold one."""
     try:
         r = subprocess.run(["git", "-C", os.path.dirname(path) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(path)],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=10, env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"})   # the stderr text is matched below
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode == 0:
