@@ -1092,7 +1092,17 @@ if (typeof window !== 'undefined') (() => {
     const mins = (Date.now() - Date.parse(c.heartbeat_at || c.claimed_at)) / 60000;
     return mins > (c.attended ? 12 * 60 : ((board.settings || {}).stale_after_minutes || 30)) ? 'stale' : 'running';
   }
-  const ago = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; };
+  const ago = iso => {
+    const at = Date.parse(iso); if (!Number.isFinite(at)) return '';
+    const m = Math.max(0, Math.floor((Date.now() - at) / 60000));
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60); if (h < 24) return h + 'h ago';
+    const d = Math.floor(h / 24); if (d < 14) return d + 'd ago';
+    if (d < 60) return Math.floor(d / 7) + 'w ago';
+    if (d < 365) return Math.floor(d / 30) + 'mo ago';
+    return Math.floor(d / 365) + 'y ago';
+  };
   // The board's agent-capacity rule (settings.max_agent_claims, whole number 1-100): running, non-attended agent claims on OTHER cards count,
   // the page's own pending placeholders included (same count as keeptrack.py's claim). Returns '' when there is room, else the message to show.
   let renderBusy = null;   // inside a render: { list } caches the busy claims so each card does not re-filter every task; null outside, where the click paths compute fresh
@@ -2225,6 +2235,24 @@ if (typeof window !== 'undefined') (() => {
       if (e.target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); }
     });
   }
+  function latestTaskActivity(t) {
+    const stamps = [t.updated, t.created];
+    (t.comments || []).forEach(x => stamps.push(x.at));
+    (t.history || []).forEach(x => stamps.push(x.at));
+    if (t.claim) stamps.push(t.claim.heartbeat_at, t.claim.claimed_at, t.claim.finished_at);
+    if (t.last_run) stamps.push(t.last_run.heartbeat_at, t.last_run.started_at, t.last_run.finished_at);
+    return stamps.filter(x => Number.isFinite(Date.parse(x))).sort((a, b) => Date.parse(b) - Date.parse(a))[0] || '';
+  }
+  function cardAges(t) {
+    const row = el('div', 'cardage');
+    const add = (label, iso) => {
+      const relative = ago(iso); if (!relative) return;
+      const item = el('span'), time = el('time', null, relative); time.dateTime = iso; time.title = fmtStamp(iso);
+      item.append(document.createTextNode(label + ' '), time); row.append(item);
+    };
+    add('Created', t.created); add('Active', latestTaskActivity(t));
+    return row.childNodes.length ? row : null;
+  }
   function cardEl(t, ci, detailed = false) {
     const c = el('div', 'card' + (detailed ? ' detailed' : '') + (viewPending.has(t.id) ? ' pending' : '')); c.draggable = !phone(); paint(c, t); if (viewPending.has(t.id)) c.title = 'Saving…';   // phones use hold-to-move instead: the browser's own drag would swallow the touch
     c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); c.classList.add('dragging'); });
@@ -2244,6 +2272,7 @@ if (typeof window !== 'undefined') (() => {
     [...labelTags(t), clientTag(t), projectTag(t)].forEach(x => x && tags.append(x));
     if (tags.childNodes.length) c.append(tags);
     if (t.todos.length) { const { done, all } = todoCount(t), pr = el('div', 'prog'), bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round(100 * done / all) + '%'; bar.append(fill); pr.append(bar); pr.classList.toggle('full', done === all); c.append(pr); }
+    { const ages = cardAges(t); if (ages) c.append(ages); }
     if (detailed) { const actions = taskQuickActions(t); actions.classList.add('cinemaactions'); c.append(actions); }
     if (detailed) {
       const context = el('div', 'cardcontext');
@@ -4276,7 +4305,7 @@ if (typeof window !== 'undefined') (() => {
       if (!cur || !['ignored', 'answered'].includes(cur.status)) return { abort: 'Only an ignored proposal or an answered question can be reopened.' };
       if (!cur.change) return { abort: 'This proposal was slimmed after 30 days and can no longer be reopened.' };
       const old = cur.decision || {};
-      if (cur.status === 'answered' && old.done) return { abort: `Not reopened: ${old.done.by || 'someone'} already acted on this answer.` };
+      if (cur.status === 'answered' && old.done) return { abort: `Not reopened: ${old.done.by || 'someone'} already ${old.done.acted === false ? 'closed this answer without acting' : 'acted on this answer'}.` };
       if (isAsk(cur) && askDecider(cur)) return { abort: `Only @${cur.decider} can reopen this question.` };
       const x = clone(cur); x.status = 'pending'; x.decision = null;
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `reopened (was ${cur.status} by ${old.by || 'someone'})` });
@@ -4329,7 +4358,7 @@ if (typeof window !== 'undefined') (() => {
     if (p.status !== 'pending') {
       const d = p.decision || {};
       if (p.status === 'answered') wrap.append(el('p', 'prop__decision', `Answered by ${d.by || 'someone'} on ${whenText(d.at)}: ${answerText(p)}`));
-      if (d.done) wrap.append(el('p', 'prop__decision muted', `Acted on by ${d.done.by || 'someone'} on ${whenText(d.done.at)}${d.done.note ? ': ' + d.done.note : ''}`));
+      if (d.done) wrap.append(el('p', 'prop__decision muted', `${d.done.acted === false ? 'Closed without acting by' : 'Acted on by'} ${d.done.by || 'someone'} on ${whenText(d.done.at)}${d.done.note ? ': ' + d.done.note : ''}`));
       return wrap;
     }
     if (blocked) { wrap.append(el('p', 'muted', `Waiting for @${p.decider} to answer.`)); }

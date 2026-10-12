@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Inbox questions closed with `proposal-done --not-acted` show "Closed without acting by …" (kit v45).
+
+- **2026-10-12** — Kanban cards show compact relative creation and last-activity ages, progressing from hours through
+  days, weeks, months and years, with exact timestamps on hover. Activity includes task edits, comments, history and
+  agent runs.
+
 - **2026-10-12** — Kit v45: each browser tab stays on the board it opened: switching boards in another tab can no
   longer make this tab save into the wrong repo. A board whose `settings.min_kit` is newer than the page is read-only, with a
   banner. The agent-claim limit, and whether a cleared wait may restart a blocked claim, are decided on the board as it
@@ -119,6 +125,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   JSON file, rule 3 gives the 15-minute heartbeat, and its `wait` line warns against `unwait`.
 - Tests: shared `merge3` cases (`tests/fixtures/merge3-cases.json`) run through both `keeptrack.py` and `board.js`; the
   key rules are checked in both board skills; frozen board `v4_kit45`. No schema migration.
+- `proposal-done --not-acted --answer-id <id> [--note]` closes an answered question without acting (`decision.done.acted: false`), so
+  a rejected approval or a changed content hash no longer stays open for ever.
+- An answered question that is not done is kept whole only for `archive.done_days`; after that it is slimmed and
+  archived like other decided items.
+- `proposal-done` refuses an `ask.approve` with no `content_hash` (it no longer skips the check).
+- The unknown-kind error lists every kind, including `ask.*`.
+- Docs: "the agent that asked" is the same `BOARD_AGENT@BOARD_USER`, not one session.
 
 ### [44] — 2026-10-12
 

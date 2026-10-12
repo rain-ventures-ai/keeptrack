@@ -155,20 +155,52 @@ class AskItems(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("kt_slim", KT); kt = importlib.util.module_from_spec(spec); spec.loader.exec_module(kt)
         import datetime as dt
         old = {"decision": {"at": "2026-01-01T00:00:00Z", "answer": {"text": "Use 12,000"}}, "change": {"question": "Budget?"}}
-        waiting = dict(old, id="r_wait000001", status="answered", decision=dict(old["decision"]))
+        recent = {"at": "2026-08-01T00:00:00Z", "answer": {"text": "Use 12,000"}}   # older than 30 days, younger than done_days
+        waiting = dict(old, id="r_wait000001", status="answered", decision=recent)
         acted = dict(old, id="r_done000001", status="answered", decision=dict(old["decision"], answer={"text": "Use 9,000"}, done={"at": "x"}))
-        data = {"tasks": [], "contacts": [], "proposals": [waiting, acted], "columns": [{"id": "done"}]}
+        stale = dict(old, id="r_stal000001", status="answered", decision=dict(old["decision"]))
+        data = {"tasks": [], "contacts": [], "proposals": [waiting, acted, stale], "columns": [{"id": "done"}]}
         kt.archive_plan(data, dict(kt.ARCHIVE_DEFAULTS), today=dt.date(2026, 10, 12))
         kept = {p["id"]: p for p in data["proposals"]}
         self.assertEqual({"text": "Use 12,000"}, kept["r_wait000001"]["decision"]["answer"])
         self.assertIn("change", kept["r_wait000001"])
         self.assertNotIn("r_done000001", kept, "an acted-on answer is slimmed and archived as usual")
+        self.assertNotIn("r_stal000001", kept, "an answer nobody acted on for done_days is archived too")
 
     def test_rejected_approval_cannot_be_acted_on(self):
         self.add(APPROVE)
         rid = self.ids()["approve-1"]
         self.kt("proposal-answer", rid, "--reject", "--note", "Too long")
         self.assertEqual(2, self.kt("proposal-done", rid, "--content-hash", DRAFT_HASH, env=self.agent, ok=False).returncode)
+        self.assertEqual(2, self.kt("proposal-done", rid, "--not-acted", env=self.agent, ok=False).returncode, "an agent names the answer it saw")
+        aid = json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)["answer_id"]
+        self.kt("proposal-reopen", rid); self.kt("proposal-answer", rid, "--approve")   # the person changes their mind
+        self.assertEqual(3, self.kt("proposal-done", rid, "--not-acted", "--answer-id", aid, env=self.agent, ok=False).returncode)
+        self.kt("proposal-reopen", rid); self.kt("proposal-answer", rid, "--reject")
+        aid = json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)["answer_id"]
+        out = json.loads(self.kt("proposal-done", rid, "--not-acted", "--answer-id", aid, "--note", "rejected", env=self.agent).stdout)
+        self.assertEqual({"done": rid, "acted": False}, out)
+        done = json.loads(self.kt("proposal-result", rid).stdout)["done"]
+        self.assertIs(False, done["acted"]); self.assertEqual("rejected", done["note"])
+        self.assertEqual(3, self.kt("proposal-done", rid, "--not-acted", "--answer-id", aid, env=self.agent, ok=False).returncode, "closed once")
+        p = self.kt("proposal-reopen", rid, ok=False)
+        self.assertEqual(3, p.returncode, "a closed answer is final"); self.assertIn("closed without acting", p.stderr)
+
+    def test_approval_without_a_content_hash_fails_closed(self):
+        self.add(APPROVE)
+        rid = self.ids()["approve-1"]
+        self.kt("proposal-answer", rid, "--approve")
+        path = os.path.join(self.board, "proposals", rid + ".json")
+        with open(path, encoding="utf-8") as f: item = json.load(f)
+        del item["change"]["content_hash"]   # a hand edit or an older page
+        with open(path, "w", encoding="utf-8") as f: f.write(json.dumps(item, indent=2) + "\n")
+        self.assertEqual(2, self.kt("proposal-done", rid, env=self.agent, ok=False).returncode)
+        self.assertEqual(2, self.kt("proposal-done", rid, "--content-hash", DRAFT_HASH, env=self.agent, ok=False).returncode)
+        self.kt("proposal-done", rid, "--not-acted", "--answer-id", json.loads(self.kt("proposal-result", rid).stdout)["answer_id"], env=self.agent)
+
+    def test_unknown_kind_error_lists_the_ask_kinds(self):
+        p = self.add(dict(QUESTION, kind="ask.chose"), ok=False)
+        self.assertEqual(2, p.returncode); self.assertIn("ask.choose", p.stderr)
 
     def test_another_agent_cannot_read_or_act_on_the_answer(self):
         self.add(QUESTION)

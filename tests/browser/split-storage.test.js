@@ -262,7 +262,7 @@ let base;
     await reuse.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_boards', JSON.stringify({ 'other/board': { branch: 'main', path: 'board/tasks.json', token: 'reusable-token' }, 'acme/board': { branch: 'main', path: 'board/tasks.json' } })); });
     await reuse.route('https://api.test/**', r => noToken.route(r)); await reuse.goto(base + '/board/index.html'); await reuse.locator('#sTokenReuse').filter({ hasText: 'Reused a token' }).waitFor();
     assert.equal(await reuse.evaluate(() => localStorage.getItem('kb_token')), 'reusable-token'); assert.equal(await reuse.evaluate(() => JSON.parse(localStorage.getItem('kb_boards'))['acme/board'].token), 'reusable-token');
-    assert.equal(await reuse.locator('#sTokenState').textContent(), 'Saved for this board'); assert.equal(await reuse.locator('#sTokenBtns').isVisible(), true);
+    await reuse.locator('#sTokenBtns').waitFor({ state: 'visible' }); assert.equal(await reuse.locator('#sTokenState').textContent(), 'Saved for this board');
     assert(noToken.calls.some(x => x.path === '' && x.auth === 'Bearer reusable-token'), 'the saved candidate must be tested against the target repo'); await reuse.close();
 
     const blankApi = new Github(true), blank = await browser.newPage(); blank.on('pageerror', e => console.error('page error:', e.message));

@@ -26,7 +26,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Versions
 ### v45 (schema 4)
-A safety release: no data migration, the board stays on schema 4, and v44 tools keep reading and writing a v45 board.
+A safety release with small fixes to Inbox questions: no data migration, the board stays on schema 4, and v44 tools keep reading and writing a v45 board.
 - **`settings.min_kit` now prevents, not only detects.** `keeptrack.py` and the web page refuse to write a board whose
   `settings.min_kit` is an integer above their own kit version (reads, dry runs and plain `doctor` still work;
   `doctor --fix` writes nothing). A missing or non-integer value never blocks. v45 needs no new `min_kit`, and the
@@ -52,8 +52,12 @@ A safety release: no data migration, the board stays on schema 4, and v44 tools 
   minutes lag the template.
 - Web page: after the upgrade, hard-refresh every open tab once. Settings codes made by older pages still import; a
   code copied without "Include tokens and keys" removes this browser's tokens on import.
+- `proposal-done --not-acted --answer-id <answer_id> --note "why"` closes an answer the agent will not act on (rejected, content changed, no
+  longer needed). Routines that ask for approvals should use it after a rejection, so the item does not stay open.
+- An answer nobody acts on is kept whole for `archive.done_days` (90 by default), then slimmed and archived.
+- `proposal-done` refuses an `ask.approve` with no `content_hash`.
 - Check: `cat board/KIT_VERSION` says 45; `keeptrack.py doctor` shows no `KIT_OLD`; `keeptrack.py kit-check` shows no
-  template drift; the web board loads and saves.
+  template drift; `keeptrack.py proposal-done --help` lists `--not-acted`; the web board loads and saves.
 
 ### v44 (schema 4)
 The Review Inbox is **always on** for split-storage boards, and it holds **questions** as well as proposals: an agent
