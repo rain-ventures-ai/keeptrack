@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Today expands Inbox evidence and proposed changes inline, with explicit Accept and Ignore
+  actions and Undo. Successful decisions refill a stable board-scoped queue while retaining order, reading position,
+  focus and other expanded reviews. Failed saves and changed evidence never advance or silently accept a proposal.
+  Existing-task updates show `Updates #N`; genuine other duplicate candidates still require edit/merge review.
+
 - **2026-10-12** — The full Review Inbox uses clearer proposal summaries, source context, grouped changes and
   restrained decision controls, with responsive light/dark styling and visual QA coverage. No proposal decisions
   or board records are changed by this presentation update.

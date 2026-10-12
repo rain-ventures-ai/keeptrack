@@ -10,6 +10,7 @@ const crypto = require('node:crypto');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '../..');
+const KIT = JSON.parse(fs.readFileSync(path.join(ROOT, 'board/kit/manifest.json'), 'utf8')).version;
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 const server = http.createServer((req, res) => {
   const rel = decodeURIComponent(new URL(req.url, 'http://local').pathname).replace(/^\/+/, '') || 'board/index.html';
@@ -46,6 +47,23 @@ function fixture({ enabled = true } = {}) {
   return Object.fromEntries(Object.entries(files).map(([k, v]) => [k, text(v)]));
 }
 
+// Honest, fictional Today fixtures: current kit, member CRM identity, and more proposals than the preview limit.
+function todayFixture() {
+  const files = fixture();
+  files['people/p_alex.json'] = text({ ...person, id: 'p_alex', name: 'Alex Example', github: 'alex' });
+  for (let n = 1; n <= 4; n++) {
+    const id = 'r_today0000' + n;
+    files[`proposals/${id}.json`] = text(prop(id, 'task.create', `Prepare fictional deliverable ${n}`, {
+      change: { title: `Prepare fictional deliverable ${n}`, details: 'Review the proposed deliverable before adding it to the board.' },
+      source: { ...meeting, date: '2026-10-10' }, created: `2026-10-10T08:0${n}:00.000Z`,
+    }));
+  }
+  const update = JSON.parse(files['proposals/r_update0001.json']);
+  update.likely_duplicates = [{ type: 'task', id: 't_first', why: 'target record' }, { type: 'task', id: 't_second', why: 'related outcome' }];
+  files['proposals/r_update0001.json'] = text(update);
+  return files;
+}
+
 // A GitHub with real commit parents: a ref update that is not a fast-forward is refused (422), like force:false.
 class Github {
   constructor(files) { this.files = files; this.head = 'c1'; this.n = 1; this.calls = []; this.blobs = {}; this.trees = {}; this.commits = { c1: { files: { ...files } } }; }
@@ -59,8 +77,8 @@ class Github {
     const json = (body, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
     if (p === '/user') return json({ login: 'alex' });
     if (p.startsWith('/user/repos')) return json([]);
-    if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
-    if (p === '/contents/board/KIT_VERSION' && method === 'GET') return route.fulfill({ status: 200, body: '42\n' });
+    if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: this.pushAllowed !== false }, default_branch: 'main' });
+    if (p === '/contents/board/KIT_VERSION' && method === 'GET') return route.fulfill({ status: 200, body: `${KIT}\n` });
     if (p.startsWith('/contents/board/tasks.json') && method === 'GET') return json({ sha: this.sha('tasks.json'), size: this.files['tasks.json'].length, encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') });
     if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON();
       if ((b.sha || null) !== (this.files[rel] ? this.sha(rel) : null)) return json({ message: 'sha does not match' }, 409);
@@ -76,7 +94,8 @@ class Github {
     if (p === '/git/blobs' && method === 'POST') { const b = req.postDataJSON(), sha = 'blob-' + Object.keys(this.blobs).length; this.blobs[sha] = b.content; return json({ sha }); }
     if (p === '/git/trees' && method === 'POST') { const b = req.postDataJSON(), sha = 'tree-' + Object.keys(this.trees).length; this.trees[sha] = b.tree; return json({ sha }); }
     if (p === '/git/commits' && method === 'POST') { const b = req.postDataJSON(), sha = 'new-' + crypto.randomBytes(4).toString('hex'); this.commits[sha] = { parent: b.parents[0], tree: this.trees[b.tree] }; return json({ sha }); }
-    if (p === '/git/refs/heads/main' && method === 'PATCH') { if (this.hold) { this.hold = false; this.held = true; await new Promise(r => { this.release = r; }); }   // hold one ref update to interleave two reviewers
+    if (p === '/git/refs/heads/main' && method === 'PATCH') { if (this.failRefOnce) { this.failRefOnce = false; return json({ message: 'Fixture write failure' }, 500); }
+      if (this.hold) { this.hold = false; this.held = true; await new Promise(r => { this.release = r; }); }   // hold one ref update to interleave two reviewers
       const b = req.postDataJSON(), c = this.commits[b.sha];
       if (!c || c.parent !== this.head) return json({ message: 'Update is not a fast forward' }, 422);
       for (const e of c.tree) { const rel = e.path.replace(/^board\//, ''); if (e.sha === null) delete this.files[rel]; else this.files[rel] = this.blobs[e.sha]; }
@@ -89,7 +108,7 @@ let base;
 async function openBoard(browser, api, opts = {}) {
   const page = await browser.newPage(opts.viewport ? { viewport: opts.viewport, isMobile: !!opts.mobile, hasTouch: !!opts.mobile } : {});
   page.on('pageerror', e => console.error('page error:', e.message));
-  await page.addInitScript(([view, me]) => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', me); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); sessionStorage.setItem('kb_view', view); }, [opts.view || 'board', opts.me || 'alex']);
+  await page.addInitScript(([view, me, readonly]) => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', me); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); if (readonly) localStorage.setItem('kb_ro:acme/board', '1'); sessionStorage.setItem('kb_view', view); }, [opts.view || 'board', opts.me || 'alex', !!opts.readonly]);
   await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html');
   await page.waitForFunction(() => /Synced/.test(document.querySelector('#status').textContent));
   return page;
@@ -117,18 +136,18 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.deepEqual((await page.locator('.card .t').allTextContents()).sort(), ['First', 'Second']);
     assert.equal(await page.locator('.col[data-col="todo"] h2 .ui-count').first().textContent(), '2');
     assert.equal(await page.locator('#btnInbox').isVisible(), true);
-    // Today previews proposals, but decisions stay with the evidence in the full Inbox.
+    // Today exposes decisions only after opening the evidence inline.
     await page.locator('#viewSw [data-view="today"]').first().click(); await page.waitForSelector('.today .treview');
     assert.match(await page.locator('.todayhead h2').textContent(), /6 to review/);
     assert.equal(await page.locator('.treview .trow').count(), 5, 'Today lists the five newest proposals');
-    assert.equal(await page.locator('.treview .trow .ui-pill').count(), 6, 'shared pills show types and duplicate warning');
+    assert.match(await page.locator('.treview').textContent(), /Possible duplicate/, 'shared pills warn about real duplicate candidates');
     assert.equal(await page.locator('.treview .trow button').count(), 5, 'each preview has just one safe Review action');
     assert.equal(await page.locator('.treview').getByRole('button', { name: 'Accept', exact: true }).count(), 0, 'cannot accept without seeing the proposal');
     const writesBeforeReview = api.writes().length;
     await page.locator('.treview .trow button').first().focus(); await page.keyboard.press('Enter');
-    await page.waitForSelector('#board.v-inbox');
+    await page.waitForSelector('.treview article.prop');
+    assert.equal(await page.locator('#board.v-inbox').count(), 0, 'Review stays on Today');
     assert.equal(api.writes().length, writesBeforeReview, 'keyboard Review never writes to GitHub');
-    await page.locator('#viewSw [data-view="today"]').first().click();
     assert.match(await page.locator('.tgo[data-go="inbox"]').textContent(), /6 to review/);
     if (process.env.INBOX_SCREENSHOT) await page.screenshot({ path: process.env.INBOX_SCREENSHOT, fullPage: true });
     await page.locator('.treview button', { hasText: /Review all 6/ }).click(); await page.waitForSelector('#board.v-inbox');
@@ -243,6 +262,141 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.equal(await page.locator('#inboxBadge').textContent(), '1', 'only the race proposal is still pending');
     assert.equal(await page.locator('#viewSw .ui-tab[data-view="today"] .todaycount').textContent(), '1', 'the Today count follows each decision');
     await page.close();
+
+    // Today is a stable, inline review surface, not a redirect or an automatic approval workflow.
+    { const todayApi = new Github(todayFixture()), today = await openBoard(browser, todayApi, { view: 'today' });
+      await today.waitForSelector('.treview .trow');
+      const rows = () => today.locator('.treview .trow[data-id]');
+      const row = id => today.locator(`.treview .trow[data-id="${id}"]`);
+      const order = () => rows().evaluateAll(es => es.map(e => e.dataset.id));
+      const initial = await order();
+      assert.equal(initial.length, 5, 'ten pending suggestions start with a five-row preview');
+      assert.equal(todayApi.writes().length, 0, 'loading Today never decides anything');
+      assert.equal(await today.locator('.treview [data-act="accept"]').count(), 0, 'no Accept until evidence is expanded');
+      const badgePage = await openBoard(browser, todayApi, { view: 'inbox' }); await badgePage.waitForSelector('article.prop');
+      const targeted = propCard(badgePage, 'r_update0001');
+      assert.match(await targeted.textContent(), /View #1/);
+      assert(!/Looks like: First/.test(await targeted.textContent()), 'an update target is not its own duplicate');
+      assert.match(await targeted.textContent(), /Looks like: Second/, 'a different duplicate candidate is still visible');
+      await badgePage.locator('#viewSw [data-view="today"]').first().click();
+      // The target badge is on the compact Today row, distinct from the full card's View link.
+      const badgeFiles = fixture(); const badgeUpdate = JSON.parse(badgeFiles['proposals/r_update0001.json']);
+      badgeUpdate.source.date = '2026-10-12'; badgeFiles['proposals/r_update0001.json'] = text(badgeUpdate);
+      const targetToday = await openBoard(browser, new Github(badgeFiles), { view: 'today' });
+      assert.match(await targetToday.locator('.treview .trow[data-id="r_update0001"]').textContent(), /Updates #1/);
+      await targetToday.close();
+      await badgePage.close();
+      const first = initial[0], second = initial[1];
+      await row(first).getByRole('button', { name: /^Review:/ }).click();
+      await row(second).getByRole('button', { name: /^Review:/ }).click();
+      await row(second).locator('article.prop').waitFor();
+      assert.equal(await today.locator('#board.v-inbox').count(), 0, 'both cards expand without leaving Today');
+      assert.equal(todayApi.writes().length, 0, 'expansion is read-only');
+      const inlineSource = row(second).locator('a', { hasText: 'Open the source' });
+      assert.equal(await inlineSource.getAttribute('href'), meeting.url, 'expanded evidence links to its source');
+      assert.match(await inlineSource.getAttribute('rel'), /noopener/, 'new-tab source links cannot control the board');
+      await row(second).locator('[data-act="accept"]').focus();
+      await today.evaluate(() => {
+        const b = document.querySelector('#board'); window.refreshTrace = [];
+        window.refreshSnapshot = phase => ({ phase, at: performance.now(), scroll: b.scrollTop, height: b.clientHeight, extent: b.scrollHeight,
+          focus: document.activeElement.id || document.activeElement.dataset.act || document.activeElement.tagName,
+          rows: [...b.querySelectorAll('.treview .trow')].map(r => ({ id: r.dataset.id, top: r.getBoundingClientRect().top, height: r.getBoundingClientRect().height, expanded: !!r.querySelector('article.prop') })) });
+        document.querySelector('#btnRefresh').addEventListener('click', () => window.refreshTrace.push(window.refreshSnapshot('click-capture')), true);
+        b.addEventListener('scroll', () => window.refreshTrace.push(window.refreshSnapshot('scroll')));
+      });
+      const beforeRefresh = await today.evaluate(() => window.refreshSnapshot('before-click'));
+      todayApi.files['proposals/r_newer0001.json'] = text(prop('r_newer0001', 'task.create', 'New arrival should not displace the current review', { source: { ...meeting, date: '2026-10-13' } })); todayApi.bump();
+      await today.locator('#btnRefresh').click();
+      await today.evaluate(() => window.refreshTrace.push(window.refreshSnapshot('after-click')));
+      await today.waitForFunction(() => document.querySelector('#inboxBadge')?.textContent === '11');
+      await today.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.deepEqual(await order(), initial, 'a newer remote proposal does not reorder the five displayed rows');
+      assert.equal(await row(second).locator('article.prop').count(), 1, 'refresh preserves a second expanded review');
+      const afterRefresh = await today.evaluate(() => window.refreshSnapshot('after-render'));
+      // The explicit Refresh click owns focus, while the viewport remains on the same reading position.
+      assert(Math.abs(afterRefresh.scroll - beforeRefresh.scroll) < 40, `remote refresh preserves the reading position: ${JSON.stringify({ beforeRefresh, afterRefresh, trace: await today.evaluate(() => window.refreshTrace.slice(-12)) })}`);
+      if (process.env.TODAY_INLINE_SCREENSHOT) {
+        for (const width of [1280, 350]) {
+          await today.setViewportSize({ width, height: 850 });
+          for (const theme of ['light', 'dark']) {
+            await today.evaluate(t => window.kbTheme.set(t), theme);
+            await today.waitForTimeout(300);
+            assert(await today.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `Today fits ${width}px in ${theme}`);
+            assert.equal(await today.locator('#readOnlyBanner:visible, .member-onboard:visible').count(), 0, 'fictional fixture is writable and has its member record');
+            if (width === 350) assert((await row(second).locator('.prop__actions button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect().height))).every(h => h >= 44), 'expanded decision controls have 44px touch targets');
+            await row(second).evaluate(e => { const b = document.querySelector('#board'); b.scrollTop += e.getBoundingClientRect().top - b.getBoundingClientRect().top - 12; });
+            await today.waitForTimeout(100);
+            await today.screenshot({ path: `${process.env.TODAY_INLINE_SCREENSHOT}-${width}-${theme}.png` });
+          }
+        }
+        await today.setViewportSize({ width: 1280, height: 850 }); await today.evaluate(() => window.kbTheme.set('light'));
+      }
+      await row(first).locator('[data-act="accept"]').click();
+      await said(today, /Accepted/);
+      assert.equal(todayApi.json(`proposals/${first}.json`).status, 'accepted');
+      const afterAccept = await order();
+      assert.equal(afterAccept.length, 5, 'the next pending suggestion fills the vacancy');
+      assert.deepEqual(afterAccept.slice(0, 4), initial.slice(1), 'remaining rows keep their order');
+      assert.equal(await row(second).locator('article.prop').count(), 1, 'another expanded proposal remains expanded');
+      assert.equal(await today.locator('#board.v-inbox').count(), 0, 'successful Accept stays on Today');
+      assert.equal(await today.evaluate(() => document.activeElement.closest('.trow')?.dataset.id), second, 'focus moves to the next review, not the page top');
+
+      // A failed write keeps the proposal in place and pending; a retry is still an explicit decision.
+      todayApi.failRefOnce = true; await clearLive(today);
+      await row(second).locator('[data-act="accept"]').click();
+      await said(today, /Not saved|failed|failure/i);
+      assert.equal(todayApi.json(`proposals/${second}.json`).status, 'pending');
+      assert.deepEqual(await order(), afterAccept, 'failed decision does not move the row');
+      assert.equal(await row(second).locator('article.prop').count(), 1, 'failed proposal stays open');
+      await clearLive(today); await row(second).locator('[data-act="ignore"]').click(); await said(today, /Ignored/);
+      assert.equal(todayApi.json(`proposals/${second}.json`).status, 'ignored');
+      await clearLive(today); await today.locator('#btnUndo').click(); await said(today, /pending again/);
+      assert.equal(todayApi.json(`proposals/${second}.json`).status, 'pending');
+      assert(await order().then(ids => ids.includes(second)), 'Undo restores the suggestion to the Today preview');
+      if (!(await row(second).locator('article.prop').count())) await row(second).getByRole('button', { name: /^Review:/ }).click();
+      todayApi.edit(`proposals/${second}.json`, p => { p.reason = 'New evidence from another reviewer.'; p.change.title = 'Changed after the original review'; });
+      const beforeStaleWrites = todayApi.writes().length; await clearLive(today);
+      await row(second).locator('[data-act="accept"]').click(); await said(today, /proposal changed|latest evidence/);
+      assert.equal(todayApi.writes().length, beforeStaleWrites, 'changed evidence is never accepted from the stale expanded snapshot');
+      assert.equal(todayApi.json(`proposals/${second}.json`).status, 'pending');
+      assert.equal(await row(second).locator('article.prop').count(), 0, 'changed evidence requires an explicit new review');
+      await row(second).getByRole('button', { name: /^Review:/ }).click();
+      assert.match(await row(second).locator('article.prop').textContent(), /Changed after the original review/);
+      await today.close();
+
+      const roApi = new Github(todayFixture()); roApi.pushAllowed = false;
+      const readonly = await openBoard(browser, roApi, { view: 'today', readonly: true }); await readonly.waitForSelector('.treview .trow');
+      await readonly.locator('.treview .trow').first().getByRole('button', { name: /^Review:/ }).click();
+      assert.equal(await readonly.locator('.treview [data-act="accept"]').first().isDisabled(), true);
+      assert.equal(await readonly.locator('.treview [data-act="ignore"]').first().isDisabled(), true);
+      assert.equal(roApi.writes().length, 0, 'read-only review causes no write requests');
+      await readonly.close();
+
+      // Evidence changes after the decision's first read but before its ref update: the retry must not silently
+      // accept the newer proposal. The first non-fast-forward attempt cannot publish either record.
+      const retryApi = new Github(todayFixture()), retryPage = await openBoard(browser, retryApi, { view: 'today' });
+      await retryPage.waitForSelector('.treview .trow');
+      const retryRow = retryPage.locator('.treview .trow').first(), retryId = await retryRow.getAttribute('data-id');
+      await retryRow.getByRole('button', { name: /^Review:/ }).click(); retryApi.hold = true;
+      await retryRow.locator('[data-act="accept"]').click();
+      for (let n = 0; !retryApi.held && n < 100; n++) await new Promise(r => setTimeout(r, 20));
+      assert(retryApi.held, 'fixture pauses the first ref update');
+      retryApi.edit(`proposals/${retryId}.json`, p => { p.change.title = 'Remote replacement during commit'; p.evidence = 'Changed after the first read'; });
+      retryApi.release(); await said(retryPage, /proposal changed|latest evidence/);
+      assert.equal(retryApi.json(`proposals/${retryId}.json`).status, 'pending');
+      assert.equal(Object.keys(retryApi.files).filter(k => k.startsWith('cards/')).length, 2, 'no card published from stale evidence');
+      assert.equal(retryApi.calls.filter(c => c.method === 'PATCH').length, 1, 'retry guard aborts before another write');
+      await retryPage.close();
+
+      const emptyApi = new Github(todayFixture()), emptyPage = await openBoard(browser, emptyApi, { view: 'today' });
+      await emptyPage.waitForSelector('.treview .trow');
+      for (const key of Object.keys(emptyApi.files).filter(k => k.startsWith('proposals/'))) emptyApi.edit(key, p => { p.status = 'ignored'; });
+      await emptyPage.locator('#btnRefresh').click(); await emptyPage.waitForFunction(() => !document.querySelector('.treview'));
+      emptyApi.files['proposals/r_return0001.json'] = text(prop('r_return0001', 'task.create', 'A later suggestion after the queue emptied')); emptyApi.bump();
+      await emptyPage.locator('#btnRefresh').click(); await emptyPage.waitForSelector('.treview .trow[data-id="r_return0001"]');
+      assert.equal(emptyApi.writes().length, 0, 'external empty/refill never triggers decisions');
+      await emptyPage.close();
+    }
 
     // Two reviewers accept the same proposal at the same moment: both start from pending, one commit wins, the other
     // is refused by GitHub (not a fast-forward), re-reads and stops. Exactly one card.
