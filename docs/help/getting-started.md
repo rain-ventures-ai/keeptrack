@@ -46,7 +46,7 @@ The order is name, company, role and email. Only the name is necessary. Press En
 Have a spreadsheet of contacts? Ask your AI assistant to add them (see [AI assistants](ai-assistants.md)). It checks for duplicates.
 
 ## 5. Use it on another device
-In **⚙️ Settings → Connection → Advanced**, click **Copy setup link** (it asks first) and open the link on your other device. The link holds your token, so send it only to yourself. To use Claude on your phone too, see [On your phone](where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser).
+In **⚙️ Settings → Connection → Advanced**, tick **Include tokens and keys**, click **Copy setup link** (it asks first) and open the link on your other device. The link then holds your token, so send it only to yourself. Without the tick, add the token again on the other device. To use Claude on your phone too, see [On your phone](where-agents-run.md#on-your-phone-or-at-claudeai-in-a-browser).
 
 ## Next
 - [People and follow-ups](people-and-follow-ups.md)

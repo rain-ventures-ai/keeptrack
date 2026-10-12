@@ -433,7 +433,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     await phone.waitForSelector('.treview');
     await phone.locator('#btnInbox').click(); await phone.waitForSelector('article.prop');
     await phone.evaluate(() => window.kbLayout.set('classic'));
-    assert.equal(await phone.evaluate(() => { const old = localStorage.getItem('kb_branch'); localStorage.setItem('kb_branch', 'example-branch'); const branch = new URL(window.kbNavigation.link()).searchParams.get('branch'); localStorage.setItem('kb_branch', old); return branch; }), 'example-branch', 'links use the active board branch');
+    assert.equal(await phone.evaluate(() => { const old = localStorage.getItem('kb_branch'); localStorage.setItem('kb_branch', 'example-branch'); const branch = new URL(window.kbNavigation.link()).searchParams.get('branch'); localStorage.setItem('kb_branch', old); return branch; }), 'main', 'links use the tab\'s own board branch (main, not the default master), even after kb_branch changes underneath it');
     assert(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the Inbox fits a 390px screen');
     const heights = await phone.locator('.prop__actions button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect().height));
     assert(heights.length && heights.every(h => h >= 44), 'decision buttons are at least 44px tall on a phone: ' + heights.join(','));

@@ -356,6 +356,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
     {
       const page = await open(browser);
       await page.evaluate(() => { localStorage.setItem('kb_email_sync', '1'); localStorage.setItem('kb_claude_steps', '3'); localStorage.setItem('kb_claude_ok', '1'); });
+      await page.reload(); await page.waitForSelector('.card');   // a tab reads its board's keys once, at start-up
       await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xCode').click();
       await page.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click(); await page.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
       const code = await page.evaluate(() => window.__copied); await page.close();
