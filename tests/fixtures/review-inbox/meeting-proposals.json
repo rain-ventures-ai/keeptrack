@@ -16,8 +16,8 @@
                "url": "https://example.invalid/notes/acme-weekly"},
     "action_key": "ak-call-acme-urgent", "work_key": "wk-call-acme",
     "reason": "Casey said the first call is now urgent.",
-    "target": {"type": "task", "id": "t_first", "base": {"priority": "high"}},
-    "change": {"labels": ["urgent"]}
+    "target": {"type": "task", "id": "t_first", "base": {"priority": "high", "labels": ["call"]}},
+    "change": {"labels": ["call", "urgent"]}
   },
   {
     "kind": "contact.touch",

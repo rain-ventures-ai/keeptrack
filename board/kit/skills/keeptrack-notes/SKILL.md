@@ -118,7 +118,8 @@ Each proposal (fictional example):
 - Kinds: `task.create`, `task.update` (with `target: {"type": "task", "id": "<task id>", "base": {<field>: <current value>}}`),
   `person.upsert` (a new person, or with a person `target` to change fields) and `contact.touch` (a meeting log or
   follow-up on an existing person; `change.text` is one line).
-- `base` holds the current value of every field the proposal changes. The page uses it to show a conflict if the
+- `base` holds the current value of every field the proposal overwrites (`owner` is checked as `assignees`, a person's
+  `due` as `next_due`). `proposal-add` refuses a proposal without it. Added comments, checklist items and links need none. The page uses it to show a conflict if the
   record changed before someone accepts.
 - Use the same `action_key` and `work_key` as the ingestion log in [references/routines.md](references/routines.md). The
   action key has no revision or date in it, so an ignored action does not return when the same notes are edited.

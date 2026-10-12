@@ -40,6 +40,7 @@ function fixture({ enabled = true } = {}) {
     'proposals/r_merge00001.json': prop('r_merge00001', 'task.create', 'Second', { change: { title: 'Second', comments: [{ text: 'From the meeting' }], todos: [{ text: 'Book the room' }] }, likely_duplicates: [{ type: 'task', id: 't_second', why: 'same title and client' }] }),
     'proposals/r_editme0001.json': prop('r_editme0001', 'task.create', 'Draft the summary', { change: { title: 'Draft the summary', client: 'Acme' } }),
     'proposals/r_touch00001.json': prop('r_touch00001', 'contact.touch', 'Email from Casey Example, 9 Oct', { source: email, reason: '', run: { routine: 'contact-email', run_id: 'run-9', at: '2026-10-09T07:00:00Z' }, target: { type: 'person', id: 'p_casey', base: {} }, change: { text: '', channel: 'email', source_id: email.id } }),
+    'proposals/r_race000001.json': prop('r_race000001', 'task.create', 'Book the venue', { change: { title: 'Book the venue', client: 'Acme' } }),
     'proposals/r_ignored001.json': prop('r_ignored001', 'task.create', 'An old idea', { status: 'ignored', decision: { action: 'ignore', by: 'sam', at: '2026-10-02T09:00:00Z', result: null, commit: null } }),
   };
   return Object.fromEntries(Object.entries(files).map(([k, v]) => [k, text(v)]));
@@ -69,12 +70,13 @@ class Github {
     if (p.startsWith('/git/trees/root-') && method === 'GET') return json({ tree: [{ path: 'board', type: 'tree', sha: 'board-' + p.split('root-')[1] }] });
     if (p.startsWith('/git/trees/board-') && method === 'GET') { const c = this.commits[p.split('board-')[1].split('?')[0]] || { files: this.files }, f = c.files;
       return json({ truncated: false, tree: Object.entries(f).map(([k, v]) => ({ path: k, type: 'blob', sha: crypto.createHash('sha1').update(v).digest('hex'), size: Buffer.byteLength(v) })) }); }
-    if (p.startsWith('/git/blobs/') && method === 'GET') { const sha = p.split('/').pop(), all = Object.values(this.commits).flatMap(c => Object.values(c.files)).concat(Object.values(this.files));
+    if (p.startsWith('/git/blobs/') && method === 'GET') { const sha = p.split('/').pop(), all = Object.values(this.commits).flatMap(c => c.files ? Object.values(c.files) : []).concat(Object.values(this.files), Object.values(this.blobs));
       const v = all.find(x => crypto.createHash('sha1').update(x).digest('hex') === sha); return json({ encoding: 'base64', content: Buffer.from(v).toString('base64') }); }
     if (p === '/git/blobs' && method === 'POST') { const b = req.postDataJSON(), sha = 'blob-' + Object.keys(this.blobs).length; this.blobs[sha] = b.content; return json({ sha }); }
     if (p === '/git/trees' && method === 'POST') { const b = req.postDataJSON(), sha = 'tree-' + Object.keys(this.trees).length; this.trees[sha] = b.tree; return json({ sha }); }
     if (p === '/git/commits' && method === 'POST') { const b = req.postDataJSON(), sha = 'new-' + crypto.randomBytes(4).toString('hex'); this.commits[sha] = { parent: b.parents[0], tree: this.trees[b.tree] }; return json({ sha }); }
-    if (p === '/git/refs/heads/main' && method === 'PATCH') { const b = req.postDataJSON(), c = this.commits[b.sha];
+    if (p === '/git/refs/heads/main' && method === 'PATCH') { if (this.hold) { this.hold = false; this.held = true; await new Promise(r => { this.release = r; }); }   // hold one ref update to interleave two reviewers
+      const b = req.postDataJSON(), c = this.commits[b.sha];
       if (!c || c.parent !== this.head) return json({ message: 'Update is not a fast forward' }, 422);
       for (const e of c.tree) { const rel = e.path.replace(/^board\//, ''); if (e.sha === null) delete this.files[rel]; else this.files[rel] = this.blobs[e.sha]; }
       this.head = b.sha; c.files = { ...this.files }; return json({ object: { sha: this.head } }); }
@@ -112,7 +114,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.deepEqual((await page.locator('.card .t').allTextContents()).sort(), ['First', 'Second']);
     assert.equal(await page.locator('.col[data-col="todo"] h2 .ui-count').first().textContent(), '2');
     assert.equal(await page.locator('#btnInbox').isVisible(), true);
-    assert.equal(await page.locator('#inboxBadge').textContent(), '5', 'five proposals are pending');
+    assert.equal(await page.locator('#inboxBadge').textContent(), '6', 'six proposals are pending');
     assert(!api.calls.some(c => /git\/trees\/root-.*recursive/.test(c.path)), 'never reads the whole repository tree');
 
     await inbox(page);
@@ -189,12 +191,36 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.equal(merged.history[0].text, 'created'); assert(merged.history.some(h => /merged from proposal r_merge00001/.test(h.text)));
     assert.equal(merged.todos[0].done, true, 'existing checklist state is kept');
 
-    // Keyboard only: focus the list, move with j, ignore with i. The ignored proposal stays decided.
-    await page.locator('article.prop').first().focus(); assert.equal(await page.evaluate(() => document.activeElement.dataset.id), 'r_touch00001');
+    // Keyboard only. j and k move, Enter on a proposal with no record yet moves to its first action, e opens the edit form.
+    const order = await page.locator('article.prop').evaluateAll(a => a.map(x => x.dataset.id));
+    await page.locator('article.prop').first().focus(); await page.keyboard.press('j');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.id), order[1]); await page.keyboard.press('k');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.id), order[0]);
+    const raceAt = order.indexOf('r_race000001'); for (let i = 0; i < raceAt; i++) await page.keyboard.press('j');
+    await page.keyboard.press('Enter'); assert.equal(await page.evaluate(() => document.activeElement.dataset.act), 'accept', 'Enter moves to Accept');
+    await page.locator('article.prop[data-id="r_race000001"]').focus(); await page.keyboard.press('e');
+    assert.equal(await page.evaluate(() => document.activeElement.tagName), 'INPUT', 'e opens the edit form and focuses its first field');
+    await propCard(page, 'r_race000001').getByRole('button', { name: 'Cancel' }).click();
+    assert.equal(await propCard(page, 'r_touch00001').locator('[data-act="edit"]').count(), 0, 'a private email proposal (metadata only) cannot be edited into a summary');
+    // ... and i ignores the focused proposal. The ignored proposal stays decided.
+    await page.locator('article.prop[data-id="r_touch00001"]').focus(); assert.equal(await page.evaluate(() => document.activeElement.dataset.id), 'r_touch00001');
     await page.keyboard.press('i'); await page.waitForFunction(() => /Ignored/.test(document.querySelector('#inboxLive').textContent));
     assert.equal(api.json('proposals/r_touch00001.json').status, 'ignored'); assert.equal(api.json('people/p_casey.json').comments.length, 0, 'an ignored interaction is never logged');
-    assert.equal(await page.locator('#inboxBadge').isHidden(), true, 'nothing is pending now');
+    assert.equal(await page.locator('#inboxBadge').textContent(), '1', 'only the race proposal is still pending');
     await page.close();
+
+    // Two reviewers accept the same proposal at the same moment: both start from pending, one commit wins, the other
+    // is refused by GitHub (not a fast-forward), re-reads and stops. Exactly one card.
+    { const race = new Github(fixture()), a = await openBoard(browser, race, { view: 'inbox' }), b = await openBoard(browser, race, { view: 'inbox', me: 'sam' });
+      await a.waitForSelector('article.prop'); await b.waitForSelector('article.prop');
+      race.hold = true; await clearLive(a); await clearLive(b);
+      await propCard(a, 'r_race000001').locator('[data-act="accept"]').click();
+      while (!race.held) await new Promise(r => setTimeout(r, 20));
+      await propCard(b, 'r_race000001').locator('[data-act="accept"]').click(); await said(b, /Accepted/);
+      race.release(); await said(a, /Already accepted by sam/);
+      const decided = race.json('proposals/r_race000001.json'); assert.equal(decided.decision.by, 'sam');
+      assert.equal(Object.entries(race.files).filter(([k, t]) => k.startsWith('cards/') && /"title": "Book the venue"/.test(t)).length, 1, 'exactly one card');
+      await a.close(); await b.close(); }
 
     // Phone width: no sideways scrolling, buttons large enough to tap, every control named.
     const phoneApi = new Github(fixture()), phone = await openBoard(browser, phoneApi, { viewport: { width: 390, height: 800 }, mobile: true, view: 'inbox' });

@@ -4579,7 +4579,7 @@ PROPOSAL_DETAIL_LIMIT = 300
 PROPOSAL_ROOT_FIELDS = {"id", "version", "kind", "status", "title", "source", "run", "action_key", "work_key",
                         "reason", "evidence", "target", "change", "likely_duplicates", "previously_ignored",
                         "reviewer", "decision", "history", "created", "createdBy"}
-PROPOSAL_SOURCE_FIELDS = {"kind", "id", "revision", "title", "date", "url"}
+PROPOSAL_SOURCE_FIELDS = {"kind", "id", "revision", "title", "date", "url", "recipients_confirmed"}
 PROPOSAL_RUN_FIELDS = {"routine", "run_id", "at"}
 TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priority", "due", "labels", "owner", "assignees",
                       "details", "links", "contacts", "todos", "comments"}
@@ -4628,6 +4628,66 @@ def _proposal_change_fields(kind):
     return TOUCH_CHANGE_FIELDS
 
 
+STR_FIELDS = {"title", "column", "client", "project", "contact", "owner", "details", "name", "company", "role", "email", "phone",
+              "linkedin", "github", "stage", "value", "source", "notes", "next", "text", "channel", "at", "source_id"}
+DATE_FIELDS = {"due", "next_due"}
+STR_LIST_FIELDS = {"labels", "assignees", "source_message_ids"}
+DICT_LIST_FIELDS = {"links", "contacts", "todos", "comments", "emails", "phones"}
+ADDITIVE_FIELDS = {"comments", "todos", "links"}
+# Text that can carry what an email said. Without --recipients-confirmed an email proposal holds none of it.
+EMAIL_TEXT_FIELDS = {"title", "details", "notes", "next", "text", "comments", "todos", "links", "contacts", "value", "source"}
+EMAIL_METADATA_TITLE = re.compile(r"Email (?:from|to|with) [^\n]{1,80}")
+
+
+def check_change_values(kind, change):
+    """Value types, not only field names: a malformed value must never reach a live record."""
+    for key, value in change.items():
+        if key in STR_FIELDS and not isinstance(value, str):
+            proposal_error(f"change.{key} must be text")
+        if key in DATE_FIELDS and (not isinstance(value, str) or (value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))):
+            proposal_error(f"change.{key} must be a YYYY-MM-DD date or empty")
+        if key in STR_LIST_FIELDS and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
+            proposal_error(f"change.{key} must be a list of text")
+        if key in DICT_LIST_FIELDS and (not isinstance(value, list) or not all(isinstance(x, dict) for x in value)):
+            proposal_error(f"change.{key} must be a list of objects")
+        if key in ("comments", "todos") and not all(isinstance(x.get("text"), str) and x.get("text").strip() for x in value):
+            proposal_error(f"each change.{key} item needs text")
+        if key == "links" and not all(isinstance(x.get("url"), str) and x["url"].strip() for x in value):
+            proposal_error("each change.links item needs a url")
+        if key == "priority" and value not in ("high", "medium", "low"):
+            proposal_error("change.priority must be high, medium or low")
+
+
+def proposal_base_fields(kind, target_type, change):
+    """The live fields an accept would overwrite: each must be in target.base, so a newer edit is reviewed, not replaced."""
+    out = set()
+    for key in change:
+        if key in ADDITIVE_FIELDS or (kind == "contact.touch" and key in ("text", "channel", "at", "source_id", "source_message_ids")):
+            continue
+        if key == "owner":
+            out.add("assignees")
+        elif key == "due" and target_type == "person":
+            out.add("next_due")
+        else:
+            out.add(key)
+    return out
+
+
+def check_email_privacy(proposal, confirmed):
+    if (proposal.get("source") or {}).get("kind") != "email" or confirmed:
+        return
+    if proposal["kind"] != "contact.touch":
+        proposal_error("an email proposal other than contact.touch needs --recipients-confirmed (every intended board reader received that message)")
+    if not EMAIL_METADATA_TITLE.fullmatch(proposal.get("title", "")):
+        proposal_error("without --recipients-confirmed an email proposal title must be metadata only, e.g. 'Email from Casey Example, 9 Oct'")
+    if (proposal.get("source") or {}).get("title", "").strip() or (proposal.get("reason") or "").strip() or (proposal.get("evidence") or "").strip():
+        proposal_error("email reason/evidence/subject requires --recipients-confirmed; without it these fields must be empty")
+    for key in EMAIL_TEXT_FIELDS:
+        value = (proposal.get("change") or {}).get(key)
+        if key != "title" and value not in (None, "", []):
+            proposal_error(f"email change.{key} requires --recipients-confirmed; store metadata only without it")
+
+
 def validate_proposal_input(raw, recipients_confirmed=False):
     if not isinstance(raw, dict):
         proposal_error("each proposal must be a JSON object")
@@ -4660,18 +4720,13 @@ def validate_proposal_input(raw, recipients_confirmed=False):
     for label, value in (("reason", reason), ("evidence", evidence)):
         if not isinstance(value, str) or "\n" in value or "\r" in value or len(value) > PROPOSAL_DETAIL_LIMIT:
             proposal_error(f"{label} must be one line of at most {PROPOSAL_DETAIL_LIMIT} characters")
-    if source.get("kind") == "email" and not recipients_confirmed and (source.get("title") or "").strip():
-        proposal_error("email source.title (often the subject) requires --recipients-confirmed; without it leave it empty")
-    if source.get("kind") == "email" and not recipients_confirmed and (reason.strip() or evidence.strip()):
-        proposal_error("email reason/evidence requires --recipients-confirmed; without it both fields must be empty")
     change = raw.get("change")
     if not isinstance(change, dict) or not change:
         proposal_error("change must be a non-empty object")
     bad_change = sorted(set(change) - _proposal_change_fields(kind))
     if bad_change:
         proposal_error("unknown change field(s) for " + kind + ": " + ", ".join(bad_change))
-    if source.get("kind") == "email" and not recipients_confirmed and kind == "contact.touch" and change.get("text"):
-        proposal_error("email contact text requires --recipients-confirmed; store metadata only without it")
+    check_change_values(kind, change)
     target = raw.get("target")
     if kind in ("task.update", "contact.touch") and not isinstance(target, dict):
         proposal_error(f"{kind} needs a target")
@@ -4683,6 +4738,10 @@ def validate_proposal_input(raw, recipients_confirmed=False):
             proposal_error(f"target must identify a {expected} and include a base object")
     if kind == "task.create" and target is not None:
         proposal_error("task.create target must be null")
+    if target is not None:
+        missing = sorted(proposal_base_fields(kind, target.get("type"), change) - set(target.get("base") or {}))
+        if missing:
+            proposal_error("target.base must hold the current value of every field this proposal overwrites; missing: " + ", ".join(missing))
     if kind == "contact.touch" and not isinstance(change.get("text"), str):
         proposal_error("contact.touch change needs text")
     if kind == "contact.touch":
@@ -4710,6 +4769,8 @@ def validate_proposal_input(raw, recipients_confirmed=False):
     if raw.get("version", 1) != 1 or raw.get("status", "pending") != "pending" or raw.get("decision") not in (None,):
         proposal_error("new proposals must have version 1, status pending and no decision")
     clean_source = {key: source.get(key, "") for key in ("kind", "id", "revision", "title", "date", "url")}
+    if clean_source["kind"] == "email":
+        clean_source["recipients_confirmed"] = bool(recipients_confirmed)
     out = {"id": ident, "version": 1, "kind": kind, "status": "pending", "title": title,
            "source": clean_source, "action_key": action_key, "work_key": work_key,
            "reason": reason.strip(), "target": copy.deepcopy(target), "change": copy.deepcopy(change),
@@ -4718,6 +4779,7 @@ def validate_proposal_input(raw, recipients_confirmed=False):
     for key in ("run", "evidence", "reviewer"):
         if raw.get(key) not in (None, ""):
             out[key] = copy.deepcopy(raw[key])
+    check_email_privacy(out, recipients_confirmed)
     return out
 
 
@@ -4872,11 +4934,19 @@ def proposal_result_id(proposal, prefix):
     return prefix + _base36(int(hashlib.sha1(proposal["id"].encode()).hexdigest(), 16))[-10:].rjust(10, "0")
 
 
+def _recovered(record, proposal):
+    """An accept that stopped after the record was written: finish it only if the record came from this proposal."""
+    mark = f"created from proposal {proposal['id']}"
+    if not any(isinstance(h, dict) and h.get("text") == mark for h in record.get("history", [])):
+        proposal_conflict(f"not saved: {record.get('id')} already exists but was not created from proposal {proposal['id']}; review it by hand")
+    return record
+
+
 def _new_task(data, proposal, change):
     ident = proposal_result_id(proposal, "t_")
     existing = next((t for t in data.get("tasks", []) if t.get("id") == ident), None)
     if existing:
-        return existing, True
+        return _recovered(existing, proposal), True
     column = change.get("column") or "todo"
     ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
     ts = now()
@@ -4905,7 +4975,7 @@ def _new_person(data, proposal, change):
     ident = proposal_result_id(proposal, "p_")
     existing = next((p for p in data.get("contacts", []) if p.get("id") == ident), None)
     if existing:
-        return existing, True
+        return _recovered(existing, proposal), True
     ts = now()
     person = {"id": ident, "name": change.get("name") or proposal["title"], "company": "", "role": "", "email": "", "phone": "",
               "linkedin": "", "github": "", "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "",
@@ -4985,6 +5055,13 @@ def _edit_change(proposal, path):
     if bad: proposal_error("unknown edited field(s): " + ", ".join(sorted(bad)))
     changed = {k: copy.deepcopy(v) for k, v in value.items() if proposal["change"].get(k) != v}
     merged = copy.deepcopy(proposal["change"]); merged.update(copy.deepcopy(value))
+    check_change_values(proposal["kind"], merged)
+    target = proposal.get("target")
+    if target:
+        missing = sorted(proposal_base_fields(proposal["kind"], target.get("type"), merged) - set(target.get("base") or {}))
+        if missing:
+            proposal_error("an edit cannot overwrite a field the proposal did not record (" + ", ".join(missing) + "); add a new proposal instead")
+    check_email_privacy(dict(proposal, change=merged), bool((proposal.get("source") or {}).get("recipients_confirmed")))
     return merged, changed
 
 
@@ -5182,8 +5259,9 @@ def archive_plan(data, rules, today=None):
                 for field in ("reason", "evidence", "change"):
                     proposal.pop(field, None)
                 if isinstance(proposal.get("decision"), dict):
-                    proposal["decision"].pop("undo", None)
-            if proposal.get("status") in ("accepted", "ignored") and decision_day and decision_day < archive_cut:
+                    proposal["decision"].pop("undo", None); proposal["decision"].pop("edited", None)
+            # Archive only what is already slimmed: an archive file must never keep the detail the 30-day rule removes.
+            if proposal.get("status") in ("accepted", "ignored") and decision_day and decision_day < min(archive_cut, slim_cut):
                 part(str(decision_day.year))["proposals"].append(proposal)
             else:
                 keep_r.append(proposal)

@@ -82,7 +82,10 @@ each exchange instead, with `keeptrack.py proposal-add <file> --dry-run` and the
   only when every intended reader of the board received that specific message. On a board shared by two people, both
   must be recipients of that message. Being on another reply in the same thread is not enough. Only then pass
   `--recipients-confirmed`. Without it, `proposal-add` refuses any summary or subject, and the proposal holds only the
-  sender's name, the date and the message key. Never store a body, a private reply or an attachment.
+  sender's name, the date and the message key, with a title such as `Email from Casey Example, 9 Oct`. Only a
+  `contact.touch` can be proposed that way: a task or person proposal from an email always needs
+  `--recipients-confirmed`. On a board with one reader, that reader received the message. Never store a body, a
+  private reply or an attachment.
 - An explicit follow-up goes in `change.next` and `change.due`. A profile change for an existing person is a
   `person.upsert` proposal with that person as `target` and the current values in `target.base`.
 - A one-off scan in a chat may offer to accept the proposals the person names, with `proposal-accept <id>`. A

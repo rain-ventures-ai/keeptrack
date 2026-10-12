@@ -50,6 +50,14 @@ class ReviewInboxCli(unittest.TestCase):
         self.assertEqual(live, self.snapshot("cards", "people"))
         self.assertEqual(listing, self.kt("list").stdout)
         self.assertNotIn("revised plan", self.kt("today").stdout, "pending proposals never show as work for today")
+        # Agents cannot claim a proposal, and next never picks one.
+        pid = self.pending()[0]["id"]
+        self.assertNotEqual(0, self.kt("claim", pid, ok=False).returncode)
+        nxt = subprocess.run([sys.executable, KT, "--file", os.path.join(self.board, "tasks.json"), "next", "--all"],
+                             capture_output=True, text=True, env=dict(self.env, BOARD_AGENT="codex"))
+        self.assertNotIn("revised plan", nxt.stdout + nxt.stderr)
+        self.assertEqual(4, len(self.pending()))
+        live = self.snapshot("cards", "people")   # next may claim a real card; from here on compare against that
         self.assertEqual(4, len(self.pending()))
 
         # Rerunning the same extraction adds nothing.
@@ -104,6 +112,24 @@ class ReviewInboxCli(unittest.TestCase):
                            capture_output=True, text=True, env=self.env)
         self.assertEqual(2, p.returncode, p.stderr)
         self.assertIn("needs split storage (schema 4)", p.stderr)
+
+    def test_older_cli_keeps_proposal_files(self):
+        """A kit v40 keeptrack.py (before the Inbox) saving to a board that has proposals never drops or changes them."""
+        old = os.path.join(self.tmp.name, "keeptrack_v40.py")
+        src = subprocess.run(["git", "show", "51dfdb5:board/kit/keeptrack.py"], cwd=HERE, capture_output=True, text=True)
+        if src.returncode:
+            self.skipTest("kit v40 keeptrack.py is not in this checkout's history")
+        with open(old, "w", encoding="utf-8") as f:
+            f.write(src.stdout)
+        self.kt("settings-set", "review_inbox.enabled", "true")
+        self.kt("proposal-add", os.path.join(FIX, "meeting-proposals.json"))
+        before = self.snapshot("proposals")
+        p = subprocess.run([sys.executable, old, "--file", os.path.join(self.board, "tasks.json"), "add", "Made by an older tool"],
+                           capture_output=True, text=True, env=self.env)
+        self.assertEqual(0, p.returncode, p.stderr)
+        self.assertEqual(before, self.snapshot("proposals"))
+        self.assertEqual(3, len(self.pending()))
+
 
 if __name__ == "__main__":
     unittest.main()

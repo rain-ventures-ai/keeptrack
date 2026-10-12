@@ -672,10 +672,10 @@ if (typeof window !== 'undefined') (() => {
     if (!meta.projectsLoaded) { for (const p of deletes) if (p.startsWith('projects/')) deletes.delete(p); }
     deletes.forEach(p => changes.delete(p)); return { changes, deletes };
   }
-  async function splitSave(next, message, meta, extra) {
+  async function splitSave(next, message, meta, extra, forceTree = false) {   // forceTree: always one Git Data commit on the head that was read (Review Inbox decisions)
     const { changes, deletes } = splitChanges(next, meta, extra), paths = [...changes.keys(), ...deletes];
     if (!paths.length) { state = next; return 'ok'; }
-    if (paths.length === 1) {
+    if (paths.length === 1 && !forceTree) {
       const rel = paths[0], old = meta.files.get(rel), body = { message, branch: cfg().branch };
       let res;
       if (deletes.has(rel)) { body.sha = old.sha; res = await gh('DELETE', body, false, { path: remotePath(rel) }); }
@@ -696,7 +696,7 @@ if (typeof window !== 'undefined') (() => {
     splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
   }
 
-  async function save(next, message, expectedSha = sha, extra = {}) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
+  async function save(next, message, expectedSha = sha, extra = {}, tree = false) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
     if (ro) { roToast(); return 'error:readonly'; }
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return 'error:schema'; }
     if (isSplit(next)) {
@@ -708,7 +708,7 @@ if (typeof window !== 'undefined') (() => {
         if (res.ok) { sha = (await res.json()).content.sha; etag = null; state = next; return 'ok'; }
         return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       }
-      try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra); }
+      try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra, tree); }
       catch (e) { console.error(e); return isTimeout(e) ? 'error:timeout' : 'error:network'; }
     }
     const body = { message, content: b64e(JSON.stringify(next, null, 2) + '\n'), branch: cfg().branch }; if (expectedSha) body.sha = expectedSha;
@@ -1021,9 +1021,9 @@ if (typeof window !== 'undefined') (() => {
         fixNums(latest, pre); ensureRanks(latest);
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
-        let extra = {};   // options.extra: more files for the same commit (the Review Inbox writes the proposal with its record), checked on this revision
-        if (options.extra) { const r = options.extra(pre, readSha, latest); if (r && r.abort) { state = pre; render(); fail(r.abort); return false; } extra = (r && r.files) || {}; }
-        const out = await save(latest, message, readSha, extra);
+        let extra = {}, tree = false;   // options.extra: more files for the same commit (the Review Inbox writes the proposal with its record), checked on this revision
+        if (options.extra) { const r = options.extra(pre, readSha, latest); if (r && r.abort) { state = pre; render(); fail(r.abort); if (options.onAbort) options.onAbort(r.abort); return false; } extra = (r && r.files) || {}; tree = !!(r && r.tree); }
+        const out = await save(latest, message, readSha, extra, tree);
         if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); if (waiting) savingStatus(); else setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
         if (out !== 'conflict') { fail(out === 'error:timeout' ? 'Not saved: GitHub did not answer in time' : 'Save failed (' + out + ')'); state = before; render(); return false; }
         setStatus('Someone else changed the board, retrying…', 'err');
@@ -3955,7 +3955,7 @@ if (typeof window !== 'undefined') (() => {
     const ctx = { resultId, into: opts.into, fields: opts.fields || [] };
     const label = action === 'ignore' ? 'Ignore' : action === 'merge' ? 'Merge' : 'Accept';
     const message = `${label} proposal: ${p.title}`.slice(0, 120);
-    const ok = await mutate(n => applyProposal(n, p, action, change, ctx), message, [], null, { recheckArchive: true, remember: false, extra: (pre, meta, latest) => {
+    const ok = await mutate(n => applyProposal(n, p, action, change, ctx), message, [], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta, latest) => {
       const cur = proposalIn(meta, id);
       if (!cur) return { abort: 'That proposal is no longer on the board.' };
       if (cur.status !== 'pending') return { abort: alreadyMsg(cur) };
@@ -3965,6 +3965,8 @@ if (typeof window !== 'undefined') (() => {
         if (p.kind === 'contact.touch') { const ids = change.source_message_ids || [], cov = new Set((r.comments || []).flatMap(c => c.source_message_ids || [])), hit = ids.filter(k => cov.has(k));
           if (hit.length && hit.length < new Set(ids).size) return { abort: 'Not saved: some of these messages are already logged. Review the rest as a new proposal.' }; }
       }
+      if (creates) { const had = findRef(pre, ref);   // an earlier accept stopped after writing the record: finish it only if it came from this proposal
+        if (had && !(had.history || []).some(h => h && h.text === `created from proposal ${p.id}`)) return { abort: `Not saved: ${ref.id} already exists but was not created from this proposal. Review it by hand.` }; }
       let undo = null;
       if (ref) {
         const after = findRef(latest, ref); if (!after) return { abort: 'Not saved: the record could not be found.' };
@@ -3972,7 +3974,7 @@ if (typeof window !== 'undefined') (() => {
         undo = { before: before ? clone(before) : null, after: clone(after), created: creates };
       }
       const out = decidedProposal(cur, action === 'accept' && opts.change ? 'edit' : action, ref, edited, undo, note);
-      return { files: { [proposalPath(id)]: jsonText(out) } };
+      return { files: { [proposalPath(id)]: jsonText(out) }, tree: true };
     } });
     if (ok) rememberDecision(id, message, action === 'ignore');
     return ok;
@@ -3990,26 +3992,26 @@ if (typeof window !== 'undefined') (() => {
     const ok = await mutate(n => {
       if (u.created) { const k = d.result.type === 'task' ? 'tasks' : 'contacts'; n[k] = n[k].filter(x => x.id !== d.result.id); return; }
       const r = findRef(n, d.result); if (r && u.before) { Object.keys(r).forEach(k => { delete r[k]; }); Object.assign(r, clone(u.before)); }
-    }, `Undo proposal: ${p.title}`.slice(0, 120), [d.result.id], null, { recheckArchive: true, remember: false, extra: (pre, meta) => {
+    }, `Undo proposal: ${p.title}`.slice(0, 120), [d.result.id], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta) => {
       const cur = proposalIn(meta, id);
       if (!cur || cur.status !== 'accepted' || !cur.decision || cur.decision.at !== d.at) return { abort: 'Not undone: the proposal changed since. The Inbox shows the latest.' };
       if (!same(findRef(pre, d.result))) return { abort: 'Not undone: the record changed after it was accepted. Later edits are untouched.' };
       const x = clone(cur); x.status = 'pending'; x.decision = null;
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `undid ${d.action} by ${d.by} (${d.result.id})` });
-      return { files: { [proposalPath(id)]: jsonText(x) } };
+      return { files: { [proposalPath(id)]: jsonText(x) }, tree: true };
     } });
     if (ok) inboxSay('Undone. The proposal is pending again.');
     return ok;
   }
   async function reopenProposal(id) {   // ignored -> pending (keeptrack.py proposal-reopen)
     if (ro) { roToast(); return false; }
-    const ok = await mutate(() => {}, 'Reopen proposal', [], null, { recheckArchive: true, remember: false, extra: (pre, meta) => {
+    const ok = await mutate(() => {}, 'Reopen proposal', [], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta) => {
       const cur = proposalIn(meta, id);
       if (!cur || cur.status !== 'ignored') return { abort: 'Only an ignored proposal can be reopened.' };
       if (!cur.change) return { abort: 'This proposal was slimmed after 30 days and can no longer be reopened.' };
       const old = cur.decision || {}, x = clone(cur); x.status = 'pending'; x.decision = null;
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `reopened (was ignored by ${old.by || 'someone'})` });
-      return { files: { [proposalPath(id)]: jsonText(x) } };
+      return { files: { [proposalPath(id)]: jsonText(x) }, tree: true };
     } });
     if (ok) inboxSay('Reopened. The proposal is pending again.');
     return ok;
@@ -4112,7 +4114,8 @@ if (typeof window !== 'undefined') (() => {
     if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide');
     const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro) b.disabled = true; acts.append(b); };
-    if (p.status === 'pending') { btn('accept', 'Accept', 'primary', 'a'); btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'secondary', 'i'); btn('leave', 'Leave pending', 'ghost'); }
+    const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
+    if (p.status === 'pending') { btn('accept', 'Accept', 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'secondary', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
     else if (p.status === 'ignored' && p.change) btn('reopen', 'Reopen', 'secondary');
     if (acts.children.length) art.append(acts);
@@ -4158,7 +4161,8 @@ if (typeof window !== 'undefined') (() => {
       const cards = [...wrap.querySelectorAll('article.prop')], cur = e.target.closest('article.prop'), i = cards.indexOf(cur);
       if (e.key === 'j' || e.key === 'k') { e.preventDefault(); const nx = cards[Math.max(0, Math.min(cards.length - 1, i < 0 ? 0 : i + (e.key === 'j' ? 1 : -1)))]; if (nx) nx.focus(); return; }
       if (!cur) return;
-      if (e.key === 'Enter' && e.target === cur) { const p = all.find(x => x.id === cur.dataset.id), ref = p && ((p.decision && p.decision.result) || p.target); if (ref && findRef(state, ref)) { e.preventDefault(); if (ref.type === 'task') openCard(ref.id); else openContact(ref.id); } return; }
+      if (e.key === 'Enter' && e.target === cur) { const p = all.find(x => x.id === cur.dataset.id), ref = p && ((p.decision && p.decision.result) || p.target); if (ref && findRef(state, ref)) { e.preventDefault(); if (ref.type === 'task') openCard(ref.id); else openContact(ref.id); return; }
+        const first = cur.querySelector('.prop__actions button'); if (first) { e.preventDefault(); first.focus(); } return; }
       const act = { a: 'accept', e: 'edit', m: 'merge', i: 'ignore' }[e.key]; if (!act) return;
       const b = cur.querySelector(`.prop__actions [data-act="${act}"]`); if (b && !b.disabled) { e.preventDefault(); b.click(); }
     });

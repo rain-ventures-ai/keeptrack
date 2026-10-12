@@ -49,7 +49,7 @@ For each proposal, pick one:
 
 There is no "accept all". Each change is a choice.
 
-Keys: **j** and **k** move between proposals. **a** accepts, **e** edits, **m** merges and **i** ignores. **Enter** opens the record.
+Keys: **j** and **k** move between proposals. **a** accepts, **e** edits, **m** merges and **i** ignores. **Enter** opens the record, or moves to the buttons when there is no record yet.
 
 ## Safety
 
@@ -71,7 +71,7 @@ Keys: **j** and **k** move between proposals. **a** accepts, **e** edits, **m** 
 
 - A proposal stores a short reason, at most 300 characters. It never stores a transcript, an email body or attachments.
 - An email proposal on a shared board can hold a summary only when every intended reader of the board received that specific email. For example, on a board shared by two people, both must have received it. Being on another reply in the same thread is not enough.
-- Otherwise an email proposal holds only who it was from, the date and a message key. The subject line is left out too.
+- Otherwise an email proposal can only log that an email happened. It holds who it was from, the date and a message key. The subject line is left out too. It cannot be edited into a summary, and it cannot propose a task or a change to a person.
 - After 30 days, decided proposals keep only their keys, title, source, decision and result. The reason and details are removed. The archive sweep later moves old decided proposals into `board/archive/<year>.json`.
 
 ## Limits

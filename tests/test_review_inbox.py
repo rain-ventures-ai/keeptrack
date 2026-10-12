@@ -189,17 +189,56 @@ class ReviewInbox(unittest.TestCase):
         before = outputs(); self.add(proposal()); self.assertEqual(before, outputs())
 
     def test_11_email_privacy_lengths_and_unknown_raw_fields(self):
-        email = proposal(source="email")
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught: kt.validate_proposal_input(email, False)
-        self.assertEqual(2, caught.exception.code)
-        email["reason"] = email["evidence"] = ""
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught: kt.validate_proposal_input(email, False)
-        self.assertEqual(2, caught.exception.code)   # source.title is often the subject line: private too
-        email["source"]["title"] = ""
-        kt.validate_proposal_input(email, False)
+        def refused(value, confirmed=False):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught: kt.validate_proposal_input(value, confirmed)
+            self.assertEqual(2, caught.exception.code)
+        # Without --recipients-confirmed an email proposal is metadata only: a contact.touch with a metadata title.
+        refused(proposal(source="email"))                                   # task.create from a private email
+        meta = proposal(kind="contact.touch", source="email", title="Email from Casey Example, 9 Oct", reason="", evidence="",
+                        target={"type": "person", "id": "p_acme", "base": {}}, change={"text": "", "channel": "email"})
+        meta["source"]["title"] = ""
+        self.assertEqual(False, kt.validate_proposal_input(copy.deepcopy(meta), False)["source"]["recipients_confirmed"])
+        for field, value in (("text", "Budget is 40k"), ("next", "Reply about the budget"), ("comments", [{"text": "Budget"}]),
+                             ("notes", "Budget"), ("details", "Budget")):
+            bad = copy.deepcopy(meta); bad["change"][field] = value; refused(bad)
+        bad = copy.deepcopy(meta); bad["title"] = "Re: confidential budget"; refused(bad)
+        bad = copy.deepcopy(meta); bad["source"]["title"] = "Re: confidential budget"; refused(bad)
+        bad = copy.deepcopy(meta); bad["reason"] = "Casey wrote about the budget."; refused(bad)
+        ok = copy.deepcopy(meta); ok["change"]["text"] = "Confirmed Friday."; ok["reason"] = "Both readers got it."
+        self.assertEqual(True, kt.validate_proposal_input(ok, True)["source"]["recipients_confirmed"])
         for field in ("body", "text", "transcript"):
-            bad = copy.deepcopy(email); bad[field] = "raw"
-            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit): kt.validate_proposal_input(bad, False)
+            bad = copy.deepcopy(meta); bad[field] = "raw"; refused(bad)
+        # An edit before accepting cannot add private text to an unconfirmed email proposal.
+        stored = kt.validate_proposal_input(copy.deepcopy(meta), False); stored["id"] = "r_aaaaaaaaaa"
+        path = os.path.join(self.tmp.name, "edit.json")
+        with open(path, "w", encoding="utf-8") as dst: json.dump({"text": "Budget is 40k"}, dst)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught: kt._edit_change(stored, path)
+        self.assertEqual(2, caught.exception.code)
+
+    def test_values_and_base_coverage_are_checked(self):
+        def refused(value):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught: kt.validate_proposal_input(value, False)
+            self.assertEqual(2, caught.exception.code)
+        refused(proposal(change={"title": "x", "labels": "urgent"}))
+        refused(proposal(change={"title": "x", "comments": "not a list"}))
+        refused(proposal(change={"title": "x", "due": "next week"}))
+        refused(proposal(change={"title": "x", "priority": "urgent"}))
+        refused(proposal(kind="task.update", target={"type": "task", "id": "t_first", "base": {}}, change={"labels": ["x"]}))
+        refused(proposal(kind="task.update", target={"type": "task", "id": "t_first", "base": {}}, change={"owner": "alex"}))
+        kt.validate_proposal_input(proposal(kind="task.update", target={"type": "task", "id": "t_first", "base": {"assignees": []}},
+                                            change={"owner": "alex", "comments": [{"text": "added, never overwritten"}]}), False)
+
+    def test_recovery_needs_provenance(self):
+        ident = self.add(proposal(action="recover-me"))
+        stray = kt.proposal_result_id({"id": ident}, "t_")
+        def plant(data):
+            data["tasks"].append({"id": stray, "title": "Made by hand", "column": "todo", "history": []})
+        self.quiet(kt.mutate, plant, "a record that happens to have the id")
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            kt.cmd_proposal_accept(Args(id=ident, edit=None, json=False))
+        self.assertEqual(3, caught.exception.code)
+        self.assertEqual("pending", self.load_proposal(ident)["status"])
+
         long = proposal(); long["reason"] = "x" * 301
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit): kt.validate_proposal_input(long, False)
 
@@ -260,6 +299,17 @@ class ReviewInbox(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             kt.mutate(lambda data: lines.extend(kt._prepare_proposals(data, [proposal()], False)[1]), "archived repeat")
         self.assertEqual([f"exists {ident} ignored"], lines)
+
+    def test_early_archive_never_keeps_unslimmed_detail(self):
+        ident = self.add(proposal(action="recent"))
+        self.quiet(kt.cmd_proposal_ignore, Args(id=ident, reason=None))
+        path = os.path.join(self.board, "proposals", ident + ".json")
+        with open(path) as src: p = json.load(src)
+        p["decision"]["at"] = (kt.board_today(None) - kt.dt.timedelta(days=10)).isoformat() + "T00:00:00Z"
+        with open(path, "w") as dst: json.dump(p, dst)
+        self.quiet(kt.cmd_archive, Args(ref=None, done_days=1, lost_days=None, keep_history=None, dry_run=False))
+        self.assertTrue(os.path.exists(path), "a 10-day-old decision is not archived before it is slimmed")
+        self.assertIn("reason", self.load_proposal(ident))
 
 
 if __name__ == "__main__":
