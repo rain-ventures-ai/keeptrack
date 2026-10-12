@@ -1258,6 +1258,8 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .trow__meta { font-size: var(--fs-sm); margin-top: 4px; }
 .trow__acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .trow__foot { padding-top: 8px; }
+.treview .trow > .prop { flex: 1 1 100%; width: 100%; margin: 4px 0 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; padding: 16px 0 0; background: transparent; }
+.treview .trow > .prop > .prop__top { display: none; } /* The parent preview already names this proposal. */
 @media (max-width: 640px) { .trow__acts .ui-btn { min-height: var(--touch, 44px); } .trow__text { flex-basis: 100%; } .trow__acts { width: 100%; } .trow__acts .ui-btn { flex: 1; } }
 
 /* Review Inbox count on the Today tab (header strip and phone dock) */

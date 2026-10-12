@@ -26,7 +26,7 @@ When it is on, the meeting-notes and email workflows send their suggestions to t
 
 ## Review proposals
 
-1. Open **Today**. When proposals are waiting, **To review** previews the newest five with their type, source date and any duplicate warning. Choose **Review** to read the evidence and proposed changes before deciding; previewing never accepts or ignores anything. The **Review Inbox** tile and **Review all** open the full Inbox. While proposals wait, an **Inbox** button with a count also shows at the top.
+1. Open **Today**. **To review** starts with the newest five proposals. Choose **Review** to expand the evidence and proposed changes inline, then **Accept** or **Ignore**. Ignore can be undone. Updates identify their existing task; a different possible duplicate requires the full Inbox's edit/merge review. Successful decisions refill the preview from the pending queue while preserving the remaining order and your reading position. Failed saves leave the item pending. Incoming remote proposals append without replacing the item you are reviewing, and changed evidence must be reviewed again before saving. The **Review Inbox** tile and **Review all** open the full Inbox. While proposals wait, an **Inbox** button with a count also shows at the top.
 2. Proposals are grouped by source (a meeting or an email) and then by the run that found them.
 3. Use the filters to show one type, one source, one reviewer, or decided proposals.
 

@@ -1364,9 +1364,11 @@ if (typeof window !== 'undefined') (() => {
     if ($('dlgCard').open && editing) markSeen(editing);
     applyModes(); syncInboxButton(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
     if (view !== 'board') {
+      const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
       ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox })[view](); board.scrollTop = st; renderLegend(); renderStats();
+      if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if ($('dlgCard').open) refreshDrawer(); return;
     }
     const board = $('board');
@@ -3888,6 +3890,31 @@ if (typeof window !== 'undefined') (() => {
   const LIST_FIELDS = ['comments', 'todos', 'links'];
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
   const inboxOpen = {};   // proposal id -> 'edit' | 'merge' (the inline form that is open)
+  let todayQueue = { key: '', order: [], visible: [], reviewed: new Map(), busy: new Set() };
+  function otherProposalDuplicates(p) {
+    return (p.likely_duplicates || []).filter(d => !(p.target && d.type === p.target.type && d.id === p.target.id));
+  }
+  const reviewedProposalMatches = (p, reviewed) => sameJson(p, reviewed);
+  function todayReviewPosition() {
+    const board = $('board'), rows = [...board.querySelectorAll('.treview .trow')], active = document.activeElement;
+    const row = rows.find(r => r.getBoundingClientRect().bottom > board.getBoundingClientRect().top) || rows[0];
+    return { id: row && row.dataset.id, top: row && row.getBoundingClientRect().top, scroll: board.scrollTop,
+      focus: active && active.closest('.treview .trow') ? { id: active.closest('.trow').dataset.id, act: active.dataset.act || '', review: active.classList.contains('trow__review') } : null };
+  }
+  function restoreTodayReviewPosition(pos) {
+    const board = $('board'), rows = [...board.querySelectorAll('.treview .trow')];
+    const row = rows.find(r => r.dataset.id === pos.id);
+    board.scrollTop = row ? board.scrollTop + row.getBoundingClientRect().top - pos.top : pos.scroll;
+    if (pos.focus) { const r = rows.find(x => x.dataset.id === pos.focus.id) || row || rows[0];
+      const b = r && (pos.focus.review ? r.querySelector('.trow__review') : r.querySelector(`[data-act="${pos.focus.act}"]`));
+      if (b && !b.disabled) b.focus({ preventScroll: true }); else if (r) r.querySelector('.trow__review').focus({ preventScroll: true }); }
+  }
+  function restoreTodayProposal(id) {
+    if (todayQueue.key !== [cfg().repo, cfg().branch, cfg().path].join('|') || todayQueue.visible.includes(id)) return;
+    todayQueue.visible.push(id);
+    todayQueue.visible.sort((a, b) => todayQueue.order.indexOf(a) - todayQueue.order.indexOf(b));
+    if (todayQueue.visible.length > 5) { const last = todayQueue.visible.slice().reverse().find(x => x !== id && !todayQueue.reviewed.has(x)); if (last) todayQueue.visible = todayQueue.visible.filter(x => x !== last); }
+  }
   const canonO = o => { if (Array.isArray(o)) return o.map(canonO); if (o && typeof o === 'object') { const x = {}; Object.keys(o).sort().forEach(k => { x[k] = canonO(o[k]); }); return x; } return o; };
   const canonJ = o => JSON.stringify(canonO(o));
   const inboxMe = () => cfg().me || 'web';
@@ -3998,6 +4025,9 @@ if (typeof window !== 'undefined') (() => {
     const p = proposalIn(got.meta, id);
     if (!p) { inboxSay('That proposal is no longer on the board.', true); await load(true); return false; }
     if (p.status !== 'pending') { inboxSay(alreadyMsg(p), true); await load(true); return false; }
+    if (opts.reviewed && !reviewedProposalMatches(p, opts.reviewed)) {
+      todayQueue.reviewed.delete(id); await load(true); inboxSay('Not saved: this proposal changed. Expand Review again to read the latest evidence.', true); return false;
+    }
     const fresh = normalise(got.data), change = clone(opts.change || p.change || {});
     const edited = opts.change ? Object.fromEntries(Object.entries(opts.change).filter(([k, v]) => !sameJson((p.change || {})[k], v))) : null;
     let expect = {}, note = '';
@@ -4023,6 +4053,7 @@ if (typeof window !== 'undefined') (() => {
       const cur = proposalIn(meta, id);
       if (!cur) return { abort: 'That proposal is no longer on the board.' };
       if (cur.status !== 'pending') return { abort: alreadyMsg(cur) };
+      if (opts.reviewed && !reviewedProposalMatches(cur, opts.reviewed)) { todayQueue.reviewed.delete(id); return { abort: 'Not saved: this proposal changed. Expand Review again to read the latest evidence.' }; }
       if (action !== 'ignore' && p.target) {
         const r = findRef(pre, p.target); if (!r) return { abort: `Not saved: ${p.target.id} is no longer on the board.` };
         if (Object.keys(expect).some(f => !sameJson(r[f], expect[f]))) return { abort: 'Not saved: the record changed again while you were deciding. Review it again.' };
@@ -4064,7 +4095,7 @@ if (typeof window !== 'undefined') (() => {
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `undid ${d.action} by ${d.by} (${d.result.id})` });
       return { files: { [proposalPath(id)]: jsonText(x) }, tree: true };
     } });
-    if (ok) inboxSay('Undone. The proposal is pending again.');
+    if (ok) { restoreTodayProposal(id); inboxSay('Undone. The proposal is pending again.'); render(); }
     return ok;
   }
   async function reopenProposal(id) {   // ignored -> pending (keeptrack.py proposal-reopen)
@@ -4077,7 +4108,7 @@ if (typeof window !== 'undefined') (() => {
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `reopened (was ignored by ${old.by || 'someone'})` });
       return { files: { [proposalPath(id)]: jsonText(x) }, tree: true };
     } });
-    if (ok) inboxSay('Reopened. The proposal is pending again.');
+    if (ok) { restoreTodayProposal(id); inboxSay('Reopened. The proposal is pending again.'); render(); }
     return ok;
   }
   // A decision is one Undo step (Ctrl/Cmd+Z, the Undo button, the toast): an accept is undone, an ignore is reopened.
@@ -4091,26 +4122,63 @@ if (typeof window !== 'undefined') (() => {
     if (typeof v === 'object') return JSON.stringify(v);
     return String(v);
   }
-  // Today is a preview, not an approval surface: read the evidence and changes in the Inbox first.
+  // A stable session queue: new remote proposals append, and only a successful decision refills a slot.
   function todayReview(items) {
     const sec = ui.section({ title: 'To review', count: items.length, icon: 'inbox' }); sec.classList.add('tsec', 'treview');
     sec.body.append(el('p', 'treview__hint muted', 'Suggested changes, not yet on your board. Review the evidence before accepting.'));
-    const list = items.slice().sort((a, b) => String((b.source || {}).date || '').localeCompare(String((a.source || {}).date || '')) || String(b.created || '').localeCompare(String(a.created || ''))).slice(0, 5);
+    const key = [cfg().repo, cfg().branch, cfg().path].join('|');
+    const sorted = items.slice().sort((a, b) => String((b.source || {}).date || '').localeCompare(String((a.source || {}).date || '')) || String(b.created || '').localeCompare(String(a.created || '')) || a.id.localeCompare(b.id));
+    if (todayQueue.key !== key) todayQueue = { key, order: sorted.map(p => p.id), visible: sorted.slice(0, 5).map(p => p.id), reviewed: new Map(), busy: new Set() };
+    sorted.forEach(p => { if (!todayQueue.order.includes(p.id)) todayQueue.order.push(p.id); });
+    const byId = new Map(items.map(p => [p.id, p]));
+    if (!todayQueue.visible.some(id => byId.has(id)) && ![...todayQueue.reviewed.keys()].some(id => byId.has(id))) {
+      todayQueue.visible = todayQueue.order.filter(id => byId.has(id)).slice(0, 5);
+      todayQueue.reviewed.clear();
+    }
+    const list = todayQueue.visible.map(id => byId.has(id) ? todayQueue.reviewed.get(id) || byId.get(id) : null).filter(Boolean);
     list.forEach(p => {
       const row = el('div', 'trow'), s = p.source || {}; row.dataset.id = p.id;
       const txt = el('div', 'trow__text');
       const tags = el('div', 'trow__tags'); tags.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm', tone: 'neutral' }));
-      if ((p.likely_duplicates || []).length) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
+      if (p.kind === 'task.update' && p.target) { const target = findRef(state, p.target); tags.append(ui.pill({ text: 'Updates ' + (target && target.num ? '#' + target.num : refTitle(p.target)), size: 'sm', tone: 'info' })); }
+      if (otherProposalDuplicates(p).length) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
       txt.append(tags, el('span', 'trow__title', p.title || '(no title)'), el('span', 'trow__meta muted', [SRC_LABEL[s.kind] || 'Source', s.date || ''].filter(Boolean).join(' · ')));
       const acts = el('div', 'trow__acts'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Review: ' + (p.title || p.id));
-      const review = ui.button({ label: 'Review', icon: 'arrow-right', variant: 'secondary', size: 'sm', onClick: () => { inboxFocus = p.id; setView('inbox'); } });
+      const review = ui.button({ label: todayQueue.reviewed.has(p.id) ? 'Hide details' : 'Review', icon: 'arrow-right', variant: 'secondary', size: 'sm', onClick: () => {
+        const pos = todayReviewPosition(); if (todayQueue.reviewed.has(p.id)) todayQueue.reviewed.delete(p.id); else todayQueue.reviewed.set(p.id, clone(p)); render(); restoreTodayReviewPosition(pos);
+      } });
+      review.classList.add('trow__review'); review.setAttribute('aria-expanded', String(todayQueue.reviewed.has(p.id))); review.setAttribute('aria-controls', 'today-review-' + p.id);
       review.setAttribute('aria-label', 'Review: ' + (p.title || p.id)); acts.append(review);
-      row.append(txt, acts); sec.body.append(row);
+      row.append(txt, acts);
+      if (todayQueue.reviewed.has(p.id)) { const details = proposalCard(todayQueue.reviewed.get(p.id), { today: true }); details.id = 'today-review-' + p.id; row.append(details); }
+      sec.body.append(row);
     });
     const all = ui.button({ label: items.length > list.length ? `Review all ${items.length}` : 'Open the Review Inbox', variant: 'secondary', size: 'sm', onClick: () => setView('inbox') });
     const foot = el('div', 'trow__foot'); foot.append(all); sec.body.append(foot);
     if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }
     return sec;
+  }
+  async function todayInboxAct(p, act) {
+    if (todayQueue.busy.has(p.id)) return;
+    if (act === 'edit' || act === 'merge') { inboxFocus = p.id; inboxOpen[p.id] = act; setView('inbox'); return; }
+    if (act === 'leave') return;
+    const queue = todayQueue, pos = todayReviewPosition(), index = queue.visible.indexOf(p.id);
+    if ($('inboxLive')) $('inboxLive').textContent = '';
+    queue.busy.add(p.id); document.querySelectorAll(`.trow[data-id="${p.id}"] .prop__actions button`).forEach(b => { b.disabled = true; });
+    let ok = false;
+    try { ok = await decideProposal(p.id, act, { reviewed: p }); }
+    finally { queue.busy.delete(p.id); }
+    if (todayQueue !== queue || view !== 'today') return;
+    if (ok) {
+      todayQueue.reviewed.delete(p.id); todayQueue.visible = todayQueue.visible.filter(id => id !== p.id);
+      const pending = new Set(inboxPending().map(x => x.id));
+      const next = todayQueue.order.find(id => pending.has(id) && !todayQueue.visible.includes(id));
+      if (next) todayQueue.visible.push(next);
+      if (pos.id === p.id) { pos.id = todayQueue.visible[Math.min(index, todayQueue.visible.length - 1)]; }
+      if (pos.focus && pos.focus.id === p.id) pos.focus = { id: pos.id, review: true };
+      inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : 'Accepted.');
+    } else if (!$('inboxLive') || !$('inboxLive').textContent) inboxSay('Not saved. The proposal is still pending; check your connection and try again.', true);
+    render(); restoreTodayReviewPosition(pos);
   }
   function syncInboxButton() {
     const on = inboxOn(), n = on ? inboxPending().length : 0, b = $('btnInbox'), bd = $('inboxBadge');
@@ -4181,7 +4249,7 @@ if (typeof window !== 'undefined') (() => {
     if (act === 'accept') inboxSay('Accepted.'); else if (act === 'ignore') inboxSay('Ignored. It will not come back for this source.');
     inboxFocus = next ? next.dataset.id : ''; render();
   }
-  function proposalCard(p) {
+  function proposalCard(p, options = {}) {
     const art = el('article', 'prop prop--' + p.status); art.tabIndex = 0; art.dataset.id = p.id; const hid = 'prop-' + p.id; art.setAttribute('aria-labelledby', hid);
     const top = el('div', 'prop__top'), t = el('h4', 'prop__title', p.title || '(no title)'); t.id = hid;
     top.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm' }), t);
@@ -4197,13 +4265,13 @@ if (typeof window !== 'undefined') (() => {
     if (p.reviewer) add('Reviewer', '@' + p.reviewer);
     art.append(meta);
     const flags = el('ul', 'prop__flags');
-    (p.likely_duplicates || []).forEach(d => flags.append(el('li', 'propflag', `Looks like: ${refTitle(d)}${d.why ? ' (' + d.why + ')' : ''}`)));
+    otherProposalDuplicates(p).forEach(d => flags.append(el('li', 'propflag', `Looks like: ${refTitle(d)}${d.why ? ' (' + d.why + ')' : ''}`)));
     if (p.previously_ignored) flags.append(el('li', 'propflag', `You ignored this on ${String(p.previously_ignored.at || '').slice(0, 10) || 'an earlier date'} (${p.previously_ignored.proposal}).`));
     if (flags.children.length) art.append(flags);
     art.append(proposalChange(p));
     if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
-    const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro) b.disabled = true; acts.append(b); };
+    const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => options.today ? todayInboxAct(p, act) : inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).length)))) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
     if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Accept applies these changes to the board. Leave pending if anything needs checking.')); btn('accept', 'Accept', 'secondary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
