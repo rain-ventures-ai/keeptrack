@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
+### [36] — 2026-10-12
+
+- Claim ownership follow-ups, from the adversarial review of v35. The local claim record is read once per command (kept across the save retries) instead of two or three times, and `session_for` no longer takes an unused card id. A record that git tracks is ignored with one stderr note, so a board writer who commits `.board-claim.json` cannot give every pulling clone a known session id (checked with one `git ls-files` per command, and by the heartbeat hook; not for a `--file` board or outside a git repo). Writing the record at a board repo's root warns when `.gitignore` does not list it, but still writes it. A bare `heartbeat` (or `--status blocked`), `done` or `release` whose save loses a race re-runs on the newer board, so it can no longer land a `heartbeat_at` or status on another session's fresh claim of the card; the API save path is unchanged (a one-file contents PUT still fails when that card's file changed, and the git path when the branch moved).
+
 ### [35] — 2026-10-11
 
 - Claim ownership and launch checks, from the external review of private-tasks. `done`, `release` and `heartbeat` refuse a card whose claim belongs to another session; `--force` on them is only for a person's explicit say-so, and it overrides only the assignee check and another session's live claim. Releasing a stale, stuck or blocked claim works from any session. A session is identified by `--session`, `BOARD_SESSION`, `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, or else the local claim record this clone wrote, so an attended session keeps its own card. A routine's `claim` replaces the web page's `pending-...` placeholder for the same agent and person without `--force`. `--force` no longer bypasses `settings.max_agent_claims`; the capacity refusal says to raise it or use `--attended`. The web page will not send a card to Claude when the board's agent limit is full, and its quick-assign button says why. The routine text no longer mentions `--force`.
