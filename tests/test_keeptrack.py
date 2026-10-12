@@ -1697,8 +1697,18 @@ class ClaimLifecycle(unittest.TestCase):
                 calls.append(1); return False
             return real(data, sha, msg)
         kt.save = racing
-        self.release(1)                                        # a lost save re-runs the command's fn with the same read
+        reads, real_open = [], os.open
+        def counting(path, *a, **kw):
+            if str(path) == self.claim_file:
+                reads.append(1)
+            return real_open(path, *a, **kw)
+        kt.os.open = counting
+        try:
+            self.release(1)                                    # a lost save re-runs the command's fn with the same read
+        finally:
+            kt.os.open = real_open
         self.assertIsNone(self.card(1)["claim"]); self.assertEqual(len(calls), 1)
+        self.assertEqual(len(reads), 1, "the retry read the record again")
         write(self.claim_file, {"session": "other"})            # a later command sees the new file
         self.assertEqual(kt.recorded_session(), "other")
 
