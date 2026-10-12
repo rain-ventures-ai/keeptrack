@@ -69,3 +69,9 @@ jobs:
       - name: Agent limit on the page, routine text, cancelled outcome
         working-directory: tests/browser
         run: node agent-limit.test.js
+      - name: Board widgets and browser opt-in
+        working-directory: tests/browser
+        run: node widgets.test.js
+      - name: Search help, settings and theme actions
+        working-directory: tests/browser
+        run: node search-actions.test.js

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Board-owned Today widgets and per-board browser appearance are opt-in. Search now finds Help,
+  agent setup, connections and appearance settings, and can switch built-in themes while respecting the active board profile.
+
 - **2026-10-12** — The hosted board is an installable PWA. Each repo/branch/path combination has a separate app identity, launch URL, name, colour and generated initials icon, so several boards can be installed together. The service worker caches the app shell for offline startup and keeps phone notification taps tied to the originating board.
 
 ## Schema versions
@@ -24,6 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [38] — 2026-10-12
+
+- Canonical email message keys deduplicate shared-board scans across members' mailboxes. Bind verified messages to
+  existing contact history without changing its summary, stage or date; retry overlap checks after concurrent saves.
 
 ### [37] — 2026-10-12
 

@@ -15,6 +15,7 @@
 - **Tasks (optional):** the board, list, calendar, schedule and activity views, linked to people and companies.
 - **Installable boards:** install each board on a phone or computer as its own app. Every board has a separate name, launch target, colour and initials icon.
 - **AI helpers:** for Claude (Code on your computer, on the web and in the phone app; Desktop and Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
+- **Scheduled routines:** contact email reconciliation, meeting notes and task-assignment workers can report their management location, last attempt and results in each board repo. See [schedules across boards and users](docs/help/schedules.md).
 
 ## Start
 **Easiest:** paste this into your current or a new chat with Claude, Codex or Cursor. It walks you through everything, also when you have no board yet:
@@ -53,7 +54,7 @@ Help for users: [docs/help](docs/help/README.md). In the web board, click **❓ 
 Contacts are personal data. Keep the data repo **private**. The board warns you if it is public. Git keeps old versions of the file, so a deleted contact stays in the repo history; a full delete needs a history rewrite.
 
 ## Not in scope (for now)
-Email or calendar sync, sending messages, quotes and invoices, reports, a hosted ChatGPT connector.
+Calendar sync, sending messages, quotes and invoices, a hosted ChatGPT connector. Email reconciliation uses your assistant's approved Gmail or Outlook connection and a separately configured scheduler; Keeptrack does not host that scheduler.
 
 ## Licence
 MIT. See [LICENSE](LICENSE). MiniSearch in `board/vendor/` has its own MIT licence.

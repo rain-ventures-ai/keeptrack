@@ -170,6 +170,58 @@ class LocalBoard(unittest.TestCase):
         finally:
             kt.save = original
 
+    def test_canonical_email_keys_and_verified_binding(self):
+        self.test_email_touch_keeps_source_time_and_is_idempotent()
+        key = kt.email_key('  < shared-123@EXAMPLE.test >  ')
+        self.assertEqual(key, kt.email_key('shared-123@example.test'))
+        for bad in ['no-id', '<a@b>\nInjected: value', 'a b@example.test', 'a@b@c', 'é@b', 'x' * 999 + '@b']:
+            with self.assertRaises(SystemExit): kt.email_key(bad)
+        p = self.read()['contacts'][0]; c = p['comments'][0]
+        before = copy.deepcopy(c)
+        self.quiet(kt.cmd_touch_source, Args(ref='p_casey', touch_id=c['id'], source_message_id=[key]))
+        changed = self.read()['contacts'][0]['comments'][0]
+        changed.pop('source_message_ids'); before.pop('source_message_ids')
+        self.assertEqual(before, changed)
+        with self.assertRaises(SystemExit):
+            self.quiet(kt.cmd_touch_source, Args(ref='p_casey', touch_id=p['comments'][1]['id'], source_message_id=[key]))
+        args = Args(ref='p_casey', text='Same mail in Jez mailbox', channel='email', draft=False, preserve_stage=True,
+                    source_message_id=[key], source_id='email:' + 'd' * 64, at='2026-10-08T09:30:00Z',
+                    company=None, role=None, email=None, phone=None, linkedin=None, value=None, source=None,
+                    notes=None, next=None, stage=None, due=None)
+        original_author = kt.who_am_i
+        try:
+            kt.who_am_i = lambda t=None: 'claude@jezhub'
+            self.quiet(kt.cmd_touch, args)
+            self.assertEqual(2, len(self.read()['contacts'][0]['comments']))
+            args.source_message_id = [kt.email_key('<reply-456@example.test>')]
+            self.quiet(kt.cmd_touch, args)
+        finally: kt.who_am_i = original_author
+        self.assertEqual(3, len(self.read()['contacts'][0]['comments']))
+        self.assertEqual('claude@jezhub', self.read()['contacts'][0]['comments'][-1]['by'])
+        args.draft = True
+        with self.assertRaises(SystemExit): self.quiet(kt.cmd_touch, args)
+
+    def test_email_overlap_rechecks_after_save_race(self):
+        self.test_email_touch_keeps_source_time_and_is_idempotent()
+        key = kt.email_key('<racing@example.test>')
+        args = Args(ref='p_casey', text='Email confirmed', channel='email', draft=False, preserve_stage=True,
+                    source_message_id=[key], source_id=None, at='2026-10-08T09:30:00Z', company=None, role=None,
+                    email=None, phone=None, linkedin=None, value=None, source=None, notes=None, next=None, stage=None, due=None)
+        original = kt.save; attempted = []
+        def race(data, sha, message):
+            attempted.append(True)
+            kt.save = original
+            latest = self.read()
+            latest['contacts'][0]['comments'].append(dict(data['contacts'][0]['comments'][-1], by='Jez'))
+            write(self.file, latest)
+            return False
+        try:
+            kt.save = race
+            self.quiet(kt.cmd_touch, args)
+            self.assertEqual(1, len(attempted))
+            self.assertEqual(3, len(self.read()['contacts'][0]['comments']))
+        finally: kt.save = original
+
     def test_task_link_accepts_local_resource_path(self):
         self.quiet(kt.cmd_link, Args(id="t_live", url="/srv/tasks/live", title="Working folder"))
         task = next(x for x in self.read()["tasks"] if x["id"] == "t_live")
@@ -1295,11 +1347,13 @@ class AdminRemoveAndAgents(unittest.TestCase):
     def test_routine_reports_refuse_overlap_and_preserve_success_on_failure(self):
         self.use(self.one)
         old_root = kt.ROOT
+        old_user = kt.default_user
         try:
             kt.ROOT = self.temp.name
+            kt.default_user = lambda: 'osouthgate'
             path = os.path.join(kt.ROOT, "automation", "routines", "email.json")
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            write(path, {"version": 1, "id": "email", "last_successful_run_at": None, "runs": []})
+            write(path, {"version": 1, "id": "email", "owner": "osouthgate", "last_successful_run_at": None, "runs": []})
             run_quiet(kt.cmd_routine, id="email", action="start", run_id="first")
             self.assertIn("already", refused(self, kt.cmd_routine, id="email", action="start", run_id="second"))
             self.assertIn("explicit --status", refused(self, kt.cmd_routine, id="email", action="finish", run_id="first"))
@@ -1314,6 +1368,29 @@ class AdminRemoveAndAgents(unittest.TestCase):
             self.assertIsNone(report["current_run"])
         finally:
             kt.ROOT = old_root
+            kt.default_user = old_user
+
+    def test_routine_reports_enforce_owner_and_ascii_counts(self):
+        # Reporting a different member's routine must fail even in local --file mode.
+        self.use(self.one)
+        old_root = kt.ROOT
+        old_user = kt.default_user
+        try:
+            kt.ROOT = self.temp.name
+            kt.default_user = lambda: 'jezhub'
+            path = os.path.join(kt.ROOT, 'automation', 'routines', 'owned.json')
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write(path, {'version': 1, 'id': 'owned', 'owner': 'osouthgate', 'runs': []})
+            self.assertIn('registered owner', refused(self, kt.cmd_routine, id='owned', action='start', run_id='attempt'))
+            kt.default_user = lambda: 'osouthgate'
+            run_quiet(kt.cmd_routine, id='owned', action='start', run_id='attempt')
+            self.assertIn('counts', refused(self, kt.cmd_routine, id='owned', action='finish', run_id='attempt', status='success', summary='', count=['touches=١']))
+            self.assertIn('missing', refused(self, kt.cmd_routine, id='absent', action='show'))
+            write(path, {'version': 1, 'id': 'owned', 'runs': []})
+            self.assertIn('valid GitHub owner', refused(self, kt.cmd_routine, id='owned', action='start', run_id='attempt'))
+        finally:
+            kt.ROOT = old_root
+            kt.default_user = old_user
 
     def test_agents_add_list_remove(self):
         for d in (self.one, self.split):

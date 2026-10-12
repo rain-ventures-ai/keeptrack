@@ -1,0 +1,12 @@
+{
+  "label": "v4 split with protected member record (kit v38)",
+  "schema": 4,
+  "layout": "split",
+  "kit_before_update": 37,
+  "counts": {
+    "tasks": 2,
+    "contacts": 1,
+    "clients": 1,
+    "projects": 1
+  }
+}

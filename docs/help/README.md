@@ -13,6 +13,8 @@ Keeptrack keeps your people, follow-ups, pipeline and tasks in a private GitHub 
 | Use the task board | [Tasks](tasks.md) |
 | Find anything, and move old items out of the way | [Search and archive](search-and-archive.md) |
 | Ask Claude, Codex, Cursor or ChatGPT to help you | [AI assistants](ai-assistants.md) |
+| Set up, monitor or pause routines across boards, mailboxes and users | [Schedules and shared boards](schedules.md) |
+| Enable per-board widgets in this browser | [Board widgets](widgets.md) |
 | Choose where your assistant runs (Cowork, your computer, the cloud, your phone) and set it up | [Where your assistant runs](where-agents-run.md) |
 | Know where your data is and who can see it | [Privacy and security](privacy-and-security.md) |
 | Fix a problem | [Questions and problems](faq.md) |

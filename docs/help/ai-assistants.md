@@ -67,8 +67,12 @@ Type **@claude** in a task comment and your own Claude routine starts work on th
 Use a separate scheduled email routine to compare recent Gmail or Outlook messages with the exact email addresses on
 your Keeptrack people. It can add concise sent/received email facts to contact logs and update an explicit next step,
 but it never sends, drafts or deletes mail. The routine keeps its last successful run and recent run summaries in
-`automation/contact-email-sync.json`, without storing message bodies, subjects, attachments or email addresses there.
+its own owner-specific checkpoint, without storing message bodies, subjects, attachments or email addresses there.
 
 Ask Claude Code in the board repo: **“Set up my Keeptrack contact email routine.”** It follows the
 `keeptrack-email` skill and asks which mailbox and schedule to use. Keep this routine separate from the task-comment
 routine so an untrusted board comment never has access to your mailbox.
+
+For setup, last-run reports, multiple email accounts and avoiding duplicate entries from shared threads, see
+[Schedules and shared boards](schedules.md). A personal board can use both work and personal mail to propose project
+or task updates for your approval; that is a separate workflow from automatically logging existing contacts.
