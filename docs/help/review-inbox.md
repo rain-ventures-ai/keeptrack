@@ -138,14 +138,14 @@ Set `decider` to a GitHub login when only one person may answer. There is no `ta
 python3 board/keeptrack.py proposal-add question.json          # the agent asks
 python3 board/keeptrack.py proposals --status answered --mine  # the agent's own answered questions
 python3 board/keeptrack.py proposal-result <id>                # the answer (an agent reads only its own)
-python3 board/keeptrack.py proposal-done <id> --answered-at <at from proposal-result> [--content-hash sha256:...] [--note "sent"]   # just before acting
+python3 board/keeptrack.py proposal-done <id> --answer-id <answer_id from proposal-result> [--content-hash sha256:...] [--note "sent"]   # just before acting
 python3 board/keeptrack.py proposal-answer <id> --choose b | --other "…" | --approve | --reject | --text "…" [--note "…"]   # a person only
 ```
 
 Agents never answer or reopen questions, and dismiss only their own pending question (to withdraw it after asking
 again with a new one); this is refused for anything else when `BOARD_AGENT` is set. Run `proposal-done` just before
 you act: it records the answer as acted on, once, and prints the answer it locked. Act on that printed answer only: a
-person may have changed the answer since you read it (`--answered-at` refuses when it changed). Exit code 3 means someone already acted, or, for an approval, the
+person may have changed the answer since you read it (`--answer-id` refuses when it changed). Exit code 3 means someone already acted, or, for an approval, the
 content hash differs from the approved one; then do not act, and ask again with a new question if needed.
 
 If the card waits on the answer, use `keeptrack.py wait <card> --on "answer to <question id>"` and stop.

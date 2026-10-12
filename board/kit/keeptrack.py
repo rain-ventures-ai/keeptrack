@@ -5759,7 +5759,8 @@ def cmd_proposal_answer(a):
         answer = ask_answer(proposal, a.choose, a.other, approve, a.text, a.note)
         ts, by = now(), who_am_i()
         proposal["status"] = "answered"
-        proposal["decision"] = {"action": "answer", "by": by, "at": ts, "answer": answer, "result": None, "commit": None}
+        proposal["decision"] = {"action": "answer", "id": "a_" + uuid.uuid4().hex[:10], "by": by, "at": ts, "answer": answer,
+                                "result": None, "commit": None}   # id: each answer is unique, even two in the same second
         proposal.setdefault("history", []).append({"at": ts, "by": by, "text": "answered"})
         print(f"answered {proposal['id']}: " + json.dumps(answer, ensure_ascii=False))
     mutate(fn, f"Answer question: {a.id}")
@@ -5772,7 +5773,7 @@ def cmd_proposal_result(a):
         proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy')}; an agent reads only the answers to its own questions")
     d = proposal.get("decision") or {}
     out = {"id": proposal["id"], "kind": proposal.get("kind"), "status": proposal.get("status"), "decider": proposal.get("decider"),
-           "answer": d.get("answer"), "by": d.get("by"), "at": d.get("at"), "done": d.get("done"),
+           "answer": d.get("answer"), "answer_id": d.get("id"), "by": d.get("by"), "at": d.get("at"), "done": d.get("done"),
            "content_hash": (proposal.get("change") or {}).get("content_hash")}
     print(json.dumps(out, indent=2, ensure_ascii=False))
 
@@ -5787,12 +5788,12 @@ def cmd_proposal_done(a):
         if agent_run() and proposal.get("createdBy") != who_am_i():
             proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy')}; only that agent acts on its answer")
         d = proposal["decision"]
-        if not d.get("answer"):
-            proposal_error("this answer is empty (slimmed or damaged): do not act on it; ask again")
-        if a.answered_at and a.answered_at != d.get("at"):
-            proposal_conflict("not done: the answer changed after you read it (answered_at differs). Read proposal-result again")
+        if a.answer_id and a.answer_id != d.get("id"):
+            proposal_conflict("not done: the answer changed after you read it (answer_id differs). Read proposal-result again")
         if d.get("done"):
             proposal_conflict(f"already acted on by {d['done'].get('by', 'someone')} at {d['done'].get('at', 'an unknown time')}; do not act again")
+        if not d.get("answer"):
+            proposal_error("this answer is empty (slimmed or damaged): do not act on it; ask again")
         if proposal["kind"] == "ask.approve":
             if not proposal.get("change"):
                 proposal_error("this approval was slimmed after 30 days and can no longer be checked: ask again")
@@ -5806,7 +5807,8 @@ def cmd_proposal_done(a):
         if a.note: d["done"]["note"] = _one_line(a.note, "--note", PROPOSAL_DETAIL_LIMIT)
         proposal.setdefault("history", []).append({"at": ts, "by": by, "text": "acted on" + (f": {d['done']['note']}" if a.note else "")})
         # Act on this answer, the one now locked, never on an earlier read: a person may have changed it in between.
-        print(json.dumps({"done": proposal["id"], "answer": d.get("answer"), "answered_by": d.get("by"), "answered_at": d.get("at")},
+        print(json.dumps({"done": proposal["id"], "answer": d.get("answer"), "answer_id": d.get("id"), "answered_by": d.get("by"),
+                          "answered_at": d.get("at")},
                          ensure_ascii=False))
     mutate(fn, f"Acted on answer: {a.id}")
 
@@ -6425,7 +6427,7 @@ def main():
     s.add_argument("id"); s.set_defaults(f=cmd_proposal_result)
     s = sub.add_parser("proposal-done", help="the asking agent marks an answer as acted on (once; run it just before acting)")
     s.add_argument("id"); s.add_argument("--content-hash", dest="content_hash")
-    s.add_argument("--answered-at", dest="answered_at", help="decision.at from proposal-result: refuse if the answer changed since")
+    s.add_argument("--answer-id", dest="answer_id", help="answer_id from proposal-result: refuse if the answer changed since")
     s.add_argument("--note"); s.set_defaults(f=cmd_proposal_done)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     have = {act.dest for act in sub._choices_actions}   # argparse lists only commands created with a help line

@@ -4226,7 +4226,7 @@ if (typeof window !== 'undefined') (() => {
       if (!isAsk(cur)) return { abort: 'This is not a question.' };
       if (askDecider(cur)) return { abort: `Only @${cur.decider} answers this.` };
       const at = nowIso(), by = inboxMe(), x = clone(cur); title = cur.title || id;
-      x.status = 'answered'; x.decision = { action: 'answer', by, at, answer: clone(answer), result: null, commit: null };
+      x.status = 'answered'; x.decision = { action: 'answer', id: 'a_' + rid6() + rid6().slice(0, 4), by, at, answer: clone(answer), result: null, commit: null };
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at, by, text: 'answered' });
       return { files: { [proposalPath(id)]: jsonText(x) }, tree: true };
     } });

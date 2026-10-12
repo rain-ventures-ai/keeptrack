@@ -115,7 +115,7 @@ class AskItems(unittest.TestCase):
         self.kt("proposal-answer", rid, "--choose", "a")
         read = json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)
         self.kt("proposal-reopen", rid); self.kt("proposal-answer", rid, "--choose", "b")   # the person changes their mind
-        self.assertEqual(3, self.kt("proposal-done", rid, "--answered-at", read["at"], env=self.agent, ok=False).returncode)
+        self.assertEqual(3, self.kt("proposal-done", rid, "--answer-id", read["answer_id"], env=self.agent, ok=False).returncode)
         out = json.loads(self.kt("proposal-done", rid, env=self.agent).stdout)
         self.assertEqual("b", out["answer"]["choice"], "done prints the answer it locked")
 

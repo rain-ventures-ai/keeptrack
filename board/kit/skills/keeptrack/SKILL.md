@@ -148,7 +148,7 @@ $B proposals --status pending              # what waits for a person's decision
 $B proposal-accept <id>                    # only after the user chose it; also proposal-merge / -ignore / -reopen / -undo
 $B proposal-add question.json              # ask a person: ask.choose / ask.approve / ask.question (kit v44)
 $B proposal-result <id>                    # the answer to your own question
-$B proposal-done <id> --answered-at <at> [--content-hash sha256:..]   # just before acting; act on the answer it prints
+$B proposal-done <id> --answer-id <answer_id> [--content-hash sha256:..]   # just before acting; act on the answer it prints
 ```
 Proposals are not tasks: never count them, claim them or work on them. Only a person decides. A routine never accepts.
 When you need a person's decision (pick a design, send a draft, merge a PR, any open question), ask in the Inbox
