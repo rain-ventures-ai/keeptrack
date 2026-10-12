@@ -93,7 +93,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `archive --done-days` (a one-off value) no longer shortens how long an unacted answer is kept; the board's
   `archive.done_days` decides.
-- `proposal-done --not-acted` by a person is refused unless they are the question's `decider` (when one is set).
+- `proposal-done` (with or without `--not-acted`) by a person is refused unless they are the question's `decider`
+  (when one is set). `proposal-ignore --reason` lines start with `ignored: `, and slimming removes the reason.
 - Slimming after 30 days also removes the `proposal-done --note` text from `decision.done` and its history line.
 - The hints after a rejection, a missing hash or a changed hash name `--not-acted --answer-id <answer_id>`.
 

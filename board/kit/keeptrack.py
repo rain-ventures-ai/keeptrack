@@ -6078,7 +6078,7 @@ def cmd_proposal_ignore(a):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id); _already_decided(proposal); _ask_person(proposal, "dismiss", own_ok=True)
         _decide(proposal, "ignore")
-        if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": _one_line(a.reason, "ignore reason", 300)})
+        if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": "ignored: " + _one_line(a.reason, "ignore reason", 300)})
         print(f"ignored {proposal['id']}")
     mutate(fn, f"Ignore proposal: {a.id}")
 
@@ -6214,8 +6214,8 @@ def cmd_proposal_done(a):
         if a.not_acted and agent_run() and not a.answer_id:
             proposal_error("--not-acted needs --answer-id from proposal-result, so a changed answer is never closed unseen")
         decider = proposal.get("decider")
-        if a.not_acted and not agent_run() and decider and decider.casefold() != os.environ.get("BOARD_USER", "").casefold():
-            proposal_error(f"only @{decider} can close this question (BOARD_USER is {os.environ.get('BOARD_USER') or 'not set'})")
+        if not agent_run() and decider and decider.casefold() != os.environ.get("BOARD_USER", "").casefold():
+            proposal_error(f"only @{decider} can close or act on this question (BOARD_USER is {os.environ.get('BOARD_USER') or 'not set'})")
         if a.not_acted:   # close it without acting: a rejection, a changed content hash, or work no longer needed
             ts, by = now(), who_am_i()
             d["done"] = {"at": ts, "by": by, "acted": False}
@@ -6343,7 +6343,7 @@ def archive_plan(data, rules, today=None):
                         proposal["decision"]["done"].pop("note", None)
                 for h in proposal.get("history") or []:   # "acted on: <note>" keeps only "acted on"
                     if isinstance(h, dict) and isinstance(h.get("text"), str):
-                        for head in ("acted on: ", "closed, not acted on: "):
+                        for head in ("acted on: ", "closed, not acted on: ", "ignored: "):
                             if h["text"].startswith(head):
                                 h["text"] = head[:-2]
             # Archive only what is already slimmed: an archive file must never keep the detail the 30-day rule removes.

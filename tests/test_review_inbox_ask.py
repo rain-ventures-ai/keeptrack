@@ -204,7 +204,9 @@ class AskItems(unittest.TestCase):
         self.kt("proposal-answer", rid, "--reject")
         p = self.kt("proposal-done", rid, "--content-hash", DRAFT_HASH, env=self.agent, ok=False)
         self.assertIn("--not-acted --answer-id", p.stderr, "the hint names the flags an agent needs")
-        self.assertEqual(2, self.kt("proposal-done", rid, "--not-acted", env=dict(self.env, BOARD_USER="jo"), ok=False).returncode)
+        jo = dict(self.env, BOARD_USER="jo")
+        self.assertEqual(2, self.kt("proposal-done", rid, "--not-acted", env=jo, ok=False).returncode)
+        self.assertEqual(2, self.kt("proposal-done", rid, "--content-hash", DRAFT_HASH, env=jo, ok=False).returncode, "nor without the flag")
         self.kt("proposal-done", rid, "--not-acted", "--note", "Too long")   # alex, the decider
 
     def test_v47_slimming_drops_the_done_note_and_a_one_off_done_days_keeps_answers(self):
@@ -213,7 +215,8 @@ class AskItems(unittest.TestCase):
         done = {"id": "r_note000001", "status": "answered", "change": {"question": "Send?"},
                 "decision": {"at": "2026-08-01T00:00:00Z", "answer": {"approved": False},
                              "done": {"at": "2026-08-02T00:00:00Z", "by": "claude@alex", "acted": False, "note": "client said no"}},
-                "history": [{"at": "x", "by": "y", "text": "closed, not acted on: client said no"}]}
+                "history": [{"at": "x", "by": "y", "text": "closed, not acted on: client said no"},
+                            {"at": "x", "by": "y", "text": "ignored: duplicate of the Casey email"}]}
         waiting = {"id": "r_wait000002", "status": "answered", "change": {"question": "Budget?"},
                    "decision": {"at": "2026-08-01T00:00:00Z", "answer": {"text": "Use 12,000"}}}
         data = {"tasks": [], "contacts": [], "proposals": [done, waiting], "columns": [{"id": "done"}]}
@@ -223,7 +226,7 @@ class AskItems(unittest.TestCase):
         self.assertIn("r_wait000002", kept, "the board's 90 days decide, not the one-off value")
         self.assertIn("change", kept["r_wait000002"])
         self.assertNotIn("r_note000001", kept)
-        self.assertNotIn("note", done["decision"]["done"]); self.assertEqual("closed, not acted on", done["history"][0]["text"])
+        self.assertNotIn("note", done["decision"]["done"]); self.assertEqual(["closed, not acted on", "ignored"], [h["text"] for h in done["history"]])
 
     def test_unknown_kind_error_lists_the_ask_kinds(self):
         p = self.add(dict(QUESTION, kind="ask.chose"), ok=False)

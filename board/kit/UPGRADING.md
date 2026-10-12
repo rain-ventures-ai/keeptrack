@@ -30,7 +30,8 @@ Four small fixes to Inbox questions. No data migration.
 - Run `kit-update` only. A board on v45 does the v46 steps first.
 - A one-off `archive --done-days` no longer shortens how long an answer nobody acted on is kept. The board setting
   `archive.done_days` decides.
-- When a question names a `decider`, only that person (or the asking agent) can close it with `--not-acted`.
+- When a question names a `decider`, only that person (or the asking agent) can run `proposal-done` on it.
+- `proposal-ignore --reason` history lines start with `ignored: `, and slimming removes the reason text.
 - Slimming also removes the `proposal-done --note` text (`decision.done.note` and the note in the history line).
 - Check: `keeptrack.py kit-check` says v47.
 
