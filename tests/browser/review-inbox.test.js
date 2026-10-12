@@ -123,11 +123,10 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
-    // Off by default: no Inbox button, and proposal files never become cards.
+    // Kit v44: always on. An old `review_inbox.enabled: false` is ignored, and proposal files still never become cards.
     { const api = new Github(fixture({ enabled: false })), page = await openBoard(browser, api);
-      assert.equal(await page.locator('#btnInbox').isHidden(), true, 'the Inbox stays hidden while the board has it off');
-      await page.locator('#viewSw [data-view="today"]').first().click(); await page.waitForSelector('.todayhead');
-      assert.equal(await page.locator('.treview, .tgo[data-go="inbox"]').count(), 0, 'Today shows nothing of the Inbox while it is off'); assert.equal(await page.locator('#viewSw .todaycount:not([hidden])').count(), 0, 'and no count on the Today tab'); await page.locator('#viewSw [data-view="board"]').first().click(); await page.waitForSelector('.card');
+      assert.equal(await page.locator('#btnInbox').isVisible(), true, 'the Inbox shows even where the old setting said off');
+      assert.equal(await page.locator('#sInbox').count(), 0, 'there is no on/off switch in Settings');
       assert.deepEqual((await page.locator('.card .t').allTextContents()).sort(), ['First', 'Second']);
       await page.close(); }
 
@@ -446,6 +445,41 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.equal(unnamed, 0, 'every control in the Inbox has a name');
     assert.equal(await phone.locator('#inboxLive[aria-live="polite"]').count(), 1, 'results are announced');
     await phone.close();
+
+    // Kit v44 questions: choose, approve (decider only) and a free-text question. Answers write only the proposal file.
+    { const files = fixture(), q = (id, kind, title, change, extra = {}) => text(prop(id, kind, title, { source: { kind: 'other', id: 'agent-1', revision: '1', title: 'Agent questions', date: '2026-10-11' }, run: null, reason: '', change: { question: title, ...change }, ...extra }));
+      files['proposals/r_askpick001.json'] = q('r_askpick001', 'ask.choose', 'Which design do you prefer?', { task: 't_first', allow_other: true, options: [{ key: 'a', label: 'Design A', url: 'https://example.invalid/a.png' }, { key: 'b', label: 'Design B' }] });
+      files['proposals/r_askmail001.json'] = q('r_askmail001', 'ask.approve', 'Send this reply to Casey?', { content_hash: 'sha256:' + 'c'.repeat(64), subject: { type: 'email', url: 'https://mail.example.invalid/d/1', summary: 'Reply with the revised plan' } }, { decider: 'alex' });
+      files['proposals/r_asksam0001.json'] = q('r_asksam0001', 'ask.approve', 'Merge the pricing PR?', { content_hash: 'sha256:' + 'd'.repeat(64), subject: { type: 'pr', url: 'https://example.invalid/pr/1' } }, { decider: 'sam' });
+      files['proposals/r_asktext001.json'] = q('r_asktext001', 'ask.question', 'What budget should the proposal use?', {});
+      files['proposals/r_askrace001.json'] = q('r_askrace001', 'ask.question', 'Which day suits the workshop?', {});
+      const api = new Github(files), page = await openBoard(browser, api, { view: 'inbox' }); await page.waitForSelector('article.prop');
+      const cardsBefore = Object.keys(api.files).filter(k => k.startsWith('cards/')).map(k => api.files[k]);
+      const pick = propCard(page, 'r_askpick001');
+      assert.equal(await pick.locator('[data-act="accept"], [data-act="edit"], [data-act="merge"]').count(), 0, 'a question has no accept, edit or merge');
+      await clearLive(page); await pick.locator('.ask__note').fill('Darker header'); await pick.getByRole('button', { name: 'Design B', exact: true }).click(); await said(page, /Answered/);
+      let saved = api.json('proposals/r_askpick001.json'); assert.equal(saved.status, 'answered'); assert.deepEqual(saved.decision.answer, { choice: 'b', note: 'Darker header' });
+      assert.deepEqual(Object.keys(api.files).filter(k => k.startsWith('cards/')).map(k => api.files[k]), cardsBefore, 'answering never changes a card');
+      assert.equal(await propCard(page, 'r_asksam0001').getByRole('button', { name: 'Approve', exact: true }).isDisabled(), true, 'only the named person can answer');
+      assert.equal(await propCard(page, 'r_asksam0001').locator('[data-act="ignore"]').isDisabled(), true, 'or dismiss it');
+      await clearLive(page); await propCard(page, 'r_askmail001').getByRole('button', { name: 'Approve', exact: true }).click(); await said(page, /Answered/);
+      assert.deepEqual(api.json('proposals/r_askmail001.json').decision.answer, { approved: true });
+      await clearLive(page); await propCard(page, 'r_asktext001').locator('textarea').fill('Use 12,000'); await propCard(page, 'r_asktext001').getByRole('button', { name: 'Send answer' }).click(); await said(page, /Answered/);
+      assert.equal(api.json('proposals/r_asktext001.json').decision.answer.text, 'Use 12,000');
+      // Someone answered first: the page refuses and never overwrites their answer.
+      api.edit('proposals/r_askrace001.json', o => { o.status = 'answered'; o.decision = { action: 'answer', by: 'sam', at: '2026-10-12T09:00:00Z', answer: { text: 'Tuesday' }, result: null, commit: null }; });
+      await clearLive(page); await propCard(page, 'r_askrace001').locator('textarea').fill('Friday'); await propCard(page, 'r_askrace001').getByRole('button', { name: 'Send answer' }).click(); await said(page, /Already answered by sam/);
+      assert.equal(api.json('proposals/r_askrace001.json').decision.answer.text, 'Tuesday');
+      // Change an answer before the agent acted: it is pending again.
+      await page.selectOption('[data-filter="status"]', 'answered'); await page.waitForSelector('article.prop[data-id="r_askpick001"]');
+      await clearLive(page); await propCard(page, 'r_askpick001').locator('[data-act="reopen"]').click(); await said(page, /Reopened|pending/);
+      assert.equal(api.json('proposals/r_askpick001.json').status, 'pending');
+      api.edit('proposals/r_askmail001.json', o => { o.decision.done = { at: '2026-10-12T10:00:00Z', by: 'claude@alex', note: 'sent' }; });
+      await page.reload(); await page.waitForFunction(() => /Synced/.test(document.querySelector('#status').textContent));
+      await page.locator('#btnInbox').click(); await page.selectOption('[data-filter="status"]', 'answered'); await page.waitForSelector('article.prop[data-id="r_askmail001"]');
+      assert.equal(await propCard(page, 'r_askmail001').locator('[data-act="reopen"]').count(), 0, 'an answer the agent acted on cannot be changed');
+      assert.match(await propCard(page, 'r_askmail001').textContent(), /Acted on by claude@alex/);
+      await page.close(); }
 
     console.log('review inbox browser tests passed');
   } finally { await browser.close(); server.close(); }

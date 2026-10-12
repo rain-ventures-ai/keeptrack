@@ -1,8 +1,13 @@
 # Review Inbox
 
-The Review Inbox holds changes that an agent or routine wants to make. Nothing in it is on your board until a person accepts it.
+The Review Inbox is where agents and routines stop and wait for a person. It holds two kinds of item:
 
-Use it when meeting notes or email produce more suggestions than real, agreed work.
+- **Proposals**: a change an agent wants to make to the board. Nothing changes until a person accepts it.
+- **Questions** (from kit v44): a decision only a person can make, such as "which design do you prefer?", "send this
+  draft email?" or "what budget should we use?". The person answers; the agent that asked does the work.
+
+Use it when meeting notes or email produce more suggestions than real, agreed work, and whenever an agent needs a
+person to decide before it acts.
 
 ## What it is (and is not)
 
@@ -11,18 +16,15 @@ Use it when meeting notes or email produce more suggestions than real, agreed wo
 - A proposal is not a task. It has no column and no status on the board. It is not counted, and it is not shown in Kanban, List, Calendar, Schedule, Activity, Today, widgets or search.
 - Agents never pick up a proposal as work. Only an accepted change reaches the board.
 
-## Turn it on
+## Always on
 
-The Inbox needs split storage (schema 4). See [Repair a board](repair-a-board.md) and `board/UPGRADING.md` if your board is older.
+From kit v44 the Inbox is always on for a board with split storage (schema 4). There is no setting. An older board
+moves to split storage with `python3 board/keeptrack.py migrate --to 4` (see `board/UPGRADING.md`); until then it has
+no Inbox.
 
-1. Open **Settings → Board**.
-2. Tick **Review Inbox**.
-
-Or run `python3 board/keeptrack.py settings-set review_inbox.enabled true`.
-
-Turning it on only changes this setting. It does not create, change or start any routine or schedule. You set those up separately (see [Schedules and shared boards](schedules.md)).
-
-When it is on, the meeting-notes and email workflows send their suggestions to the Inbox instead of writing to the board.
+The Inbox does not create, change or start any routine or schedule. You set those up separately (see
+[Schedules and shared boards](schedules.md)). The meeting-notes and email workflows send their suggestions to the
+Inbox instead of writing to the board.
 
 ## Review proposals
 
@@ -51,6 +53,29 @@ There is no "accept all". Each change is a choice.
 
 Keys: **j** and **k** move between proposals. **a** accepts, **e** edits, **m** merges and **i** ignores. **Enter** opens the record, or moves to the buttons when there is no record yet.
 
+## Answer questions
+
+A question shows the question, links to what it is about (a draft, a design, a pull request) and, while it waits, the
+ways to answer:
+
+| Type | How you answer |
+|---|---|
+| **Choose** | Pick one of the options. When the agent allows it, write something else instead. |
+| **Approve** | **Approve** or **Do not approve**. Open the link first: the approval is for exactly that version. |
+| **Question** | Write your answer and choose **Send answer**. |
+
+You can add a note to any answer. **Dismiss** closes a question without an answer, and **Leave pending** moves on.
+
+- A question can name the person who answers it ("Who answers: @sam"). Only that person can answer, dismiss or
+  change it; others see "Waiting for @sam to answer". Without a name, any board member can.
+- An answer changes nothing on the board. Only the question's own file changes.
+- **Change answer** (or Undo) puts the question back to pending, until the agent has acted on the answer. After that
+  the question shows "Acted on by …" and stays as it is.
+- A question holds links and a short summary, never the content itself. A draft email stays in the mailbox, a design
+  stays in Drive.
+- The agent that asked acts on an answer once. For an approval, it acts only if the content is still exactly the version
+  you approved. If the draft changed, it must ask you again.
+
 ## Safety
 
 - Before a change is made, the page reads the proposal and the record again.
@@ -72,7 +97,7 @@ Keys: **j** and **k** move between proposals. **a** accepts, **e** edits, **m** 
 - A proposal stores a short reason, at most 300 characters. It never stores a transcript, an email body or attachments.
 - An email proposal on a shared board can hold a summary only when every intended reader of the board received that specific email. For example, on a board shared by two people, both must have received it. Being on another reply in the same thread is not enough.
 - Otherwise an email proposal can only log that an email happened. It holds who it was from, the date and a message key. The subject line is left out too. It cannot be edited into a summary, and it cannot propose a task or a change to a person.
-- After 30 days, decided proposals keep only their keys, title, source, decision and result. The reason and details are removed. The archive sweep later moves old decided proposals into `board/archive/<year>.json`.
+- After 30 days, decided proposals keep only their keys, title, source, decision and result. The reason and details are removed. For a question, this waits until the agent has acted on the answer; then the choice or approval stays and any written answer or note is removed. The archive sweep later moves old decided proposals into `board/archive/<year>.json`.
 
 ## Limits
 
@@ -97,3 +122,30 @@ python3 board/keeptrack.py proposal-undo <id>
 ```
 
 A routine only adds and lists proposals. It never accepts them. Exit code 3 means the proposal was already decided, or the record changed.
+
+Questions (kit v44) use three kinds. The `change` holds `question` (one line, at most 300 characters), optional
+`task` (a card id for context) and `links` (`[{url, title}]`, https only), plus:
+
+- `ask.choose`: `options` (2 to 10 of `{key, label, url, note}`) and `allow_other` (true or false);
+- `ask.approve`: `subject` (`{type: email|message|pr|document|other, url, summary}`) and `content_hash`
+  (required: `sha256:<64 hex>` of the exact content you will send or merge). An email `summary` needs
+  `--recipients-confirmed`; without it, link the draft and leave the summary out;
+- `ask.question`: nothing more.
+
+Set `decider` to a GitHub login when only one person may answer. There is no `target`.
+
+```
+python3 board/keeptrack.py proposal-add question.json          # the agent asks
+python3 board/keeptrack.py proposals --status answered --mine  # the agent's own answered questions
+python3 board/keeptrack.py proposal-result <id>                # the answer (an agent reads only its own)
+python3 board/keeptrack.py proposal-done <id> --answer-id <answer_id from proposal-result> [--content-hash sha256:...] [--note "sent"]   # just before acting
+python3 board/keeptrack.py proposal-answer <id> --choose b | --other "…" | --approve | --reject | --text "…" [--note "…"]   # a person only
+```
+
+Agents never answer or reopen questions, and dismiss only their own pending question (to withdraw it after asking
+again with a new one); this is refused for anything else when `BOARD_AGENT` is set. Run `proposal-done` just before
+you act: it records the answer as acted on, once, and prints the answer it locked. Act on that printed answer only: a
+person may have changed the answer since you read it (`--answer-id` refuses when it changed). Exit code 3 means someone already acted, or, for an approval, the
+content hash differs from the approved one; then do not act, and ask again with a new question if needed.
+
+If the card waits on the answer, use `keeptrack.py wait <card> --on "answer to <question id>"` and stop.

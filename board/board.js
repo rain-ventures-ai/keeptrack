@@ -3503,7 +3503,6 @@ if (typeof window !== 'undefined') (() => {
   const fillConn = () => { const c = cfg(); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); };
   $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); fillConn(); setPanel('prefs'); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
-  $('sInbox').onchange = saveInboxSetting;
   $('btnInbox').onclick = () => setView('inbox');
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
@@ -3965,13 +3964,15 @@ if (typeof window !== 'undefined') (() => {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
-    const ib = $('sInbox'); if (ib) { ib.checked = inboxOn(); ib.disabled = locked || !isSplit(state); }
   }
   // ---- Review Inbox (kit v42): proposals from agents and routines wait in <board>/proposals/<id>.json --------------
   // They are never part of state (tasks, contacts), so counts, views, search, Today, widgets and agents never see them.
   // A decision re-reads the proposal and its target, then writes the record and the proposal in ONE commit (Git Data,
   // parent = head, force:false). Same contract as keeptrack.py proposal-accept / -merge / -ignore / -reopen / -undo.
-  const inboxOn = () => isSplit(state) && !!(state.settings.review_inbox && state.settings.review_inbox.enabled);
+  // Kit v44: always on for a split board (settings.review_inbox is no longer read). ask.* items are questions: a person
+  // answers (keeptrack.py proposal-answer), the agent that asked acts on the answer once (proposal-done).
+  const inboxOn = () => isSplit(state);
+  const isAsk = p => /^ask\./.test((p && p.kind) || '');
   const proposalPath = id => `proposals/${id}.json`;
   const isProposalPath = p => /^proposals\/[^/]+\.json$/.test(p);
   function inboxAll(meta = splitMeta) {
@@ -3980,7 +3981,9 @@ if (typeof window !== 'undefined') (() => {
   }
   const proposalIn = (meta, id) => { const f = meta && meta.files && meta.files.get(proposalPath(id)); return f && f.obj ? clone(f.obj) : null; };
   const inboxPending = () => inboxAll().filter(p => p.status === 'pending');
-  const KIND_LABEL = { 'task.create': 'New task', 'task.update': 'Task update', 'person.upsert': 'Person', 'contact.touch': 'Interaction' };
+  const KIND_LABEL = { 'task.create': 'New task', 'task.update': 'Task update', 'person.upsert': 'Person', 'contact.touch': 'Interaction',
+    'ask.choose': 'Choose', 'ask.approve': 'Approve', 'ask.question': 'Question' };
+  const STATUS_LABEL = { accepted: 'Accepted', answered: 'Answered', ignored: 'Ignored' };
   const SRC_LABEL = { meeting: 'Meeting', email: 'Email', other: 'Other' };
   const LIST_FIELDS = ['comments', 'todos', 'links'];
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
@@ -4120,6 +4123,8 @@ if (typeof window !== 'undefined') (() => {
     const p = proposalIn(got.meta, id);
     if (!p) { inboxSay('That proposal is no longer on the board.', true); await load(true); return false; }
     if (p.status !== 'pending') { inboxSay(alreadyMsg(p), true); await load(true); return false; }
+    if (isAsk(p) && action !== 'ignore') { inboxSay('This is a question: answer it instead.', true); return false; }
+    if (isAsk(p) && askDecider(p)) { inboxSay(`Only @${p.decider} can dismiss this question.`, true); return false; }
     if (opts.reviewed && !reviewedProposalMatches(p, opts.reviewed)) {
       todayQueue.reviewed.delete(id); await load(true); inboxSay('Not saved: this proposal changed. Expand Review again to read the latest evidence.', true); return false;
     }
@@ -4193,18 +4198,99 @@ if (typeof window !== 'undefined') (() => {
     if (ok) { restoreTodayProposal(id); inboxSay('Undone. The proposal is pending again.'); render(); }
     return ok;
   }
-  async function reopenProposal(id) {   // ignored -> pending (keeptrack.py proposal-reopen)
+  async function reopenProposal(id) {   // ignored, or answered and not yet acted on -> pending (keeptrack.py proposal-reopen)
     if (ro) { roToast(); return false; }
     const ok = await mutate(() => {}, 'Reopen proposal', [], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta) => {
       const cur = proposalIn(meta, id);
-      if (!cur || cur.status !== 'ignored') return { abort: 'Only an ignored proposal can be reopened.' };
+      if (!cur || !['ignored', 'answered'].includes(cur.status)) return { abort: 'Only an ignored proposal or an answered question can be reopened.' };
       if (!cur.change) return { abort: 'This proposal was slimmed after 30 days and can no longer be reopened.' };
-      const old = cur.decision || {}, x = clone(cur); x.status = 'pending'; x.decision = null;
-      (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `reopened (was ignored by ${old.by || 'someone'})` });
+      const old = cur.decision || {};
+      if (cur.status === 'answered' && old.done) return { abort: `Not reopened: ${old.done.by || 'someone'} already acted on this answer.` };
+      if (isAsk(cur) && askDecider(cur)) return { abort: `Only @${cur.decider} can reopen this question.` };
+      const x = clone(cur); x.status = 'pending'; x.decision = null;
+      (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `reopened (was ${cur.status} by ${old.by || 'someone'})` });
       return { files: { [proposalPath(id)]: jsonText(x) }, tree: true };
     } });
     if (ok) { restoreTodayProposal(id); inboxSay('Reopened. The proposal is pending again.'); render(); }
     return ok;
+  }
+  // Answer a question (keeptrack.py proposal-answer): only the proposal file changes, in one commit on the latest head.
+  const askDecider = p => p.decider && String(p.decider).toLowerCase() !== String(cfg().me || '').toLowerCase() ? p.decider : '';
+  async function answerProposal(id, answer) {
+    if (ro) { roToast(); return false; }
+    let title = id;
+    const ok = await mutate(() => {}, 'Answer question', [], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta) => {
+      const cur = proposalIn(meta, id);
+      if (!cur) return { abort: 'That question is no longer on the board.' };
+      if (cur.status !== 'pending') return { abort: alreadyMsg(cur) };
+      if (!isAsk(cur)) return { abort: 'This is not a question.' };
+      if (askDecider(cur)) return { abort: `Only @${cur.decider} answers this.` };
+      const at = nowIso(), by = inboxMe(), x = clone(cur); title = cur.title || id;
+      x.status = 'answered'; x.decision = { action: 'answer', id: 'a_' + rid6() + rid6().slice(0, 4), by, at, answer: clone(answer), result: null, commit: null };
+      (x.history = Array.isArray(x.history) ? x.history : []).push({ at, by, text: 'answered' });
+      return { files: { [proposalPath(id)]: jsonText(x) }, tree: true };
+    } });
+    if (ok) rememberDecision(id, `Answer: ${title}`.slice(0, 120), true);
+    return ok;
+  }
+  function answerText(p) {
+    const a = (p.decision || {}).answer || {}, c = p.change || {};
+    const opt = 'choice' in a ? ((c.options || []).find(o => o.key === a.choice) || {}).label || a.choice : '';
+    const main = opt || a.other || ('approved' in a ? (a.approved ? 'Approved' : 'Not approved') : a.text || '');
+    return main + (a.note ? ` (${a.note})` : '');
+  }
+  const httpsUrl = u => typeof u === 'string' && /^https:\/\//i.test(u) ? u : '';
+  function askLink(url, text) { const a = el('a', 'ask__link', text); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; }
+  // The question, its options or subject, and (while pending) the answer controls.
+  function askBody(p, options = {}) {
+    const c = p.change || {}, wrap = el('section', 'ask'), busy = options.today && todayQueue.busy.has(p.id), blocked = !!askDecider(p);
+    wrap.append(el('p', 'ask__q', c.question || p.title || ''));
+    if (c.task) { const t = (state.tasks || []).find(x => x.id === c.task); if (t) wrap.append(ui.button({ label: `View ${t.num ? '#' + t.num + ' · ' : ''}${t.title}`, variant: 'ghost', size: 'sm', onClick: () => openCard(t.id) })); }
+    const links = el('ul', 'ask__links'); (c.links || []).forEach(x => { const u = httpsUrl(x.url); if (u) { const li = el('li'); li.append(askLink(u, x.title || u)); links.append(li); } });
+    if (p.kind === 'ask.approve' && c.subject) {
+      const s = c.subject, box = el('div', 'ask__subject');
+      box.append(el('span', 'muted', ({ email: 'Email', message: 'Message', pr: 'Pull request', document: 'Document', other: 'Item' })[s.type] || 'Item'));
+      if (s.summary) box.append(el('p', null, s.summary));
+      if (httpsUrl(s.url)) box.append(askLink(s.url, 'Open it before you decide'));
+      wrap.append(box);
+    }
+    if (links.children.length) wrap.append(links);
+    if (p.status !== 'pending') {
+      const d = p.decision || {};
+      if (p.status === 'answered') wrap.append(el('p', 'prop__decision', `Answered by ${d.by || 'someone'} on ${whenText(d.at)}: ${answerText(p)}`));
+      if (d.done) wrap.append(el('p', 'prop__decision muted', `Acted on by ${d.done.by || 'someone'} on ${whenText(d.done.at)}${d.done.note ? ': ' + d.done.note : ''}`));
+      return wrap;
+    }
+    if (blocked) { wrap.append(el('p', 'muted', `Waiting for @${p.decider} to answer.`)); }
+    const note = el('input'); note.type = 'text'; note.maxLength = 2000; note.placeholder = 'Note (optional)'; note.className = 'ask__note';
+    note.setAttribute('aria-label', 'Note with your answer (optional)');
+    const send = async answer => {
+      const n = note.value.trim(); if (n) answer.note = n;
+      wrap.querySelectorAll('button, input, textarea').forEach(b => { b.disabled = true; });
+      if (options.today) return todayInboxAct(p, 'answer', answer);
+      if (await answerProposal(p.id, answer)) { inboxSay('Answered. Use Undo to change your answer.'); render(); }
+      else wrap.querySelectorAll('button, input, textarea').forEach(b => { b.disabled = false; });
+    };
+    const row = el('div', 'ask__answers'); row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Answer: ' + (c.question || p.title || ''));
+    const add = (label, variant, answer) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => send(answer()) }); if (ro || busy || blocked) b.disabled = true; row.append(b); return b; };
+    if (p.kind === 'ask.choose') {
+      (c.options || []).forEach(o => { const b = add(o.label, 'secondary', () => ({ choice: o.key })); if (o.note) b.title = o.note; });
+      wrap.append(row);
+      const optLinks = el('ul', 'ask__links'); (c.options || []).forEach(o => { const u = httpsUrl(o.url); if (u) { const li = el('li'); li.append(askLink(u, 'View ' + o.label)); optLinks.append(li); } });
+      if (optLinks.children.length) wrap.append(optLinks);
+      if (c.allow_other) { const f = el('form', 'ask__other'), i = el('input'); i.type = 'text'; i.maxLength = 2000; i.placeholder = 'Something else'; i.setAttribute('aria-label', 'Something else');
+        const go = ui.button({ label: 'Send', variant: 'secondary', size: 'sm', type: 'submit' }); if (ro || busy || blocked) { i.disabled = go.disabled = true; }
+        f.append(i, go); f.addEventListener('submit', e => { e.preventDefault(); if (i.value.trim()) send({ other: i.value.trim() }); }); wrap.append(f); }
+    } else if (p.kind === 'ask.approve') {
+      add('Approve', 'primary', () => ({ approved: true })); add('Do not approve', 'secondary', () => ({ approved: false })); wrap.append(row);
+      wrap.append(el('p', 'muted', 'Approval is for exactly this version. If it changes, you are asked again.'));
+    } else {
+      const f = el('form', 'ask__other'), t = el('textarea'); t.maxLength = 2000; t.rows = 2; t.setAttribute('aria-label', 'Your answer');
+      const go = ui.button({ label: 'Send answer', variant: 'primary', size: 'sm', type: 'submit' }); if (ro || busy || blocked) { t.disabled = go.disabled = true; }
+      f.append(t, go); f.addEventListener('submit', e => { e.preventDefault(); if (t.value.trim()) send({ text: t.value.trim() }); }); wrap.append(f);
+    }
+    wrap.append(note);
+    return wrap;
   }
   // A decision is one Undo step (Ctrl/Cmd+Z, the Undo button, the toast): an accept is undone, an ignore is reopened.
   function rememberDecision(id, message, ignored) {
@@ -4253,7 +4339,7 @@ if (typeof window !== 'undefined') (() => {
     if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }
     return sec;
   }
-  async function todayInboxAct(p, act) {
+  async function todayInboxAct(p, act, answer) {
     if (todayQueue.busy.has(p.id)) return;
     if (act === 'edit' || act === 'merge') { inboxFocus = p.id; inboxOpen[p.id] = act; setView('inbox'); return; }
     if (act === 'leave') return;
@@ -4261,7 +4347,7 @@ if (typeof window !== 'undefined') (() => {
     if ($('inboxLive')) $('inboxLive').textContent = '';
     queue.busy.add(p.id); document.querySelectorAll(`.trow[data-id="${p.id}"] .prop__actions button`).forEach(b => { b.disabled = true; });
     let ok = false;
-    try { ok = await decideProposal(p.id, act, { reviewed: p }); }
+    try { ok = act === 'answer' ? await answerProposal(p.id, answer) : await decideProposal(p.id, act, { reviewed: p }); }
     finally { queue.busy.delete(p.id); }
     if (todayQueue !== queue || view !== 'today') return;
     if (ok) {
@@ -4271,7 +4357,7 @@ if (typeof window !== 'undefined') (() => {
       if (next) todayQueue.visible.push(next);
       if (pos.id === p.id) { pos.id = todayQueue.visible[Math.min(index, todayQueue.visible.length - 1)]; }
       if (pos.focus && pos.focus.id === p.id) pos.focus = { id: pos.id, review: true };
-      inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : 'Accepted.');
+      inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : act === 'answer' ? 'Answered. Use Undo to change your answer.' : 'Accepted.');
     } else if (!$('inboxLive') || !$('inboxLive').textContent) inboxSay('Not saved. The proposal is still pending; check your connection and try again.', true);
     render(); restoreTodayReviewPosition(pos);
   }
@@ -4348,8 +4434,20 @@ if (typeof window !== 'undefined') (() => {
     const art = el('article', 'prop prop--' + p.status); art.tabIndex = 0; art.dataset.id = p.id; const hid = 'prop-' + p.id; art.setAttribute('aria-labelledby', hid);
     const top = el('div', 'prop__top'), t = el('h4', 'prop__title', p.title || '(no title)'); t.id = hid;
     top.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm' }), t);
-    if (p.status !== 'pending') top.append(ui.pill({ text: p.status === 'accepted' ? 'Accepted' : 'Ignored', tone: p.status === 'accepted' ? 'ok' : 'neutral', size: 'sm' }));
+    if (p.status !== 'pending') top.append(ui.pill({ text: STATUS_LABEL[p.status] || p.status, tone: p.status === 'ignored' ? 'neutral' : 'ok', size: 'sm' }));
     art.append(top);
+    if (isAsk(p)) {   // a question: no field table, no accept / edit / merge
+      if (p.reason) art.append(el('p', 'prop__reason', p.reason));
+      if (p.decider) { const meta = el('dl', 'prop__meta'); meta.append(el('dt', null, 'Who answers'), el('dd', null, '@' + p.decider)); art.append(meta); }
+      art.append(askBody(p, options));
+      const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'More choices');
+      const btn = (act, label) => { const b = ui.button({ label, variant: 'ghost', size: 'sm', onClick: () => options.today ? todayInboxAct(p, act) : inboxAct(p, act) }); b.dataset.act = act; if (ro || (options.today && todayQueue.busy.has(p.id)) || (act !== 'leave' && askDecider(p))) b.disabled = true; acts.append(b); };
+      if (p.status === 'pending') { btn('ignore', 'Dismiss'); btn('leave', 'Leave pending'); }
+      else if (p.change && (p.status === 'ignored' || (p.status === 'answered' && !(p.decision || {}).done))) btn('reopen', p.status === 'answered' ? 'Change answer' : 'Reopen');
+      if (acts.children.length) art.append(acts);
+      art.addEventListener('focus', () => { inboxFocus = p.id; });
+      return art;
+    }
     if (options.today && p.source && /^https?:\/\//i.test(p.source.url || '')) { const source = el('a', 'inbox__srclink', 'Open the source'); source.href = p.source.url; source.target = '_blank'; source.rel = 'noopener noreferrer'; art.append(source); }
     if (p.target) { const r = findRef(state, p.target); const link = ui.button({ label: r ? `View ${p.target.type === 'task' && r.num ? '#' + r.num + ' · ' : ''}${r.title || r.name}` : 'Record no longer on board', variant: 'ghost', size: 'sm', onClick: () => { if (r) p.target.type === 'task' ? openCard(r.id) : openContact(r.id); } }); link.disabled = !r; art.append(link); }
     if (p.reason) art.append(el('p', 'prop__reason', p.reason));
@@ -4383,16 +4481,15 @@ if (typeof window !== 'undefined') (() => {
     wrap.append(ui.button({ label: 'Back to Today', icon: 'arrow-left', variant: 'ghost', size: 'sm', onClick: () => setView('today') }));
     if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }   // outside #board: a re-render must not drop what it announces
     if (!isSplit(state)) { wrap.append(ui.empty({ text: 'The Review Inbox needs split storage (schema 4). See UPGRADING.md.', icon: 'inbox' })); return; }
-    if (!inboxOn()) { wrap.append(ui.empty({ text: 'The Review Inbox is off for this board. Turn it on in Settings → Board.', icon: 'inbox' })); return; }
     const all = inboxAll(), head = el('div', 'inbox__head');
     head.append(el('h2', null, 'Review Inbox'), el('span', 'inbox__count', `${all.filter(p => p.status === 'pending').length} pending`)); wrap.append(head);
-    wrap.append(el('p', 'inbox__hint muted', 'Review the evidence and proposed changes. Nothing changes on the board until you accept.'));
+    wrap.append(el('p', 'inbox__hint muted', 'Review proposed changes and answer questions from agents. Nothing changes on the board until you accept.'));
     const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · e edits · m merges · i ignores')); wrap.append(keys);
     const filters = el('div', 'inbox__filters'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', 'Filter proposals');
     const sel = (key, label, opts) => { const l = el('label', 'inbox__filter'), s = el('select'); s.dataset.filter = key; l.append(el('span', null, label), s);
       opts.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; s.append(o); }); s.value = inboxF[key]; if (s.value !== inboxF[key]) s.value = '';
       s.onchange = () => { inboxF[key] = s.value; render(); const again = document.querySelector(`#board [data-filter="${key}"]`); if (again) again.focus(); }; return l; };
-    filters.append(sel('status', 'Status', [['pending', 'Pending'], ['accepted', 'Accepted'], ['ignored', 'Ignored'], ['all', 'All']]),
+    filters.append(sel('status', 'Status', [['pending', 'Pending'], ['accepted', 'Accepted'], ['answered', 'Answered'], ['ignored', 'Ignored'], ['all', 'All']]),
       sel('kind', 'Type', [['', 'All'], ...Object.entries(KIND_LABEL)]), sel('source', 'Source', [['', 'All'], ...Object.entries(SRC_LABEL)]),
       sel('reviewer', 'Reviewer', [['', 'Anyone'], ...[...new Set(all.map(p => p.reviewer).filter(Boolean))].sort().map(r => [r, '@' + r])]));
     wrap.append(filters);
@@ -4425,13 +4522,6 @@ if (typeof window !== 'undefined') (() => {
       const b = cur.querySelector(`.prop__actions [data-act="${act}"]`); if (b && !b.disabled) { e.preventDefault(); b.click(); }
     });
     if (inboxFocus && (document.activeElement === document.body || !document.activeElement)) { const f = wrap.querySelector(`article.prop[data-id="${inboxFocus}"]`); if (f) f.focus({ preventScroll: false }); }
-  }
-  async function saveInboxSetting() {
-    const on = $('sInbox').checked;
-    if (!isSplit(state)) { $('sInbox').checked = false; toast('The Review Inbox needs split storage (schema 4). See UPGRADING.md.', true); return; }
-    const ok = await mutate(d => { d.settings.review_inbox = Object.assign({}, d.settings.review_inbox, { enabled: on }); }, `Review Inbox ${on ? 'on' : 'off'}`);
-    if (ok) toast(on ? 'Review Inbox is on. This does not create, change or start any routine or schedule.' : 'Review Inbox is off. Pending proposals stay in the board files.');
-    syncModeSettings(); render();
   }
 
   // ---- Settings → Board → Columns: one mutate per action, so each can be undone ---------------------------------

@@ -141,13 +141,18 @@ $B unarchive '#12'            # put a task (or a person id) back on the board
 ```
 Run `archive` when the board file is large (the web board warns at 600 KB), or when the user asks. Before you say a person or task does not exist, also check `archived -q`.
 
-## 5. Review Inbox (when `settings` shows `review_inbox.enabled: true`)
+## 5. Review Inbox (when `settings` shows `review_inbox.enabled: true`: every split-storage board from kit v44)
 ```bash
 $B proposal-add proposals.json --dry-run   # suggested changes from notes, email or a routine; never live records
 $B proposals --status pending              # what waits for a person's decision
 $B proposal-accept <id>                    # only after the user chose it; also proposal-merge / -ignore / -reopen / -undo
+$B proposal-add question.json              # ask a person: ask.choose / ask.approve / ask.question (kit v44)
+$B proposal-result <id>                    # the answer to your own question
+$B proposal-done <id> --answer-id <answer_id> [--content-hash sha256:..]   # just before acting; act on the answer it prints
 ```
 Proposals are not tasks: never count them, claim them or work on them. Only a person decides. A routine never accepts.
+When you need a person's decision (pick a design, send a draft, merge a PR, any open question), ask in the Inbox
+instead of guessing. Link the draft or design; never paste its content. Agents never answer questions.
 See docs/help/review-inbox.md (privacy: no email summary or subject without `--recipients-confirmed`).
 
 ## Rules

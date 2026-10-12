@@ -25,6 +25,22 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v44 (schema 4)
+The Review Inbox is **always on** for split-storage boards, and it holds **questions** as well as proposals: an agent
+asks (`ask.choose`, `ask.approve`, `ask.question`), a person answers, and the agent acts on the answer once. No data
+migration: `settings.review_inbox` is left as it is and no longer read.
+- Run `kit-update` only.
+- **Behaviour change:** a split board that had the Inbox off now has it on. The notes and email skills then send
+  their suggestions to the Inbox instead of writing to the board. Tell the board's people, and check any routine whose
+  own prompt writes to the board directly.
+- A board that is not on split storage has no Inbox. To get it, migrate with `keeptrack.py migrate --to 4` (backup
+  first, see above).
+- **Upgrade every copy before an agent asks its first question:** the repo (`board-upgrade`), plugin copies,
+  routines' clones, and a hard refresh of the hosted page. An older page offers Accept on a question and would close
+  it with no answer. The first question raises `settings.min_kit` to 44 so `doctor` reports older copies (`KIT_OLD`).
+- Check: `keeptrack.py help review-inbox` lists `proposal-answer`, `proposal-result` and `proposal-done`;
+  `keeptrack.py settings` shows `review_inbox.enabled: true`; the web page has no Review Inbox switch in Settings.
+
 ### v43 (schema 4)
 Adds **waiting-for**: a card can be parked on a person or an event (`waiting`: on, who, since, nudge, note, by,
 by_session), and a board flag, `settings.min_kit`. No data migration: the board stays on schema 4, and older tools read

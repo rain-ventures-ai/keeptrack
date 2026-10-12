@@ -210,6 +210,25 @@ class FixtureBoards(unittest.TestCase):
         self.assertFalse(codes & {"KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "WAITING"}, issues)
         self.assertIn("AGENT_CLEARED", codes)   # the fixture's override stays visible to doctor
 
+    def test_v44_questions_survive_kit_update_save_and_doctor(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit44", "fixture.json"))
+        board_dir, _ = self.use_fixture("v4_kit44", meta)
+        folder = os.path.join(board_dir, "proposals")
+        before = {n: read_json(os.path.join(folder, n)) for n in sorted(os.listdir(folder))}
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        data["tasks"][0]["details"] += " Updated fixture."
+        self.assertTrue(kt.save_changes(data, message="Questions fixture roundtrip"))
+        self.assertEqual(before, {n: read_json(os.path.join(folder, n)) for n in sorted(os.listdir(folder))})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_settings(Args())
+        self.assertIn("review_inbox.enabled: true", out.getvalue(), "an old off setting is ignored from kit v44")
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual(0, code, issues)
+        self.assertFalse({x["code"] for x in issues} & {"KIT_OLD", "MIN_KIT_LOWERED"}, issues)
+
 
 if __name__ == "__main__":
     unittest.main()
