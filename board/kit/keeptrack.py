@@ -1963,6 +1963,8 @@ def cmd_history(a):
 def cmd_auto_heartbeat(a):
     """Hook entry point. Never fails loudly: a hook must not break the agent's session."""
     try:
+        if os.path.islink(os.path.dirname(CLAIM_FILE)):
+            return   # lstat/utime follow symlinks in parent components; reject the personal folder before touching its target
         st = os.lstat(CLAIM_FILE)   # a symlinked record is nobody's: its target is never read, touched or followed
         if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return

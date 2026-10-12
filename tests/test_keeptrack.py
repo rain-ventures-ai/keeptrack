@@ -1782,6 +1782,15 @@ class ClaimLifecycle(unittest.TestCase):
         finally:
             kt.subprocess.run = real_run
 
+    def test_auto_heartbeat_never_touches_a_record_through_a_symlinked_folder(self):
+        victim = os.path.join(self.dir.name, "victim"); os.makedirs(victim)
+        record = os.path.join(victim, "claim.json"); write(record, {"id": "t_c1", "session": "planted"})
+        os.utime(record, (1, 1)); before = os.stat(record).st_mtime_ns
+        os.symlink(victim, os.path.join(self.dir.name, ".keeptrack"))
+        kt.CLAIM_FILE = os.path.join(self.dir.name, ".keeptrack", "claim.json")
+        kt.cmd_auto_heartbeat(Args())
+        self.assertEqual(os.stat(record).st_mtime_ns, before, "the hook touched a file through a symlinked personal folder")
+
     def test_a_record_not_ignored_warns_but_is_written(self):
         repo = self.git_repo(ignore=False)
         kt._PENDING_CLAIM["rec"] = {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False}
