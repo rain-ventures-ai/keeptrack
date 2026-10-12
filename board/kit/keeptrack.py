@@ -60,7 +60,7 @@ From any other project (Claude plugin "board"): name the board once, then use th
 
 Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-check [--card]  # is this repo's kit older than the published one? --card adds an upgrade task for the upgrade owner
-  keeptrack.py kit-update [--from DIR]   # copy the published kit into this repo and set board/KIT_VERSION (does not commit)
+  keeptrack.py kit-update [--from DIR] [--allow-downgrade]   # copy the published kit (one commit) into this repo and set board/KIT_VERSION (does not commit)
   keeptrack.py migrate             # bring tasks.json up to v3 (safe to run twice)
   keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person (install the v8 web page first)
   keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
@@ -200,8 +200,11 @@ REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
 KIT_VERSION = 43  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
-KIT_URL = os.environ.get("BOARD_KIT_URL", "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack/main/board/kit")
+KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
+KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
+# Board data: kit-update never writes or removes these, whatever a manifest says.
+KIT_NEVER = ("board/tasks.json", "board/cards", "board/people", "board/projects", "board/proposals", "board/archive")
 
 
 def _default_branch():
@@ -360,13 +363,38 @@ def http(method, path, body=None, accept="application/vnd.github+json"):
                                  headers={"Authorization": f"Bearer {t}", "Accept": accept,
                                           "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "board-cli",
                                           **({"Content-Type": "application/json"} if body is not None else {})})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return 0, r.read().decode(), ""
-    except urllib.error.HTTPError as e:
-        return 1, e.read().decode(errors="replace"), f"HTTP {e.code}: {e.reason}"
-    except (urllib.error.URLError, OSError) as e:
-        return 1, "", f"network error: {e}"
+    for attempt in range(RATE_TRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return 0, r.read().decode(), ""
+        except urllib.error.HTTPError as e:
+            out = e.read().decode(errors="replace")
+            wait = _rate_wait(e.code, e.headers, out, attempt)
+            if wait is None:
+                return 1, out, f"HTTP {e.code}: {e.reason}"
+            if attempt == RATE_TRIES:
+                return 1, out, f"HTTP {e.code}: rate limited"
+            time.sleep(wait)
+        except (urllib.error.URLError, OSError) as e:
+            return 1, "", f"network error: {e}"
+
+
+RATE_TRIES = 3   # retries after a GitHub rate-limit answer, each after a short wait (the hook's 20 s timeout cuts long waits)
+
+
+def _rate_limited(code, headers, text):
+    """A 403 or 429 that is GitHub's rate limit (primary or secondary), not a missing permission."""
+    headers = headers or {}
+    return code in (403, 429) and (code == 429 or bool(headers.get("Retry-After")) or headers.get("x-ratelimit-remaining") == "0"
+                                   or "rate limit" in (text or "").lower())
+
+
+def _rate_wait(code, headers, text, attempt):
+    """Seconds to wait before retrying a rate-limited call, or None when it is not rate limited."""
+    if not _rate_limited(code, headers, text):
+        return None
+    ra = str((headers or {}).get("Retry-After") or "")
+    return min(int(ra) if ra.isdigit() else 2 ** (attempt + 1), 30)
 
 
 def gh(*args, body=None):
@@ -380,9 +408,14 @@ def gh(*args, body=None):
             rc, out, err = http("GET", "user")
             return (rc, json.loads(out).get("login", "") if rc == 0 else out, err)
         return http(method, path, body)
-    p = subprocess.run(["gh", "api", *args], input=json.dumps(body) if body is not None else None,
-                       capture_output=True, text=True)
-    return p.returncode, p.stdout, p.stderr
+    for attempt in range(RATE_TRIES + 1):
+        p = subprocess.run(["gh", "api", *args], input=json.dumps(body) if body is not None else None,
+                           capture_output=True, text=True)
+        m = re.search(r"HTTP (403|429)", p.stderr) if p.returncode else None
+        wait = _rate_wait(int(m.group(1)), {}, p.stdout + p.stderr, attempt) if m else None   # gh shows no headers: the message says it
+        if wait is None or attempt == RATE_TRIES:
+            return p.returncode, p.stdout, p.stderr
+        time.sleep(wait)
 
 
 def assign_nums(data):
@@ -977,7 +1010,10 @@ def _api_error(rc, out, err):
         raise UseGit()
     detail = (err.strip() + (f" ({msg})" if msg else "")) or out.strip()
     hint = ""
-    if "403" in err or "404" in err:
+    if "rate limit" in (err + " " + msg).lower() or "HTTP 429" in err:
+        hint = ("\nGitHub rate limited these requests (too many in a short time), even after waiting and retrying. The token is fine: "
+                "wait a few minutes and run the command again.")
+    elif "403" in err or "404" in err:
         hint = (f"\nThe token can read this repo but cannot write it. It needs Contents: Read and write on {REPO}. "
                 "A person or agent cannot fix this from the board: tell a human.")
     sys.exit(f"write failed: {detail}{hint}")
@@ -1282,11 +1318,22 @@ def _mutate(fn, message):
     sys.exit("could not save after retries (board busy)")
 
 
-def guard_schema(data):
+def board_min_kit(data):
+    """settings.min_kit as a whole number, else 0: a missing or malformed value never blocks (doctor reports it)."""
+    mk = (data.get("settings") or {}).get("min_kit") if isinstance(data.get("settings"), dict) else None
+    return mk if isinstance(mk, int) and not isinstance(mk, bool) else 0
+
+
+def guard_schema(data, write=True):
     v = data.get("version", 1)
     if isinstance(v, int) and v > SCHEMA:
         sys.exit(f"tasks.json is schema v{v}, but this keeptrack.py only knows v{SCHEMA}, so it will not write (it could lose data).\n"
                  "Update the board tools first: python3 board/keeptrack.py kit-update (see board/UPGRADING.md).")
+    # Same rule as the web page: a board that needs a newer kit (settings.min_kit) is read-only here. Reads still work.
+    if write and board_min_kit(data) > KIT_VERSION:
+        sys.exit(f"this board needs kit v{board_min_kit(data)} (settings.min_kit), but this keeptrack.py is kit v{KIT_VERSION}, "
+                 "so it will not write (it may not know a rule a card relies on).\n"
+                 "Upgrade the board kit first: python3 board/keeptrack.py kit-update (see board/UPGRADING.md); a plugin copy updates with the plugin.")
 
 
 # Data migrations: MIGRATIONS[n] turns a schema-n file into schema n+1. Each step must be safe to run twice.
@@ -2484,26 +2531,81 @@ def kit_fetch(name, src=None):
             return open(os.path.join(src, name), "rb").read()
         except OSError as e:
             raise KitError(f"cannot read {name} from the kit: {e}")
+    kind, where, sha = kit_source()
+    if kind == "dir":
+        return kit_fetch(name, where)
     try:
-        with urllib.request.urlopen(urllib.request.Request(f"{KIT_URL}/{name}", headers={"User-Agent": "board-cli"}), timeout=30) as r:
+        with urllib.request.urlopen(urllib.request.Request(f"{where}/{name}", headers={"User-Agent": "board-cli"}), timeout=30) as r:
             return r.read()
-    except (urllib.error.URLError, OSError):
-        return kit_fetch(name, kit_clone())
+    except (urllib.error.URLError, OSError) as e:
+        if KIT_URL:   # a custom kit that fails stops here: never a quiet switch to the official one
+            raise KitError(f"cannot fetch {name} from BOARD_KIT_URL ({KIT_URL}): {e}. Fix or unset BOARD_KIT_URL")
+        _KIT_SRC[0] = ("dir", kit_clone(sha), sha)   # raw.githubusercontent.com blocked: the same commit through git
+        return kit_fetch(name, _KIT_SRC[0][1])
 
 
 _KIT_DIR = None
+_KIT_SRC = []   # [(kind, where, sha)], chosen once per run, so the manifest and every file come from the same commit
 
 
-def kit_clone():
-    """Fallback when raw.githubusercontent.com is blocked: a shallow git clone of the kit repo (public, no token)."""
+def kit_ref():
+    """The commit the kit's main branch is at now (git, else the API), or "" when neither answers."""
+    sha = ""
+    try:
+        p = subprocess.run(["git", "ls-remote", KIT_GIT, "refs/heads/main"], capture_output=True, text=True, timeout=30)
+        sha = p.stdout.split()[0] if p.returncode == 0 and p.stdout.strip() else ""
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        try:
+            req = urllib.request.Request("https://api.github.com/repos/rain-ventures-ai/keeptrack/commits/main",
+                                         headers={"Accept": "application/vnd.github.sha", "User-Agent": "board-cli"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                sha = r.read().decode().strip()
+        except (urllib.error.URLError, OSError, UnicodeError):
+            sha = ""
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
+
+
+def kit_source():
+    if not _KIT_SRC:
+        if KIT_URL:
+            _KIT_SRC.append(("url", KIT_URL.rstrip("/"), ""))
+        else:
+            sha = kit_ref()
+            _KIT_SRC.append(("url", f"{KIT_RAW}/{sha}/board/kit", sha) if sha else ("dir", kit_clone(), ""))
+    return _KIT_SRC[0]
+
+
+def kit_clone(sha=""):
+    """Fallback when raw.githubusercontent.com is blocked: a shallow git clone of the kit repo (public, no token), at sha if given."""
     global _KIT_DIR
     if not _KIT_DIR:
         d = tempfile.mkdtemp(prefix="board-kit-")
         p = subprocess.run(["git", "clone", "-q", "--depth", "1", KIT_GIT, d], capture_output=True, text=True)
         if p.returncode:
-            raise KitError(f"cannot fetch the board kit from {KIT_URL} or {KIT_GIT}: {p.stderr.strip()}")
+            raise KitError(f"cannot fetch the board kit from {KIT_RAW} or {KIT_GIT}: {p.stderr.strip()}")
+        head = subprocess.run(["git", "-C", d, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        if sha and head != sha:
+            p = subprocess.run(["git", "-C", d, "fetch", "-q", "--depth", "1", "origin", sha], capture_output=True, text=True)
+            p = p if p.returncode else subprocess.run(["git", "-C", d, "checkout", "-q", sha], capture_output=True, text=True)
+            if p.returncode:
+                raise KitError(f"cannot fetch kit commit {sha[:12]} from {KIT_GIT}: {p.stderr.strip()}")
         _KIT_DIR = os.path.join(d, "board", "kit")
     return _KIT_DIR
+
+
+def kit_dest(root, dest):
+    """A manifest path made safe: inside the repo and never board data (KIT_NEVER), whatever the manifest says."""
+    if not isinstance(dest, str) or not dest or os.path.isabs(dest) or "\\" in dest:
+        raise ValueError(f"unsafe path in manifest: {dest!r}")
+    path = os.path.abspath(os.path.join(root, dest))
+    if os.path.commonpath([root, path]) != root or path == root:
+        raise ValueError(f"unsafe path in manifest: {dest}")
+    rel = os.path.relpath(path, root).replace(os.sep, "/").lower()
+    if any(rel == n or rel.startswith(n + "/") or n.startswith(rel + "/") for n in KIT_NEVER):
+        raise ValueError(f"the manifest names {dest}, which is board data: kit-update never writes or removes it")
+    return path
 
 
 def need_repo_clone():
@@ -2526,8 +2628,33 @@ def kit_owner(data):
     return s if s else (people[0] if people else "")
 
 
+def kit_drift():
+    """Warnings where this repo's AGENTS.md (copied from templates/ once, at init) lags the current template. Never an error."""
+    try:
+        with open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    out = []
+    try:
+        with open(os.path.join(ROOT, PATH), encoding="utf-8") as f:
+            split = json.load(f).get("layout") == "split"
+    except (OSError, ValueError, AttributeError):
+        split = os.path.isdir(os.path.join(ROOT, os.path.dirname(PATH), "cards"))
+    if split and "Never edit the JSON files under `board/` by hand" not in text:
+        out.append("AGENTS.md rule 1 does not ban hand edits of every JSON file under board/ (split storage keeps cards and people "
+                   "in their own files): copy rule 1 from the kit's templates/AGENTS.md")
+    mins = sorted({int(n) for n in re.findall(r"every ~?(\d+) minutes", text)} - {HEARTBEAT_EVERY // 60})
+    if mins:
+        out.append(f"AGENTS.md gives heartbeat timing of {', '.join(map(str, mins))} minutes; the tools beat every "
+                   f"{HEARTBEAT_EVERY // 60}: copy the heartbeat lines from the kit's templates/AGENTS.md")
+    return out
+
+
 def cmd_kit_check(a):
     need_repo_clone()
+    for w in kit_drift():
+        print(f"template drift (warning): {w}")
     try:
         m = json.loads(kit_fetch("manifest.json", a.source))
     except (KitError, ValueError) as e:
@@ -2556,7 +2683,7 @@ def cmd_kit_check(a):
             ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == "todo" and valid_rank(t.get("rank"))]
             t = {"id": new_board_id(data, "t_", "cards"), "title": title, "column": "todo", "client": "", "priority": "medium", "due": "",
                  "labels": ["board"] if any(l.get("name") == "board" for l in data.get("labels", [])) else [],
-                 "assignees": [owner] if owner else [], "links": [{"title": "Upgrade notes", "url": f"{KIT_GIT}/blob/master/board/kit/UPGRADING.md"}],
+                 "assignees": [owner] if owner else [], "links": [{"title": "Upgrade notes", "url": f"{KIT_GIT}/blob/main/board/kit/UPGRADING.md"}],
                  "details": f"This repo's board tools are kit v{have}; the published kit is v{want}.\n\n"
                             f"@{owner or 'upgrade owner'}: comment `@claude upgrade the board kit` to start your routine. It follows "
                             ".claude/skills/board-upgrade/SKILL.md: copies the kit on a branch, runs the migrations, keeps this repo's own "
@@ -2587,20 +2714,22 @@ def cmd_kit_update(a):
                 if wanted or os.path.exists(os.path.join(ROOT, dest)):
                     files[dest] = kit_fetch(src, a.source)
         root = os.path.abspath(ROOT)
-        removals = []
-        for dest in m.get("remove", []):
-            if not isinstance(dest, str) or os.path.isabs(dest):
-                raise ValueError(f"unsafe removal path in manifest: {dest}")
-            path = os.path.abspath(os.path.join(root, dest))
-            if os.path.commonpath([root, path]) != root or path == root:
-                raise ValueError(f"unsafe removal path in manifest: {dest}")
-            removals.append((dest, path))
-    except (KitError, ValueError) as e:
+        targets = {dest: kit_dest(root, dest) for dest in files}
+        removals = [(dest, kit_dest(root, dest)) for dest in m.get("remove", [])]
+        # The fetched keeptrack.py must be the release the manifest names (a half-published or mixed kit is refused).
+        got = re.search(rb"^KIT_VERSION = (\d+)", files.get("board/keeptrack.py", b""), re.M)
+        if not got or int(got.group(1)) != m["version"]:
+            raise ValueError(f"the fetched board/keeptrack.py is kit v{got.group(1).decode() if got else '?'}, but the manifest is "
+                             f"v{m['version']}: the kit is being published or is broken; try again in a few minutes")
+    except (KitError, ValueError, KeyError, TypeError, AttributeError) as e:
         sys.exit(f"kit-update stopped, nothing changed: {e}")
     have = kit_local()
+    if have > m["version"] and not getattr(a, "allow_downgrade", False):
+        sys.exit(f"kit-update stopped, nothing changed: this repo has kit v{have}, newer than the fetched kit v{m['version']}. "
+                 "Pass --allow-downgrade only if you mean to go back.")
     changed = []
     for dest, new in files.items():
-        path = os.path.join(ROOT, dest)
+        path = targets[dest]
         old = open(path, "rb").read() if os.path.exists(path) else None
         if old != new:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2776,7 +2905,7 @@ def doctor_board(fix=False):
     if mac is not None and not claim_limit(data):
         problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
                 "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
-    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. Detects, never prevents.
+    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. From v44 an older kit will not write.
     raw_min = (data.get("settings") or {}).get("min_kit")
     min_kit = raw_min if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 0
     if raw_min is not None and not min_kit:
@@ -2838,7 +2967,7 @@ def doctor_board(fix=False):
             if entry.get("size", len(entry["text"].encode())) > 200 * 1024:
                 problem("FILE_SIZE", rel, "This board file is larger than 200 KB.")
 
-    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)):
+    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)) and min_kit <= KIT_VERSION:
         before = json.loads(json.dumps(data))
         if missing_nums or not isinstance(data.get("next_num"), int) or data.get("next_num", 0) <= maximum:
             assign_nums(data); fixes.append("assigned missing task numbers and raised next_num")
@@ -2994,7 +3123,7 @@ def _migrate_v4(a):
     with (contextlib.nullcontext() if getattr(a, "dry_run", False) else local_lock()):
         tag = None
         for attempt in range(6):
-            data, state = load(); guard_schema(data)
+            data, state = load(); guard_schema(data, write=not getattr(a, "dry_run", False))
             version = data.get("version", 1)
             if version == 4:
                 sys.exit("tasks.json is already schema v4; migration refused")
@@ -5080,7 +5209,7 @@ def apply_staging(data, st, label):
 def cmd_import(a):
     st = read_staging(a.path)
     label = a.source or _s(st.get("source")) or f"import of {os.path.basename(a.path)}"
-    data, _ = load(); guard_schema(data); migrate_data(data)
+    data, _ = load(); guard_schema(data, write=not a.dry_run); migrate_data(data)
     errs = check_staging(data, st)
     if errs:
         sys.exit("the staging file has problems, so nothing was imported:\n  " + "\n  ".join(errs[:50])
@@ -5577,7 +5706,23 @@ def _decide(proposal, action, result=None, edited=None, undo=None):
     proposal.setdefault("history", []).append({"at": ts, "by": by, "text": action + (f" as {result['id']}" if result else "")})
 
 
+def check_stored_change(proposal):
+    """Accept time: a proposal file may have been written by hand, not by `propose`. Check its kind and change again, so it can
+    never set claim, num, waiting, history, id or any other field outside the allow-list."""
+    kind, change = proposal.get("kind"), proposal.get("change")
+    if kind not in PROPOSAL_KINDS:
+        proposal_error(f"refused: proposal {proposal.get('id')} has an unknown kind {kind!r}; nothing was changed")
+    if not isinstance(change, dict) or not change:
+        proposal_error(f"refused: proposal {proposal.get('id')} has no change to apply; nothing was changed")
+    bad = sorted(set(change) - _proposal_change_fields(kind))
+    if bad:
+        proposal_error(f"refused: proposal {proposal.get('id')} sets field(s) a {kind} proposal may not set: " + ", ".join(bad)
+                       + "; nothing was changed. Ignore it, or add a corrected proposal.")
+    check_change_values(kind, change)
+
+
 def _edit_change(proposal, path):
+    check_stored_change(proposal)
     if not path: return copy.deepcopy(proposal["change"]), None
     try:
         with open(path, encoding="utf-8") as src:
@@ -5636,7 +5781,7 @@ def _append_unique(record, field, values):
 def cmd_proposal_merge(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal)
+        proposal = find_proposal(data, a.id); _already_decided(proposal); check_stored_change(proposal)
         _check_proposal_base(data, proposal)
         target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
         record = _target_record(data, target); before = copy.deepcopy(record)
@@ -5893,7 +6038,7 @@ def _cmd_archive(a):
     global WRITE
     for attempt in range(6):
         data, base = load()
-        guard_schema(data); migrate_data(data, min(SCHEMA, 3))
+        guard_schema(data, write=not getattr(a, "dry_run", False)); migrate_data(data, min(SCHEMA, 3))
         rules = archive_rules(data)
         for k in ("done_days", "lost_days", "keep_history"):
             if getattr(a, k) is not None:
@@ -6178,6 +6323,7 @@ def main():
     s = sub.add_parser("kit-check"); s.add_argument("--card", action="store_true"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_kit_check)
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
     s.add_argument("--visibility-alarm", action="store_true", help="install the optional visibility alarm workflow (kept current once installed)")
+    s.add_argument("--allow-downgrade", action="store_true", help="install a kit older than this repo's board/KIT_VERSION")
     s.set_defaults(f=cmd_kit_update)
     s = sub.add_parser("migrate"); s.add_argument("--to", type=int, help="4 = split storage; without --to the board goes up to v3 only"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
     s = sub.add_parser("verify"); s.add_argument("--against", required=True, help="backup tag, branch or commit, or a tasks.json file"); s.set_defaults(f=cmd_verify)

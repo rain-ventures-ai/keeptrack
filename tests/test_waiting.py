@@ -130,6 +130,7 @@ class Waiting(unittest.TestCase):
         self.assertTrue(self.card(1)["history"][-1]["text"].startswith("waiting on Acme finance (JezHub)"))
 
     def test_first_wait_raises_min_kit_and_never_lowers_it(self):
+        self.addCleanup(setattr, kt, "KIT_VERSION", kt.KIT_VERSION); kt.KIT_VERSION = 45   # a kit new enough to write a min_kit 45 board
         self.wait(1)
         self.assertEqual(self.read()["settings"]["min_kit"], 43)
         self.edit(lambda d: d["settings"].update(min_kit=45))
@@ -611,6 +612,7 @@ class Waiting(unittest.TestCase):
         self.assertEqual((r["merged"]["settings"]["min_kit"], r["clashes"]), (44, []))
 
     def test_a_wait_that_loses_a_race_keeps_the_higher_min_kit(self):
+        self.addCleanup(setattr, kt, "KIT_VERSION", kt.KIT_VERSION); kt.KIT_VERSION = 44
         real, calls = kt.save, []
         def racing(data, sha, msg):
             if not calls:
@@ -619,6 +621,30 @@ class Waiting(unittest.TestCase):
         kt.save = racing
         self.wait(1)
         self.assertEqual(self.read()["settings"]["min_kit"], 44)
+        self.assertEqual(self.card(1)["waiting"]["on"], "Acme finance")
+
+    def test_a_board_that_needs_a_newer_kit_is_read_only(self):
+        # Shared rule (CLI and page): settings.min_kit above this kit's KIT_VERSION refuses writes; reads still work.
+        self.edit(lambda d: d["settings"].update(min_kit=kt.KIT_VERSION + 1))
+        before = self.read()
+        msg = self.refusal(self.wait, 1)
+        self.assertIn(f"needs kit v{kt.KIT_VERSION + 1}", msg); self.assertIn("will not write", msg); self.assertIn("kit-update", msg)
+        self.assertEqual(before, self.read())
+        listed = self.out(kt.cmd_list, Args(q=None, column=None, assignee=None, unclaimed=False, attention=False,
+                                            project=None, client=None, label=None))
+        self.assertIn("Card 1", listed)
+        self.edit(lambda d: d["tasks"][4].pop("num")); before = self.read()   # a fault doctor --fix would repair
+        issues, fixes, _ = kt.doctor_board(True)   # doctor still reports, but --fix writes nothing
+        self.assertEqual(([], before), (fixes, self.read()))
+        self.assertIn("KIT_OLD", [x["code"] for x in issues])
+        self.edit(lambda d: d["settings"].update(min_kit=kt.KIT_VERSION))
+        self.assertTrue(kt.doctor_board(True)[1])   # the same fault, on a board this kit may write: fixed
+        self.edit(lambda d: d["settings"].update(min_kit=kt.KIT_VERSION + 1))
+        for odd in ("99", True, None, 4.5):   # a missing or non-integer min_kit never blocks
+            self.edit(lambda d: d["settings"].update(min_kit=odd))
+            kt.guard_schema(self.read())
+        self.edit(lambda d: d["settings"].update(min_kit=kt.KIT_VERSION))
+        self.wait(1)
         self.assertEqual(self.card(1)["waiting"]["on"], "Acme finance")
 
     def test_the_web_page_merges_min_kit_as_a_maximum_too(self):
