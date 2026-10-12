@@ -17,3 +17,5 @@ Small, hand-checked boards used by `tests/test_fixture_boards.py` and browser te
 **When you bump schema or kit:** add a row here, add a frozen directory under `tests/fixtures/`, extend the fixture tests, and add entries to the repo root `CHANGELOG.md` and `board/kit/UPGRADING.md`. The live `demo/` board stays the current showcase only.
 
 Each fixture may include `fixture.json` with expected entity counts and the kit version to simulate before `kit-update`.
+
+`merge3-cases.json` is not a board: it holds shared three-way merge cases (clean merge, clash, lists by id and by content, volatile fields) that `tests/test_merge_parity.py` runs through both `keeptrack.py` and `board.js`. Add a case there when either merge changes.
