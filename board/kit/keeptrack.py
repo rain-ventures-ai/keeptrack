@@ -296,17 +296,32 @@ def ensure_local_dir(path, warn=True, check_tracked=True):
         raise OSError(f"{d} is a symlink; Keeptrack will not write through it")
     os.makedirs(d, exist_ok=True)
     if os.path.basename(d) in CONFIG_DIRS:   # Keeptrack's own folder: nothing in it may be committed
-        tracked = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True).stdout.strip()
-        if tracked:
-            raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
+        if check_tracked:
+            try:
+                r = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                raise OSError(f"git cannot vouch for {d} (no git, or it did not answer); Keeptrack keeps its personal files out of git")
+            if r.returncode != 0 and "not a git repository" not in r.stderr:
+                raise OSError(f"git cannot vouch for {d} (it refused to answer); Keeptrack keeps its personal files out of git")
+            if r.stdout.strip():
+                raise OSError(f"{d} holds files committed to git; Keeptrack keeps its personal files out of git")
         if not os.path.lexists(os.path.join(d, ".gitignore")):
             write_private(os.path.join(d, ".gitignore"), "# personal Keeptrack settings for this project; never committed\n*\n")
     else:   # a board repo's root (.board-claim.json): the file itself must not be committed (the kit's gitignore lists it)
-        if check_tracked and _tracked_by_git(path) is not False:   # tracked, or git could not say: the same answer as the read
-            raise OSError(f"{path} is committed to git, or git cannot vouch for it; Keeptrack keeps its personal files out of git (add it to .gitignore)")
-        if warn and subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True, timeout=10).returncode == 1:
-            print(f"warning: {os.path.basename(path)} is not in .gitignore, so `git add -A` would commit this session's id; "
-                  "add it to .gitignore (the kit's template lists it)", file=sys.stderr)
+        if check_tracked:
+            tracked = _tracked_by_git(path)   # the same answer as the read: tracked, or git could not say, is not ours
+            if tracked:
+                raise OSError(f"{path} is committed to git; Keeptrack keeps its personal files out of git (add it to .gitignore)")
+            if tracked is None:
+                raise OSError(f"git cannot vouch for {path} (no git here, or it did not answer), so Keeptrack writes no personal file")
+        if warn:
+            try:
+                ignored = subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True, timeout=10).returncode != 1
+            except (OSError, subprocess.SubprocessError):
+                ignored = True   # no answer: no warning either
+            if not ignored:
+                print(f"warning: {os.path.basename(path)} is not in .gitignore, so `git add -A` would commit this session's id; "
+                      "add it to .gitignore (the kit's template lists it)", file=sys.stderr)
 
 
 def write_private(path, text):
@@ -1598,7 +1613,8 @@ def write_claim_record():
         ensure_local_dir(CLAIM_FILE)
         write_private(CLAIM_FILE, json.dumps(rec))
     except OSError as e:
-        print(f"note: no local claim record, so no automatic heartbeat ({e})", file=sys.stderr)
+        print(f"note: no local claim record, so no automatic heartbeat ({e}); pass --session {rec.get('session')} "
+              "(or export BOARD_SESSION) to heartbeat, done or release the card", file=sys.stderr)
 
 
 def do_claim(a, tid, data):
@@ -1705,8 +1721,8 @@ def drop_claim_file(task_id=None):
         return
     try:
         info = claim_record()
-        if info is None and not os.path.lexists(CLAIM_FILE):
-            return   # no record: nothing to forget, and nothing to create a folder for
+        if info is None and (task_id or not os.path.lexists(CLAIM_FILE)):
+            return   # no record read this command: nothing to forget (a record that appeared meanwhile is another command's)
         ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=info is None)   # the same guard as the write (the read already asked git when it found a record)
         if task_id:
             if info and info.get("id") and info.get("id") != task_id:
@@ -1940,7 +1956,7 @@ def cmd_auto_heartbeat(a):
         st = os.lstat(CLAIM_FILE)   # a symlinked record is nobody's: its target is never read, touched or followed
         if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
-        os.utime(CLAIM_FILE)  # throttle first: even if git or the network call stalls, the next tool calls skip this
+        os.utime(CLAIM_FILE, follow_symlinks=False)  # throttle first: even if git or the network call stalls, the next tool calls skip this
         _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
         info = claim_record()   # None for a record git tracks: it came with the repo, so it names no card of this clone's
         if not info or info.get("attended") or not info.get("id"):
