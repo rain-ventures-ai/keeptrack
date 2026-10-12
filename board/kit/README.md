@@ -183,8 +183,9 @@ A card parked on a person or an event carries `waiting` (null or absent when it 
 not claimable: `claim` refuses it and `next` skips it, with or without `--force`. If the card has a running claim,
 `wait` blocks that claim (`blocked_by_wait: true`, heartbeat time untouched) when it is the claim's own session or a
 person (no `BOARD_AGENT`); such a claim never goes stale, and only its own session, a person or `--force` releases it.
-`unwait` runs a young blocked claim again (counted against `max_agent_claims` unless attended) and releases one older
-than the stale limit to To do. An agent run may `unwait` only a wait it set in the same session whose `who` is empty or
+`unwait` runs a young blocked claim again (counted against `max_agent_claims` unless attended), puts a claim that was
+`stuck` before the wait back to `stuck` (`claim.before_wait`), and releases one older than the stale limit to To do.
+`release --column done` is refused while the card waits: use `done` or `move ID done`, which end the wait and record it. An agent run may `unwait` only a wait it set in the same session whose `who` is empty or
 the agent itself. These rules are advisory: anything with write access to the repo can edit a card, so the kit records
 what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `CLAIM_BLOCKED`, `KIT_OLD` and
 `MIN_KIT_LOWERED`. The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.

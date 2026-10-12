@@ -1654,8 +1654,9 @@ def drop_leftover_wait(t, how, data=None):
     reopened from done with such a wait: end the wait, with a history line, so it never comes back as a live one. A
     blocked_by_wait claim stops being one (the card waits on nothing now)."""
     w = waiting_of(t)
-    if w and how != "reopening" and agent_run() and other_party(w, claim_agent(t), data):
-        note_agent_cleared(t, f"{how} while waiting", session_for(None))   # column-rm or a proposal: as close_waiting records
+    if w and (agent_run() or holds_claim(t, None)) and other_party(w, claim_agent(t), data):
+        # column-rm, a proposal, or a reopen of a dormant wait put there by any route: recorded as close_waiting records
+        note_agent_cleared(t, f"{how} while waiting" if how != "reopening" else "reopened a card that was waiting", session_for(None))
     if w:
         t["waiting"] = None
         hist(t, f"wait ended by {how} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)})")
@@ -2194,7 +2195,7 @@ def cmd_move(a):
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
-            drop_leftover_wait(t, "reopening")
+            drop_leftover_wait(t, "reopening", data)
         n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
         if column == "done" and old != "done" and n_open:
             print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)
@@ -5453,7 +5454,7 @@ def _apply_update(data, record, proposal, change):
     if record.get("id", "").startswith("t_") and record.get("column") == "done" and not was_done:
         drop_leftover_wait(record, "proposal to done", data)
     elif record.get("id", "").startswith("t_") and was_done and record.get("column") != "done":
-        drop_leftover_wait(record, "reopening")
+        drop_leftover_wait(record, "reopening", data)
     record["updated"] = now(); record["updatedBy"] = who_am_i()
     hist(record, f"accepted proposal {proposal['id']}")
 
@@ -5539,6 +5540,7 @@ def cmd_proposal_merge(a):
         target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
         record = _target_record(data, target); before = copy.deepcopy(record)
         selected = set(x.strip() for x in (a.fields or "").split(",") if x.strip())
+        was_done = record.get("column") == "done"
         for key, value in proposal["change"].items():
             if key in ("comments", "todos", "links") and isinstance(value, list): _append_unique(record, key, value)
             elif key == "owner" and key in selected and record.get("id", "").startswith("t_"):
@@ -5547,6 +5549,8 @@ def cmd_proposal_merge(a):
             elif key == "due" and key in selected and record.get("id", "").startswith("p_"):
                 record["next_due"] = copy.deepcopy(value)
             elif key in selected: record[key] = copy.deepcopy(value)
+        if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
+            drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update
         record["updated"] = now(); record["updatedBy"] = who_am_i(); hist(record, f"merged from proposal {proposal['id']}")
         _decide(proposal, "merge", record, {k: proposal["change"][k] for k in selected if k in proposal["change"]},
                 {"before": before, "after": copy.deepcopy(record), "created": False})

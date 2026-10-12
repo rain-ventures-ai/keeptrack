@@ -850,7 +850,7 @@ if (typeof window !== 'undefined') (() => {
       if (p.claim && !t.claim) add('claim released'); else if (p.claim && t.claim && p.claim.status !== t.claim.status) add('claim ' + t.claim.status);
       const isW = w => w && typeof w === 'object' && !Array.isArray(w), pw = isW(p.waiting) ? p.waiting : null, tw = isW(t.waiting) ? t.waiting : null;
       if (tw && t.column === doneColId() && p.column !== t.column) { add(`wait ended by done (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // as keeptrack.py done / move ID done
-      else if (tw && p.column === doneColId() && t.column !== doneColId()) { add(`wait ended by reopening (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; }   // a leftover wait never comes back live
+      else if (tw && pw && JSON.stringify(pw) === JSON.stringify(tw) && p.column === doneColId() && t.column !== doneColId()) { add(`wait ended by reopening (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // a leftover wait never comes back live; a wait this save writes (Undo) stays
       else if (tw && JSON.stringify(pw) !== JSON.stringify(tw)) add('waiting on ' + (tw.on || '?') + (tw.nudge ? ', chase ' + tw.nudge : ''));
       else if (pw && !tw) add(`wait cleared (was waiting on ${pw.on || '?'}, since ${pw.since || '?'})`);
     });
@@ -1617,6 +1617,14 @@ if (typeof window !== 'undefined') (() => {
     try { const j = await sendToClaude(t, who, cid); toast('Assigned to Claude. It should start within about two minutes.'); watchClaudeJob(j.jobId, t.id, who, cid); return true; }
     catch (e) { toast('Not sent: ' + e.message, true); edit(t.id, x => { if (x.claim && String(x.claim.session_id || '').indexOf('pending-') === 0) { x.claim.status = 'stuck'; x.claim.note = 'Send to Claude failed: ' + e.message; } }, 'Send to Claude failed'); return false; }
   }
+  // The save merges with the newer board field by field: a wait set elsewhere meanwhile can arrive next to this page's
+  // placeholder claim. Then Claude is not started and the placeholder is taken off again (the routine's claim would be refused).
+  async function waitArrived(id, ph) {
+    const t = state.tasks.find(x => x.id === id); if (!t || !waitingOf(t)) return false;
+    toast(waitingBlock(t) + ' Claude was not started.', true);
+    await mutate(n => { const c = n.tasks.find(x => x.id === id); if (c && c.claim && c.claim.session_id === ph) { c.claim = null; stamp(c); } }, `Withdraw Claude: ${titleOf(id)}`, [id]);
+    return true;
+  }
   async function assignMyClaude(id) {
     const t = state.tasks.find(x => x.id === id), who = cfg().me; if (!t) return;
     if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents & integrations first.', true); return; }
@@ -1626,14 +1634,15 @@ if (typeof window !== 'undefined') (() => {
     if (waitingOf(t)) { toast(waitingBlock(t), true); return; }
     { const full = agentLimitFull(id); if (full) { toast(full, true); rlog(t.num, 'Not sent', full, false); return; } }
     const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
-    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card || waitingOf(card) || activeClaim(card)) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); stamp(card); }, `Assign #${t.num} to Claude`, [id]);
-    const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) await triggerClaude(current, who, cid);
+    let ph = '';
+    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card || waitingOf(card) || activeClaim(card)) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); ph = card.claim.session_id; stamp(card); }, `Assign #${t.num} to Claude`, [id]);
+    const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) { if (!(await waitArrived(id, ph))) await triggerClaude(current, who, cid); }
     else if (saved && current && (waitingOf(current) || activeClaim(current))) toast(waitingOf(current) ? waitingBlock(current) : 'Someone took this task meanwhile; Claude was not started.', true);   // the newer board won
   }
   async function postComment() {
     const ta = $('cmText'), text = ta.value.trim(), id = commentsFor; if (!text || !id) return;
     if (busy) { toast('Busy, try again in a moment', true); return; }
-    let send = false;
+    let send = false; const seen = ((state.tasks.find(x => x.id === id) || {}).claim || {}).session_id || '';   // the claim the person sees now (and may confirm below)
     if (wantsClaude(text)) {
       const full = agentLimitFull(id);
       if (!myAgents().includes('claude')) { /* this person does not use Claude: a plain mention */ }
@@ -1646,12 +1655,11 @@ if (typeof window !== 'undefined') (() => {
         else { const a = await askSend(t0 ? t0.num : '?'); if (a === 'cancel') return; send = a === 'send'; } }
     }
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
-    const seen = ((state.tasks.find(x => x.id === id) || {}).claim || {}).session_id || '';   // the claim the person saw (and may have confirmed)
-    let sent = send, why = '';
+    let sent = send, why = '', ph = '';
     await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return; t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text });
       const live = activeClaim(t); sent = send && !waitingOf(t) && !(live && live.session_id !== seen);   // the newer board may wait, or someone took it meanwhile
       why = send && !sent ? (waitingOf(t) ? waitingBlock(t) + ' Posted as a normal comment.' : 'Someone took this task meanwhile; posted as a normal comment.') : '';
-      if (sent) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); }   // the routine claims only cards assigned to its person
+      if (sent) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); ph = t.claim.session_id; }   // the routine claims only cards assigned to its person
       stamp(t); }, `Comment: ${titleOf(id)}`, [id]);
     $('cmPost').disabled = false;
     { const t2 = state.tasks.find(x => x.id === id); if (t2) syncAgentBtn(t2);
@@ -1659,7 +1667,7 @@ if (typeof window !== 'undefined') (() => {
     if (why) toast(why, true);
     if (sent && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
       const t1 = state.tasks.find(x => x.id === id);
-      await triggerClaude(t1, who, cid);
+      if (!(await waitArrived(id, ph))) await triggerClaude(t1, who, cid);
     }
     if ((state.tasks.find(x => x.id === id) || { comments: [] }).comments.length <= n0) { ta.value = text; autosize(ta); toast('Comment not saved. Your text is still in the box.', true); }
     cmSig = ''; renderComments(); ta.focus();

@@ -467,6 +467,13 @@ class Waiting(unittest.TestCase):
         c = self.card(1)["claim"]
         self.assertEqual(c["status"], "stuck"); self.assertNotIn("blocked_by_wait", c); self.assertNotIn("before_wait", c)
 
+    def test_an_agent_reopening_a_dormant_wait_on_another_party_is_recorded(self):
+        self.edit(lambda d: d["tasks"][0].update(column="done", waiting={"on": "x", "who": "JezHub", "since": "2026-10-01"}))
+        with self.agent():
+            self.claim(1, "s1")                                              # proposal-merge or an older tool left it in done
+        t = self.card(1)
+        self.assertIsNone(t["waiting"]); self.assertEqual([x["what"] for x in t["agent_cleared"]], ["reopened a card that was waiting"])
+
     def test_a_proposal_that_reopens_a_done_card_drops_a_leftover_wait(self):
         rec = {"id": "t_x", "column": "done", "waiting": {"on": "x", "since": "2026-10-01"}, "history": []}
         kt._apply_update({"people": []}, rec, {"id": "pr_1"}, {"column": "todo"})

@@ -131,6 +131,12 @@ async function assertFits(page, where) {
     assert.equal(JSON.parse(api.files['tasks.json']).settings.min_kit, 43, 'the first wait raises settings.min_kit');
     assert.match(api.card().history.slice(-1)[0].text, /^waiting on Acme finance, chase 2020-01-02/);
     assert.equal(await page.locator('.card .chip.waitchip.late').first().isVisible(), true, 'the chip is amber once the chase day has passed');
+    // done ends the wait; Undo of that move brings the wait back (a wait the save itself writes is never taken as a leftover)
+    w = saved(); await page.locator('#cCol').selectOption('done'); await w;
+    assert.equal(api.card().waiting, null); assert.match(api.card().history.slice(-1)[0].text, /wait ended by done/);
+    await page.waitForFunction(() => !document.getElementById('cUndo').disabled); w = saved(); await page.locator('#cUndo').click(); await w;
+    assert.equal(api.card().column, 'todo'); assert.equal((api.card().waiting || {}).on, 'Acme finance', 'Undo restores the wait');
+    await page.locator('#cWaitPill').waitFor();
     w = saved(); await page.locator('#cWaitPill .ui-pill__remove').click(); await w;
     assert.equal(api.card().waiting, null); assert.match(api.card().history.slice(-1)[0].text, /^wait cleared \(was waiting on Acme finance/);
     assert.equal(await page.locator('#cWaitAdd').isVisible(), true);
