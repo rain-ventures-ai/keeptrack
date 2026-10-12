@@ -71,7 +71,7 @@ class Parity(unittest.TestCase):
         lists = {k: set(re.findall(r"'([a-z_]+)'", v)) for k, v in re.findall(r"(\w+): \[([^\]]*)\]", block)}
         self.assertEqual(lists, {"task": kt.TASK_CHANGE_FIELDS, "person": kt.PERSON_CHANGE_FIELDS, "touch": kt.TOUCH_CHANGE_FIELDS})
         kinds = set(re.findall(r"'([a-z.]+)'", re.search(r"const PROPOSAL_KINDS = \[([^\]]*)\]", js).group(1)))
-        self.assertEqual(kinds, kt.PROPOSAL_KINDS)
+        self.assertEqual(kinds, kt.APPLY_KINDS)   # questions (ask.*) are answered, never applied
 
 
 if __name__ == "__main__":

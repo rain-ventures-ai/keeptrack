@@ -6,13 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
-- **2026-10-12** — Each browser tab stays on the board it opened: switching boards in another tab can no longer make
-  this tab save into the wrong repo. A board whose `settings.min_kit` is newer than the page is read-only, with a
+- **2026-10-12** — Kit v45: each browser tab stays on the board it opened: switching boards in another tab can no
+  longer make this tab save into the wrong repo. A board whose `settings.min_kit` is newer than the page is read-only, with a
   banner. The agent-claim limit, and whether a cleared wait may restart a blocked claim, are decided on the board as it
   is saved, with a whole-board commit. Accepting a Review Inbox proposal re-checks its field allow-list. The page has a
   Content-Security-Policy (GitHub's API, cron-job.org and Open-Meteo only; the bootstrap runs its scripts from `blob:`
   URLs). "Copy settings code" and "Copy setup link" leave tokens and keys out unless "Include tokens and keys" is
   ticked. Undo keeps 5 changes and stores them for the next visit only while they fit in about 1 MB.
+
+- **2026-10-12** — Review Inbox questions (kit v44): Choose, Approve and Question items show the question, its links
+  and answer buttons in the Inbox and in Today's review, with an optional note, "Who answers" for a named person,
+  Dismiss, and Change answer (Undo) until the agent has acted. Answers write only the question's file. The Inbox is
+  always on for split boards; the Settings switch is gone.
 
 - **2026-10-12** — Waiting-for: tasks can be marked as waiting on someone or something, with an optional member and
   chase day, from a Waiting row in the task drawer. Cards show a "waiting on .., Nd" chip that turns amber once the
@@ -73,7 +78,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
-### [44] — 2026-10-12
+### [45] — 2026-10-12
 
 - `settings.min_kit` now prevents: `keeptrack.py` refuses to write a board whose `min_kit` is an integer above its
   `KIT_VERSION`, and says to run `kit-update`. Reads, `import`/`migrate`/`archive --dry-run` and plain `doctor` still
@@ -98,10 +103,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   write access. On the one-file save, a 422 that is not a sha mismatch is reported instead of retried.
 - Plugin `keeptrack` skill: the v43 waiting-for rules (`wait`; never `unwait` a wait you did not set or one on someone
   else), the 15-minute heartbeat with the 30-minute stale default, and `done --cancel`. The Codex and Cursor plugin
-  manifests carry the same version as the Claude plugin (0.44.0). The `AGENTS.md` template's rule 1 names every board
+  manifests carry the same version as the Claude plugin (0.45.0). The `AGENTS.md` template's rule 1 names every board
   JSON file, rule 3 gives the 15-minute heartbeat, and its `wait` line warns against `unwait`.
 - Tests: shared `merge3` cases (`tests/fixtures/merge3-cases.json`) run through both `keeptrack.py` and `board.js`; the
-  key rules are checked in both board skills; frozen board `v4_kit44`. No schema migration.
+  key rules are checked in both board skills; frozen board `v4_kit45`. No schema migration.
+
+### [44] — 2026-10-12
+
+- The Review Inbox is always on for split-storage boards; `settings.review_inbox` is no longer read. `settings` still
+  prints `review_inbox.enabled: true` (or `false (needs split storage …)`) for older skill copies, and
+  `settings-set review_inbox.enabled true` is a no-op (`false` is refused). New boards get no `review_inbox` setting.
+- Questions: `ask.choose`, `ask.approve` and `ask.question` items, with status `answered`. `proposal-answer` (a person
+  only, and only the item's `decider` when set), `proposal-result` (the asking agent reads its own answer),
+  `proposal-done` (once, just before acting; an approval needs the matching `--content-hash`), `proposals --mine`
+  and `--status answered`. `proposal-reopen` returns an answer not yet acted on to pending. Accept and merge refuse
+  questions. The first question raises `settings.min_kit` to 44, and `doctor` reports `MIN_KIT_LOWERED` below that.
 
 ### [43] — 2026-10-12
 

@@ -13,6 +13,7 @@
 - **Contact log:** each LinkedIn message, email, call or meeting. A **draft** does not count as contact until you mark it **sent**.
 - **Contact details and resources:** each person can have multiple labelled emails, phone numbers and profile/reference links. Each company can link to working folders in Google Drive, Dropbox, OneDrive, SharePoint or on a local computer. Large files stay there, not in GitHub.
 - **Tasks (optional):** the board, list, calendar, schedule and activity views, linked to people and companies.
+- **Per-board Today widgets:** a board can configure a thin task strip, weather or a work pulse in `board/widgets.json`. Each browser opts in separately, and boards cannot run custom scripts. See [board widgets](docs/help/widgets.md).
 - **Installable boards:** install each board on a phone or computer as its own app. Every board has a separate name, launch target, colour and initials icon.
 - **AI helpers:** for Claude (Code on your computer, on the web and in the phone app; Desktop and Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
 - **Scheduled routines:** contact email reconciliation, meeting notes and task-assignment workers can report their management location, last attempt and results in each board repo. See [schedules across boards and users](docs/help/schedules.md).

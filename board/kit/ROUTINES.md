@@ -72,10 +72,10 @@ That proposals-only binding may record suggestions in its approved private-repo 
 complete, assign or edit board tasks, contact details or follow-ups before owner approval. Match to explicitly approved
 project/repo/task scope, not merely an email address that also appears on a different board.
 
-On a board with the Review Inbox on (`settings.review_inbox.enabled`), the approved proposal path is
+On a board with the Review Inbox (every split-storage board from kit v44), the approved proposal path is
 `board/proposals/`, written only through `keeptrack.py proposal-add`. A routine adds and lists proposals; it never
-accepts, merges, ignores, reopens or undoes them. Enabling the Inbox is a board setting, not a routine: it never
-registers, provisions or activates a scheduler, and the register stays the record of what runs.
+accepts, merges, ignores, reopens or undoes them, and never answers a question. The Inbox is part of the board, not a
+routine: it never registers, provisions or activates a scheduler, and the register stays the record of what runs.
 
 The scheduler's configuration is authoritative for whether a job runs. Register status records the latest verified
 observation and browser preferences only control the browser. Store the actual runtime and management location:

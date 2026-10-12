@@ -1,5 +1,5 @@
 'use strict';
-// Web-page safety (kit v44 review fixes), with a faked GitHub that has real commit parents (a ref update that is not a fast-forward is refused):
+// Web-page safety (kit v45 review fixes), with a faked GitHub that has real commit parents (a ref update that is not a fast-forward is refused):
 //  1. two tabs on different boards share localStorage: each tab keeps saving into its own board (and the CSP lets the real api.github.com through)
 //  2. settings.min_kit above this page's kit makes the board read-only with a banner, also when it rises between load and save
 //  3. the agent-claim limit and clearing a wait are decided again on the board as saved, and the claim is one whole-board commit

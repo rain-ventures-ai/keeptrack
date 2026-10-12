@@ -9,8 +9,11 @@
       "Won",
       "Lost"
     ],
-    "min_kit": 43,
-    "waiting_days": 5
+    "min_kit": 44,
+    "waiting_days": 5,
+    "review_inbox": {
+      "enabled": false
+    }
   },
   "columns": [
     {

@@ -25,14 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v44 (schema 4)
-A safety release: no data migration, the board stays on schema 4, and v43 tools keep reading and writing a v44 board.
+### v45 (schema 4)
+A safety release: no data migration, the board stays on schema 4, and v44 tools keep reading and writing a v45 board.
 - **`settings.min_kit` now prevents, not only detects.** `keeptrack.py` and the web page refuse to write a board whose
   `settings.min_kit` is an integer above their own kit version (reads, dry runs and plain `doctor` still work;
-  `doctor --fix` writes nothing). A missing or non-integer value never blocks. v44 needs no `min_kit`, and the
-  upgrade writes none; leave it as it is (43 once anyone has used `wait`). Raise it (`settings-set --min-kit N`) only
-  for a later release whose notes ask for it, and only after every copy is upgraded: this repo, plugin copies, relay,
-  routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v43 ignore the
+  `doctor --fix` writes nothing). A missing or non-integer value never blocks. v45 needs no new `min_kit`, and the
+  upgrade writes none; leave it as it is (43 once anyone has used `wait`, 44 once an agent has asked a question).
+  Raise it (`settings-set --min-kit N`) only for a later release whose notes ask for it, and only after every copy is
+  upgraded: this repo, plugin copies, relay, routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v44 ignore the
   value, so it cannot shut them out.
 - **`kit-update`** takes every file from one commit of the kit, checks that the fetched `keeptrack.py` is the release
   `manifest.json` names, refuses a downgrade unless `--allow-downgrade` is given, and never writes or removes board
@@ -48,8 +48,24 @@ A safety release: no data migration, the board stays on schema 4, and v43 tools 
   minutes lag the template.
 - Web page: after the upgrade, hard-refresh every open tab once. Settings codes made by older pages still import; a
   code copied without "Include tokens and keys" removes this browser's tokens on import.
-- Check: `cat board/KIT_VERSION` says 44; `keeptrack.py doctor` shows no `KIT_OLD`; `keeptrack.py kit-check` shows no
+- Check: `cat board/KIT_VERSION` says 45; `keeptrack.py doctor` shows no `KIT_OLD`; `keeptrack.py kit-check` shows no
   template drift; the web board loads and saves.
+
+### v44 (schema 4)
+The Review Inbox is **always on** for split-storage boards, and it holds **questions** as well as proposals: an agent
+asks (`ask.choose`, `ask.approve`, `ask.question`), a person answers, and the agent acts on the answer once. No data
+migration: `settings.review_inbox` is left as it is and no longer read.
+- Run `kit-update` only.
+- **Behaviour change:** a split board that had the Inbox off now has it on. The notes and email skills then send
+  their suggestions to the Inbox instead of writing to the board. Tell the board's people, and check any routine whose
+  own prompt writes to the board directly.
+- A board that is not on split storage has no Inbox. To get it, migrate with `keeptrack.py migrate --to 4` (backup
+  first, see above).
+- **Upgrade every copy before an agent asks its first question:** the repo (`board-upgrade`), plugin copies,
+  routines' clones, and a hard refresh of the hosted page. An older page offers Accept on a question and would close
+  it with no answer. The first question raises `settings.min_kit` to 44 so `doctor` reports older copies (`KIT_OLD`).
+- Check: `keeptrack.py help review-inbox` lists `proposal-answer`, `proposal-result` and `proposal-done`;
+  `keeptrack.py settings` shows `review_inbox.enabled: true`; the web page has no Review Inbox switch in Settings.
 
 ### v43 (schema 4)
 Adds **waiting-for**: a card can be parked on a person or an event (`waiting`: on, who, since, nudge, note, by,

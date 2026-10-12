@@ -1,5 +1,5 @@
 {
-  "label": "v4 split with v43 waiting data and a rank with a random tail, as v44 appends write (kit v44)",
+  "label": "v4 split with Review Inbox questions (answered and acted on, pending approval), a proposal and an old review_inbox off setting (kit v44)",
   "schema": 4,
   "layout": "split",
   "kit_before_update": 43,

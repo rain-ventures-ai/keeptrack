@@ -199,7 +199,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 44  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 45  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2905,7 +2905,7 @@ def doctor_board(fix=False):
     if mac is not None and not claim_limit(data):
         problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
                 "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
-    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. From v44 an older kit will not write.
+    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. From v45 an older kit will not write.
     raw_min = (data.get("settings") or {}).get("min_kit")
     min_kit = raw_min if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 0
     if raw_min is not None and not min_kit:
@@ -2917,8 +2917,11 @@ def doctor_board(fix=False):
     if local_kit and min_kit > local_kit and local_kit != KIT_VERSION:
         problem("KIT_OLD", "board/KIT_VERSION", f"This repo's board kit is v{local_kit}, but the board needs kit v{min_kit} (settings.min_kit).")
     needed = WAITING_KIT if any(waiting_of(t) for t in tasks) else 0
+    what = "Cards carry `waiting`"
+    if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
+        needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
     if needed > min_kit:
-        problem("MIN_KIT_LOWERED", "tasks.json", f"Cards carry `waiting`, which needs kit v{needed}, but settings.min_kit is "
+        problem("MIN_KIT_LOWERED", "tasks.json", f"{what}, which needs kit v{needed}, but settings.min_kit is "
                 f"{raw_min if raw_min is not None else 'not set'}; set it back: keeptrack.py settings-set --min-kit {needed}.")
     for t in tasks:
         path = f"card {t.get('id', '?')}"
@@ -3333,8 +3336,7 @@ def cmd_init(a):
             print(f"note: --email/--timezone were not applied to the existing board; use keeptrack.py member-set {people[0]['github']} ...")
     else:
         # Existing v3 boards migrate explicitly with a backup; brand-new boards need no legacy layout.
-        data = {"version": 4, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"],
-                                                                    "review_inbox": {"enabled": False}},
+        data = {"version": 4, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
                 "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"},
                             {"id": "in-progress", "name": "In progress"}, {"id": "done", "name": "Done"}],
                 "people": people, "agents": ["claude", "codex"], "clients": a.client or ["General"],
@@ -3451,7 +3453,7 @@ HELP_TOPICS = {
                         "agents", "agent-add", "agent-rm", "settings", "settings-set"],
     "archive": ["archive", "archived", "archived-history", "unarchive"],
     "review-inbox": ["proposal-add", "proposals", "proposal-show", "proposal-accept", "proposal-merge",
-                     "proposal-ignore", "proposal-reopen", "proposal-undo"],
+                     "proposal-ignore", "proposal-reopen", "proposal-undo", "proposal-answer", "proposal-result", "proposal-done"],
     "setup": ["use", "where", "here", "help", "init", "import", "kit-check", "kit-update", "kit-owner",
               "migrate", "verify", "doctor"],
 }
@@ -4799,7 +4801,8 @@ def cmd_settings(a):
     print(f"max_agent_claims: {lim or 'no limit'}" + (f" (ignored: {raw!r} is not a whole number 1-100)" if raw is not None and not lim else ""))
     print(f"stages: {', '.join(stages(data))}")
     print(f"modes: {', '.join(st.get('modes', [])) or '-'}")
-    print(f"review_inbox.enabled: {str(bool((st.get('review_inbox') or {}).get('enabled', False))).lower()}")
+    # From kit v44 the Review Inbox is always on for split boards; the line keeps its v42 shape for older skill copies.
+    print("review_inbox.enabled: " + ("true" if review_storage_ok(data) else "false (needs split storage: keeptrack.py migrate --to 4)"))
     print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
     print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
@@ -4816,9 +4819,9 @@ def cmd_settings_set(a):
             require_review_storage(data)
             if a.setting != "review_inbox.enabled" or str(a.value).lower() not in ("true", "false"):
                 proposal_error("settings-set supports review_inbox.enabled true|false")
-            st.setdefault("review_inbox", {})["enabled"] = str(a.value).lower() == "true"
-            print(f"review_inbox.enabled: {str(st['review_inbox']['enabled']).lower()}")
-            print("This changes only the Review Inbox setting. It does not create, edit or activate a routine, schedule or external scheduler.")
+            if str(a.value).lower() == "false":
+                proposal_error("The Review Inbox is always on from kit v44; it cannot be turned off.")
+            print("review_inbox.enabled: true (always on from kit v44; nothing to change)")
         if a.title is not None:
             if not a.title.strip():
                 sys.exit("the title is empty")
@@ -5231,13 +5234,18 @@ def cmd_import(a):
 
 
 # ---- Review Inbox: proposals are split files, never live tasks or CRM people -------------------------------
-PROPOSAL_KINDS = {"task.create", "task.update", "person.upsert", "contact.touch"}
-PROPOSAL_STATUSES = {"pending", "accepted", "ignored"}
+APPLY_KINDS = {"task.create", "task.update", "person.upsert", "contact.touch"}   # Accept changes the board
+ASK_KINDS = {"ask.choose", "ask.approve", "ask.question"}   # kit v44: a person answers; the agent that asked does the work
+PROPOSAL_KINDS = APPLY_KINDS | ASK_KINDS
+PROPOSAL_STATUSES = {"pending", "accepted", "answered", "ignored"}
+DECIDED_STATUSES = ("accepted", "answered", "ignored")
+ASK_KIT = 44               # the kit that understands ask.* items: the first one raises settings.min_kit to at least this
+ASK_ANSWER_LIMIT = 2000
 PROPOSAL_SOURCE_KINDS = {"meeting", "email", "other"}
 PROPOSAL_DETAIL_LIMIT = 300
 PROPOSAL_ROOT_FIELDS = {"id", "version", "kind", "status", "title", "source", "run", "action_key", "work_key",
                         "reason", "evidence", "target", "change", "likely_duplicates", "previously_ignored",
-                        "reviewer", "decision", "history", "created", "createdBy"}
+                        "reviewer", "decider", "decision", "history", "created", "createdBy"}
 PROPOSAL_SOURCE_FIELDS = {"kind", "id", "revision", "title", "date", "url", "recipients_confirmed"}
 PROPOSAL_RUN_FIELDS = {"routine", "run_id", "at"}
 TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priority", "due", "labels", "owner", "assignees",
@@ -5245,6 +5253,10 @@ TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priori
 PERSON_CHANGE_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "github", "emails", "phones",
                         "stage", "value", "source", "notes", "next", "due", "next_due", "links", "comments"}
 TOUCH_CHANGE_FIELDS = {"text", "channel", "at", "source_id", "source_message_ids", "next", "due", "next_due"}
+ASK_CHANGE_FIELDS = {"ask.choose": {"question", "options", "allow_other", "task", "links"},
+                     "ask.approve": {"question", "subject", "content_hash", "task", "links"},
+                     "ask.question": {"question", "task", "links"}}
+ASK_SUBJECT_TYPES = {"email", "message", "pr", "document", "other"}
 
 
 def proposal_error(message):
@@ -5257,9 +5269,13 @@ def proposal_conflict(message):
     raise SystemExit(3)
 
 
+def review_storage_ok(data):
+    return data.get("version") == 4 and data.get("layout") == "split"
+
+
 def require_review_storage(data):
-    if data.get("version") != 4 or data.get("layout") != "split":
-        proposal_error("The Review Inbox needs split storage (schema 4). See UPGRADING.md.")
+    if not review_storage_ok(data):
+        proposal_error("The Review Inbox needs split storage (schema 4): keeptrack.py migrate --to 4. See UPGRADING.md.")
 
 
 def find_proposal(data, ref):
@@ -5280,6 +5296,8 @@ def _one_line(value, label, limit=None):
 
 
 def _proposal_change_fields(kind):
+    if kind in ASK_KINDS:
+        return ASK_CHANGE_FIELDS[kind]
     if kind.startswith("task."):
         return TASK_CHANGE_FIELDS
     if kind == "person.upsert":
@@ -5333,6 +5351,10 @@ def proposal_base_fields(kind, target_type, change):
 
 
 def check_email_privacy(proposal, confirmed):
+    subject = (proposal.get("change") or {}).get("subject") if proposal.get("kind") == "ask.approve" else None
+    if isinstance(subject, dict) and subject.get("type") == "email" and subject.get("summary") and not confirmed:
+        proposal_error("an email summary in change.subject needs --recipients-confirmed (every intended board reader received it); "
+                       "without it, link the draft and leave the summary out")
     if (proposal.get("source") or {}).get("kind") != "email" or confirmed:
         return
     if proposal["kind"] != "contact.touch":
@@ -5345,6 +5367,48 @@ def check_email_privacy(proposal, confirmed):
         value = (proposal.get("change") or {}).get(key)
         if key != "title" and value not in (None, "", []):
             proposal_error(f"email change.{key} requires --recipients-confirmed; store metadata only without it")
+
+
+def _https(value, label):
+    if not isinstance(value, str) or not re.fullmatch(r"https://\S{1,2000}", value):
+        proposal_error(f"{label} must be one https:// link")
+
+
+def check_ask_change(kind, change):
+    """ask.* items carry a question and links, never the content itself: drafts, designs and PRs stay where they live."""
+    _one_line(change.get("question"), "change.question", PROPOSAL_DETAIL_LIMIT)
+    if "task" in change and (not isinstance(change["task"], str) or not re.fullmatch(r"t_[0-9a-z]{4,20}", change["task"])):
+        proposal_error("change.task must be a card id (t_...)")
+    links = change.get("links", [])
+    if not isinstance(links, list) or len(links) > 10 or not all(isinstance(x, dict) and set(x) <= {"url", "title"} for x in links):
+        proposal_error("change.links must be a list of at most 10 {url, title} objects")
+    for x in links:
+        _https(x.get("url"), "each change.links url")
+        if "title" in x: _one_line(x["title"], "change.links title", 120)
+    if kind == "ask.choose":
+        options = change.get("options")
+        if not isinstance(options, list) or not 2 <= len(options) <= 10:
+            proposal_error("ask.choose needs 2 to 10 options")
+        keys = set()
+        for o in options:
+            if not isinstance(o, dict) or set(o) - {"key", "label", "url", "note"}:
+                proposal_error("each option holds only key, label, url and note")
+            if not isinstance(o.get("key"), str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,19}", o["key"]) or o["key"] in keys:
+                proposal_error("each option needs a unique key: lower-case letters, digits, - or _ (at most 20)")
+            keys.add(o["key"])
+            _one_line(o.get("label"), "option label", 120)
+            if "url" in o: _https(o["url"], "option url")
+            if "note" in o: _one_line(o["note"], "option note", PROPOSAL_DETAIL_LIMIT)
+        if "allow_other" in change and not isinstance(change["allow_other"], bool):
+            proposal_error("change.allow_other must be true or false")
+    if kind == "ask.approve":
+        subject = change.get("subject")
+        if not isinstance(subject, dict) or set(subject) - {"type", "url", "summary"} or subject.get("type") not in ASK_SUBJECT_TYPES:
+            proposal_error("change.subject needs a type (" + ", ".join(sorted(ASK_SUBJECT_TYPES)) + "), and may hold url and summary")
+        if "url" in subject: _https(subject["url"], "change.subject.url")
+        if "summary" in subject: _one_line(subject["summary"], "change.subject.summary", PROPOSAL_DETAIL_LIMIT)
+        if not isinstance(change.get("content_hash"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", change["content_hash"]):
+            proposal_error("ask.approve needs change.content_hash: sha256: and 64 lower-case hex digits of the exact content approved")
 
 
 def validate_proposal_input(raw, recipients_confirmed=False):
@@ -5385,8 +5449,16 @@ def validate_proposal_input(raw, recipients_confirmed=False):
     bad_change = sorted(set(change) - _proposal_change_fields(kind))
     if bad_change:
         proposal_error("unknown change field(s) for " + kind + ": " + ", ".join(bad_change))
-    check_change_values(kind, change)
+    if kind in ASK_KINDS:
+        check_ask_change(kind, change)
+    else:
+        check_change_values(kind, change)
+    decider = raw.get("decider")
+    if decider is not None and (not isinstance(decider, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", decider)):
+        proposal_error("decider must be one GitHub login")
     target = raw.get("target")
+    if kind in ASK_KINDS and target is not None:
+        proposal_error(f"{kind} has no target; link a card with change.task")
     if kind in ("task.update", "contact.touch") and not isinstance(target, dict):
         proposal_error(f"{kind} needs a target")
     if target is not None:
@@ -5434,8 +5506,9 @@ def validate_proposal_input(raw, recipients_confirmed=False):
            "source": clean_source, "action_key": action_key, "work_key": work_key,
            "reason": reason.strip(), "target": copy.deepcopy(target), "change": copy.deepcopy(change),
            "likely_duplicates": [], "decision": None, "history": [],
-           "created": raw.get("created") or now(), "createdBy": raw.get("createdBy") or who_am_i()}
-    for key in ("run", "evidence", "reviewer"):
+           "created": raw.get("created") or now(),
+           "createdBy": who_am_i() if kind in ASK_KINDS else (raw.get("createdBy") or who_am_i())}   # an answer goes back to the asker only
+    for key in ("run", "evidence", "reviewer", "decider"):
         if raw.get(key) not in (None, ""):
             out[key] = copy.deepcopy(raw[key])
     check_email_privacy(out, recipients_confirmed)
@@ -5495,9 +5568,7 @@ def _all_proposals(data):
 
 
 def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
-    require_review_storage(data)
-    if not ((data.get("settings") or {}).get("review_inbox") or {}).get("enabled"):
-        proposal_error("The Review Inbox is off for this board. A person can turn it on with: keeptrack.py settings-set review_inbox.enabled true")
+    require_review_storage(data)   # from kit v44 the Inbox is always on: settings.review_inbox is no longer read
     every = _all_proposals(data)
     existing_ids = {p.get("id") for p in every}
     action = {p.get("action_key"): p for p in every}
@@ -5516,6 +5587,12 @@ def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
         if ignored:
             old = sorted(ignored, key=lambda p: ((p.get("decision") or {}).get("at") or p.get("created") or ""))[-1]
             proposal["previously_ignored"] = {"proposal": old["id"], "at": (old.get("decision") or {}).get("at") or old.get("created")}
+        if proposal["kind"] in ASK_KINDS:
+            if proposal["change"].get("task"):
+                find(data, proposal["change"]["task"])   # the linked card must exist
+            st = data.setdefault("settings", {})
+            if not (isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) and st["min_kit"] >= ASK_KIT):
+                st["min_kit"] = ASK_KIT   # an older page would "accept" a question without an answer: doctor flags older kits
         proposal["likely_duplicates"] = proposal_duplicates(data, proposal)
         proposal["history"].append({"at": proposal["created"], "by": proposal["createdBy"], "text": "proposed"})
         data.setdefault("proposals", []).append(proposal)
@@ -5549,6 +5626,7 @@ def cmd_proposals(a):
     if a.source: rows = [p for p in rows if (p.get("source") or {}).get("kind") == a.source]
     if a.run: rows = [p for p in rows if (p.get("run") or {}).get("run_id") == a.run or (p.get("run") or {}).get("routine") == a.run]
     if a.reviewer: rows = [p for p in rows if p.get("reviewer") == a.reviewer]
+    if a.mine: rows = [p for p in rows if p.get("createdBy") == who_am_i()]
     rows = sorted(rows, key=lambda p: (p.get("created", ""), p.get("id", "")))
     if a.json:
         print(json.dumps(rows, indent=2, ensure_ascii=False)); return
@@ -5689,6 +5767,25 @@ def _apply_update(data, record, proposal, change):
     hist(record, f"accepted proposal {proposal['id']}")
 
 
+def _ask_person(proposal, verb, own_ok=False):
+    """Questions are a person's: agents never dismiss, reopen or answer one, and a named decider is the only one who does.
+    own_ok: the agent that asked may withdraw (dismiss) its own pending question, e.g. after asking again."""
+    if proposal.get("kind") not in ASK_KINDS:
+        return
+    if own_ok and agent_run() and proposal.get("status") == "pending" and proposal.get("createdBy") == who_am_i():
+        return
+    if agent_run():
+        proposal_error(f"agents never {verb} Inbox questions; a person does, on the board or with no BOARD_AGENT set")
+    me = os.environ.get("BOARD_USER", "")
+    if proposal.get("decider") and proposal["decider"].casefold() != me.casefold():
+        proposal_error(f"only @{proposal['decider']} can {verb} this question (BOARD_USER is {me or 'not set'})")
+
+
+def _not_ask(proposal, verb):
+    if proposal.get("kind") in ASK_KINDS:
+        proposal_error(f"{proposal['id']} is a question ({proposal['kind']}); it is answered, not {verb}: keeptrack.py proposal-answer")
+
+
 def _already_decided(proposal):
     if proposal.get("status") == "pending": return
     d = proposal.get("decision") or {}
@@ -5748,7 +5845,7 @@ def _edit_change(proposal, path):
 def cmd_proposal_accept(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal)
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "accepted")
         change, edited = _edit_change(proposal, a.edit)
         kind = proposal["kind"]
         target = _check_proposal_base(data, proposal)
@@ -5781,7 +5878,7 @@ def _append_unique(record, field, values):
 def cmd_proposal_merge(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal); check_stored_change(proposal)
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "merged"); check_stored_change(proposal)
         _check_proposal_base(data, proposal)
         target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
         record = _target_record(data, target); before = copy.deepcopy(record)
@@ -5807,7 +5904,7 @@ def cmd_proposal_merge(a):
 def cmd_proposal_ignore(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal)
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _ask_person(proposal, "dismiss", own_ok=True)
         _decide(proposal, "ignore")
         if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": _one_line(a.reason, "ignore reason", 300)})
         print(f"ignored {proposal['id']}")
@@ -5818,11 +5915,15 @@ def cmd_proposal_reopen(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id)
-        if proposal.get("status") != "ignored": proposal_error("only an ignored proposal can be reopened")
+        if proposal.get("status") not in ("ignored", "answered"): proposal_error("only an ignored proposal or an answered question can be reopened")
         if not proposal.get("change"):
             proposal_error("this decided proposal was slimmed after 30 days and no longer has change detail to reopen")
-        old = proposal.get("decision") or {}; proposal["status"] = "pending"; proposal["decision"] = None
-        proposal.setdefault("history", []).append({"at": now(), "by": who_am_i(), "text": f"reopened (was ignored by {old.get('by', 'someone')})"})
+        old = proposal.get("decision") or {}
+        _ask_person(proposal, "reopen")
+        if proposal["status"] == "answered":
+            if old.get("done"): proposal_conflict(f"not reopened: the answer was already acted on by {old['done'].get('by', 'someone')}")
+        was = proposal["status"]; proposal["status"] = "pending"; proposal["decision"] = None
+        proposal.setdefault("history", []).append({"at": now(), "by": who_am_i(), "text": f"reopened (was {was} by {old.get('by', 'someone')})"})
         print(f"reopened {proposal['id']}")
     mutate(fn, f"Reopen proposal: {a.id}")
 
@@ -5855,6 +5956,104 @@ def cmd_proposal_show(a):
         try: proposal["current"] = copy.deepcopy(_target_record(data, proposal["target"]))
         except SystemExit: proposal["current"] = None
     print(json.dumps(proposal, indent=2, ensure_ascii=False))
+
+
+def _answer_text(value, label):
+    if not isinstance(value, str) or not value.strip() or len(value) > ASK_ANSWER_LIMIT:
+        proposal_error(f"{label} must be text of at most {ASK_ANSWER_LIMIT} characters")
+    return value.strip()
+
+
+def ask_answer(proposal, choose=None, other=None, approve=None, text=None, note=None):
+    """The answer object for an ask.* item; the same rules as the web page."""
+    kind, change = proposal["kind"], proposal.get("change") or {}
+    answer = {}
+    if kind == "ask.choose":
+        if (choose is None) == (other is None):
+            proposal_error("answer an ask.choose with --choose KEY or --other TEXT")
+        if choose is not None:
+            if choose not in {o.get("key") for o in change.get("options", [])}:
+                proposal_error("--choose must be one of: " + ", ".join(o.get("key") for o in change.get("options", [])))
+            answer["choice"] = choose
+        else:
+            if not change.get("allow_other"): proposal_error("this question takes one of its options only")
+            answer["other"] = _answer_text(other, "--other")
+    elif kind == "ask.approve":
+        if approve is None: proposal_error("answer an ask.approve with --approve or --reject")
+        answer["approved"] = bool(approve)
+    else:
+        answer["text"] = _answer_text(text, "--text")
+    if note is not None and str(note).strip():
+        answer["note"] = _answer_text(note, "--note")
+    return answer
+
+
+def cmd_proposal_answer(a):
+    """A person answers a question. Agents never answer, and only the named decider may answer an item that has one."""
+    if agent_run():
+        proposal_error("agents never answer Inbox questions; a person answers on the board or with no BOARD_AGENT set")
+    def fn(data):
+        require_review_storage(data); _MUT["recheck"] = True
+        proposal = find_proposal(data, a.id); _already_decided(proposal)
+        if proposal.get("kind") not in ASK_KINDS:
+            proposal_error(f"{proposal['id']} is a {proposal.get('kind')} proposal: use proposal-accept, -merge or -ignore")
+        _ask_person(proposal, "answer")
+        approve = True if a.approve else False if a.reject else None
+        answer = ask_answer(proposal, a.choose, a.other, approve, a.text, a.note)
+        ts, by = now(), who_am_i()
+        proposal["status"] = "answered"
+        proposal["decision"] = {"action": "answer", "id": "a_" + uuid.uuid4().hex[:10], "by": by, "at": ts, "answer": answer,
+                                "result": None, "commit": None}   # id: each answer is unique, even two in the same second
+        proposal.setdefault("history", []).append({"at": ts, "by": by, "text": "answered"})
+        print(f"answered {proposal['id']}: " + json.dumps(answer, ensure_ascii=False))
+    mutate(fn, f"Answer question: {a.id}")
+
+
+def cmd_proposal_result(a):
+    """For the agent that asked: the answer, and whether someone already acted on it."""
+    data, _ = load(); require_review_storage(data); proposal = find_proposal(data, a.id)
+    if agent_run() and proposal.get("createdBy") != who_am_i():
+        proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy')}; an agent reads only the answers to its own questions")
+    d = proposal.get("decision") or {}
+    out = {"id": proposal["id"], "kind": proposal.get("kind"), "status": proposal.get("status"), "decider": proposal.get("decider"),
+           "answer": d.get("answer"), "answer_id": d.get("id"), "by": d.get("by"), "at": d.get("at"), "done": d.get("done"),
+           "content_hash": (proposal.get("change") or {}).get("content_hash")}
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+
+
+def cmd_proposal_done(a):
+    """The asking agent marks an answer as acted on, once. Run it just before acting: exit 3 means someone already did."""
+    def fn(data):
+        require_review_storage(data); _MUT["recheck"] = True
+        proposal = find_proposal(data, a.id)
+        if proposal.get("kind") not in ASK_KINDS or proposal.get("status") != "answered":
+            proposal_error(f"{proposal['id']} is not an answered question (status {proposal.get('status')})")
+        if agent_run() and proposal.get("createdBy") != who_am_i():
+            proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy')}; only that agent acts on its answer")
+        d = proposal["decision"]
+        if a.answer_id and a.answer_id != d.get("id"):
+            proposal_conflict("not done: the answer changed after you read it (answer_id differs). Read proposal-result again")
+        if d.get("done"):
+            proposal_conflict(f"already acted on by {d['done'].get('by', 'someone')} at {d['done'].get('at', 'an unknown time')}; do not act again")
+        if not d.get("answer"):
+            proposal_error("this answer is empty (slimmed or damaged): do not act on it; ask again")
+        if proposal["kind"] == "ask.approve":
+            if not proposal.get("change"):
+                proposal_error("this approval was slimmed after 30 days and can no longer be checked: ask again")
+            if not (d.get("answer") or {}).get("approved"):
+                proposal_error("this was not approved: do not act on it")
+            want = (proposal.get("change") or {}).get("content_hash")
+            if want and a.content_hash != want:
+                proposal_conflict("not done: the content changed since it was approved (content hash differs). Ask again with a new item")
+        ts, by = now(), who_am_i()
+        d["done"] = {"at": ts, "by": by}
+        if a.note: d["done"]["note"] = _one_line(a.note, "--note", PROPOSAL_DETAIL_LIMIT)
+        proposal.setdefault("history", []).append({"at": ts, "by": by, "text": "acted on" + (f": {d['done']['note']}" if a.note else "")})
+        # Act on this answer, the one now locked, never on an earlier read: a person may have changed it in between.
+        print(json.dumps({"done": proposal["id"], "answer": d.get("answer"), "answer_id": d.get("id"), "answered_by": d.get("by"),
+                          "answered_at": d.get("at")},
+                         ensure_ascii=False))
+    mutate(fn, f"Acted on answer: {a.id}")
 
 
 # ---- archive: old done tasks, old Lost people and long histories move to <board dir>/archive/<year>.json ----------
@@ -5938,13 +6137,18 @@ def archive_plan(data, rules, today=None):
                 decision_day = parse(decision_at).date() if decision_at else None
             except (ValueError, TypeError):
                 decision_day = None
-            if proposal.get("status") in ("accepted", "ignored") and decision_day and decision_day < slim_cut:
+            if proposal.get("status") == "answered" and not (proposal.get("decision") or {}).get("done"):
+                keep_r.append(proposal); continue   # the asking agent has not acted yet: keep the whole answer
+            if proposal.get("status") in DECIDED_STATUSES and decision_day and decision_day < slim_cut:
                 for field in ("reason", "evidence", "change"):
                     proposal.pop(field, None)
                 if isinstance(proposal.get("decision"), dict):
                     proposal["decision"].pop("undo", None); proposal["decision"].pop("edited", None)
+                    if isinstance(proposal["decision"].get("answer"), dict):   # free text goes too; choice / approved stay
+                        for field in ("text", "other", "note"):
+                            proposal["decision"]["answer"].pop(field, None)
             # Archive only what is already slimmed: an archive file must never keep the detail the 30-day rule removes.
-            if proposal.get("status") in ("accepted", "ignored") and decision_day and decision_day < min(archive_cut, slim_cut):
+            if proposal.get("status") in DECIDED_STATUSES and decision_day and decision_day < min(archive_cut, slim_cut):
                 part(str(decision_day.year))["proposals"].append(proposal)
             else:
                 keep_r.append(proposal)
@@ -6441,7 +6645,8 @@ def main():
     s.add_argument("--recipients-confirmed", action="store_true", help="every intended board reader received this specific email")
     s.set_defaults(f=cmd_proposal_add)
     s = sub.add_parser("proposals", help="list Review Inbox proposals")
-    s.add_argument("--status", choices=["pending", "accepted", "ignored", "all"], default="pending")
+    s.add_argument("--status", choices=["pending", "accepted", "answered", "ignored", "all"], default="pending")
+    s.add_argument("--mine", action="store_true", help="only items this BOARD_AGENT@BOARD_USER added")
     s.add_argument("--kind", choices=sorted(PROPOSAL_KINDS)); s.add_argument("--source", choices=sorted(PROPOSAL_SOURCE_KINDS))
     s.add_argument("--run"); s.add_argument("--reviewer"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposals)
     s = sub.add_parser("proposal-show", help="show one proposal and its current target")
@@ -6454,10 +6659,20 @@ def main():
     s.set_defaults(f=cmd_proposal_merge)
     s = sub.add_parser("proposal-ignore", help="ignore one pending proposal")
     s.add_argument("id"); s.add_argument("--reason"); s.set_defaults(f=cmd_proposal_ignore)
-    s = sub.add_parser("proposal-reopen", help="return an ignored proposal to pending")
+    s = sub.add_parser("proposal-reopen", help="return an ignored proposal, or an answered question not yet acted on, to pending")
     s.add_argument("id"); s.set_defaults(f=cmd_proposal_reopen)
     s = sub.add_parser("proposal-undo", help="undo an unchanged accepted proposal result")
     s.add_argument("id"); s.set_defaults(f=cmd_proposal_undo)
+    s = sub.add_parser("proposal-answer", help="a person answers a question (ask.choose, ask.approve, ask.question)")
+    s.add_argument("id"); g = s.add_mutually_exclusive_group()
+    g.add_argument("--choose", metavar="KEY"); g.add_argument("--other", metavar="TEXT"); g.add_argument("--approve", action="store_true")
+    g.add_argument("--reject", action="store_true"); g.add_argument("--text"); s.add_argument("--note"); s.set_defaults(f=cmd_proposal_answer)
+    s = sub.add_parser("proposal-result", help="the answer to a question, for the agent that asked")
+    s.add_argument("id"); s.set_defaults(f=cmd_proposal_result)
+    s = sub.add_parser("proposal-done", help="the asking agent marks an answer as acted on (once; run it just before acting)")
+    s.add_argument("id"); s.add_argument("--content-hash", dest="content_hash")
+    s.add_argument("--answer-id", dest="answer_id", help="answer_id from proposal-result: refuse if the answer changed since")
+    s.add_argument("--note"); s.set_defaults(f=cmd_proposal_done)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     have = {act.dest for act in sub._choices_actions}   # argparse lists only commands created with a help line
     for name in sub.choices:
