@@ -850,8 +850,8 @@ if (typeof window !== 'undefined') (() => {
       if (p.claim && !t.claim) add('claim released'); else if (p.claim && t.claim && p.claim.status !== t.claim.status) add('claim ' + t.claim.status);
       const isW = w => w && typeof w === 'object' && !Array.isArray(w), pw = isW(p.waiting) ? p.waiting : null, tw = isW(t.waiting) ? t.waiting : null;
       if (tw && t.column === doneColId() && p.column !== t.column) { add(`wait ended by done (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // as keeptrack.py done / move ID done
-      else if (tw && pw && JSON.stringify(pw) === JSON.stringify(tw) && p.column === doneColId() && t.column !== doneColId()) { add(`wait ended by reopening (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // a leftover wait never comes back live; a wait this save writes (Undo) stays
-      else if (tw && JSON.stringify(pw) !== JSON.stringify(tw)) add('waiting on ' + (tw.on || '?') + (tw.nudge ? ', chase ' + tw.nudge : ''));
+      else if (tw && pw && jcanon(pw) === jcanon(tw) && p.column === doneColId() && t.column !== doneColId()) { add(`wait ended by reopening (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // a leftover wait never comes back live; a wait this save writes (Undo) stays
+      else if (tw && jcanon(pw) !== jcanon(tw)) add('waiting on ' + (tw.on || '?') + (tw.nudge ? ', chase ' + tw.nudge : ''));
       else if (pw && !tw) add(`wait cleared (was waiting on ${pw.on || '?'}, since ${pw.since || '?'})`);
     });
   }
@@ -1622,7 +1622,7 @@ if (typeof window !== 'undefined') (() => {
   async function waitArrived(id, ph) {
     const t = state.tasks.find(x => x.id === id); if (!t || !waitingOf(t)) return false;
     toast(waitingBlock(t) + ' Claude was not started.', true);
-    await mutate(n => { const c = n.tasks.find(x => x.id === id); if (c && c.claim && c.claim.session_id === ph) { c.claim = null; stamp(c); } }, `Withdraw Claude: ${titleOf(id)}`, [id]);
+    await mutate(n => { const c = n.tasks.find(x => x.id === id); if (c && c.claim && c.claim.session_id === ph) { c.claim = null; stamp(c); } }, `Withdraw Claude: ${titleOf(id)}`, [id], null, { remember: false });   // not undoable: Undo would put the placeholder back on a waiting card
     return true;
   }
   async function assignMyClaude(id) {

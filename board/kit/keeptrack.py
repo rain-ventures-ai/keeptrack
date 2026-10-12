@@ -1649,14 +1649,14 @@ def close_waiting(t, a, how, data=None):
          + f", since {clean(w.get('since') or '?', 20)})")
 
 
-def drop_leftover_wait(t, how, data=None):
+def drop_leftover_wait(t, how, data=None, a=None):
     """A route to done that did not call close_waiting (a proposal, column-rm --move-to done, an older tool), or a card
     reopened from done with such a wait: end the wait, with a history line, so it never comes back as a live one. A
     blocked_by_wait claim stops being one (the card waits on nothing now)."""
     w = waiting_of(t)
-    if w and (agent_run() or holds_claim(t, None)) and other_party(w, claim_agent(t), data):
+    if w and (agent_run() or holds_claim(t, a)) and other_party(w, claim_agent(t), data):
         # column-rm, a proposal, or a reopen of a dormant wait put there by any route: recorded as close_waiting records
-        note_agent_cleared(t, f"{how} while waiting" if how != "reopening" else "reopened a card that was waiting", session_for(None))
+        note_agent_cleared(t, f"{how} while waiting" if how != "reopening" else "reopened a card that was waiting", session_for(a))
     if w:
         t["waiting"] = None
         hist(t, f"wait ended by {how} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)})")
@@ -1906,7 +1906,7 @@ def do_claim(a, tid, data):
     if attended(a):
         t["claim"]["attended"] = True
     if t["column"] != "in-progress":
-        move_task_to_column(data, t, "in-progress")
+        move_task_to_column(data, t, "in-progress", a)
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
     uw = _unwait_before_claim(t)   # the session that cleared a wait on someone else now claims the card: flag it, whatever BOARD_AGENT said
     if uw and uw.get("other") and uw.get("session") == session_hash(sid):
@@ -1994,7 +1994,7 @@ def drop_claim_file(task_id=None):
         pass
 
 
-def move_task_to_column(data, task, column):
+def move_task_to_column(data, task, column, a=None):
     """Move a task and, on split boards, put it at the end without reusing a rank."""
     old = task.get("column")
     if old == column:
@@ -2002,7 +2002,7 @@ def move_task_to_column(data, task, column):
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
     if "done" in (old, column):
-        drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data)
+        drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data, a)
     if data.get("layout") == "split":
         ranks = [x.get("rank") for x in data.get("tasks", [])
                  if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
@@ -2017,8 +2017,11 @@ def cmd_release(a):
         if a.column == "done" and open_waiting(t):
             sys.exit(f"refused: {t['id']} is waiting on {waiting_text(open_waiting(t))}; release --column done does not end a wait. "
                      "Use done or move ID done (a person, or the session that set a wait on nobody else), or unwait first")
-        claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file(t["id"])
-        if a.column: move_task_to_column(data, t, a.column)
+        claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else ""))
+        if a.column and t.get("column") == "done" and waiting_of(t):
+            drop_leftover_wait(t, "reopening", data, a)   # while the claim is still there: its session is recorded too
+        t["claim"] = None; drop_claim_file(t["id"])
+        if a.column: move_task_to_column(data, t, a.column, a)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
 
@@ -2195,7 +2198,7 @@ def cmd_move(a):
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
-            drop_leftover_wait(t, "reopening", data)
+            drop_leftover_wait(t, "reopening", data, a)
         n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
         if column == "done" and old != "done" and n_open:
             print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)

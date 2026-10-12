@@ -101,6 +101,22 @@ class ReviewInbox(unittest.TestCase):
         self.assertEqual(("Send the final plan", "2026-10-20"), (card["title"], card["due"]))
         self.assertEqual("Send the final plan", p["decision"]["edited"]["title"])
 
+    def test_04b_agent_merge_to_done_of_a_waiting_card_is_recorded(self):
+        path = os.path.join(self.board, "cards", "t_first.json")
+        with open(path) as src: card = json.load(src)
+        card["waiting"] = {"on": "Alex: approve", "who": "alex", "since": "2026-10-01"}
+        with open(path, "w") as dst: json.dump(card, dst)
+        ident = self.add(proposal(kind="task.update", change={"column": "done"},
+                                  target={"type": "task", "id": "t_first", "base": {"column": card["column"]}}))
+        os.environ["BOARD_AGENT"] = "claude"
+        try:
+            self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column"))
+        finally:
+            os.environ.pop("BOARD_AGENT", None)
+        with open(path) as src: card = json.load(src)
+        self.assertEqual("done", card["column"]); self.assertIsNone(card["waiting"])
+        self.assertEqual(["proposal to done while waiting"], [x["what"] for x in card["agent_cleared"]])
+
     def test_04_merge_appends_without_removing_existing_lists(self):
         change = {"title": "Replacement title", "comments": [{"text": "New evidence"}],
                   "todos": [{"text": "Check figures"}], "links": [{"title": "Notes", "url": "https://example.invalid/notes"}]}
