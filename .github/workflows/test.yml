@@ -57,6 +57,9 @@ jobs:
       - name: Main views on the shared components (tabs, priority/due pills, avatars, popovers)
         working-directory: tests/browser
         run: node views.test.js
+      - name: Board-owned Today widgets
+        working-directory: tests/browser
+        run: node widgets.test.js
       - name: Settings dialog (tabs, section template, deep links, saves, Health, confirms, phone layout)
         working-directory: tests/browser
         run: node settings.test.js

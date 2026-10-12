@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — A board can define read-only Today widgets in `board/widgets.json`. The first renderers are a one-line task strip, an Open-Meteo weather card and a board/agent pulse. Widget configuration is read only from the active board repo, branch and folder; it cannot execute code or access GitHub tokens and saved boards.
 - **2026-10-12** — The hosted board is an installable PWA. Each repo/branch/path combination has a separate app identity, launch URL, name, colour and generated initials icon, so several boards can be installed together. The service worker caches the app shell for offline startup and keeps phone notification taps tied to the originating board.
 
 ## Schema versions

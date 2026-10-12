@@ -11,6 +11,7 @@ Keeptrack keeps your people, follow-ups, pipeline and tasks in a private GitHub 
 | Link a client's folders in Google Drive, Dropbox or OneDrive | [Client files](client-files.md) |
 | Set a client north star, projects, and link tasks to a project | [Projects and north star](projects-and-north-star.md) |
 | Use the task board | [Tasks](tasks.md) |
+| Add board-specific cards to the Today page | [Board widgets](widgets.md) |
 | Find anything, and move old items out of the way | [Search and archive](search-and-archive.md) |
 | Ask Claude, Codex, Cursor or ChatGPT to help you | [AI assistants](ai-assistants.md) |
 | Choose where your assistant runs (Cowork, your computer, the cloud, your phone) and set it up | [Where your assistant runs](where-agents-run.md) |
