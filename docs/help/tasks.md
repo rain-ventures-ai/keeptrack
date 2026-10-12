@@ -5,6 +5,10 @@ If you selected **Tasks** when you made your board, you also have these views. T
 - **List**, **Calendar** and **Schedule:** the same tasks by group, by due date and by week.
 - **Activity:** what was done today, yesterday or on a day that you select, by you and your agents. **📋 Copy** gives it as Markdown.
 
+Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
+People, labels and the combined **Client & project** control use the full width. The client/project picker filters projects
+after you choose a client and keeps long names readable on a phone.
+
 Views and utility screens can be bookmarked: the address keeps the selected view or settings section. Help, Settings,
 Search and Copy offer **Copy link to this screen**; settings sections also offer their own links. Shared screen links
 include the board, branch and file path, never your GitHub token. They do not grant repository access.
@@ -15,9 +19,9 @@ Open a person and type in **☑ Tasks**. The task is linked to that person and t
 ## Agents and tasks
 AI agents can claim a task, report progress and finish it. While an agent works on a task, the card shows its status. See [AI assistants](ai-assistants.md).
 
-## Waiting on someone
-When a task is parked on a person or an event (a client's approval, a colleague's pricing, DNS), mark it as waiting
-instead of using a label or a due date. Open the task and use **Waiting** in its details: say what or whom it waits on
+## Waiting for someone
+When a task is parked on a person or an event (a client's approval, a colleague's pricing, DNS), use **Waiting for**
+instead of using a label or a due date. Open the task and use **Waiting for** in its details: say what or whom it waits on
 and, if you like, the day to chase. The card stays in its column and keeps its due date. It shows a
 **waiting on …, Nd** chip, which turns amber once the chase day has passed. With no chase day, the task is due for a
 chase after 7 days (a board can change this with `settings-set --waiting-days N`; 0 turns it off). The **Waiting**

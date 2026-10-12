@@ -96,7 +96,11 @@ async function assertFits(page, where) {
     await page.evaluate(() => { window.__copied = ''; }); await page.locator('#dNum').click(); await page.waitForFunction(() => window.__copied);
     assert.match(await page.evaluate(() => window.__copied), /\/board\/index\.html\?repo=acme\/board&branch=main&path=board\/tasks\.json#1$/);
     assert.deepEqual(await page.locator('#cHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['Task #1, copy link', 'Undo last board change', 'Copy for agent', 'More actions', 'Close']);
-    assert.deepEqual(await page.locator('#cProps .ui-props__label').allTextContents(), ['Status', 'Priority', 'Due', 'Waiting', 'People', 'Client', 'Project', 'Labels']);
+    assert.deepEqual(await page.locator('#cProps .ui-props__label').allTextContents(), ['Status', 'Priority', 'Due date', 'Waiting for', 'People', 'Client & project', 'Labels']);
+    const propRows = await page.locator('#cProps .ui-props__row').evaluateAll(rows => rows.map(row => { const r = row.getBoundingClientRect(); return { top: Math.round(r.top), width: Math.round(r.width) }; }));
+    assert.equal(propRows[0].top, propRows[1].top, 'Status and Priority share a row');
+    assert.equal(propRows[2].top, propRows[3].top, 'Due date and Waiting for share a row');
+    assert(propRows[4].width > propRows[0].width * 1.8, 'People and the remaining long fields use the full drawer width');
     assert.deepEqual(await page.locator('#cSecs .ui-section__text').allTextContents(), ['Description', 'Checklist', 'Links', 'Contacts', 'Comments', 'History']);
     assert.equal(await page.locator('#cHist').isVisible(), false, 'History starts closed');
     await assertFits(page, 'opened'); await shot(page, 'phone-writable-top');
@@ -121,10 +125,21 @@ async function assertFits(page, where) {
     assert.doesNotMatch(await page.locator('#cDuePill').getAttribute('class'), /ddue--edit/);
     w = saved(); await page.locator('#cDueClear').click(); await w; assert.equal(api.card().due, ''); assert.equal(await page.locator('#cDueClear').isVisible(), false);
 
-    // waiting (kit v43): set what it waits on, a member and a chase day; the card shows the chip, tasks.json gets min_kit; clear ends it
-    await page.locator('#cWaitAdd').click(); await page.locator('#cWaitOn').fill('Acme finance');
+    // Waiting for opens a focused sheet rather than expanding the property row under the phone keyboard.
+    // Set what it waits on, a member and a follow-up day; the card shows the chip, tasks.json gets min_kit; clear ends it.
+    await page.locator('#cWaitAdd').click(); const waitSheet = page.locator('dialog.dwaitsheet[open]'); await waitSheet.waitFor();
+    assert.equal(await waitSheet.locator('.ui-sheet__title').textContent(), 'What is this task waiting for?');
+    assert.match(await waitSheet.textContent(), /progress depends on a person, decision, or event/i);
+    await page.waitForTimeout(250); await shot(page, 'phone-wait-sheet');
+    await page.setViewportSize({ width: 390, height: 460 });
+    const waitCompact = await waitSheet.evaluate(sheet => { const r = sheet.getBoundingClientRect(), foot = sheet.querySelector('.ui-sheet__foot').getBoundingClientRect(), input = sheet.querySelector('#cWaitOn').getBoundingClientRect(); return { top: r.top, bottom: r.bottom, footBottom: foot.bottom, inputTop: input.top, inputBottom: input.bottom, height: innerHeight }; });
+    assert(waitCompact.top >= 0 && waitCompact.bottom <= waitCompact.height + 0.5 && waitCompact.footBottom <= waitCompact.height + 0.5, 'the wait sheet and actions stay above a phone keyboard');
+    assert(waitCompact.inputTop >= waitCompact.top && waitCompact.inputBottom < waitCompact.footBottom, 'the focused wait field stays in the visible sheet body');
+    await shot(page, 'phone-wait-sheet-short'); await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#cWaitOn').fill('Acme finance');
     await page.locator('#cWaitWho').selectOption('sam'); await page.locator('#cWaitNudge').fill('2020-01-02');
     w = saved(); await page.locator('#cWaitSet').click(); await w;
+    await waitSheet.waitFor({ state: 'detached' });
     { const wt = api.card().waiting; assert.equal(wt.on, 'Acme finance'); assert.equal(wt.who, 'sam'); assert.equal(wt.nudge, '2020-01-02'); assert.match(wt.since, /^\d{4}-\d{2}-\d{2}$/); assert.equal(wt.by, 'alex'); }
     await page.locator('#cWaitPill').waitFor();
     assert.match(await page.locator('#cWaitPill').innerText(), /Acme finance \(sam\) · since .* · chase 2020-01-02/);
@@ -156,12 +171,26 @@ async function assertFits(page, where) {
     await page.locator('#cLabelAdd').click(); await page.locator('#cLabelNew').fill('urgent'); w = saved(); await page.locator('#cLabelNew').press('Enter'); await w; assert.deepEqual(api.card().labels, ['dark', 'urgent']);
     assert.ok(JSON.parse(api.files['tasks.json']).labels.some(l => l.name === 'urgent'), 'a new label joins the board labels');
 
-    // client and project: "New …" asks for a name in a sheet
-    await page.locator('#cClient').selectOption('__new'); const prompt = page.locator('dialog.ui-sheet--alert[open]'); await prompt.waitFor();
-    await prompt.locator('input').fill('Beta Ltd'); w = saved(); await prompt.locator('button', { hasText: 'Add client' }).click(); await w;
-    assert.equal(api.card().client, 'Beta Ltd'); assert.ok(JSON.parse(api.files['tasks.json']).clients.includes('Beta Ltd'));
-    await page.locator('#cProject').selectOption('__new'); await prompt.waitFor(); await prompt.locator('input').fill('Launch'); w = saved(); await prompt.locator('button', { hasText: 'Add project' }).click(); await w;
-    const proj = api.card().project; assert.ok(proj, 'the task gets the new project'); assert.equal(await page.locator('#cProject').inputValue(), proj);
+    // Client and project share one full-width summary. Its picker filters projects by client and gives long names room.
+    await page.locator('#cWorkPick').click(); const workSheet = page.locator('dialog.dworksheet[open]'); await workSheet.waitFor();
+    assert.deepEqual(await workSheet.locator('.dworkcol h3').allTextContents(), ['Client', 'Project']);
+    assert.equal(await workSheet.locator('.dworkcol').first().locator('.dworkchoice', { hasText: 'Acme' }).count(), 1);
+    await workSheet.getByRole('button', { name: 'Add a new client', exact: true }).click(); const prompt = page.locator('dialog.ui-sheet--alert[open]'); await prompt.waitFor();
+    await prompt.locator('input').fill('Beta Ltd'); await prompt.locator('button', { hasText: 'Add client' }).click(); await prompt.waitFor({ state: 'detached' });
+    assert.equal(api.card().client, 'Acme', 'the picker is a draft until Apply');
+    await workSheet.getByRole('button', { name: /Add a new project/ }).click(); await prompt.waitFor(); await prompt.locator('input').fill('Launch with a deliberately long project name'); await prompt.locator('button', { hasText: 'Add project' }).click(); await prompt.waitFor({ state: 'detached' });
+    await page.waitForTimeout(250);
+    const workActions = await workSheet.locator('.ui-sheet__foot .ui-btn').evaluateAll(buttons => buttons.map(b => ({ text: b.textContent, width: Math.round(b.getBoundingClientRect().width) })));
+    assert.deepEqual(workActions.map(x => x.text), ['Cancel', 'Apply']); assert(Math.abs(workActions[0].width - workActions[1].width) <= 1, 'picker actions share the phone footer');
+    await page.setViewportSize({ width: 390, height: 460 });
+    const workCompact = await workSheet.evaluate(sheet => { const r = sheet.getBoundingClientRect(), foot = sheet.querySelector('.ui-sheet__foot').getBoundingClientRect(); return { top: r.top, bottom: r.bottom, footBottom: foot.bottom, height: innerHeight, scrolls: sheet.querySelector('.ui-sheet__body').scrollHeight > sheet.querySelector('.ui-sheet__body').clientHeight }; });
+    assert(workCompact.top >= 0 && workCompact.bottom <= workCompact.height + 0.5 && workCompact.footBottom <= workCompact.height + 0.5, 'the work picker and actions stay above a phone keyboard'); assert.equal(workCompact.scrolls, true, 'the choices scroll when the keyboard leaves less height');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await shot(page, 'phone-client-project-picker');
+    w = saved(); await page.locator('#cWorkDone').click(); await w; await workSheet.waitFor({ state: 'detached' });
+    const proj = api.card().project; assert.ok(proj, 'the task gets the new project'); assert.equal(api.card().client, 'Beta Ltd'); assert.ok(JSON.parse(api.files['tasks.json']).clients.includes('Beta Ltd'));
+    assert.match(await page.locator('#cWorkPick').textContent(), /Beta Ltd.*Launch with a deliberately long project name/s);
+    await assertFits(page, 'long client and project');
 
     // checklist, links and contacts: empty sections show one ghost add row
     for (const sec of ['#cTodoSec', '#cLinkSec', '#cContactSec']) { assert.equal(await page.locator(`${sec} .ui-addrow__ghost`).isVisible(), true); assert.equal(await page.locator(`${sec} .ui-addrow__form`).isVisible(), false); }

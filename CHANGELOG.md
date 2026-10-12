@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — The task drawer groups Status with Priority and Due date with Waiting for, while People, Labels and
+  Client & project keep the full width. Waiting for opens a focused phone-safe sheet, and Client & project opens a
+  linked picker with wrapping names instead of two cramped permanent rows.
+
 - **2026-10-12** — Kit v46: each browser tab stays on the board it opened: switching boards in another tab can no
   longer make this tab save into the wrong repo. A board whose `settings.min_kit` is newer than the page is read-only, with a
   banner; archiving, restoring from the archive and Inbox decisions check it on the board they re-read too. A drop

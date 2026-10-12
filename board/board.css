@@ -605,7 +605,14 @@ header .badge { top: -6px; right: -6px; }
 .taskdrawer .dhead .ui-iconbtn.hot::after { content: "Codex"; font-size: var(--fs-sm); font-weight: 600; }
 .uidrawer .dtitle { min-height: 0; }   /* one line until it grows (dialog textareas default to 80px) */
 .uidrawer .ui-props { margin: var(--sp-3) 0 var(--sp-2); }
-.uidrawer .ui-props__row { grid-template-columns: 112px minmax(0, 1fr); }
+.uidrawer:not(.taskdrawer) .ui-props__row { grid-template-columns: 112px minmax(0, 1fr); }
+.taskdrawer .ui-props { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--sp-6); }
+.taskdrawer .ui-props__row { grid-template-columns: minmax(0, 1fr); align-content: center; align-items: start; gap: var(--sp-1); min-height: 68px; padding: var(--sp-2) 0; }
+.taskdrawer .dprop--full { grid-column: 1 / -1; }
+.taskdrawer .ui-props__label { font-size: var(--fs-xs); font-weight: 650; }
+.taskdrawer .ui-props__value { min-height: 36px; }
+.taskdrawer .dprop--half .ui-select { width: 100%; }
+.taskdrawer .dprop--half .ui-select__control { width: 100%; }
 .uidrawer .dval { display: contents; }
 .uidrawer .ui-props__value .ui-select { max-width: 100%; }
 .ddue { position: relative; gap: var(--sp-1); min-height: 32px; padding: 0 2px 0 var(--sp-4); font-size: var(--fs-base); font-weight: 600; }
@@ -640,8 +647,9 @@ header .badge { top: -6px; right: -6px; }
 .uidrawer .dfoot2 { margin-top: var(--sp-7); }
 @media (max-width: 760px) {
   .uidrawer .dhead { gap: 0; padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4); }
-  .uidrawer .ui-props__row { grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-3); }
-  .uidrawer .ui-props__label { font-size: var(--fs-sm); }
+  .uidrawer:not(.taskdrawer) .ui-props__row { grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-3); }
+  .taskdrawer .ui-props { column-gap: var(--sp-4); }
+  .taskdrawer .ui-props__row { min-height: 72px; gap: var(--sp-1); }
   .ddue { min-height: var(--touch); padding-left: var(--sp-5); font-size: var(--fs-md); }
   .ddue .ddue__btn, .ddue.ddue--edit .ddue__input { height: 40px; }
   .taskdrawer .dlabelnew { height: var(--touch); width: 100%; }
@@ -769,8 +777,31 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 /* Waiting-for (kit v43): a quiet chip until the chase day passes, then amber; the drawer's small set-a-wait form */
 .chip.waitchip { display: inline-flex; align-items: center; gap: 3px; }
 .chip.waitchip.late { color: var(--warn); background: var(--warn-soft); font-weight: 600; }
-.dwait { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
-.dwait > .ui-input { min-width: 0; flex: 1 1 10rem; } .dwait > input[type=date] { flex: 0 1 9.5rem; } .dwait > select.ui-input { flex: 0 1 9rem; }
+.dwait { display: flex; min-width: 0; align-items: center; }
+.dwait > .ui-pill { max-width: 100%; min-width: 0; }
+.dwait .ui-pill__main, .dwait .ui-pill__text { min-width: 0; }
+.dwait .ui-pill__text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dworkpick { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); width: 100%; min-height: 46px; padding: var(--sp-2) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel); color: var(--text); text-align: left; cursor: pointer; }
+.dworkpick:hover { border-color: var(--border-strong); background: var(--card-hover); }
+.dworkpick__text { display: grid; gap: 2px; min-width: 0; }
+.dworkpick__text strong, .dworkpick__text span { overflow-wrap: anywhere; }
+.dworkpick__text span { color: var(--muted); font-size: var(--fs-sm); }
+.dworkpick > .ui-i { flex: none; color: var(--muted); }
+.dwaitform { display: grid; gap: var(--sp-5); }
+.dwaitform .ui-sheet__text { margin-bottom: var(--sp-1); }
+.dworkpicker { display: grid; gap: var(--sp-5); }
+.dworkcols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-5); }
+.dworkcol { min-width: 0; }
+.dworkcol h3 { margin: 0 0 var(--sp-2); color: var(--muted); font-size: var(--fs-sm); }
+.dworkchoices { display: grid; align-content: start; gap: var(--sp-1); }
+.dworkchoice { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 44px; padding: var(--sp-2) var(--sp-3); border: 1px solid transparent; border-radius: var(--r-md); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.dworkchoice strong, .dworkchoice span { max-width: 100%; overflow-wrap: anywhere; }
+.dworkchoice span { color: var(--muted); font-size: var(--fs-sm); }
+.dworkchoice:hover { background: var(--panel); }
+.dworkchoice.selected { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--accent-soft); color: var(--accent); }
+.dworkchoice--add { flex-direction: row; align-items: center; color: var(--accent); }
+.dworkchoice--add .ui-i { flex: none; }
+@media (max-width: 760px) { .dworkcols { grid-template-columns: minmax(0, 1fr); } .dworkchoice { min-height: var(--touch); } }
 /* phones: hold a card to pick it up, drop it on a lane in the Move bar */
 @media (max-width: 760px) { .card { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } }
 .card.lifted { opacity: .35; }
