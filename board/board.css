@@ -1181,3 +1181,53 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 /* ---- utilities (last, so they win over a component's own margin) --------------------------------------------------
    Spacing utilities are numbered by --sp step: .mt-0 = no top margin. */
 .mt-0 { margin-top: 0; } .fs-base { font-size: var(--fs-base); }
+
+/* ---- Review Inbox (kit v41) ---------------------------------------------------------------------------------- */
+#board.v-inbox { display: block; overflow-y: auto; padding: var(--sp-6, 16px) 18px 60px; }
+.inbox { max-width: 860px; margin: 0 auto; }
+.inbox__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.inbox__head h2 { margin: 0; font-size: var(--fs-xl); }
+.inbox__count { color: var(--muted); }
+.inbox__hint { margin: 6px 0 12px; }
+.inbox__filters { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 16px; }
+.inbox__filter { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+.inbox__filter select { min-height: 36px; }
+.inbox__group { margin: 0 0 22px; }
+.inbox__src { font-size: var(--fs-lg); margin: 0 0 4px; overflow-wrap: anywhere; }
+.inbox__gcount { color: var(--muted); font-weight: 400; }
+.inbox__srclink { font-size: var(--fs-sm); }
+.inbox__run { font-size: var(--fs-sm); font-weight: 600; margin: 10px 0 6px; }
+.inbox__list { display: grid; gap: 10px; }
+.prop { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg, 10px); padding: 12px 14px; min-width: 0; }
+.prop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.prop--accepted, .prop--ignored { opacity: .85; }
+.prop__top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.prop__title { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.prop__for, .prop__reason, .prop__evidence, .prop__decision { margin: 6px 0 0; overflow-wrap: anywhere; }
+.prop__meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 8px 0 0; font-size: var(--fs-sm); }
+.prop__meta dt { color: var(--muted); }
+.prop__meta dd { margin: 0; overflow-wrap: anywhere; }
+.prop__flags { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.propflag { background: var(--warn-soft); color: var(--text); border-radius: var(--r-sm, 6px); padding: 4px 8px; font-size: var(--fs-sm); }
+.proptbl { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: var(--fs-sm); table-layout: fixed; }
+.proptbl th, .proptbl td { text-align: left; vertical-align: top; padding: 4px 6px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.proptbl thead th { color: var(--muted); font-weight: 600; border-top: 0; }
+.proptbl tbody th { width: 22%; font-weight: 600; }
+.propchanged { background: var(--accent-soft); }
+.prop__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.propform { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.propform__row { display: grid; gap: 4px; font-size: var(--fs-sm); }
+.propform__row input, .propform__row select, .propform__row textarea { min-height: 36px; width: 100%; box-sizing: border-box; }
+.propform__fields { border: 1px solid var(--border); border-radius: var(--r-sm, 6px); padding: 6px 10px; display: grid; gap: 4px; }
+.propform__chk { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.propform__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.propconf__pick { display: inline-flex; gap: 4px; margin-right: 8px; white-space: nowrap; }
+#btnInbox { position: relative; }
+#btnInbox.on { color: var(--accent); }
+@media (max-width: 640px) {
+  #board.v-inbox { padding: var(--sp-3, 8px) 12px 90px; }
+  .prop__actions .ui-btn { min-height: var(--touch, 44px); flex: 1 1 auto; }
+  .inbox__filters { display: grid; grid-template-columns: 1fr 1fr; }
+  .inbox__filter { display: grid; }
+  .proptbl tbody th { width: 30%; }
+}
