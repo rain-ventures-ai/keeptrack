@@ -27,6 +27,8 @@ const card = (id, num, title, extra) => ({ id, num, title, column: 'todo', clien
 class Github {
   constructor() {
     this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First', { client: 'Acme', priority: 'high', labels: ['pale', 'dark'], assignees: ['alex'] })), 'cards/t_two.json': text(card('t_two', 2, 'Second')) };
+    this.files['people/p_craig.json'] = text({ id: 'p_craig', name: 'Craig Example', company: 'Acme', role: 'Director', emails: [{ label: 'Work', value: 'craig@example.com' }], phones: [], links: [], comments: [], history: [] });
+    this.files['people/p_chris.json'] = text({ id: 'p_chris', name: 'Chris Example', company: 'Other', emails: [{ label: 'Work', value: 'chris@example.com' }], phones: [], links: [], comments: [], history: [] });
     this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0;
   }
   sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
@@ -39,6 +41,7 @@ class Github {
     if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
     if (p.startsWith('/contents/README.md')) return json({ message: 'Not Found' }, 404);
     if (p.startsWith('/contents/board/tasks.json') && method === 'GET') return json({ sha: this.sha('tasks.json'), size: Buffer.byteLength(this.files['tasks.json']), encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') });
+    if (p.startsWith('/contents/board/') && method === 'GET') { const rel = p.slice('/contents/board/'.length); return this.files[rel] ? json({ sha: this.sha(rel), encoding: 'base64', content: Buffer.from(this.files[rel]).toString('base64') }) : json({ message: 'Not Found' }, 404); }
     if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON(); this.files[rel] = Buffer.from(b.content, 'base64').toString(); this.head = 'head-' + ++this.n; return json({ content: { sha: this.sha(rel) }, commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
     if (p.startsWith('/contents/board/') && method === 'DELETE') { delete this.files[p.slice('/contents/board/'.length)]; this.head = 'head-' + ++this.n; return json({ commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
     if (p === '/git/ref/heads/main' && method === 'GET') return json({ object: { sha: this.head } });
@@ -153,6 +156,21 @@ async function assertFits(page, where) {
     await page.locator('#cContactSec .ui-addrow__ghost').click(); await page.locator('#cContactNew').fill('Casey | buyer | casey@example.com'); w = saved(); await page.locator('#cContactNew').press('Enter'); await w;
     assert.deepEqual(api.card().contacts, [{ name: 'Casey', role: 'buyer', email: 'casey@example.com', phone: '' }]);
     assert.equal(await page.locator('#cContactList a[href="mailto:casey@example.com"]').count(), 1);
+    const crmBefore = api.files['people/p_craig.json'];
+    await page.locator('#cContactNew').fill('crai');
+    assert.equal(await page.locator('#cContactSuggestions [role=option]').count(), 1);
+    assert.equal(await page.locator('#cContactNew').getAttribute('aria-expanded'), 'true');
+    await assertFits(page, 'CRM suggestions');
+    await page.locator('#cContactNew').press('ArrowDown'); w = saved(); await page.locator('#cContactNew').press('Enter'); await w;
+    assert.equal(api.card().contacts[1].person_id, 'p_craig');
+    assert.equal(api.card().contacts[1].email, 'craig@example.com');
+    assert.equal(api.files['people/p_craig.json'], crmBefore, 'linking does not edit the CRM person');
+    await page.locator('#cContactNew').fill('crai'); assert.equal(await page.locator('#cContactSuggestions').isVisible(), false, 'linked CRM people are excluded');
+    await page.locator('#cContactNew').fill('chris');
+    await page.locator('#cContactNew').press('Escape'); assert.equal(await page.locator('#cContactNew').inputValue(), 'chris', 'first Escape dismisses suggestions without discarding text');
+    await page.locator('#cContactNew').fill('chri'); w = saved(); await page.locator('#cContactSuggestions [role=option]').click(); await w;
+    assert.equal(api.card().contacts[2].person_id, 'p_chris');
+    assert.equal(await page.locator('#cContactNew').inputValue(), '');
     await page.locator('#cLinkList [aria-label="Remove link Spec"]').click(); w = saved(); await confirmSheet.locator('button', { hasText: 'Remove' }).click(); await w; assert.deepEqual(api.card().links, []);
 
     // status last: moving to Done shows who completed it in the Status row
@@ -189,7 +207,7 @@ async function assertFits(page, where) {
 
     // the ⋯ menu
     await page.locator('#dMore').click();
-    assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Copy link', 'Copy reference #1', 'Create GitHub issue', 'Copy as Markdown', 'Delete task']);
+    assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Copy link', 'Copy reference #1', 'Create GitHub issue', 'Copy as Markdown', 'Archive task', 'Delete task']);
     await shot(page, 'phone-writable-menu');
     await menu.locator('[role=menuitem]', { hasText: 'Copy as Markdown' }).click(); await page.waitForFunction(() => /First/.test(window.__copied));
     await page.locator('#cAgent').click(); await page.waitForFunction(() => /You are working from the Keeptrack board|#1/.test(window.__copied) && !/^#/.test(window.__copied));
@@ -208,6 +226,27 @@ async function assertFits(page, where) {
     for (let i = 0; i < 50 && api.card(); i++) await page.waitForTimeout(100);
     assert.equal(api.card(), null, 'the deleted card file is gone');
     assert.deepEqual((await page.locator('.trow:not(.thead) .lt').allTextContents()).map(x => x.replace(/^#\d+/, '')), ['Second']);
+    // Archive is the safe alternative on the delete screen; restore through global search.
+    await page.evaluate(() => { location.hash = '#2'; }); await page.locator('#dlgCard[open]').waitFor();
+    const beforeArchive = api.card('t_two');
+    await page.locator('#dMore').click(); await menu.getByRole('menuitem', { name: 'Delete task', exact: true }).click();
+    await confirmSheet.waitFor(); assert.match(await confirmSheet.textContent(), /nothing is deleted/i);
+    await confirmSheet.getByRole('button', { name: 'Archive task instead', exact: true }).click();
+    await confirmSheet.filter({ hasText: 'Archive this task?' }).waitFor();
+    assert.match(await confirmSheet.textContent(), /Nothing is deleted.*Put back on the board/s);
+    await confirmSheet.getByRole('button', { name: 'Archive task', exact: true }).click();
+    await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    assert.equal(api.card('t_two'), null);
+    const archiveFile = Object.keys(api.files).find(p => p.startsWith('archive/'));
+    assert.deepEqual(JSON.parse(api.files[archiveFile]).tasks, [{ ...beforeArchive, project: beforeArchive.project || '' }]);
+    await page.locator('#btnSearch').click(); await page.locator('#qArch').check();
+    await page.locator('#qQ').fill('Second'); await page.locator('.qhit', { hasText: 'Second' }).click();
+    await page.locator('#aRestore').click();
+    await page.locator('#dlgCard[open]').waitFor();
+    const restored = api.card('t_two');
+    for (const key of ['title', 'details', 'comments', 'todos', 'contacts', 'links']) assert.deepEqual(restored[key], beforeArchive[key]);
+    assert.deepEqual(restored.history.slice(0, -1), beforeArchive.history);
+    assert.deepEqual(JSON.parse(api.files[archiveFile]).tasks, []);
     assert.deepEqual(errors, [], 'no page errors');
     await page.close();
 
@@ -220,7 +259,7 @@ async function assertFits(page, where) {
       assert.equal(await demo.locator('#cWhoAdd').isVisible(), false); assert.equal(await demo.locator('#cLabelAdd').isVisible(), false); assert.equal(await demo.locator('#dlgCard .ui-pill__remove:visible').count(), 0);
       assert.equal(await demo.locator('#cTodoSec').isVisible(), false, 'an empty checklist is hidden when nothing can be added');
       for (const id of ['dNum', 'cAgent', 'dMore', 'cClose']) assert.equal(await demo.locator('#' + id).isEnabled(), true, id + ' stays usable');
-      await demo.locator('#dMore').click(); const items = await demo.locator('.ui-menu [role=menuitem]').allTextContents(); assert.ok(!items.includes('Delete task')); assert.ok(items.includes('Copy as Markdown'));
+      await demo.locator('#dMore').click(); const items = await demo.locator('.ui-menu [role=menuitem]').allTextContents(); assert.ok(!items.includes('Delete task')); assert.ok(!items.includes('Archive task')); assert.ok(items.includes('Copy as Markdown'));
       assert.equal(await demo.locator('.ui-menu [role=menuitem]', { hasText: 'Copy link' }).isEnabled(), true);
       await demo.keyboard.press('Escape'); await assertFits(demo, `read-only ${vp.width}px`); await shot(demo, `readonly-${vp.width}`);
       await demo.close();

@@ -4653,10 +4653,30 @@ def _cmd_archive(a):
         for k in ("done_days", "lost_days", "keep_history"):
             if getattr(a, k) is not None:
                 rules[k] = getattr(a, k)
-        plan = archive_plan(data, rules)
+        ref = getattr(a, "ref", None)
+        if ref:
+            if any(getattr(a, k) is not None for k in ("done_days", "lost_days", "keep_history")):
+                sys.exit("an individual task reference cannot be combined with bulk archive rules")
+            task = find(data, ref)
+            if task.get("claim") and task["claim"].get("status") != "done":
+                sys.exit("an agent is working on this task; finish or release its claim before archiving")
+            task = copy.deepcopy(task)
+            older = []
+            for y in reversed(archive_years(data)):
+                cur, _ = read_archive(y, base)
+                older.extend((cur or {}).get("history", {}).get(task["id"], []))
+            history = []
+            for entry in older + task.get("history", []):
+                if entry not in history: history.append(entry)
+            task["history"] = history
+            year = str(board_today(data).year)
+            plan = {year: {"tasks": [task], "contacts": [], "history": {}}}
+            data["tasks"] = [t for t in data["tasks"] if t["id"] != task["id"]]
+        else:
+            plan = archive_plan(data, rules)
         nt = sum(len(p["tasks"]) for p in plan.values()); np_ = sum(len(p["contacts"]) for p in plan.values())
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
-        summary = f"{nt} done tasks, {np_} Lost people and {nh} old history lines"
+        summary = f"task #{task.get('num')} ({task['title']}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people and {nh} old history lines"
         if not plan:
             print("nothing to archive"); return
         if a.dry_run:
@@ -4670,7 +4690,11 @@ def _cmd_archive(a):
             files = {}
             for y, p in plan.items():
                 cur, sha = read_archive(y, base)
-                cur = archive_merge(cur, p, y); archive_index(data, y, cur); files[y] = (cur, sha)
+                cur = archive_merge(cur, p, y)
+                if ref:
+                    extra_history = cur.get("history", {}).pop(task["id"], [])
+                    task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
+                archive_index(data, y, cur); files[y] = (cur, sha)
             assign_nums(data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
             ok = save_changes(data, base, msg, extra=extra)
@@ -4746,7 +4770,8 @@ def _cmd_unarchive(a):
             if k == "tasks" and data.get("layout") == "split" and not valid_rank(item.get("rank")):
                 ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
                 item["rank"] = key_between(max(ranks) if ranks else None, None)
-            data[k].append(item); hist(item, f"restored from {archive_path(y)}")
+            item.setdefault("history", []).append({"at": now(), "by": who_am_i(item), "text": f"restored from {archive_path(y)}"})
+            data[k].append(item)
         cur[k] = [x for x in cur[k] if x["id"] != item["id"]]
         idx = data.setdefault("archive", {}).setdefault("files", {}).setdefault(y, {"tasks": 0, "contacts": 0})
         idx["tasks"], idx["contacts"] = len(cur.get("tasks", [])), len(cur.get("contacts", []))   # counts come from the archive as it will be
@@ -4927,6 +4952,7 @@ def main():
     pf(s); s.set_defaults(f=cmd_touch)
     s = sub.add_parser("sent", help="mark a draft as sent (the human sent it)"); s.add_argument("ref"); s.add_argument("--touch", help="draft id (default: latest)"); pf(s); s.set_defaults(f=cmd_sent)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
+    s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")
     s.add_argument("--done-days", type=int); s.add_argument("--lost-days", type=int); s.add_argument("--keep-history", type=int)
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_archive)
     s = sub.add_parser("archived", help="list or search archived tasks and people"); s.add_argument("-q"); s.set_defaults(f=cmd_archived)

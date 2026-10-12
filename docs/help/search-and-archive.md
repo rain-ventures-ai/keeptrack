@@ -17,6 +17,10 @@ Open **⚙️ Settings → Board → Archive** to see the board size and to arch
 
 Archived items are not deleted. Search finds them when you tick **Include archive**. Open one to read it, and click **Put back on the board** to bring it back.
 
+For one task, open its **⋯ → Archive task** menu, or choose **Archive task instead** on the delete screen. This removes it from the active board without deleting any details, checklist, comments or history, regardless of its status or age. Tasks with an unfinished agent claim must be released or finished first. Prefer archiving to deleting when you want to keep a record.
+
+From the CLI: `keeptrack.py archive '#102' --dry-run` previews one task; `keeptrack.py archive '#102'` archives it; `keeptrack.py unarchive '#102'` restores it. Without a reference, `archive` keeps its existing bulk age-based behaviour. Individual references cannot be combined with bulk archive rule flags.
+
 **What the browser cannot show yet:** the old history lines that were trimmed off a card that is still on the board. Such a card shows only its last 20 history lines. (An archived item shows its full history, and **Put back on the board** brings the older lines back with it.) They are safe in the archive file (`archive/<year>.json`, under `history`). To read them, ask your AI assistant, or run `keeptrack.py archived-history ID` (ID is the task number such as `#12`, or a person's id). The same command also prints the full history of an item that is itself archived.
 
 Your AI assistant can do the same: ask it to "archive old items", "find the old task about the Harbour Foods proposal" or "show the old history of task #12".

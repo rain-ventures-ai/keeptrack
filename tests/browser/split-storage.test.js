@@ -387,6 +387,35 @@ let base;
 
     const old = new Github(false), legacy = await openBoard(browser, old); old.calls = []; await legacy.locator('.card').first().dblclick(); await legacy.locator('#cTitle').fill('Legacy edit'); const legacySaved = legacy.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/tasks.json')); await legacy.locator('#cTitle').blur(); await legacySaved; const oldPuts = old.calls.filter(x => x.method === 'PUT'); assert.equal(oldPuts.length, 1); assert.equal(oldPuts[0].path, '/contents/board/tasks.json'); await legacy.close();
 
+    // Individual archive on legacy boards incorporates older history without losing a concurrent comment.
+    for (const race of [false, true]) {
+      const archApi = new Github(false), originalRoute = archApi.route.bind(archApi), older = { at: '2024-01-01', text: 'Older history' };
+      const d = JSON.parse(archApi.files['tasks.json']); d.archive.files['2024'] = { tasks: 0, contacts: 0 }; d.tasks[0].history = [{ at: '2026-01-01', text: 'Recent history' }];
+      archApi.files['tasks.json'] = text(d); archApi.files['archive/2024.json'] = text({ version: 3, archive: true, year: '2024', tasks: [], contacts: [], history: { t_one: [older] } });
+      let injected = false;
+      archApi.route = async route => {
+        const req = route.request(), p = new URL(req.url()).pathname;
+        if (req.method() === 'GET' && p.includes('/contents/board/archive/')) {
+          const rel = p.split('/contents/board/')[1], raw = archApi.files[rel];
+          return route.fulfill({ status: raw ? 200 : 404, contentType: 'application/json', body: JSON.stringify(raw ? { sha: archApi.sha(rel), encoding: 'base64', content: Buffer.from(raw).toString('base64') } : { message: 'Not Found' }) });
+        }
+        if (req.method() === 'PUT' && p.endsWith('/contents/board/tasks.json') && req.postDataJSON().sha !== archApi.sha('tasks.json')) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: 'sha does not match' }) });
+        if (race && !injected && req.method() === 'PUT' && p.includes('/contents/board/archive/')) {
+          injected = true; const newer = JSON.parse(archApi.files['tasks.json']); newer.tasks[0].comments.push({ id: 'new-comment', text: 'Concurrent comment', by: 'alex' }); archApi.files['tasks.json'] = text(newer);
+        }
+        return originalRoute(route);
+      };
+      const ap = await openBoard(browser, archApi); await ap.locator('.card', { hasText: 'First' }).dblclick(); await ap.locator('#dMore').click(); await ap.getByRole('menuitem', { name: 'Archive task', exact: true }).click(); await answer(ap, /Nothing is deleted.*restore/s, 'Archive task');
+      for (let attempt = 0; attempt < 100 && Object.keys(JSON.parse(archApi.files['tasks.json']).archive.files).length < 2; attempt++) await ap.waitForTimeout(100);
+      assert.equal(Object.keys(JSON.parse(archApi.files['tasks.json']).archive.files).length, 2, 'archive index was persisted');
+      const after = JSON.parse(archApi.files['tasks.json']), archivePath = Object.keys(archApi.files).find(p => p.startsWith('archive/') && p !== 'archive/2024.json'), archivedTask = JSON.parse(archApi.files[archivePath]).tasks[0];
+      assert.deepEqual(archivedTask.history, [older, ...d.tasks[0].history]);
+      assert.equal(after.tasks.some(t => t.id === 't_one'), race);
+      if (race) assert.equal(after.tasks.find(t => t.id === 't_one').comments.at(-1).text, 'Concurrent comment');
+      else { await ap.locator('#btnSearch').click(); await ap.locator('#qArch').check(); await ap.locator('#qQ').fill('First'); await ap.locator('.qhit', { hasText: 'First' }).click(); await ap.locator('#aRestore').click(); await ap.locator('#dlgArch').waitFor({ state: 'hidden' }); assert.deepEqual(JSON.parse(archApi.files['tasks.json']).tasks.find(t => t.id === 't_one').history.slice(0, archivedTask.history.length), archivedTask.history); }
+      await ap.close();
+    }
+
     // A card file written by another tool can miss fields the page fills in. Editing a different card must still write one file.
     const sparse = new Github(true); { const t = JSON.parse(sparse.files['cards/t_two.json']); delete t.todos; delete t.claim; delete t.contacts; sparse.files['cards/t_two.json'] = text(t); }
     const sp = await openBoard(browser, sparse); sparse.calls = []; await sp.locator('.card', { hasText: 'First' }).dblclick(); await sp.locator('#cTitle').fill('First again'); const spSaved = sp.waitForResponse(r => r.request().method() === 'PUT'); await sp.locator('#cTitle').blur(); await spSaved;

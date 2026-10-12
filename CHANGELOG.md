@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Task Contacts suggests existing CRM people while typing, with keyboard and touch selection,
+  stable CRM references and duplicate prevention. Individual tasks can be archived without losing their details,
+  checklist, comments or history, then found and restored through Search.
+
 - **2026-10-12** — Board-owned Today widgets and per-board browser appearance are opt-in. Search now finds Help,
   agent setup, connections and appearance settings, and can switch built-in themes while respecting the active board profile.
 
@@ -27,6 +31,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [39] — 2026-10-12
+
+- Archive an individual task with `archive <id>`, regardless of its age or status, while retaining its complete record.
+  Unfinished agent claims must be released or finished first. Existing bulk archive and restore workflows remain available.
+- Task contact entries may include an optional `person_id` referencing an existing CRM person alongside compatible
+  name, role, email and phone snapshots. No data migration is required.
 
 ### [38] — 2026-10-12
 
