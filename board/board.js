@@ -4052,6 +4052,12 @@ if (typeof window !== 'undefined') (() => {
     if (b) { b.hidden = !on || (!n && view !== 'inbox'); const t = n ? `Review Inbox: ${n} pending` : 'Review Inbox'; b.title = t; b.setAttribute('aria-label', t); b.classList.toggle('on', view === 'inbox'); }
     if (bd) { bd.hidden = !n; bd.textContent = n > 99 ? '99+' : String(n); }
     document.querySelectorAll('[data-head-action="btnInbox"]').forEach(x => { x.hidden = !on; });
+    // Today tab (header strip and phone dock) carries the pending count, so the Inbox is visible from every view
+    document.querySelectorAll('#viewSw .ui-tab[data-view="today"], #dock .dtab[data-grp="today"]').forEach(t => {
+      let c = t.querySelector('.todaycount'); if (!c) { c = el('span', 'badge todaycount'); c.setAttribute('aria-hidden', 'true'); t.append(c); }
+      c.hidden = !n; c.textContent = n > 99 ? '99+' : String(n);
+      t.setAttribute('aria-label', n ? `Today, ${n} to review` : 'Today'); t.title = n ? `Today: ${n} to review` : 'Today';
+    });
   }
   function proposalChange(p) {   // rows of field / current / proposed
     const c = p.change || {}, rec = p.target ? findRef(state, p.target) : null, tbl = el('table', 'proptbl');

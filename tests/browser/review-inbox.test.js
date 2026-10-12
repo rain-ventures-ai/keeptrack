@@ -107,7 +107,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     { const api = new Github(fixture({ enabled: false })), page = await openBoard(browser, api);
       assert.equal(await page.locator('#btnInbox').isHidden(), true, 'the Inbox stays hidden while the board has it off');
       await page.locator('#viewSw [data-view="today"]').first().click(); await page.waitForSelector('.todayhead');
-      assert.equal(await page.locator('.treview, .tgo[data-go="inbox"]').count(), 0, 'Today shows nothing of the Inbox while it is off'); await page.locator('#viewSw [data-view="board"]').first().click(); await page.waitForSelector('.card');
+      assert.equal(await page.locator('.treview, .tgo[data-go="inbox"]').count(), 0, 'Today shows nothing of the Inbox while it is off'); assert.equal(await page.locator('#viewSw .todaycount:not([hidden])').count(), 0, 'and no count on the Today tab'); await page.locator('#viewSw [data-view="board"]').first().click(); await page.waitForSelector('.card');
       assert.deepEqual((await page.locator('.card .t').allTextContents()).sort(), ['First', 'Second']);
       await page.close(); }
 
@@ -124,6 +124,9 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     await page.locator('.treview button', { hasText: /Review all 6/ }).click(); await page.waitForSelector('#board.v-inbox');
     await page.locator('#viewSw [data-view="board"]').first().click();
     assert.equal(await page.locator('#inboxBadge').textContent(), '6', 'six proposals are pending');
+    const todayTab = page.locator('#viewSw .ui-tab[data-view="today"]').first();
+    assert.equal(await todayTab.locator('.todaycount').textContent(), '6', 'the Today tab counts pending proposals');
+    assert.equal(await todayTab.getAttribute('aria-label'), 'Today, 6 to review');
     assert(!api.calls.some(c => /git\/trees\/root-.*recursive/.test(c.path)), 'never reads the whole repository tree');
 
     await inbox(page);
