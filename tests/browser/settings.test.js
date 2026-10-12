@@ -35,6 +35,8 @@ class Github {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (method !== 'GET') this.writes++;
+    if (p === '/contents/automation/routines' && method === 'GET') return json((this.routines || []).map((_, i) => ({ type: 'file', name: `routine_${i}.json` })));
+    if (/^\/contents\/automation\/routines\/routine_\d+\.json$/.test(p) && method === 'GET') return json({ content: Buffer.from(text(this.routines[Number(/routine_(\d+)/.exec(p)[1])])).toString('base64') });
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
     if (p.startsWith('/user/repos')) return json([]);
     if (p === '/rate_limit') return json({ resources: { core: { remaining: 4900, limit: 5000 } } });
@@ -84,6 +86,40 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Saved routine reports are not live scheduler state; setup only copies a scoped, approval-first prompt.
+    {
+      const page = await open(browser, { width: 390, height: 844 });
+      page.api.routines = [
+        { id: 'notes_alex', name: 'Meeting notes', owner: 'alex', board_repo: 'acme/board', branch: 'main', board_path: 'board/tasks.json', purpose: 'Review meeting actions', status: 'active', runtime: 'Local Codex', schedule: 'Mon 10:30', timezone: 'Europe/London', management_url: 'https://example.test/manage', last_successful_run_at: '2026-10-12T09:00:00Z', last_started_at: '2026-10-12T08:59:00Z', connections: [{ provider: 'Drive', account_label: 'Work', access: 'read-only' }], last_run: { status: 'success', summary: 'Reviewed three meetings', counts: { documents_checked: 3, proposals: 2 } } },
+        { id: 'cleanup_alex', name: 'Cleanup proposals', status: 'unverified', last_successful_run_at: 'not-a-time', current_run: { started_at: '2026-10-12T10:00:00Z' }, connections: 'malformed' },
+        { id: 'other', name: 'Other board path', board_repo: 'acme/board', branch: 'main', board_path: 'other/tasks.json' }, null
+      ];
+      await page.evaluate(() => document.getElementById('btnSettings').click()); await page.locator('#tabAgents').click();
+      await page.waitForFunction(() => document.querySelectorAll('.routine-card').length === 2);
+      assert.deepEqual(await page.locator('.routine-card h4').allTextContents(), ['Meeting notes', 'Cleanup proposals']);
+      assert.match(await page.locator('.routine-card').first().textContent(), /Recorded active/);
+      assert.match(await page.locator('.routine-card').first().textContent(), /Last reported run: Succeeded — Reviewed three meetings/);
+      assert.match(await page.locator('.routine-card').nth(1).textContent(), /check the runner before assuming it is still working/);
+      assert.match(await page.locator('.routine-card').nth(1).textContent(), /legacy scope; verify before running/);
+      assert.equal(await page.locator('.routine-card__details').first().getAttribute('open'), null);
+      assert.equal(await page.locator('.routine-card').first().locator('a').getAttribute('href'), 'https://example.test/manage');
+      const localTime = await page.evaluate(() => new Date('2026-10-12T09:00:00Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
+      assert.match(await page.locator('.routine-card').first().textContent(), new RegExp(localTime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      await page.locator('.routine-card__details').first().locator('summary').click();
+      assert.deepEqual(await page.locator('.routine-counts dd').allTextContents(), ['3', '2']);
+      const writes = page.api.writes;
+      await page.locator('#routineWorkflow').selectOption('cleanup'); await page.locator('#routineGoals').fill('Is this going to make money soon?'); await page.locator('#routineSchedule').fill('Mon Wed Fri 10:30 Europe/London');
+      await page.locator('#routineSetupCopy').click(); await page.waitForFunction(() => window.__copied.includes('safe board cleanup proposals'));
+      const prompt = await page.evaluate(() => window.__copied);
+      assert.match(prompt, /Board: acme\/board; branch: main; board path: board\/tasks.json; owner: alex/);
+      assert.match(prompt, /Is this going to make money soon\?/); assert.match(prompt, /Mon Wed Fri 10:30 Europe\/London/);
+      assert.match(prompt, /before provisioning or enabling anything/); assert.match(prompt, /never silently delete or archive/);
+      assert.match(prompt, /specific message/); assert.match(prompt, /register.*real ID/);
+      assert.equal(page.api.writes, writes, 'copying setup does not write to GitHub or create a schedule');
+      const overflow = await page.evaluate(() => document.getElementById('dlgSettings').scrollWidth - document.getElementById('dlgSettings').clientWidth);
+      assert.equal(overflow, 0, 'routine cards and setup fit a phone width');
+      assert.deepEqual(page.errors, []); await page.close();
+    }
     // 1. Clicking Settings opens Preferences, every time, whatever tab was open before.
     {
       const page = await open(browser);
@@ -136,6 +172,25 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await page.locator('#memBox .ui-addrow__input').last().fill('@bea'); await page.locator('#memBox .ui-addrow__input').last().press('Enter'); await w;
       assert.deepEqual(page.api.root().people.map(p => p.github), ['alex', 'bea']); assert.equal(page.api.root().people[1].name, 'bea');
       await page.waitForFunction(() => document.querySelectorAll('#memBox .memrow').length === 2);
+      assert.equal(page.api.root().people[0].own_companies, undefined, 'company links are never inferred');
+      await alex().getByLabel('Link an own company for @alex').focus();
+      w = saved(); await alex().getByLabel('Link an own company for @alex').selectOption('Acme'); await w;
+      assert.deepEqual(page.api.root().people[0].own_companies, ['Acme']);
+      await page.locator('#memBox .memrow').nth(1).getByLabel('Link an own company for @bea').focus();
+      w = saved(); await page.locator('#memBox .memrow').nth(1).getByLabel('Link an own company for @bea').selectOption('Acme'); await w;
+      await page.waitForFunction(() => document.querySelector('#memBox .memrow[data-gh="bea"] [aria-label="Remove @bea"]').disabled);
+      assert.equal(await page.locator('#memBox .memrow').nth(1).getByRole('button', { name: 'Remove @bea', exact: true }).isDisabled(), true);
+      await page.locator('#memBox .memrow').nth(1).getByRole('button', { name: 'Unlink own company Acme from @bea' }).click();
+      let unlink = page.getByRole('alertdialog'); await unlink.waitFor(); assert.match(await unlink.textContent(), /Still protected for @alex/);
+      w = saved(); await unlink.getByRole('button', { name: 'Unlink', exact: true }).click(); await w;
+      assert.equal(page.api.root().people[1].own_companies, undefined);
+      await alex().locator('.memcompanies .ui-pill').first().click(); await page.locator('#dlgClient[open]').waitFor();
+      assert.match(await page.locator('#clIdentity').textContent(), /Your company.*@alex/);
+      await page.locator('#clClose').click(); await page.evaluate(() => window.kbSettings.open('members'));
+      await alex().getByRole('button', { name: 'Unlink own company Acme from @alex' }).click(); unlink = page.getByRole('alertdialog'); await unlink.waitFor();
+      assert.match(await unlink.textContent(), /tasks.*projects.*CRM employer references/);
+      w = saved(); await unlink.getByRole('button', { name: 'Unlink', exact: true }).click(); await w;
+      assert(page.api.root().clients.includes('Acme'), 'unlinking never removes the company');
       w = saved(); await page.locator('#memBox .memrow').nth(1).getByRole('button', { name: 'Remove' }).click();
       const rm = page.getByRole('alertdialog'); await rm.waitFor(); await rm.getByRole('button', { name: 'Remove', exact: true }).click(); await w;
       assert.deepEqual(page.api.root().people.map(p => p.github), ['alex']);
@@ -169,8 +224,8 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       // 6. Agents & integrations: the chooser lists three integrations with status chips and takes you to each section.
       await page.locator('#tabAgents').click();
       assert.deepEqual(await page.locator('#agChooser .agpick b').allTextContents(), ['@claude in task comments', 'Claude or Codex in your chat app', 'Email contact sync']);
-      assert.deepEqual(await page.locator('#agChooser .schip').allTextContents(), ['Off', 'In your app', 'Off']);
-      await page.locator('#sUseEmail').check(); assert.equal(await page.locator('#agEmailChip').textContent(), 'On'); assert.equal(await page.evaluate(() => localStorage.getItem('kb_email_sync')), '1');
+      assert.deepEqual(await page.locator('#agChooser .schip').allTextContents(), ['Off', 'In your app', 'Not marked']);
+      await page.locator('#sUseEmail').check(); assert.equal(await page.locator('#agEmailChip').textContent(), 'Marked as set up'); assert.equal(await page.evaluate(() => localStorage.getItem('kb_email_sync')), '1');
       await page.locator('#agChooser .agpick').nth(2).click(); await page.waitForTimeout(600); assert.equal(await inView(page, 'agEmail'), true, 'the chooser scrolls to Email contact sync');
       assert.equal(await page.locator('#dlgSettings [id^="ag"] .sprompt button', { hasText: 'Copy setup prompt' }).count() >= 2, true, 'one setup-prompt helper, one label');
 

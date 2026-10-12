@@ -282,9 +282,21 @@
   </div>
 
   <div id="panelAgents" role="tabpanel" aria-labelledby="tabAgents" hidden>
-    <div data-sec id="agRegister" data-icon="activity" data-title="Routines on this board" data-scope="board" data-purpose="Where each routine runs, its connections and its latest reported result. Browser setup switches below are preferences; these reports come from the repo.">
+    <div data-sec id="agRegister" data-icon="activity" data-title="Routines on this board" data-scope="board" data-learn="schedules.md" data-purpose="Reports saved in this board repo, not a live scheduler check. A registered routine may still need setup. Its scheduler controls whether it runs; browser switches below only record your preferences.">
       <div id="routineRegister" role="status">Open Agents to load routine reports.</div>
       <button id="routineRefresh" type="button">Refresh routine reports</button>
+    </div>
+    <div data-sec id="agRoutineSetup" data-icon="calendar" data-title="Set up any routine for this board" data-scope="browser" data-learn="schedules.md" data-purpose="Choose the work and your goals, then copy a setup prompt into your assistant. Nothing is scheduled or changed by this form.">
+      <label for="routineWorkflow">What should it do?</label>
+      <select id="routineWorkflow"><option value="notes">Post-meeting notes and actions</option><option value="email">Contact email history</option><option value="cleanup">Safe board cleanup proposals</option><option value="tasks">Task agent requests</option><option value="custom">Custom goals or briefing</option></select>
+      <label for="routineGoals">Your goals and instructions</label>
+      <textarea id="routineGoals" rows="3" placeholder="For example: What could generate revenue soon? Show evidence, blockers and proposed next steps."></textarea>
+      <label for="routineSchedule">When and in which time zone?</label>
+      <input id="routineSchedule" placeholder="For example: Mon, Wed, Fri at 10:30, Europe/London">
+      <p class="hint">An assistant will help verify your sources, permissions and existing schedules before setting anything up. You choose the actual scheduler: Claude, Codex or another supported runner. A local runner needs its computer available.</p>
+      <button id="routineSetupCopy" type="button">Copy routine setup prompt</button>
+      <p class="hint">Paste into your board-aware assistant. Approve scope and schedule before provisioning. Cleanup and briefings propose changes first; they do not delete, archive or change tasks without approval.</p>
+      <details class="sfold"><summary>How routines stay visible and avoid overlap</summary><p class="hint">Each routine has a board, owner, workflow and approved sources. Reuse an existing matching schedule instead of creating a duplicate. Shared boards keep owner-specific checkpoints and deduplicate imported source events; a register alone is not a cross-user lock.</p><p class="hint">The worker reports its start, completion, summary and counts into <code>automation/routines/&lt;id&gt;.json</code> using Keeptrack's routine commands. Keep secrets and private email content out of reports.</p><a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/ROUTINES.md" target="_blank" rel="noopener noreferrer">Routine registration and reporting contract</a></details>
     </div>
     <div data-sec id="agPick" data-icon="compass" data-title="What do you want to set up?" data-scope="browser" data-learn="where-agents-run.md" data-purpose="Agents read and update the board for you. They draft messages and never send them.">
       <div id="agChooser" class="agpicks"></div>
@@ -388,8 +400,9 @@
     <div data-sec id="agEmail" data-icon="mail" data-title="Email contact sync" data-scope="browser" data-learn="people-and-follow-ups.md" data-purpose="A scheduled routine checks Gmail or Outlook against your people and records who you were in touch with.">
       <span id="agEmailChip" data-chip></span>
       <div data-props>
-        <div data-row="I use email sync" data-for="sUseEmail"><label class="schk"><input type="checkbox" id="sUseEmail"> On</label></div>
+        <div data-row="Remember my email setup" data-for="sUseEmail"><label class="schk"><input type="checkbox" id="sUseEmail"> I set this up elsewhere</label></div>
       </div>
+      <p class="hint">This browser marker does not create, enable or pause a schedule. Check the routine's saved report above and manage the actual job in its scheduler.</p>
       <div data-prompt="email" data-id="agEmailPrompt"></div>
       <details class="sfold"><summary>What it reads and stores</summary>
         <p class="hint">It matches exact addresses on your people and records short contact facts. It never stores full email text or attachments, and never sends, drafts, deletes or marks mail as read.</p>

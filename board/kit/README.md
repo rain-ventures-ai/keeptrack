@@ -126,6 +126,25 @@ adds an optional `person_id` to the task's `contacts[]` entry alongside the name
 not edit the CRM person or create another one. Snapshots are not automatically synchronized when CRM details change.
 Manual `Name | role | email | phone` entries remain supported without a `person_id`.
 
+### Your companies (explicit member identity)
+
+A board member may have multiple `own_companies` in their `people[]` member record. These are existing company/client
+names, not guessed from a CRM person's employer, task client or which companies happen to be on the board.
+In **Settings → Board → Members**, explicitly link a company or use:
+
+```bash
+python3 board/keeptrack.py member-set USER --own-company 'Company A' --own-company 'Company B'
+python3 board/keeptrack.py member-set USER --remove-own-company 'Company A'
+```
+
+The company drawer labels it **Your company** or **Board member company**. Any member link protects company removal;
+unlinking one member does not release another member's protection. Unlinking only removes the identity link: company
+files, tasks, projects and CRM employer references stay unchanged. Those ordinary references must also be moved before
+`client-rm` can succeed. A linked member must explicitly unlink before member removal. `client-rename` updates these
+name-based links together with other references; there is no new company-ID system or inferred migration.
+Upgrade older CLI copies before relying on these safeguards. They prevent mistakes, not writes by someone bypassing
+Keeptrack with direct repository access. Existing boards without these optional fields behave as before.
+
 ### Agent claim
 When an agent picks up a task it writes (and keeps refreshing) a `claim`, so anyone can see who is running it and spot a stuck session:
 ```jsonc

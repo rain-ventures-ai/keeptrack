@@ -8,7 +8,22 @@ your browser does not by itself create a scheduled job.
 
 Open **Settings → Agents & integrations** and copy the setup prompt for the workflow you want. Tell your assistant
 the board, your GitHub username, the connected account labels, the permitted changes, a first-run date range and a
-schedule with a timezone. For example:
+schedule with a timezone.
+
+The **Set up any routine for this board** form offers post-meeting notes, contact-email history, safe cleanup
+proposals, task-agent requests and custom goals or briefings. Add your own goal (for example, "What could generate
+revenue soon?") and desired schedule/time zone, then copy its starter prompt. This only copies instructions; it does
+not save those drafts, create a scheduler or enable a routine. Your assistant confirms scope and action permissions,
+checks existing registrations and the actual runner, then asks before provisioning. Reuse a matching binding rather
+than creating another schedule for the same board/owner/workflow.
+
+Cleanup defaults to proposals: candidates and reasons, no task changes, deletion or archival without approval.
+Briefings likewise propose task changes. Private email content must never be published; a shared-message summary
+needs explicit sharing approval and evidence that every intended recipient received that particular message. Being
+on another reply in the same thread does not establish permission. Shared-output publication needs a concurrency
+guard appropriate to the runner; separate local register locks alone are not cross-user coordination.
+
+For example:
 
 > Set up a daily contact-email routine for my consulting board at 08:00 Europe/London. Use my Work Gmail only,
 > start with the last seven days, update existing contact logs and explicit follow-ups, and record every run in the repo.
@@ -67,6 +82,11 @@ These files contain no tokens or full emails.
 
 An active register entry is an observation about a scheduler, not a live health check. An unknown scheduler stays
 unverified. Browser integration preferences control that browser's features; they do not pause a server or desktop job.
+
+Routine cards show recorded setup status separately from the last observed run result. Times are displayed in your
+browser's local time; expand **Run details, sources and management** for raw UTC timestamps, counts, approved sources,
+scope and where to manage the real schedule. An unfinished attempt means no completion was reported—not proof the
+worker is still running. Legacy registrations without a complete board/branch/path binding need scope verification.
 
 If a run fails, its last-success time stays unchanged so it can retry the missed window. If it crashes, inspect the
 scheduler first. Once the old worker is confirmed stopped, finish that recorded run ID as failed before retrying.

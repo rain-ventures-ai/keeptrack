@@ -217,8 +217,21 @@ async function assertFits(page, where) {
     await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(await page.locator('#cTodoSec .ui-addrow__form').isVisible(), false, 'add rows start closed on every open');
 
+    // Desktop native backdrop: one click keeps the drawer, two close through its normal path.
+    await page.setViewportSize({ width: 1200, height: 844 });
+    await page.mouse.click(20, 400);
+    assert.equal(await page.locator('#dlgCard').getAttribute('open'), '', 'single backdrop click keeps the task open');
+    await page.locator('#cTitle').dblclick();
+    assert.equal(await page.locator('#dlgCard').getAttribute('open'), '', 'double click inside the task keeps it open');
+    await page.mouse.dblclick(20, 400);
+    await page.locator('#dlgCard').waitFor({ state: 'hidden' }); await page.waitForFunction(() => location.hash === '');
+    await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+
     // delete: Cancel keeps the task, Delete removes its card file
     await page.locator('#dMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete task' }).click(); await confirmSheet.waitFor();
+    await page.evaluate(() => document.getElementById('dlgCard').dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: -1, clientY: 400 })));
+    assert.equal(await page.locator('#dlgCard').getAttribute('open'), '', 'a nested confirmation prevents backdrop dismissal');
     await confirmSheet.locator('button', { hasText: 'Cancel' }).click(); await confirmSheet.waitFor({ state: 'detached' }); assert.ok(api.card(), 'Cancel keeps the task');
     assert.equal(await page.locator('#dlgCard').getAttribute('open'), '');
     await page.locator('#dMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete task' }).click(); await confirmSheet.waitFor();
