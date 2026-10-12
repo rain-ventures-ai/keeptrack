@@ -122,6 +122,8 @@ if (typeof window !== 'undefined') (() => {
   const qv = v => encodeURIComponent(v).replace(/%2F/gi, '/');   // keep owner/name and board/tasks.json readable
   const boardUrl = () => `${location.pathname}?repo=${qv(LS.get('kb_repo'))}&branch=${qv(LS.get('kb_branch', 'master'))}&path=${qv(LS.get('kb_path', 'board/tasks.json'))}`;
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
+    // another tab may have switched this browser to repo: its live keys (kb_repo, its token ...) go too, not only kb_boards
+    if (rawRepo() === repo) try { ['kb_repo', ...BOARD_KEYS.map(k => 'kb_' + k)].forEach(k => localStorage.removeItem(k)); } catch {}
     try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`) || k.startsWith(`kb_weather_location:${repo}:`)).forEach(k => localStorage.removeItem(k)); } catch {}
     const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
     try { Object.keys(localStorage).filter(k => (k.startsWith(`kb_context:${repo}:`) || k.startsWith(`kb_drafts:${repo}:`))).forEach(k => localStorage.removeItem(k)); } catch {} }   // also drop cached cards, local drafts, context and Undo

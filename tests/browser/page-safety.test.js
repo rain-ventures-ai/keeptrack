@@ -1,6 +1,7 @@
 'use strict';
 // Web-page safety (kit v45 review fixes), with a faked GitHub that has real commit parents (a ref update that is not a fast-forward is refused):
-//  1. two tabs on different boards share localStorage: each tab keeps saving into its own board (and the CSP lets the real api.github.com through)
+//  1. two tabs on different boards share localStorage: each tab keeps saving into its own board (and the CSP lets the real api.github.com through);
+//     removing the board another tab switched to removes its live keys too
 //  2. settings.min_kit above this page's kit makes the board read-only with a banner, also when it rises between load and save
 //  3. the agent-claim limit and clearing a wait are decided again on the board as saved, and the claim is one whole-board commit
 //  4. accepting a proposal re-checks its field allow-list
@@ -123,6 +124,15 @@ const CLAUDE = { kb_agents: 'claude', kb_claude_url: 'https://api.anthropic.com/
       assert.equal(JSON.parse(await a.evaluate(() => localStorage.getItem('kb_boards')))['acme/one'].token, 'token-one');
       await a.reload(); await a.locator('.card', { hasText: 'Added in tab one' }).waitFor();
       assert.match(a.url(), /repo=acme\/one/, 'a reload keeps the tab on its board');
+      // removing the board another tab switched this browser to also removes its live keys (kb_repo, its token), not only kb_boards
+      await b.reload(); await b.locator('.card', { hasText: 'Two card' }).waitFor();
+      assert.equal(await a.evaluate(() => localStorage.getItem('kb_token')), 'token-two');
+      await a.evaluate(() => window.kbSettings.open('move')); await a.locator('#bRemoveList .brow', { hasText: 'acme/two' }).locator('button', { hasText: 'Remove' }).click();
+      await a.getByRole('alertdialog').locator('button', { hasText: 'Remove' }).click();
+      await a.waitForFunction(() => !localStorage.getItem('kb_boards').includes('acme/two'));
+      const left = await a.evaluate(() => Object.fromEntries(['kb_repo', 'kb_token', 'kb_branch', 'kb_path'].map(k => [k, localStorage.getItem(k)])));
+      assert.deepEqual(left, { kb_repo: null, kb_token: null, kb_branch: null, kb_path: null }, 'no token of the removed board is left in this browser');
+      assert.equal(JSON.parse(await a.evaluate(() => localStorage.getItem('kb_boards')))['acme/one'].token, 'token-one', 'the other board is kept');
       assert.deepEqual(errors, [], 'no page errors or CSP violations: ' + errors.join('; '));
       await ctx.close();
     }
