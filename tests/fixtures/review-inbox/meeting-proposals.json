@@ -1,0 +1,32 @@
+[
+  {
+    "kind": "task.create",
+    "title": "Send Acme the revised plan",
+    "source": {"kind": "meeting", "id": "doc-acme-weekly", "revision": "1", "title": "Acme weekly", "date": "2026-10-08",
+               "url": "https://example.invalid/notes/acme-weekly"},
+    "run": {"routine": "meeting-notes-alex", "run_id": "run-2026-10-08", "at": "2026-10-08T18:00:00Z"},
+    "action_key": "ak-send-revised-plan", "work_key": "wk-send-revised-plan",
+    "reason": "Alex agreed to send the revised plan; Casey asked for it twice (combined).",
+    "change": {"title": "Send Acme the revised plan", "client": "Acme", "owner": "alex", "due": "2026-10-15"}
+  },
+  {
+    "kind": "task.update",
+    "title": "Call Acme is now urgent",
+    "source": {"kind": "meeting", "id": "doc-acme-weekly", "revision": "1", "title": "Acme weekly", "date": "2026-10-08",
+               "url": "https://example.invalid/notes/acme-weekly"},
+    "action_key": "ak-call-acme-urgent", "work_key": "wk-call-acme",
+    "reason": "Casey said the first call is now urgent.",
+    "target": {"type": "task", "id": "t_first", "base": {"priority": "high", "labels": ["call"]}},
+    "change": {"labels": ["call", "urgent"]}
+  },
+  {
+    "kind": "contact.touch",
+    "title": "Meeting with Casey Example, 8 Oct",
+    "source": {"kind": "meeting", "id": "doc-acme-weekly", "revision": "1", "title": "Acme weekly", "date": "2026-10-08",
+               "url": "https://example.invalid/notes/acme-weekly"},
+    "action_key": "ak-meeting-casey", "work_key": "wk-meeting-casey-2026-10-08",
+    "reason": "Weekly meeting with Casey.",
+    "target": {"type": "person", "id": "p_acme", "base": {}},
+    "change": {"text": "Weekly meeting: revised plan due 15 Oct.", "channel": "meeting", "at": "2026-10-08T10:00:00Z"}
+  }
+]

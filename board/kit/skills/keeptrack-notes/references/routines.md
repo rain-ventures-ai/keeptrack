@@ -91,6 +91,28 @@ The checkpoint is not evidence that a board write succeeded. Update and commit i
 the next run must safely retry it. Pull/rebase before committing the checkpoint because board saves may have advanced
 the default branch.
 
+## With the Review Inbox
+
+When `keeptrack.py settings` shows `review_inbox.enabled: true`, the routine proposes and never writes live records.
+Follow the same steps below, with these changes:
+
+- Instead of `add`, `comment`, `link`, `move`, `assign`, `touch` or `import`, build proposals as described in the
+  notes skill and run `keeptrack.py proposal-add <file> --dry-run`, then `keeptrack.py proposal-add <file>`.
+- A completion becomes a `task.update` proposal: `change: {"column": "done"}`, with the current column in
+  `target.base`. A new source for an existing task becomes a `task.update` proposal that adds a link
+  (`change: {"links": [{"title": "<meeting> (<date>)", "url": "<url>"}]}`).
+- Fill `run` with the routine id and run id used for `routine start|finish`.
+- Record each action in the ingestion log with `"result": "proposed"` (added) or `"result": "exists"` (an earlier
+  proposal had the same action key, whatever its status), and the proposal id. Advance a document's revision only
+  after `proposal-add` succeeded and the log commit succeeded.
+- Never call `proposal-accept`, `proposal-merge`, `proposal-ignore`, `proposal-reopen` or `proposal-undo` from a routine.
+  Approval is a person's decision.
+- Report proposals added, proposals that already existed, and proposals flagged as previously ignored, instead of
+  tasks added and updated.
+
+Turning the Inbox on does not register, change or schedule this routine. Keep the routine register and scheduler as
+they are.
+
 ## Each run
 
 1. Read the log. If it does not exist, start with the last seven calendar days unless the user supplied another window;

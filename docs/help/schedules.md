@@ -23,6 +23,9 @@ needs explicit sharing approval and evidence that every intended recipient recei
 on another reply in the same thread does not establish permission. Shared-output publication needs a concurrency
 guard appropriate to the runner; separate local register locks alone are not cross-user coordination.
 
+With the [Review Inbox](review-inbox.md) on, the notes and email routines add proposals instead of changing the
+board. A person accepts them. Turning the Inbox on does not create, change or start a routine.
+
 For example:
 
 > Set up a daily contact-email routine for my consulting board at 08:00 Europe/London. Use my Work Gmail only,

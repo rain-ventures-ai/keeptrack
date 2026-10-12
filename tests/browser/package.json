@@ -4,9 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node split-storage.test.js",
+    "test": "node split-storage.test.js && node review-inbox.test.js",
     "test:ui": "node ui-catalogue.test.js",
-    "screenshots": "node capture-demo-screenshots.js"
+    "screenshots": "node capture-demo-screenshots.js",
+    "test:inbox": "node review-inbox.test.js"
   },
   "keywords": [],
   "author": "",

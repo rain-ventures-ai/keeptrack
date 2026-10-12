@@ -118,6 +118,16 @@ This common register complements the email checkpoint below and does not replace
    and the last successful run time. If any
    write fails, record a failed run without advancing the success watermark, then stop.
 
+## With the Review Inbox
+
+When `keeptrack.py settings` shows `review_inbox.enabled: true`, step 6 proposes instead of writing: build
+`contact.touch` proposals as described in the email skill and run `proposal-add` (with `--dry-run` first). Keep the
+checkpoint rules unchanged: message keys are recorded once their proposal is added (or reported as `exists`), and the
+success watermark advances only after `proposal-add` and the checkpoint commit succeed. Never accept, merge, ignore or
+reopen proposals from a routine. Pass `--recipients-confirmed` only when every intended reader of the board received
+that specific message; otherwise the proposal holds no summary and no subject. Report proposals added and already
+existing, instead of touches written. Turning the Inbox on does not register or schedule anything.
+
 ## Prompt template
 
 Replace the placeholders and save this as the separate scheduled routine's prompt:

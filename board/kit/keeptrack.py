@@ -752,7 +752,7 @@ def _api_blob(sha):
 
 
 def _wanted_rel(rel):
-    return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|projects|archive)/[^/]+", rel) is not None
+    return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|projects|proposals|archive)/[^/]+", rel) is not None
 
 
 def _local_snapshot():
@@ -762,7 +762,7 @@ def _local_snapshot():
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as f:
                 files[rel] = {"text": f.read(), "sha": None, "size": os.path.getsize(path)}
-    for folder in ("cards", "people", "projects", "archive"):
+    for folder in ("cards", "people", "projects", "proposals", "archive"):
         path = _local_path(folder)
         if not os.path.isdir(path):
             continue
@@ -785,7 +785,7 @@ def _git_snapshot():
         sys.exit(f"cannot resolve {REPO}@{BRANCH}: {err}")
     base = os.path.dirname(PATH).strip("/")
     rc, names, err = git("ls-tree", "-r", "--name-only", head, "--", PATH,
-                         *[f"{base + '/' if base else ''}{x}" for x in ("cards", "people", "projects", "archive")])
+                         *[f"{base + '/' if base else ''}{x}" for x in ("cards", "people", "projects", "proposals", "archive")])
     if rc:
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
@@ -878,7 +878,7 @@ def load_board():
     data = dict(root)
     layout = root.get("layout")
     if root.get("version") == 4 and layout == "split":
-        tasks, people, projects = [], [], []
+        tasks, people, projects, proposals = [], [], [], []
         for rel, entry in sorted(files.items()):
             if rel.startswith("cards/") and rel.endswith(".json"):
                 tasks.append(_decode_json(rel, entry))
@@ -886,7 +886,11 @@ def load_board():
                 people.append(_decode_json(rel, entry))
             elif rel.startswith("projects/") and rel.endswith(".json"):
                 projects.append(_decode_json(rel, entry))
+            elif rel.startswith("proposals/") and rel.endswith(".json"):
+                proposals.append(_decode_json(rel, entry))
         data["tasks"], data["contacts"], data["projects"] = tasks, people, projects
+        if proposals:
+            data["proposals"] = proposals
     else:
         data.setdefault("tasks", [])
         data.setdefault("contacts", [])
@@ -909,7 +913,7 @@ def load():
 
 def _desired_files(data, state, extra=None):
     split = data.get("version") == 4 and data.get("layout") == "split"
-    root = {k: v for k, v in data.items() if not (split and k in ("tasks", "contacts", "projects"))}
+    root = {k: v for k, v in data.items() if not (split and k in ("tasks", "contacts", "projects", "proposals"))}
     desired_obj = {"tasks.json": root}
     if split:
         for t in data.get("tasks", []):
@@ -918,6 +922,8 @@ def _desired_files(data, state, extra=None):
             desired_obj[_item_file("people", p)] = p
         for pr in data.get("projects", []):
             desired_obj[_item_file("projects", pr)] = pr
+        for proposal in data.get("proposals", []):
+            desired_obj[_item_file("proposals", proposal)] = proposal
     desired = {}
     for rel, obj in desired_obj.items():
         old = state.get("files", {}).get(rel)
@@ -931,7 +937,7 @@ def _duplicate_files(state):
     seen, dup = {}, []
     for rel, entry in sorted(state.get("files", {}).items()):
         obj = entry.get("obj")
-        if rel.startswith(("cards/", "people/", "projects/")) and isinstance(obj, dict) and obj.get("id"):
+        if rel.startswith(("cards/", "people/", "projects/", "proposals/")) and isinstance(obj, dict) and obj.get("id"):
             if obj["id"] in seen:
                 dup.append(f"{obj['id']} ({seen[obj['id']]} and {rel})")
             else:
@@ -945,7 +951,7 @@ def _changes(data, state, extra=None):
         sys.exit("not saved: two board files have the same id: " + ", ".join(dup) + ". Run keeptrack.py doctor (the board-doctor skill).")
     desired = _desired_files(data, state, extra)
     managed = {p for p in state.get("files", {}) if p == "tasks.json" or
-               (p.startswith(("cards/", "people/", "projects/")) and p.endswith(".json"))}
+               (p.startswith(("cards/", "people/", "projects/", "proposals/")) and p.endswith(".json"))}
     if extra:
         managed.update(extra)
     changes = {p: text for p, text in desired.items() if state.get("files", {}).get(p, {}).get("text") != text}
@@ -2197,14 +2203,17 @@ def doctor_board(fix=False):
         tasks = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("cards/") and rel.endswith(".json")]
         people = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("people/") and rel.endswith(".json")]
         projects = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("projects/") and rel.endswith(".json")]
+        proposals = [obj for rel, obj in sorted(parsed.items()) if rel.startswith("proposals/") and rel.endswith(".json")]
     else:
         tasks = data.setdefault("tasks", []) if isinstance(data.get("tasks", []), list) else []
         people = data.setdefault("contacts", []) if isinstance(data.get("contacts", []), list) else []
         projects = data.setdefault("projects", []) if isinstance(data.get("projects", []), list) else []
     data["tasks"], data["contacts"], data["projects"] = tasks, people, projects
+    if split and proposals:
+        data["proposals"] = proposals
 
     ids, duplicate_ids = {}, False
-    for kind, items in (("task", tasks), ("person", people), ("project", projects)):
+    for kind, items in (("task", tasks), ("person", people), ("project", projects), ("proposal", proposals if split else [])):
         for item in items:
             ident = item.get("id")
             if ident is not None and not (isinstance(ident, str) and SAFE_ID.fullmatch(ident)):
@@ -2231,7 +2240,8 @@ def doctor_board(fix=False):
     rename_conflict = False
     if split:
         for rel, obj in parsed.items():
-            folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else "projects" if rel.startswith("projects/") else None
+            folder = ("cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else
+                      "projects" if rel.startswith("projects/") else "proposals" if rel.startswith("proposals/") else None)
             if folder and rel.endswith(".json") and obj.get("id") and rel != f"{folder}/{obj['id']}.json":
                 problem("FILE_NAME", rel, f"The file name does not match id {obj['id']}.")
                 if f"{folder}/{obj['id']}.json" in state["files"]:
@@ -2354,7 +2364,8 @@ def doctor_board(fix=False):
                     fixes.append(f"added a comment id on {item.get('id', '?')}")
         if split:
             for rel, obj in parsed.items():
-                folder = "cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else "projects" if rel.startswith("projects/") else None
+                folder = ("cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else
+                          "projects" if rel.startswith("projects/") else "proposals" if rel.startswith("proposals/") else None)
                 canonical = f"{folder}/{obj.get('id')}.json" if folder and obj.get("id") else rel
                 if folder and rel != canonical and canonical not in state["files"]:
                     fixes.append(f"renamed {rel} to {canonical}")
@@ -2416,6 +2427,9 @@ def load_v4_from_files(files):
     out["tasks"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("cards/") and path.endswith(".json")]
     out["contacts"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("people/") and path.endswith(".json")]
     out["projects"] = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("projects/") and path.endswith(".json")]
+    proposals = [json.loads(text) for path, text in sorted(files.items()) if path.startswith("proposals/") and path.endswith(".json")]
+    if proposals:
+        out["proposals"] = proposals
     return out
 
 
@@ -2430,6 +2444,8 @@ def migration_differences(before, after):
         d["tasks"] = sorted(d.get("tasks", []), key=lambda x: x.get("id", ""))
         d["contacts"] = sorted(d.get("contacts", []), key=lambda x: x.get("id", ""))
         d["projects"] = sorted(d.get("projects", []), key=lambda x: x.get("id", ""))
+        if "proposals" in d:
+            d["proposals"] = sorted(d.get("proposals", []), key=lambda x: x.get("id", ""))
         return d
     a, b = normal(before), normal(after)
     if a == b:
@@ -2530,7 +2546,7 @@ def _migrate_v4(a):
         sys.exit("could not migrate after retries (board busy)")
 
 
-SPLIT_DIRS = ("cards/", "people/", "projects/")
+SPLIT_DIRS = ("cards/", "people/", "projects/", "proposals/")
 
 
 def _read_backup(ref):
@@ -2698,7 +2714,8 @@ def cmd_init(a):
             print(f"note: --email/--timezone were not applied to the existing board; use keeptrack.py member-set {people[0]['github']} ...")
     else:
         # Existing v3 boards migrate explicitly with a backup; brand-new boards need no legacy layout.
-        data = {"version": 4, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
+        data = {"version": 4, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"],
+                                                                    "review_inbox": {"enabled": False}},
                 "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"},
                             {"id": "in-progress", "name": "In progress"}, {"id": "done", "name": "Done"}],
                 "people": people, "agents": ["claude", "codex"], "clients": a.client or ["General"],
@@ -2814,6 +2831,8 @@ HELP_TOPICS = {
                         "column-move", "column-rm", "members", "me", "member-add", "member-set", "member-rm",
                         "agents", "agent-add", "agent-rm", "settings", "settings-set"],
     "archive": ["archive", "archived", "archived-history", "unarchive"],
+    "review-inbox": ["proposal-add", "proposals", "proposal-show", "proposal-accept", "proposal-merge",
+                     "proposal-ignore", "proposal-reopen", "proposal-undo"],
     "setup": ["use", "where", "here", "help", "init", "import", "kit-check", "kit-update", "kit-owner",
               "migrate", "verify", "doctor"],
 }
@@ -4138,6 +4157,7 @@ def cmd_settings(a):
     print(f"max_agent_claims: {lim or 'no limit'}" + (f" (ignored: {raw!r} is not a whole number 1-100)" if raw is not None and not lim else ""))
     print(f"stages: {', '.join(stages(data))}")
     print(f"modes: {', '.join(st.get('modes', [])) or '-'}")
+    print(f"review_inbox.enabled: {str(bool((st.get('review_inbox') or {}).get('enabled', False))).lower()}")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
     print(f"agents: {', '.join(data.get('agents', [])) or '-'}")
@@ -4148,6 +4168,13 @@ def cmd_settings_set(a):
     """Change board settings: title, stale minutes, pipeline stages (with renames)."""
     def fn(data):
         st = data.setdefault("settings", {})
+        if getattr(a, "setting", None) is not None:
+            require_review_storage(data)
+            if a.setting != "review_inbox.enabled" or str(a.value).lower() not in ("true", "false"):
+                proposal_error("settings-set supports review_inbox.enabled true|false")
+            st.setdefault("review_inbox", {})["enabled"] = str(a.value).lower() == "true"
+            print(f"review_inbox.enabled: {str(st['review_inbox']['enabled']).lower()}")
+            print("This changes only the Review Inbox setting. It does not create, edit or activate a routine, schedule or external scheduler.")
         if a.title is not None:
             if not a.title.strip():
                 sys.exit("the title is empty")
@@ -4550,6 +4577,609 @@ def cmd_import(a):
     mutate(fn, f"Import: {label}")
 
 
+# ---- Review Inbox: proposals are split files, never live tasks or CRM people -------------------------------
+PROPOSAL_KINDS = {"task.create", "task.update", "person.upsert", "contact.touch"}
+PROPOSAL_STATUSES = {"pending", "accepted", "ignored"}
+PROPOSAL_SOURCE_KINDS = {"meeting", "email", "other"}
+PROPOSAL_DETAIL_LIMIT = 300
+PROPOSAL_ROOT_FIELDS = {"id", "version", "kind", "status", "title", "source", "run", "action_key", "work_key",
+                        "reason", "evidence", "target", "change", "likely_duplicates", "previously_ignored",
+                        "reviewer", "decision", "history", "created", "createdBy"}
+PROPOSAL_SOURCE_FIELDS = {"kind", "id", "revision", "title", "date", "url", "recipients_confirmed"}
+PROPOSAL_RUN_FIELDS = {"routine", "run_id", "at"}
+TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priority", "due", "labels", "owner", "assignees",
+                      "details", "links", "contacts", "todos", "comments"}
+PERSON_CHANGE_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "github", "emails", "phones",
+                        "stage", "value", "source", "notes", "next", "due", "next_due", "links", "comments"}
+TOUCH_CHANGE_FIELDS = {"text", "channel", "at", "source_id", "source_message_ids", "next", "due", "next_due"}
+
+
+def proposal_error(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
+
+def proposal_conflict(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(3)
+
+
+def require_review_storage(data):
+    if data.get("version") != 4 or data.get("layout") != "split":
+        proposal_error("The Review Inbox needs split storage (schema 4). See UPGRADING.md.")
+
+
+def find_proposal(data, ref):
+    proposals = data.get("proposals", [])
+    matches = [p for p in proposals if p.get("id") == ref] or [p for p in proposals if str(p.get("id", "")).startswith(ref)]
+    if len(matches) != 1:
+        proposal_error(f"proposal '{ref}' not found" if not matches else f"proposal '{ref}' is ambiguous")
+    return matches[0]
+
+
+def _one_line(value, label, limit=None):
+    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+        proposal_error(f"{label} must be one non-empty line")
+    value = value.strip()
+    if limit is not None and len(value) > limit:
+        proposal_error(f"{label} must be at most {limit} characters")
+    return value
+
+
+def _proposal_change_fields(kind):
+    if kind.startswith("task."):
+        return TASK_CHANGE_FIELDS
+    if kind == "person.upsert":
+        return PERSON_CHANGE_FIELDS
+    return TOUCH_CHANGE_FIELDS
+
+
+STR_FIELDS = {"title", "column", "client", "project", "contact", "owner", "details", "name", "company", "role", "email", "phone",
+              "linkedin", "github", "stage", "value", "source", "notes", "next", "text", "channel", "at", "source_id"}
+DATE_FIELDS = {"due", "next_due"}
+STR_LIST_FIELDS = {"labels", "assignees", "source_message_ids"}
+DICT_LIST_FIELDS = {"links", "contacts", "todos", "comments", "emails", "phones"}
+ADDITIVE_FIELDS = {"comments", "todos", "links"}
+# Text that can carry what an email said. Without --recipients-confirmed an email proposal holds none of it.
+EMAIL_TEXT_FIELDS = {"title", "details", "notes", "next", "text", "comments", "todos", "links", "contacts", "value", "source"}
+EMAIL_METADATA_TITLE = re.compile(r"Email (?:from|to|with) [^\n]{1,80}")
+
+
+def check_change_values(kind, change):
+    """Value types, not only field names: a malformed value must never reach a live record."""
+    for key, value in change.items():
+        if key in STR_FIELDS and not isinstance(value, str):
+            proposal_error(f"change.{key} must be text")
+        if key in DATE_FIELDS and (not isinstance(value, str) or (value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))):
+            proposal_error(f"change.{key} must be a YYYY-MM-DD date or empty")
+        if key in STR_LIST_FIELDS and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
+            proposal_error(f"change.{key} must be a list of text")
+        if key in DICT_LIST_FIELDS and (not isinstance(value, list) or not all(isinstance(x, dict) for x in value)):
+            proposal_error(f"change.{key} must be a list of objects")
+        if key in ("comments", "todos") and not all(isinstance(x.get("text"), str) and x.get("text").strip() for x in value):
+            proposal_error(f"each change.{key} item needs text")
+        if key == "links" and not all(isinstance(x.get("url"), str) and x["url"].strip() for x in value):
+            proposal_error("each change.links item needs a url")
+        if key == "priority" and value not in ("high", "medium", "low"):
+            proposal_error("change.priority must be high, medium or low")
+
+
+def proposal_base_fields(kind, target_type, change):
+    """The live fields an accept would overwrite: each must be in target.base, so a newer edit is reviewed, not replaced."""
+    out = set()
+    for key in change:
+        if key in ADDITIVE_FIELDS or (kind == "contact.touch" and key in ("text", "channel", "at", "source_id", "source_message_ids")):
+            continue
+        if key == "owner":
+            out.add("assignees")
+        elif key == "due" and target_type == "person":
+            out.add("next_due")
+        else:
+            out.add(key)
+    return out
+
+
+def check_email_privacy(proposal, confirmed):
+    if (proposal.get("source") or {}).get("kind") != "email" or confirmed:
+        return
+    if proposal["kind"] != "contact.touch":
+        proposal_error("an email proposal other than contact.touch needs --recipients-confirmed (every intended board reader received that message)")
+    if not EMAIL_METADATA_TITLE.fullmatch(proposal.get("title", "")):
+        proposal_error("without --recipients-confirmed an email proposal title must be metadata only, e.g. 'Email from Casey Example, 9 Oct'")
+    if (proposal.get("source") or {}).get("title", "").strip() or (proposal.get("reason") or "").strip() or (proposal.get("evidence") or "").strip():
+        proposal_error("email reason/evidence/subject requires --recipients-confirmed; without it these fields must be empty")
+    for key in EMAIL_TEXT_FIELDS:
+        value = (proposal.get("change") or {}).get(key)
+        if key != "title" and value not in (None, "", []):
+            proposal_error(f"email change.{key} requires --recipients-confirmed; store metadata only without it")
+
+
+def validate_proposal_input(raw, recipients_confirmed=False):
+    if not isinstance(raw, dict):
+        proposal_error("each proposal must be a JSON object")
+    unknown = sorted(set(raw) - PROPOSAL_ROOT_FIELDS)
+    if unknown:
+        proposal_error("unknown proposal field(s): " + ", ".join(unknown))
+    kind = raw.get("kind")
+    if kind not in PROPOSAL_KINDS:
+        proposal_error("kind must be task.create, task.update, person.upsert or contact.touch")
+    title = _one_line(raw.get("title"), "title")
+    source = raw.get("source")
+    if not isinstance(source, dict) or set(source) - PROPOSAL_SOURCE_FIELDS:
+        proposal_error("source must contain only kind, id, revision, title, date and url")
+    if source.get("kind") not in PROPOSAL_SOURCE_KINDS:
+        proposal_error("source.kind must be meeting, email or other")
+    for key in ("id", "revision"):
+        _one_line(source.get(key), f"source.{key}")
+    for key in ("title", "date", "url"):
+        if source.get(key) is not None and not isinstance(source.get(key), str):
+            proposal_error(f"source.{key} must be text")
+    if source.get("kind") == "email" and not re.fullmatch(r"rfc822:[0-9a-f]{64}", source.get("id", "")):
+        proposal_error("email source.id must be the canonical rfc822: key from email-key")
+    run = raw.get("run")
+    if run is not None and (not isinstance(run, dict) or set(run) - PROPOSAL_RUN_FIELDS):
+        proposal_error("run must contain only routine, run_id and at")
+    action_key = _one_line(raw.get("action_key"), "action_key")
+    work_key = _one_line(raw.get("work_key"), "work_key")
+    reason = raw.get("reason", "")
+    evidence = raw.get("evidence", "")
+    for label, value in (("reason", reason), ("evidence", evidence)):
+        if not isinstance(value, str) or "\n" in value or "\r" in value or len(value) > PROPOSAL_DETAIL_LIMIT:
+            proposal_error(f"{label} must be one line of at most {PROPOSAL_DETAIL_LIMIT} characters")
+    change = raw.get("change")
+    if not isinstance(change, dict) or not change:
+        proposal_error("change must be a non-empty object")
+    bad_change = sorted(set(change) - _proposal_change_fields(kind))
+    if bad_change:
+        proposal_error("unknown change field(s) for " + kind + ": " + ", ".join(bad_change))
+    check_change_values(kind, change)
+    target = raw.get("target")
+    if kind in ("task.update", "contact.touch") and not isinstance(target, dict):
+        proposal_error(f"{kind} needs a target")
+    if target is not None:
+        if not isinstance(target, dict) or set(target) - {"type", "id", "base"}:
+            proposal_error("target must contain only type, id and base")
+        expected = "task" if kind.startswith("task.") else "person"
+        if target.get("type") != expected or not isinstance(target.get("id"), str) or not isinstance(target.get("base", {}), dict):
+            proposal_error(f"target must identify a {expected} and include a base object")
+    if kind == "task.create" and target is not None:
+        proposal_error("task.create target must be null")
+    if target is not None:
+        missing = sorted(proposal_base_fields(kind, target.get("type"), change) - set(target.get("base") or {}))
+        if missing:
+            proposal_error("target.base must hold the current value of every field this proposal overwrites; missing: " + ", ".join(missing))
+    if kind == "contact.touch" and not isinstance(change.get("text"), str):
+        proposal_error("contact.touch change needs text")
+    if kind == "contact.touch":
+        if len(change["text"]) > PROPOSAL_DETAIL_LIMIT or "\r" in change["text"] or "\n" in change["text"]:
+            proposal_error(f"contact.touch text must be one line of at most {PROPOSAL_DETAIL_LIMIT} characters")
+        if change.get("channel") not in (None, *CHANNELS):
+            proposal_error("contact.touch channel is not supported")
+        try:
+            if change.get("at") is not None:
+                check_event_time(change["at"])
+            if change.get("source_id") is not None:
+                check_source_id(change["source_id"])
+            if "source_message_ids" in change:
+                if not isinstance(change["source_message_ids"], list):
+                    proposal_error("source_message_ids must be a list")
+                for key in change["source_message_ids"]:
+                    check_source_id(key)
+        except SystemExit as exc:
+            if exc.code == 2:
+                raise
+            proposal_error(str(exc))
+    ident = raw.get("id")
+    if ident is not None and (not isinstance(ident, str) or not re.fullmatch(r"r_[0-9a-z]{10}", ident)):
+        proposal_error("proposal id must be r_ followed by 10 lower-case letters or digits")
+    if raw.get("version", 1) != 1 or raw.get("status", "pending") != "pending" or raw.get("decision") not in (None,):
+        proposal_error("new proposals must have version 1, status pending and no decision")
+    clean_source = {key: source.get(key, "") for key in ("kind", "id", "revision", "title", "date", "url")}
+    if clean_source["kind"] == "email":
+        clean_source["recipients_confirmed"] = bool(recipients_confirmed)
+    out = {"id": ident, "version": 1, "kind": kind, "status": "pending", "title": title,
+           "source": clean_source, "action_key": action_key, "work_key": work_key,
+           "reason": reason.strip(), "target": copy.deepcopy(target), "change": copy.deepcopy(change),
+           "likely_duplicates": [], "decision": None, "history": [],
+           "created": raw.get("created") or now(), "createdBy": raw.get("createdBy") or who_am_i()}
+    for key in ("run", "evidence", "reviewer"):
+        if raw.get(key) not in (None, ""):
+            out[key] = copy.deepcopy(raw[key])
+    check_email_privacy(out, recipients_confirmed)
+    return out
+
+
+def _norm(value):
+    return " ".join(str(value or "").casefold().split())
+
+
+def proposal_duplicates(data, proposal):
+    c = proposal["change"]
+    out = []
+    if proposal["kind"].startswith("task."):
+        title, client = _norm(c.get("title") or proposal["title"]), _norm(c.get("client"))
+        for task in data.get("tasks", []):
+            if _norm(task.get("title")) == title and (not client or _norm(task.get("client")) == client):
+                out.append({"type": "task", "id": task["id"], "why": "same title" + (" and client" if client else "")})
+    elif proposal["kind"] == "person.upsert":
+        emails = {_norm(c.get("email"))} | {_norm(x.get("value")) for x in c.get("emails", []) if isinstance(x, dict)}
+        emails.discard("")
+        for person in data.get("contacts", []):
+            person_emails = {_norm(x["value"]) for x in person_methods(person, "email")}
+            if emails.intersection(person_emails):
+                out.append({"type": "person", "id": person["id"], "why": "same email"})
+            elif _norm(person.get("name")) == _norm(c.get("name")) and _norm(person.get("company")) == _norm(c.get("company")):
+                out.append({"type": "person", "id": person["id"], "why": "same name and company"})
+    return out
+
+
+def _read_proposal_payload(path):
+    try:
+        if path == "-":
+            raw = sys.stdin.read()
+        else:
+            with open(path, encoding="utf-8") as src:
+                raw = src.read()
+        value = json.loads(raw)
+    except (OSError, ValueError) as e:
+        proposal_error(f"cannot read proposal JSON: {e}")
+    return value if isinstance(value, list) else [value]
+
+
+def _all_proposals(data):
+    """Active and archived proposals, for identities that must survive an archive sweep."""
+    out = list(data.get("proposals", []))
+    state = _BOARD_STATES.get(id(data), {})
+    for rel, entry in state.get("files", {}).items():
+        if not (rel.startswith("archive/") and rel.endswith(".json")):
+            continue
+        try:
+            archived = entry.get("obj") or json.loads(entry["text"])
+        except (ValueError, TypeError):
+            continue
+        out.extend(x for x in archived.get("proposals", []) if isinstance(x, dict))
+    return out
+
+
+def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
+    require_review_storage(data)
+    if not ((data.get("settings") or {}).get("review_inbox") or {}).get("enabled"):
+        proposal_error("The Review Inbox is off for this board. A person can turn it on with: keeptrack.py settings-set review_inbox.enabled true")
+    every = _all_proposals(data)
+    existing_ids = {p.get("id") for p in every}
+    action = {p.get("action_key"): p for p in every}
+    added, lines = [], []
+    for raw in values:
+        proposal = validate_proposal_input(raw, recipients_confirmed)
+        old = action.get(proposal["action_key"])
+        if old:
+            lines.append(f"exists {old['id']} {old['status']}")
+            continue
+        if not proposal["id"]:
+            proposal["id"] = new_id("r_", existing_ids)
+        if proposal["id"] in existing_ids:
+            proposal_error(f"proposal id {proposal['id']} already exists")
+        ignored = [p for p in every if p.get("work_key") == proposal["work_key"] and p.get("status") == "ignored"]
+        if ignored:
+            old = sorted(ignored, key=lambda p: ((p.get("decision") or {}).get("at") or p.get("created") or ""))[-1]
+            proposal["previously_ignored"] = {"proposal": old["id"], "at": (old.get("decision") or {}).get("at") or old.get("created")}
+        proposal["likely_duplicates"] = proposal_duplicates(data, proposal)
+        proposal["history"].append({"at": proposal["created"], "by": proposal["createdBy"], "text": "proposed"})
+        data.setdefault("proposals", []).append(proposal)
+        every.append(proposal); existing_ids.add(proposal["id"]); action[proposal["action_key"]] = proposal; added.append(proposal)
+        lines.append(("would add " if dry_run else "added ") + proposal["id"] + " pending")
+    return added, lines
+
+
+def cmd_proposal_add(a):
+    values = _read_proposal_payload(a.path)
+    if a.dry_run:
+        data, _ = load(); before = copy.deepcopy(data)
+        _, lines = _prepare_proposals(data, values, a.recipients_confirmed, True)
+        for line_ in lines: print(line_)
+        print(f"DRY RUN: {len(data.get('proposals', [])) - len(before.get('proposals', []))} proposal(s) would be added. Nothing was saved.")
+        return
+    def fn(data):
+        _MUT["recheck"] = True   # action-key dedup must be re-evaluated if another proposal lands first
+        added, lines = _prepare_proposals(data, values, a.recipients_confirmed)
+        for line_ in lines: print(line_)
+        return added
+    mutate(fn, "Add Review Inbox proposals")
+
+
+def cmd_proposals(a):
+    data, _ = load(); require_review_storage(data)
+    rows = data.get("proposals", [])
+    status = a.status or "pending"
+    if status != "all": rows = [p for p in rows if p.get("status") == status]
+    if a.kind: rows = [p for p in rows if p.get("kind") == a.kind]
+    if a.source: rows = [p for p in rows if (p.get("source") or {}).get("kind") == a.source]
+    if a.run: rows = [p for p in rows if (p.get("run") or {}).get("run_id") == a.run or (p.get("run") or {}).get("routine") == a.run]
+    if a.reviewer: rows = [p for p in rows if p.get("reviewer") == a.reviewer]
+    rows = sorted(rows, key=lambda p: (p.get("created", ""), p.get("id", "")))
+    if a.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False)); return
+    for p in rows:
+        print(f"{p['id']}  {p['status']:<8} {p['kind']:<13} {p['title']}")
+    if not rows: print("(no proposals)")
+
+
+def _target_record(data, target):
+    if target.get("type") == "task":
+        return find(data, target["id"])
+    return find_person(data, target["id"])
+
+
+def _check_proposal_base(data, proposal, target=None):
+    target = target or proposal.get("target")
+    if not target:
+        return None
+    try:
+        record = _target_record(data, target)
+    except SystemExit:
+        proposal_conflict(f"not saved: proposal target {target.get('id')} no longer exists")
+    clashes = []
+    for field, old in (target.get("base") or {}).items():
+        current = record.get(field)
+        if current != old:
+            clashes.append((field, old, current))
+    if clashes:
+        proposal_conflict("not saved: the proposal target changed:\n" + "\n".join(
+            f"  {field}: proposed from {old!r}, current {current!r}" for field, old, current in clashes))
+    return record
+
+
+def _base36(value):
+    chars, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    while value:
+        value, rem = divmod(value, 36); out = chars[rem] + out
+    return out or "0"
+
+
+def proposal_result_id(proposal, prefix):
+    return prefix + _base36(int(hashlib.sha1(proposal["id"].encode()).hexdigest(), 16))[-10:].rjust(10, "0")
+
+
+def _recovered(record, proposal):
+    """An accept that stopped after the record was written: finish it only if the record came from this proposal."""
+    mark = f"created from proposal {proposal['id']}"
+    if not any(isinstance(h, dict) and h.get("text") == mark for h in record.get("history", [])):
+        proposal_conflict(f"not saved: {record.get('id')} already exists but was not created from proposal {proposal['id']}; review it by hand")
+    return record
+
+
+def _new_task(data, proposal, change):
+    ident = proposal_result_id(proposal, "t_")
+    existing = next((t for t in data.get("tasks", []) if t.get("id") == ident), None)
+    if existing:
+        return _recovered(existing, proposal), True
+    column = change.get("column") or "todo"
+    ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
+    ts = now()
+    assignees = copy.deepcopy(change.get("assignees", []))
+    owner = change.get("owner")
+    if not assignees and isinstance(owner, str) and any(owner.casefold() == str(m.get("github", "")).casefold() for m in data.get("people", [])):
+        assignees = [owner]
+    task = {"id": ident, "title": change.get("title") or proposal["title"], "column": column,
+            "client": change.get("client", ""), "project": change.get("project", ""), "priority": change.get("priority", "medium"),
+            "due": change.get("due", ""), "labels": copy.deepcopy(change.get("labels", [])),
+            "assignees": assignees, "details": change.get("details", ""),
+            "links": copy.deepcopy(change.get("links", [])), "contacts": copy.deepcopy(change.get("contacts", [])),
+            "todos": copy.deepcopy(change.get("todos", [])), "comments": copy.deepcopy(change.get("comments", [])),
+            "history": [], "claim": None, "created": ts, "createdBy": who_am_i(), "updated": ts, "updatedBy": who_am_i()}
+    for todo in task["todos"]:
+        todo.setdefault("id", "d_" + uuid.uuid4().hex[:6]); todo.setdefault("done", False)
+    for comment in task["comments"]:
+        comment.setdefault("id", "c_" + uuid.uuid4().hex[:6]); comment.setdefault("at", ts); comment.setdefault("by", who_am_i())
+    task["rank"] = key_between(max(ranks) if ranks else None, None)
+    hist(task, f"created from proposal {proposal['id']}")
+    data.setdefault("tasks", []).append(task); assign_nums(data)
+    return task, False
+
+
+def _new_person(data, proposal, change):
+    ident = proposal_result_id(proposal, "p_")
+    existing = next((p for p in data.get("contacts", []) if p.get("id") == ident), None)
+    if existing:
+        return _recovered(existing, proposal), True
+    ts = now()
+    person = {"id": ident, "name": change.get("name") or proposal["title"], "company": "", "role": "", "email": "", "phone": "",
+              "linkedin": "", "github": "", "emails": [], "phones": [], "stage": stages(data)[0], "value": "", "next": "",
+              "next_due": "", "source": "", "notes": "", "links": [], "comments": [], "history": [],
+              "created": ts, "updated": ts, "createdBy": who_am_i()}
+    for key, value in change.items(): person["next_due" if key == "due" else key] = copy.deepcopy(value)
+    sync_person_methods(person); hist(person, f"created from proposal {proposal['id']}")
+    data.setdefault("contacts", []).append(person)
+    if person.get("company") and person["company"] not in data.setdefault("clients", []): data["clients"].append(person["company"])
+    return person, False
+
+
+def _apply_touch(person, proposal, change):
+    ts = change.get("at") or now()
+    source_id = change.get("source_id")
+    if source_id and any(c.get("source_id") == source_id for c in person.get("comments", [])):
+        return
+    message_ids = sorted(set(change.get("source_message_ids", [])))
+    covered = {key for comment in person.get("comments", []) for key in comment.get("source_message_ids", [])}
+    overlap = covered.intersection(message_ids)
+    if overlap:
+        if overlap == set(message_ids):
+            return
+        proposal_conflict("not saved: some source messages are already logged; review the remaining messages as a new proposal")
+    comment = {"id": "c_" + uuid.uuid4().hex[:6], "at": ts, "by": who_am_i(), "channel": change.get("channel", "note"),
+               "text": change["text"], "draft": False}
+    if source_id: comment["source_id"] = source_id
+    if message_ids: comment["source_message_ids"] = message_ids
+    person.setdefault("comments", []).append(comment)
+    for key in ("next", "next_due"):
+        if key in change: person[key] = change[key]
+    if "due" in change: person["next_due"] = change["due"]
+    person["updated"] = now(); hist(person, f"accepted proposal {proposal['id']}")
+
+
+def _apply_update(data, record, proposal, change):
+    for key, value in change.items():
+        if key in ("comments", "todos", "links") and isinstance(value, list):
+            _append_unique(record, key, value)
+            continue
+        if key == "owner" and record.get("id", "").startswith("t_"):
+            if isinstance(value, str) and any(value.casefold() == str(m.get("github", "")).casefold() for m in data.get("people", [])):
+                record["assignees"] = [value]
+            continue
+        record["next_due" if key == "due" and record.get("id", "").startswith("p_") else key] = copy.deepcopy(value)
+    record["updated"] = now(); record["updatedBy"] = who_am_i()
+    hist(record, f"accepted proposal {proposal['id']}")
+
+
+def _already_decided(proposal):
+    if proposal.get("status") == "pending": return
+    d = proposal.get("decision") or {}
+    proposal_conflict(f"Already {proposal.get('status')} by {d.get('by', 'someone')} at {d.get('at', 'an unknown time')}")
+
+
+def _decide(proposal, action, result=None, edited=None, undo=None):
+    ts, by = now(), who_am_i()
+    proposal["status"] = "ignored" if action == "ignore" else "accepted"
+    proposal["decision"] = {"action": action, "by": by, "at": ts,
+                            "result": ({"type": "task" if result and result.get("id", "").startswith("t_") else "person", "id": result["id"]} if result else None),
+                            "commit": None}
+    if edited: proposal["decision"]["edited"] = copy.deepcopy(edited)
+    if undo: proposal["decision"]["undo"] = undo
+    proposal.setdefault("history", []).append({"at": ts, "by": by, "text": action + (f" as {result['id']}" if result else "")})
+
+
+def _edit_change(proposal, path):
+    if not path: return copy.deepcopy(proposal["change"]), None
+    try:
+        with open(path, encoding="utf-8") as src:
+            value = json.load(src)
+    except (OSError, ValueError) as e:
+        proposal_error(f"cannot read edit JSON: {e}")
+    if isinstance(value, dict) and set(value) == {"change"}: value = value["change"]
+    if not isinstance(value, dict): proposal_error("edit JSON must be an object of proposed fields")
+    bad = set(value) - _proposal_change_fields(proposal["kind"])
+    if bad: proposal_error("unknown edited field(s): " + ", ".join(sorted(bad)))
+    changed = {k: copy.deepcopy(v) for k, v in value.items() if proposal["change"].get(k) != v}
+    merged = copy.deepcopy(proposal["change"]); merged.update(copy.deepcopy(value))
+    check_change_values(proposal["kind"], merged)
+    target = proposal.get("target")
+    if target:
+        missing = sorted(proposal_base_fields(proposal["kind"], target.get("type"), merged) - set(target.get("base") or {}))
+        if missing:
+            proposal_error("an edit cannot overwrite a field the proposal did not record (" + ", ".join(missing) + "); add a new proposal instead")
+    check_email_privacy(dict(proposal, change=merged), bool((proposal.get("source") or {}).get("recipients_confirmed")))
+    return merged, changed
+
+
+def cmd_proposal_accept(a):
+    def fn(data):
+        require_review_storage(data); _MUT["recheck"] = True
+        proposal = find_proposal(data, a.id); _already_decided(proposal)
+        change, edited = _edit_change(proposal, a.edit)
+        kind = proposal["kind"]
+        target = _check_proposal_base(data, proposal)
+        before, recovered = copy.deepcopy(target), False
+        if kind == "task.create": result, recovered = _new_task(data, proposal, change); before = None
+        elif kind == "person.upsert" and target is None: result, recovered = _new_person(data, proposal, change); before = None
+        elif kind == "contact.touch": result = target; _apply_touch(result, proposal, change)
+        else: result = target; _apply_update(data, result, proposal, change)
+        undo = {"before": before, "after": copy.deepcopy(result), "created": before is None}
+        _decide(proposal, "edit" if a.edit else "accept", result, edited, undo)
+        if a.json:
+            print(json.dumps({"proposal": proposal["id"], "status": proposal["status"], "decision": proposal["decision"]}, ensure_ascii=False))
+        else:
+            print(("recovered" if recovered else "accepted") + f" {proposal['id']} -> {result['id']}")
+    mutate(fn, f"Accept proposal: {a.id}")
+
+
+def _append_unique(record, field, values):
+    dest = record.setdefault(field, [])
+    for value in values:
+        item = copy.deepcopy(value)
+        if field in ("comments", "todos") and isinstance(item, dict):
+            item.setdefault("id", ("c_" if field == "comments" else "d_") + uuid.uuid4().hex[:6])
+            if field == "comments": item.setdefault("at", now()); item.setdefault("by", who_am_i())
+            else: item.setdefault("done", False)
+        if item not in dest and not (isinstance(item, dict) and item.get("id") and any(x.get("id") == item["id"] for x in dest if isinstance(x, dict))):
+            dest.append(item)
+
+
+def cmd_proposal_merge(a):
+    def fn(data):
+        require_review_storage(data); _MUT["recheck"] = True
+        proposal = find_proposal(data, a.id); _already_decided(proposal)
+        _check_proposal_base(data, proposal)
+        target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
+        record = _target_record(data, target); before = copy.deepcopy(record)
+        selected = set(x.strip() for x in (a.fields or "").split(",") if x.strip())
+        for key, value in proposal["change"].items():
+            if key in ("comments", "todos", "links") and isinstance(value, list): _append_unique(record, key, value)
+            elif key == "owner" and key in selected and record.get("id", "").startswith("t_"):
+                if isinstance(value, str) and any(value.casefold() == str(m.get("github", "")).casefold() for m in data.get("people", [])):
+                    record["assignees"] = [value]
+            elif key == "due" and key in selected and record.get("id", "").startswith("p_"):
+                record["next_due"] = copy.deepcopy(value)
+            elif key in selected: record[key] = copy.deepcopy(value)
+        record["updated"] = now(); record["updatedBy"] = who_am_i(); hist(record, f"merged from proposal {proposal['id']}")
+        _decide(proposal, "merge", record, {k: proposal["change"][k] for k in selected if k in proposal["change"]},
+                {"before": before, "after": copy.deepcopy(record), "created": False})
+        print(f"merged {proposal['id']} -> {record['id']}")
+    mutate(fn, f"Merge proposal: {a.id}")
+
+
+def cmd_proposal_ignore(a):
+    def fn(data):
+        require_review_storage(data); _MUT["recheck"] = True
+        proposal = find_proposal(data, a.id); _already_decided(proposal)
+        _decide(proposal, "ignore")
+        if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": _one_line(a.reason, "ignore reason", 300)})
+        print(f"ignored {proposal['id']}")
+    mutate(fn, f"Ignore proposal: {a.id}")
+
+
+def cmd_proposal_reopen(a):
+    def fn(data):
+        require_review_storage(data); _MUT["recheck"] = True
+        proposal = find_proposal(data, a.id)
+        if proposal.get("status") != "ignored": proposal_error("only an ignored proposal can be reopened")
+        if not proposal.get("change"):
+            proposal_error("this decided proposal was slimmed after 30 days and no longer has change detail to reopen")
+        old = proposal.get("decision") or {}; proposal["status"] = "pending"; proposal["decision"] = None
+        proposal.setdefault("history", []).append({"at": now(), "by": who_am_i(), "text": f"reopened (was ignored by {old.get('by', 'someone')})"})
+        print(f"reopened {proposal['id']}")
+    mutate(fn, f"Reopen proposal: {a.id}")
+
+
+def cmd_proposal_undo(a):
+    def fn(data):
+        require_review_storage(data); _MUT["recheck"] = True
+        proposal = find_proposal(data, a.id)
+        decision = proposal.get("decision") or {}; undo = decision.get("undo") or {}
+        if proposal.get("status") != "accepted" or not decision.get("result") or not undo:
+            proposal_error("only an accepted proposal with an undo record can be undone")
+        result = decision["result"]
+        record = find(data, result["id"]) if result["type"] == "task" else find_person(data, result["id"])
+        if record != undo.get("after"):
+            proposal_conflict("not undone: the resulting record changed after acceptance; later edits are untouched")
+        if undo.get("created"):
+            key = "tasks" if result["type"] == "task" else "contacts"
+            data[key] = [x for x in data[key] if x.get("id") != result["id"]]
+        else:
+            record.clear(); record.update(copy.deepcopy(undo["before"]))
+        old = copy.deepcopy(decision); proposal["status"] = "pending"; proposal["decision"] = None
+        proposal.setdefault("history", []).append({"at": now(), "by": who_am_i(), "text": f"undid {old.get('action')} by {old.get('by')} ({result['id']})"})
+        print(f"undid {proposal['id']}; it is pending")
+    mutate(fn, f"Undo proposal: {a.id}")
+
+
+def cmd_proposal_show(a):
+    data, _ = load(); require_review_storage(data); proposal = copy.deepcopy(find_proposal(data, a.id))
+    if proposal.get("target"):
+        try: proposal["current"] = copy.deepcopy(_target_record(data, proposal["target"]))
+        except SystemExit: proposal["current"] = None
+    print(json.dumps(proposal, indent=2, ensure_ascii=False))
+
+
 # ---- archive: old done tasks, old Lost people and long histories move to <board dir>/archive/<year>.json ----------
 ARCHIVE_DEFAULTS = {"done_days": 90, "lost_days": 180, "keep_history": 20}
 ARCHIVE_SCHEMA = 3
@@ -4598,12 +5228,12 @@ def done_col(data):
 
 
 def archive_plan(data, rules, today=None):
-    """Take what can be archived out of data. Returns {year: {"tasks": [], "contacts": [], "history": {id: [...]}}}."""
+    """Take what can be archived out of data, including decided Review Inbox proposals."""
     today = today or board_today(data)
     cut_t = (today - dt.timedelta(days=rules["done_days"])).isoformat()
     cut_p = (today - dt.timedelta(days=rules["lost_days"])).isoformat()
     dc, plan = done_col(data), {}
-    part = lambda y: plan.setdefault(y, {"tasks": [], "contacts": [], "history": {}})
+    part = lambda y: plan.setdefault(y, {"tasks": [], "contacts": [], "proposals": [], "history": {}})
     stamp = lambda x: str(x.get("updated") or x.get("created") or today.isoformat())
     year = lambda x: stamp(x)[:4] if valid_year(stamp(x)[:4]) else None   # a record with no usable date stays on the board
     keep_t = []
@@ -4621,6 +5251,27 @@ def archive_plan(data, rules, today=None):
         else:
             keep_p.append(p)
     data["tasks"], data["contacts"] = keep_t, keep_p
+    if "proposals" in data:
+        keep_r = []
+        slim_cut = today - dt.timedelta(days=30)
+        archive_cut = today - dt.timedelta(days=rules["done_days"])
+        for proposal in data.get("proposals", []):
+            decision_at = str((proposal.get("decision") or {}).get("at") or "")
+            try:
+                decision_day = parse(decision_at).date() if decision_at else None
+            except (ValueError, TypeError):
+                decision_day = None
+            if proposal.get("status") in ("accepted", "ignored") and decision_day and decision_day < slim_cut:
+                for field in ("reason", "evidence", "change"):
+                    proposal.pop(field, None)
+                if isinstance(proposal.get("decision"), dict):
+                    proposal["decision"].pop("undo", None); proposal["decision"].pop("edited", None)
+            # Archive only what is already slimmed: an archive file must never keep the detail the 30-day rule removes.
+            if proposal.get("status") in ("accepted", "ignored") and decision_day and decision_day < min(archive_cut, slim_cut):
+                part(str(decision_day.year))["proposals"].append(proposal)
+            else:
+                keep_r.append(proposal)
+        data["proposals"] = keep_r
     n = rules["keep_history"]
     for x in keep_t + keep_p:
         h = x.get("history") or []
@@ -4631,10 +5282,12 @@ def archive_plan(data, rules, today=None):
 
 def archive_merge(cur, part, year):
     """Add a plan part to an archive file's data (replace by id, so a retried run does not duplicate)."""
-    cur = cur or {"version": ARCHIVE_SCHEMA, "archive": True, "year": year, "tasks": [], "contacts": [], "history": {}}
-    for k in ("tasks", "contacts"):
-        ids = {x["id"] for x in part[k]}
-        cur[k] = [x for x in cur.get(k, []) if x["id"] not in ids] + part[k]
+    cur = cur or {"version": ARCHIVE_SCHEMA, "archive": True, "year": year, "tasks": [], "contacts": [], "proposals": [], "history": {}}
+    for k in ("tasks", "contacts", "proposals"):
+        incoming = part.get(k, [])
+        ids = {x["id"] for x in incoming}
+        if incoming or k in cur:
+            cur[k] = [x for x in cur.get(k, []) if x["id"] not in ids] + incoming
     for i, h in part["history"].items():
         old = cur.setdefault("history", {}).setdefault(i, [])
         old.extend(e for e in h if e not in old)
@@ -4643,7 +5296,10 @@ def archive_merge(cur, part, year):
 
 def archive_index(data, year, cur):
     a = data.setdefault("archive", {})
-    a.setdefault("files", {})[year] = {"tasks": len(cur.get("tasks", [])), "contacts": len(cur.get("contacts", []))}
+    counts = {"tasks": len(cur.get("tasks", [])), "contacts": len(cur.get("contacts", []))}
+    if cur.get("proposals"):
+        counts["proposals"] = len(cur["proposals"])
+    a.setdefault("files", {})[year] = counts
     a["last_run"] = now()
 
 
@@ -4727,18 +5383,28 @@ def _cmd_archive(a):
                 if entry not in history: history.append(entry)
             task["history"] = history
             year = str(board_today(data).year)
-            plan = {year: {"tasks": [task], "contacts": [], "history": {}}}
+            plan = {year: {"tasks": [task], "contacts": [], "proposals": [], "history": {}}}
             data["tasks"] = [t for t in data["tasks"] if t["id"] != task["id"]]
         else:
+            proposals_before = copy.deepcopy(data.get("proposals", []))
             plan = archive_plan(data, rules)
+            slimmed = sum(1 for old in proposals_before for new in data.get("proposals", [])
+                          if old.get("id") == new.get("id") and old != new)
         nt = sum(len(p["tasks"]) for p in plan.values()); np_ = sum(len(p["contacts"]) for p in plan.values())
+        nr = sum(len(p.get("proposals", [])) for p in plan.values())
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
-        summary = f"task #{task.get('num')} ({task['title']}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people and {nh} old history lines"
+        summary = f"task #{task.get('num')} ({task['title']}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
         if not plan:
+            if not ref and slimmed:
+                if a.dry_run:
+                    print(f"would slim {slimmed} decided proposal(s); nothing was saved"); return
+                if save_changes(data, base, f"Slim {slimmed} Review Inbox proposal(s)"):
+                    print(f"slimmed {slimmed} decided proposal(s)"); return
+                time.sleep(0.4 * (attempt + 1)); continue
             print("nothing to archive"); return
         if a.dry_run:
             for y, p in sorted(plan.items()):
-                print(f"{archive_path(y)}: {len(p['tasks'])} tasks, {len(p['contacts'])} people, {sum(len(h) for h in p['history'].values())} history lines")
+                print(f"{archive_path(y)}: {len(p['tasks'])} tasks, {len(p['contacts'])} people, {len(p.get('proposals', []))} proposals, {sum(len(h) for h in p['history'].values())} history lines")
                 for t in p["tasks"]: print(f"  #{t.get('num')} {t['title']}")
                 for c in p["contacts"]: print(f"  {c['id']} {c['name']} ({c.get('company', '')})")
             return
@@ -5070,11 +5736,34 @@ def main():
     s = sub.add_parser("agent-rm", help="remove an agent name"); s.add_argument("name"); s.add_argument("--unassign", action="store_true", help="take it off its open tasks"); s.set_defaults(f=cmd_agent_rm)
     s = sub.add_parser("settings", help="show board settings"); s.set_defaults(f=cmd_settings)
     s = sub.add_parser("settings-set", help="change title, stale minutes or pipeline stages"); s.add_argument("--title")
+    s.add_argument("setting", nargs="?"); s.add_argument("value", nargs="?")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
     s.add_argument("--rename-stage", dest="rename_stage", action="append", help="OLD=NEW (repeatable); moves people in OLD")
     s.set_defaults(f=cmd_settings_set)
+    s = sub.add_parser("proposal-add", help="add one proposal, or a JSON list, to the Review Inbox")
+    s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--recipients-confirmed", action="store_true", help="every intended board reader received this specific email")
+    s.set_defaults(f=cmd_proposal_add)
+    s = sub.add_parser("proposals", help="list Review Inbox proposals")
+    s.add_argument("--status", choices=["pending", "accepted", "ignored", "all"], default="pending")
+    s.add_argument("--kind", choices=sorted(PROPOSAL_KINDS)); s.add_argument("--source", choices=sorted(PROPOSAL_SOURCE_KINDS))
+    s.add_argument("--run"); s.add_argument("--reviewer"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposals)
+    s = sub.add_parser("proposal-show", help="show one proposal and its current target")
+    s.add_argument("id"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposal_show)
+    s = sub.add_parser("proposal-accept", help="accept one pending proposal")
+    s.add_argument("id"); s.add_argument("--edit", help="JSON object containing replacement proposed fields"); s.add_argument("--json", action="store_true")
+    s.set_defaults(f=cmd_proposal_accept)
+    s = sub.add_parser("proposal-merge", help="merge one pending proposal into an existing task or person")
+    s.add_argument("id"); s.add_argument("--into", required=True); s.add_argument("--fields", help="comma-separated scalar fields to set")
+    s.set_defaults(f=cmd_proposal_merge)
+    s = sub.add_parser("proposal-ignore", help="ignore one pending proposal")
+    s.add_argument("id"); s.add_argument("--reason"); s.set_defaults(f=cmd_proposal_ignore)
+    s = sub.add_parser("proposal-reopen", help="return an ignored proposal to pending")
+    s.add_argument("id"); s.set_defaults(f=cmd_proposal_reopen)
+    s = sub.add_parser("proposal-undo", help="undo an unchanged accepted proposal result")
+    s.add_argument("id"); s.set_defaults(f=cmd_proposal_undo)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     have = {act.dest for act in sub._choices_actions}   # argparse lists only commands created with a help line
     for name in sub.choices:
