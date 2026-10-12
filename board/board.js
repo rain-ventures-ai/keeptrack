@@ -231,6 +231,7 @@ if (typeof window !== 'undefined') (() => {
     { id: 'btnUndo', icon: 'undo-2', menu: 'Undo last change', title: 'Nothing to undo' },
     { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
     { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
+    { id: 'btnInstall', icon: 'download', short: 'Install', menu: 'Install this board', title: 'Install this board' },
     { id: 'btnHelp', icon: 'circle-help', short: 'Help', menu: 'Help', title: 'Help' },
     { tour: true, icon: 'compass', menu: 'Show me around' },
     { id: 'btnSettings', icon: 'settings', short: 'Settings', menu: 'Settings', title: 'Settings' }
@@ -3052,7 +3053,8 @@ if (typeof window !== 'undefined') (() => {
   function notify(title, body, id) {
     const n = 'Notification' in window && Notification.permission === 'granted';
     if (!n) { if (!document.hidden) toast(title + ': ' + body); return; }
-    const opts = { body: String(body).slice(0, 240), tag: id || 'board', data: { card: id || '' }, icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') };
+    const task = id && state.tasks.find(t => t.id === id);
+    const opts = { body: String(body).slice(0, 240), tag: id || 'board', data: { card: id || '', url: new URL(boardUrl() + (task ? '#' + task.num : ''), location.href).href }, icon: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + boardColour(cfg().repo) + '"/><text x="32" y="41" font-size="24" font-family="sans-serif" font-weight="700" fill="#fff" text-anchor="middle">' + boardInitials(cfg().repo) + '</text></svg>') };
     try { const x = new Notification(title, opts); x.onclick = () => { window.focus(); if (id) openCard(id); x.close(); }; }
     catch {   // Android browsers only allow a service worker to show one (sw.js)
       if (!navigator.serviceWorker) { toast(title + ': ' + body); return; }
@@ -3293,6 +3295,19 @@ if (typeof window !== 'undefined') (() => {
   $('sMarkAll').onclick = () => { markAllSeen(); render(); toast('All cards marked as read'); };
   $('btnRefresh').onclick = () => load();
   $('btnCopy').onclick = () => { closePops(); if (!$('dlgCopy').open) $('dlgCopy').showModal(); };
+  const syncInstall = () => {
+    const show = !!(window.kbPwa && window.kbPwa.available());
+    [$('btnInstall'), ...document.querySelectorAll('[data-head-action="btnInstall"]')].forEach(button => { if (button) button.hidden = !show; });
+  };
+  $('btnInstall').onclick = async () => {
+    closePops(); if (!window.kbPwa) return;
+    const result = await window.kbPwa.install();
+    if (result === 'accepted') toast(`Installing ${window.kbPwa.boardName}…`);
+    else if (result === 'ios') toast('On iPhone or iPad, tap Share, then Add to Home Screen.');
+    else if (result === 'browser') toast('Open your browser menu and choose Install app or Add to Home screen.');
+    syncInstall();
+  };
+  window.addEventListener('kb-pwa-change', syncInstall); syncInstall();
   $('copyClose').onclick = () => $('dlgCopy').close();
   $('copyAgent').onclick = () => { $('dlgCopy').close(); copyText(agentPrompt(null), 'Board instructions copied for an agent'); };
   $('copyMarkdown').onclick = () => { $('dlgCopy').close(); copyMarkdown(); };
