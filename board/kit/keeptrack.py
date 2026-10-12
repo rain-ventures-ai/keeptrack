@@ -298,7 +298,7 @@ def ensure_local_dir(path, warn=True, check_tracked=True):
     if os.path.basename(d) in CONFIG_DIRS:   # Keeptrack's own folder: nothing in it may be committed
         if check_tracked:
             try:
-                r = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True, timeout=10)
+                r = subprocess.run(["git", "-C", d, "ls-files", "--", "."], capture_output=True, text=True, timeout=10, env=_git_c_env())
             except (OSError, subprocess.SubprocessError):
                 raise OSError(f"git cannot vouch for {d} (no git, or it did not answer); Keeptrack keeps its personal files out of git")
             if r.returncode != 0 and "not a git repository" not in r.stderr:
@@ -316,7 +316,8 @@ def ensure_local_dir(path, warn=True, check_tracked=True):
                 raise OSError(f"git cannot vouch for {path} (no git here, or it did not answer), so Keeptrack writes no personal file")
         if warn:
             try:
-                ignored = subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True, timeout=10).returncode != 1
+                ignored = subprocess.run(["git", "-C", d, "check-ignore", "-q", "--", os.path.basename(path)], capture_output=True, timeout=10,
+                                         env=_git_c_env()).returncode != 1
             except (OSError, subprocess.SubprocessError):
                 ignored = True   # no answer: no warning either
             if not ignored:
@@ -1413,8 +1414,10 @@ def claim_record():
     (which keeps no record) or outside a git repo."""
     if _REC.get("on") and _REC.get("path") == CLAIM_FILE and "info" in _REC:
         return _REC["info"]
-    info = None
-    if os.path.lexists(CLAIM_FILE):
+    info, tracked = None, None
+    if os.path.islink(os.path.dirname(CLAIM_FILE)):
+        pass   # a symlinked folder is never written through (ensure_local_dir), so nothing in it is this clone's record
+    elif os.path.lexists(CLAIM_FILE):
         tracked = _record_tracked()   # asked before the file is opened: a committed record is never read, whatever it holds
         if tracked is False:
             try:
@@ -1429,12 +1432,17 @@ def claim_record():
         else:
             print(f"note: git could not say whether {CLAIM_FILE} is committed, so it is not trusted as this clone's record", file=sys.stderr)
     if _REC.get("on"):
-        _REC.update(path=CLAIM_FILE, info=info)
+        _REC.update(path=CLAIM_FILE, info=info, tracked=tracked)
     return info
 
 
 def _record_tracked():
     return _tracked_by_git(CLAIM_FILE)
+
+
+def _git_c_env():
+    """The environment for a git probe whose stderr text is matched: git translates its messages, so the C locale."""
+    return {**os.environ, "LC_ALL": "C", "LANGUAGE": "C"}
 
 
 def _tracked_by_git(path):
@@ -1444,7 +1452,7 @@ def _tracked_by_git(path):
     runs in may hold one."""
     try:
         r = subprocess.run(["git", "-C", os.path.dirname(path) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(path)],
-                           capture_output=True, text=True, timeout=10, env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"})   # the stderr text is matched below
+                           capture_output=True, text=True, timeout=10, env=_git_c_env())   # the stderr text is matched below
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode == 0:
@@ -1721,8 +1729,8 @@ def drop_claim_file(task_id=None):
         return
     try:
         info = claim_record()
-        if info is None and (task_id or not os.path.lexists(CLAIM_FILE)):
-            return   # no record read this command: nothing to forget (a record that appeared meanwhile is another command's)
+        if info is None and (not os.path.lexists(CLAIM_FILE) or (task_id and _REC.get("tracked") is not False)):
+            return   # nothing read this command (no record, one git did not vouch for, or one that appeared meanwhile): not ours to forget
         ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=info is None)   # the same guard as the write (the read already asked git when it found a record)
         if task_id:
             if info and info.get("id") and info.get("id") != task_id:
