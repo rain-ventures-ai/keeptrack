@@ -442,6 +442,20 @@ class Waiting(unittest.TestCase):
         self.assertIsNone(self.card(2)["waiting"])
         self.claim(2, "s2")                                                  # the old wait did not come back
 
+    def test_release_to_done_does_not_end_a_wait(self):
+        self.wait(1, who="JezHub")
+        with self.agent():
+            self.assertIn("does not end a wait", self.refusal(self.release, 1, session="s1", column="done"))
+        self.assertIsNotNone(self.card(1)["waiting"])
+
+    def test_an_agent_route_to_done_without_close_waiting_is_recorded(self):
+        self.wait(1, who="JezHub")
+        d = self.read()
+        with self.agent():
+            kt.move_task_to_column(d, d["tasks"][0], "done")                 # column-rm --move-to done, or a proposal
+        t = d["tasks"][0]
+        self.assertIsNone(t["waiting"]); self.assertEqual([x["what"] for x in t["agent_cleared"]], ["move to done while waiting"])
+
     def test_a_persons_wait_blocks_a_stuck_claim_too(self):
         self.claim(1, "s1")
         self.set_claim(1, status="stuck")
@@ -449,6 +463,14 @@ class Waiting(unittest.TestCase):
         c = self.card(1)["claim"]
         self.assertEqual(c["status"], "blocked"); self.assertTrue(c["blocked_by_wait"])
         self.assertNotIn(("CLAIM_BLOCKED", "card t_c1"), self.doctor_codes()[0])
+        self.unwait(1)                                                       # a stuck claim stays stuck: it still needs help
+        c = self.card(1)["claim"]
+        self.assertEqual(c["status"], "stuck"); self.assertNotIn("blocked_by_wait", c); self.assertNotIn("before_wait", c)
+
+    def test_a_proposal_that_reopens_a_done_card_drops_a_leftover_wait(self):
+        rec = {"id": "t_x", "column": "done", "waiting": {"on": "x", "since": "2026-10-01"}, "history": []}
+        kt._apply_update({"people": []}, rec, {"id": "pr_1"}, {"column": "todo"})
+        self.assertIsNone(rec["waiting"])
 
     def test_an_agents_permitted_self_unwait_is_not_flagged_at_the_next_claim(self):
         with self.agent():

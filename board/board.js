@@ -849,7 +849,8 @@ if (typeof window !== 'undefined') (() => {
       p.todos.forEach(d => { if (!tm.has(d.id)) add('removed to-do: ' + d.text); });
       if (p.claim && !t.claim) add('claim released'); else if (p.claim && t.claim && p.claim.status !== t.claim.status) add('claim ' + t.claim.status);
       const isW = w => w && typeof w === 'object' && !Array.isArray(w), pw = isW(p.waiting) ? p.waiting : null, tw = isW(t.waiting) ? t.waiting : null;
-      if (tw && t.column === doneColId() && p.column !== t.column) { add(`wait ended by done (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; }   // as keeptrack.py done / move ID done
+      if (tw && t.column === doneColId() && p.column !== t.column) { add(`wait ended by done (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // as keeptrack.py done / move ID done
+      else if (tw && p.column === doneColId() && t.column !== doneColId()) { add(`wait ended by reopening (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; }   // a leftover wait never comes back live
       else if (tw && JSON.stringify(pw) !== JSON.stringify(tw)) add('waiting on ' + (tw.on || '?') + (tw.nudge ? ', chase ' + tw.nudge : ''));
       else if (pw && !tw) add(`wait cleared (was waiting on ${pw.on || '?'}, since ${pw.since || '?'})`);
     });
@@ -1645,13 +1646,18 @@ if (typeof window !== 'undefined') (() => {
         else { const a = await askSend(t0 ? t0.num : '?'); if (a === 'cancel') return; send = a === 'send'; } }
     }
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
+    const seen = ((state.tasks.find(x => x.id === id) || {}).claim || {}).session_id || '';   // the claim the person saw (and may have confirmed)
+    let sent = send, why = '';
     await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return; t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text });
-      if (send) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); }   // the routine claims only cards assigned to its person
+      const live = activeClaim(t); sent = send && !waitingOf(t) && !(live && live.session_id !== seen);   // the newer board may wait, or someone took it meanwhile
+      why = send && !sent ? (waitingOf(t) ? waitingBlock(t) + ' Posted as a normal comment.' : 'Someone took this task meanwhile; posted as a normal comment.') : '';
+      if (sent) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); }   // the routine claims only cards assigned to its person
       stamp(t); }, `Comment: ${titleOf(id)}`, [id]);
     $('cmPost').disabled = false;
     { const t2 = state.tasks.find(x => x.id === id); if (t2) syncAgentBtn(t2);
       if (mentionsCodex(text) && myAgents().includes('codex')) toast('Codex can’t be started from the board. Press Copy for Codex at the top of the card, then paste it into Codex.'); }
-    if (send && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
+    if (why) toast(why, true);
+    if (sent && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
       const t1 = state.tasks.find(x => x.id === id);
       await triggerClaude(t1, who, cid);
     }
@@ -2493,7 +2499,7 @@ if (typeof window !== 'undefined') (() => {
       const old = waitingOf(t);
       t.waiting = { on, who: who || '', since: (old && old.since) || todayIso(), nudge: DAY_RE.test(nudge || '') ? nudge : '', note: (old && old.note) || '', by: cfg().me || 'someone', by_session: '' };
       if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= WAITING_KIT)) n.settings.min_kit = WAITING_KIT;   // tells v43+ tools (doctor, relay) a card relies on it
-      const c = t.claim; if (c && (c.status === 'running' || c.status === 'blocked' || c.status === 'stuck')) { c.status = 'blocked'; c.blocked_by_wait = true; c.note = 'waiting on ' + on; }   // a person's wait blocks the claim, as `wait` does
+      const c = t.claim; if (c && (c.status === 'running' || c.status === 'blocked' || c.status === 'stuck')) { if (c.status === 'stuck') c.before_wait = 'stuck'; c.status = 'blocked'; c.blocked_by_wait = true; c.note = 'waiting on ' + on; }   // a person's wait blocks the claim, as `wait` does
     }, `Waiting: ${titleOf(id)}`);
   }
   async function clearWait(id) {
@@ -2508,6 +2514,7 @@ if (typeof window !== 'undefined') (() => {
             t.column = 'todo'; if (isSplit(n)) t.rank = keyBetween(last, null);
           }
         }
+        else if (c.before_wait === 'stuck') { delete c.blocked_by_wait; delete c.before_wait; c.status = 'stuck'; }   // it still needs help: the wait did not fix that
         else if (c.attended || !agentLimitFull(id)) { delete c.blocked_by_wait; c.status = 'running'; c.heartbeat_at = nowIso(); }
         else full = agentLimitFull(id);   // keeps blocked_by_wait: still live, as `unwait` does
       }

@@ -1644,21 +1644,23 @@ def close_waiting(t, a, how, data=None):
         note_agent_cleared(t, f"{how} while waiting", sid)
     t["waiting"] = None
     if isinstance(t.get("claim"), dict):
-        t["claim"].pop("blocked_by_wait", None)
+        t["claim"].pop("blocked_by_wait", None); t["claim"].pop("before_wait", None)
     hist(t, f"wait ended by {how} (was waiting on {waiting_text(w)}" + (f", {clean(w.get('who'), 60)}" if w.get("who") else "")
          + f", since {clean(w.get('since') or '?', 20)})")
 
 
-def drop_leftover_wait(t, how):
+def drop_leftover_wait(t, how, data=None):
     """A route to done that did not call close_waiting (a proposal, column-rm --move-to done, an older tool), or a card
     reopened from done with such a wait: end the wait, with a history line, so it never comes back as a live one. A
     blocked_by_wait claim stops being one (the card waits on nothing now)."""
     w = waiting_of(t)
+    if w and how != "reopening" and agent_run() and other_party(w, claim_agent(t), data):
+        note_agent_cleared(t, f"{how} while waiting", session_for(None))   # column-rm or a proposal: as close_waiting records
     if w:
         t["waiting"] = None
         hist(t, f"wait ended by {how} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)})")
     if isinstance(t.get("claim"), dict):
-        t["claim"].pop("blocked_by_wait", None)
+        t["claim"].pop("blocked_by_wait", None); t["claim"].pop("before_wait", None)
 
 
 def waiting_index(data):
@@ -1964,7 +1966,7 @@ def cmd_heartbeat(a):
         if a.note is not None: c["note"] = a.note
         if a.status: c["status"] = a.status
         if a.status in ("running", "stuck"):
-            c.pop("blocked_by_wait", None)   # blocked keeps it (agents report "I need a person" that way); running and stuck end it
+            c.pop("blocked_by_wait", None); c.pop("before_wait", None)   # blocked keeps it (agents report "I need a person" that way); running and stuck end it
         t["updated"] = now(); print(f"heartbeat {t['id']} ({c['status']})")
     mutate(fn, f"Agent heartbeat: {a.id}")
 
@@ -1999,7 +2001,7 @@ def move_task_to_column(data, task, column):
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
     if "done" in (old, column):
-        drop_leftover_wait(task, "reopening" if old == "done" else "move to done")
+        drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data)
     if data.get("layout") == "split":
         ranks = [x.get("rank") for x in data.get("tasks", [])
                  if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
@@ -2010,7 +2012,11 @@ def move_task_to_column(data, task, column):
 
 def cmd_release(a):
     def fn(data):
-        t = find(data, a.id); claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file(t["id"])
+        t = find(data, a.id)
+        if a.column == "done" and open_waiting(t):
+            sys.exit(f"refused: {t['id']} is waiting on {waiting_text(open_waiting(t))}; release --column done does not end a wait. "
+                     "Use done or move ID done (a person, or the session that set a wait on nobody else), or unwait first")
+        claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file(t["id"])
         if a.column: move_task_to_column(data, t, a.column)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
@@ -2086,6 +2092,8 @@ def cmd_wait(a):
             if own or not agent_run():
                 if c.get("status") != "blocked":
                     hist(t, f"claim blocked: waiting on {on}")
+                if c.get("status") == "stuck":
+                    c["before_wait"] = "stuck"   # unwait puts it back: the agent still needs help
                 c["status"] = "blocked"; c["blocked_by_wait"] = True; c["note"] = note or f"waiting on {on}"   # heartbeat_at untouched
             elif claim_state(data, c) in ("running", "blocked"):
                 note_agent_cleared(t, "wait on a live claim", sid)   # (d): left alone, but recorded for review
@@ -2129,6 +2137,9 @@ def cmd_unwait(a):
                 hist(t, f"released to todo: the claim's session sent no heartbeat for {_age(age)}")
                 t["claim"] = None; move_task_to_column(data, t, "todo"); drop_claim_file(t["id"])
                 msg += "; its old claim is released and the card is back in To do"
+            elif c.get("before_wait") == "stuck":
+                c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
+                msg += "; its claim is stuck again (it was stuck before the wait)"
             else:
                 busy = [] if c.get("attended") else busy_over_limit(data, t)   # reviving counts like a new claim
                 if busy:
@@ -2426,7 +2437,10 @@ def cmd_kit_check(a):
     except (SystemExit, Exception):   # no board here, or one this kit can't read: the version check still runs
         mk = None
     if isinstance(mk, int) and not isinstance(mk, bool) and mk > have:
-        print(f"this board needs kit v{mk} (settings.min_kit), but this repo has v{have}: upgrade before an older tool saves it")
+        if mk > want:
+            print(f"settings.min_kit is {mk}, above the published kit v{want}: probably a typo (doctor reports it)")
+        else:
+            print(f"this board needs kit v{mk} (settings.min_kit), but this repo has v{have}: upgrade before an older tool saves it")
     if have >= want:
         print(f"board kit is current (v{have})"); return
     print(f"board kit is out of date: this repo has v{have}, the published kit is v{want}. "
@@ -2683,7 +2697,7 @@ def doctor_board(fix=False):
         if w and claim and claim.get("status") != "done" and not (claim.get("status") == "blocked" and claim.get("blocked_by_wait")):
             problem("CLAIM_BLOCKED", path, f"{claim.get('agent', '?')} holds a {claim.get('status', '?')} claim on a card that is waiting "
                     f"on {waiting_text(w)} (an older tool may have claimed it); release it, or unwait the card if the wait is over.")
-        recent = [x for x in t.get("agent_cleared") or [] if isinstance(x, dict) and (minutes_since(x.get("at")) or 0) < AGENT_CLEARED_DAYS * 1440]
+        recent = [x for x in t.get("agent_cleared") or [] if isinstance(x, dict) and (minutes_since(x.get("at")) or 0) < AGENT_CLEARED_DAYS * 1440]   # a bad `at` shows: fail toward showing
         for x in recent[-3:]:   # done cards too: "done while waiting" is the case to check
             problem("AGENT_CLEARED", path, f"An agent run ({clean(x.get('by') or '?', 60)}, session {clean(x.get('session') or '?', 20)}) "
                     f"did '{clean(x.get('what') or '?', 40)}' at {clean(x.get('at') or '?', 30)}: check it was allowed.")
@@ -5426,6 +5440,7 @@ def _apply_touch(person, proposal, change):
 
 
 def _apply_update(data, record, proposal, change):
+    was_done = record.get("column") == "done"
     for key, value in change.items():
         if key in ("comments", "todos", "links") and isinstance(value, list):
             _append_unique(record, key, value)
@@ -5435,8 +5450,10 @@ def _apply_update(data, record, proposal, change):
                 record["assignees"] = [value]
             continue
         record["next_due" if key == "due" and record.get("id", "").startswith("p_") else key] = copy.deepcopy(value)
-    if record.get("id", "").startswith("t_") and record.get("column") == "done":
-        drop_leftover_wait(record, "proposal to done")
+    if record.get("id", "").startswith("t_") and record.get("column") == "done" and not was_done:
+        drop_leftover_wait(record, "proposal to done", data)
+    elif record.get("id", "").startswith("t_") and was_done and record.get("column") != "done":
+        drop_leftover_wait(record, "reopening")
     record["updated"] = now(); record["updatedBy"] = who_am_i()
     hist(record, f"accepted proposal {proposal['id']}")
 
