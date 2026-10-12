@@ -25,6 +25,19 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v41 (schema 4)
+Canonical email keys support bounded `email-key --stdin`. Pass untrusted headers as runtime data through stdin or
+one non-shell argv element, never interpolate headers into shell commands or executable source. The positional
+form remains compatible when invoked safely; canonical key output is unchanged. Email skills and routine instructions
+now explain this security boundary.
+The hosted weather widget supports opt-in approximate browser location, rounded to 0.1° before local storage or
+Open-Meteo requests. Location is requested only on an explicit click; no background tracking or GitHub location writes.
+Fixed-city configurations remain compatible; optional `location.mode: browser` waits for permission and uses a configured
+fallback on failure if available. Widget enablement and location overrides stay scoped to this browser/board/widget.
+- Run `kit-update` only. No migration, source re-import, widgets installation, location selection or schedule change.
+- Check: `email-key --help` lists `--stdin`; automation callers must not generate shell/script text containing headers.
+- Read the updated email skill and `ROUTINES.md` before the next email import. Existing message hashes remain valid.
+
 ### v40 (schema 4)
 Board members may explicitly link multiple existing companies with optional `own_companies` in their member record.
 These identity links are never inferred from CRM employers. Linked companies and members are protected from removal

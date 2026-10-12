@@ -115,7 +115,7 @@ if (typeof window !== 'undefined') (() => {
   const qv = v => encodeURIComponent(v).replace(/%2F/gi, '/');   // keep owner/name and board/tasks.json readable
   const boardUrl = () => `${location.pathname}?repo=${qv(LS.get('kb_repo'))}&branch=${qv(LS.get('kb_branch', 'master'))}&path=${qv(LS.get('kb_path', 'board/tasks.json'))}`;
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
-    try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`)).forEach(k => localStorage.removeItem(k)); } catch {}
+    try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`) || k.startsWith(`kb_weather_location:${repo}:`)).forEach(k => localStorage.removeItem(k)); } catch {}
     const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
     try { Object.keys(localStorage).filter(k => (k.startsWith(`kb_context:${repo}:`) || k.startsWith(`kb_drafts:${repo}:`))).forEach(k => localStorage.removeItem(k)); } catch {} }   // also drop cached cards, local drafts, context and Undo
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
@@ -368,8 +368,9 @@ if (typeof window !== 'undefined') (() => {
           appearance: { show: Array.isArray(a.show) ? a.show.filter(x => ['number', 'title', 'column', 'priority', 'due'].includes(x)).slice(0, 5) : ['number', 'title'], density: a.density === 'thin' ? 'thin' : 'regular' } });
       } else if (source.type === 'weather') {
         const loc = source.location && typeof source.location === 'object' ? source.location : {}, lat = Number(loc.latitude), lon = Number(loc.longitude);
-        if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) continue;
-        out.push({ id, type: source.type, slot: source.slot, title, location: { name: shortText(loc.name, 'Local weather', 60), latitude: lat, longitude: lon }, units: source.units === 'fahrenheit' ? 'fahrenheit' : 'celsius' });
+        const valid = loc.latitude != null && loc.longitude != null && Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lon) && lon >= -180 && lon <= 180;
+        if (!valid && loc.mode !== 'browser') continue;
+        out.push({ id, type: source.type, slot: source.slot, title, location: { mode: loc.mode === 'browser' ? 'browser' : 'fixed', name: shortText(loc.name, 'Board location', 60), latitude: valid ? lat : null, longitude: valid ? lon : null }, units: source.units === 'fahrenheit' ? 'fahrenheit' : 'celsius' });
       } else if (source.type === 'board-pulse') {
         out.push({ id, type: source.type, slot: source.slot, title });
       }
@@ -4120,18 +4121,55 @@ if (typeof window !== 'undefined') (() => {
       .then(value => { weatherCache.set(key, { at: Date.now(), value }); return value; }).catch(e => { weatherCache.delete(key); throw e; });
     weatherCache.set(key, { at: Date.now(), promise }); return promise;
   }
+  function coarseWeatherLocation(value) {
+    if (!value || typeof value.latitude !== 'number' || typeof value.longitude !== 'number' || !Number.isFinite(value.latitude) || !Number.isFinite(value.longitude) || Math.abs(value.latitude) > 90 || Math.abs(value.longitude) > 180) return null;
+    return { name: 'Approximate location', latitude: Math.round(value.latitude * 10) / 10, longitude: Math.round(value.longitude * 10) / 10 };
+  }
   function weatherWidget(w) {
-    const box = widgetShell(w, 'kwwweather'), body = el('div', 'kwwweatherbody'); body.append(el('span', 'muted', 'Loading forecast…')); box.append(body);
-    const boardKey = boardStoreId(); weatherFor(w).then(data => {
-      if (!body.isConnected || boardStoreId() !== boardKey) return; body.textContent = '';
+    const box = widgetShell(w, 'kwwweather'), body = el('div', 'kwwweatherbody'), boardKey = boardStoreId(), localKey = 'kb_weather_location:' + boardKey + ':' + w.id;
+    const controls = el('div', 'kwwweathercontrols'), status = el('p', 'hint'); status.setAttribute('role', 'status');
+    const privacy = el('p', 'hint', 'Optional: your browser asks permission. Coordinates are rounded to 0.1° before being stored here or sent to Open-Meteo, which also sees normal network metadata. Nothing is saved to GitHub. No background tracking.');
+    let saved = null; try { saved = coarseWeatherLocation(JSON.parse(LS.get(localKey, 'null'))); } catch {}
+    const fallback = w.location.latitude !== null && w.location.longitude !== null ? w.location : null;
+    let sequence = 0, geoRequest = 0;
+    const active = () => box.isConnected && boardStoreId() === boardKey && widgetsEnabled();
+    const paint = location => {
+      const request = ++sequence; body.textContent = '';
+      if (!location) { body.append(el('span', 'muted', 'Choose approximate browser location to see weather. No location is requested until you click.')); return; }
+      body.append(el('span', 'muted', 'Loading forecast…'));
+      weatherFor({ ...w, location }).then(data => {
+      if (!active() || request !== sequence) return; body.textContent = '';
       const cur = data.current || {}, daily = data.daily || {}, condition = WEATHER[cur.weather_code] || ['🌡️', 'Current conditions'];
       const hero = el('div', 'kwwweatherhero'); hero.append(el('span', 'kwwweathericon', condition[0]), el('strong', null, Number.isFinite(cur.temperature_2m) ? Math.round(cur.temperature_2m) + (w.units === 'fahrenheit' ? '°F' : '°C') : '—'));
-      const detail = el('div', 'kwwweatherdetail'); detail.append(el('b', null, w.location.name), el('span', null, condition[1]));
+      const detail = el('div', 'kwwweatherdetail'); detail.append(el('b', null, location.name), el('span', null, condition[1]));
       const lo = daily.temperature_2m_min && daily.temperature_2m_min[0], hi = daily.temperature_2m_max && daily.temperature_2m_max[0], rain = daily.precipitation_probability_max && daily.precipitation_probability_max[0], unit = w.units === 'fahrenheit' ? '°F' : '°C', bits = [];
       if (Number.isFinite(lo) && Number.isFinite(hi)) bits.push(`${Math.round(lo)}–${Math.round(hi)}${unit}`);
       if (Number.isFinite(rain)) bits.push(`${Math.round(rain)}% rain`); if (Number.isFinite(cur.wind_speed_10m)) bits.push(`${Math.round(cur.wind_speed_10m)} ${w.units === 'fahrenheit' ? 'mph' : 'km/h'} wind`);
       detail.append(el('span', 'muted', bits.join(' · '))); body.append(hero, detail);
-    }).catch(() => { if (body.isConnected && boardStoreId() === boardKey) { body.textContent = ''; body.append(el('span', 'muted', 'Forecast unavailable. The board still works offline.')); } });
+      }).catch(() => { if (active() && request === sequence) { body.textContent = ''; body.append(el('span', 'muted', 'Forecast unavailable. The board still works offline.')); } });
+    };
+    const locate = ui.button({ label: saved ? 'Update approximate location' : 'Use approximate location', icon: 'globe', size: 'sm' });
+    const reset = ui.button({ label: fallback ? 'Use board location' : 'Forget location', size: 'sm', variant: 'ghost' }); reset.hidden = !saved;
+    const failed = code => {
+      locate.disabled = false;
+      const reason = code === 1 ? 'Location permission was not granted.' : code === 3 ? 'Location request timed out.' : 'Browser location is unavailable.';
+      status.textContent = reason + (fallback ? ` Using ${fallback.name}.` : ' No forecast location selected. You can try again or configure a city as the widget’s fallback.');
+      saved = null; LS.del(localKey); reset.hidden = true; locate.textContent = 'Use approximate location'; paint(fallback);
+    };
+    locate.onclick = () => {
+      if (!active()) return;
+      if (!navigator.geolocation || !window.isSecureContext) { failed(2); return; }
+      const request = ++geoRequest; locate.disabled = true; status.textContent = 'Waiting for your browser’s location permission…';
+      try { navigator.geolocation.getCurrentPosition(position => {
+        if (!active() || request !== geoRequest) return;
+        const location = coarseWeatherLocation(position && position.coords); if (!location) { failed(2); return; }
+        saved = location; LS.set(localKey, JSON.stringify({ latitude: location.latitude, longitude: location.longitude })); locate.disabled = false; locate.textContent = 'Update approximate location'; reset.hidden = false;
+        status.textContent = 'Using approximate location in this browser only. Update it when you move.'; paint(location);
+      }, error => { if (active() && request === geoRequest) failed(error && error.code); }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }); }
+      catch { if (active() && request === geoRequest) failed(2); }
+    };
+    reset.onclick = () => { if (!active()) return; geoRequest++; LS.del(localKey); saved = null; reset.hidden = true; locate.disabled = false; locate.textContent = 'Use approximate location'; status.textContent = fallback ? 'Using the board’s configured location.' : 'Browser location forgotten.'; paint(fallback); };
+    controls.append(locate, reset); box.append(body, controls, status, privacy); paint(saved || (w.location.mode === 'fixed' ? fallback : null));
     return box;
   }
   function pulseWidget(w) {

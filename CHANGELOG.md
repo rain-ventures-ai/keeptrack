@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Weather widgets offer explicit approximate browser location, with permission/failure guidance,
+  rounded local coordinates, per-board/widget overrides and configured-city fallback. No automatic location requests,
+  background tracking or GitHub location writes; fixed-city widgets remain supported.
+
 - **2026-10-12** — Routine reports distinguish recorded setup, observed completion and unfinished attempts, with
   source/scope/management details and local-time display. A configurable routine setup form copies safe, board-scoped
   prompts without scheduling work. Members can explicitly link their own companies, protected from removal while
@@ -36,6 +40,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [41] — 2026-10-12
+
+- `email-key --stdin` accepts bounded untrusted header input as data; the safely invoked positional form and canonical
+  hashes remain compatible. Email skills and shared routine guidance prohibit header interpolation into shell/script text.
+- No schema migration, email re-import, board widget installation or routine schedule changes are required.
 
 ### [40] — 2026-10-12
 
