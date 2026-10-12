@@ -4258,7 +4258,7 @@ if (typeof window !== 'undefined') (() => {
     if (p.status !== 'pending') {
       const d = p.decision || {};
       if (p.status === 'answered') wrap.append(el('p', 'prop__decision', `Answered by ${d.by || 'someone'} on ${whenText(d.at)}: ${answerText(p)}`));
-      if (d.done) wrap.append(el('p', 'prop__decision muted', `Acted on by ${d.done.by || 'someone'} on ${whenText(d.done.at)}${d.done.note ? ': ' + d.done.note : ''}`));
+      if (d.done) wrap.append(el('p', 'prop__decision muted', `${d.done.acted === false ? 'Closed without acting by' : 'Acted on by'} ${d.done.by || 'someone'} on ${whenText(d.done.at)}${d.done.note ? ': ' + d.done.note : ''}`));
       return wrap;
     }
     if (blocked) { wrap.append(el('p', 'muted', `Waiting for @${p.decider} to answer.`)); }
