@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — The full Review Inbox uses clearer proposal summaries, source context, grouped changes and
+  restrained decision controls, with responsive light/dark styling and visual QA coverage. No proposal decisions
+  or board records are changed by this presentation update.
+
 - **2026-10-12** — Today previews Inbox proposals with Review-only cards, source/type and duplicate warnings;
   decisions stay in the full Inbox after evidence review. Shareable links reopen views, settings sections and utility
   screens without carrying tokens. Task cards open with one click/tap or Enter/Space while embedded controls, selection
