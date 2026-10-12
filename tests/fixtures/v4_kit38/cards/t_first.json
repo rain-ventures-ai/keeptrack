@@ -1,0 +1,46 @@
+{
+  "id": "t_first",
+  "num": 1,
+  "title": "Call Acme",
+  "column": "todo",
+  "client": "Acme",
+  "project": "pr_pilot01ab",
+  "priority": "high",
+  "due": "2026-10-20",
+  "labels": [
+    "call"
+  ],
+  "assignees": [
+    "alex"
+  ],
+  "details": "Confirm the next step.",
+  "links": [],
+  "contacts": [],
+  "todos": [
+    {
+      "id": "d_one",
+      "text": "Prepare notes",
+      "done": false
+    }
+  ],
+  "comments": [
+    {
+      "id": "c_one",
+      "at": "2026-10-01T09:00:00.000Z",
+      "by": "alex",
+      "text": "Please call in the morning."
+    }
+  ],
+  "history": [
+    {
+      "at": "2026-10-01T08:00:00.000Z",
+      "by": "alex",
+      "text": "created"
+    }
+  ],
+  "claim": null,
+  "last_run": null,
+  "created": "2026-10-01T08:00:00.000Z",
+  "updated": "2026-10-01T09:00:00.000Z",
+  "rank": "a0"
+}

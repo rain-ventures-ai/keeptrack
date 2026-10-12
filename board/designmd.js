@@ -81,6 +81,7 @@
 
   // Apply a custom theme: CSS variables on <html>, data-theme="custom". Saved so theme.js can restore it before paint.
   function apply(t, save) {
+    if (window.kbTheme && window.kbTheme.validateCustom && !window.kbTheme.validateCustom(t)) throw new Error('Theme colours must be hex colours.');
     if (window.kbTheme && window.kbTheme.paintCustom) window.kbTheme.paintCustom(t);   // theme.js (loaded first, in <head>) owns the variables; status colours live in board.css
     else {   // a theme.js cached from before paintCustom: set the picked colours here so the theme still shows
       var s = document.documentElement.style;
@@ -88,7 +89,7 @@
       s.setProperty('--on-hero', t.onHero || '#ffffff'); document.documentElement.setAttribute('data-mode', t.mode === 'dark' ? 'dark' : 'light');
     }
     document.documentElement.setAttribute('data-theme', 'custom');
-    if (save !== false) try { localStorage.setItem('kb_custom', JSON.stringify(t)); localStorage.setItem('kb_theme', 'custom'); } catch (e) {}
+    if (save !== false) { if (window.kbTheme && window.kbTheme.saveCustom) { window.kbTheme.saveCustom(t); window.kbTheme.set('custom'); } else try { localStorage.setItem('kb_custom', JSON.stringify(t)); localStorage.setItem('kb_theme', 'custom'); } catch (e) {} }
   }
 
   // Export the current theme (built-in or custom) as a DESIGN.md file.

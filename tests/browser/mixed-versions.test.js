@@ -157,6 +157,9 @@ async function mixes(browser, base) {
     { fail: req => req.resourceType() === 'fetch' && /\/board\/[\w.]+\.(js|css)$/.test(new URL(req.url()).pathname), allowErrors: true });
   // a newer board.js (higher markup version) with this index.html
   await expectStale(browser, base, 'board.js for newer markup', { 'board.js': cur('board.js').replace(/\bconst KB_MARKUP = (\d+);/, (m, n) => `const KB_MARKUP = ${+n + 1};`) });
+  const lastRelease = name => execSync(`git show 47cd545:board/${name}`, { cwd: ROOT, encoding: 'utf8' });
+  await expectStale(browser, base, 'previous released markup without widget controls', { 'index.html': lastRelease('index.html') });
+  await expectStale(browser, base, 'new markup with previous released board script', { 'board.js': lastRelease('board.js') });
   // the same versions work, on both loader paths
   (await expectBoard(browser, base, 'current page', {})).page.close();
   (await expectBoard(browser, base, 'current page by script tag', {},

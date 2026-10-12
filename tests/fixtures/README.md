@@ -8,6 +8,7 @@ Small, hand-checked boards used by `tests/test_fixture_boards.py` and browser te
 | `v4/` | v4 split, no `projects/` files | kit v8–v16 | `tests/fixtures/v4` since #11 |
 | `v4_kit17/` | v4 split with `projects/` and client north stars | kit v17 | Derived from #45 (`41e66e0`) project layout |
 | `v4_kit37/` | v4 split with projects and a member CRM record | kit v37 | Frozen routine-register/deletion-protection fixture |
+| `v4_kit38/` | v4 split with canonical shared-email source keys | kit v38 | Frozen cross-mailbox deduplication fixture |
 
 **When you bump schema or kit:** add a row here, add a frozen directory under `tests/fixtures/`, extend the fixture tests, and add entries to the repo root `CHANGELOG.md` and `board/kit/UPGRADING.md`. The live `demo/` board stays the current showcase only.
 

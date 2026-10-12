@@ -66,7 +66,7 @@ Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-owner [USER]    # show or set whose Claude does kit upgrades on this board (settings.kit_owner)
   keeptrack.py init --person osouthgate:Oliver [--person ...] [--client "General"]   # new board repo: kit files, README.md, AGENTS.md, CLAUDE.md, empty tasks.json
 """
-import argparse, base64, collections, contextlib, copy, datetime as dt, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
+import argparse, base64, collections, contextlib, copy, datetime as dt, hashlib, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 try:
     import fcntl
 except ImportError:   # Windows
@@ -2802,7 +2802,7 @@ HELP_TOPICS = {
     "tasks": ["list", "show", "add", "task-set", "move", "assign", "link", "unlink", "task-rm"],
     "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "comment", "comments", "history"],
-    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "touch", "sent"],
+    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
@@ -3010,6 +3010,40 @@ def check_source_id(value):
     if value and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}:[0-9a-f]{16,64}", value):
         sys.exit("source id must be an opaque key such as email:<16-to-64 hex characters>; hash provider ids before storing them")
     return value
+
+
+def email_key(value):
+    """Canonical key shared by copies of one message in different mailboxes."""
+    value = str(value or "").strip()
+    if len(value) > 998 or "\n" in value or "\r" in value:
+        sys.exit("Message-ID must be one valid header value of at most 998 characters")
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    if not re.fullmatch(r"[!-~]+@[!-~]+", value) or any(x in value for x in "<>()") or value.count("@") != 1:
+        sys.exit("Message-ID must contain a single opaque id@domain, optionally inside angle brackets")
+    local, domain = value.rsplit("@", 1)
+    return "rfc822:" + hashlib.sha256((local + "@" + domain.lower()).encode("ascii")).hexdigest()
+
+
+def cmd_email_key(a):
+    print(email_key(a.message_id))
+
+
+def cmd_touch_source(a):
+    keys = sorted(set(check_source_id(x) for x in a.source_message_id))
+    if not keys or any(not x for x in keys):
+        sys.exit("at least one source message key is required")
+    def fn(data):
+        _MUT["recheck"] = True
+        p = find_person(data, a.ref)
+        touch = next((c for c in p.get("comments", []) if c.get("id") == a.touch_id), None)
+        if not touch or touch.get("draft") or touch.get("channel") != "email":
+            sys.exit("exact touch id must identify an existing non-draft email touch")
+        if any(set(keys).intersection(c.get("source_message_ids", [])) for c in p.get("comments", []) if c is not touch):
+            sys.exit("source message key already belongs to a different touch for this contact")
+        touch["source_message_ids"] = sorted(set(touch.get("source_message_ids", [])) | set(keys))
+        print(f"bound source messages to {touch['id']}")
+    mutate(fn, f"Bind email sources: {a.ref}")
 
 
 def last_touch(p):
@@ -3225,6 +3259,8 @@ def cmd_touch(a):
     """Log a contact. --draft records a message that is not sent yet (it does not count as contact)."""
     event_at, source_id = check_event_time(getattr(a, "at", None)), check_source_id(getattr(a, "source_id", None))
     message_ids = sorted(set(check_source_id(x) for x in getattr(a, "source_message_id", []) or []))
+    if message_ids and (a.draft or any(not x for x in message_ids)):
+        sys.exit("source message keys require a non-draft touch and nonempty keys")
     def fn(data):
         _MUT["recheck"] = True
         p = find_person(data, a.ref)
@@ -4521,8 +4557,9 @@ def archive_plan(data, rules, today=None):
         else:
             keep_t.append(t)
     keep_p = []
+    ml = member_logins(data)
     for p in data.get("contacts", []):
-        if not member_of(data, p) and year(p) and str(p.get("stage", "")).lower() == "lost" and stamp(p)[:10] < cut_p and not (p.get("next_due") or "") >= today.isoformat():
+        if not own_member(p, ml) and year(p) and str(p.get("stage", "")).lower() == "lost" and stamp(p)[:10] < cut_p and not (p.get("next_due") or "") >= today.isoformat():
             part(year(p))["contacts"].append(p)
         else:
             keep_p.append(p)
@@ -4741,6 +4778,8 @@ def cmd_routine(a):
 
 
 def _routine_report(a, path):
+    if not os.path.isfile(path):
+        sys.exit("routine register is missing; register this routine before reporting runs")
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     if data.get("version") != 1 or data.get("id") != a.id:
@@ -4751,6 +4790,11 @@ def _routine_report(a, path):
             sys.exit("routine register does not match the resolved board/branch/path")
     if a.action == "show":
         print(json.dumps(data, indent=2, ensure_ascii=False)); return
+    owner = data.get("owner")
+    if not isinstance(owner, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", owner):
+        sys.exit("routine register needs a valid GitHub owner before reporting runs")
+    if owner.lower() != default_user().strip().lower():
+        sys.exit("routine reports can only be updated by the registered owner; set BOARD_USER to your verified GitHub login")
     run_id = a.run_id
     if not run_id:
         sys.exit("--run-id is required for start and finish")
@@ -4767,7 +4811,7 @@ def _routine_report(a, path):
         counts = {}
         for value in a.count:
             key, sep, number = value.partition("=")
-            if not sep or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) or not number.isdigit():
+            if not sep or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) or not re.fullmatch(r"[0-9]+", number):
                 sys.exit("counts must be name=nonnegative_integer")
             counts[key] = int(number)
         report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts)
@@ -4871,6 +4915,9 @@ def main():
     s = sub.add_parser("person-add", help="add a person (refuses duplicates)"); s.add_argument("name"); pf(s); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_person_add)
     s = sub.add_parser("person-set", help="change a person's fields, stage or next step"); s.add_argument("ref"); s.add_argument("--name"); pf(s); s.set_defaults(f=cmd_person_set)
     s = sub.add_parser("person-rm", help="delete a person added by mistake (needs --yes)"); s.add_argument("ref"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_person_rm)
+    s = sub.add_parser("email-key", help="hash an RFC822 Message-ID without storing the raw header"); s.add_argument("message_id"); s.set_defaults(f=cmd_email_key)
+    s = sub.add_parser("touch-source", help="bind verified message keys to an existing email touch"); s.add_argument("ref"); s.add_argument("touch_id")
+    s.add_argument("--source-message-id", action="append", required=True); s.set_defaults(f=cmd_touch_source)
     s = sub.add_parser("touch", help="log a contact; --draft for a message that is not sent yet"); s.add_argument("ref"); s.add_argument("text")
     s.add_argument("--channel", choices=CHANNELS, default="note"); s.add_argument("--draft", action="store_true")
     s.add_argument("--at", help="actual contact time as an ISO timestamp with timezone")

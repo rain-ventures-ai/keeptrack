@@ -1,8 +1,9 @@
 # Recurring meeting-notes imports
 
-Register this routine in `automation/routines/meeting-notes.json` following `board/ROUTINES.md`. Record where it is
+Register this routine in `automation/routines/meeting-notes-<github-owner>.json` following `board/ROUTINES.md`. Use a
+separate owner-specific checkpoint and routine binding per board + owner + workflow. Record where it is
 managed, its owner, schedule and connection labels without secrets. Report every attempt using `keeptrack.py routine
-meeting-notes start|finish` with a unique run id, outcome, summary and counts; commit those reports alongside the
+meeting-notes-<github-owner> start|finish` with a unique run id, outcome, summary and counts; commit those reports alongside the
 dedicated ingestion checkpoint. Never invent a last-run timestamp from file modification times.
 
 Use a separate scheduled routine for a notes source such as Google Drive. Do not add a Drive connector to the
@@ -12,7 +13,8 @@ board repo.
 
 ## Default scope and durable ingestion log
 
-For a recurring import, create `automation/meeting-notes-ingestion.json` in the private board repo. This is repo-owned
+For a recurring import, create `automation/meeting-notes-ingestion-<github-owner>.json` in the private board repo. Preserve
+an existing owner's legacy path and history unless deliberately migrating it. This is repo-owned
 routine state, not board data; never put it under `board/` and never edit board JSON directly.
 
 Use a rolling seven-calendar-day lookback unless the user explicitly chooses another window. Prefer the meeting date;
@@ -134,7 +136,8 @@ Replace the placeholders and save this as the scheduled routine's prompt:
 Use the Keeptrack notes workflow with the private board <owner/repo>.
 
 Meeting notes are in <source folder URL>. This is a recurring import. Keep the durable ingestion log in
-automation/meeting-notes-ingestion.json as described by the keeptrack-notes skill. Use a rolling seven-day lookback
+automation/meeting-notes-ingestion-<github-owner>.json (or my existing owner-bound legacy path) as described by the
+keeptrack-notes skill. Register and report under meeting-notes-<github-owner>. Use a rolling seven-day lookback
 unless I explicitly change it. Ignore a document when its stable id and revision are already in the log; on later runs,
 inspect only new or changed documents in the window. Record documents with no actions so they are not reprocessed.
 

@@ -1,7 +1,7 @@
 // Markup handshake: the ids and page structure this file needs from index.html. index.html sets window.kbMarkup to the
 // version it carries (and its loader reads this line before running the file). Bump both together whenever board.js
 // starts to need markup an older index.html does not have, or index.html drops markup an older board.js needs.
-const KB_MARKUP = 3;
+const KB_MARKUP = 4;
 // Fractional ranks. This is the same algorithm as board/kit/keeptrack.py.
 // Keep it outside the browser closure so the Python parity test can load it in Node.
 const RANK_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -111,10 +111,11 @@ if (typeof window !== 'undefined') (() => {
     BOARD_KEYS.forEach(k => { const v = LS.get('kb_' + k); if (v) e[k] = v; }); m[repo] = e; LS.set('kb_boards', JSON.stringify(m)); }
   function activateBoard(repo, over = {}) { // keep the current board's values, then load the saved ones for repo (never carry a token across)
     stashBoard(); const e = Object.assign({}, boardsMap()[repo] || {}, over); LS.set('kb_repo', repo);
-    BOARD_KEYS.forEach(k => { if (e[k]) LS.set('kb_' + k, e[k]); else LS.del('kb_' + k); }); stashBoard(); }
+    BOARD_KEYS.forEach(k => { if (e[k]) LS.set('kb_' + k, e[k]); else LS.del('kb_' + k); }); stashBoard(); if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg()); }
   const qv = v => encodeURIComponent(v).replace(/%2F/gi, '/');   // keep owner/name and board/tasks.json readable
   const boardUrl = () => `${location.pathname}?repo=${qv(LS.get('kb_repo'))}&branch=${qv(LS.get('kb_branch', 'master'))}&path=${qv(LS.get('kb_path', 'board/tasks.json'))}`;
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
+    try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`)).forEach(k => localStorage.removeItem(k)); } catch {}
     const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
     try { Object.keys(localStorage).filter(k => (k.startsWith(`kb_context:${repo}:`) || k.startsWith(`kb_drafts:${repo}:`))).forEach(k => localStorage.removeItem(k)); } catch {} }   // also drop cached cards, local drafts, context and Undo
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
@@ -125,6 +126,7 @@ if (typeof window !== 'undefined') (() => {
     else { if (repo && REPO_RE.test(repo) && !cur) LS.set('kb_repo', repo); Object.keys(over).forEach(k => { if (!LS.get('kb_' + k)) LS.set('kb_' + k, over[k]); }); }
     stashBoard(); })();
   const boardStoreId = (c = cfg()) => `${c.repo}:${c.branch}:${c.path}`;
+  if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
   const localBoardJson = kind => { try { const x = JSON.parse(LS.get(`kb_${kind}:${boardStoreId()}`, '{}')); return x && typeof x === 'object' && !Array.isArray(x) ? x : {}; } catch { return {}; } };
   const saveLocalBoardJson = (kind, value) => LS.set(`kb_${kind}:${boardStoreId()}`, JSON.stringify(value));
   const boardContext = () => localBoardJson('context');
@@ -170,6 +172,8 @@ if (typeof window !== 'undefined') (() => {
 
   const HOME = 'https://github.com/rain-ventures-ai/keeptrack/blob/main';   // where Keeptrack itself lives (docs, kit, plugins)
   let state = DEFAULT(), sha = null, etag = null, busy = false, lastSyncOk = false, fromSnap = false, splitMeta = null;
+  let widgets = [], widgetMeta = { key: '', etag: '', problem: '' };
+  const weatherCache = new Map();
   let loadGen = 0, fileDemo = false;   // loadGen: a newer load, a save or "Forget token" makes older in-flight loads drop their result; fileDemo: the board file has demo_base
   // read-only: 'demo' (an example board: ?demo=crm or ?demo=board, or any file with demo_base), 'public' (a public repo read with no token), 'token' (the token can read but not write)
   const DEMO = (() => { const q = new URLSearchParams(location.search); if (!q.has('demo')) return ''; const v = q.get('demo'); return /^[a-z0-9-]+$/.test(v) && v !== '1' ? v : 'crm'; })();
@@ -339,6 +343,63 @@ if (typeof window !== 'undefined') (() => {
         ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
   }
 
+  // ---- board-owned widgets -------------------------------------------------
+  // A board may opt into the renderers Keeptrack ships by adding board/widgets.json beside tasks.json. The file is
+  // always read from the selected repo and branch. It is configuration, not executable code: a board never gets the
+  // page's GitHub token, localStorage, DOM, or access to another saved board.
+  const WIDGET_FILE = 'widgets.json', WIDGET_LIMIT = 12, WIDGET_BYTES = 64 * 1024;
+  const widgetsEnabled = (c = cfg()) => !SANDBOX && LS.get('kb_widgets:' + boardStoreId(c)) === '1';
+  const widgetPath = c => { const i = c.path.lastIndexOf('/'); return (i < 0 ? '' : c.path.slice(0, i + 1)) + WIDGET_FILE; };
+  const shortText = (v, fallback = '', max = 80) => { const s = typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, '').trim() : ''; return s ? s.slice(0, max) : fallback; };
+  const widgetId = v => typeof v === 'string' && /^[a-z0-9][a-z0-9_-]{0,47}$/i.test(v) ? v : '';
+  const widgetColumns = v => Array.isArray(v) ? v.filter(x => typeof x === 'string' && /^[\w.-]{1,80}$/.test(x)).slice(0, 12) : [];
+  const widgetNames = v => Array.isArray(v) ? v.map(x => shortText(x, '', 80)).filter(Boolean).slice(0, 12) : [];
+  function normaliseWidgets(raw) {
+    if (!raw || raw.version !== 1 || !Array.isArray(raw.widgets)) throw new Error('widgets.json must have version 1 and a widgets array');
+    const seen = new Set(), out = [];
+    for (const source of raw.widgets.slice(0, WIDGET_LIMIT)) {
+      if (!source || source.enabled === false || source.slot !== 'today.after-shortcuts') continue;
+      const id = widgetId(source.id); if (!id || seen.has(id)) continue; seen.add(id);
+      const title = shortText(source.title, source.type === 'weather' ? 'Weather' : source.type === 'board-pulse' ? 'Board pulse' : 'Recent tasks');
+      if (source.type === 'task-strip') {
+        const q = source.query && typeof source.query === 'object' ? source.query : {}, a = source.appearance && typeof source.appearance === 'object' ? source.appearance : {};
+        out.push({ id, type: source.type, slot: source.slot, title, query: { columns: widgetColumns(q.columns), labels: widgetNames(q.labels), assignee: q.assignee === 'me' ? 'me' : '',
+          sort: ['created-desc', 'updated-desc', 'due', 'priority', 'manual'].includes(q.sort) ? q.sort : 'created-desc', limit: Math.max(1, Math.min(12, Number.isInteger(q.limit) ? q.limit : 6)) },
+          appearance: { show: Array.isArray(a.show) ? a.show.filter(x => ['number', 'title', 'column', 'priority', 'due'].includes(x)).slice(0, 5) : ['number', 'title'], density: a.density === 'thin' ? 'thin' : 'regular' } });
+      } else if (source.type === 'weather') {
+        const loc = source.location && typeof source.location === 'object' ? source.location : {}, lat = Number(loc.latitude), lon = Number(loc.longitude);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) continue;
+        out.push({ id, type: source.type, slot: source.slot, title, location: { name: shortText(loc.name, 'Local weather', 60), latitude: lat, longitude: lon }, units: source.units === 'fahrenheit' ? 'fahrenheit' : 'celsius' });
+      } else if (source.type === 'board-pulse') {
+        out.push({ id, type: source.type, slot: source.slot, title });
+      }
+    }
+    return out;
+  }
+  async function loadWidgets(c) {
+    if (!c.repo || !widgetsEnabled(c)) { const changed = widgets.length > 0 || !!widgetMeta.problem; widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; return changed; }
+    const key = boardStoreId(c), same = widgetMeta.key === key, path = widgetPath(c);
+    const current = () => boardStoreId() === key && widgetsEnabled(c);
+    const url = `${c.api}/repos/${c.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(c.branch)}`;
+    try {
+      const r = await fetch(url, { cache: 'no-store', signal: ghSignal('GET'), headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(same && widgetMeta.etag ? { 'If-None-Match': widgetMeta.etag } : {}) } });
+      if (!current()) return false;
+      if (r.status === 304) return false;
+      if (r.status === 404) { const changed = !same || widgets.length > 0 || widgetMeta.problem; widgets = []; widgetMeta = { key, etag: '', problem: '' }; return !!changed; }
+      if (!r.ok) throw new Error(`GitHub error ${r.status}`);
+      const d = await r.json(); if ((d.size || 0) > WIDGET_BYTES) throw new Error(`${WIDGET_FILE} is larger than 64 KB`);
+      if (!current()) return false;
+      const text = d.encoding === 'base64' ? b64d(d.content || '') : ''; if (!text || new TextEncoder().encode(text).length > WIDGET_BYTES) throw new Error(`${WIDGET_FILE} is empty or too large`);
+      const next = normaliseWidgets(JSON.parse(text)), changed = !same || JSON.stringify(next) !== JSON.stringify(widgets) || widgetMeta.problem;
+      widgets = next; widgetMeta = { key, etag: r.headers.get('ETag') || '', problem: '' }; return !!changed;
+    } catch (e) {
+      if (!current()) return false;
+      if (same && widgets.length && (isTimeout(e) || e instanceof TypeError)) return false;   // offline: keep the last good board-owned layout
+      const problem = e && e.message ? e.message : String(e), changed = !same || widgets.length > 0 || problem !== widgetMeta.problem;
+      widgets = []; widgetMeta = { key, etag: '', problem }; return !!changed;
+    }
+  }
+
   function repoReadme() {
     const c = cfg(), query = new URLSearchParams({ repo: c.repo, branch: c.branch, path: c.path });
     return [
@@ -447,7 +508,7 @@ if (typeof window !== 'undefined') (() => {
   }
   async function loadDemo() {   // the example boards in demo/<name>/tasks.json, served from the same site as this page
     try { const r = await fetch(`../demo/${DEMO}/tasks.json`, { cache: 'no-cache' }); if (!r.ok) throw new Error('demo ' + DEMO + ': ' + r.status);
-      state = normalise(demoShift(await r.json())); lastSyncOk = true; setStatus('Demo board (read-only)', 'ok'); applyRo(); render(); setTimeout(restoreBoardContext, 30); return true;
+      widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; state = normalise(demoShift(await r.json())); lastSyncOk = true; setStatus('Demo board (read-only)', 'ok'); applyRo(); render(); setTimeout(restoreBoardContext, 30); return true;
     } catch (e) { console.error(e); setStatus('Could not load the demo board', 'err'); return false; }
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
@@ -462,24 +523,24 @@ if (typeof window !== 'undefined') (() => {
       if (r && r.ok) { const { d: data, raw: raw0 } = await fileJson(r); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = r.headers.get('ETag'); let raw = raw0;
         if (isSplit(raw)) { ro = 'public'; applyRo(); setStatus('This board needs a token to read', 'err'); const b = $('board'); b.textContent = ''; b.append(el('div', 'empty', 'This board needs a token to read')); return false; }
         const isDemo = fileDemo = !!raw.demo_base; raw = demoShift(raw);
-        newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo();
+        newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo(); await loadWidgets(c); if (stale()) return false;
         setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true; }
       if (ro === 'public') { ro = ''; applyRo(); }
     }
-    if (!c.token) { setStatus('Not connected', 'err'); if ($('board').className !== 'v-welcome') render(); if (c.repo) noTokenBox(); else if ($('board').className !== 'v-welcome') renderWelcome(); return false; }
+    if (!c.token) { widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; setStatus('Not connected', 'err'); if ($('board').className !== 'v-welcome') render(); if (c.repo) noTokenBox(); else if ($('board').className !== 'v-welcome') renderWelcome(); return false; }
     { const want = fileDemo ? 'demo' : LS.get(roKey()) ? 'token' : ''; if (ro !== want) { ro = want; applyRo(); } }   // a 304 keeps the last file's demo status
     if (!quiet) setStatus(fromSnap ? 'Showing the last copy, syncing…' : 'Loading…');
     try {
       if (splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`) {
         const got = await splitSnapshot(false); if (stale()) return false;
         if (!isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
-        if (got.unchanged) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); return true; }
+        if (got.unchanged) { const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
         const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); state = normalise(got.data);
-        if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
+        if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
       }
       const res = await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
-      if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); return true; }
+      if (res.status === 304) { const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
       if (res.status === 404) { await diagnose404(); return false; }
       if (res.status === 401 || res.status === 403) { lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
       if (!res.ok) { lastProblem = `Loading the board: GitHub error ${res.status}`; setStatus(`GitHub error ${res.status}`, 'err'); return false; }
@@ -490,7 +551,7 @@ if (typeof window !== 'undefined') (() => {
       if (isSplit(raw)) { const got = await splitSnapshot(true); if (stale()) return false; splitMeta = got.meta; raw = got.data; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); }
       else splitMeta = null;
       newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkPublic(); lastSyncOk = true; initSeen();
-      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
+      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
     } catch (e) { console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
 
@@ -2977,6 +3038,8 @@ if (typeof window !== 'undefined') (() => {
       reports.forEach(report => {
         const item = el('section', 'agcard'), last = report.last_run;
         item.append(el('b', null, report.name || report.id), el('p', 'hint', `${report.status || 'unverified'} · ${report.runtime || 'Unknown runtime'} · ${report.schedule || 'Schedule unverified'}`));
+        item.append(el('p', 'hint', `Owner: ${report.owner ? '@' + String(report.owner).replace(/^@/, '') : 'Not reported'}`));
+        if (report.config && report.config.management_location) item.append(el('p', 'hint', 'Managed at: ' + String(report.config.management_location)));
         item.append(el('p', 'hint', 'Connections: ' + (report.connections || []).map(x => `${x.provider}: ${x.account_label || x.name || ''}`).join(', ')));
         item.append(el('p', 'hint', `Last success: ${report.last_successful_run_at || 'Not reported'} · Last attempt: ${report.last_started_at || 'Not reported'}`));
         if (report.current_run) item.append(el('p', 'hint', `Running since ${report.current_run.started_at}; completion has not been reported.`));
@@ -3126,7 +3189,7 @@ if (typeof window !== 'undefined') (() => {
   // Tabs keep tabPrefs/panelPrefs-style ids. settingsTab(name) is the deep link every other place uses: it also takes the
   // names of the old tabs and of single sections, and opens or scrolls to the right one.
   const SET_TABS = [['prefs', 'Preferences'], ['board', 'Board'], ['conn', 'Connection'], ['agents', 'Agents & integrations', 'Agents']];
-  const SET_LINKS = { general: ['prefs'], preferences: ['prefs'], appearance: ['prefs', 'secLook'], alerts: ['prefs', 'secAlerts'], notifications: ['prefs', 'secAlerts'],
+  const SET_LINKS = { general: ['prefs'], preferences: ['prefs'], appearance: ['prefs', 'secLook'], widgets: ['prefs', 'secWidgets'], alerts: ['prefs', 'secAlerts'], notifications: ['prefs', 'secAlerts'],
     modes: ['board', 'secModes'], members: ['board', 'memSec'], people: ['board', 'memSec'], team: ['board', 'memSec'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], archive: ['board', 'secArchive'],
     connect: ['conn'], conn: ['conn', 'bThis'], boards: ['conn', 'secBoards'], checks: ['conn', 'secHealth'], health: ['conn', 'secHealth'], move: ['conn', 'secMove'], advanced: ['conn', 'secAdv'],
     claude: ['agents', 'agClaude'], codex: ['agents', 'agLocal'], chat: ['agents', 'agLocal'], email: ['agents', 'agEmail'] };
@@ -3183,7 +3246,7 @@ if (typeof window !== 'undefined') (() => {
   const saveBtnIdle = () => { const b = $('sSave'); b.disabled = false; (b.querySelector('.ui-btn__label') || b).textContent = 'Save & connect'; };
   $('sCancel').onclick = () => { connGen++; saveBtnIdle(); fillConn(); showEdit(false); };   // put the saved values back and fold the form
   $('dlgSettings').addEventListener('close', () => { connGen++; saveBtnIdle(); });
-  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Token removed'); };
+  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Token removed'); };
   $('sSave').onclick = async () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
@@ -3199,6 +3262,7 @@ if (typeof window !== 'undefined') (() => {
     }
     if (moved) activateBoard(nr);
     LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
+    if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
     if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();
@@ -3886,6 +3950,85 @@ if (typeof window !== 'undefined') (() => {
   }
   const crmFilter = p => { const fc = clientValues(); return !fc.length || fc.includes(p.company); };
 
+  function widgetShell(w, cls) {
+    const box = el('section', 'kbwidget ' + cls); box.dataset.widget = w.id;
+    const head = el('div', 'kwwhead'); head.append(el('h3', null, w.title)); box.append(head); return box;
+  }
+  function taskStripWidget(w) {
+    const box = widgetShell(w, 'kwwtasks'), q = w.query, done = doneColId(); let items = state.tasks.filter(t => t.column !== done);
+    if (q.columns.length) items = items.filter(t => q.columns.includes(t.column));
+    if (q.labels.length) items = items.filter(t => q.labels.some(x => t.labels.includes(x)));
+    if (q.assignee === 'me') items = items.filter(t => t.assignees.includes(cfg().me));
+    const newest = field => (a, b) => String(b[field] || '').localeCompare(String(a[field] || '')) || numOf(b) - numOf(a);
+    if (q.sort === 'created-desc') items.sort(newest('created'));
+    else if (q.sort === 'updated-desc') items.sort(newest('updated'));
+    else if (q.sort === 'due') items.sort((a, b) => String(a.due || '9999-99-99').localeCompare(String(b.due || '9999-99-99')) || numOf(a) - numOf(b));
+    else if (q.sort === 'priority') items = priorityTasks(items);
+    else items = displayTasks(items);
+    const strip = el('div', 'kwwstrip' + (w.appearance.density === 'thin' ? ' thin' : ''));
+    items.slice(0, q.limit).forEach(t => {
+      const b = el('button', 'kwwtask'); b.type = 'button'; b.title = `Open #${t.num} ${t.title}`; b.onclick = () => openCard(t.id);
+      if (w.appearance.show.includes('priority')) { const dot = el('i', 'kwwprio'); dot.dataset.prio = t.priority || 'medium'; dot.setAttribute('aria-label', (t.priority || 'medium') + ' priority'); b.append(dot); }
+      if (w.appearance.show.includes('number') && t.num) b.append(el('span', 'kwwnum', '#' + t.num));
+      if (w.appearance.show.includes('title')) b.append(el('span', 'kwwtitle', t.title));
+      if (w.appearance.show.includes('column')) b.append(el('span', 'kwwmeta', colName(t.column)));
+      if (w.appearance.show.includes('due') && t.due) b.append(el('span', 'kwwmeta', (ui.dueInfo(t.due) || {}).text || t.due));
+      strip.append(b);
+    });
+    if (!strip.childElementCount) strip.append(el('span', 'muted', 'No matching tasks.'));
+    box.append(strip); return box;
+  }
+  const WEATHER = {
+    0: ['☀️', 'Clear'], 1: ['🌤️', 'Mostly clear'], 2: ['⛅', 'Partly cloudy'], 3: ['☁️', 'Overcast'],
+    45: ['🌫️', 'Fog'], 48: ['🌫️', 'Freezing fog'], 51: ['🌦️', 'Light drizzle'], 53: ['🌦️', 'Drizzle'], 55: ['🌧️', 'Heavy drizzle'],
+    56: ['🌧️', 'Freezing drizzle'], 57: ['🌧️', 'Freezing drizzle'], 61: ['🌦️', 'Light rain'], 63: ['🌧️', 'Rain'], 65: ['🌧️', 'Heavy rain'],
+    66: ['🌧️', 'Freezing rain'], 67: ['🌧️', 'Freezing rain'], 71: ['🌨️', 'Light snow'], 73: ['🌨️', 'Snow'], 75: ['❄️', 'Heavy snow'], 77: ['❄️', 'Snow grains'],
+    80: ['🌦️', 'Rain showers'], 81: ['🌧️', 'Rain showers'], 82: ['⛈️', 'Heavy showers'], 85: ['🌨️', 'Snow showers'], 86: ['🌨️', 'Heavy snow showers'],
+    95: ['⛈️', 'Thunderstorm'], 96: ['⛈️', 'Thunderstorm and hail'], 99: ['⛈️', 'Thunderstorm and hail']
+  };
+  async function weatherFor(w) {
+    const key = [w.location.latitude, w.location.longitude, w.units].join(':'), old = weatherCache.get(key);
+    if (old && Date.now() - old.at < 15 * 60000) return old.value || old.promise;
+    const p = new URLSearchParams({ latitude: String(w.location.latitude), longitude: String(w.location.longitude),
+      current: 'temperature_2m,apparent_temperature,weather_code,wind_speed_10m', daily: 'temperature_2m_max,temperature_2m_min,precipitation_probability_max', timezone: 'auto', forecast_days: '1' });
+    if (w.units === 'fahrenheit') { p.set('temperature_unit', 'fahrenheit'); p.set('wind_speed_unit', 'mph'); }
+    const promise = fetch('https://api.open-meteo.com/v1/forecast?' + p, { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: ghSignal('GET') }).then(r => { if (!r.ok) throw new Error('weather ' + r.status); return r.json(); })
+      .then(value => { weatherCache.set(key, { at: Date.now(), value }); return value; }).catch(e => { weatherCache.delete(key); throw e; });
+    weatherCache.set(key, { at: Date.now(), promise }); return promise;
+  }
+  function weatherWidget(w) {
+    const box = widgetShell(w, 'kwwweather'), body = el('div', 'kwwweatherbody'); body.append(el('span', 'muted', 'Loading forecast…')); box.append(body);
+    const boardKey = boardStoreId(); weatherFor(w).then(data => {
+      if (!body.isConnected || boardStoreId() !== boardKey) return; body.textContent = '';
+      const cur = data.current || {}, daily = data.daily || {}, condition = WEATHER[cur.weather_code] || ['🌡️', 'Current conditions'];
+      const hero = el('div', 'kwwweatherhero'); hero.append(el('span', 'kwwweathericon', condition[0]), el('strong', null, Number.isFinite(cur.temperature_2m) ? Math.round(cur.temperature_2m) + (w.units === 'fahrenheit' ? '°F' : '°C') : '—'));
+      const detail = el('div', 'kwwweatherdetail'); detail.append(el('b', null, w.location.name), el('span', null, condition[1]));
+      const lo = daily.temperature_2m_min && daily.temperature_2m_min[0], hi = daily.temperature_2m_max && daily.temperature_2m_max[0], rain = daily.precipitation_probability_max && daily.precipitation_probability_max[0], unit = w.units === 'fahrenheit' ? '°F' : '°C', bits = [];
+      if (Number.isFinite(lo) && Number.isFinite(hi)) bits.push(`${Math.round(lo)}–${Math.round(hi)}${unit}`);
+      if (Number.isFinite(rain)) bits.push(`${Math.round(rain)}% rain`); if (Number.isFinite(cur.wind_speed_10m)) bits.push(`${Math.round(cur.wind_speed_10m)} ${w.units === 'fahrenheit' ? 'mph' : 'km/h'} wind`);
+      detail.append(el('span', 'muted', bits.join(' · '))); body.append(hero, detail);
+    }).catch(() => { if (body.isConnected && boardStoreId() === boardKey) { body.textContent = ''; body.append(el('span', 'muted', 'Forecast unavailable. The board still works offline.')); } });
+    return box;
+  }
+  function pulseWidget(w) {
+    const box = widgetShell(w, 'kwwpulse'), open = state.tasks.filter(t => t.column !== doneColId()), today = todayIso();
+    const active = open.filter(t => activeClaim(t) && claimState(t.claim) === 'running'), attention = open.filter(needsAttention), doing = open.filter(t => t.column === 'in-progress'), doneToday = state.tasks.filter(t => { const c = completionOf(t); return c && String(c.at || '').slice(0, 10) === today; });
+    const grid = el('div', 'kwwmetrics'), metric = (value, label, tone) => { const x = el('div', 'kwwmetric' + (tone ? ' ' + tone : '')); x.append(el('strong', null, String(value)), el('span', null, label)); return x; };
+    grid.append(metric(doing.length, 'in progress'), metric(active.length, 'agent runs', active.length ? 'active' : ''), metric(attention.length, 'need attention', attention.length ? 'warn' : ''), metric(doneToday.length, 'done today', doneToday.length ? 'good' : ''));
+    box.append(grid);
+    if (active.length) { const t = active.sort((a, b) => numOf(a) - numOf(b))[0], b = el('button', 'kwwactive', `${agentLabel(t.claim)} · #${t.num} ${t.title}`); b.type = 'button'; b.onclick = () => openCard(t.id, 'comments'); box.append(b); }
+    return box;
+  }
+  function renderTodayWidgets(wrap) {
+    if (!widgetsEnabled()) return;
+    if (widgetMeta.key !== boardStoreId()) return;
+    if (widgetMeta.problem) { const warning = el('div', 'kwwproblem'); warning.append(svgIcon('triangle-alert'), el('span', null, `${WIDGET_FILE} could not be loaded: ${widgetMeta.problem}`)); wrap.append(warning); }
+    if (!widgets.length) return;
+    const area = el('div', 'kbwidgets');
+    widgets.forEach(w => { if (w.type === 'task-strip') area.append(taskStripWidget(w)); else if (w.type === 'weather') area.append(weatherWidget(w)); else if (w.type === 'board-pulse') area.append(pulseWidget(w)); });
+    if (area.childElementCount) wrap.append(area);
+  }
+
   function renderToday() {
     const board = $('board'), t = todayIso(), week = plusDays(7), m = modes(), hasCrm = m.includes('crm'), hasTasks = m.includes('tasks');
     const open = hasCrm ? state.contacts.filter(p => !closedStage(p.stage) && crmFilter(p) && contactOnly(p)) : [];   // members are never follow-ups
@@ -3913,6 +4056,7 @@ if (typeof window !== 'undefined') (() => {
       inv.append(svgIcon('compass'), el('span', 'ti', 'New here? Take a one-minute tour of Today, Kanban and People.'), start, x); wrap.append(inv);
     }
     if (go.childElementCount) wrap.append(go);
+    renderTodayWidgets(wrap);
     const addGroups = list => list.forEach(([[ic, title], items]) => {
       if (!items.length) return; const sec = ui.section({ title, count: items.length, icon: ic }); sec.classList.add('tsec');
       items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec.body); wrap.append(sec);
@@ -4536,6 +4680,27 @@ if (typeof window !== 'undefined') (() => {
     if (withArch && archived) { archived.tasks.forEach(x => task(x.item, x.year)); archived.contacts.forEach(x => person(x.item, x.year)); }
     return docs;
   }
+  function searchActions(query) {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const matches = text => words.every(word => text.toLowerCase().includes(word));
+    const settings = name => () => { $('btnSettings').click(); settingsTab(name); };
+    const actions = [
+      { label: 'Open Help', icon: 'circle-help', keywords: 'help guide documentation support how to use', run: () => $('btnHelp').click() },
+      { label: 'Appearance and themes', icon: 'palette', keywords: 'appearance theme settings switch change colors colours style layout dark light', run: settings('appearance') },
+      { label: 'Set up agents and integrations', icon: 'bot', keywords: 'agents agent setup set up configure claude codex plugins skills routines schedules email integrations settings', run: settings('claude') },
+      { label: 'Connection and boards', icon: 'plug', keywords: 'connection connect board boards repository repo github token pat settings', run: settings('conn') },
+      { label: 'Board customisations', icon: 'sliders-horizontal', keywords: 'board customisation customisations customization customizations widgets enable browser appearance settings', run: settings('widgets') }
+    ].filter(action => matches(action.label + ' ' + action.keywords));
+    if (words.length && window.kbTheme) {
+      const options = Array.from($('sTheme').options);
+      (window.kbTheme.list || []).filter(theme => theme !== 'custom').forEach(theme => {
+        const option = options.find(option => option.value === theme), label = option ? option.textContent : theme;
+        if (!matches(label + ' ' + theme + ' theme appearance switch change set colors colours')) return;
+        actions.push({ label: 'Use ' + label + ' theme', icon: 'palette', run: () => { window.kbTheme.set(theme); $('sTheme').value = window.kbTheme.get(); toast(label + ' theme selected'); } });
+      });
+    }
+    return actions;
+  }
   async function runSearch() {
     const q = $('qQ').value.trim(), withArch = $('qArch').checked, res = $('qRes'); let info = '';
     if (withArch && !archived && archYears().length) { $('qInfo').textContent = 'Loading the archive…'; try { await loadArchived(); } catch (e) { info = 'Could not load the archive: ' + (e.message || e); } }
@@ -4547,9 +4712,14 @@ if (typeof window !== 'undefined') (() => {
     if (goes.length) { const grid = el('div', 'qgos'); res.append(el('div', 'qhead', 'Go to'), grid);
       goes.forEach(v => { const g = el('button', 'qhit qgo'); g.type = 'button'; g.title = v.title; g.append(svgIcon(v.icon), el('span', null, v.label));
         g.onclick = () => { $('dlgSearch').close(); setView(v.value); }; grid.append(g); }); }
+    const actions = searchActions(q);
+    if (actions.length) { res.append(el('div', 'qhead', 'Help and settings'));
+      actions.forEach(action => { const button = el('button', 'qhit qaction'); button.type = 'button';
+        button.append(elI('span', 'qic', action.icon), el('span', 'qt', action.label));
+        button.onclick = () => { $('dlgSearch').close(); action.run(); }; res.append(button); }); }
     if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} people and tasks` + (matchMedia('(pointer: fine)').matches ? ' · press / anywhere to search' : ''); if (res.firstElementChild) res.querySelector('.qhit').classList.add('first'); return; }
     const hits = msIndex.search(q).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
-    $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
+    $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
     hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
       b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
         else if (h.kind === 'task') openCard(h.ref); else openContact(h.ref); };
@@ -4596,12 +4766,21 @@ if (typeof window !== 'undefined') (() => {
   $('dlgHelp').querySelectorAll('a[data-doc]').forEach(a => { a.href = HOME + '/docs/help/' + a.dataset.doc; a.target = '_blank'; a.rel = 'noopener noreferrer'; });
 
   $('sLayout').value = window.kbLayout ? window.kbLayout.get() : 'dock'; $('sLayout').onchange = e => { window.kbLayout && window.kbLayout.set(e.target.value); closePops(); render(); renderTopbar(); };
+  $('sWidgets').checked = widgetsEnabled();
+  const syncAppearance = () => { $('sBoardAppearance').checked = !!(window.kbTheme && window.kbTheme.boardAppearance && window.kbTheme.boardAppearance()); $('sBoardAppearance').disabled = SANDBOX || !cfg().repo; $('sTheme').value = window.kbTheme ? window.kbTheme.get() : 'auto'; $('sStyle').value = window.kbStyle ? window.kbStyle.get() : 'classic'; syncCustomOpt(); };
+  $('btnSettings').addEventListener('click', syncAppearance);
+  $('sBoardAppearance').onchange = e => { if (window.kbTheme && window.kbTheme.enableBoard) window.kbTheme.enableBoard(e.target.checked); syncAppearance(); render(); };
+  $('btnSettings').addEventListener('click', () => { $('sWidgets').checked = widgetsEnabled(); $('sWidgets').disabled = SANDBOX || !cfg().repo; });
+  $('sWidgets').onchange = async e => {
+    const c = cfg(); LS.set('kb_widgets:' + boardStoreId(c), e.target.checked ? '1' : '0');
+    await loadWidgets(c); render();
+  };
   $('sStyle').value = window.kbStyle ? window.kbStyle.get() : 'classic'; $('sStyle').onchange = e => { window.kbStyle && window.kbStyle.set(e.target.value); render(); };
   $('sTheme').value = window.kbTheme ? window.kbTheme.get() : 'auto';
   $('sTheme').onchange = e => window.kbTheme && window.kbTheme.set(e.target.value);
   // DESIGN.md (Google's open design-token format): import its colours as a custom theme, or copy the current theme as one.
   const themeMsg = (t, bad) => { $('sThemeMsg').textContent = t; $('sThemeMsg').classList.toggle('err', !!bad); };
-  const syncCustomOpt = () => { let c = null; try { c = JSON.parse(LS.get('kb_custom', 'null')); } catch {} $('sThemeCustom').hidden = !c; if (c) $('sThemeCustom').textContent = c.name || 'Your DESIGN.md'; };
+  const syncCustomOpt = () => { let c = null; try { c = JSON.parse(window.kbTheme && window.kbTheme.custom ? window.kbTheme.custom() : LS.get('kb_custom', 'null')); } catch {} $('sThemeCustom').hidden = !c; if (c) $('sThemeCustom').textContent = c.name || 'Your DESIGN.md'; };
   syncCustomOpt();
   $('sThemeImport').onclick = () => $('sThemeFile').click();
   $('sThemeFile').onchange = async e => {

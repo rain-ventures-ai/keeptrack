@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v38 (schema 4)
+Shared email scans prefer canonical `email-key` RFC822 Message-ID hashes, so copies seen by different board members
+are deduplicated per contact while later replies remain new activity. `touch-source` binds verified source keys to an
+existing email touch without rewriting its history. Drafts cannot carry imported source-message keys.
+Run `kit-update` only. No data migration. Update email routine prompts to use canonical keys and read
+`board/ROUTINES.md` for multi-user schedules. Existing entries need verified source binding before automatic imports
+can deduplicate them across mailboxes; never infer identity from similar summaries alone.
+
 ### v37 (schema 4)
 Board-member CRM records cannot be deleted through the web board or `person-rm`. Routines can keep a repo-owned
 register and consistent bounded run reports with `routine <id> show|start|finish`; see `board/ROUTINES.md`.

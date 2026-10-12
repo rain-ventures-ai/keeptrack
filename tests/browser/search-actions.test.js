@@ -1,0 +1,66 @@
+'use strict';
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require('playwright');
+const ROOT = path.resolve(__dirname, '../..');
+const server = http.createServer((req, res) => {
+  const file = path.resolve(ROOT, '.' + new URL(req.url, 'http://local').pathname);
+  if (!file.startsWith(ROOT + path.sep)) return res.writeHead(403).end();
+  fs.readFile(file, (error, data) => { if (error) return res.writeHead(404).end();
+    res.setHeader('Content-Type', ({ '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' })[path.extname(file)] || 'application/octet-stream'); res.end(data); });
+});
+(async () => {
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage(); const errors = []; let writes = 0;
+    page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(() => { localStorage.setItem('kb_tour_seen', '1'); localStorage.setItem('kb_theme', 'sand');
+      localStorage.setItem('kb_repo', 'acme/search'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_api', 'https://api.test'); sessionStorage.setItem('kb_view', 'board'); });
+    const board = { version: 3, columns: [{ id: 'todo', name: 'To do' }], people: [], contacts: [], clients: [], agents: [], labels: [], settings: {},
+      tasks: [{ id: 't_search', num: 1, title: 'Search example card', column: 'todo', priority: 'medium', assignees: [], labels: [], comments: [], todos: [], history: [], links: [] }] };
+    await page.route('https://api.test/**', route => { if (route.request().method() !== 'GET') writes++;
+      const url = route.request().url();
+      if (url.includes('/contents/board/tasks.json')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sha: 'one', encoding: 'base64', content: Buffer.from(JSON.stringify(board)).toString('base64') }) });
+      if (url.includes('/contents/board/KIT_VERSION')) return route.fulfill({ body: '999' });
+      return route.fulfill({ status: 404, body: '{}' }); });
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?repo=acme/search&branch=main&path=board/tasks.json`);
+    await page.waitForSelector('.card');
+    const search = async query => { await page.evaluate(() => document.getElementById('btnSearch').click()); await page.locator('#qQ').fill(query); await page.waitForTimeout(150); };
+    await search('HELP'); await page.getByRole('button', { name: 'Open Help', exact: true }).click();
+    assert.equal(await page.locator('#dlgHelp').evaluate(dialog => dialog.open), true);
+    await page.locator('#hClose').click();
+    await search('setup agents'); await page.getByRole('button', { name: 'Set up agents and integrations', exact: true }).click();
+    assert.equal(await page.locator('#panelAgents').isVisible(), true);
+    await page.locator('#dlgSettings').evaluate(dialog => dialog.close());
+    await search('connection'); await page.getByRole('button', { name: 'Connection and boards', exact: true }).click();
+    assert.equal(await page.locator('#panelConn').isVisible(), true);
+    await page.locator('#dlgSettings').evaluate(dialog => dialog.close());
+    await search('theme'); await page.getByRole('button', { name: 'Appearance and themes', exact: true }).click();
+    assert.equal(await page.locator('#sTheme').isVisible(), true);
+    await page.locator('#dlgSettings').evaluate(dialog => dialog.close());
+    await search('widgets'); await page.getByRole('button', { name: 'Board customisations', exact: true }).click();
+    assert.equal(await page.locator('#sWidgets').isVisible(), true);
+    await page.waitForFunction(() => { const section = document.getElementById('secWidgets').getBoundingClientRect(), dialog = document.getElementById('dlgSettings').getBoundingClientRect(); return section.top >= dialog.top && section.top < dialog.bottom - 80; });
+    await page.locator('#dlgSettings').evaluate(dialog => dialog.close());
+    await search('MIDNIGHT'); await page.locator('#qQ').press('Enter');
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'midnight');
+    assert.equal(await page.evaluate(() => localStorage.getItem('kb_theme')), 'midnight');
+    await page.evaluate(() => { window.kbTheme.useBoard({ repo: 'acme/search', branch: 'main', path: 'board/tasks.json' }); window.kbTheme.enableBoard(true); });
+    await search('forest'); await page.getByRole('button', { name: /Use Forest.*theme/i }).click();
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'forest');
+    assert.equal(await page.evaluate(() => localStorage.getItem('kb_theme')), 'midnight', 'board choice preserves browser default');
+    await page.evaluate(() => window.kbTheme.useBoard({ repo: 'acme/other', branch: 'main', path: 'board/tasks.json' }));
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'midnight');
+    // Existing navigation/data results and keyboard navigation stay present.
+    await search(''); assert.equal(await page.locator('.qgo').count() > 0, true);
+    await page.locator('#qQ').press('ArrowDown'); assert.equal(await page.locator('.qhit:focus').count(), 1);
+    await page.locator('#qClose').click();
+    await search('example card'); await page.getByRole('button', { name: /Search example card/ }).click();
+    assert.equal(await page.locator('#dlgCard').evaluate(dialog => dialog.open), true);
+    assert.equal(writes, 0); assert.deepEqual(errors, []);
+    console.log('search-actions: all checks passed');
+  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+})().catch(error => { console.error(error); process.exitCode = 1; });
