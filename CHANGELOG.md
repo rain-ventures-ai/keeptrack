@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Inbox questions closed with `proposal-done --not-acted` show "Closed without acting by …" (kit v45).
+
 - **2026-10-12** — Kanban cards show compact relative creation and last-activity ages, progressing from hours through
   days, weeks, months and years, with exact timestamps on hover. Activity includes task edits, comments, history and
   agent runs.
@@ -76,6 +78,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [45] — 2026-10-12
+
+- `proposal-done --not-acted --answer-id <id> [--note]` closes an answered question without acting (`decision.done.acted: false`), so
+  a rejected approval or a changed content hash no longer stays open for ever.
+- An answered question that is not done is kept whole only for `archive.done_days`; after that it is slimmed and
+  archived like other decided items.
+- `proposal-done` refuses an `ask.approve` with no `content_hash` (it no longer skips the check).
+- The unknown-kind error lists every kind, including `ask.*`.
+- Docs: "the agent that asked" is the same `BOARD_AGENT@BOARD_USER`, not one session.
 
 ### [44] — 2026-10-12
 

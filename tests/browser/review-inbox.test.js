@@ -479,6 +479,10 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       await page.locator('#btnInbox').click(); await page.selectOption('[data-filter="status"]', 'answered'); await page.waitForSelector('article.prop[data-id="r_askmail001"]');
       assert.equal(await propCard(page, 'r_askmail001').locator('[data-act="reopen"]').count(), 0, 'an answer the agent acted on cannot be changed');
       assert.match(await propCard(page, 'r_askmail001').textContent(), /Acted on by claude@alex/);
+      api.edit('proposals/r_askmail001.json', o => { o.decision.done = { at: '2026-10-12T10:00:00Z', by: 'claude@alex', acted: false, note: 'rejected' }; });
+      await page.reload(); await page.waitForFunction(() => /Synced/.test(document.querySelector('#status').textContent));
+      await page.locator('#btnInbox').click(); await page.selectOption('[data-filter="status"]', 'answered'); await page.waitForSelector('article.prop[data-id="r_askmail001"]');
+      assert.match(await propCard(page, 'r_askmail001').textContent(), /Closed without acting by claude@alex/);
       await page.close(); }
 
     console.log('review inbox browser tests passed');

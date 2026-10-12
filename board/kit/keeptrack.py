@@ -199,7 +199,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 44  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 45  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack/main/board/kit")
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 
@@ -5192,7 +5192,7 @@ def validate_proposal_input(raw, recipients_confirmed=False):
         proposal_error("unknown proposal field(s): " + ", ".join(unknown))
     kind = raw.get("kind")
     if kind not in PROPOSAL_KINDS:
-        proposal_error("kind must be task.create, task.update, person.upsert or contact.touch")
+        proposal_error("kind must be one of: " + ", ".join(sorted(PROPOSAL_KINDS)))
     title = _one_line(raw.get("title"), "title")
     source = raw.get("source")
     if not isinstance(source, dict) or set(source) - PROPOSAL_SOURCE_FIELDS:
@@ -5678,7 +5678,7 @@ def cmd_proposal_reopen(a):
         old = proposal.get("decision") or {}
         _ask_person(proposal, "reopen")
         if proposal["status"] == "answered":
-            if old.get("done"): proposal_conflict(f"not reopened: the answer was already acted on by {old['done'].get('by', 'someone')}")
+            if old.get("done"): proposal_conflict(f"not reopened: the answer was already {_done_word(old['done'])} by {old['done'].get('by', 'someone')}")
         was = proposal["status"]; proposal["status"] = "pending"; proposal["decision"] = None
         proposal.setdefault("history", []).append({"at": now(), "by": who_am_i(), "text": f"reopened (was {was} by {old.get('by', 'someone')})"})
         print(f"reopened {proposal['id']}")
@@ -5766,6 +5766,10 @@ def cmd_proposal_answer(a):
     mutate(fn, f"Answer question: {a.id}")
 
 
+def _done_word(done):
+    return "closed without acting" if (done or {}).get("acted") is False else "acted on"
+
+
 def cmd_proposal_result(a):
     """For the agent that asked: the answer, and whether someone already acted on it."""
     data, _ = load(); require_review_storage(data); proposal = find_proposal(data, a.id)
@@ -5791,17 +5795,28 @@ def cmd_proposal_done(a):
         if a.answer_id and a.answer_id != d.get("id"):
             proposal_conflict("not done: the answer changed after you read it (answer_id differs). Read proposal-result again")
         if d.get("done"):
-            proposal_conflict(f"already acted on by {d['done'].get('by', 'someone')} at {d['done'].get('at', 'an unknown time')}; do not act again")
+            proposal_conflict(f"already {_done_word(d['done'])} by {d['done'].get('by', 'someone')} at {d['done'].get('at', 'an unknown time')}; do not act again")
+        if a.not_acted and agent_run() and not a.answer_id:
+            proposal_error("--not-acted needs --answer-id from proposal-result, so a changed answer is never closed unseen")
+        if a.not_acted:   # close it without acting: a rejection, a changed content hash, or work no longer needed
+            ts, by = now(), who_am_i()
+            d["done"] = {"at": ts, "by": by, "acted": False}
+            if a.note: d["done"]["note"] = _one_line(a.note, "--note", PROPOSAL_DETAIL_LIMIT)
+            proposal.setdefault("history", []).append({"at": ts, "by": by, "text": "closed, not acted on" + (f": {d['done']['note']}" if a.note else "")})
+            print(json.dumps({"done": proposal["id"], "acted": False}, ensure_ascii=False))
+            return
         if not d.get("answer"):
             proposal_error("this answer is empty (slimmed or damaged): do not act on it; ask again")
         if proposal["kind"] == "ask.approve":
             if not proposal.get("change"):
                 proposal_error("this approval was slimmed after 30 days and can no longer be checked: ask again")
             if not (d.get("answer") or {}).get("approved"):
-                proposal_error("this was not approved: do not act on it")
+                proposal_error("this was not approved: do not act on it. Close it with proposal-done --not-acted")
             want = (proposal.get("change") or {}).get("content_hash")
-            if want and a.content_hash != want:
-                proposal_conflict("not done: the content changed since it was approved (content hash differs). Ask again with a new item")
+            if not want:
+                proposal_error("this approval has no content hash, so it cannot be checked: do not act on it. Close it with --not-acted and ask again")
+            if a.content_hash != want:
+                proposal_conflict("not done: the content changed since it was approved (content hash differs). Close it with --not-acted and ask again with a new item")
         ts, by = now(), who_am_i()
         d["done"] = {"at": ts, "by": by}
         if a.note: d["done"]["note"] = _one_line(a.note, "--note", PROPOSAL_DETAIL_LIMIT)
@@ -5894,8 +5909,9 @@ def archive_plan(data, rules, today=None):
                 decision_day = parse(decision_at).date() if decision_at else None
             except (ValueError, TypeError):
                 decision_day = None
-            if proposal.get("status") == "answered" and not (proposal.get("decision") or {}).get("done"):
-                keep_r.append(proposal); continue   # the asking agent has not acted yet: keep the whole answer
+            if (proposal.get("status") == "answered" and not (proposal.get("decision") or {}).get("done")
+                    and not (decision_day and decision_day < archive_cut)):
+                keep_r.append(proposal); continue   # the asking agent has not acted yet: keep the whole answer (until done_days)
             if proposal.get("status") in DECIDED_STATUSES and decision_day and decision_day < slim_cut:
                 for field in ("reason", "evidence", "change"):
                     proposal.pop(field, None)
@@ -6428,6 +6444,8 @@ def main():
     s = sub.add_parser("proposal-done", help="the asking agent marks an answer as acted on (once; run it just before acting)")
     s.add_argument("id"); s.add_argument("--content-hash", dest="content_hash")
     s.add_argument("--answer-id", dest="answer_id", help="answer_id from proposal-result: refuse if the answer changed since")
+    s.add_argument("--not-acted", dest="not_acted", action="store_true",
+                   help="close the answer without acting on it (rejected, content changed, or no longer needed)")
     s.add_argument("--note"); s.set_defaults(f=cmd_proposal_done)
     s = sub.add_parser("import", help="load an onboarding staging file (JSON, or a CSV of people); run --dry-run first"); s.add_argument("path"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--source", help="evidence line for records with none, for example 'Clients sheet, Oct 2026'"); s.set_defaults(f=cmd_import)
     have = {act.dest for act in sub._choices_actions}   # argparse lists only commands created with a help line

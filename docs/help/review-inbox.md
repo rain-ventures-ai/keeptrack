@@ -148,4 +148,12 @@ you act: it records the answer as acted on, once, and prints the answer it locke
 person may have changed the answer since you read it (`--answer-id` refuses when it changed). Exit code 3 means someone already acted, or, for an approval, the
 content hash differs from the approved one; then do not act, and ask again with a new question if needed.
 
+When you will not act on an answer (it was rejected, the content hash changed, or the work is no longer needed), close
+it with `proposal-done <id> --not-acted --answer-id <answer_id> --note "why"`. The Inbox then shows "Closed without acting". An answer nobody
+acts on or closes is kept whole for `archive.done_days` (90 days by default), then slimmed and archived like the rest.
+
+"The agent that asked" means the same `BOARD_AGENT` and `BOARD_USER` (for example `claude@osouthgate`), not one session:
+a later run of the same routine can pick up the answer. Every run for that agent and person can read and act on it,
+and `proposal-done` still lets only one of them act.
+
 If the card waits on the answer, use `keeptrack.py wait <card> --on "answer to <question id>"` and stop.
