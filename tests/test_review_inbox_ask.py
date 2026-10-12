@@ -172,12 +172,19 @@ class AskItems(unittest.TestCase):
         rid = self.ids()["approve-1"]
         self.kt("proposal-answer", rid, "--reject", "--note", "Too long")
         self.assertEqual(2, self.kt("proposal-done", rid, "--content-hash", DRAFT_HASH, env=self.agent, ok=False).returncode)
-        out = json.loads(self.kt("proposal-done", rid, "--not-acted", "--note", "rejected", env=self.agent).stdout)
+        self.assertEqual(2, self.kt("proposal-done", rid, "--not-acted", env=self.agent, ok=False).returncode, "an agent names the answer it saw")
+        aid = json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)["answer_id"]
+        self.kt("proposal-reopen", rid); self.kt("proposal-answer", rid, "--approve")   # the person changes their mind
+        self.assertEqual(3, self.kt("proposal-done", rid, "--not-acted", "--answer-id", aid, env=self.agent, ok=False).returncode)
+        self.kt("proposal-reopen", rid); self.kt("proposal-answer", rid, "--reject")
+        aid = json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)["answer_id"]
+        out = json.loads(self.kt("proposal-done", rid, "--not-acted", "--answer-id", aid, "--note", "rejected", env=self.agent).stdout)
         self.assertEqual({"done": rid, "acted": False}, out)
         done = json.loads(self.kt("proposal-result", rid).stdout)["done"]
         self.assertIs(False, done["acted"]); self.assertEqual("rejected", done["note"])
-        self.assertEqual(3, self.kt("proposal-done", rid, "--not-acted", env=self.agent, ok=False).returncode, "closed once")
-        self.assertEqual(3, self.kt("proposal-reopen", rid, ok=False).returncode, "a closed answer is final")
+        self.assertEqual(3, self.kt("proposal-done", rid, "--not-acted", "--answer-id", aid, env=self.agent, ok=False).returncode, "closed once")
+        p = self.kt("proposal-reopen", rid, ok=False)
+        self.assertEqual(3, p.returncode, "a closed answer is final"); self.assertIn("closed without acting", p.stderr)
 
     def test_approval_without_a_content_hash_fails_closed(self):
         self.add(APPROVE)
@@ -189,7 +196,7 @@ class AskItems(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f: f.write(json.dumps(item, indent=2) + "\n")
         self.assertEqual(2, self.kt("proposal-done", rid, env=self.agent, ok=False).returncode)
         self.assertEqual(2, self.kt("proposal-done", rid, "--content-hash", DRAFT_HASH, env=self.agent, ok=False).returncode)
-        self.kt("proposal-done", rid, "--not-acted", env=self.agent)
+        self.kt("proposal-done", rid, "--not-acted", "--answer-id", json.loads(self.kt("proposal-result", rid).stdout)["answer_id"], env=self.agent)
 
     def test_unknown_kind_error_lists_the_ask_kinds(self):
         p = self.add(dict(QUESTION, kind="ask.chose"), ok=False)

@@ -28,7 +28,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v45 (schema 4)
 Small fixes to Inbox questions. No data migration.
 - Run `kit-update` only.
-- `proposal-done --not-acted --note "why"` closes an answer the agent will not act on (rejected, content changed, no
+- `proposal-done --not-acted --answer-id <answer_id> --note "why"` closes an answer the agent will not act on (rejected, content changed, no
   longer needed). Routines that ask for approvals should use it after a rejection, so the item does not stay open.
 - An answer nobody acts on is kept whole for `archive.done_days` (90 by default), then slimmed and archived.
 - `proposal-done` refuses an `ask.approve` with no `content_hash`.

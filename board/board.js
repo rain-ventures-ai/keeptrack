@@ -4205,7 +4205,7 @@ if (typeof window !== 'undefined') (() => {
       if (!cur || !['ignored', 'answered'].includes(cur.status)) return { abort: 'Only an ignored proposal or an answered question can be reopened.' };
       if (!cur.change) return { abort: 'This proposal was slimmed after 30 days and can no longer be reopened.' };
       const old = cur.decision || {};
-      if (cur.status === 'answered' && old.done) return { abort: `Not reopened: ${old.done.by || 'someone'} already acted on this answer.` };
+      if (cur.status === 'answered' && old.done) return { abort: `Not reopened: ${old.done.by || 'someone'} already ${old.done.acted === false ? 'closed this answer without acting' : 'acted on this answer'}.` };
       if (isAsk(cur) && askDecider(cur)) return { abort: `Only @${cur.decider} can reopen this question.` };
       const x = clone(cur); x.status = 'pending'; x.decision = null;
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text: `reopened (was ${cur.status} by ${old.by || 'someone'})` });

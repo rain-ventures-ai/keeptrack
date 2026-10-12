@@ -5678,7 +5678,7 @@ def cmd_proposal_reopen(a):
         old = proposal.get("decision") or {}
         _ask_person(proposal, "reopen")
         if proposal["status"] == "answered":
-            if old.get("done"): proposal_conflict(f"not reopened: the answer was already acted on by {old['done'].get('by', 'someone')}")
+            if old.get("done"): proposal_conflict(f"not reopened: the answer was already {_done_word(old['done'])} by {old['done'].get('by', 'someone')}")
         was = proposal["status"]; proposal["status"] = "pending"; proposal["decision"] = None
         proposal.setdefault("history", []).append({"at": now(), "by": who_am_i(), "text": f"reopened (was {was} by {old.get('by', 'someone')})"})
         print(f"reopened {proposal['id']}")
@@ -5766,6 +5766,10 @@ def cmd_proposal_answer(a):
     mutate(fn, f"Answer question: {a.id}")
 
 
+def _done_word(done):
+    return "closed without acting" if (done or {}).get("acted") is False else "acted on"
+
+
 def cmd_proposal_result(a):
     """For the agent that asked: the answer, and whether someone already acted on it."""
     data, _ = load(); require_review_storage(data); proposal = find_proposal(data, a.id)
@@ -5791,7 +5795,9 @@ def cmd_proposal_done(a):
         if a.answer_id and a.answer_id != d.get("id"):
             proposal_conflict("not done: the answer changed after you read it (answer_id differs). Read proposal-result again")
         if d.get("done"):
-            proposal_conflict(f"already acted on by {d['done'].get('by', 'someone')} at {d['done'].get('at', 'an unknown time')}; do not act again")
+            proposal_conflict(f"already {_done_word(d['done'])} by {d['done'].get('by', 'someone')} at {d['done'].get('at', 'an unknown time')}; do not act again")
+        if a.not_acted and agent_run() and not a.answer_id:
+            proposal_error("--not-acted needs --answer-id from proposal-result, so a changed answer is never closed unseen")
         if a.not_acted:   # close it without acting: a rejection, a changed content hash, or work no longer needed
             ts, by = now(), who_am_i()
             d["done"] = {"at": ts, "by": by, "acted": False}

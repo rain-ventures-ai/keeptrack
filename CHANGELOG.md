@@ -74,7 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### [45] — 2026-10-12
 
-- `proposal-done --not-acted [--note]` closes an answered question without acting (`decision.done.acted: false`), so
+- `proposal-done --not-acted --answer-id <id> [--note]` closes an answered question without acting (`decision.done.acted: false`), so
   a rejected approval or a changed content hash no longer stays open for ever.
 - An answered question that is not done is kept whole only for `archive.done_days`; after that it is slimmed and
   archived like other decided items.
