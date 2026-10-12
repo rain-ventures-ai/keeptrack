@@ -276,6 +276,10 @@
   </div>
 
   <div id="panelAgents" role="tabpanel" aria-labelledby="tabAgents" hidden>
+    <div data-sec id="agRegister" data-icon="activity" data-title="Routines on this board" data-scope="board" data-purpose="Where each routine runs, its connections and its latest reported result. Browser setup switches below are preferences; these reports come from the repo.">
+      <div id="routineRegister" role="status">Open Agents to load routine reports.</div>
+      <button id="routineRefresh" type="button">Refresh routine reports</button>
+    </div>
     <div data-sec id="agPick" data-icon="compass" data-title="What do you want to set up?" data-scope="browser" data-learn="where-agents-run.md" data-purpose="Agents read and update the board for you. They draft messages and never send them.">
       <div id="agChooser" class="agpicks"></div>
     </div>

@@ -2800,7 +2800,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "add", "task-set", "move", "assign", "link", "unlink", "task-rm"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat"],
+    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "touch", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -3171,6 +3171,7 @@ def cmd_person(a):
     if resources: print("  access: cloud resources need the matching connector/plugin/MCP and account; local paths need a session on that computer. Ask the user if access fails.")
     for c in p.get("comments", []):
         print(f"  [{c['at'][:16]}] {c.get('channel', 'note')}{' DRAFT (not sent) ' + c['id'] if c.get('draft') else ''} {c.get('by', '?')}: {c['text']}")
+        if c.get("source_message_ids"): print("    source messages: " + ", ".join(c["source_message_ids"]))
     tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
     for x in tasks: print("  task: " + line(data, x))
 
@@ -3205,7 +3206,10 @@ def cmd_person_rm(a):
     """Delete a CRM person added by mistake (not Lost: wrong). Needs --yes. Tasks that named them as contact lose that link
     (as in the web board). Projects list people by email address, not by id, so they are left alone."""
     def fn(data):
+        _MUT["recheck"] = True
         p = find_person(data, a.ref)
+        if member_of(data, p):
+            sys.exit("board members' own records cannot be deleted from the CRM")
         tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
         if not a.yes:
             sys.exit(f"this deletes {person_line(p, data, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
@@ -3220,16 +3224,25 @@ def cmd_person_rm(a):
 def cmd_touch(a):
     """Log a contact. --draft records a message that is not sent yet (it does not count as contact)."""
     event_at, source_id = check_event_time(getattr(a, "at", None)), check_source_id(getattr(a, "source_id", None))
+    message_ids = sorted(set(check_source_id(x) for x in getattr(a, "source_message_id", []) or []))
     def fn(data):
+        _MUT["recheck"] = True
         p = find_person(data, a.ref)
+        covered = {x for c in p.get("comments", []) for x in c.get("source_message_ids", [])}
+        overlap = covered.intersection(message_ids)
+        if overlap:
+            if overlap == set(message_ids):
+                print(f"all source messages already logged for {p['name']}"); return
+            sys.exit("some source messages are already logged; regroup only unlogged messages and recalculate the summary/source id")
         if source_id:
             old = next((c for c in p.get("comments", []) if c.get("source_id") == source_id), None)
             if old:
                 print(f"already logged {a.channel} for {p['name']} ({old['id']})"); return
         c = {"id": "c_" + uuid.uuid4().hex[:6], "at": event_at, "by": who_am_i(), "channel": a.channel, "text": a.text, "draft": bool(a.draft and a.channel != "note")}
         if source_id: c["source_id"] = source_id
+        if message_ids: c["source_message_ids"] = message_ids
         p.setdefault("comments", []).append(c)
-        if not c["draft"] and a.channel != "note" and p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
+        if not getattr(a, "preserve_stage", False) and not c["draft"] and a.channel != "note" and p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
             hist(p, f"stage {p['stage']} -> {stages(data)[1]}"); p["stage"] = stages(data)[1]
         for x in set_fields(data, p, a): hist(p, x)
         p["updated"] = now()
@@ -4509,7 +4522,7 @@ def archive_plan(data, rules, today=None):
             keep_t.append(t)
     keep_p = []
     for p in data.get("contacts", []):
-        if year(p) and str(p.get("stage", "")).lower() == "lost" and stamp(p)[:10] < cut_p and not (p.get("next_due") or "") >= today.isoformat():
+        if not member_of(data, p) and year(p) and str(p.get("stage", "")).lower() == "lost" and stamp(p)[:10] < cut_p and not (p.get("next_due") or "") >= today.isoformat():
             part(year(p))["contacts"].append(p)
         else:
             keep_p.append(p)
@@ -4712,11 +4725,71 @@ def _cmd_unarchive(a):
     sys.exit("could not restore after retries (board busy)")
 
 
+def cmd_routine(a):
+    """Repo-owned routine inventory and bounded run reports; scheduler credentials stay outside git."""
+    if not ROOT:
+        sys.exit("routine commands need a board repo clone")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", a.id):
+        sys.exit("routine id must use lowercase letters, digits, hyphens or underscores")
+    path = os.path.join(ROOT, "automation", "routines", a.id + ".json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".lock", "a+b") as lock:
+        if fcntl: fcntl.flock(lock, fcntl.LOCK_EX)
+        elif msvcrt:
+            lock.seek(0); msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        _routine_report(a, path)
+
+
+def _routine_report(a, path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if data.get("version") != 1 or data.get("id") != a.id:
+        sys.exit("routine register version/id mismatch")
+    if not FILE:
+        _check_git_clone()
+        if data.get("board_repo") != REPO or data.get("branch") != BRANCH or data.get("board_path") != PATH:
+            sys.exit("routine register does not match the resolved board/branch/path")
+    if a.action == "show":
+        print(json.dumps(data, indent=2, ensure_ascii=False)); return
+    run_id = a.run_id
+    if not run_id:
+        sys.exit("--run-id is required for start and finish")
+    if a.action == "start":
+        if data.get("current_run"):
+            sys.exit("another run is already recorded as running; inspect it before replacing it")
+        data["last_started_at"] = now()
+        data["current_run"] = {"id": run_id, "started_at": data["last_started_at"], "status": "running"}
+    else:
+        if not getattr(a, "status", None): sys.exit("finish requires an explicit --status")
+        current = data.get("current_run")
+        if not current or current.get("id") != run_id:
+            sys.exit("run id does not match the running attempt")
+        counts = {}
+        for value in a.count:
+            key, sep, number = value.partition("=")
+            if not sep or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) or not number.isdigit():
+                sys.exit("counts must be name=nonnegative_integer")
+            counts[key] = int(number)
+        report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts)
+        data["last_run"] = report
+        data["runs"] = (data.get("runs", []) + [report])[-30:]
+        data["current_run"] = None
+        if a.status == "success": data["last_successful_run_at"] = report["finished_at"]
+    atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    print(f"{a.id}: {a.action}; commit {os.path.relpath(path, ROOT)} to publish the report")
+
+
 def main():
     global FILE
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--file", help="use a local tasks.json instead of GitHub (testing)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("routine", help="show, start or finish a registered routine's structured run report")
+    s.add_argument("id"); s.add_argument("action", choices=["show", "start", "finish"])
+    s.add_argument("--run-id"); s.add_argument("--status", choices=["success", "partial", "failed", "blocked"])
+    s.add_argument("--summary", help="brief outcome; no secrets or email text")
+    s.add_argument("--count", action="append", default=[], help="structured count such as touches_logged=3")
+    s.set_defaults(f=cmd_routine)
     global _SUBPARSERS
     _SUBPARSERS = sub
     p.epilog = "Commands by topic: keeptrack.py help [topic]"
@@ -4802,6 +4875,8 @@ def main():
     s.add_argument("--channel", choices=CHANNELS, default="note"); s.add_argument("--draft", action="store_true")
     s.add_argument("--at", help="actual contact time as an ISO timestamp with timezone")
     s.add_argument("--source-id", help="opaque retry key such as email:<sha256>; duplicate keys are not logged twice")
+    s.add_argument("--source-message-id", action="append", default=[], help="hashed individual email message key, repeatable; refuses partial overlap")
+    s.add_argument("--preserve-stage", action="store_true", help="import contact history without automatically advancing the stage")
     pf(s); s.set_defaults(f=cmd_touch)
     s = sub.add_parser("sent", help="mark a draft as sent (the human sent it)"); s.add_argument("ref"); s.add_argument("--touch", help="draft id (default: latest)"); pf(s); s.set_defaults(f=cmd_sent)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")

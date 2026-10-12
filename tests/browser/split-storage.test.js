@@ -281,7 +281,11 @@ let base;
     await missingPerm.locator('#btnSettings').click(); await missingPerm.locator('#tabConn').click(); await missingPerm.locator('#ckRun').click(); const permFix = missingPerm.locator('.cknext'); await permFix.waitFor();
     assert.match(await missingPerm.locator('.ck.bad').last().textContent(), /PAT permissions.*cannot read its default branch/s); const permHref = await permFix.locator('a.btnlink').getAttribute('href'); assert.match(permHref, /target_name=acme/); assert.match(permHref, /contents=write/); await missingPerm.close();
 
+    // A member record added remotely must survive an unrelated save from an older tab.
+    api.files['people/p_alex.json'] = text({ ...person, id: 'p_alex', name: 'Alex', github: 'alex' });
+    api.head = 'head-' + ++api.n;
     api.calls = []; await page.locator('.card').first().dblclick(); await page.locator('#cTitle').fill('First edited'); const edited = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/cards/')); await page.locator('#cTitle').blur(); await edited;
+    assert.equal(JSON.parse(api.files['people/p_alex.json']).github, 'alex');
     const puts = api.calls.filter(x => x.method === 'PUT'); assert.equal(puts.length, 1, JSON.stringify(api.calls, null, 2)); assert.equal(puts[0].path, '/contents/board/cards/t_one.json');
 
     await page.locator('#cClose').click(); api.calls = []; const add = page.locator('.col[data-col="todo"] .add input'); await add.fill('Third'); const added = page.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/git/refs/heads/main')); await add.press('Enter'); await added;
