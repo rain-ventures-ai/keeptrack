@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v47 (schema 4)
+Four small fixes to Inbox questions. No data migration.
+- Run `kit-update` only. A board on v45 does the v46 steps first.
+- A one-off `archive --done-days` no longer shortens how long an answer nobody acted on is kept. The board setting
+  `archive.done_days` decides.
+- When a question names a `decider`, only that person (or the asking agent) can run `proposal-done` on it.
+- `proposal-ignore --reason` history lines start with `ignored: `, and slimming removes the reason text.
+- Slimming also removes the `proposal-done --note` text (`decision.done.note` and the note in the history line).
+- Check: `keeptrack.py kit-check` says v47.
+
 ### v46 (schema 4)
 A safety release: no data migration, the board stays on schema 4, and v45 tools keep reading and writing a v46 board.
 - **`settings.min_kit` now prevents, not only detects.** `keeptrack.py` and the web page refuse to write a board whose

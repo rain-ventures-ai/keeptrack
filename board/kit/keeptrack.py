@@ -203,7 +203,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 46  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 47  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -6078,7 +6078,7 @@ def cmd_proposal_ignore(a):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id); _already_decided(proposal); _ask_person(proposal, "dismiss", own_ok=True)
         _decide(proposal, "ignore")
-        if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": _one_line(a.reason, "ignore reason", 300)})
+        if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": "ignored: " + _one_line(a.reason, "ignore reason", 300)})
         print(f"ignored {proposal['id']}")
     mutate(fn, f"Ignore proposal: {a.id}")
 
@@ -6213,6 +6213,9 @@ def cmd_proposal_done(a):
             proposal_conflict(f"already {_done_word(d['done'])} by {d['done'].get('by', 'someone')} at {d['done'].get('at', 'an unknown time')}; do not act again")
         if a.not_acted and agent_run() and not a.answer_id:
             proposal_error("--not-acted needs --answer-id from proposal-result, so a changed answer is never closed unseen")
+        decider = proposal.get("decider")
+        if not agent_run() and decider and decider.casefold() != os.environ.get("BOARD_USER", "").casefold():
+            proposal_error(f"only @{decider} can close or act on this question (BOARD_USER is {os.environ.get('BOARD_USER') or 'not set'})")
         if a.not_acted:   # close it without acting: a rejection, a changed content hash, or work no longer needed
             ts, by = now(), who_am_i()
             d["done"] = {"at": ts, "by": by, "acted": False}
@@ -6226,12 +6229,12 @@ def cmd_proposal_done(a):
             if not proposal.get("change"):
                 proposal_error("this approval was slimmed after 30 days and can no longer be checked: ask again")
             if not (d.get("answer") or {}).get("approved"):
-                proposal_error("this was not approved: do not act on it. Close it with proposal-done --not-acted")
+                proposal_error("this was not approved: do not act on it. Close it with proposal-done --not-acted --answer-id <answer_id>")
             want = (proposal.get("change") or {}).get("content_hash")
             if not want:
-                proposal_error("this approval has no content hash, so it cannot be checked: do not act on it. Close it with --not-acted and ask again")
+                proposal_error("this approval has no content hash, so it cannot be checked: do not act on it. Close it with proposal-done --not-acted --answer-id <answer_id> and ask again")
             if a.content_hash != want:
-                proposal_conflict("not done: the content changed since it was approved (content hash differs). Close it with --not-acted and ask again with a new item")
+                proposal_conflict("not done: the content changed since it was approved (content hash differs). Close it with proposal-done --not-acted --answer-id <answer_id> and ask again with a new item")
         ts, by = now(), who_am_i()
         d["done"] = {"at": ts, "by": by}
         if a.note: d["done"]["note"] = _one_line(a.note, "--note", PROPOSAL_DETAIL_LIMIT)
@@ -6318,6 +6321,7 @@ def archive_plan(data, rules, today=None):
         keep_r = []
         slim_cut = today - dt.timedelta(days=30)
         archive_cut = today - dt.timedelta(days=rules["done_days"])
+        answer_cut = today - dt.timedelta(days=archive_rules(data)["done_days"])   # the board setting, never a one-off --done-days
         for proposal in data.get("proposals", []):
             decision_at = str((proposal.get("decision") or {}).get("at") or "")
             try:
@@ -6325,7 +6329,7 @@ def archive_plan(data, rules, today=None):
             except (ValueError, TypeError):
                 decision_day = None
             if (proposal.get("status") == "answered" and not (proposal.get("decision") or {}).get("done")
-                    and not (decision_day and decision_day < archive_cut)):
+                    and not (decision_day and decision_day < answer_cut)):
                 keep_r.append(proposal); continue   # the asking agent has not acted yet: keep the whole answer (until done_days)
             if proposal.get("status") in DECIDED_STATUSES and decision_day and decision_day < slim_cut:
                 for field in ("reason", "evidence", "change"):
@@ -6335,6 +6339,13 @@ def archive_plan(data, rules, today=None):
                     if isinstance(proposal["decision"].get("answer"), dict):   # free text goes too; choice / approved stay
                         for field in ("text", "other", "note"):
                             proposal["decision"]["answer"].pop(field, None)
+                    if isinstance(proposal["decision"].get("done"), dict):
+                        proposal["decision"]["done"].pop("note", None)
+                for h in proposal.get("history") or []:   # "acted on: <note>" keeps only "acted on"
+                    if isinstance(h, dict) and isinstance(h.get("text"), str):
+                        for head in ("acted on: ", "closed, not acted on: ", "ignored: "):
+                            if h["text"].startswith(head):
+                                h["text"] = head[:-2]
             # Archive only what is already slimmed: an archive file must never keep the detail the 30-day rule removes.
             if proposal.get("status") in DECIDED_STATUSES and decision_day and decision_day < min(archive_cut, slim_cut):
                 part(str(decision_day.year))["proposals"].append(proposal)
