@@ -35,7 +35,8 @@ A safety release: no data migration, the board stays on schema 4, and v45 tools 
   upgraded: this repo, plugin copies, relay, routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v45 ignore the
   value, so it cannot shut them out. A typo above every kit is not a lock-out: when the stored value is above the published kit,
   `settings-set --min-kit N` on its own lowers it to at most this kit (never below what the cards and questions need),
-  and `doctor --fix` lowers it to the published kit. A value the published kit reaches is real: both refuse, and the
+  and `doctor --fix` lowers it to the published kit or this kit, whichever is older (never below what the cards and
+  questions need). A value the published kit reaches is real: both refuse, and the
   answer is `kit-update`.
 - **`doctor --fix` and `DUPLICATE_RANK`:** the fix now breaks only the tied ranks and keeps every other card's rank and
   order. Before, it re-ranked the whole column by priority and due date.
@@ -48,7 +49,10 @@ A safety release: no data migration, the board stays on schema 4, and v45 tools 
   in one clone should give each its own `BOARD_SESSION` (a random id, never the claude.ai session id). Update plugin
   copies (the `keeptrack` plugin's hook runs its own `keeptrack.py`) at the same time as this repo: a v45 copy writes
   the old one-card record on `claim`, `done` or `release`, which drops the other sessions' cards from it, so they get no
-  automatic heartbeats and go STALE after 30 minutes.
+  automatic heartbeats and go STALE after 30 minutes. A run with `--session` or `BOARD_SESSION` now owns only that
+  session's claims (v45 also accepted the session this clone's record holds): keep the same `BOARD_SESSION` from
+  `claim` to `done` (in Claude Code put it in each command, since exports do not persist between commands). A run
+  whose id changed is refused on its own card and told to rerun with the id it claimed with.
 - **Refresh this repo's `AGENTS.md`** (and `CLAUDE.md` where it repeats them) from `board/kit/templates/AGENTS.md`:
   rule 1 must ban hand edits of every board JSON file (`tasks.json`, `cards/`, `people/`, `projects/`, `proposals/`,
   `archive/`), rule 3 and the heartbeat line must say 15 minutes (30 minutes to STALE), and the `wait` line must warn

@@ -2702,6 +2702,17 @@ class ClaimLifecycle(unittest.TestCase):
         self.done(1, session="s1")
         self.assertEqual(list(json.load(open(self.claim_file))["cards"]), ["t_c2"])
 
+    def test_a_changed_board_session_is_told_to_use_the_id_it_claimed_with(self):
+        self.real_record()
+        self.claim(1, "s1")                                    # BOARD_SESSION was s1 at claim, s2 by done
+        msg = self.refusal(self.done, 1, session="s2")
+        self.assertIn("from this clone under a different session id (running)", msg)
+        self.assertIn("rerun with the id you claimed with", msg)
+        self.assertNotIn("s1", msg)                            # the owning id is never printed
+        self.assertEqual(self.card(1)["column"], "in-progress")
+        self.done(1, session="s1")
+        self.assertEqual(self.card(1)["column"], "done")
+
     def test_move_to_done_on_another_sessions_live_claim_is_refused(self):
         self.claim(1, "s1")
         mv = lambda **kw: self.quiet(kt.cmd_move, Args(id="t_c1", column="done", note=None, priority=None, before=None, after=None, top=False, **kw))

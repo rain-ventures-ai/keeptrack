@@ -105,7 +105,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   must name `cards/`, `people/` and each of `projects/`, `proposals/` and `archive/` the repo has, in any wording;
   heartbeat minutes), and the upgrade card links `blob/main`.
 - `.board-claim.json` records each claimed card with its session, so two sessions in one clone keep separate claims.
-  With `--session` or `BOARD_SESSION`, a run owns only that session's claims. Every rewrite of the record re-reads it
+  With `--session` or `BOARD_SESSION`, a run owns only that session's claims (a run whose id changed since the claim
+  is told to rerun with the id it claimed with). Every rewrite of the record re-reads it
   under a lock and changes only that command's own cards, written atomically. Each entry keeps a hash of the Claude
   Code session that claimed it (`claimant`) and its own beat time (`beat_at`): the automatic heartbeat beats only its
   own Claude session's cards (entries without a claimant, and a hook that cannot name its session, beat as before;

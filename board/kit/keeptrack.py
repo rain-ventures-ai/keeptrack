@@ -1728,6 +1728,10 @@ def claim_owner_check(data, t, a, action):
             and not (state == "blocked" and c.get("blocked_by_wait") and agent_run()):
         return   # a stale placeholder (the routine never started) is a dead run too. A claim `wait` blocked (v43) is live for
         # release: only its own session, a person (no BOARD_AGENT) or --force; else blocking it would hand any session the card
+    if explicit_session(a) and (record_cards(claim_record()).get(t["id"]) or {}).get("session") == own:
+        sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')} from this clone under a different session id ({state}): "
+                 "if BOARD_SESSION (or --session) changed since the claim, rerun with the id you claimed with; it is not "
+                 "this session's otherwise (use --force only if a person told you to)")   # the record says this clone claimed it
     sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')}, another session ({state}); it is not this session's "
              "(use --force only if a person told you to; never pass --session with an id you did not generate)")
 

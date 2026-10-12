@@ -40,6 +40,15 @@ class Templates(unittest.TestCase):
         for part in ("JSON files under `board/`", "tasks.json", "cards/", "people/", "projects/", "proposals/", "archive/"):
             self.assertIn(part, rule)
 
+    def test_upgrade_skill_names_every_board_json_folder(self):
+        text = read("repo-skills", "board-upgrade", "SKILL.md")
+        rule = text.split("never edit `board/tasks.json`", 1)[1].split(".", 1)[0]
+        for part in ("cards/", "people/", "projects/", "proposals/", "archive/"):
+            self.assertIn(part, rule)
+
+    def test_upgrade_notes_say_to_keep_one_board_session_from_claim_to_done(self):
+        self.assertIn("keep the same `BOARD_SESSION` from `claim` to `done`", read("UPGRADING.md"))
+
     def test_heartbeat_and_stale_timing_match_the_code(self):
         self.assertIn(f"at least every {MINUTES} minutes", TEMPLATE)
         self.assertIn(f"refreshes the claim at most every {MINUTES} minutes", TEMPLATE)
