@@ -1425,8 +1425,10 @@ def claim_record():
                     info = json.load(f)
                 if not isinstance(info, dict):
                     info = None
-            except (OSError, ValueError):
-                info = None
+            except ValueError:
+                info = None   # untracked but not a record: a later drop may remove it
+            except OSError:
+                info, tracked = None, None   # a symlinked or unreadable file is nobody's: never removed either
         elif tracked:
             print(f"note: {CLAIM_FILE} is committed to git, so it is not this clone's own record; ignoring it", file=sys.stderr)
         else:

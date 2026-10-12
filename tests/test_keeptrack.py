@@ -1766,6 +1766,22 @@ class ClaimLifecycle(unittest.TestCase):
         finally:
             kt.FILE = old_file
 
+    def test_the_git_probe_reads_english_whatever_the_users_locale(self):
+        # a translated git says "fatal: kein Git-Repository" outside a repo; the probe must still read it as "not a repo"
+        real_run = subprocess.run
+        def german(cmd, *a, **kw):
+            if cmd[:1] == ["git"] and kw.get("env", {}).get("LC_ALL") != "C":
+                return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: kein Git-Repository (oder eines der Elternverzeichnisse): .git\n")
+            return real_run(cmd, *a, **kw)
+        plain = os.path.join(self.dir.name, "plain"); os.makedirs(plain)
+        kt.subprocess.run = german
+        try:
+            self.assertIs(kt._tracked_by_git(os.path.join(plain, ".board-claim.json")), False)
+            kt.ensure_local_dir(os.path.join(plain, ".board-claim.json"))            # a board root outside git: written
+            kt.ensure_local_dir(os.path.join(plain, ".keeptrack", "claim.json"))    # a project folder outside git: written
+        finally:
+            kt.subprocess.run = real_run
+
     def test_a_record_not_ignored_warns_but_is_written(self):
         repo = self.git_repo(ignore=False)
         kt._PENDING_CLAIM["rec"] = {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False}
