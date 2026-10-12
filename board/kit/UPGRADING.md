@@ -12,7 +12,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 - The owner comments `@claude upgrade the board kit` on the card. Their routine follows `.claude/skills/board-upgrade/SKILL.md`.
 
 ## Rules for a kit change (for whoever changes keeptrack board/kit)
-1. Increase `version` in `manifest.json` by one, and add a section below for the new version. Set `version` in `.claude-plugin/plugin.json` to `0.<new kit version>.0` so plugin users get the update. A plugin-only change between kit versions (a skill, a hook) bumps the last number instead.
+1. Increase `version` in `manifest.json` by one, and add a section below for the new version. Set `version` to `0.<new kit version>.0` in all three of `.claude-plugin`, `.codex-plugin` and `.cursor-plugin` `plugin.json` so plugin users get the update (`tests/test_plugin_manifest.py` checks they match), and set `KIT_VERSION` in `keeptrack.py` and `const PAGE_KIT` in `board/board.js` to the new version (`tests/test_web_page.py` checks the page). A plugin-only change between kit versions (a skill, a hook) bumps the last number instead.
 2. If `tasks.json` changes shape, increase `SCHEMA` and the manifest schema. Add a safe step to `MIGRATIONS`. Update each writer in the phase that adds its write support. Follow the version notes for the migration command. Do not migrate before the upgrade is merged.
 3. The web board and `keeptrack.py` must still read the schema version before the new one, so boards that are not upgraded yet continue to work.
 4. A change that needs more than a file copy is not finished until its section here says what the upgrading agent must do and how to check it.
@@ -25,6 +25,32 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v44 (schema 4)
+A safety release: no data migration, the board stays on schema 4, and v43 tools keep reading and writing a v44 board.
+- **`settings.min_kit` now prevents, not only detects.** `keeptrack.py` and the web page refuse to write a board whose
+  `settings.min_kit` is an integer above their own kit version (reads, dry runs and plain `doctor` still work;
+  `doctor --fix` writes nothing). A missing or non-integer value never blocks. v44 needs no `min_kit`, and the
+  upgrade writes none; leave it as it is (43 once anyone has used `wait`). Raise it (`settings-set --min-kit N`) only
+  for a later release whose notes ask for it, and only after every copy is upgraded: this repo, plugin copies, relay,
+  routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v43 ignore the
+  value, so it cannot shut them out.
+- **`kit-update`** takes every file from one commit of the kit, checks that the fetched `keeptrack.py` is the release
+  `manifest.json` names, refuses a downgrade unless `--allow-downgrade` is given, and never writes or removes board
+  data (`tasks.json`, `cards/`, `people/`, `projects/`, `proposals/`, `archive/`). `BOARD_KIT_URL` has no default
+  any more: set it only for a custom kit; when it fails, the update stops instead of using the official kit.
+- **`.board-claim.json`** now records each claimed card with its session. An existing one-card record is still read
+  and is rewritten in the new shape at the next claim; the hook script is unchanged. Agents running parallel sessions
+  in one clone should give each its own `BOARD_SESSION` (a random id, never the claude.ai session id).
+- **Refresh this repo's `AGENTS.md`** (and `CLAUDE.md` where it repeats them) from `board/kit/templates/AGENTS.md`:
+  rule 1 must ban hand edits of every board JSON file (`tasks.json`, `cards/`, `people/`, `archive/`), rule 3 and the
+  heartbeat line must say 15 minutes (30 minutes to STALE), and the `wait` line must warn never to `unwait` a wait you
+  did not set or one on someone else. `kit-check` now prints `template drift (warning)` while rule 1 or the heartbeat
+  minutes lag the template.
+- Web page: after the upgrade, hard-refresh every open tab once. Settings codes made by older pages still import; a
+  code copied without "Include tokens and keys" removes this browser's tokens on import.
+- Check: `cat board/KIT_VERSION` says 44; `keeptrack.py doctor` shows no `KIT_OLD`; `keeptrack.py kit-check` shows no
+  template drift; the web board loads and saves.
+
 ### v43 (schema 4)
 Adds **waiting-for**: a card can be parked on a person or an event (`waiting`: on, who, since, nudge, note, by,
 by_session), and a board flag, `settings.min_kit`. No data migration: the board stays on schema 4, and older tools read

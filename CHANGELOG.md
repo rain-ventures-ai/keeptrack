@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Each browser tab stays on the board it opened: switching boards in another tab can no longer make
+  this tab save into the wrong repo. A board whose `settings.min_kit` is newer than the page is read-only, with a
+  banner. The agent-claim limit, and whether a cleared wait may restart a blocked claim, are decided on the board as it
+  is saved, with a whole-board commit. Accepting a Review Inbox proposal re-checks its field allow-list. The page has a
+  Content-Security-Policy (GitHub's API, cron-job.org and Open-Meteo only; the bootstrap runs its scripts from `blob:`
+  URLs). "Copy settings code" and "Copy setup link" leave tokens and keys out unless "Include tokens and keys" is
+  ticked. Undo keeps 5 changes and stores them for the next visit only while they fit in about 1 MB.
+
 - **2026-10-12** — Waiting-for: tasks can be marked as waiting on someone or something, with an optional member and
   chase day, from a Waiting row in the task drawer. Cards show a "waiting on .., Nd" chip that turns amber once the
   chase day has passed (and "waiting on you" on your own waits), a Waiting filter, and Needs attention includes waits
@@ -64,6 +72,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [44] — 2026-10-12
+
+- `settings.min_kit` now prevents: `keeptrack.py` refuses to write a board whose `min_kit` is an integer above its
+  `KIT_VERSION`, and says to run `kit-update`. Reads, `import`/`migrate`/`archive --dry-run` and plain `doctor` still
+  work; `doctor --fix` writes nothing on such a board. A missing or non-integer value never blocks.
+- `kit-update` and `kit-check` take the manifest and every file from one commit of the kit (raw at that sha, or a git
+  clone checked out at it). `kit-update` checks that the fetched `keeptrack.py` is the release the manifest names,
+  refuses a downgrade unless `--allow-downgrade` is given, and never writes or removes board data (`tasks.json`,
+  `cards/`, `people/`, `projects/`, `proposals/`, `archive/`). A failing `BOARD_KIT_URL` stops with an error instead of
+  falling back to the official kit. `kit-check` warns about template drift in `AGENTS.md` (rule 1 on split boards,
+  heartbeat minutes), and the upgrade card links `blob/main`.
+- `.board-claim.json` records each claimed card with its session, so two sessions in one clone keep separate claims.
+  With `--session` or `BOARD_SESSION`, a run owns only that session's claims. The automatic heartbeat beats every card
+  the record holds (only `BOARD_SESSION`'s cards when the hook has it set), and a failed beat is tried again at the
+  next tool call. `release`, `done` and `unwait` forget the local claim only after the save worked.
+- `add` and `kit-check --card` print the #number the card has after saving; before, a save that lost a race could print
+  a number that belonged to someone else's card.
+- Ranks appended to a column get a short random tail, so concurrent saves no longer create `DUPLICATE_RANK`, and
+  `move --before`/`--after` next to two equal ranks no longer crashes.
+- `proposal-accept` and `proposal-merge` re-check the stored change against the field allow-list, so a hand-written
+  proposal cannot set `claim`, `num` or `waiting`.
+- GitHub rate limits (403/429) are retried with a short back-off and reported as rate limited, not as a token without
+  write access. On the one-file save, a 422 that is not a sha mismatch is reported instead of retried.
+- Plugin `keeptrack` skill: the v43 waiting-for rules (`wait`; never `unwait` a wait you did not set or one on someone
+  else), the 15-minute heartbeat with the 30-minute stale default, and `done --cancel`. The Codex and Cursor plugin
+  manifests carry the same version as the Claude plugin (0.44.0). The `AGENTS.md` template's rule 1 names every board
+  JSON file, rule 3 gives the 15-minute heartbeat, and its `wait` line warns against `unwait`.
+- Tests: shared `merge3` cases (`tests/fixtures/merge3-cases.json`) run through both `keeptrack.py` and `board.js`; the
+  key rules are checked in both board skills; frozen board `v4_kit44`. No schema migration.
 
 ### [43] — 2026-10-12
 
