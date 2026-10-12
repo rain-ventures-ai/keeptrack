@@ -474,6 +474,13 @@ class Waiting(unittest.TestCase):
         t = self.card(1)
         self.assertIsNone(t["waiting"]); self.assertEqual([x["what"] for x in t["agent_cleared"]], ["reopened a card that was waiting"])
 
+    def test_release_to_done_of_a_done_card_leaves_its_leftover_wait(self):
+        self.edit(lambda d: d["tasks"][0].update(column="done", waiting={"on": "x", "who": "JezHub", "since": "2026-10-01"}))
+        with self.agent():
+            self.release(1, session="s1", column="done")
+        t = self.card(1)
+        self.assertIsNotNone(t["waiting"]); self.assertFalse(t.get("agent_cleared"))
+
     def test_a_proposal_that_reopens_a_done_card_drops_a_leftover_wait(self):
         rec = {"id": "t_x", "column": "done", "waiting": {"on": "x", "since": "2026-10-01"}, "history": []}
         kt._apply_update({"people": []}, rec, {"id": "pr_1"}, {"column": "todo"})

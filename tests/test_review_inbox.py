@@ -108,11 +108,12 @@ class ReviewInbox(unittest.TestCase):
         with open(path, "w") as dst: json.dump(card, dst)
         ident = self.add(proposal(kind="task.update", change={"column": "done"},
                                   target={"type": "task", "id": "t_first", "base": {"column": card["column"]}}))
-        os.environ["BOARD_AGENT"] = "claude"
+        old_agent = os.environ.get("BOARD_AGENT"); os.environ["BOARD_AGENT"] = "claude"
         try:
             self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column"))
         finally:
-            os.environ.pop("BOARD_AGENT", None)
+            if old_agent is None: os.environ.pop("BOARD_AGENT", None)
+            else: os.environ["BOARD_AGENT"] = old_agent
         with open(path) as src: card = json.load(src)
         self.assertEqual("done", card["column"]); self.assertIsNone(card["waiting"])
         self.assertEqual(["proposal to done while waiting"], [x["what"] for x in card["agent_cleared"]])

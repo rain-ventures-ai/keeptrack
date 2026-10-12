@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   chase day has passed (and "waiting on you" on your own waits), a Waiting filter, and Needs attention includes waits
   due for a chase. Assign to Claude and `@claude` are off while a task waits. The page keeps `waiting`,
   `agent_cleared` and `settings.min_kit` on save, and merges `min_kit` as a maximum.
+
 - **2026-10-12** — The full Review Inbox uses clearer proposal summaries, source context, grouped changes and
   restrained decision controls, with responsive light/dark styling and visual QA coverage. No proposal decisions
   or board records are changed by this presentation update.

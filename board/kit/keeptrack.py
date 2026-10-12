@@ -1906,7 +1906,7 @@ def do_claim(a, tid, data):
     if attended(a):
         t["claim"]["attended"] = True
     if t["column"] != "in-progress":
-        move_task_to_column(data, t, "in-progress", a)
+        move_task_to_column(data, t, "in-progress", argparse.Namespace(session=sid))   # the new claim's own session id
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
     uw = _unwait_before_claim(t)   # the session that cleared a wait on someone else now claims the card: flag it, whatever BOARD_AGENT said
     if uw and uw.get("other") and uw.get("session") == session_hash(sid):
@@ -2018,7 +2018,7 @@ def cmd_release(a):
             sys.exit(f"refused: {t['id']} is waiting on {waiting_text(open_waiting(t))}; release --column done does not end a wait. "
                      "Use done or move ID done (a person, or the session that set a wait on nobody else), or unwait first")
         claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else ""))
-        if a.column and t.get("column") == "done" and waiting_of(t):
+        if a.column and a.column != "done" and t.get("column") == "done" and waiting_of(t):
             drop_leftover_wait(t, "reopening", data, a)   # while the claim is still there: its session is recorded too
         t["claim"] = None; drop_claim_file(t["id"])
         if a.column: move_task_to_column(data, t, a.column, a)
