@@ -1400,25 +1400,41 @@ def claim_record():
     if _REC.get("on") and _REC.get("path") == CLAIM_FILE and "info" in _REC:
         return _REC["info"]
     info = None
-    try:
-        with open(CLAIM_FILE) as f:
-            info = json.load(f)
-        if not isinstance(info, dict):
-            info = None
-        elif not FILE:
+    if os.path.lexists(CLAIM_FILE):
+        tracked = _record_tracked()   # asked before the file is opened: a committed record is never read, whatever it holds
+        if tracked is False:
             try:
-                tracked = subprocess.run(["git", "-C", os.path.dirname(CLAIM_FILE) or ".", "ls-files", "--", os.path.basename(CLAIM_FILE)],
-                                         capture_output=True, text=True, timeout=10).stdout.strip()
-            except (OSError, subprocess.SubprocessError):
-                tracked = ""   # no git here (or git did not answer in time): nothing to be tracked in
-            if tracked:
-                print(f"note: {CLAIM_FILE} is committed to git, so it is not this clone's own record; ignoring it", file=sys.stderr)
+                with os.fdopen(os.open(CLAIM_FILE, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))) as f:   # a symlinked record is nobody's
+                    info = json.load(f)
+                if not isinstance(info, dict):
+                    info = None
+            except (OSError, ValueError):
                 info = None
-    except (OSError, ValueError):
-        info = None
+        elif tracked:
+            print(f"note: {CLAIM_FILE} is committed to git, so it is not this clone's own record; ignoring it", file=sys.stderr)
+        else:
+            print(f"note: git could not say whether {CLAIM_FILE} is committed, so it is not trusted as this clone's record", file=sys.stderr)
     if _REC.get("on"):
         _REC.update(path=CLAIM_FILE, info=info)
     return info
+
+
+def _record_tracked():
+    """Whether git tracks the local claim record: True, False, or None when git could not say (a stalled or refusing git,
+    say a repo whose ownership git doubts), which trusts nothing. Without git at all nothing can be tracked. Asked for a
+    --file board too: that board writes no record, but the clone it runs in may hold one."""
+    try:
+        r = subprocess.run(["git", "-C", os.path.dirname(CLAIM_FILE) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(CLAIM_FILE)],
+                           capture_output=True, text=True, timeout=10)
+    except OSError:
+        return False   # no git here: nothing to be tracked in
+    except subprocess.SubprocessError:
+        return None
+    if r.returncode == 0:
+        return True
+    if r.returncode == 1 or "not a git repository" in r.stderr:
+        return False
+    return None
 
 
 def _record_changed(info):
@@ -1788,8 +1804,10 @@ def cmd_move(a):
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
-        if column == "done" and t["column"] != "done" and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
-            claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
+        if column == "done" and t["column"] != "done" and t.get("claim"):
+            _MUT["rerun"] = True   # a lost race re-runs this: a claim that was stale here may be live on the newer board
+            if claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
+                claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)

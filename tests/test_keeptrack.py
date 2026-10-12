@@ -1674,18 +1674,18 @@ class ClaimLifecycle(unittest.TestCase):
         self.claim(1, "s1")
         write(self.claim_file, {"id": "t_c1", "session": "s1"})
         reads = []
-        real_open = open
+        real_open = os.open
         def counting(path, *a, **kw):
             if str(path) == self.claim_file:
                 reads.append(1)
             return real_open(path, *a, **kw)
-        kt.open = counting   # module-level name: shadows the builtin for keeptrack.py only
+        kt.os.open = counting   # the record is opened through os.open (no symlink follow)
         try:
             for run in (lambda: self.beat(1), lambda: self.release(1, column="todo"), lambda: self.claim(1, "s1"), lambda: self.done(1)):
                 reads.clear(); run()
                 self.assertEqual(len(reads), 1, "heartbeat or done read the record more than once")
         finally:
-            del kt.open
+            kt.os.open = real_open
         self.assertEqual(kt.recorded_session(), "s1")
 
     def test_the_read_survives_a_retry_and_never_goes_stale_across_commands(self):
@@ -1729,8 +1729,8 @@ class ClaimLifecycle(unittest.TestCase):
         kt.subprocess.run = counting
         old_file = kt.FILE
         try:
-            kt.FILE = self.file                                    # a --file board: the record is read, git is not asked
-            kt.recorded_session(); self.assertEqual(calls, [])
+            kt.FILE = self.file                                    # a --file board writes no record, but the clone's one is checked the same way
+            self.assertEqual(kt.recorded_session(), ""); self.assertEqual(len(calls), 1); calls.clear()
             kt.FILE = None
             err = io.StringIO(); kt._REC.clear(); kt._REC["on"] = True   # what mutate() does around a command
             with contextlib.redirect_stderr(err):
@@ -1739,7 +1739,15 @@ class ClaimLifecycle(unittest.TestCase):
             self.assertEqual(len(calls), 1); self.assertEqual(err.getvalue().count("committed to git"), 1)
         finally:
             kt._REC.clear(); kt.subprocess.run = real_run; kt.FILE = old_file
-        os.remove(kt.CLAIM_FILE)                                  # not a git repo at all: no check, the record is trusted
+        self.g("rm", "-q", "--cached", ".board-claim.json"); os.remove(kt.CLAIM_FILE)
+        os.symlink(os.path.join(self.dir.name, "elsewhere.json"), kt.CLAIM_FILE)   # a symlinked record is never followed
+        write(os.path.join(self.dir.name, "elsewhere.json"), {"session": "via-link"})
+        kt.FILE = None
+        try:
+            self.assertEqual(kt.recorded_session(), "")
+        finally:
+            kt.FILE = old_file
+        os.remove(kt.CLAIM_FILE)                                  # not a git repo at all: the record is trusted
         plain = os.path.join(self.dir.name, "plain"); os.makedirs(plain)
         kt.CLAIM_FILE = os.path.join(plain, ".board-claim.json"); write(kt.CLAIM_FILE, {"session": "ok"})
         kt.FILE = None
