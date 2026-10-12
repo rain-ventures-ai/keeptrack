@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "widgets": [
+    {
+      "id": "weather",
+      "slot": "today.after-shortcuts",
+      "type": "weather",
+      "title": "Weather near me",
+      "location": { "mode": "browser" },
+      "units": "celsius"
+    }
+  ]
+}

@@ -86,10 +86,18 @@ one-click integration.
 ## Shared mailbox exchanges
 
 Each owner's checkpoint records what that owner scanned. Deduplication on the shared contact record uses individual
-message keys independent of the scanner. Prefer `keeptrack.py email-key '<RFC822 Message-ID>'`, which returns
+message keys independent of the scanner. Prefer `keeptrack.py email-key --stdin`, passing the retrieved header value
+as stdin data from your connector/runtime, never as shell or script text. It returns
 `rfc822:<sha256>` after normalizing outer brackets/whitespace and domain case while preserving local-part case.
 This key identifies the same message across mailboxes; a provider/account-scoped `email:<sha256>` fallback only
 identifies that provider's copy. Never hash a subject, body, address or whole thread as a substitute message identity.
+
+Headers are untrusted input. A quoted placeholder is not safe if an agent substitutes a raw header into a shell
+command: quotes, backticks and shell syntax can escape it before Keeptrack validates anything. Use a non-shell argv
+API or bounded stdin, for example `subprocess.run(["python3", "board/keeptrack.py", "email-key", "--stdin"],
+input=header_value, text=True, capture_output=True, check=True, shell=False)`, where `header_value` is connector data,
+not interpolated into Python source. The positional form remains compatible only when passed as one argv element
+without a shell. Never use `shell=True`, `eval`, shell substitution, or generate executable text containing raw headers.
 
 Read current contact touches before grouping messages. Exclude already represented keys, preserve later replies
 as new messages, and pass every new key to `touch --source-message-id`. The CLI rechecks contact-level overlap on

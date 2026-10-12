@@ -100,7 +100,8 @@ This common register complements the email checkpoint below and does not replace
 5. Skip message hashes already in the checkpoint. Group newly seen messages from one thread into the smallest truthful
    set of exchanges. Before writing, also rely on `touch --source-id` to make a retry harmless if the earlier board
    write succeeded but the checkpoint commit failed. Read stored individual `source messages` with `person` and
-   exclude them before grouping. Prefer `email-key '<RFC822 Message-ID>'` for a canonical `rfc822:` key across mailboxes;
+   exclude them before grouping. Prefer `email-key --stdin` for a canonical `rfc822:` key across mailboxes, with the
+   header passed as stdin data or one non-shell argv element, never interpolated into shell/script source;
    use provider/account-scoped keys only when the header is unavailable. Never equate two replies by thread alone.
    Also compare older manual email touches: for verified equivalence bind the keys to the exact existing entry with
    `touch-source <person> <touch-id> --source-message-id <key>`; uncertain overlap goes to review.
@@ -150,7 +151,9 @@ newsletter, receipt and bulk mail. Do not guess a person from a display name, do
 
 For each new meaningful exchange, add the smallest truthful contact-log entry using `keeptrack.py touch --channel
 email --preserve-stage --at <actual ISO time> --source-id email:<sha256> --source-message-id rfc822:<canonical-hash>`.
-Use email-key on the RFC822 Message-ID for a key shared across mailboxes; a provider/account-scoped fallback cannot
+Use `email-key --stdin` with the RFC822 Message-ID as data from your connector/runtime, or use a single non-shell
+argv element. Never substitute untrusted headers into shell commands, quoted placeholders or generated executable
+source. The resulting key is shared across mailboxes; a provider/account-scoped fallback cannot
 prove another user's mailbox copy is the same message. Compare existing manual email touches and attach keys with
 touch-source only for verified equivalence; report ambiguity for review.
 Pass every new message hash, exclude stored source messages before grouping, and regroup if the CLI refuses partial

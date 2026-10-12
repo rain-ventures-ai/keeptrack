@@ -55,3 +55,36 @@ The supported types are:
 All current widgets use the `today.after-shortcuts` slot. Unknown types and invalid entries are ignored. A malformed
 file shows a small warning on Today without stopping the board from loading. Keeptrack supports these declarative
 widgets and their appearance options; it does not load arbitrary JavaScript plugins or CSS overrides from a board.
+
+## Optional approximate browser weather
+
+Every weather widget offers **Use approximate location**. Only clicking that button requests browser location
+permission; loading, refreshing or scheduling a board never requests location or starts background tracking.
+The browser may return precise coordinates even with high accuracy disabled. Keeptrack rounds them to 0.1° before
+storing an override or sending a weather request. It stores only those rounded coordinates in this browser, scoped
+to board/repo/branch/path and widget ID—not in GitHub, reports or the shared widget configuration. Open-Meteo receives
+the rounded coordinates and normal network metadata such as your network address; it receives no board token/data.
+
+Use **Update approximate location** when you move. **Use board location** clears the local override and restores
+the configured city. Denied permission, timeout or unavailable location uses that configured fallback, if present,
+and explains what happened. Browser permission is controlled by the browser/site; forgetting the local override
+does not revoke browser permission. Turning widgets off stops new location and forecast requests; a late location
+callback after disabling or switching boards is discarded.
+
+To offer browser weather without guessing any city, use this configuration:
+
+```json
+{
+  "id": "weather",
+  "slot": "today.after-shortcuts",
+  "type": "weather",
+  "title": "Weather near me",
+  "location": { "mode": "browser" },
+  "units": "celsius"
+}
+```
+
+It waits for an explicit location choice. Without permission and without a configured fallback it shows no forecast;
+the user can retry or explicitly configure their own city coordinates. A browser-mode widget may also include
+`location.name`, `latitude` and `longitude` as an optional fallback. Existing fixed-city configurations keep working.
+Browser geolocation needs a secure context and permission; some browser policies or embedded browsers block it.

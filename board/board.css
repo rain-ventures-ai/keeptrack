@@ -1088,6 +1088,8 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 .kwwweatherhero { display: flex; flex: 0 0 auto; align-items: center; gap: var(--sp-2); font-size: var(--fs-xl); }
 .kwwweathericon { font-size: 28px; line-height: 1; }
 .kwwweatherdetail { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.kwwweathercontrols { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+.kwwweather > .hint { font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
 .kwwweatherdetail > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kwwmetrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
 .kwwmetric { min-width: 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--panel); text-align: center; }

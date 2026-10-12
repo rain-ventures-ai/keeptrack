@@ -204,7 +204,7 @@ Old items move out of the active card and person files so that the current board
 - Archive files are written first and merged by id, so a run that stops half way is safe to repeat. An item on the board and in an archive file at the same time counts as on the board.
 - `archived -q` searches them; `unarchive <#N|id>` puts one back (in git mode the board and the archive file change in one commit); `archived-history <#N|id>` prints the history lines that were trimmed off a card. The web board does not show trimmed history yet. The web board's search (press `/`) can include them.
 
-## Review Inbox (kit v41, split storage)
+## Review Inbox (kit v42, split storage)
 - `settings.review_inbox.enabled` (default off) turns it on. It needs schema 4. It does not create or start any routine.
 - Proposals live in `proposals/<id>.json` next to `cards/` and `people/`: `{ "id": "r_…", "version": 1, "kind": "task.create|task.update|person.upsert|contact.touch", "status": "pending|accepted|ignored", "title", "source": {kind, id, revision, title, date, url}, "run", "action_key", "work_key", "reason", "evidence", "target": {type, id, base}, "change", "likely_duplicates", "previously_ignored", "reviewer", "decision": {action, by, at, result, commit, edited, undo}, "history", "created", "createdBy" }`.
 - They are never part of `tasks` or `contacts`: `list`, `next`, `claim`, `today`, counts and the web views do not see them.

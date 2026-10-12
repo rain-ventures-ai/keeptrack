@@ -1,5 +1,5 @@
 'use strict';
-// Review Inbox (kit v41): proposals live in board/proposals/<id>.json and never reach the live board until accepted.
+// Review Inbox (kit v42): proposals live in board/proposals/<id>.json and never reach the live board until accepted.
 // GitHub is mocked with content SHAs, commit parents and fast-forward-only ref updates, so races behave like GitHub.
 
 const assert = require('node:assert/strict');

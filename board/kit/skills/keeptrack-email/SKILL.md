@@ -38,7 +38,9 @@ least-privilege routine, incremental checkpoint, last-run log and copyable promp
     --source-id 'email:<sha256 of provider account id + thread id + sorted new message ids in this touch>'
   ```
 
-- Prefer `keeptrack.py email-key '<RFC822 Message-ID>'` for each message's canonical `rfc822:` key, shared across
+- Prefer `keeptrack.py email-key --stdin` for each message's canonical `rfc822:` key, passing the raw header as stdin
+  data through the connector/runtime (or as a single argument through a non-shell argv API). Never interpolate raw
+  headers into shell commands or generated executable source; quotes are not a safe substitute. The keys are shared across
   mailboxes. If the header is unavailable, use a provider/account-scoped `email:` hash and report unresolved shared
   mailbox overlap rather than treating that fallback as cross-user duplicate protection. Never merge distinct replies.
 - Hash the provider's opaque account id, thread id and the sorted stable ids of the new messages represented by that

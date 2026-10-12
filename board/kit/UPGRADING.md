@@ -25,16 +25,29 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v41 (schema 4)
+### v42 (schema 4)
 Adds the Review Inbox. No data change. The Inbox is off until a board turns it on, and it needs split storage
 (schema 4). Turning it on does not create, change or start any routine or schedule.
 - Run `kit-update` only.
 - To use it, run `python3 board/keeptrack.py settings-set review_inbox.enabled true`, or tick Settings → Board →
-  Review Inbox in the web board. Use the v41 web page: older pages ignore proposal files and show no Inbox.
+  Review Inbox in the web board. Use the v42 web page: older pages ignore proposal files and show no Inbox.
 - With it on, the notes and email skills add proposals instead of writing to the board. Existing routines keep their
   register, checkpoint and schedule. Read docs/help/review-inbox.md before turning it on for a shared board.
 - Check: `keeptrack.py help review-inbox` lists the proposal commands, and `keeptrack.py settings` shows
   `review_inbox.enabled`.
+
+### v41 (schema 4)
+Canonical email keys support bounded `email-key --stdin`. Pass untrusted headers as runtime data through stdin or
+one non-shell argv element, never interpolate headers into shell commands or executable source. The positional
+form remains compatible when invoked safely; canonical key output is unchanged. Email skills and routine instructions
+now explain this security boundary.
+The hosted weather widget supports opt-in approximate browser location, rounded to 0.1° before local storage or
+Open-Meteo requests. Location is requested only on an explicit click; no background tracking or GitHub location writes.
+Fixed-city configurations remain compatible; optional `location.mode: browser` waits for permission and uses a configured
+fallback on failure if available. Widget enablement and location overrides stay scoped to this browser/board/widget.
+- Run `kit-update` only. No migration, source re-import, widgets installation, location selection or schedule change.
+- Check: `email-key --help` lists `--stdin`; automation callers must not generate shell/script text containing headers.
+- Read the updated email skill and `ROUTINES.md` before the next email import. Existing message hashes remain valid.
 
 ### v40 (schema 4)
 Board members may explicitly link multiple existing companies with optional `own_companies` in their member record.
