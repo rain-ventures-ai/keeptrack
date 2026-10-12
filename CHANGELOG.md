@@ -4,6 +4,10 @@ All notable changes to the **board kit** (`board/kit/`) and **board data schema*
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Web board
+
+- **2026-10-12** — The hosted board is an installable PWA. Each repo/branch/path combination has a separate app identity, launch URL, name, colour and generated initials icon, so several boards can be installed together. The service worker caches the app shell for offline startup and keeps phone notification taps tied to the originating board.
+
 ## Schema versions
 
 ### Schema 4 (split storage)

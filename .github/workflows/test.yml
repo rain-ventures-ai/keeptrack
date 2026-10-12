@@ -63,6 +63,9 @@ jobs:
       - name: Alerts (a phone's service-worker fallback, blocked-permission guidance)
         working-directory: tests/browser
         run: node alerts.test.js
+      - name: Installable PWA (separate board identities, icons and offline shell)
+        working-directory: tests/browser
+        run: node pwa.test.js
       - name: Agent limit on the page, routine text, cancelled outcome
         working-directory: tests/browser
         run: node agent-limit.test.js

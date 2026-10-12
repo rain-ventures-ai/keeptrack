@@ -140,7 +140,9 @@ let base;
       await blur(page); await page.keyboard.press('Control+z');   // undo while a save is stuck: say so, do not stay silent
       await until(async () => (await toasts(page)).some(t => /Undo will run after the current save/.test(t)), 'undo-waits toast');
       await until(async () => (await toasts(page)).some(t => /did not answer in time/.test(t)), 'timeout error toast');
-      await until(() => titles(api).includes('Beta'), 'Beta saved after the timeout');
+      // The queued undo can start in the same turn as Beta's save finishes, so observe the commit rather than a
+      // transient file state that a faster browser can legitimately pass through between two polling ticks.
+      await until(() => api.calls.some(c => c.method === 'POST' && c.path === '/git/commits' && c.body.message === 'Add task: Beta'), 'Beta saved after the timeout');
       // the queued Ctrl+Z then undid the newest change (Beta)
       await until(() => !titles(api).includes('Beta'), 'the waiting undo ran');
       assert.deepEqual(titles(api), ['First', 'Second']); await page.close();
