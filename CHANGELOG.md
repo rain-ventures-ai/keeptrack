@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **2026-10-12** — Inbox questions closed with `proposal-done --not-acted` show "Closed without acting by …" (kit v45).
 
+- **2026-10-12** — Mobile Find results keep the full height of wrapped titles and metadata when the on-screen keyboard
+  reduces the available space, scrolling the result list instead of overlapping adjacent rows.
+
 - **2026-10-12** — Review Inbox questions (kit v44): Choose, Approve and Question items show the question, its links
   and answer buttons in the Inbox and in Today's review, with an optional note, "Who answers" for a named person,
   Dismiss, and Change answer (Undo) until the agent has acted. Answers write only the question's file. The Inbox is
