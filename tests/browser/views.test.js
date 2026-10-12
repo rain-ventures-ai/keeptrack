@@ -39,6 +39,98 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Navigation destinations are bookmarkable; actions and private search/filter state are not URL inputs.
+    {
+      const page = await open(browser, { view: 'today', layout: 'dock' });
+      await page.evaluate(() => { location.hash = 'view=list'; });
+      await page.waitForFunction(() => document.body.dataset.view === 'list');
+      await page.locator('#dock [data-grp="today"]').click();
+      await page.waitForFunction(() => document.body.dataset.view === 'today');
+      assert.match(page.url(), /#view=today$/);
+      await page.goBack(); await page.waitForFunction(() => document.body.dataset.view === 'list');
+      await page.goForward(); await page.waitForFunction(() => document.body.dataset.view === 'today');
+      for (const [layout, pop] of [['classic', 'morePop'], ['dock', 'dockPop']]) {
+        await page.evaluate(l => window.kbLayout.set(l), layout);
+        await page.waitForTimeout(200);
+        await page.evaluate(() => { location.hash = 'menu'; });
+        await page.locator('#' + pop).waitFor({ state: 'visible' });
+        await page.goBack(); await page.locator('#' + pop).waitFor({ state: 'hidden' });
+        await page.goForward(); await page.locator('#' + pop).waitFor({ state: 'visible' });
+        await page.keyboard.press('Escape'); await page.locator('#' + pop).waitFor({ state: 'hidden' });
+        await page.evaluate(() => { location.hash = 'view=today'; });
+      }
+      await page.evaluate(() => { location.hash = 'settings=members'; });
+      await page.locator('#dlgSettings').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#panelBoard').isVisible(), true);
+      await page.locator('#sClose').click();
+      await page.locator('#dlgSettings').waitFor({ state: 'hidden' });
+      await page.evaluate(() => { location.hash = 'help'; });
+      await page.locator('#dlgHelp').waitFor({ state: 'visible' });
+      await page.locator('#hClose').click();
+      await page.locator('#dlgHelp').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => location.hash === '#view=today');
+      await page.goForward(); await page.locator('#dlgHelp').waitFor({ state: 'visible' });
+      await page.goBack(); await page.locator('#dlgHelp').waitFor({ state: 'hidden' });
+      await page.evaluate(() => { location.hash = 'view=not-a-real-view'; });
+      await page.waitForFunction(() => document.body.dataset.view === 'today');
+      assert.equal(await page.evaluate(() => { history.replaceState(null, '', '?demo=board&token=secret&q=private#view=today'); return /secret|private|token=/.test(window.kbNavigation.link()); }), false);
+      assert.equal(await page.evaluate(() => { history.replaceState(null, '', '?demo=board#kbcfg=secret'); return /secret|kbcfg/.test(window.kbNavigation.link()); }), false);
+      await page.goto(`${base}/board/index.html?demo=board#settings=appearance`);
+      await page.locator('#dlgSettings').waitFor({ state: 'visible' });
+      await page.locator('#sClose').click();
+      await page.locator('#dlgSettings').waitFor({ state: 'hidden' });
+      await page.waitForTimeout(150);
+      assert.equal(await page.locator('#dlgSettings').isVisible(), false, 'closing a directly linked dialog does not reopen it');
+      assert.deepEqual(page.errors, []);
+      await page.done();
+      const disconnected = await browser.newPage();
+      await disconnected.route('https://api.github.com/**', r => r.fulfill({ status: 404, body: '{}' }));
+      await disconnected.goto(`${base}/board/index.html?repo=acme/unconnected&branch=main&path=board/tasks.json#help`);
+      await disconnected.locator('#dlgHelp').waitFor({ state: 'visible' });
+      assert.equal(await disconnected.locator('#dlgSettings').isVisible(), false, 'no-token setup does not override explicit Help');
+      await disconnected.close();
+      const local = await browser.newPage();
+      await local.goto(require('node:url').pathToFileURL(path.join(ROOT, 'board/index.html')).href + '?demo=board#help');
+      await local.waitForFunction(() => !!window.kbNavigation);
+      assert.match(await local.evaluate(() => window.kbNavigation.link()), /^file:\/\/.*#help$/);
+      await local.close();
+    }
+    // Card bodies open on one click, not embedded controls or a completed drag/selection gesture.
+    {
+      const page = await open(browser);
+      const card = page.locator('.card').first();
+      await card.locator('.t').click(); await page.locator('#dlgCard').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+      await card.locator('.t').dblclick(); await page.locator('#dlgCard').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+      await card.locator('.numchip').click(); assert.equal(await page.locator('#dlgCard').isVisible(), false);
+      await card.locator('[aria-label="Copy agent instructions for this task"]').click();
+      assert.equal(await page.locator('#dlgCard').isVisible(), false, 'copy instructions leaves drawer closed');
+      await card.locator('.todochip').click();
+      assert.equal(await page.locator('#dlgCard').isVisible(), false, 'checklist toggle leaves drawer closed');
+      await card.evaluate(c => {
+        const r = document.createRange(); r.selectNodeContents(c.querySelector('.t'));
+        const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        c.querySelector('.t').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+      });
+      assert.equal(await page.locator('#dlgCard').isVisible(), false, 'selected card text does not open');
+      await page.evaluate(() => window.getSelection().removeAllRanges());
+      await card.evaluate(c => {
+        const dataTransfer = new DataTransfer(); c.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
+        c.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }));
+        c.querySelector('.t').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+      });
+      assert.equal(await page.locator('#dlgCard').isVisible(), false, 'drag-end click does not open');
+      await card.focus(); await page.keyboard.press('Space'); await page.locator('#dlgCard').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+      await page.locator('.col').first().locator('.hcinema').click();
+      const cinema = page.locator('.cinema-col .card').first();
+      await cinema.locator('.quickstatus').click(); assert.equal(await page.locator('#dlgCard').isVisible(), false);
+      await page.keyboard.press('Escape');
+      await cinema.locator('.quickassign summary').click(); assert.equal(await page.locator('#dlgCard').isVisible(), false);
+      await cinema.locator('.t').click(); await page.locator('#dlgCard').waitFor({ state: 'visible' });
+      assert.deepEqual(page.errors, []); await page.done();
+    }
     // 1. Every view renders with no page errors at 390 and 1280 (dock layout on the phone, classic on the desktop).
     for (const [viewport, layout] of [[PHONE, 'dock'], [DESKTOP, 'classic']]) for (const [view, demo] of VIEWS) {
       const page = await open(browser, { demo, view, viewport, layout });
@@ -94,7 +186,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       // the header strip can redraw (refit) between finding the avatar and reading it, so read both in one go once it is there
       const hdr = await page.waitForFunction(who => { const a = document.querySelector(`.pq .ui-avatar[aria-label="${who}"]`); const c = a && getComputedStyle(a).backgroundColor; return c || false; }, who).then(h => h.jsonValue());
       assert.equal(hdr, onCard, 'header filter avatar matches the card');
-      await page.locator('.card', { has: page.locator(`.foot .ui-avatar[aria-label="${who}"]`) }).first().locator('.t').dblclick(); await page.locator('#dlgCard[open]').waitFor();
+      await page.locator('.card', { has: page.locator(`.foot .ui-avatar[aria-label="${who}"]`) }).first().locator('.t').click(); await page.locator('#dlgCard[open]').waitFor();
       assert.equal(await bg(page, `#cWho .ui-avatar`), onCard, `the drawer's person chip for ${login} matches the card`);
       await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
       await page.locator('#viewSw [data-view="list"]').click(); await page.waitForSelector('.trow');

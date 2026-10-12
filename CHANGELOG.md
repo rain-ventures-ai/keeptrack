@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Today previews Inbox proposals with Review-only cards, source/type and duplicate warnings;
+  decisions stay in the full Inbox after evidence review. Shareable links reopen views, settings sections and utility
+  screens without carrying tokens. Task cards open with one click/tap or Enter/Space while embedded controls, selection
+  and drag/hold gestures stay independent; an opening double-click cannot accidentally dismiss the drawer backdrop.
+
 - **2026-10-12** — Review Inbox: a header Inbox button with a pending count (only when the board turns it on) opens a
   review view grouped by source and run, with filters, current-against-proposed values, Accept, Edit & accept, Merge,
   Ignore, Leave pending, Undo and Reopen, keyboard keys and a phone layout. Settings → Board has the switch.

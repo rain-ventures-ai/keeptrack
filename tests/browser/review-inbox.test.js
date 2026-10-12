@@ -116,11 +116,20 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.deepEqual((await page.locator('.card .t').allTextContents()).sort(), ['First', 'Second']);
     assert.equal(await page.locator('.col[data-col="todo"] h2 .ui-count').first().textContent(), '2');
     assert.equal(await page.locator('#btnInbox').isVisible(), true);
-    // Today carries the Inbox: a tile, a "to review" count in the heading and a short list with Accept / Ignore / Review.
+    // Today previews proposals, but decisions stay with the evidence in the full Inbox.
     await page.locator('#viewSw [data-view="today"]').first().click(); await page.waitForSelector('.today .treview');
     assert.match(await page.locator('.todayhead h2').textContent(), /6 to review/);
     assert.equal(await page.locator('.treview .trow').count(), 5, 'Today lists the five newest proposals');
+    assert.equal(await page.locator('.treview .trow .ui-pill').count(), 6, 'shared pills show types and duplicate warning');
+    assert.equal(await page.locator('.treview .trow button').count(), 5, 'each preview has just one safe Review action');
+    assert.equal(await page.locator('.treview').getByRole('button', { name: 'Accept', exact: true }).count(), 0, 'cannot accept without seeing the proposal');
+    const writesBeforeReview = api.writes().length;
+    await page.locator('.treview .trow button').first().focus(); await page.keyboard.press('Enter');
+    await page.waitForSelector('#board.v-inbox');
+    assert.equal(api.writes().length, writesBeforeReview, 'keyboard Review never writes to GitHub');
+    await page.locator('#viewSw [data-view="today"]').first().click();
     assert.match(await page.locator('.tgo[data-go="inbox"]').textContent(), /6 to review/);
+    if (process.env.INBOX_SCREENSHOT) await page.screenshot({ path: process.env.INBOX_SCREENSHOT, fullPage: true });
     await page.locator('.treview button', { hasText: /Review all 6/ }).click(); await page.waitForSelector('#board.v-inbox');
     await page.locator('#viewSw [data-view="board"]').first().click();
     assert.equal(await page.locator('#inboxBadge').textContent(), '6', 'six proposals are pending');
@@ -238,9 +247,23 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     // Phone width: no sideways scrolling, buttons large enough to tap, every control named.
     const phoneApi = new Github(fixture()), phone = await openBoard(browser, phoneApi, { viewport: { width: 390, height: 800 }, mobile: true, view: 'inbox' });
     await phone.waitForSelector('article.prop');
+    await phone.evaluate(() => window.kbLayout.set('dock'));
+    await phone.locator('#dock [data-grp="today"]').click();
+    await phone.waitForSelector('.treview');
+    await phone.locator('#btnInbox').click(); await phone.waitForSelector('article.prop');
+    await phone.getByRole('button', { name: 'Back to Today', exact: true }).click();
+    await phone.waitForSelector('.treview');
+    await phone.locator('#btnInbox').click(); await phone.waitForSelector('article.prop');
+    await phone.evaluate(() => window.kbLayout.set('classic'));
+    assert.equal(await phone.evaluate(() => { const old = localStorage.getItem('kb_branch'); localStorage.setItem('kb_branch', 'example-branch'); const branch = new URL(window.kbNavigation.link()).searchParams.get('branch'); localStorage.setItem('kb_branch', old); return branch; }), 'example-branch', 'links use the active board branch');
     assert(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the Inbox fits a 390px screen');
     const heights = await phone.locator('.prop__actions button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect().height));
     assert(heights.length && heights.every(h => h >= 44), 'decision buttons are at least 44px tall on a phone: ' + heights.join(','));
+    await phone.locator('#viewSw [data-view="today"]').first().click(); await phone.waitForSelector('.treview');
+    assert(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'Today preview fits a phone');
+    assert((await phone.locator('.treview .trow button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect().height))).every(h => h >= 44), 'Review has a touch-sized target');
+    if (process.env.INBOX_PHONE_SCREENSHOT) await phone.screenshot({ path: process.env.INBOX_PHONE_SCREENSHOT, fullPage: true });
+    await phone.locator('#btnInbox').click(); await phone.waitForSelector('article.prop');
     const unnamed = await phone.evaluate(() => [...document.querySelectorAll('#board button, #board select, #board a, #board article')].filter(e => !(e.getAttribute('aria-label') || e.getAttribute('aria-labelledby') || e.textContent.trim() || (e.labels && e.labels.length))).length);
     assert.equal(unnamed, 0, 'every control in the Inbox has a name');
     assert.equal(await phone.locator('#inboxLive[aria-live="polite"]').count(), 1, 'results are announced');

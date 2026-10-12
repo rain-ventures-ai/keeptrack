@@ -1,9 +1,13 @@
 # Tasks
 
 If you selected **Tasks** when you made your board, you also have these views. They are under **Tasks** in the view bar (the people views are under **People**):
-- **Kanban:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Double-click a card to open it.
+- **Kanban:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Click or tap a card to open it, or focus it and press Enter or Space. Inline controls still work without opening the card.
 - **List**, **Calendar** and **Schedule:** the same tasks by group, by due date and by week.
 - **Activity:** what was done today, yesterday or on a day that you select, by you and your agents. **📋 Copy** gives it as Markdown.
+
+Views and utility screens can be bookmarked: the address keeps the selected view or settings section. Help, Settings,
+Search and Copy offer **Copy link to this screen**; settings sections also offer their own links. Shared screen links
+include the board, branch and file path, never your GitHub token. They do not grant repository access.
 
 ## Tasks for a person
 Open a person and type in **☑ Tasks**. The task is linked to that person and their company, and it shows on **Today** when it is due.
