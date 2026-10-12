@@ -1174,12 +1174,15 @@ def _renumber(merged, theirs):
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
-        _REC.clear(); _REC["on"] = True   # the local claim record is read once for this command, across its retries
+        owner = not _REC.get("on")   # the local claim record is read once for this command, across its retries (a caller that
+        if owner:                    # already holds the one read, the heartbeat hook, keeps it)
+            _REC.clear(); _REC["on"] = True
         try:
             return _mutate(fn, message)
         finally:
             _MUT["recheck"] = _MUT["rerun"] = False
-            _REC.clear()
+            if owner:
+                _REC.clear()
 
 
 def _mutate(fn, message):
@@ -1405,9 +1408,9 @@ def claim_record():
         elif not FILE:
             try:
                 tracked = subprocess.run(["git", "-C", os.path.dirname(CLAIM_FILE) or ".", "ls-files", "--", os.path.basename(CLAIM_FILE)],
-                                         capture_output=True, text=True).stdout.strip()
-            except OSError:
-                tracked = ""   # no git here: nothing to be tracked in
+                                         capture_output=True, text=True, timeout=10).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                tracked = ""   # no git here (or git did not answer in time): nothing to be tracked in
             if tracked:
                 print(f"note: {CLAIM_FILE} is committed to git, so it is not this clone's own record; ignoring it", file=sys.stderr)
                 info = None
@@ -1917,8 +1920,9 @@ def cmd_auto_heartbeat(a):
         st = os.stat(CLAIM_FILE)
         if time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
+        os.utime(CLAIM_FILE)  # throttle first: even if git or the network call stalls, the next tool calls skip this
+        _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
         info = claim_record()   # None for a record git tracks: it came with the repo, so it names no card of this clone's
-        os.utime(CLAIM_FILE)  # throttle even if the network call fails, and even when there is nothing to beat
         if not info or info.get("attended") or not info.get("id"):
             return  # a person drives this session, or no card is active: no automatic heartbeats
 
@@ -1935,6 +1939,8 @@ def cmd_auto_heartbeat(a):
         mutate(fn, f"Agent heartbeat: {info['id']}")
     except BaseException:
         return
+    finally:
+        _REC.clear()
 
 
 def cmd_add(a):
