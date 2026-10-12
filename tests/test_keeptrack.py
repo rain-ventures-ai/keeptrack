@@ -1,5 +1,5 @@
 """Tests for board/kit/keeptrack.py against a local --file board. Run: python3 -m unittest discover tests"""
-import contextlib, copy, importlib.util, io, json, os, random, re, shutil, subprocess, tempfile, unittest
+import contextlib, copy, importlib.util, inspect, io, json, os, random, re, shutil, subprocess, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("keeptrack", os.path.join(HERE, "..", "board", "kit", "keeptrack.py"))
@@ -1643,18 +1643,203 @@ class ClaimLifecycle(unittest.TestCase):
     def test_session_for_order(self):
         os.environ["CODEX_SESSION_ID"] = "codex"
         try:
-            self.assertEqual(kt.session_for(Args(session=None), "t_c1"), "codex")
+            self.assertEqual(kt.session_for(Args(session=None)), "codex")
             os.environ["CLAUDE_SESSION_ID"] = "claude"
-            self.assertEqual(kt.session_for(Args(session=None), "t_c1"), "claude")
+            self.assertEqual(kt.session_for(Args(session=None)), "claude")
             os.environ["BOARD_SESSION"] = "board"
-            self.assertEqual(kt.session_for(Args(session=None), "t_c1"), "board")
-            self.assertEqual(kt.session_for(Args(session="flag"), "t_c1"), "flag")
+            self.assertEqual(kt.session_for(Args(session=None)), "board")
+            self.assertEqual(kt.session_for(Args(session="flag")), "flag")
         finally:
             for k in ("CODEX_SESSION_ID", "CLAUDE_SESSION_ID", "BOARD_SESSION"):
                 os.environ.pop(k, None)
         write(self.claim_file, {"id": "t_c1", "session": "rec"})
-        self.assertEqual(kt.session_for(Args(session=None), "t_c1"), "rec")
-        self.assertEqual(kt.session_for(Args(session=None), "t_c2"), "rec")   # one clone is one session, whichever card it claimed last
+        self.assertEqual(kt.session_for(Args(session=None)), "rec")
+        self.assertEqual(kt.recorded_session("t_c2"), "")                  # a card-scoped read still asks which card
+        self.assertEqual(kt.session_for(Args(session=None)), "rec")         # one clone is one session, whichever card it claimed last
+
+    # --- one read of the local record, a tracked record, an unignored record, a lost race on a bare heartbeat -----------
+
+    def git_repo(self, ignore=True):
+        repo = os.path.join(self.dir.name, "repo"); os.makedirs(os.path.join(repo, "board"))
+        self.g = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *a],
+                                           cwd=repo, capture_output=True, text=True, check=True)
+        write(os.path.join(repo, "board", "tasks.json"), {})
+        if ignore:
+            open(os.path.join(repo, ".gitignore"), "w").write(".board-claim.json\n")
+        self.g("init", "-q"); self.g("add", "-A"); self.g("commit", "-qm", "init")
+        kt.CLAIM_FILE = os.path.join(repo, ".board-claim.json")
+        return repo
+
+    def test_the_record_is_read_once_per_command(self):
+        self.claim(1, "s1")
+        write(self.claim_file, {"id": "t_c1", "session": "s1"})
+        reads = []
+        real_open = open
+        def counting(path, *a, **kw):
+            if str(path) == self.claim_file:
+                reads.append(1)
+            return real_open(path, *a, **kw)
+        kt.open = counting   # module-level name: shadows the builtin for keeptrack.py only
+        try:
+            for run in (lambda: self.beat(1), lambda: self.release(1, column="todo"), lambda: self.claim(1, "s1"), lambda: self.done(1)):
+                reads.clear(); run()
+                self.assertEqual(len(reads), 1, "heartbeat or done read the record more than once")
+        finally:
+            del kt.open
+        self.assertEqual(kt.recorded_session(), "s1")
+
+    def test_the_read_survives_a_retry_and_never_goes_stale_across_commands(self):
+        self.claim(1, "s1")
+        write(self.claim_file, {"id": "t_c1", "session": "s1"})
+        real, calls = kt.save, []
+        def racing(data, sha, msg):
+            if not calls:
+                calls.append(1); return False
+            return real(data, sha, msg)
+        kt.save = racing
+        self.release(1)                                        # a lost save re-runs the command's fn with the same read
+        self.assertIsNone(self.card(1)["claim"]); self.assertEqual(len(calls), 1)
+        write(self.claim_file, {"session": "other"})            # a later command sees the new file
+        self.assertEqual(kt.recorded_session(), "other")
+
+    def test_a_tracked_record_is_not_this_clones_session(self):
+        self.git_repo()
+        write(kt.CLAIM_FILE, {"id": "t_c1", "session": "planted-id"})
+        old = kt.FILE; kt.FILE = None                                      # a real board (a --file board skips the check)
+        try:
+            self.assertEqual(kt.recorded_session(), "planted-id")          # an ignored file in a git repo: trusted
+            self.g("add", "-f", ".board-claim.json"); self.g("commit", "-qm", "planted")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(kt.recorded_session(), "")
+                self.assertIsNone(kt.claim_record())
+                self.assertNotEqual(kt.session_for(Args(session=None)), "planted-id")   # so it cannot own a card either
+            self.assertIn("committed to git", err.getvalue())
+        finally:
+            kt.FILE = old
+
+    def test_a_tracked_record_costs_one_git_call_and_one_note_per_command(self):
+        self.git_repo(); write(kt.CLAIM_FILE, {"id": "t_c1", "session": "planted-id"})
+        self.g("add", "-f", ".board-claim.json"); self.g("commit", "-qm", "planted")
+        calls, real_run = [], subprocess.run
+        def counting(cmd, *a, **kw):
+            if cmd[:1] == ["git"] and "ls-files" in cmd:
+                calls.append(cmd)
+            return real_run(cmd, *a, **kw)
+        kt.subprocess.run = counting
+        old_file = kt.FILE
+        try:
+            kt.FILE = self.file                                    # a --file board: the record is read, git is not asked
+            kt.recorded_session(); self.assertEqual(calls, [])
+            kt.FILE = None
+            err = io.StringIO(); kt._REC.clear(); kt._REC["on"] = True   # what mutate() does around a command
+            with contextlib.redirect_stderr(err):
+                for _ in range(4):
+                    self.assertEqual(kt.recorded_session(), "")
+            self.assertEqual(len(calls), 1); self.assertEqual(err.getvalue().count("committed to git"), 1)
+        finally:
+            kt._REC.clear(); kt.subprocess.run = real_run; kt.FILE = old_file
+        os.remove(kt.CLAIM_FILE)                                  # not a git repo at all: no check, the record is trusted
+        plain = os.path.join(self.dir.name, "plain"); os.makedirs(plain)
+        kt.CLAIM_FILE = os.path.join(plain, ".board-claim.json"); write(kt.CLAIM_FILE, {"session": "ok"})
+        kt.FILE = None
+        try:
+            self.assertEqual(kt.recorded_session(), "ok")
+        finally:
+            kt.FILE = old_file
+
+    def test_a_record_not_ignored_warns_but_is_written(self):
+        repo = self.git_repo(ignore=False)
+        kt._PENDING_CLAIM["rec"] = {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False}
+        old = kt.FILE; kt.FILE = None
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                kt.write_claim_record()
+        finally:
+            kt.FILE = old
+        self.assertIn("not in .gitignore", err.getvalue())
+        self.assertEqual(json.load(open(kt.CLAIM_FILE))["session"], "s1")
+        open(os.path.join(repo, ".gitignore"), "w").write(".board-claim.json\n")   # ignored now: silent
+        kt._PENDING_CLAIM["rec"] = {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False}
+        kt.FILE = None; err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                kt.write_claim_record()
+        finally:
+            kt.FILE = old
+        self.assertEqual(err.getvalue(), "")
+
+    def test_owner_check_asks_for_a_rerun_not_the_commit_path(self):
+        calls = []
+        def gh(*args, body=None):
+            calls.append(args[1:3]); return 0, json.dumps({"sha": "abc"}), ""
+        old_gh = kt.gh; kt.gh = gh
+        try:
+            kt._MUT["recheck"] = kt._MUT["rerun"] = False
+            t = {"id": "t_c1", "claim": {"agent": "claude", "session_id": "s1", "status": "running", "heartbeat_at": kt.now(), "claimed_at": kt.now()}}
+            kt.claim_owner_check({"tasks": [t], "settings": {}}, t, Args(session="s1", force=False), "heartbeat")
+            self.assertTrue(kt._MUT["rerun"]); self.assertFalse(kt._MUT["recheck"])
+            state = {"files": {"cards/t.json": {"sha": "s"}}, "head": "h", "base_tree": "bt"}
+            kt._api_save_changes({"cards/t.json": "{}"}, set(), state, "m")   # still the single contents PUT
+            self.assertEqual(len(calls), 1); self.assertIn("PUT", calls[0][0])
+        finally:
+            kt.gh = old_gh; kt._MUT["recheck"] = kt._MUT["rerun"] = False
+
+    def race_to_a_reclaim(self, f, **kw):
+        """s2 holds card 1, stale. s1 revives it between s2's read and s2's save, so s2's save loses. Returns s1's claim
+        as s1 saved it; s2's command must be refused on the newer board and add nothing to it."""
+        self.claim(1, "s2"); self.make_stale(1)
+        real, calls, s1 = kt.save, [], {}
+        def racing(data, sha, msg):
+            if not calls:
+                calls.append(1); d = self.read()   # another process saved first (written directly: a nested command would reset mutate's flags)
+                d["tasks"][0]["claim"].update(session_id="s1", note="mine", claimed_at=kt.now(), heartbeat_at=kt.now())
+                d["tasks"][0]["updated"] = kt.now(); write(self.file, d); s1.update(d["tasks"][0]["claim"])
+                return False
+            return real(data, sha, msg)
+        kt.save = racing
+        self.assertIn("not this session's", self.refusal(f, 1, session="s2", **kw))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.card(1)["claim"], s1)             # no field of s2's command landed on s1's claim
+        return s1
+
+    def test_a_bare_heartbeat_that_loses_a_race_to_a_reclaim_leaves_the_new_claim_alone(self):
+        self.race_to_a_reclaim(self.beat)                       # only heartbeat_at (a volatile field) would have merged in
+
+    def test_a_blocking_heartbeat_that_loses_a_race_to_a_reclaim_leaves_the_new_claim_alone(self):
+        self.assertEqual(self.race_to_a_reclaim(self.beat, status="blocked")["status"], "running")
+
+    def test_a_done_that_loses_a_race_to_a_reclaim_is_refused_too(self):
+        self.claim(1, "s2"); self.make_stale(1)
+        real, calls = kt.save, []
+        def racing(data, sha, msg):
+            if not calls:
+                calls.append(1); d = self.read(); d["tasks"][0]["claim"].update(session_id="s1", heartbeat_at=kt.now()); write(self.file, d)
+                return False
+            return real(data, sha, msg)
+        kt.save = racing
+        with self.assertRaises(SystemExit):
+            self.done(1, session="s2")
+        self.assertEqual(self.card(1)["claim"]["session_id"], "s1"); self.assertEqual(self.card(1)["column"], "in-progress")
+
+    def test_auto_heartbeat_ignores_a_tracked_record(self):
+        self.git_repo(); write(kt.CLAIM_FILE, {"id": "t_c1", "session": "planted-id"})
+        self.g("add", "-f", ".board-claim.json"); self.g("commit", "-qm", "planted")
+        os.utime(kt.CLAIM_FILE, (0, 0))
+        calls, old_mut, old_file = [], kt.mutate, kt.FILE
+        kt.mutate, kt.FILE = lambda fn, msg: calls.append(msg), None
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                kt.cmd_auto_heartbeat(Args())
+        finally:
+            kt.mutate, kt.FILE = old_mut, old_file
+        self.assertEqual(calls, [])
+        self.assertGreater(os.stat(kt.CLAIM_FILE).st_mtime, 1)   # still throttled: no git call on every tool call
+
+    def test_auto_heartbeat_still_asks_for_a_recheck(self):
+        src = inspect.getsource(kt.cmd_auto_heartbeat)
+        self.assertIn('_MUT["recheck"] = True', src)
 
     def test_a_page_placeholder_needs_force_for_done_release_and_heartbeat(self):
         self.placeholder(1)
@@ -1763,6 +1948,7 @@ class ClaimLifecycle(unittest.TestCase):
                                       cwd=repo, capture_output=True, text=True, check=True)
         g("init", "-q"); g("add", "-A"); g("commit", "-qm", "init")   # a board repo's root always holds committed files
         kt.CLAIM_FILE = os.path.join(repo, ".board-claim.json")
+        open(os.path.join(repo, ".gitignore"), "w").write(".board-claim.json\n")   # the kit's template; without it a warning is printed
         kt._PENDING_CLAIM["rec"] = {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False}
         old = kt.FILE; kt.FILE = None
         try:
