@@ -995,6 +995,213 @@ class VisibilityAlarm(unittest.TestCase):
         self.assertEqual({"contents": "read", "issues": "write"}, wf["permissions"])
 
 
+class KitUpdateSafety(unittest.TestCase):
+    """kit-update fetches one commit, checks the release, never downgrades by accident and never touches board data."""
+    KIT = os.path.join(HERE, "..", "board", "kit")
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        names = ("ROOT", "need_repo_clone", "KIT_URL", "_KIT_DIR", "kit_ref", "kit_clone", "urllib", "subprocess", "time")
+        self.saved = {k: getattr(kt, k) for k in names}
+        self.addCleanup(lambda: [setattr(kt, k, v) for k, v in self.saved.items()])
+        self.addCleanup(kt._KIT_SRC.clear); kt._KIT_SRC.clear()
+        kt.ROOT, kt.need_repo_clone = self.temp.name, lambda: None
+        self.kit = os.path.join(self.temp.name, "kit")
+        shutil.copytree(self.KIT, self.kit)
+
+    def manifest(self, fn):
+        path = os.path.join(self.kit, "manifest.json")
+        with open(path) as f:
+            m = json.load(f)
+        fn(m)
+        with open(path, "w") as f:
+            json.dump(m, f)
+
+    def update(self, **kw):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=self.kit, quiet=True, **kw))
+
+    def refused(self, **kw):
+        with self.assertRaises(SystemExit) as e:
+            self.update(**kw)
+        self.assertFalse(os.path.exists(os.path.join(self.temp.name, "board", "keeptrack.py")))   # nothing written
+        return str(e.exception)
+
+    def test_manifest_cannot_write_or_remove_board_data(self):
+        os.makedirs(os.path.join(self.temp.name, "board", "cards"))
+        for dest in ("board/tasks.json", "board/cards/t_x.json", "Board/People/p.json", "board/archive/2025.json",
+                     "board/proposals", "board/./tasks.json"):
+            self.manifest(lambda m: m["files"].update({dest: "README.md"}))
+            self.assertIn("board data", self.refused())
+            self.manifest(lambda m: m["files"].pop(dest))
+        for dest in ("board", "board/cards", "../x"):
+            self.manifest(lambda m: m.update(remove=[dest]))
+            self.assertRegex(self.refused(), "board data|unsafe path")
+        self.assertTrue(os.path.isdir(os.path.join(self.temp.name, "board", "cards")))
+
+    def test_fetched_keeptrack_must_match_the_manifest_version(self):
+        self.manifest(lambda m: m.update(version=m["version"] + 1))
+        self.assertIn("the manifest is", self.refused())
+
+    def test_downgrade_needs_the_flag(self):
+        os.makedirs(os.path.join(self.temp.name, "board"))
+        with open(os.path.join(self.temp.name, "board", "KIT_VERSION"), "w") as f:
+            f.write(f"{kt.KIT_VERSION + 1}\n")
+        with self.assertRaises(SystemExit) as e:
+            self.update()
+        self.assertIn("--allow-downgrade", str(e.exception))
+        self.assertFalse(os.path.exists(os.path.join(self.temp.name, "board", "keeptrack.py")))
+        self.update(allow_downgrade=True)
+        self.assertEqual(kt.KIT_VERSION, kt.kit_local())
+
+    def fake_urlopen(self, urls, fail=False):
+        kit = self.kit
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def urlopen(req, timeout=None):
+            url = req.full_url; urls.append(url)
+            if fail:
+                raise kt.urllib.error.URLError("blocked")
+            with open(os.path.join(kit, url.split("/board/kit/", 1)[1]), "rb") as f:
+                return Resp(f.read())
+        return urlopen
+
+    def fake_urllib(self, urlopen):
+        class U: pass
+        u = U(); u.request = U(); u.error = kt.urllib.error
+        u.request.Request, u.request.urlopen = self.saved["urllib"].request.Request, urlopen
+        return u
+
+    def test_official_kit_is_fetched_at_one_commit(self):
+        sha = "a" * 40
+        kt.KIT_URL, kt.kit_ref, urls = "", lambda: sha, []
+        kt.urllib = self.fake_urllib(self.fake_urlopen(urls))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=None, quiet=True))
+        self.assertTrue(urls)
+        self.assertTrue(all(u.startswith(f"{kt.KIT_RAW}/{sha}/board/kit/") for u in urls), urls)
+        self.assertEqual(kt.KIT_VERSION, kt.kit_local())
+
+    def test_blocked_raw_falls_back_to_a_clone_of_the_same_commit(self):
+        sha, cloned = "b" * 40, []
+        kt.KIT_URL, kt.kit_ref = "", lambda: sha
+        kt.kit_clone = lambda ref="": cloned.append(ref) or self.kit
+        kt.urllib = self.fake_urllib(self.fake_urlopen([], fail=True))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=None, quiet=True))
+        self.assertEqual([sha], cloned)
+
+    def test_a_failing_custom_kit_url_never_falls_back(self):
+        cloned = []
+        kt.KIT_URL = "https://kit.example.invalid/board/kit"
+        kt.kit_ref = lambda: self.fail("a custom kit is not pinned to the official repo")
+        kt.kit_clone = lambda ref="": cloned.append(ref) or self.kit
+        kt.urllib = self.fake_urllib(self.fake_urlopen([], fail=True))
+        with self.assertRaises(SystemExit) as e, contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=None, quiet=True))
+        self.assertIn("BOARD_KIT_URL", str(e.exception))
+        self.assertEqual([], cloned)
+
+    def test_kit_check_warns_about_template_drift(self):
+        os.makedirs(os.path.join(self.temp.name, "board"))
+        with open(os.path.join(self.temp.name, "board", "tasks.json"), "w") as f:
+            json.dump({"version": 4, "layout": "split"}, f)
+        with open(os.path.join(self.temp.name, "board", "KIT_VERSION"), "w") as f:
+            f.write(f"{kt.KIT_VERSION}\n")
+        agents = os.path.join(self.temp.name, "AGENTS.md")
+        with open(agents, "w") as f:
+            f.write("1. **Never edit `board/tasks.json` by hand.**\nheartbeat at least every 10 minutes; hook at most every 5 minutes\n")
+        drift = kt.kit_drift()
+        self.assertEqual(2, len(drift))
+        self.assertIn("rule 1", drift[0]); self.assertIn("5, 10 minutes", drift[1])
+        shutil.copy(os.path.join(self.KIT, "templates", "AGENTS.md"), agents)
+        self.assertEqual([], kt.kit_drift())
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            kt.cmd_kit_check(Args(source=self.kit, card=False))
+        self.assertIn("board kit is current", out.getvalue())   # a warning never fails kit-check
+        with open(agents, "w") as f:
+            f.write("old rules\n")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            kt.cmd_kit_check(Args(source=self.kit, card=False))
+        self.assertIn("template drift (warning)", out.getvalue())
+
+    def test_upgrade_card_links_the_main_branch(self):
+        with open(os.path.join(self.KIT, "keeptrack.py")) as f:
+            src = f.read()
+        self.assertIn("{KIT_GIT}/blob/main/board/kit/UPGRADING.md", src)
+        self.assertNotIn("blob/master", src)
+
+
+class RateLimits(unittest.TestCase):
+    """A GitHub rate limit is waited out a bounded number of times, then reported as a rate limit, not a token problem."""
+
+    def setUp(self):
+        self.saved = {k: getattr(kt, k) for k in ("urllib", "subprocess", "time", "use_http", "token")}
+        self.addCleanup(lambda: [setattr(kt, k, v) for k, v in self.saved.items()])
+        self.sleeps = []
+        class T: pass
+        kt.time = T(); kt.time.sleep = self.sleeps.append
+
+    def http_error(self, code, headers, body):
+        import email.message
+        h = email.message.Message()
+        for k, v in headers.items():
+            h[k] = v
+        return kt.urllib.error.HTTPError("https://api.github.com/x", code, "Forbidden", h, io.BytesIO(body.encode()))
+
+    def fake_urllib(self, answers):
+        calls = []
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def urlopen(req, timeout=None):
+            calls.append(req.full_url); a = answers[min(len(calls), len(answers)) - 1]
+            if isinstance(a, Exception):
+                raise a
+            return Resp(a.encode())
+        class U: pass
+        u = U(); u.request = U(); u.error = kt.urllib.error; u.parse = kt.urllib.parse
+        u.request.Request, u.request.urlopen = self.saved["urllib"].request.Request, urlopen
+        kt.urllib, kt.token = u, lambda: "tok"
+        return calls
+
+    def test_secondary_limit_is_retried_then_succeeds(self):
+        calls = self.fake_urllib([self.http_error(403, {"Retry-After": "7"}, '{"message": "You have exceeded a secondary rate limit"}'),
+                                  self.http_error(429, {}, "{}"), '{"ok": true}'])
+        self.assertEqual((0, '{"ok": true}', ""), kt.http("POST", "repos/a/b/git/blobs", {"x": 1}))
+        self.assertEqual(3, len(calls)); self.assertEqual([7, 4], self.sleeps)
+
+    def test_persistent_limit_is_reported_as_rate_limited(self):
+        calls = self.fake_urllib([self.http_error(403, {"x-ratelimit-remaining": "0"}, '{"message": "API rate limit exceeded"}')])
+        rc, out, err = kt.http("GET", "repos/a/b")
+        self.assertEqual((1, "HTTP 403: rate limited"), (rc, err))
+        self.assertEqual(kt.RATE_TRIES + 1, len(calls)); self.assertTrue(all(s <= 30 for s in self.sleeps))
+        with self.assertRaises(SystemExit) as e:
+            kt._api_error(rc, out, err)
+        self.assertIn("rate limited", str(e.exception)); self.assertNotIn("cannot write", str(e.exception))
+
+    def test_a_permission_403_is_not_retried(self):
+        calls = self.fake_urllib([self.http_error(403, {"x-ratelimit-remaining": "4999"}, '{"message": "Resource not accessible"}')])
+        rc, out, err = kt.http("PUT", "repos/a/b/contents/x", {})
+        self.assertEqual((1, 1, []), (rc, len(calls), self.sleeps))
+        with self.assertRaises(SystemExit) as e:
+            kt._api_error(rc, out, err)
+        self.assertIn("cannot write", str(e.exception))
+
+    def test_gh_cli_rate_limit_is_retried(self):
+        runs = []
+        class P:
+            def __init__(self, rc, out, err): self.returncode, self.stdout, self.stderr = rc, out, err
+        answers = [P(1, "", "gh: You have exceeded a secondary rate limit (HTTP 403)"), P(0, "{}", "")]
+        class S: pass
+        kt.subprocess = S(); kt.subprocess.run = lambda *a, **k: runs.append(a) or answers[len(runs) - 1]
+        kt.use_http = lambda: False
+        self.assertEqual((0, "{}", ""), kt.gh("repos/a/b"))
+        self.assertEqual((2, [2]), (len(runs), self.sleeps))
+
+
 class MoveInPlace(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
