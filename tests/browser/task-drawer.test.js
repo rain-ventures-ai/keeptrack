@@ -21,12 +21,13 @@ const server = http.createServer((req, res) => {
 
 const text = x => JSON.stringify(x, null, 2) + '\n';
 const root = { version: 4, layout: 'split', settings: { title: 'Drawer test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }, { github: 'sam', name: 'Sam' }], agents: [], clients: ['Acme'], labels: [{ name: 'pale', color: '#dce1e7' }, { name: 'dark', color: '#334155' }], client_info: {}, next_num: 3, archive: { files: {} } };
+const CLEARED = [{ what: 'wait on a live claim', by: 'codex@sam', session: '7c4a8d09ca37', at: '2026-10-06T10:00:00.000Z' }];   // kit v43 evidence the page must keep
 const card = (id, num, title, extra) => ({ id, num, title, column: 'todo', client: '', priority: 'medium', due: '', labels: [], assignees: [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: '2026-10-01T08:00:00.000Z', updated: '2026-10-01T08:00:00.000Z', rank: 'a' + num, ...extra });
 
 // A small GitHub: contents API for reads and single-file writes, git data API for multi-file commits (same shape as split-storage.test.js).
 class Github {
   constructor() {
-    this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First', { client: 'Acme', priority: 'high', labels: ['pale', 'dark'], assignees: ['alex'] })), 'cards/t_two.json': text(card('t_two', 2, 'Second')) };
+    this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First', { client: 'Acme', priority: 'high', labels: ['pale', 'dark'], assignees: ['alex'], agent_cleared: CLEARED })), 'cards/t_two.json': text(card('t_two', 2, 'Second')) };
     this.files['people/p_craig.json'] = text({ id: 'p_craig', name: 'Craig Example', company: 'Acme', role: 'Director', emails: [{ label: 'Work', value: 'craig@example.com' }], phones: [], links: [], comments: [], history: [] });
     this.files['people/p_chris.json'] = text({ id: 'p_chris', name: 'Chris Example', company: 'Other', emails: [{ label: 'Work', value: 'chris@example.com' }], phones: [], links: [], comments: [], history: [] });
     this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0;
@@ -95,7 +96,7 @@ async function assertFits(page, where) {
     await page.evaluate(() => { window.__copied = ''; }); await page.locator('#dNum').click(); await page.waitForFunction(() => window.__copied);
     assert.match(await page.evaluate(() => window.__copied), /\/board\/index\.html\?repo=acme\/board&branch=main&path=board\/tasks\.json#1$/);
     assert.deepEqual(await page.locator('#cHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['Task #1, copy link', 'Undo last board change', 'Copy for agent', 'More actions', 'Close']);
-    assert.deepEqual(await page.locator('#cProps .ui-props__label').allTextContents(), ['Status', 'Priority', 'Due', 'People', 'Client', 'Project', 'Labels']);
+    assert.deepEqual(await page.locator('#cProps .ui-props__label').allTextContents(), ['Status', 'Priority', 'Due', 'Waiting', 'People', 'Client', 'Project', 'Labels']);
     assert.deepEqual(await page.locator('#cSecs .ui-section__text').allTextContents(), ['Description', 'Checklist', 'Links', 'Contacts', 'Comments', 'History']);
     assert.equal(await page.locator('#cHist').isVisible(), false, 'History starts closed');
     await assertFits(page, 'opened'); await shot(page, 'phone-writable-top');
@@ -119,6 +120,27 @@ async function assertFits(page, where) {
     await page.locator('#cDueBtn').evaluate(() => document.activeElement.blur());
     assert.doesNotMatch(await page.locator('#cDuePill').getAttribute('class'), /ddue--edit/);
     w = saved(); await page.locator('#cDueClear').click(); await w; assert.equal(api.card().due, ''); assert.equal(await page.locator('#cDueClear').isVisible(), false);
+
+    // waiting (kit v43): set what it waits on, a member and a chase day; the card shows the chip, tasks.json gets min_kit; clear ends it
+    await page.locator('#cWaitAdd').click(); await page.locator('#cWaitOn').fill('Acme finance');
+    await page.locator('#cWaitWho').selectOption('sam'); await page.locator('#cWaitNudge').fill('2020-01-02');
+    w = saved(); await page.locator('#cWaitSet').click(); await w;
+    { const wt = api.card().waiting; assert.equal(wt.on, 'Acme finance'); assert.equal(wt.who, 'sam'); assert.equal(wt.nudge, '2020-01-02'); assert.match(wt.since, /^\d{4}-\d{2}-\d{2}$/); assert.equal(wt.by, 'alex'); }
+    await page.locator('#cWaitPill').waitFor();
+    assert.match(await page.locator('#cWaitPill').innerText(), /Acme finance \(sam\) · since .* · chase 2020-01-02/);
+    assert.equal(JSON.parse(api.files['tasks.json']).settings.min_kit, 43, 'the first wait raises settings.min_kit');
+    assert.match(api.card().history.slice(-1)[0].text, /^waiting on Acme finance, chase 2020-01-02/);
+    assert.equal(await page.locator('.card .chip.waitchip.late').first().isVisible(), true, 'the chip is amber once the chase day has passed');
+    // done ends the wait; Undo of that move brings the wait back (a wait the save itself writes is never taken as a leftover)
+    w = saved(); await page.locator('#cCol').selectOption('done'); await w;
+    assert.equal(api.card().waiting, null); assert.match(api.card().history.slice(-1)[0].text, /wait ended by done/);
+    await page.waitForFunction(() => !document.getElementById('cUndo').disabled); w = saved(); await page.locator('#cUndo').click(); await w;
+    assert.equal(api.card().column, 'todo'); assert.equal((api.card().waiting || {}).on, 'Acme finance', 'Undo restores the wait');
+    await page.locator('#cWaitPill').waitFor();
+    w = saved(); await page.locator('#cWaitPill .ui-pill__remove').click(); await w;
+    assert.equal(api.card().waiting, null); assert.match(api.card().history.slice(-1)[0].text, /^wait cleared \(was waiting on Acme finance/);
+    assert.equal(await page.locator('#cWaitAdd').isVisible(), true);
+    assert.deepEqual(api.card().agent_cleared, CLEARED, 'the page keeps agent_cleared on every save');
 
     // people: the pill's x unassigns, the "+ Add" menu lists members and the agent options
     w = saved(); await page.locator('#cWho .ui-pill__remove').click(); await w; assert.deepEqual(api.card().assignees, []);

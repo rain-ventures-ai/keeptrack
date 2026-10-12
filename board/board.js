@@ -725,7 +725,7 @@ if (typeof window !== 'undefined') (() => {
   // Lists merge by item id (items without an id: by content): an item added on either side is kept, one removed on one
   // side and untouched on the other is removed, one edited on both sides merges field by field. A clash is a value both
   // sides changed to different things, or an item one side edited and the other removed. merged keeps THEIR value at a clash.
-  const VOLATILE = { updated: 'mine', updatedBy: 'mine', heartbeat_at: 'mine', next_num: 'max' };   // bookkeeping, never a clash
+  const VOLATILE = { updated: 'mine', updatedBy: 'mine', heartbeat_at: 'mine', next_num: 'max', min_kit: 'max' };   // bookkeeping, never a clash (settings.min_kit only rises)
   const sortKeys = v => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])])) : v;
   const jcanon = v => v === undefined ? '\0missing' : JSON.stringify(sortKeys(v));
   const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v), has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -848,6 +848,11 @@ if (typeof window !== 'undefined') (() => {
       t.todos.forEach(d => { const o = pm.get(d.id); if (!o) add('added to-do: ' + d.text); else if (!o.done && d.done) add('✓ ' + d.text); else if (o.done && !d.done) add('reopened: ' + d.text); });
       p.todos.forEach(d => { if (!tm.has(d.id)) add('removed to-do: ' + d.text); });
       if (p.claim && !t.claim) add('claim released'); else if (p.claim && t.claim && p.claim.status !== t.claim.status) add('claim ' + t.claim.status);
+      const isW = w => w && typeof w === 'object' && !Array.isArray(w), pw = isW(p.waiting) ? p.waiting : null, tw = isW(t.waiting) ? t.waiting : null;
+      if (tw && t.column === doneColId() && p.column !== t.column) { add(`wait ended by done (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // as keeptrack.py done / move ID done
+      else if (tw && pw && jcanon(pw) === jcanon(tw) && p.column === doneColId() && t.column !== doneColId()) { add(`wait ended by reopening (was waiting on ${tw.on || '?'}, since ${tw.since || '?'})`); t.waiting = null; if (t.claim) { delete t.claim.blocked_by_wait; delete t.claim.before_wait; } }   // a leftover wait never comes back live; a wait this save writes (Undo) stays
+      else if (tw && jcanon(pw) !== jcanon(tw)) add('waiting on ' + (tw.on || '?') + (tw.nudge ? ', chase ' + tw.nudge : ''));
+      else if (pw && !tw) add(`wait cleared (was waiting on ${pw.on || '?'}, since ${pw.since || '?'})`);
     });
   }
 
@@ -1068,7 +1073,7 @@ if (typeof window !== 'undefined') (() => {
     const busy = agentBusy().filter(x => x.id !== exceptId); if (busy.length < lim) return '';
     return `${busy.length} agent run${busy.length === 1 ? '' : 's'} already going (${busy.map(x => '#' + x.num).join(', ')}); the board's limit is ${lim}. Wait for one to finish, or raise it with keeptrack.py settings-set --max-agent-claims N.`;
   }
-  const needsAttention = t => { const cs = claimState(t.claim); const late = t.due && t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); return late || cs === 'stale' || cs === 'stuck' || cs === 'blocked'; };
+  const needsAttention = t => { const cs = claimState(t.claim); const late = t.due && t.column !== 'done' && t.due < new Date().toISOString().slice(0, 10); return late || cs === 'stale' || cs === 'stuck' || cs === 'blocked' || chaseNow(t); };   // a wait past its chase day too (as list --attention)
 
   // ---- filters / render ---------------------------------------------------
   function fillSelect(sel, items, allLabel) { // items: [value,label]
@@ -1281,6 +1286,7 @@ if (typeof window !== 'undefined') (() => {
     if (fl && !t.labels.includes(fl)) return false;
     if (fprio && (t.priority || 'medium') !== fprio) return false;   // no priority shows (and filters) as Medium, as keeptrack.py treats it
     if ($('fAttn').checked && !needsAttention(t)) return false;
+    if ($('fWaiting').checked && !waitingOf(t)) return false;
     return true;
   }
   const sortKey = () => 'kb_sort:' + cfg().repo;
@@ -1526,7 +1532,7 @@ if (typeof window !== 'undefined') (() => {
     bd.textContent = fresh > 99 ? '99+' : String(fresh); bd.hidden = !fresh; bell.classList.toggle('on', freshOnly);
     bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes${freshOnly ? ' (showing only these; click to show all)' : ' (click to show only these)'}` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
     document.title = (fresh ? `(${fresh}) ` : '') + (state.settings.title || 'Keeptrack');
-    const nf = ['fWho', 'fDoneBy', 'fLabel', 'fPrio'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
+    const nf = ['fWho', 'fDoneBy', 'fLabel', 'fPrio'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fWaiting').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
     fb.textContent = String(nf); fb.hidden = !nf; $('btnFilter').title = nf ? `Filters (${nf} on)` : 'Filters'; renderTopbar();
   }
 
@@ -1613,41 +1619,57 @@ if (typeof window !== 'undefined') (() => {
     try { const j = await sendToClaude(t, who, cid); toast('Assigned to Claude. It should start within about two minutes.'); watchClaudeJob(j.jobId, t.id, who, cid); return true; }
     catch (e) { toast('Not sent: ' + e.message, true); edit(t.id, x => { if (x.claim && String(x.claim.session_id || '').indexOf('pending-') === 0) { x.claim.status = 'stuck'; x.claim.note = 'Send to Claude failed: ' + e.message; } }, 'Send to Claude failed'); return false; }
   }
+  // The save merges with the newer board field by field: a wait set elsewhere meanwhile can arrive next to this page's
+  // placeholder claim. Then Claude is not started and the placeholder is taken off again (the routine's claim would be refused).
+  async function waitArrived(id, ph) {
+    const t = state.tasks.find(x => x.id === id); if (!t || !waitingOf(t)) return false;
+    toast(waitingBlock(t) + ' Claude was not started.', true);
+    await mutate(n => { const c = n.tasks.find(x => x.id === id); if (c && c.claim && c.claim.session_id === ph) { c.claim = null; stamp(c); } }, `Withdraw Claude: ${titleOf(id)}`, [id], null, { remember: false });   // not undoable: Undo would put the placeholder back on a waiting card
+    return true;
+  }
   async function assignMyClaude(id) {
     const t = state.tasks.find(x => x.id === id), who = cfg().me; if (!t) return;
     if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents & integrations first.', true); return; }
     if (!claudeReady()) { toast('Finish your Claude routine setup in Settings → Agents & integrations first.', true); return; }
     if (!who) { toast('Set your GitHub username in Settings first.', true); return; }
     const live = activeClaim(t); if (live) { toast(`${agentLabel(live)} already has this task. Release that claim before assigning another agent.`, true); return; }
+    if (waitingOf(t)) { toast(waitingBlock(t), true); return; }
     { const full = agentLimitFull(id); if (full) { toast(full, true); rlog(t.num, 'Not sent', full, false); return; } }
     const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
-    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); stamp(card); }, `Assign #${t.num} to Claude`, [id]);
-    const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) await triggerClaude(current, who, cid);
+    let ph = '';
+    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card || waitingOf(card) || activeClaim(card)) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); ph = card.claim.session_id; stamp(card); }, `Assign #${t.num} to Claude`, [id]);
+    const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) { if (!(await waitArrived(id, ph))) await triggerClaude(current, who, cid); }
+    else if (saved && current && (waitingOf(current) || activeClaim(current))) toast(waitingOf(current) ? waitingBlock(current) : 'Someone took this task meanwhile; Claude was not started.', true);   // the newer board won
   }
   async function postComment() {
     const ta = $('cmText'), text = ta.value.trim(), id = commentsFor; if (!text || !id) return;
     if (busy) { toast('Busy, try again in a moment', true); return; }
-    let send = false;
+    let send = false; const seen = ((state.tasks.find(x => x.id === id) || {}).claim || {}).session_id || '';   // the claim the person sees now (and may confirm below)
     if (wantsClaude(text)) {
       const full = agentLimitFull(id);
       if (!myAgents().includes('claude')) { /* this person does not use Claude: a plain mention */ }
       else if (!claudeReady()) toast('To make @claude start your routine, set it up in Settings → Agents & integrations. Posting as a normal comment.');
       else if (!cfg().me) toast('Set your GitHub username in Settings first. Posting as a normal comment.', true);
       else if (full) { const t0 = state.tasks.find(x => x.id === id); toast(full + ' Posting as a normal comment.', true); rlog(t0 ? t0.num : '?', 'Not sent', full, false); }   // no dialog, no claim, no cron job: the comment is posted alone
+      else if (waitingOf(state.tasks.find(x => x.id === id))) toast(waitingBlock(state.tasks.find(x => x.id === id)) + ' Posting as a normal comment.', true);   // the routine's claim would be refused
       else { const t0 = state.tasks.find(x => x.id === id), other = t0 && t0.claim && claimState(t0.claim) === 'running' && String(t0.claim.session_id || '').indexOf('pending-') !== 0;
         if (other && !(await ui.confirm({ title: 'Send to Claude anyway?', body: `${t0.claim.agent} already has a running session on this task. Cancel posts the comment without starting Claude.`, confirmLabel: 'Send to Claude' }))) { /* post only */ }
         else { const a = await askSend(t0 ? t0.num : '?'); if (a === 'cancel') return; send = a === 'send'; } }
     }
     const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
+    let sent = send, why = '', ph = '';
     await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return; t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text });
-      if (send) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); }   // the routine claims only cards assigned to its person
+      const live = activeClaim(t); sent = send && !waitingOf(t) && !(live && live.session_id !== seen);   // the newer board may wait, or someone took it meanwhile
+      why = send && !sent ? (waitingOf(t) ? waitingBlock(t) + ' Posted as a normal comment.' : 'Someone took this task meanwhile; posted as a normal comment.') : '';
+      if (sent) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); ph = t.claim.session_id; }   // the routine claims only cards assigned to its person
       stamp(t); }, `Comment: ${titleOf(id)}`, [id]);
     $('cmPost').disabled = false;
     { const t2 = state.tasks.find(x => x.id === id); if (t2) syncAgentBtn(t2);
       if (mentionsCodex(text) && myAgents().includes('codex')) toast('Codex can’t be started from the board. Press Copy for Codex at the top of the card, then paste it into Codex.'); }
-    if (send && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
+    if (why) toast(why, true);
+    if (sent && (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length > n0) {
       const t1 = state.tasks.find(x => x.id === id);
-      await triggerClaude(t1, who, cid);
+      if (!(await waitArrived(id, ph))) await triggerClaude(t1, who, cid);
     }
     if ((state.tasks.find(x => x.id === id) || { comments: [] }).comments.length <= n0) { ta.value = text; autosize(ta); toast('Comment not saved. Your text is still in the box.', true); }
     cmSig = ''; renderComments(); ta.focus();
@@ -1800,6 +1822,26 @@ if (typeof window !== 'undefined') (() => {
   }
   function chipMention(t) { return freshInfo(t).mention ? el('span', 'chip mentionchip', '@ you') : null; }
   function chipAgent(t) { if (!t.claim || t.claim.status === 'done') return null; const st = claimState(t.claim); return elI('span', 'chip agentchip ' + st, 'bot', `${t.claim.agent} · ${st}`); }
+  // Waiting-for (kit v43): the same rules as keeptrack.py's wait / unwait. A waiting card stays in its column, keeps its due
+  // date, and is never sent to an agent (claim refuses it); its chase day is the nudge, else since + settings.waiting_days.
+  const WAITING_KIT = 43, DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const waitingOf = t => t && t.column !== doneColId() && t.waiting && typeof t.waiting === 'object' && !Array.isArray(t.waiting) && Object.keys(t.waiting).length ? t.waiting : null;
+  const waitingDays = () => { const v = state.settings.waiting_days; return Number.isInteger(v) && v >= 0 && v <= 365 ? v : 7; };
+  const dayNum = s => Math.round(new Date(s + 'T00:00:00Z').getTime() / 864e5);
+  function chaseDate(w) {
+    if (DAY_RE.test(w.nudge || '')) return w.nudge;
+    const d = waitingDays(); if (!d || !DAY_RE.test(w.since || '')) return '';
+    return new Date((dayNum(w.since) + d) * 864e5).toISOString().slice(0, 10);
+  }
+  const chaseNow = t => { const w = waitingOf(t), d = w && chaseDate(w); return !!d && d <= todayIso(); };
+  const waitingOnMe = w => !!w && !!cfg().me && String(w.who || '').toLowerCase() === cfg().me.toLowerCase();
+  const waitingBlock = t => `#${t.num} is waiting on ${(waitingOf(t) || {}).on || '?'}: clear the wait in the task first, so Claude can claim it.`;
+  function chipWaiting(t) {
+    const w = waitingOf(t); if (!w) return null;
+    const days = DAY_RE.test(w.since || '') ? Math.max(0, dayNum(todayIso()) - dayNum(w.since)) : 0, on = waitingOnMe(w) ? 'you' : String(w.on || '?');
+    const c = elI('span', 'chip waitchip' + (chaseNow(t) ? ' late' : ''), 'alarm-clock', `waiting on ${on.length > 40 ? on.slice(0, 39) + '…' : on}, ${days}d`);
+    const chase = chaseDate(w); c.title = `Waiting on ${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} since ${w.since || '?'}${chase ? ', chase ' + chase : ''}${w.note ? '\n' + w.note : ''}`; return c;
+  }
   const cancelledRun = t => t && t.column === doneColId() && t.outcome === 'cancelled' ? (t.last_run || {}) : null;   // v35 done always sets the card's outcome
   const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') ? s : s.slice(0, Math.min(3, Math.floor(s.length / 2))) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
   function chipOutcome(t) { const r = cancelledRun(t); if (!r) return null; const c = el('span', 'chip cancelledchip', 'cancelled'); c.title = 'Closed as cancelled' + (r.note ? ': ' + r.note : ''); return c; }
@@ -1826,7 +1868,7 @@ if (typeof window !== 'undefined') (() => {
     if (t.due) mm.append(duePill(t));
     mm.append(prioPill(t));
     mm.append(...labelTags(t)); { const c = clientTag(t); if (c) mm.append(c); }
-    [chipMention(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
+    [chipMention(t), chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t));
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
@@ -1834,7 +1876,7 @@ if (typeof window !== 'undefined') (() => {
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
     const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
     const pr = el('div', 'c-prio'); pr.append(prioPill(t));
-    const more = el('div', 'c-more'); [chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
+    const more = el('div', 'c-more'); [chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     row.append(c0, task, desc, ppl, lab, due, pr, more); return row;
@@ -1884,7 +1926,7 @@ if (typeof window !== 'undefined') (() => {
       const title = el('div', 'stitle'); { const d = changedDot(t); if (d) title.append(d); } title.append(document.createTextNode(t.title));
       const sub = [t.client, ...t.labels].filter(Boolean).join(' · '); if (sub) title.append(el('span', 'ssub', sub));
       const avs = el('div', 'lavs'); t.assignees.forEach(a => avs.append(avatar(a)));
-      const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && extra.append(x));
+      const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && extra.append(x));
       row.append(circ, el('div', 'stime', colName(t.column)), title, extra, avs); row.onclick = () => openCard(t.id); return row;
     };
     const day = (key, label, list, cls) => {
@@ -2007,7 +2049,7 @@ if (typeof window !== 'undefined') (() => {
     if (fw) { const a = agentAssignments().find(x => x.value === fw); out.push(fw === '__none' ? 'unassigned' : fw === '__agent' ? 'assigned to any active agent' : a ? 'assigned to ' + a.label : 'assigned to @' + fw); }
     if (fd) { const x = completionOptions().find(x => completionFilterValue(x) === fd); if (x) out.push('completed by ' + x.label); }
     if (fl) out.push('label ' + fl); if (fp) out.push('priority ' + fp);
-    if ($('fAttn').checked) out.push('needs attention'); if (freshOnly) out.push('new for me');
+    if ($('fAttn').checked) out.push('needs attention'); if ($('fWaiting').checked) out.push('waiting'); if (freshOnly) out.push('new for me');
     if ($('fHideDone').checked && view !== 'activity') out.push('done hidden');
     return out.join(', ');
   }
@@ -2118,8 +2160,8 @@ if (typeof window !== 'undefined') (() => {
     summary.title = `Assign task #${t.num}`; assign.append(summary);
     const menu = el('div', 'quickassignmenu'); state.people.forEach(p => { const on = t.assignees.includes(p.github), b = el('button', 'quickperson' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.append(avatar(p.github), document.createTextNode(p.name || '@' + p.github));
       b.onclick = () => edit(t.id, x => { const i = x.assignees.indexOf(p.github); if (i >= 0) x.assignees.splice(i, 1); else x.assignees.push(p.github); }, `Assignees: ${titleOf(t.id)}`); menu.append(b); });
-    if (myAgents().includes('claude')) { const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === cfg().me, b = el('button', 'quickagent' + (mine ? ' on' : '')); b.type = 'button'; const full = !claim && agentLimitFull(t.id); b.disabled = !!claim || !claudeReady() || !cfg().me || !!full; b.setAttribute('aria-pressed', String(!!mine)); b.append(svgIcon('bot'), el('span', null, mine ? `Claude for @${cfg().me} · assigned` : claudeReady() && cfg().me ? `Assign to Claude for @${cfg().me}` : 'Claude · finish setup first'));
-      b.title = mine ? 'This task is already assigned to your Claude routine' : claim ? `${agentLabel(claim)} already has this task` : full ? full : 'Assign this card to your Claude routine; it starts automatically'; b.onclick = () => { assign.open = false; assignMyClaude(t.id); }; menu.append(b); }
+    if (myAgents().includes('claude')) { const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === cfg().me, b = el('button', 'quickagent' + (mine ? ' on' : '')); b.type = 'button'; const full = !claim && agentLimitFull(t.id), waits = !claim && waitingOf(t); b.disabled = !!claim || !claudeReady() || !cfg().me || !!full || !!waits; b.setAttribute('aria-pressed', String(!!mine)); b.append(svgIcon('bot'), el('span', null, mine ? `Claude for @${cfg().me} · assigned` : claudeReady() && cfg().me ? `Assign to Claude for @${cfg().me}` : 'Claude · finish setup first'));
+      b.title = mine ? 'This task is already assigned to your Claude routine' : claim ? `${agentLabel(claim)} already has this task` : full ? full : waits ? waitingBlock(t) : 'Assign this card to your Claude routine; it starts automatically'; b.onclick = () => { assign.open = false; assignMyClaude(t.id); }; menu.append(b); }
     else { const setup = elI('button', 'quickagent setup', 'settings', 'Set up your Claude agent…'); setup.type = 'button'; setup.onclick = () => { assign.open = false; if ($('dlgCard').open) $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); }; menu.append(setup); }
     if (t.assignees.length) { const clear = elI('button', 'quickunassign', 'x', 'Unassign everyone'); clear.type = 'button'; clear.onclick = () => edit(t.id, x => { x.assignees = []; }, `Unassign: ${titleOf(t.id)}`); menu.append(clear); }
     if (!state.people.length) menu.append(el('span', 'muted', 'Add people in Settings first.')); assign.append(menu); return assign;
@@ -2179,7 +2221,7 @@ if (typeof window !== 'undefined') (() => {
       if (context.childNodes.length) c.append(context);
     }
     const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
-    [chipMention(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+    [chipMention(t), chipWaiting(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
       other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t), chipOutcome(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
@@ -2315,6 +2357,7 @@ if (typeof window !== 'undefined') (() => {
     const status = el('span', 'dval'); status.id = 'cStatusVal'; status.append(drawerSelect('cCol', 'Status'));
     const prio = drawerSelect('cPrio', 'Priority', [{ value: 'high', label: 'High' }, { value: 'medium', label: 'Medium' }, { value: 'low', label: 'Low' }]);
     const due = datePill('cDue', 'Due date', 'Clear due date');
+    const wait = el('span', 'dval dwait'); wait.id = 'cWaitVal';
     const who = el('span', 'dval'); who.id = 'cWho';
     const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
     const chips = el('span', 'dval'); chips.id = 'cLabelChips';
@@ -2325,6 +2368,7 @@ if (typeof window !== 'undefined') (() => {
       { label: 'Status', icon: 'square-kanban', value: status },
       { label: 'Priority', icon: 'flag', value: prio },
       { label: 'Due', icon: 'calendar', value: due },
+      { label: 'Waiting', icon: 'alarm-clock', value: wait },
       { label: 'People', icon: 'users', value: [who, whoAdd] },
       { label: 'Client', icon: 'building-2', value: drawerSelect('cClient', 'Client') },
       { label: 'Project', icon: 'folder', value: drawerSelect('cProject', 'Project') },
@@ -2436,6 +2480,57 @@ if (typeof window !== 'undefined') (() => {
     });
     const claim = activeClaim(t); if (claim) { const a = ui.pill({ text: agentLabel(claim), icon: 'bot', tone: 'accent' }); a.title = 'This agent is working on the task'; box.append(a); }
   }
+  // Waiting (kit v43): one small editor in the drawer. Set: what or whom it waits on, optionally a member and a chase day.
+  // Clear ends it as keeptrack.py unwait does: a claim the wait blocked runs again, or goes back to To do once it is stale.
+  let waitForm = '';   // the card whose wait form is open, so a background sync does not wipe what is being typed
+  function renderWaiting(t, force) {
+    const box = $('cWaitVal'); if (!force && waitForm === t.id) return; waitForm = ''; box.textContent = ''; const w = waitingOf(t);
+    if (w) {
+      const chase = chaseDate(w), p = ui.pill({ text: `${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} · since ${w.since || '?'}${chase ? ' · chase ' + chase : ''}`, icon: 'alarm-clock',
+        tone: chaseNow(t) ? 'warn' : 'neutral', removeLabel: 'Clear the wait', onRemove: () => clearWait(t.id) });
+      p.id = 'cWaitPill'; if (w.note) p.title = w.note; box.append(p); return;
+    }
+    if (t.column === doneColId()) { box.append(el('span', 'muted', '—')); return; }
+    box.append(ghostAdd('cWaitAdd', 'Add', 'Mark this task as waiting on someone or something', () => {
+      waitForm = t.id; box.textContent = '';
+      const on = el('input', 'ui-input'); on.id = 'cWaitOn'; on.placeholder = 'Waiting on (e.g. Acme finance)'; on.setAttribute('aria-label', 'Waiting on'); on.maxLength = 200;
+      const who = el('select', 'ui-input'); who.id = 'cWaitWho'; who.setAttribute('aria-label', 'Who (optional)'); fillSelect(who, [['', 'Who (optional)'], ...state.people.map(p => [p.github, p.name || '@' + p.github])]);
+      const nudge = el('input', 'ui-input'); nudge.id = 'cWaitNudge'; nudge.type = 'date'; nudge.setAttribute('aria-label', 'Chase on (optional)'); nudge.title = `Chase on (optional; default ${waitingDays() ? waitingDays() + ' days from today' : 'none'})`;
+      const set = ui.button({ label: 'Set', size: 'sm' }); set.id = 'cWaitSet'; const cancel = ui.button({ label: 'Cancel', variant: 'ghost', size: 'sm' });
+      set.onclick = () => { const id = t.id; waitForm = ''; setWait(id, on.value, who.value, nudge.value); };
+      cancel.onclick = () => { waitForm = ''; renderWaiting(taskNow() || t, true); };
+      on.addEventListener('keydown', e => { if (e.key === 'Enter') set.click(); if (e.key === 'Escape') { e.stopPropagation(); cancel.click(); } });
+      box.append(on, who, nudge, set, cancel); on.focus();
+    }));
+  }
+  function setWait(id, on, who, nudge) {
+    on = String(on || '').replace(/\s+/g, ' ').trim().slice(0, 200); if (!on) { toast('Say what or whom the task is waiting on', true); renderWaiting(taskNow(), true); return; }
+    edit(id, (t, n) => {
+      const old = waitingOf(t);
+      t.waiting = { on, who: who || '', since: (old && old.since) || todayIso(), nudge: DAY_RE.test(nudge || '') ? nudge : '', note: (old && old.note) || '', by: cfg().me || 'someone', by_session: '' };
+      if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= WAITING_KIT)) n.settings.min_kit = WAITING_KIT;   // tells v43+ tools (doctor, relay) a card relies on it
+      const c = t.claim; if (c && (c.status === 'running' || c.status === 'blocked' || c.status === 'stuck')) { if (c.status === 'stuck') c.before_wait = 'stuck'; c.status = 'blocked'; c.blocked_by_wait = true; c.note = 'waiting on ' + on; }   // a person's wait blocks the claim, as `wait` does
+    }, `Waiting: ${titleOf(id)}`);
+  }
+  async function clearWait(id) {
+    let full = '';
+    const ok = await edit(id, (t, n) => {
+      full = ''; t.waiting = null; const c = t.claim;   // a retry runs this again on the newer board
+      if (c && c.status === 'blocked' && c.blocked_by_wait) {
+        if (claimState({ ...c, status: 'running' }) === 'stale') {   // its session is gone: release the claim, back to To do (at the end)
+          delete c.blocked_by_wait; t.claim = null;
+          if (t.column !== 'todo' && n.columns.some(x => x.id === 'todo')) {
+            const last = n.tasks.filter(x => x !== t && x.column === 'todo' && validRank(x.rank)).map(x => x.rank).sort().pop() || null;
+            t.column = 'todo'; if (isSplit(n)) t.rank = keyBetween(last, null);
+          }
+        }
+        else if (c.before_wait === 'stuck') { delete c.blocked_by_wait; delete c.before_wait; c.status = 'stuck'; }   // it still needs help: the wait did not fix that
+        else if (c.attended || !agentLimitFull(id)) { delete c.blocked_by_wait; c.status = 'running'; c.heartbeat_at = nowIso(); }
+        else full = agentLimitFull(id);   // keeps blocked_by_wait: still live, as `unwait` does
+      }
+    }, `Wait cleared: ${titleOf(id)}`);
+    if (ok && full) toast(`The wait is cleared, but the claim stays blocked: ${full}`, true);
+  }
   function openPeopleMenu(anchor) {
     const t = taskNow(); if (!t) return; const items = [], me = cfg().me;
     const free = state.people.filter(p => !t.assignees.includes(p.github));
@@ -2445,9 +2540,9 @@ if (typeof window !== 'undefined') (() => {
     else if (!free.length) items.push({ label: 'Everyone on the board is assigned', icon: 'users', disabled: true });
     items.push({ separator: true });
     if (myAgents().includes('claude')) {
-      const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === me, full = !claim && agentLimitFull(t.id);
-      items.push({ label: mine ? `Claude for @${me} · assigned` : claim ? `${agentLabel(claim)} already has this task` : full ? 'Claude · the board’s agent limit is full' : claudeReady() && me ? `Assign to Claude for @${me}` : 'Claude · finish setup first', icon: 'bot',
-        disabled: !!claim || !claudeReady() || !me || !!full, onSelect: () => assignMyClaude(t.id) });
+      const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === me, full = !claim && agentLimitFull(t.id), waits = !claim && waitingOf(t);
+      items.push({ label: mine ? `Claude for @${me} · assigned` : claim ? `${agentLabel(claim)} already has this task` : full ? 'Claude · the board’s agent limit is full' : waits ? 'Claude · the task is waiting (clear it first)' : claudeReady() && me ? `Assign to Claude for @${me}` : 'Claude · finish setup first', icon: 'bot',
+        disabled: !!claim || !claudeReady() || !me || !!full || !!waits, onSelect: () => assignMyClaude(t.id) });
     } else items.push({ label: 'Set up your Claude agent…', icon: 'settings', onSelect: () => { $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); } });
     ui.menu(anchor, items, { label: `Assign task #${t.num}` });
   }
@@ -2567,7 +2662,7 @@ if (typeof window !== 'undefined') (() => {
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
+    renderWaiting(t, force); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
@@ -3601,14 +3696,14 @@ if (typeof window !== 'undefined') (() => {
   $('clientPop').addEventListener('click', e => e.stopPropagation()); POPS.add($('clientPop'));
   document.addEventListener('click', () => closePops()); document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (popOpen) { closePops(true); return; } if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
-  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
+  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fWaiting').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
   { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(() => { renderTopbar(); layoutCinemaCards(); }, 60); };
     window.addEventListener('resize', refit);
     const wrap = document.querySelector('.clientwrap');
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
-  ['fClient', 'fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fHideDone'].forEach(i => $(i).addEventListener('change', render));
+  ['fClient', 'fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', render));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again

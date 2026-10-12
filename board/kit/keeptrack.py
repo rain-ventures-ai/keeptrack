@@ -6,7 +6,7 @@ Works against GitHub using your existing `gh` login (no token handling here), or
 local file with --file for testing. Every write re-reads the latest file and retries on a
 SHA conflict, so a human editing the board in the browser never gets overwritten.
 
-  keeptrack.py list [-q "text"] [--column todo] [--assignee osouthgate] [--unclaimed] [--attention]
+  keeptrack.py list [-q "text"] [--column todo] [--assignee osouthgate] [--unclaimed] [--attention] [--waiting] [--waiting-on me]
   keeptrack.py show ID
   keeptrack.py next --for osouthgate --agent claude --session ABC     # claim the first claimable todo task
   keeptrack.py claim ID --for osouthgate --agent claude --session ABC [--note ...] [--force]
@@ -25,6 +25,8 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py link ID URL [--title ...]            # attach a link, e.g. the pull request
   keeptrack.py unlink ID URL                        # remove a link (by URL or title)
   keeptrack.py task-set ID [--title ..] [--details ..] [--priority ..] [--due ..] [--label x] [--unlabel y] [--client ..] [--project ..]
+  keeptrack.py wait ID --on "Acme finance" [--who p_id|login] [--nudge +3|YYYY-MM-DD] [--note ..]   # park a card: not claimable until unwait
+  keeptrack.py unwait ID --note "why"   # end the wait (agents: only a wait they set in this session that names nobody else)
 
 Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
@@ -197,6 +199,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
+KIT_VERSION = 43  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack/main/board/kit")
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 
@@ -1076,7 +1079,8 @@ def rewrite_archives(data, edit):
 
 # ---- three-way merge (the same rules as merge3 in board/board.js; see docs/conflicts.md) ----------------------------------
 _MISSING = object()
-_VOLATILE = {"updated": "mine", "updatedBy": "mine", "heartbeat_at": "mine", "next_num": "max"}   # bookkeeping, never a clash
+_VOLATILE = {"updated": "mine", "updatedBy": "mine", "heartbeat_at": "mine", "next_num": "max",
+             "min_kit": "max"}   # bookkeeping, never a clash (settings.min_kit only ever rises: two kits writing it at once keep the higher)
 
 
 def _canon(v):
@@ -1502,20 +1506,213 @@ def claim_owner_check(data, t, a, action):
     own = c.get("session_id")
     if own and not is_placeholder_claim(c) and own in {session_for(a), recorded_session()}:
         return   # a claim with no session id is nobody's: only --force finishes it
-    if action == "release" and state in ("stale", "stuck", "blocked"):
-        return   # a stale placeholder (the routine never started) is a dead run too
+    if action == "release" and state in ("stale", "stuck", "blocked") \
+            and not (state == "blocked" and c.get("blocked_by_wait") and agent_run()):
+        return   # a stale placeholder (the routine never started) is a dead run too. A claim `wait` blocked (v43) is live for
+        # release: only its own session, a person (no BOARD_AGENT) or --force; else blocking it would hand any session the card
     sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')}, another session ({state}); it is not this session's "
              "(use --force only if a person told you to; never pass --session with an id you did not generate)")
 
 
-def line(data, t):
+# ---- waiting-for (kit v43): a card parked on a person or an event, with who, since when and when to chase ---------------
+# `waiting` belongs to the card, not to a claim: it outlives any session. A waiting card is not claimable (`--force` does
+# not change that); only `unwait` ends a wait, or closing the card (`done`, `move ID done`), which history keeps.
+WAITING_KIT = 43           # the kit that understands `waiting`: the first `wait` raises settings.min_kit to at least this
+WAITING_DAYS = 7           # settings.waiting_days default: a wait with no nudge date is due for a chase this many days after it began
+AGENT_CLEARED_DAYS = 30    # doctor warns on agent_cleared entries this young; older ones stay on the card as a record
+AGENT_CLEARED_KEEP = 20    # agent_cleared keeps the newest entries only (the bulk archive keeps 20 history lines, too)
+
+
+def agent_run():
+    """This run says it is an agent (BOARD_AGENT). Set by the caller, so the waiting rules also key on the session."""
+    return bool(os.environ.get("BOARD_AGENT", "").strip())
+
+
+def session_hash(sid):
+    """waiting.by_session and agent_cleared[].session: the first 12 hex characters of a sha256 of the session id, so the
+    raw id stays off the card once the claim ends. Not a secret and not a credential (a short id can be found by trying
+    every value): repo write access is the trust boundary."""
+    return hashlib.sha256(str(sid or "").encode()).hexdigest()[:12]
+
+
+def waiting_of(t):
+    """The card's wait, or None (absent, null or not an object)."""
+    w = (t or {}).get("waiting")
+    return w if isinstance(w, dict) and w else None
+
+
+def open_waiting(t):
+    """The wait of a card that is not done (a done card's leftover wait, written by an older tool, is ignored)."""
+    return waiting_of(t) if t.get("column") != "done" else None
+
+
+def waiting_days(data):
+    """settings.waiting_days as a whole number 0-365 (0 turns the automatic chase off), else the default 7."""
+    v = (data.get("settings") or {}).get("waiting_days")
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 365 else WAITING_DAYS
+
+
+def chase_date(data, w):
+    """The day to chase a wait: its nudge date, else `since` plus settings.waiting_days; '' when there is none (the board
+    set waiting_days to 0, or the wait has no valid since)."""
+    nudge = str(w.get("nudge") or "")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", nudge):
+        return nudge
+    days = waiting_days(data)
+    try:
+        since = dt.date.fromisoformat(str(w.get("since") or ""))
+    except ValueError:
+        return ""
+    return (since + dt.timedelta(days=days)).isoformat() if days else ""
+
+
+def chase_now(data, t, today):
+    """The card waits and its chase date is today or earlier (today: the board clock's ISO date)."""
+    w = open_waiting(t)
+    d = chase_date(data, w) if w else ""
+    return bool(d) and d <= today
+
+
+def other_party(w, agent="", data=None):
+    """waiting.who names someone other than the agent itself: a board member, a CRM contact or another agent. A CRM
+    person or a board member is always another party, whatever `agent` says (with data)."""
+    who = str(w.get("who") or "").strip().lower()
+    if not who:
+        return False
+    if data is not None and (who.startswith("p_") or any(isinstance(m, dict) and str(m.get("github") or "").lower() == who
+                                                          for m in data.get("people") or [])):
+        return True
+    return who != str(agent or "").strip().lower()
+
+
+def claim_agent(t):
+    """"The agent itself" for the waiting rules: the agent named on the card's live claim, else (no claim, or a page
+    placeholder) BOARD_AGENT. A person is never the agent itself whatever this says: other_party checks the board first."""
+    c = t.get("claim") or {}
+    if c and c.get("status") != "done" and not is_placeholder_claim(c) and c.get("agent"):
+        return str(c["agent"])
+    return os.environ.get("BOARD_AGENT", "").strip()
+
+
+def holds_claim(t, a):
+    """This run's session holds the card's live claim (not a page placeholder)."""
+    c = t.get("claim") or {}
+    sid = c.get("session_id")
+    return bool(c) and c.get("status") != "done" and bool(sid) and not is_placeholder_claim(c) \
+        and sid in {session_for(a), recorded_session()}
+
+
+def note_agent_cleared(t, what, sid):
+    """Evidence on the card (not only a history line, which the bulk archive trims) that an agent run, or the session
+    holding its claim, ended or overrode someone else's wait. doctor, list --attention and relay read it."""
+    lst = t.get("agent_cleared") if isinstance(t.get("agent_cleared"), list) else []
+    lst.append({"what": what, "by": who_am_i(t), "session": session_hash(sid), "at": now()})
+    t["agent_cleared"] = lst[-AGENT_CLEARED_KEEP:]
+
+
+def waiting_text(w, limit=80):
+    return clean(w.get("on") or "?", limit)
+
+
+def check_who(data, who):
+    """--who: a CRM person id (p_...), a board member's GitHub login or an agent name; '' for nobody in particular."""
+    who = (who or "").strip().lstrip("@")
+    if not who:
+        return ""
+    if who.startswith("p_"):
+        if not any(p.get("id") == who for p in data.get("contacts", [])):
+            sys.exit(f"no CRM person {who} (people lists them)")
+        return who
+    for m in data.get("people") or []:
+        if isinstance(m, dict) and str(m.get("github") or "").lower() == who.lower():
+            return m["github"]
+    for x in data.get("agents") or []:
+        if str(x).lower() == who.lower():
+            return x
+    sys.exit(f"unknown --who '{who}': give a CRM person id (p_...), a board member's GitHub login or an agent name")
+
+
+def close_waiting(t, a, how, data=None):
+    """done and move-to-done end a wait; history keeps what it was. An agent run (or the session holding the claim, whatever
+    BOARD_AGENT says) that closes a card waiting on another party is recorded in agent_cleared, as an unwait it may not do
+    would be. Call it before the claim is cleared."""
+    w = waiting_of(t)
+    if not w:
+        return
+    sid = session_for(a)
+    if (agent_run() or holds_claim(t, a)) and other_party(w, claim_agent(t), data):
+        note_agent_cleared(t, f"{how} while waiting", sid)
+    t["waiting"] = None
+    if isinstance(t.get("claim"), dict):
+        t["claim"].pop("blocked_by_wait", None); t["claim"].pop("before_wait", None)
+    hist(t, f"wait ended by {how} (was waiting on {waiting_text(w)}" + (f", {clean(w.get('who'), 60)}" if w.get("who") else "")
+         + f", since {clean(w.get('since') or '?', 20)})")
+
+
+def drop_leftover_wait(t, how, data=None, a=None):
+    """A route to done that did not call close_waiting (a proposal, column-rm --move-to done, an older tool), or a card
+    reopened from done with such a wait: end the wait, with a history line, so it never comes back as a live one. A
+    blocked_by_wait claim stops being one (the card waits on nothing now)."""
+    w = waiting_of(t)
+    if w and (agent_run() or holds_claim(t, a)) and other_party(w, claim_agent(t), data):
+        # column-rm, a proposal, or a reopen of a dormant wait put there by any route: recorded as close_waiting records
+        note_agent_cleared(t, f"{how} while waiting" if how != "reopening" else "reopened a card that was waiting", session_for(a))
+    if w:
+        t["waiting"] = None
+        hist(t, f"wait ended by {how} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)})")
+    if isinstance(t.get("claim"), dict):
+        t["claim"].pop("blocked_by_wait", None); t["claim"].pop("before_wait", None)
+
+
+def waiting_index(data):
+    """Built once per command: open waits by lower-case `who` ({who: [card ids]}) and an {id: task} map, so `people`
+    and `person` never scan the card list per person."""
+    by_who, cards = collections.defaultdict(list), {}
+    for t in data.get("tasks", []):
+        cards[t.get("id")] = t
+        w = open_waiting(t)
+        if w and w.get("who"):
+            by_who[str(w["who"]).lower()].append(t.get("id"))
+    return by_who, cards
+
+
+def person_waits(p, by_who, ml=None):
+    """Card ids waiting on CRM person p: by its id or its GitHub login. A member's own record is skipped (v33)."""
+    if ml is not None and own_member(p, ml):
+        return []
+    keys = {str(p.get("id") or "").lower(), str(p.get("github") or "").lower()} - {""}
+    return list(dict.fromkeys(i for k in keys for i in by_who.get(k, [])))
+
+
+def minutes_since(ts):
+    try:
+        return (dt.datetime.now(dt.timezone.utc) - parse(ts)).total_seconds() / 60
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _age(mins):
+    return "?" if mins is None else f"{int(mins)}m" if mins < 120 else f"{int(mins // 60)}h" if mins < 48 * 60 else f"{int(mins // 1440)}d"
+
+
+def line(data, t, wait_suffix="list", today=None):
     cs = claim_state(data, t.get("claim"))
     who = ",".join("@" + a for a in t.get("assignees", [])) or "-"
-    cl = f"  [{t['claim']['agent']}:{cs}]" if t.get("claim") else ""
+    c = t.get("claim") or {}
+    if c.get("blocked_by_wait") and cs == "blocked":   # never goes stale, so show how old its last heartbeat is
+        cl = f"  [{c.get('agent')}:blocked by wait, beat {_age(minutes_since(c.get('heartbeat_at') or c.get('claimed_at')))} ago]"
+    else:
+        cl = f"  [{c.get('agent')}:{cs}]" if c else ""
     td = t.get("todos") or []
     pr = f"  [{sum(1 for d in td if d.get('done'))}/{len(td)}]" if td else ""
     cm = f"  \U0001F4AC{len(t['comments'])}" if t.get("comments") else ""
-    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {t['title']}{pr}{cm}{cl}"
+    w, wt = open_waiting(t), ""
+    if w and wait_suffix == "today":
+        wt = f"  [waiting on {waiting_text(w)}]"
+    elif w:
+        chase = today and chase_now(data, t, today)
+        wt = f"  [waiting: {waiting_text(w)}{', chase now' if chase else ''}]"
+    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {t['title']}{pr}{cm}{wt}{cl}"
 
 
 def _default_scope(a, data=None):
@@ -1536,17 +1733,33 @@ def searchable(t):
     return out
 
 
+def recently_cleared(t, days=7):
+    """The card's newest agent_cleared entry is under `days` old (list --attention shows it for a week; doctor for AGENT_CLEARED_DAYS)."""
+    lst = t.get("agent_cleared") if isinstance(t.get("agent_cleared"), list) else []
+    ages = [minutes_since(x.get("at")) for x in lst if isinstance(x, dict)]
+    return any(m is not None and m < days * 1440 for m in ages)
+
+
 def cmd_list(a):
     _default_scope(a)
     data, _ = load()
     ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
     query = (getattr(a, "q", None) or "").casefold()
+    today = board_today(data).isoformat()
+    wait_on = (getattr(a, "waiting_on", None) or "").strip().lstrip("@").lower()
+    if wait_on == "me":
+        wait_on = default_user().lower()
+        if not wait_on:
+            sys.exit("--waiting-on me needs to know who you are: set BOARD_USER (or log in with gh)")
     for t in ordered:
         if query and query not in json.dumps(searchable(t), ensure_ascii=False).casefold(): continue   # never a substring oracle for a session id
         if a.column and t["column"] != a.column: continue
         if a.assignee and a.assignee.lower() not in [x.lower() for x in t.get("assignees", [])]: continue
         if a.unclaimed and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): continue
-        if a.attention and claim_state(data, t.get("claim")) not in ("stale", "stuck", "blocked"): continue
+        if a.attention and claim_state(data, t.get("claim")) not in ("stale", "stuck", "blocked") \
+                and not chase_now(data, t, today) and not recently_cleared(t): continue
+        if getattr(a, "waiting", False) and not open_waiting(t): continue
+        if wait_on and str((open_waiting(t) or {}).get("who") or "").lower() != wait_on: continue
         if getattr(a, "project", None):
             pref = a.project
             try:
@@ -1557,7 +1770,8 @@ def cmd_list(a):
                 continue
         if getattr(a, "client", None) and t.get("client") != a.client: continue
         if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
-        print(line(data, t))
+        cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
+        print(line(data, t, today=today) + cleared)
 
 
 def cmd_show(a):
@@ -1633,8 +1847,30 @@ def write_claim_record():
               "(or export BOARD_SESSION) to heartbeat, done or release the card", file=sys.stderr)
 
 
+def refuse_waiting(t):
+    """claim, next and the routines' first claim: a waiting card is not claimable, and --force does not change that."""
+    w = open_waiting(t)
+    if w:
+        sys.exit(f"refused: #{t.get('num', '?')} {t['id']} is waiting on {waiting_text(w)} since {clean(w.get('since') or '?', 20)}; "
+                 "a waiting card can't be claimed, with or without --force. Only `unwait` ends a wait (whoever set it in that "
+                 "session, or a person); comment on the card and stop")
+
+
+def _unwait_before_claim(t):
+    """The unwait record of the card's latest unwait when no claim came after it, else None."""
+    for h in reversed(t.get("history") or []):
+        if not isinstance(h, dict):
+            continue
+        if isinstance(h.get("unwait"), dict):
+            return h["unwait"]
+        if str(h.get("text", "")).startswith("claimed"):
+            return None
+    return None
+
+
 def do_claim(a, tid, data):
     t = find(data, tid)
+    refuse_waiting(t)
     user = a.for_user or default_user()
     agent = a.agent or os.environ.get("BOARD_AGENT") or "agent"
     sid = session_id(a)
@@ -1670,8 +1906,11 @@ def do_claim(a, tid, data):
     if attended(a):
         t["claim"]["attended"] = True
     if t["column"] != "in-progress":
-        move_task_to_column(data, t, "in-progress")
+        move_task_to_column(data, t, "in-progress", argparse.Namespace(session=sid))   # the new claim's own session id
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
+    uw = _unwait_before_claim(t)   # the session that cleared a wait on someone else now claims the card: flag it, whatever BOARD_AGENT said
+    if uw and uw.get("other") and uw.get("session") == session_hash(sid):
+        note_agent_cleared(t, "claim after unwait", sid)
     hist(t, "claimed" + (f": {a.note}" if a.note else ""), f"{agent}@{user}")
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
     # a save that loses a race re-runs this on the newer board and may refuse: write the local record after the save
@@ -1697,7 +1936,7 @@ def cmd_next(a):
             if only and t.get("project") != only:
                 continue
             if t["column"] in ("todo",) and user.lower() in [x.lower() for x in t.get("assignees", [])] \
-                    and claim_state(data, t.get("claim")) in (None, "done", "stale"):
+                    and claim_state(data, t.get("claim")) in (None, "done", "stale") and not open_waiting(t):   # a waiting card is skipped
                 return do_claim(a, t["id"], data)
         sys.exit(f"nothing claimable in 'todo' for @{user}")
     _PENDING_CLAIM.clear()
@@ -1715,6 +1954,9 @@ def cmd_heartbeat(a):
     def fn(data):
         t = find(data, a.id); c = must_claim(t)
         claim_owner_check(data, t, a, "heartbeat")
+        if a.status == "running" and waiting_of(t):
+            sys.exit(f"refused: {t['id']} is waiting on {waiting_text(waiting_of(t))}; its claim can't run until the wait ends "
+                     "(unwait: whoever set it in that session, or a person)")
         if claim_state(data, c) != "running" and (a.status or c.get("status")) == "running" and not c.get("attended"):
             busy = busy_over_limit(data, t)   # reviving a stale, stuck or blocked claim counts like a new claim
             if busy:
@@ -1724,6 +1966,8 @@ def cmd_heartbeat(a):
         elif a.note is not None and a.note != c.get("note"): hist(t, f"progress: {a.note}")
         if a.note is not None: c["note"] = a.note
         if a.status: c["status"] = a.status
+        if a.status in ("running", "stuck"):
+            c.pop("blocked_by_wait", None); c.pop("before_wait", None)   # blocked keeps it (agents report "I need a person" that way); running and stuck end it
         t["updated"] = now(); print(f"heartbeat {t['id']} ({c['status']})")
     mutate(fn, f"Agent heartbeat: {a.id}")
 
@@ -1750,13 +1994,15 @@ def drop_claim_file(task_id=None):
         pass
 
 
-def move_task_to_column(data, task, column):
+def move_task_to_column(data, task, column, a=None):
     """Move a task and, on split boards, put it at the end without reusing a rank."""
     old = task.get("column")
     if old == column:
         return old
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
+    if "done" in (old, column):
+        drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data, a)
     if data.get("layout") == "split":
         ranks = [x.get("rank") for x in data.get("tasks", [])
                  if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
@@ -1767,8 +2013,15 @@ def move_task_to_column(data, task, column):
 
 def cmd_release(a):
     def fn(data):
-        t = find(data, a.id); claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else "")); t["claim"] = None; drop_claim_file(t["id"])
-        if a.column: move_task_to_column(data, t, a.column)
+        t = find(data, a.id)
+        if a.column == "done" and open_waiting(t):
+            sys.exit(f"refused: {t['id']} is waiting on {waiting_text(open_waiting(t))}; release --column done does not end a wait. "
+                     "Use done or move ID done (a person, or the session that set a wait on nobody else), or unwait first")
+        claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else ""))
+        if a.column and a.column != "done" and t.get("column") == "done" and waiting_of(t):
+            drop_leftover_wait(t, "reopening", data, a)   # while the claim is still there: its session is recorded too
+        t["claim"] = None; drop_claim_file(t["id"])
+        if a.column: move_task_to_column(data, t, a.column, a)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
 
@@ -1788,6 +2041,7 @@ def cmd_done(a):
             sys.exit(f"refused: {t['id']} has {len(open_todos)} open to-dos ({first}); tick them with todo-done, "
                      "remove them, or close the card with --cancel --note \"why\"")
         outcome = "cancelled" if cancel else "completed"
+        close_waiting(t, a, "cancel" if cancel else "done", data)
         c = t.get("claim")
         if c:  # the claim banner goes away; the card keeps a one-line record of the run, with its link
             t["last_run"] = {"agent": c.get("agent", ""), "on_behalf_of": c.get("on_behalf_of", ""), "session_id": c.get("session_id", ""),
@@ -1802,6 +2056,104 @@ def cmd_done(a):
         move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(t["id"])
         print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
+
+
+def cmd_wait(a):
+    """Park a card on a person or an event (kit v43). It stays in its column; `due` is untouched. A running claim is
+    blocked in the same save when this is its own session or a person; an agent from another session leaves it alone."""
+    on = " ".join(str(a.on or "").split())
+    if not on:
+        sys.exit("wait needs --on with what or whom the card waits for")
+    if len(on) > 200:
+        sys.exit("--on is at most 200 characters; put the detail in --note or a comment")
+    note = " ".join(str(a.note or "").split())
+
+    def fn(data):
+        t = find(data, a.id)
+        if t.get("column") == "done":
+            sys.exit(f"refused: {t['id']} is done; a done card waits on nothing")
+        who = check_who(data, a.who)
+        nudge = check_date(a.nudge, data) or "" if a.nudge else ""
+        sid = session_for(a); mine = session_hash(sid)
+        old = waiting_of(t)
+        if old and agent_run() and old.get("by_session") != mine:
+            sys.exit(f"refused: {t['id']} already waits on {waiting_text(old)} (set by {clean(old.get('by') or '?', 60)}); an agent "
+                     "changes only a wait it set in this session. Comment with @the assignee and stop")
+        if old and agent_run() and other_party(old, claim_agent(t), data) and who.lower() != str(old.get("who") or "").lower():
+            sys.exit(f"refused: {t['id']} waits on {clean(old.get('who'), 60)}, another party; an agent can't change who a wait "
+                     "is on (only a person can). Comment with @the assignee and stop")
+        _MUT["rerun"] = True   # the claim rules read this card's claim: a lost race re-runs on the newer board, never a merge
+        w = {"on": on, "who": who, "since": (old or {}).get("since") or board_today(data).isoformat(), "nudge": nudge,
+             "note": note, "by": who_am_i(None), "by_session": mine}
+        t["waiting"] = w
+        st = data.setdefault("settings", {})
+        if not (isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) and st["min_kit"] >= WAITING_KIT):
+            st["min_kit"] = WAITING_KIT   # older kits don't refuse a waiting card: doctor and relay check this from v43
+        c = t.get("claim")
+        hist(t, f"waiting on {on}" + (f" ({who})" if who else "") + (f", chase {nudge}" if nudge else "") + (f": {note}" if note else ""))
+        if c and c.get("status") in ("running", "blocked", "stuck"):   # stuck too: else doctor's CLAIM_BLOCKED fires at once
+            own = bool(c.get("session_id")) and not is_placeholder_claim(c) and c["session_id"] in {sid, recorded_session()}
+            if own or not agent_run():
+                if c.get("status") != "blocked":
+                    hist(t, f"claim blocked: waiting on {on}")
+                if c.get("status") == "stuck":
+                    c["before_wait"] = "stuck"   # unwait puts it back: the agent still needs help
+                c["status"] = "blocked"; c["blocked_by_wait"] = True; c["note"] = note or f"waiting on {on}"   # heartbeat_at untouched
+            elif claim_state(data, c) in ("running", "blocked"):
+                note_agent_cleared(t, "wait on a live claim", sid)   # (d): left alone, but recorded for review
+        t["updated"] = now()
+        print(f"#{t.get('num', '?')} waiting on {on}" + (f" ({who})" if who else "") + f"; chase {chase_date(data, w) or 'off'}")
+    mutate(fn, f"Waiting: {a.id}")
+
+
+def cmd_unwait(a):
+    """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
+    person's to clear. A claim `wait` blocked runs again (a young one) or goes back to To do (one older than the stale limit)."""
+    note = " ".join(str(a.note or "").split())
+    if not note:
+        sys.exit("unwait needs --note with why the wait is over")
+
+    def fn(data):
+        t = find(data, a.id); w = waiting_of(t)
+        if not w:
+            sys.exit(f"{t['id']} is not waiting")
+        sid = session_for(a); mine = session_hash(sid)
+        agent = os.environ.get("BOARD_AGENT", "").strip()
+        if agent and w.get("by_session") != mine:
+            sys.exit(f"refused: an agent ends only a wait it set in this session; this one was set by {clean(w.get('by') or '?', 60)}. "
+                     "Comment with @the assignee and stop (--force does not change this)")
+        if agent and other_party(w, claim_agent(t), data):
+            sys.exit(f"refused: {t['id']} waits on {clean(w.get('who'), 60)}, another party; only a person ends that wait (the web "
+                     "page, or a shell without BOARD_AGENT). Comment with @the assignee and stop")
+        _MUT["rerun"] = True   # reads this card's claim
+        c = t.get("claim")
+        other = other_party(w, claim_agent(t), data)
+        if not agent and other and holds_claim(t, a):
+            note_agent_cleared(t, "unwait", sid)   # (a): the session holding the claim cleared a wait on someone else
+        t["waiting"] = None
+        hist(t, f"unwait: {note} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)}; "
+                f"session {redact_session(sid)})")
+        t["history"][-1]["unwait"] = {"session": mine, "other": other}   # a claim by this same session next is flagged too
+        msg = f"#{t.get('num', '?')} no longer waiting"
+        if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
+            age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
+            if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
+                hist(t, f"released to todo: the claim's session sent no heartbeat for {_age(age)}")
+                t["claim"] = None; move_task_to_column(data, t, "todo"); drop_claim_file(t["id"])
+                msg += "; its old claim is released and the card is back in To do"
+            elif c.get("before_wait") == "stuck":
+                c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
+                msg += "; its claim is stuck again (it was stuck before the wait)"
+            else:
+                busy = [] if c.get("attended") else busy_over_limit(data, t)   # reviving counts like a new claim
+                if busy:
+                    msg += f"; its claim stays blocked: {limit_message(data, busy)}"   # keeps blocked_by_wait: no stale, no release
+                else:
+                    c.pop("blocked_by_wait", None); c["status"] = "running"; c["heartbeat_at"] = now(); hist(t, "claim running again")
+                    msg += "; its claim is running again"
+        t["updated"] = now()
+        print(msg)
+    mutate(fn, f"Unwait: {a.id}")
 
 
 def cmd_move(a):
@@ -1842,9 +2194,11 @@ def cmd_move(a):
             _MUT["rerun"] = True   # a lost race re-runs this: a claim absent or stale here may be live on the newer board
             if claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
                 claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
+            close_waiting(t, a, "move to done", data)
         old = t["column"]; t["column"] = column
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
+            drop_leftover_wait(t, "reopening", data, a)
         n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
         if column == "done" and old != "done" and n_open:
             print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)
@@ -2061,6 +2415,8 @@ def need_repo_clone():
 
 
 def kit_local():
+    if not ROOT:
+        return 0   # a plugin copy outside a board repo has no clone (os.path.join(None, ...) raises TypeError)
     try:
         return int(open(os.path.join(ROOT, "board", "KIT_VERSION")).read().strip() or 0)
     except (OSError, ValueError):
@@ -2080,6 +2436,15 @@ def cmd_kit_check(a):
     except (KitError, ValueError) as e:
         print(f"could not check the board kit ({e}); carry on"); return
     have, want = kit_local(), m["version"]
+    try:
+        mk = (load()[0].get("settings") or {}).get("min_kit")
+    except (SystemExit, Exception):   # no board here, or one this kit can't read: the version check still runs
+        mk = None
+    if isinstance(mk, int) and not isinstance(mk, bool) and mk > have:
+        if mk > want:
+            print(f"settings.min_kit is {mk}, above the published kit v{want}: probably a typo (doctor reports it)")
+        else:
+            print(f"this board needs kit v{mk} (settings.min_kit), but this repo has v{have}: upgrade before an older tool saves it")
     if have >= want:
         print(f"board kit is current (v{have})"); return
     print(f"board kit is out of date: this repo has v{have}, the published kit is v{want}. "
@@ -2313,6 +2678,33 @@ def doctor_board(fix=False):
     if mac is not None and not claim_limit(data):
         problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
                 "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
+    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. Detects, never prevents.
+    raw_min = (data.get("settings") or {}).get("min_kit")
+    min_kit = raw_min if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 0
+    if raw_min is not None and not min_kit:
+        problem("SETTINGS", "tasks.json", f"settings.min_kit {raw_min!r} must be a whole number (a kit version).")
+    if min_kit > KIT_VERSION:
+        problem("KIT_OLD", "tasks.json", f"This keeptrack.py is kit v{KIT_VERSION}, but the board needs kit v{min_kit} (settings.min_kit): "
+                "it may not know a rule a card relies on. Update the board tools (kit-update) before writing.")
+    local_kit = kit_local() if ROOT else 0   # a plugin copy has no clone: only the constant above is checked
+    if local_kit and min_kit > local_kit and local_kit != KIT_VERSION:
+        problem("KIT_OLD", "board/KIT_VERSION", f"This repo's board kit is v{local_kit}, but the board needs kit v{min_kit} (settings.min_kit).")
+    needed = WAITING_KIT if any(waiting_of(t) for t in tasks) else 0
+    if needed > min_kit:
+        problem("MIN_KIT_LOWERED", "tasks.json", f"Cards carry `waiting`, which needs kit v{needed}, but settings.min_kit is "
+                f"{raw_min if raw_min is not None else 'not set'}; set it back: keeptrack.py settings-set --min-kit {needed}.")
+    for t in tasks:
+        path = f"card {t.get('id', '?')}"
+        w, claim = open_waiting(t), t.get("claim") or {}
+        if w and (not str(w.get("on") or "").strip() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(w.get("since") or ""))):
+            problem("WAITING", path, "The wait needs `on` and a `since` date (YYYY-MM-DD).")
+        if w and claim and claim.get("status") != "done" and not (claim.get("status") == "blocked" and claim.get("blocked_by_wait")):
+            problem("CLAIM_BLOCKED", path, f"{claim.get('agent', '?')} holds a {claim.get('status', '?')} claim on a card that is waiting "
+                    f"on {waiting_text(w)} (an older tool may have claimed it); release it, or unwait the card if the wait is over.")
+        recent = [x for x in t.get("agent_cleared") or [] if isinstance(x, dict) and (minutes_since(x.get("at")) or 0) < AGENT_CLEARED_DAYS * 1440]   # a bad `at` shows: fail toward showing
+        for x in recent[-3:]:   # done cards too: "done while waiting" is the case to check
+            problem("AGENT_CLEARED", path, f"An agent run ({clean(x.get('by') or '?', 60)}, session {clean(x.get('session') or '?', 20)}) "
+                    f"did '{clean(x.get('what') or '?', 40)}' at {clean(x.get('at') or '?', 30)}: check it was allowed.")
     board_modes = (data.get("settings") or {}).get("modes") or ["tasks", "crm"]
     for m in [x for x in (data.get("people") or []) if isinstance(x, dict)]:
         gh_user = m.get("github")
@@ -2819,7 +3211,7 @@ def _here(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "add", "task-set", "move", "assign", "link", "unlink", "task-rm"],
+    "tasks": ["list", "show", "add", "task-set", "move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
     "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
@@ -2853,7 +3245,7 @@ def cmd_help(a):
 
 _SUBPARSERS = None
 COMMAND_HELP = {   # one line each, for commands whose parser has none
-    "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention)",
+    "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention, --waiting, --waiting-on WHO)",
     "show": "one card in full: details, links, checklist, claim, latest comments",
     "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo)",
     "move": "move a card to a column, or reorder it (--before, --after, --top); --priority",
@@ -2897,7 +3289,8 @@ def cmd_where(a):
 # "channel". A draft is never a contact: it counts only when it is marked sent (`sent`). Agents never send messages.
 CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
-DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS"})
+DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS",
+                             "KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "AGENT_CLEARED", "WAITING"})   # v43: detect, never stop the board
 
 
 def person_for_github(data, github):
@@ -3188,9 +3581,10 @@ def cmd_people(a):
         st = check_stage(data, a.stage); people = [p for p in people if p.get("stage") == st]
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
-    ml = member_logins(data); t = board_today(data)
+    ml = member_logins(data); t = board_today(data); by_who, _ = waiting_index(data)
     for p in sorted(people, key=lambda p: p.get("name", "").lower()):
-        print(person_line(p, ml=ml, today=t))
+        n = len(person_waits(p, by_who, ml))
+        print(person_line(p, ml=ml, today=t) + (f"  [waiting on them: {n}]" if n else ""))
     if not people: print("(nobody)")
 
 
@@ -3211,10 +3605,26 @@ def cmd_today(a):
             for p in sorted(ps, key=lambda p: (p.get("next_due") or "", p.get("name", ""))):
                 print("  " + person_line(p, today=t))
     tasks = [x for x in data.get("tasks", []) if x.get("due") and x["due"] <= ti and x.get("column") != "done"]
+    due_ids = {x.get("id") for x in tasks}   # a card both due and waiting stays in TASKS DUE: a deadline is still a deadline
+    waiting = [x for x in data.get("tasks", []) if open_waiting(x) and x.get("id") not in due_ids]
+    chase = [x for x in waiting if chase_now(data, x, ti)]
+    if chase:
+        print(f"CHASE NOW ({len(chase)})")
+        for x in sorted(chase, key=lambda x: (str(open_waiting(x).get("since") or ""), x.get("num") or 0)):
+            w = open_waiting(x)
+            try:
+                since = dt.date.fromisoformat(str(w.get("since")))
+                when = f"since {since.day} {since.strftime('%b')} ({(t - since).days} days)"
+            except ValueError:
+                when = "since ?"
+            print(f"  #{x.get('num', '?')} {clean(x.get('title', ''), 120)}  waiting on {waiting_text(w)}, {when}")
     if tasks:
         print(f"TASKS DUE ({len(tasks)})")
-        for x in tasks: print("  " + line(data, x))
-    if not any(ps for _, ps in groups) and not tasks: print("nothing to follow up")
+        for x in tasks: print("  " + line(data, x, wait_suffix="today"))
+    rest = len(waiting) - len(chase)
+    if rest:
+        print(f"waiting, not due for a chase yet: {rest} card{'s' if rest != 1 else ''} (list --waiting)")
+    if not any(ps for _, ps in groups) and not tasks and not chase and not rest: print("nothing to follow up")
 
 
 def cmd_person(a):
@@ -3236,6 +3646,11 @@ def cmd_person(a):
         if c.get("source_message_ids"): print("    source messages: " + ", ".join(c["source_message_ids"]))
     tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
     for x in tasks: print("  task: " + line(data, x))
+    by_who, cards = waiting_index(data)
+    waits = person_waits(p, by_who, member_logins(data))
+    if waits:
+        print(f"  Waiting on them ({len(waits)}):")
+        for i in waits: print("    " + line(data, cards[i]))
 
 
 def cmd_person_add(a):
@@ -4158,6 +4573,8 @@ def cmd_settings(a):
     print(f"stages: {', '.join(stages(data))}")
     print(f"modes: {', '.join(st.get('modes', [])) or '-'}")
     print(f"review_inbox.enabled: {str(bool((st.get('review_inbox') or {}).get('enabled', False))).lower()}")
+    print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
+    print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
     print(f"agents: {', '.join(data.get('agents', [])) or '-'}")
@@ -4183,6 +4600,15 @@ def cmd_settings_set(a):
             if not 5 <= a.stale_minutes <= 24 * 60:
                 sys.exit("stale minutes must be between 5 and 1440")
             st["stale_after_minutes"] = a.stale_minutes; print(f"stale_after_minutes: {a.stale_minutes}")
+        if getattr(a, "waiting_days", None) is not None:
+            if not 0 <= a.waiting_days <= 365:
+                sys.exit("waiting days must be between 0 (no automatic chase) and 365")
+            st["waiting_days"] = a.waiting_days; print(f"waiting_days: {a.waiting_days or 'off (no automatic chase)'}")
+        if getattr(a, "min_kit", None) is not None:
+            cur = st.get("min_kit") if isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) else 0
+            if not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
+                sys.exit(f"min kit must be between the stored value ({cur or 'none'}) and this kit's version ({KIT_VERSION})")
+            st["min_kit"] = a.min_kit; print(f"min_kit: {a.min_kit}")
         if getattr(a, "max_agent_claims", None) is not None:
             if not 0 <= a.max_agent_claims <= 100:
                 sys.exit("max agent claims must be between 0 (no limit) and 100")
@@ -5018,6 +5444,7 @@ def _apply_touch(person, proposal, change):
 
 
 def _apply_update(data, record, proposal, change):
+    was_done = record.get("column") == "done"
     for key, value in change.items():
         if key in ("comments", "todos", "links") and isinstance(value, list):
             _append_unique(record, key, value)
@@ -5027,6 +5454,10 @@ def _apply_update(data, record, proposal, change):
                 record["assignees"] = [value]
             continue
         record["next_due" if key == "due" and record.get("id", "").startswith("p_") else key] = copy.deepcopy(value)
+    if record.get("id", "").startswith("t_") and record.get("column") == "done" and not was_done:
+        drop_leftover_wait(record, "proposal to done", data)
+    elif record.get("id", "").startswith("t_") and was_done and record.get("column") != "done":
+        drop_leftover_wait(record, "reopening", data)
     record["updated"] = now(); record["updatedBy"] = who_am_i()
     hist(record, f"accepted proposal {proposal['id']}")
 
@@ -5112,6 +5543,7 @@ def cmd_proposal_merge(a):
         target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
         record = _target_record(data, target); before = copy.deepcopy(record)
         selected = set(x.strip() for x in (a.fields or "").split(",") if x.strip())
+        was_done = record.get("column") == "done"
         for key, value in proposal["change"].items():
             if key in ("comments", "todos", "links") and isinstance(value, list): _append_unique(record, key, value)
             elif key == "owner" and key in selected and record.get("id", "").startswith("t_"):
@@ -5120,6 +5552,8 @@ def cmd_proposal_merge(a):
             elif key == "due" and key in selected and record.get("id", "").startswith("p_"):
                 record["next_due"] = copy.deepcopy(value)
             elif key in selected: record[key] = copy.deepcopy(value)
+        if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
+            drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update
         record["updated"] = now(); record["updatedBy"] = who_am_i(); hist(record, f"merged from proposal {proposal['id']}")
         _decide(proposal, "merge", record, {k: proposal["change"][k] for k in selected if k in proposal["change"]},
                 {"before": before, "after": copy.deepcopy(record), "created": False})
@@ -5373,6 +5807,8 @@ def _cmd_archive(a):
             task = find(data, ref)
             if task.get("claim") and task["claim"].get("status") != "done":
                 sys.exit("an agent is working on this task; finish or release its claim before archiving")
+            if open_waiting(task):
+                sys.exit(f"this task is waiting on {waiting_text(open_waiting(task))}; unwait it first, so a wait is never hidden in the archive")
             task = copy.deepcopy(task)
             older = []
             for y in reversed(archive_years(data)):
@@ -5593,7 +6029,10 @@ def main():
                         help="a person drives this session: no automatic heartbeats, stale only after 12 hours (or BOARD_ATTENDED=1)")
 
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
-    s.add_argument("--unclaimed", action="store_true"); s.add_argument("--attention", action="store_true")
+    s.add_argument("--unclaimed", action="store_true")
+    s.add_argument("--attention", action="store_true", help="stale, stuck or blocked claims, waits due for a chase, waits an agent cleared this week")
+    s.add_argument("--waiting", action="store_true", help="only cards waiting on someone or something")
+    s.add_argument("--waiting-on", dest="waiting_on", metavar="WHO", help="only cards waiting on WHO: me, a GitHub login or a p_ person id")
     s.add_argument("--project", help="project id or name prefix"); s.add_argument("--client", help="client name")
     s.add_argument("--label", help="label name, exactly as on the card (the web board's label filter)")
     s.add_argument("--all", action="store_true", help="ignore this repo's default project")
@@ -5611,6 +6050,13 @@ def main():
     s.add_argument("--cancel", action="store_true", help="close the card without finishing it (needs --note; open to-dos are dropped)")
     s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_done)
     s = sub.add_parser("auto-heartbeat"); s.set_defaults(f=cmd_auto_heartbeat)
+    s = sub.add_parser("wait", help="park a card on a person or an event: --on text [--who p_id|login] [--nudge +3|date] [--note ..]")
+    s.add_argument("id"); s.add_argument("--on", required=True, help="what or whom the card waits for (always shown)")
+    s.add_argument("--who", help="a CRM person id (p_...), a board member's GitHub login or an agent name")
+    s.add_argument("--nudge", help="the day to chase: YYYY-MM-DD, today or +N (default: settings.waiting_days after today)")
+    s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
+    s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session")
+    s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session"); s.set_defaults(f=cmd_unwait)
     s = sub.add_parser("todo-add"); s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_todo_add)
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
@@ -5741,6 +6187,10 @@ def main():
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
     s.add_argument("--rename-stage", dest="rename_stage", action="append", help="OLD=NEW (repeatable); moves people in OLD")
+    s.add_argument("--waiting-days", dest="waiting_days", type=int,
+                   help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
+    s.add_argument("--min-kit", dest="min_kit", type=int,
+                   help="the oldest board kit that may write this board; only between the stored value and this kit's version")
     s.set_defaults(f=cmd_settings_set)
     s = sub.add_parser("proposal-add", help="add one proposal, or a JSON list, to the Review Inbox")
     s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")

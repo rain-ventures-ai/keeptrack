@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Waiting-for: tasks can be marked as waiting on someone or something, with an optional member and
+  chase day, from a Waiting row in the task drawer. Cards show a "waiting on .., Nd" chip that turns amber once the
+  chase day has passed (and "waiting on you" on your own waits), a Waiting filter, and Needs attention includes waits
+  due for a chase. Assign to Claude and `@claude` are off while a task waits. The page keeps `waiting`,
+  `agent_cleared` and `settings.min_kit` on save, and merges `min_kit` as a maximum.
+
 - **2026-10-12** — Today expands Inbox evidence and proposed changes inline, with explicit Accept and Ignore
   actions and Undo. Successful decisions refill a stable board-scoped queue while retaining order, reading position,
   focus and other expanded reviews. Failed saves and changed evidence never advance or silently accept a proposal.
@@ -58,6 +64,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [43] — 2026-10-12
+
+- Waiting-for: `wait ID --on "text" [--who p_id|login] [--nudge +3|date] [--note ..]` parks a card on a person or an
+  event; `unwait ID --note ".."` ends it, and so do `done` and `move ID done` (history keeps it). A waiting card is not
+  claimable: `claim` refuses it and `next` skips it, and `--force` does not change that. `wait` blocks a running claim
+  of its own session or a person's (`blocked_by_wait`); such a claim is live for `release`, and `heartbeat --status
+  running` is refused while the card waits. `unwait` runs a young blocked claim again (within `max_agent_claims`) and
+  releases a stale one to To do. An agent run ends only a wait it set in the same session that names nobody else.
+  Overrides are recorded on the card in `agent_cleared` (newest 20).
+- `today` has a CHASE NOW group and a count of other waits; `list --waiting`, `--waiting-on me|login|p_id`, a
+  `[waiting: ..]` suffix, and `--attention` includes waits due for a chase. `people` shows `[waiting on them: n]` and
+  `person` a "Waiting on them" list. `settings.waiting_days` (default 7, 0 = off) sets the chase day when there is no
+  nudge. The single-task `archive` refuses a waiting card.
+- `settings.min_kit`: set to 43 by the first `wait`, merged as a maximum. `KIT_VERSION` constant in `keeptrack.py`;
+  `doctor` warns `KIT_OLD`, `MIN_KIT_LOWERED`, `CLAIM_BLOCKED` and `AGENT_CLEARED`; `settings-set --min-kit` accepts
+  only a value between the stored one and this kit's version.
+- Web board: a "waiting on .., Nd" chip (amber once the chase day has passed), a Waiting row in the task drawer, a
+  Waiting filter, and Assign to Claude / `@claude` are off on a waiting card. No schema migration.
 
 ### [42] — 2026-10-12
 

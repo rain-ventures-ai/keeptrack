@@ -15,6 +15,22 @@ Open a person and type in **☑ Tasks**. The task is linked to that person and t
 ## Agents and tasks
 AI agents can claim a task, report progress and finish it. While an agent works on a task, the card shows its status. See [AI assistants](ai-assistants.md).
 
+## Waiting on someone
+When a task is parked on a person or an event (a client's approval, a colleague's pricing, DNS), mark it as waiting
+instead of using a label or a due date. Open the task and use **Waiting** in its details: say what or whom it waits on
+and, if you like, the day to chase. The card stays in its column and keeps its due date. It shows a
+**waiting on …, Nd** chip, which turns amber once the chase day has passed. With no chase day, the task is due for a
+chase after 7 days (a board can change this with `settings-set --waiting-days N`; 0 turns it off). The **Waiting**
+filter shows only waiting tasks. **Clear** ends the wait, and marking the task done ends it too; the history keeps it.
+
+A waiting task can't be sent to Claude: **Assign to Claude** and `@claude` are off until the wait is cleared, and an
+agent's `claim` is refused. Agents that need a decision mark the card waiting, comment with `@you` and the question,
+assign it to you and stop. An agent never clears a wait it did not set, or one on someone else; you do.
+
+Agents and scripts use `wait ID --on "Acme finance" [--who p_id|login] [--nudge +3|YYYY-MM-DD] [--note ..]` and
+`unwait ID --note "why"`. `today` lists waits due for a chase under **CHASE NOW**, `list --waiting` (or
+`--waiting-on me`) lists waiting tasks, and `people` shows how many tasks wait on each person.
+
 ## Labels
 
 Type a label on a task to create it. To rename, recolour or delete labels, or add one with a colour, open **Settings → Board → Labels**. Renaming or deleting a label updates every task that uses it, and **Undo** reverts the whole change. The agent tool does the same with `label-set` and `label-rm`.

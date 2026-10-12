@@ -28,7 +28,7 @@
     </div>
     <select id="fClient" multiple hidden aria-hidden="true"></select>
     <div id="peopleQ" class="peopleq" role="group" aria-label="Filter by assignee"></div>
-    <button id="btnAttn" class="attnbtn" hidden title="Cards that are overdue or have a stale, stuck or blocked agent: click to show only these" aria-label="Needs attention"><span class="ic"><i data-i="triangle-alert"></i></span><span id="attnN"></span><span id="attnT" class="atx"></span><span id="attnS" class="atx short"> attention</span></button>
+    <button id="btnAttn" class="attnbtn" hidden title="Cards that are overdue, due for a chase, or have a stale, stuck or blocked agent: click to show only these" aria-label="Needs attention"><span class="ic"><i data-i="triangle-alert"></i></span><span id="attnN"></span><span id="attnT" class="atx"></span><span id="attnS" class="atx short"> attention</span></button>
     <button id="btnUnread" aria-label="Unread" title="Nothing new"><span class="ic"><i data-i="bell"></i></span><span id="unreadBadge" class="badge" hidden>0</span></button>
     <button id="btnInbox" type="button" aria-label="Review Inbox" title="Review Inbox" hidden><span class="ic"><i data-i="inbox"></i></span><span class="tx"> Inbox</span><span id="inboxBadge" class="badge" hidden>0</span></button>
     <button id="btnSearch" aria-label="Search" title="Search everything (press /)"><span class="ic"><i data-i="search"></i></span><span class="tx"> Search</span></button>
@@ -42,6 +42,7 @@
         <label>Project <select id="fProject"><option value="">All</option></select></label>
         <label>Priority <select id="fPrio"><option value="">All</option><option>high</option><option>medium</option><option>low</option></select></label>
         <label class="chk"><input type="checkbox" id="fAttn"> Needs attention <span id="attnCount" class="muted"></span></label>
+        <label class="chk"><input type="checkbox" id="fWaiting"> Waiting</label>
         <label class="chk"><input type="checkbox" id="fHideDone"> Hide done</label>
         <div class="popfoot"><button id="fClear" type="button">Clear filters</button></div>
       </div>

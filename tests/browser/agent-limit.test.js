@@ -123,6 +123,32 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       await page.close();
     }
 
+    // ---- 1b. kit v43: a waiting card is never sent to Claude, even with room under the limit; the Waiting filter finds it ----
+    {
+      const api = new Github(), cron = []; { const r = JSON.parse(api.files['tasks.json']); r.settings.max_agent_claims = 3; api.files['tasks.json'] = text(r); }
+      { const c = api.card('t_one'); c.waiting = { on: 'Acme finance', who: 'sam', since: '2026-10-01', nudge: '', note: '', by: 'alex', by_session: '' }; api.files['cards/t_one.json'] = text(c); }
+      const page = await openBoard(browser, api, cron);
+      await page.locator('.col[data-col="todo"] .hcinema').click();
+      const first = page.locator('.cinema-col .card', { hasText: 'First' }); await first.locator('.quickassign summary').click();
+      const quick = first.locator('.quickagent'); assert.equal(await quick.isDisabled(), true, 'quick-assign is off on a waiting card');
+      assert.match(await quick.getAttribute('title'), /waiting on Acme finance/);
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor();
+      await page.locator('#cWhoAdd').click();
+      const item = page.locator('.ui-menu [role=menuitem]', { hasText: 'Claude' }); assert.equal(await item.isDisabled(), true); assert.match(await item.textContent(), /waiting/);
+      await page.keyboard.press('Escape');
+      const saved = page.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
+      await page.locator('#cmText').fill('@claude please take this'); await page.locator('#cmPost').click(); await saved;
+      await page.locator('.ui-toast', { hasText: 'is waiting on Acme finance' }).waitFor();
+      assert.equal(await page.locator('#dlgSend[open]').count(), 0, 'no send dialog on a waiting card');
+      assert.equal(api.card('t_one').claim, null, 'no placeholder claim on a waiting card'); assert.ok(api.card('t_one').waiting, 'the wait is kept');
+      assert.equal(cron.filter(c => c.method === 'PUT').length, 0, 'no cron-job.org job is created');
+      await page.locator('#cClose').click();
+      await page.evaluate(() => { const f = document.getElementById('fWaiting'); f.checked = true; f.dispatchEvent(new Event('change')); });
+      assert.deepEqual(await page.locator('.card .t').allTextContents(), ['First'], 'the Waiting filter shows only waiting cards');
+      await page.close();
+    }
+
     // ---- 2. room under the limit: the same board with max_agent_claims 3 sends, and the routine text matches the new CLI rules ----
     {
       const api = new Github(), cron = []; { const r = JSON.parse(api.files['tasks.json']); r.settings.max_agent_claims = 3; api.files['tasks.json'] = text(r); }

@@ -1,0 +1,12 @@
+{
+  "label": "v4 split with a waiting card, a wait-blocked claim, agent_cleared and settings.min_kit (kit v43)",
+  "schema": 4,
+  "layout": "split",
+  "kit_before_update": 42,
+  "counts": {
+    "tasks": 2,
+    "contacts": 1,
+    "clients": 1,
+    "projects": 1
+  }
+}

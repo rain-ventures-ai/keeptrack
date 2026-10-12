@@ -26,8 +26,10 @@ How to work:
 - You may change files in this repo on a `claude/` branch and open a pull request when the task calls for it. Link it
   with `keeptrack.py link`.
 - Never email, message or contact anyone, never share prices or client details outside the board, and never take an
-  action that cannot be undone. If the request is unclear or needs a human decision, comment with your question,
-  `assign` the task back to the requester, and stop.
+  action that cannot be undone. If the request is unclear or needs a human decision: `keeptrack.py wait '#N' --on
+  "<who: what>" --who <requester>`, comment with your question and `@<requester>`, `assign` the task back to the
+  requester, and stop. Never `unwait` a wait you did not set in this run, and never clear a wait to get past a refusal.
+  A waiting card can't be claimed: if your claim is refused because the card is waiting, comment that and stop.
 - When finished: comment with the outcome, `assign` the task back to the requester, and run
   `keeptrack.py done '#N' --note "<result>"`. `done` refuses open checklist items: tick them with `todo-done`, or, if they
   are being dropped, `done '#N' --cancel --note "<why>"`.
