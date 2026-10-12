@@ -41,7 +41,7 @@ Board structure (labels, clients, members, settings) lives in tasks.json; change
   ID may also be a task number: '#12' (quote the # in a shell).
 
 ID may be any unique prefix. Defaults: BOARD_REPO, BOARD_BRANCH, BOARD_PATH, BOARD_AGENT, BOARD_USER,
-BOARD_SESSION (or CLAUDE_SESSION_ID / CODEX_SESSION_ID).
+BOARD_SESSION (or CLAUDE_SESSION_ID / CODEX_SESSION_ID). With --session or BOARD_SESSION a run owns only that session's claims.
 
 Auth: uses the `gh` CLI if it is installed and BOARD_TOKEN is not set. Otherwise (cloud sandboxes, CI) it
 calls the GitHub API directly with a fine-grained token from BOARD_TOKEN, GH_TOKEN or GITHUB_TOKEN
@@ -491,6 +491,12 @@ def valid_rank(key):
         return all(c in RANK_DIGITS for c in fraction) and not fraction.endswith(RANK_DIGITS[0])
     except (TypeError, ValueError):
         return False
+
+
+def append_rank(ranks):
+    """A rank after every one in `ranks`, with a short random tail: two saves that append to one column at once read the
+    same last rank, and without it both pick the same key (DUPLICATE_RANK). Still below the next integer key."""
+    return key_between(max(ranks) if ranks else None, None) + secrets.choice(RANK_DIGITS) + secrets.choice(RANK_DIGITS[1:])
 
 
 def key_between(a, b):
@@ -977,6 +983,16 @@ def _api_error(rc, out, err):
     sys.exit(f"write failed: {detail}{hint}")
 
 
+def _sha_mismatch(out, err):
+    """A contents PUT or DELETE refused because the file changed (or appeared) since this command read it."""
+    try:
+        msg = str(json.loads(out).get("message", ""))
+    except (ValueError, AttributeError):
+        msg = ""
+    text = f"{err} {msg}"
+    return "409" in err or "does not match" in text or ("422" in err and "sha" in text.lower())
+
+
 def _api_save_changes(changes, deletes, state, message):
     paths = set(changes) | set(deletes)
     # One file: a contents PUT, which only notices a change to that file. A whole-board check (the claim limit) needs
@@ -992,9 +1008,9 @@ def _api_save_changes(changes, deletes, state, message):
             rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{_remote_path(rel)}", "--input", "-", body=body)
         if rc == 0:
             return True
-        if "409" in err or "422" in err or "does not match" in err:
-            return False
-        _api_error(rc, out, err)
+        if _sha_mismatch(out, err):
+            return False   # someone saved this file first: the caller merges or re-runs
+        _api_error(rc, out, err)   # any other 422 (bad path, too large, a rule on the branch) is not a race: six retries would not help
     entries = []
     for rel, text in changes.items():
         rc, out, err = gh("-X", "POST", f"repos/{REPO}/git/blobs", "--input", "-",
@@ -1058,11 +1074,12 @@ class UseGit(Exception):
     """The API refused the write because of the sandbox proxy: switch to the git transport and retry."""
 
 
-_MUT = {"base": None, "extra": {}, "recheck": False, "rerun": False}   # while fn runs inside mutate: the board state it reads, the extra files it wants saved with it,
+_MUT = {"base": None, "extra": {}, "recheck": False, "rerun": False, "after": []}   # while fn runs inside mutate: the board state it reads, the extra files it wants saved with it,
 # whether its checks read the whole board (recheck: a lost race re-runs fn on the newer board instead of merging, and an API
 # save takes the commit path, whose ref update notices any save), and whether a check on one card must hold on the newer
 # board (rerun: the same re-run after a lost race, with the save path unchanged: a one-file contents PUT already fails
-# when that card's file changed)
+# when that card's file changed). "after": calls fn(saved data) once the save worked (a merged save renumbers new cards,
+# so what fn printed of a #number would be stale; the local claim record changes only once the board did)
 
 
 def rewrite_archives(data, edit):
@@ -1196,6 +1213,11 @@ def _renumber(merged, theirs):
     return assign_nums(merged)
 
 
+def num_of(data, tid):
+    """The #number a card has in `data` (after a merged save, the renumbered one), else '?'."""
+    return next((x.get("num", "?") for x in data.get("tasks", []) if x.get("id") == tid), "?")
+
+
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
@@ -1205,7 +1227,7 @@ def mutate(fn, message):
         try:
             return _mutate(fn, message)
         finally:
-            _MUT["recheck"] = _MUT["rerun"] = False
+            _MUT["recheck"] = _MUT["rerun"] = False; _MUT["after"] = []
             if owner:
                 _REC.clear()
 
@@ -1226,7 +1248,7 @@ def _mutate(fn, message):
             # read may have changed.
             base = copy.deepcopy(data)
             out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
-            _MUT["base"], _MUT["extra"], _MUT["recheck"], _MUT["rerun"] = sha, {}, False, False
+            _MUT["base"], _MUT["extra"], _MUT["recheck"], _MUT["rerun"], _MUT["after"] = sha, {}, False, False, []
             with contextlib.redirect_stdout(out):
                 result = fn(data)
             assign_nums(data)
@@ -1252,6 +1274,8 @@ def _mutate(fn, message):
             continue
         if ok:
             print(out.getvalue(), end="")
+            for after in _MUT["after"]:
+                after(data)
             return result
         lost = (base, copy.deepcopy(data), bool(extra) or _MUT["recheck"] or _MUT["rerun"])
         time.sleep(0.4 * (attempt + 1))
@@ -1402,6 +1426,21 @@ def session_for(a):
     return sid or recorded_session() or uuid.uuid4().hex[:8]
 
 
+def explicit_session(a=None):
+    """--session or BOARD_SESSION, when usable: an id this run was given on purpose. Then it alone is this run's: parallel
+    sessions in one clone share the local claim record, so the record's session is not trusted on top of it."""
+    return usable_session(getattr(a, "session", None) or os.environ.get("BOARD_SESSION"))
+
+
+def my_sessions(a, task_id=None):
+    """The session ids whose claims this run owns: the explicit id alone, else session_for's id and the sessions this
+    clone's record holds (the clone's latest, and the one recorded for task_id)."""
+    sid = explicit_session(a)
+    if sid:
+        return {sid}
+    return {session_for(a), recorded_session(), recorded_session(task_id) if task_id else ""} - {""}
+
+
 def redact_session(sid):
     """A session id shown to whoever did not claim the card: enough to recognise it, not enough to pass as it."""
     sid = str(sid or "")
@@ -1480,12 +1519,41 @@ def _record_changed(info):
         _REC["info"] = info
 
 
+def record_cards(info):
+    """The cards a local claim record holds, {card id: {"session", "agent", "user", "by_person"}}, oldest claim first. Reads
+    the one-card record of kit v43 and older ({"id", "session", ...}) too. by_person, not "attended": the hook greps the
+    record for '"attended": true' (every card driven by a person: no beats, no python)."""
+    if not isinstance(info, dict):
+        return {}
+    cards = info.get("cards")
+    if isinstance(cards, dict):
+        return {k: v for k, v in cards.items() if isinstance(k, str) and k and isinstance(v, dict)}
+    if info.get("id") and isinstance(info["id"], str):
+        return {info["id"]: {"session": info.get("session"), "agent": info.get("agent"), "user": info.get("user"),
+                             "by_person": bool(info.get("attended"))}}
+    return {}
+
+
+def record_json(cards, session):
+    """The record for `cards`. Its top level keeps the older one-card shape (a card that gets beats, else the latest one;
+    attended only when every card is) for the hook's grep; "session" is the clone's session for an env-less run."""
+    beat = [k for k, v in cards.items() if not v.get("by_person")]
+    top = (beat or list(cards))[-1:]
+    rec = {"session": session}
+    if top:
+        v = cards[top[0]]
+        rec = {"id": top[0], "agent": v.get("agent"), "user": v.get("user"), "session": v.get("session"), "attended": not beat}
+    if cards:
+        rec["cards"] = cards
+    return rec
+
+
 def recorded_session(task_id=None):
-    """The session in this clone's local claim record (for this card when task_id is given), else ''. A clone is one
-    trust domain: the record it wrote is its session, whichever card it claimed last."""
+    """The session in this clone's local claim record (the one recorded for this card when task_id is given), else ''.
+    Without an explicit id a clone is one trust domain: the record it wrote is its session, whichever card it claimed last."""
     info = claim_record()
-    ok = info is not None and usable_session(info.get("session")) and (task_id is None or info.get("id") == task_id)
-    return info["session"] if ok else ""
+    sid = (info or {}).get("session") if task_id is None else (record_cards(info).get(task_id) or {}).get("session")
+    return sid if usable_session(sid) else ""
 
 
 def claim_owner_check(data, t, a, action):
@@ -1504,7 +1572,7 @@ def claim_owner_check(data, t, a, action):
         return   # no live claim (older cards kept a finished one)
     state = claim_state(data, c)
     own = c.get("session_id")
-    if own and not is_placeholder_claim(c) and own in {session_for(a), recorded_session()}:
+    if own and not is_placeholder_claim(c) and own in my_sessions(a, t.get("id")):
         return   # a claim with no session id is nobody's: only --force finishes it
     if action == "release" and state in ("stale", "stuck", "blocked") \
             and not (state == "blocked" and c.get("blocked_by_wait") and agent_run()):
@@ -1599,7 +1667,7 @@ def holds_claim(t, a):
     c = t.get("claim") or {}
     sid = c.get("session_id")
     return bool(c) and c.get("status") != "done" and bool(sid) and not is_placeholder_claim(c) \
-        and sid in {session_for(a), recorded_session()}
+        and sid in my_sessions(a, t.get("id"))
 
 
 def note_agent_cleared(t, what, sid):
@@ -1841,7 +1909,10 @@ def write_claim_record():
         return
     try:
         ensure_local_dir(CLAIM_FILE)
-        write_private(CLAIM_FILE, json.dumps(rec))
+        cards = record_cards(claim_record()); cards.pop(rec["id"], None)   # parallel sessions in one clone: one entry per card
+        cards[rec["id"]] = {"session": rec["session"], "agent": rec["agent"], "user": rec["user"], "by_person": bool(rec["attended"])}
+        info = record_json(cards, rec["session"])
+        write_private(CLAIM_FILE, json.dumps(info)); _record_changed(info)
     except OSError as e:
         print(f"note: no local claim record, so no automatic heartbeat ({e}); pass --session {rec.get('session')} "
               "(or export BOARD_SESSION) to heartbeat, done or release the card", file=sys.stderr)
@@ -1879,7 +1950,7 @@ def do_claim(a, tid, data):
     cs = claim_state(data, t.get("claim"))
     # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
     _MUT["recheck"] = True   # a lost race re-runs this on the newer board: never a three-way merge of two claims
-    mine = {sid, recorded_session()} - {""}   # this run's id, and the session this clone's record holds (one clone is one session)
+    mine = {sid} | my_sessions(a, t.get("id"))   # this run's id, and without an explicit one the clone's recorded sessions
     if t.get("claim") and t["claim"].get("session_id") in mine:
         sid = t["claim"]["session_id"]   # re-claiming its own card keeps the id the claim already carries
     if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") in mine and cs == "running"):
@@ -1920,10 +1991,21 @@ def do_claim(a, tid, data):
     return t["id"]
 
 
+def with_record(run):
+    """run() with one read of the local claim record, shared by its mutate and the record write after the save."""
+    owner = not _REC.get("on")
+    if owner:
+        _REC.clear(); _REC["on"] = True
+    try:
+        return run()
+    finally:
+        if owner:
+            _REC.clear()
+
+
 def cmd_claim(a):
     _PENDING_CLAIM.clear()
-    mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}")
-    write_claim_record()
+    with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
 
 
 def cmd_next(a):
@@ -1940,8 +2022,7 @@ def cmd_next(a):
                 return do_claim(a, t["id"], data)
         sys.exit(f"nothing claimable in 'todo' for @{user}")
     _PENDING_CLAIM.clear()
-    mutate(fn, "Agent claim: next task")
-    write_claim_record()
+    with_record(lambda: (mutate(fn, "Agent claim: next task"), write_claim_record()))
 
 
 def must_claim(t):
@@ -1985,10 +2066,12 @@ def drop_claim_file(task_id=None):
             return   # nothing read this command (no record, one git did not vouch for, or one that appeared meanwhile): not ours to forget
         ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=info is None)   # the same guard as the write (the read already asked git when it found a record)
         if task_id:
-            if info and info.get("id") and info.get("id") != task_id:
+            cards = record_cards(info)
+            if cards and task_id not in cards:
                 return
-            if info and usable_session(info.get("session")):
-                write_private(CLAIM_FILE, json.dumps({"session": info["session"]})); _record_changed({"session": info["session"]}); return
+            cards.pop(task_id, None)
+            if cards or (info and usable_session(info.get("session"))):
+                rec = record_json(cards, (info or {}).get("session")); write_private(CLAIM_FILE, json.dumps(rec)); _record_changed(rec); return
         os.remove(CLAIM_FILE); _record_changed(None)
     except OSError:
         pass
@@ -2006,7 +2089,7 @@ def move_task_to_column(data, task, column, a=None):
     if data.get("layout") == "split":
         ranks = [x.get("rank") for x in data.get("tasks", [])
                  if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
-        task["rank"] = key_between(max(ranks) if ranks else None, None)
+        task["rank"] = append_rank(ranks)
     task["column"] = column
     return old
 
@@ -2020,7 +2103,7 @@ def cmd_release(a):
         claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else ""))
         if a.column and a.column != "done" and t.get("column") == "done" and waiting_of(t):
             drop_leftover_wait(t, "reopening", data, a)   # while the claim is still there: its session is recorded too
-        t["claim"] = None; drop_claim_file(t["id"])
+        t["claim"] = None; tid = t["id"]; _MUT["after"].append(lambda d: drop_claim_file(tid))   # only once the save worked
         if a.column: move_task_to_column(data, t, a.column, a)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
@@ -2053,7 +2136,8 @@ def cmd_done(a):
             t["last_run"]["outcome"] = outcome   # the run record never disagrees with the card
         link = (c or {}).get("session_url", "")
         hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
-        move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(t["id"])
+        move_task_to_column(data, t, "done"); t["updated"] = now(); tid = t["id"]
+        _MUT["after"].append(lambda d: drop_claim_file(tid))   # only once the save worked: a failed one leaves the claim provably ours
         print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
 
@@ -2092,7 +2176,7 @@ def cmd_wait(a):
         c = t.get("claim")
         hist(t, f"waiting on {on}" + (f" ({who})" if who else "") + (f", chase {nudge}" if nudge else "") + (f": {note}" if note else ""))
         if c and c.get("status") in ("running", "blocked", "stuck"):   # stuck too: else doctor's CLAIM_BLOCKED fires at once
-            own = bool(c.get("session_id")) and not is_placeholder_claim(c) and c["session_id"] in {sid, recorded_session()}
+            own = bool(c.get("session_id")) and not is_placeholder_claim(c) and c["session_id"] in my_sessions(a, t.get("id"))
             if own or not agent_run():
                 if c.get("status") != "blocked":
                     hist(t, f"claim blocked: waiting on {on}")
@@ -2139,7 +2223,8 @@ def cmd_unwait(a):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
             if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
                 hist(t, f"released to todo: the claim's session sent no heartbeat for {_age(age)}")
-                t["claim"] = None; move_task_to_column(data, t, "todo"); drop_claim_file(t["id"])
+                t["claim"] = None; move_task_to_column(data, t, "todo"); tid = t["id"]
+                _MUT["after"].append(lambda d: drop_claim_file(tid))
                 msg += "; its old claim is released and the card is back in To do"
             elif c.get("before_wait") == "stuck":
                 c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
@@ -2187,6 +2272,7 @@ def cmd_move(a):
                 lo = peers[-1].get("rank") if peers else None; hi = None
             if lo is not None and not valid_rank(lo): lo = None
             if hi is not None and not valid_rank(hi): hi = None
+            if lo is not None and hi is not None and lo >= hi: lo = None   # equal neighbours (two concurrent appends): as the page does
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
@@ -2328,23 +2414,33 @@ def cmd_auto_heartbeat(a):
         st = os.lstat(CLAIM_FILE)   # a symlinked record is nobody's: its target is never read, touched or followed
         if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_EVERY:
             return
-        os.utime(CLAIM_FILE, follow_symlinks=False)  # throttle first: even if git or the network call stalls, the next tool calls skip this
         _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
         info = claim_record()   # None for a record git tracks: it came with the repo, so it names no card of this clone's
-        if not info or info.get("attended") or not info.get("id"):
+        only = explicit_session()   # BOARD_SESSION in the hook's environment: that session's cards only
+        cards = {k: v for k, v in record_cards(info).items() if not v.get("by_person") and usable_session(v.get("session"))
+                 and (not only or v.get("session") == only)}
+        if not cards:
+            os.utime(CLAIM_FILE, follow_symlinks=False)   # nothing to write: the next tool calls skip the read
             return  # a person drives this session, or no card is active: no automatic heartbeats
+        gone = []
 
         def fn(data):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
-            t = find(data, info["id"]); c = t.get("claim")
-            if not c or c.get("status") == "done" or c.get("session_id") != info.get("session"):
-                drop_claim_file(info["id"]); return  # released, finished, or taken over: forget the card, keep the clone's session
-            if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
-                print(f"keeptrack: claim {info['id']} is stale and the board's agent limit is full; it stays stale "
-                      "(another session may take the card)", file=sys.stderr)
-                return
-            c["heartbeat_at"] = now(); t["updated"] = now()
-        mutate(fn, f"Agent heartbeat: {info['id']}")
+            gone.clear()
+            for tid, v in cards.items():   # every card this clone's sessions (or BOARD_SESSION) claimed and still holds
+                t = next((x for x in data.get("tasks", []) if x.get("id") == tid), None); c = (t or {}).get("claim")
+                if not c or c.get("status") == "done" or c.get("session_id") != v.get("session"):
+                    gone.append(tid); continue  # released, finished, taken over or deleted: forget the card, keep the clone's session
+                if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
+                    print(f"keeptrack: claim {tid} is stale and the board's agent limit is full; it stays stale "
+                          "(another session may take the card)", file=sys.stderr)
+                    continue
+                c["heartbeat_at"] = now(); t["updated"] = now()
+        mutate(fn, "Agent heartbeat: " + ", ".join(cards))
+        for tid in gone:
+            drop_claim_file(tid)
+        with contextlib.suppress(OSError):
+            os.utime(CLAIM_FILE, follow_symlinks=False)  # throttle only after the beat saved: a failed one is tried again at the next tool call
     except BaseException:
         return
     finally:
@@ -2370,9 +2466,10 @@ def cmd_add(a):
             print(f"created label {x}")
         t["labels"] = list(dict.fromkeys(check_label_name(x) for x in a.label or []))
         if data.get("layout") == "split":
-            t["rank"] = key_between(max(ranks) if ranks else None, None)
+            t["rank"] = append_rank(ranks)
         hist(t, "created")
-        data["tasks"].append(t); assign_nums(data); print(f"added #{t['num']} ({t['id']})")
+        data["tasks"].append(t); assign_nums(data); tid = t["id"]
+        _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})"))   # the saved #number: a lost race renumbers ours
     mutate(fn, f"Add task: {a.title}")
 
 
@@ -2469,9 +2566,10 @@ def cmd_kit_check(a):
                                             "Checks pass", "Open and link the PR"]],
                  "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
             if data.get("layout") == "split":
-                t["rank"] = key_between(max(ranks) if ranks else None, None)
+                t["rank"] = append_rank(ranks)
             hist(t, "created by kit-check")
-            data["tasks"].append(t); assign_nums(data); print(f"added #{t['num']} for @{owner or '?'}: {title}")
+            data["tasks"].append(t); assign_nums(data); tid = t["id"]
+            _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} for @{owner or '?'}: {title}"))   # the saved #number
         mutate(fn, f"Add task: Upgrade board tools to kit v{want}")
         return  # with --card the caller carries on with its own work
     sys.exit(3)
@@ -4973,7 +5071,7 @@ def apply_staging(data, st, label):
         if contact: x["contact"] = contact
         if data.get("layout") == "split":
             ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
-            x["rank"] = key_between(max(ranks) if ranks else None, None)
+            x["rank"] = append_rank(ranks)
         hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
         say(f"+ task     {title}{' [' + client + ']' if client else ''}"); out["added"] += 1
     return out
@@ -5397,7 +5495,7 @@ def _new_task(data, proposal, change):
         todo.setdefault("id", "d_" + uuid.uuid4().hex[:6]); todo.setdefault("done", False)
     for comment in task["comments"]:
         comment.setdefault("id", "c_" + uuid.uuid4().hex[:6]); comment.setdefault("at", ts); comment.setdefault("by", who_am_i())
-    task["rank"] = key_between(max(ranks) if ranks else None, None)
+    task["rank"] = append_rank(ranks)
     hist(task, f"created from proposal {proposal['id']}")
     data.setdefault("tasks", []).append(task); assign_nums(data)
     return task, False
@@ -5928,7 +6026,7 @@ def _cmd_unarchive(a):
         if not any(x["id"] == item["id"] for x in data.setdefault(k, [])):
             if k == "tasks" and data.get("layout") == "split" and not valid_rank(item.get("rank")):
                 ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
-                item["rank"] = key_between(max(ranks) if ranks else None, None)
+                item["rank"] = append_rank(ranks)
             item.setdefault("history", []).append({"at": now(), "by": who_am_i(item), "text": f"restored from {archive_path(y)}"})
             data[k].append(item)
         cur[k] = [x for x in cur[k] if x["id"] != item["id"]]

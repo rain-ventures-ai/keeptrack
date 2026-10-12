@@ -53,6 +53,22 @@ class LocalBoard(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             return f(*a)
 
+    def test_add_prints_the_saved_number_after_a_lost_race(self):
+        real, calls = kt.save, []
+        def racing(data, sha, msg):
+            if not calls:   # another writer adds a card with the #number ours was given, between our read and our save
+                n = next(t["num"] for t in data["tasks"] if t["title"] == "Ours"); calls.append(n); d = self.read()
+                d["tasks"].append({"id": "t_theirs", "num": n, "title": "Theirs", "column": "todo", "history": [], "todos": []})
+                write(self.file, d); return False
+            return real(data, sha, msg)
+        kt.save = racing
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_add(Args(title="Ours", column=None, client=None, project=None, priority="medium", due=None, assign=None, label=None, details=None, todo=None, all=True))
+        ours = next(t for t in self.read()["tasks"] if t["title"] == "Ours")
+        self.assertNotEqual(ours["num"], calls[0])                       # renumbered by the merge
+        self.assertEqual(out.getvalue(), f"added #{ours['num']} ({ours['id']})\n")   # and the output says so
+
     def test_archive_year_must_be_four_digits(self):
         self.assertEqual(kt.archive_path("2025"), "board/archive/2025.json")
         for bad in ("../../x", "2025/../../a", "20251", ""):
@@ -581,6 +597,17 @@ class ApiSave(unittest.TestCase):
             return 0, json.dumps({"sha": "commit1"}), ""
         return 0, "{}", ""
 
+    def test_a_422_on_one_file_is_a_lost_race_only_for_a_sha_mismatch(self):
+        state = {"head": "commit0", "base_tree": "tree0", "files": {"tasks.json": {"sha": "root-sha"}}}
+        for out, err in (('{"message": "board/tasks.json does not match root-sha"}', "gh: HTTP 409"),
+                         ('{"message": "Invalid request.\\n\\n\\"sha\\" wasn\'t supplied."}', "gh: HTTP 422")):
+            kt.gh = lambda *a, body=None: (1, out, err)
+            self.assertFalse(kt._api_save_changes({"tasks.json": "{}\n"}, set(), state, "Save"))   # retried after a merge
+        kt.gh = lambda *a, body=None: (1, '{"message": "Invalid request. content is too large"}', "gh: HTTP 422")
+        with self.assertRaises(SystemExit) as e:                               # reported, not retried six times
+            kt._api_save_changes({"tasks.json": "{}\n"}, set(), state, "Save")
+        self.assertIn("too large", str(e.exception))
+
     def test_one_file_uses_contents_api_with_sha(self):
         kt.gh = self.fake_gh
         state = {"head": "commit0", "base_tree": "tree0", "files": {"tasks.json": {"sha": "root-sha"}}}
@@ -1017,6 +1044,26 @@ class MoveInPlace(unittest.TestCase):
         moved = read_json(os.path.join(self.board_dir, "cards", "t_second.json"))
         self.assertEqual(second["column"], moved["column"])
         self.assertLess(moved["rank"], first["rank"])
+
+
+    def test_move_before_a_card_with_an_equal_rank_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_add(Args(title="Third", column=None, client=None, project=None, priority="medium", due=None, assign=None, label=None, details=None, todo=None, all=True))
+        third = next(t for t in kt.load()[0]["tasks"] if t["title"] == "Third")
+        for name in ("t_first", "t_second"):   # two concurrent appends picked the same rank
+            path = os.path.join(self.board_dir, "cards", f"{name}.json"); c = read_json(path); c["rank"] = "a0"; write(path, c)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_move(Args(id=third["id"], column=None, column_pos=None, before="t_second", after=None, top=False, priority=None, note=None))
+        moved = next(t for t in kt.load()[0]["tasks"] if t["id"] == third["id"])
+        self.assertTrue(kt.valid_rank(moved["rank"])); self.assertLess(moved["rank"], "a0")   # as the page does: below the pair
+
+    def test_appended_ranks_rarely_collide_and_keep_order(self):
+        ranks = ["a0", "a1"]
+        keys = {kt.append_rank(ranks) for _ in range(40)}
+        self.assertGreater(len(keys), 30)                                       # two writers appending at once differ
+        for k in keys:
+            self.assertTrue(kt.valid_rank(k)); self.assertGreater(k, "a1"); self.assertLess(k, "a3")
+            self.assertGreater(kt.key_between(k, None), k)                      # the next append still sorts after it
 
 
 class Verify(unittest.TestCase):
@@ -1898,7 +1945,7 @@ class ClaimLifecycle(unittest.TestCase):
         try:
             for run in (lambda: self.beat(1), lambda: self.release(1, column="todo"), lambda: self.claim(1, "s1"), lambda: self.done(1)):
                 reads.clear(); run()
-                self.assertEqual(len(reads), 1, "heartbeat or done read the record more than once")
+                self.assertLessEqual(len(reads), 1, "heartbeat or done read the record more than once")   # a claim with --session needs none
         finally:
             kt.os.open = real_open
         self.assertEqual(kt.recorded_session(), "s1")
@@ -2234,6 +2281,87 @@ class ClaimLifecycle(unittest.TestCase):
         self.beat(1); self.done(1)                                          # card 1 is still this clone's
         self.assertEqual(self.card(1)["column"], "done")
         self.assertEqual(kt.recorded_session("t_c1"), ""); self.assertEqual(kt.recorded_session(), "s1")
+
+    def real_record(self):
+        """write_claim_record and drop_claim_file as on a real board (a --file board keeps no local record)."""
+        old = kt.write_claim_record, kt.drop_claim_file
+        def unfile(f):
+            def g(*a):
+                was = kt.FILE; kt.FILE = None
+                try:
+                    return f(*a)
+                finally:
+                    kt.FILE = was
+            return g
+        kt.write_claim_record, kt.drop_claim_file = unfile(old[0]), unfile(old[1])
+        self.addCleanup(lambda: (setattr(kt, "write_claim_record", old[0]), setattr(kt, "drop_claim_file", old[1])))
+
+    def test_parallel_sessions_in_one_clone_keep_their_own_claims(self):
+        self.real_record()
+        self.claim(1, "s1"); self.claim(2, "s2")                           # two sessions, one clone
+        cards = json.load(open(self.claim_file))["cards"]
+        self.assertEqual({k: v["session"] for k, v in cards.items()}, {"t_c1": "s1", "t_c2": "s2"})
+        os.environ["BOARD_SESSION"] = "s2"                                 # an explicit id is the only one trusted
+        self.assertIn("not this session's", self.refusal(self.done, 1))
+        self.assertIn("not this session's", self.refusal(self.release, 1))
+        self.beat(2)
+        os.environ.pop("BOARD_SESSION")
+        self.beat(1)                                                       # no explicit id: the card's own recorded session
+        self.done(2, session="s2")
+        self.assertEqual(list(json.load(open(self.claim_file))["cards"]), ["t_c1"])   # only the finished card is forgotten
+        self.assertEqual(kt.recorded_session("t_c1"), "s1")
+
+    def test_an_older_one_card_record_is_still_read(self):
+        self.real_record()
+        self.claim(1, "s1")
+        write(self.claim_file, {"id": "t_c1", "agent": "claude", "user": "osouthgate", "session": "s1", "attended": False})
+        self.assertEqual(kt.recorded_session("t_c1"), "s1")
+        self.claim(2, "s2")
+        rec = json.load(open(self.claim_file))
+        self.assertEqual({k: v["session"] for k, v in rec["cards"].items()}, {"t_c1": "s1", "t_c2": "s2"})
+        self.assertEqual((rec["id"], rec["session"], rec["attended"]), ("t_c2", "s2", False))   # the top level an older reader knows
+
+    def test_an_attended_card_in_the_map_does_not_read_as_an_attended_record(self):
+        self.real_record()
+        self.claim(1, "s1", attended=True); self.claim(2, "s1")
+        text = open(self.claim_file).read()
+        self.assertNotIn('"attended": true', text)                         # the hook's grep: card 2 still gets beats
+        self.assertEqual(json.loads(text)["id"], "t_c2")
+
+    def test_auto_heartbeat_beats_every_card_of_this_session(self):
+        self.real_record()
+        self.claim(1, "s1"); self.claim(2, "s2"); self.make_stale(1); self.make_stale(2)
+        os.utime(self.claim_file, (0, 0))
+        with contextlib.redirect_stderr(io.StringIO()):
+            kt.cmd_auto_heartbeat(Args())                                  # no BOARD_SESSION in the hook: every card this clone holds
+        self.assertEqual([self.card(n)["claim"]["heartbeat_at"] > "2026-01-02" for n in (1, 2)], [True, True])
+        self.make_stale(1); self.make_stale(2); os.utime(self.claim_file, (0, 0))
+        os.environ["BOARD_SESSION"] = "s2"
+        with contextlib.redirect_stderr(io.StringIO()):
+            kt.cmd_auto_heartbeat(Args())
+        self.assertEqual([self.card(n)["claim"]["heartbeat_at"] > "2026-01-02" for n in (1, 2)], [False, True])
+
+    def test_auto_heartbeat_throttles_only_after_a_saved_beat(self):
+        self.real_record()
+        self.claim(1, "s1"); self.make_stale(1); os.utime(self.claim_file, (0, 0))
+        kt.save = lambda *a: sys.exit("write failed: offline")
+        kt.cmd_auto_heartbeat(Args())
+        self.assertLess(os.stat(self.claim_file).st_mtime, 1)              # not throttled: the next tool call tries again
+        kt.save = self.old[1]
+        kt.cmd_auto_heartbeat(Args())
+        self.assertGreater(os.stat(self.claim_file).st_mtime, 1)
+        self.assertGreater(self.card(1)["claim"]["heartbeat_at"], "2026-01-02")
+
+    def test_done_and_release_keep_the_record_when_the_save_fails(self):
+        self.real_record()
+        self.claim(1, "s1"); self.claim(2, "s1")
+        kt.save = lambda *a: sys.exit("write failed: offline")
+        self.assertIn("offline", self.refusal(self.done, 1, session="s1"))
+        self.assertIn("offline", self.refusal(self.release, 2, session="s1"))
+        self.assertEqual(sorted(json.load(open(self.claim_file))["cards"]), ["t_c1", "t_c2"])   # still provably this session's
+        kt.save = self.old[1]
+        self.done(1, session="s1")
+        self.assertEqual(list(json.load(open(self.claim_file))["cards"]), ["t_c2"])
 
     def test_move_to_done_on_another_sessions_live_claim_is_refused(self):
         self.claim(1, "s1")
