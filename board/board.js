@@ -1684,7 +1684,7 @@ if (typeof window !== 'undefined') (() => {
   const setView = (v, fromHistory) => {
     const was = view; view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); saveBoardContext({ view: v }); render();
     if (fromHistory || v === was) return;
-    const push = () => { try { history.pushState({ kbView: v }, '', location.pathname + location.search); } catch {} };
+    const push = () => { try { history.pushState({ kbView: v }, '', location.pathname + location.search + '#view=' + v); } catch {} };
     if (backPending) backPending.then(push); else push();   // a dialog that just closed is still taking its own step off
   };
   const syncViewSw = () => { Object.values(viewTabs).forEach(tl => tl.select(view)); syncDock(); };
@@ -1693,9 +1693,9 @@ if (typeof window !== 'undefined') (() => {
   const dockLast = { today: 'today', tasks: 'board', crm: 'people' };
   const grpOf = v => (VIEW_GROUPS.find(g => g.views.some(x => x.value === v)) || VIEW_GROUPS[0]).grp;
   function syncDock() {
-    const cur = grpOf(view); dockLast[cur] = view;
+    const cur = grpOf(view); if (view !== 'inbox') dockLast[cur] = view;
     document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => {
-      const g = viewTabs[t.dataset.grp], on = t.dataset.grp === cur;
+      const g = viewTabs[t.dataset.grp], on = view !== 'inbox' && t.dataset.grp === cur;
       t.hidden = !g || g.hidden; t.classList.toggle('on', on); if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
     });
     const sub = $('subnav'), views = VIEW_GROUPS.find(g => g.grp === cur).views;
@@ -2131,14 +2131,30 @@ if (typeof window !== 'undefined') (() => {
 
   function numChip(t) { const b = el('button', 'numchip', '#' + t.num); b.type = 'button'; b.title = `Task #${t.num}: click to copy the reference`; b.setAttribute('aria-label', `Task number ${t.num}, copy`);
     b.onclick = e => { e.stopPropagation(); copyText('#' + t.num, `Copied #${t.num}`); }; return b; }
+  // Shared card activation leaves embedded controls, selection and drag/hold gestures alone.
+  function activateCard(card, open) {
+    let draggedUntil = 0;
+    const controls = 'button, a, input, select, textarea, summary, details, label, [contenteditable]:not([contenteditable="false"]), [role="button"], .taskactions';
+    card.tabIndex = 0;
+    card.addEventListener('dragstart', () => { draggedUntil = Infinity; });
+    card.addEventListener('dragend', () => { draggedUntil = Date.now() + 400; });
+    card.addEventListener('click', e => {
+      if (e.defaultPrevented || e.detail > 1 || Date.now() < draggedUntil || lift.justLifted || e.target.closest(controls)) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && (card.contains(selection.anchorNode) || card.contains(selection.focusNode))) return;
+      open();
+    });
+    card.addEventListener('keydown', e => {
+      if (e.target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); }
+    });
+  }
   function cardEl(t, ci, detailed = false) {
     const c = el('div', 'card' + (detailed ? ' detailed' : '') + (viewPending.has(t.id) ? ' pending' : '')); c.draggable = !phone(); paint(c, t); if (viewPending.has(t.id)) c.title = 'Saving…';   // phones use hold-to-move instead: the browser's own drag would swallow the touch
     c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', t.id); c.classList.add('dragging'); });
     c.addEventListener('dragend', () => c.classList.remove('dragging'));
     c.addEventListener('dragover', e => e.preventDefault());
     c.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); dropOn(e, t.column, t.id); });
-    c.addEventListener('dblclick', () => openCard(t.id));
-    c.addEventListener('click', e => { if (phone() && !lift.justLifted && !e.target.closest('button, a, input, select, textarea, .taskactions')) openCard(t.id); });   // phones: tap a card to open it (and change its status there)
+    activateCard(c, () => openCard(t.id));
     c.addEventListener('touchstart', e => liftStart(e, t, c), { passive: true });   // phones: hold to pick it up and drop it on another lane   // phones: tap a card to open it (and change its status there)
     const top = el('div', 'top'); top.append(numChip(t)); { const d = changedDot(t); if (d) top.append(d); } top.append(prioPill(t), el('span', 'spacer'));
     const edit = elI('button', 'ico', 'pencil'), bot = elI('button', 'ico', 'bot');
@@ -2561,17 +2577,44 @@ if (typeof window !== 'undefined') (() => {
   // Archive or Add a person adds one history entry, so Back closes it and returns to the board instead of leaving the
   // site. Closing it any other way (X, Escape, backdrop) takes that entry off again, so Back never goes somewhere odd.
   // A card's entry carries its #number; the entry under it is the board without one (so a #13 link backs to the board).
-  const BACK_DIALOGS = ['dlgCard', 'dlgContact', 'dlgClient', 'dlgProject', 'dlgSettings', 'dlgHelp', 'dlgSearch', 'dlgArch', 'dlgAddPerson'];
-  const backStack = []; let backClosing = 0;
+  const BACK_DIALOGS = ['dlgCard', 'dlgContact', 'dlgClient', 'dlgProject', 'dlgSettings', 'dlgHelp', 'dlgSearch', 'dlgArch', 'dlgAddPerson', 'dlgCopy'];
+  const backStack = []; let backClosing = 0, closingHash = false;
   // the page is going to another address (switching board, reload): a history.back() now would cancel that
   window.addEventListener('beforeunload', markLeaving);
   const bareUrl = () => location.pathname + location.search;
+  const routeDialogs = { dlgSettings: 'settings', dlgHelp: 'help', dlgSearch: 'search', dlgAddPerson: 'add-person', dlgCopy: 'copy' };
+  let routeApplying = false, settingsRoute = 'prefs';
+  function navigationLink(hash = location.hash || '#view=' + view) {
+    const u = new URL(location.pathname, location.href), source = new URLSearchParams(location.search);
+    ['repo', 'branch', 'path', 'demo'].forEach(k => { if (source.has(k)) u.searchParams.set(k, source.get(k)); });
+    if (!DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
+    const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
+    const safe = /^\d{1,5}$/.test(h) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
+      (q.has('view') && ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(q.get('view')) && [...q.keys()].length === 1) ||
+      (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
+    u.hash = safe ? hash : '#view=' + view; return u.href;
+  }
+  const routeHash = d => d.id === 'dlgCard' ? location.hash : '#' + (routeDialogs[d.id] || 'view=' + view) + (d.id === 'dlgSettings' ? '=' + settingsRoute : '');
+  function applyRoute() {
+    const h = location.hash.slice(1), q = new URLSearchParams(h);
+    if (/^\d{1,5}$/.test(h)) { openFromHash(); return; }
+    routeApplying = true;
+    try {
+      if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(v) ? v : 'today', true); }
+      else if (q.has('settings')) { const name = q.get('settings'); if (!$('dlgSettings').open) $('btnSettings').click(); settingsTab(Object.hasOwn(SET_LINKS, name) || SET_TABS.some(t => t[0] === name) ? name : 'prefs'); }
+      else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
+      else if (h === 'menu') { const docked = window.kbLayout && window.kbLayout.get() === 'dock', pop = docked ? 'dockPop' : 'morePop', trigger = docked ? 'dockMenu' : 'btnMore'; if ($(pop).hidden) $(trigger).click(); }
+      else { const id = Object.keys(routeDialogs).find(id => routeDialogs[id] === h); if (id && $(id) && !$(id).open) { if (id === 'dlgSearch') openSearch(); else if (id === 'dlgAddPerson') openAddPersonForm(); else if (id === 'dlgCopy') $('btnCopy').click(); else $(id).showModal(); } }
+    } finally { routeApplying = false; }
+  }
+  window.kbNavigation = Object.freeze({ link: navigationLink });
   function backOpened(d) {
     const st = history.state || {};
     if (st.kbDlg === d.id && !backStack.includes(d.id)) { backStack.push(d.id); return; }   // reload or Forward: this entry is already ours
     if (backStack.includes(d.id)) return;
     try {
-      const url = d.id === 'dlgCard' ? bareUrl() + location.hash : bareUrl();
+      const url = bareUrl() + routeHash(d);
+      if (routeDialogs[d.id] && !(history.state || {}).kbDlg) history.replaceState({ kbView: view }, '', bareUrl() + '#view=' + view);
       const top = backStack[backStack.length - 1];
       if (top && !$(top).open && st.kbDlg === top) {   // it replaces a drawer that just closed (person → Open client): take over its entry
         backStack.pop(); history.replaceState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id); return;
@@ -2586,12 +2629,13 @@ if (typeof window !== 'undefined') (() => {
     if (i === backStack.length - 1 && (history.state || {}).kbDlg === d.id) {
       backStack.pop(); backClosing++;
       backPending = new Promise(res => { const done = backDone = () => { if (backDone === done) { backDone = null; backPending = null; } res(); }; setTimeout(done, 500); });
-      try { history.back(); } catch { backClosing--; backDone && backDone(); }
+      closingHash = true;
+      try { history.back(); } catch { closingHash = false; backClosing--; backDone && backDone(); }
     }
     else backStack.splice(i, 1);   // closed under another one: leave its entry, it only goes back to the board
   }
   window.addEventListener('popstate', () => {
-    if (backClosing) { backClosing--; if (backDone) backDone(); return; }   // our own history.back() after a close
+    if (backClosing) { backClosing--; setTimeout(() => { closingHash = false; }, 0); if (backDone) backDone(); return; }   // our own history.back() after a close; no hashchange is possible for non-routed drawers
     const want = (history.state || {}).kbDlg;
     while (backStack.length && backStack[backStack.length - 1] !== want) {   // close everything opened after the entry we are now on
       const d = $(backStack[backStack.length - 1]); backStack.pop();
@@ -2599,6 +2643,7 @@ if (typeof window !== 'undefined') (() => {
     }
     const v = (history.state || {}).kbView;   // Back/Forward between views
     if (v && v !== view && !backStack.length) setView(v, true);
+    applyRoute();
   });
   // the address bar names the board too: a page opened without ?repo= (a bookmark, a home-screen icon) gets it, keeping the #N
   try { if (!DEMO && !SETUP && LS.get('kb_repo') && !new URLSearchParams(location.search).get('repo')) history.replaceState(history.state, '', boardUrl() + location.hash); } catch {}
@@ -2614,14 +2659,16 @@ if (typeof window !== 'undefined') (() => {
   let contextRestored = false;
   function restoreBoardContext() {
     if (contextRestored || !lastSyncOk || SETUP) return; contextRestored = true;
-    if (hashNum() !== null) { openFromHash(); return; }
+    if (location.hash) { applyRoute(); return; }
     const id = boardContext().card; if (!id) return;
     if (state.tasks.some(t => t.id === id)) openCard(id); else { clearDraft(id); saveBoardContext({ view, card: '' }); }
   }
-  window.addEventListener('hashchange', openFromHash);
+  window.addEventListener('hashchange', () => { if (closingHash) { closingHash = false; return; } applyRoute(); });
   function refreshDrawer() { const t = taskNow(); if (!t) { $('dlgCard').close(); return; } fillDrawer(t, false); }   // board data changed underneath an open card
 
+  let backdropClicks = 0;
   function openCard(id, focus) {
+    backdropClicks = 0;
     const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false; activeDraft = { title: false, details: false };
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
@@ -2632,10 +2679,16 @@ if (typeof window !== 'undefined') (() => {
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
   $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
+  $('dlgCard').addEventListener('click', e => {
+    const drawer = $('dlgCard'), r = drawer.getBoundingClientRect();
+    const outside = e.target === drawer && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
+    backdropClicks = outside ? (e.detail === 1 ? 1 : backdropClicks + 1) : 0;
+  });
   $('dlgCard').addEventListener('dblclick', e => {
     const drawer = $('dlgCard'), r = drawer.getBoundingClientRect();
     // Native dialog backdrops target the dialog itself. Padding inside the drawer is not backdrop.
     if (e.target !== drawer || (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)) return;
+    if (backdropClicks < 2) return;   // the second click of opening a card must not also dismiss it
     if (document.querySelector('dialog[open]:not(#dlgCard)')) return;   // never dismiss a task underneath a confirmation
     $('cClose').click();   // reuse title/description saves, context cleanup and native focus restoration
   });
@@ -3305,6 +3358,9 @@ if (typeof window !== 'undefined') (() => {
     modes: ['board', 'secModes'], members: ['board', 'memSec'], people: ['board', 'memSec'], team: ['board', 'memSec'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], archive: ['board', 'secArchive'],
     connect: ['conn'], conn: ['conn', 'bThis'], boards: ['conn', 'secBoards'], checks: ['conn', 'secHealth'], health: ['conn', 'secHealth'], move: ['conn', 'secMove'], advanced: ['conn', 'secAdv'],
     claude: ['agents', 'agClaude'], codex: ['agents', 'agLocal'], chat: ['agents', 'agLocal'], email: ['agents', 'agEmail'] };
+  // Every concrete settings section is a destination, including plugin/routine subsections.
+  SET_TABS.forEach(([tab]) => $('panel' + cap(tab)).querySelectorAll('[data-sec][id]').forEach(sec => { SET_LINKS[sec.id] = [tab, sec.id]; }));
+  SET_LINKS.routines = ['agents', 'agRegister']; SET_LINKS['routine-setup'] = ['agents', 'agRoutineSetup'];
   const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'prefs', style: 'underline', label: 'Settings sections', onChange: v => setPanel(v) });
   setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach((b, i) => { const n = cap(b.dataset.value), short = SET_TABS[i][2]; b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n);
     if (short) { const l = b.querySelector('.ui-tab__label'); l.textContent = ''; l.append(el('span', 'tl-long', SET_TABS[i][1]), el('span', 'tl-short', short)); } });   // phones: the short name, so all four fit
@@ -3313,6 +3369,8 @@ if (typeof window !== 'undefined') (() => {
   { const list = setTabs.matches('[role=tablist]') ? setTabs : setTabs.querySelector('[role=tablist]'), wide = matchMedia('(min-width: 1000px)');   // from 1000px the tab list is a column (board.css)
     const orient = () => list.setAttribute('aria-orientation', wide.matches ? 'vertical' : 'horizontal'); orient(); wide.addEventListener('change', orient); }
   function setPanel(tab) {   // a tab chosen by hand: its panel, from the top
+    settingsRoute = tab;
+    if ($('dlgSettings').open && !routeApplying) setHash('#settings=' + tab);
     SET_TABS.forEach(([n]) => { $('panel' + cap(n)).hidden = n !== tab; }); setTabs.select(tab);
     $('dlgSettings').scrollTop = 0;
     if (tab === 'prefs') renderAlerts();
@@ -3330,6 +3388,8 @@ if (typeof window !== 'undefined') (() => {
     if (name === 'checks' || name === 'health') runChecks(over);
     if (name === 'archive') renderArchiveBox();
     if (sec && name !== 'conn') secTop(sec);
+    settingsRoute = name;
+    if ($('dlgSettings').open && !routeApplying) setHash('#settings=' + encodeURIComponent(name));
   }
   window.kbSettings = Object.freeze({ open: name => { if (!$('dlgSettings').open) $('btnSettings').click(); settingsTab(name); } });   // the same deep links, for the console and the browser tests
   let autoChecked = '';
@@ -3532,6 +3592,9 @@ if (typeof window !== 'undefined') (() => {
   $('copyAgent').onclick = () => { $('dlgCopy').close(); copyText(agentPrompt(null), 'Board instructions copied for an agent'); };
   $('copyMarkdown').onclick = () => { $('dlgCopy').close(); copyMarkdown(); };
   popover($('btnFilter'), $('filterPop')); popover($('btnMore'), $('morePop'));
+  [['btnFilter', 'filterPop', 'filters'], ['dockMenu', 'dockPop', 'menu'], ['btnMore', 'morePop', 'menu']].forEach(([trigger, pop, route]) => {
+    $(trigger).addEventListener('click', () => { if (!routeApplying) setHash($(pop).hidden ? '#view=' + view : '#' + route); });
+  });
   document.querySelectorAll('[data-head-action]').forEach(b => { b.onclick = () => { const target = $(b.dataset.headAction); closePops(); if (target) target.click(); }; });
   $('clientPop').addEventListener('click', e => e.stopPropagation()); POPS.add($('clientPop'));
   document.addEventListener('click', () => closePops()); document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (popOpen) { closePops(true); return; } if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
@@ -4028,18 +4091,20 @@ if (typeof window !== 'undefined') (() => {
     if (typeof v === 'object') return JSON.stringify(v);
     return String(v);
   }
-  // Today → "To review": the newest pending proposals with Accept / Ignore, and a way into the full Inbox.
+  // Today is a preview, not an approval surface: read the evidence and changes in the Inbox first.
   function todayReview(items) {
     const sec = ui.section({ title: 'To review', count: items.length, icon: 'inbox' }); sec.classList.add('tsec', 'treview');
+    sec.body.append(el('p', 'treview__hint muted', 'Suggested changes, not yet on your board. Review the evidence before accepting.'));
     const list = items.slice().sort((a, b) => String((b.source || {}).date || '').localeCompare(String((a.source || {}).date || '')) || String(b.created || '').localeCompare(String(a.created || ''))).slice(0, 5);
     list.forEach(p => {
       const row = el('div', 'trow'), s = p.source || {}; row.dataset.id = p.id;
-      const txt = el('div', 'trow__text'); txt.append(el('span', 'trow__title', p.title || '(no title)'), el('span', 'trow__meta muted', [KIND_LABEL[p.kind] || p.kind, SRC_LABEL[s.kind] || '', s.date || ''].filter(Boolean).join(' · ')));
-      const acts = el('div', 'trow__acts'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide: ' + (p.title || p.id));
-      const act = (label, variant, fn) => { const b = ui.button({ label, variant, size: 'sm', onClick: fn }); if (ro) b.disabled = true; acts.append(b); };
-      act('Accept', 'primary', async () => { if (await decideProposal(p.id, 'accept')) { inboxSay('Accepted.'); render(); } });
-      act('Ignore', 'secondary', async () => { if (await decideProposal(p.id, 'ignore')) { inboxSay('Ignored. It will not come back for this source.'); render(); } });
-      act('Review', 'ghost', () => { inboxFocus = p.id; setView('inbox'); });
+      const txt = el('div', 'trow__text');
+      const tags = el('div', 'trow__tags'); tags.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm', tone: 'neutral' }));
+      if ((p.likely_duplicates || []).length) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
+      txt.append(tags, el('span', 'trow__title', p.title || '(no title)'), el('span', 'trow__meta muted', [SRC_LABEL[s.kind] || 'Source', s.date || ''].filter(Boolean).join(' · ')));
+      const acts = el('div', 'trow__acts'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Review: ' + (p.title || p.id));
+      const review = ui.button({ label: 'Review', icon: 'arrow-right', variant: 'secondary', size: 'sm', onClick: () => { inboxFocus = p.id; setView('inbox'); } });
+      review.setAttribute('aria-label', 'Review: ' + (p.title || p.id)); acts.append(review);
       row.append(txt, acts); sec.body.append(row);
     });
     const all = ui.button({ label: items.length > list.length ? `Review all ${items.length}` : 'Open the Review Inbox', variant: 'secondary', size: 'sm', onClick: () => setView('inbox') });
@@ -4138,10 +4203,10 @@ if (typeof window !== 'undefined') (() => {
     if (flags.children.length) art.append(flags);
     art.append(proposalChange(p));
     if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
-    const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide');
+    const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
     const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
-    if (p.status === 'pending') { btn('accept', 'Accept', 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'secondary', 'i'); btn('leave', 'Leave pending', 'ghost'); }
+    if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Accept applies these changes to the board. Leave pending if anything needs checking.')); btn('accept', 'Accept', 'secondary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
     else if (p.status === 'ignored' && p.change) btn('reopen', 'Reopen', 'secondary');
     if (acts.children.length) art.append(acts);
@@ -4152,6 +4217,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderInbox() {
     const board = $('board'), wrap = el('section', 'inbox'); wrap.setAttribute('aria-label', 'Review Inbox'); board.append(wrap);
+    wrap.append(ui.button({ label: 'Back to Today', icon: 'arrow-left', variant: 'secondary', size: 'sm', onClick: () => setView('today') }));
     if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }   // outside #board: a re-render must not drop what it announces
     if (!isSplit(state)) { wrap.append(ui.empty({ text: 'The Review Inbox needs split storage (schema 4). See UPGRADING.md.', icon: 'inbox' })); return; }
     if (!inboxOn()) { wrap.append(ui.empty({ text: 'The Review Inbox is off for this board. Turn it on in Settings → Board.', icon: 'inbox' })); return; }
@@ -4669,7 +4735,7 @@ if (typeof window !== 'undefined') (() => {
         const k = el('div', 'card pcard'); k.draggable = true; k.tabIndex = 0;
         k.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', p.id); k.classList.add('dragging'); });
         k.addEventListener('dragend', () => k.classList.remove('dragging'));
-        k.onclick = () => openContact(p.id); k.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
+        activateCard(k, () => openContact(p.id));
         k.append(el('div', 'ctitle', p.name || '(no name)'));
         if (p.company || p.role) k.append(el('div', 'muted small', [p.role, p.company].filter(Boolean).join(' · ')));
         if (p.next || p.next_due) { const nx = el('div', 'pnext small'); nx.append(el('span', null, p.next || ''), personDue(p)); k.append(nx); }
@@ -5393,5 +5459,15 @@ if (typeof window !== 'undefined') (() => {
   };
   $('sThemeExport').onclick = () => { if (window.kbDesignMd) copyText(window.kbDesignMd.exportCurrent(), 'Theme copied as DESIGN.md'); };
   applyRo(); render();
-  (async () => { await restoreUndo(); await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo || SETUP) load(); else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // no token for this board yet: the app opens Settings itself, on Connection with the form open (a click on Settings opens Preferences)
+  ['dlgSettings', 'dlgHelp', 'dlgSearch', 'dlgCopy'].forEach(id => {
+    const b = ui.button({ label: 'Copy link to this screen', icon: 'link', variant: 'secondary', size: 'sm', onClick: () => copyText(navigationLink(), 'Screen link copied') });
+    b.dataset.roKeep = '1'; $(id).append(b);
+  });
+  Object.entries(SET_LINKS).filter(([name, route]) => name === route[1]).forEach(([name, [, id]]) => {
+    const sec = $(id); if (!sec) return;
+    const a = el('a', 'small', 'Link to this section'); a.href = navigationLink('#settings=' + encodeURIComponent(name));
+    ['focus', 'pointerdown', 'contextmenu'].forEach(event => a.addEventListener(event, () => { a.href = navigationLink('#settings=' + encodeURIComponent(name)); }));
+    a.addEventListener('click', e => { e.preventDefault(); settingsTab(name); }); sec.append(a);
+  });
+  (async () => { await restoreUndo(); await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo || SETUP || location.hash) { load(); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
 })();
