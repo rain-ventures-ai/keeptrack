@@ -163,7 +163,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await page.getByText('is not an email address').waitFor(); assert.equal(writes(), before, 'a bad address is not saved');
       w = saved(); await alex().locator('.ui-addrow__input').fill('alex@work.example'); await alex().locator('.ui-addrow__input').press('Enter'); await w;
       assert.deepEqual(page.api.root().people[0].emails, ['alex@work.example']);
-      await page.waitForFunction(() => document.querySelector('#memBox .memmail .ui-pill__text').textContent === 'alex@work.example');
+      await page.waitForFunction(() => document.querySelector('#memBox .memmail .ui-pill__text')?.textContent === 'alex@work.example');
       before = writes(); await alex().getByLabel('Time zone of @alex').fill('Mars/Base'); await alex().getByLabel('Time zone of @alex').blur();
       await page.getByText('is not a time zone').waitFor(); assert.equal(writes(), before, 'a bad time zone is not saved');
       w = saved(); await alex().getByLabel('Time zone of @alex').fill('europe/london'); await alex().getByLabel('Time zone of @alex').blur(); await w;
