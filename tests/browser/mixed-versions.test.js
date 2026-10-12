@@ -102,7 +102,9 @@ const cur = f => fs.readFileSync(path.join(ROOT, 'board', f), 'utf8');
 const TYPES = { html: 'text/html', js: 'text/javascript', css: 'text/css' };
 
 async function mixPage(browser, base, files, opts = {}) {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = [], seen = {};
+  // These cases isolate the page's own HTTP-cache/asset handshake. A service worker would become a second cache layer
+  // and bypass Playwright's per-page route fixtures, so block it in this focused test.
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, serviceWorkers: 'block' }), errors = [], seen = {};
   let loads = 0;
   page.on('pageerror', e => errors.push(e.message));
   page.on('load', () => loads++);

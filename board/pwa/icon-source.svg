@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#243447"/>
+  <circle cx="96" cy="62" r="360" fill="#ffffff" opacity="0.08"/>
+  <text x="256" y="260" fill="#ffffff" font-family="system-ui, sans-serif" font-size="172" font-weight="700" text-anchor="middle">KT</text>
+  <g fill="#ffffff">
+    <rect x="164" y="336" width="54" height="62" rx="10"/>
+    <rect x="229" y="305" width="54" height="93" rx="10"/>
+    <rect x="294" y="351" width="54" height="47" rx="10"/>
+  </g>
+</svg>

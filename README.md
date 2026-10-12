@@ -13,6 +13,7 @@
 - **Contact log:** each LinkedIn message, email, call or meeting. A **draft** does not count as contact until you mark it **sent**.
 - **Contact details and resources:** each person can have multiple labelled emails, phone numbers and profile/reference links. Each company can link to working folders in Google Drive, Dropbox, OneDrive, SharePoint or on a local computer. Large files stay there, not in GitHub.
 - **Tasks (optional):** the board, list, calendar, schedule and activity views, linked to people and companies.
+- **Installable boards:** install each board on a phone or computer as its own app. Every board has a separate name, launch target, colour and initials icon.
 - **AI helpers:** for Claude (Code on your computer, on the web and in the phone app; Desktop and Cowork), Codex and Cursor. Say "help me write a LinkedIn message to the CEO of Acme": the agent finds the person, writes a draft, logs it as a draft and sets a follow-up. **It never sends anything.**
 
 ## Start
@@ -45,6 +46,7 @@ Help for users: [docs/help](docs/help/README.md). In the web board, click **❓ 
 ## How it works
 - The data is one `board/` folder in **your** private repo. `board/tasks.json` holds settings and indexes; current boards keep each task in `board/cards/` and each CRM person in `board/people/`. Schema and rules: [board/kit/README.md](board/kit/README.md).
 - The web page is static. Your token stays in your browser and goes only to api.github.com.
+- The web page is an installable PWA. Installed boards share this page's browser storage and permissions, while each keeps its own launcher identity and opens its own repo.
 - Agents use `board/kit/keeptrack.py` (Python 3, no packages). It re-reads the latest file and retries on a conflict, so people and agents never overwrite each other.
 
 ## Privacy
