@@ -121,6 +121,10 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
 }
 ```
 Task order within the array is the order on the board. Humans are assigned with `assignees`; an **agent works on behalf of an assigned human** via a claim.
+The web task **Contacts** add field suggests existing CRM people by name, client, role or email. Selecting a person
+adds an optional `person_id` to the task's `contacts[]` entry alongside the name/role/email/phone snapshot; it does
+not edit the CRM person or create another one. Snapshots are not automatically synchronized when CRM details change.
+Manual `Name | role | email | phone` entries remain supported without a `person_id`.
 
 ### Agent claim
 When an agent picks up a task it writes (and keeps refreshing) a `claim`, so anyone can see who is running it and spot a stuck session:
@@ -173,6 +177,9 @@ holds a local path. If it cannot access one, it must say so and ask the user rat
 ## Archive files (schema 3)
 Old items move out of the active card and person files so that the current board stays small. Legacy v3 boards keep their active items in `tasks.json` (the GitHub contents API sends no content above 1 MB; the web board and `keeptrack.py` can read it raw up to 100 MB, but legacy boards are fastest below about 600 KB).
 - `keeptrack.py archive` (or the web board: Settings → Board → Archive) moves tasks in the done column with no change for `settings.archive.done_days` (default 90), people at stage Lost with no change for `lost_days` (180) and no future next step, and all but the last `keep_history` (20) history lines of each card.
+- `keeptrack.py archive <id>` (or the task's **⋯ → Archive task** menu) archives one task immediately, regardless
+  of its status or age, retaining all details, checklist, comments and history. An unfinished agent claim must be
+  released or finished first. Prefer this to deleting a task when you want to keep its record.
 - They go to `archive/<year>.json` next to `tasks.json`: `{ "version": 3, "archive": true, "year": "2025", "tasks": [...], "contacts": [...], "history": { "<card id>": [...] } }`. The year is the year of the item's last change (four digits; an item whose date has no valid year stays on the board, and any other archive key is refused); trimmed history goes to the current year.
 - `tasks.json` keeps an index: `"archive": { "files": { "2025": { "tasks": 120, "contacts": 8 } }, "last_run": "<ISO time>" }`.
 - Archive files are written first and merged by id, so a run that stops half way is safe to repeat. An item on the board and in an archive file at the same time counts as on the board.

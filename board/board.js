@@ -990,6 +990,9 @@ if (typeof window !== 'undefined') (() => {
           latest = normalise(rawL); }
         else if (rawL) latest = normalise(rawL);
         const pre = clone(latest);
+        // Archival is conditional on an unchanged snapshot. Re-evaluate that condition against
+        // each current revision rather than merging a stale optimistic task deletion.
+        if (options.recheckArchive) { base = pre; mine = clone(pre); fn(mine); }
         // three-way merge: what I saw (base), my change (mine), what is on GitHub now (pre). Checked on every attempt:
         // a choice covers only the revision that was shown, so a newer clash asks again
         const gone = deletedUnderMe(base, pre, targetIds), mg = merge3(base, mine, pre);
@@ -2304,7 +2307,8 @@ if (typeof window !== 'undefined') (() => {
     const linkAdd = drawerAddRow('cLinkNew', { placeholder: 'URL or local path (Title | location)', ghostLabel: 'Add link', label: 'New link: a cloud URL or local path, optionally as Title | location', onAdd: addLinkLine });
     const linkHint = el('p', 'hint dhint', 'Working Drive, Dropbox or local files/folders, issues, pull requests and other supporting pages for this task. Cloud access needs the matching connector/plugin/MCP and account; a local path needs an agent session on that computer. Profile links such as LinkedIn belong on the person.');
     const contacts = el('div', 'dlist'); contacts.id = 'cContactList';
-    const contactAdd = drawerAddRow('cContactNew', { placeholder: 'Name | role | email | phone', ghostLabel: 'Add contact', label: 'New contact: Name | role | email | phone', onAdd: addContactLine });
+    const contactAdd = drawerAddRow('cContactNew', { placeholder: 'Find a CRM contact, or Name | role | email | phone', ghostLabel: 'Add contact', label: 'Find a CRM contact or add a new task contact', onAdd: addContactLine });
+    attachContactSuggest(contactAdd);
     const hist = el('ol', 'hist'); hist.id = 'cHist';
     const secs = [
       drawerSection('cDescSec', { title: 'Description', action: descBtn, body: $('cDescParts') }),
@@ -2440,7 +2444,45 @@ if (typeof window !== 'undefined') (() => {
   }
   function addContactLine(txt) {
     const p = txt.split('|').map(x => x.trim()); if (!p[0]) return false;
-    const k = { name: p[0], role: p[1] || '', email: p[2] || '', phone: p[3] || '' }; edit(editing, t => { t.contacts.push(k); }, `Contacts: ${titleOf(editing)}`);
+    const k = { name: p[0], role: p[1] || '', email: p[2] || '', phone: p[3] || '' }; edit(editing, t => { if (!t.contacts.some(c => c.name === k.name && c.email === k.email && c.phone === k.phone)) t.contacts.push(k); }, `Contacts: ${titleOf(editing)}`);
+  }
+  function attachContactSuggest(row) {
+    const input = row.input, pop = el('div', 'suggest contact-suggest'); pop.id = 'cContactSuggestions'; pop.hidden = true;
+    pop.setAttribute('role', 'listbox'); pop.setAttribute('aria-label', 'CRM contacts'); row.append(pop); row.classList.add('sugwrap');
+    input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-controls', pop.id); input.setAttribute('aria-expanded', 'false'); input.autocomplete = 'off';
+    let items = [], index = -1;
+    const linked = (t, p) => t.contacts.some(k => k.person_id === p.id || (k.email && (p.emails || []).some(e => e.value.toLowerCase() === k.email.toLowerCase())) || (!k.person_id && k.name === p.name && !k.email));
+    const close = () => { pop.hidden = true; items = []; index = -1; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); };
+    const collapse = row.collapse; row.collapse = () => { close(); collapse(); };
+    const paint = () => {
+      pop.textContent = ''; items.forEach((p, i) => {
+        const option = el('button', 'sug' + (i === index ? ' on' : '')); option.type = 'button'; option.id = 'cContactOption' + i;
+        option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(i === index));
+        option.append(el('b', null, p.name), el('span', 'sm', [p.company, p.email].filter(Boolean).join(' · ')));
+        option.addEventListener('mousedown', e => e.preventDefault()); option.onclick = () => pick(i); pop.append(option);
+      });
+      pop.hidden = !items.length; input.setAttribute('aria-expanded', String(!!items.length));
+      if (index >= 0) input.setAttribute('aria-activedescendant', 'cContactOption' + index); else input.removeAttribute('aria-activedescendant');
+    };
+    const pick = i => {
+      const p = items[i], id = editing; if (!p || !id || ro) return;
+      edit(id, (t, n) => { const person = n.contacts.find(x => x.id === p.id); if (!person || linked(t, person)) return;
+        t.contacts.push({ person_id: person.id, name: person.name, role: person.role || '', email: person.email || '', phone: person.phone || '' });
+      }, `Contacts: ${titleOf(id)}`);
+      input.value = ''; close(); input.focus();
+    };
+    const refresh = () => {
+      const q = input.value.trim().toLowerCase(), t = taskNow(); if (!q || q.includes('|') || !t || ro) { close(); return; }
+      items = state.contacts.filter(p => !linked(t, p) && [p.name, p.company, p.role, ...(p.emails || []).map(e => e.value)].some(v => String(v || '').toLowerCase().includes(q)))
+        .sort((a, b) => a.name.localeCompare(b.name)).slice(0, 8); index = -1; paint();
+    };
+    input.addEventListener('input', refresh); input.addEventListener('focus', refresh); input.addEventListener('blur', () => setTimeout(close, 150));
+    input.addEventListener('keydown', e => {
+      if (pop.hidden) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); index = index < 0 ? (e.key === 'ArrowDown' ? 0 : items.length - 1) : (index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; paint(); pop.children[index].scrollIntoView({ block: 'nearest' }); }
+      else if (e.key === 'Enter' && index >= 0) { e.preventDefault(); e.stopImmediatePropagation(); pick(index); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); }
+    }, true);
   }
   function renderContactList(t) {
     const box = $('cContactList'); box.textContent = ''; $('cContactCount').textContent = t.contacts.length || '';
@@ -2588,7 +2630,7 @@ if (typeof window !== 'undefined') (() => {
       { label: il ? `Open GitHub issue #${il.n}` : 'Create GitHub issue', icon: 'github', disabled: issueBusy || (!il && !!ro), onSelect: issueAction },
       { label: 'Copy as Markdown', icon: 'clipboard-copy', onSelect: () => { const x = taskNow(); if (x) copyText(taskMarkdown(x), 'Card copied as Markdown'); } }
     ];
-    if (!ro) items.push({ separator: true }, { label: 'Delete task', icon: 'trash-2', danger: true, onSelect: deleteTask });
+    if (!ro) items.push({ separator: true }, { label: 'Archive task', icon: 'archive', onSelect: () => archiveTask() }, { label: 'Delete task', icon: 'trash-2', danger: true, onSelect: deleteTask });
     ui.menu(anchor, items, { label: `Actions for task #${t.num}` });
   }
   // ---- GitHub issue from a card: creates an issue that carries the task and tells automation how to report back ----
@@ -2637,7 +2679,14 @@ if (typeof window !== 'undefined') (() => {
   $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // closing never loses typed text
   async function deleteTask() {
     const id = editing, title = titleOf(id);
-    if (!(await ui.confirm({ title: 'Delete this task?', body: `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`, confirmLabel: 'Delete task', danger: true })) || editing !== id) return;
+    const body = el('div'); body.append(el('p', 'ui-sheet__text', `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`));
+    body.append(el('p', 'ui-sheet__text', 'Prefer Archive: nothing is deleted. Search with Include archive, then Put back on the board to restore it.'));
+    let archiveInstead = false;
+    body.append(ui.button({ icon: 'archive', label: 'Archive task instead', onClick: () => { archiveInstead = true; body.closest('dialog').close(); } }));
+    const confirmed = await ui.confirm({ title: 'Delete this task?', body, confirmLabel: 'Delete task', danger: true });
+    if (editing !== id) return;
+    if (archiveInstead) { await archiveTask(id); return; }
+    if (!confirmed) return;
     editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
   }
 
@@ -4446,6 +4495,13 @@ if (typeof window !== 'undefined') (() => {
   const archYears = () => Object.keys(((state.archive || {}).files) || {}).sort().reverse();
   const dayIso = n => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); };
   function archivePlan(d, rules) {   // takes what can be archived out of d; returns { year: { tasks, contacts, history: { id: [entries] } } }
+    if (rules.taskId) {
+      const t = d.tasks.find(x => x.id === rules.taskId);
+      if (!t) throw new Error('This task is no longer on the board. Refresh before archiving.');
+      if (t.claim && t.claim.status !== 'done') throw new Error('An agent is working on this task. Finish or release its claim before archiving.');
+      const y = todayIso().slice(0, 4); d.tasks = d.tasks.filter(x => x.id !== t.id);
+      return { [y]: { tasks: [t], contacts: [], history: {} } };
+    }
     const cutT = dayIso(rules.done_days), cutP = dayIso(rules.lost_days), today = todayIso(), plan = {}, stamp = x => x.updated || x.created || today;
     const dc = (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id;
     const part = y => plan[y] || (plan[y] = { tasks: [], contacts: [], history: {} });
@@ -4496,15 +4552,27 @@ if (typeof window !== 'undefined') (() => {
   }
   function archiveCounts() { const p = archivePlan(clone(state), archRules()), v = Object.values(p);
     return { tasks: v.reduce((n, x) => n + x.tasks.length, 0), contacts: v.reduce((n, x) => n + x.contacts.length, 0), history: v.reduce((n, x) => n + Object.values(x.history).reduce((m, h) => m + h.length, 0), 0) }; }
+  async function completeArchiveHistory(plan, rules, fresh, meta) {
+    if (!rules.taskId) return;
+    const t = Object.values(plan)[0].tasks[0], older = [];
+    for (const y of Object.keys((fresh.archive || {}).files || {}).sort()) {
+      const entry = meta && meta.files.get(`archive/${y}.json`);
+      const data = meta ? entry && entry.obj : (await readArchive(y)).data;
+      older.push(...((data && data.history || {})[t.id] || []));
+    }
+    const seen = new Set(); t.history = older.concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; });
+  }
   async function archiveSplitNow(rules, what) {
     const message = 'Archive board items'; setStatus('Archiving…');
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
         const got = await splitSnapshot(true), fresh = normalise(got.data), plan = archivePlan(clone(fresh), rules), years = Object.keys(plan);
+        await completeArchiveHistory(plan, rules, fresh, got.meta);
         if (!years.length) { setStatus(''); toast('Nothing to archive yet'); return; }
         const extras = {}, gone = new Set(), histories = {}, counts = {};
         years.forEach(y => { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           extras[rel] = jsonText(merged); counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length };
+          if (rules.taskId) { delete merged.history[rules.taskId]; extras[rel] = jsonText(merged); }
           plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); }); });
         fresh.tasks = fresh.tasks.filter(x => !gone.has(x.id)); fresh.contacts = fresh.contacts.filter(x => !gone.has(x.id));
         [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
@@ -4516,11 +4584,18 @@ if (typeof window !== 'undefined') (() => {
     }
     setStatus('Could not archive after retries', 'err'); toast('The board stayed busy. Try Archive again.', true);
   }
-  async function archiveNow() {
+  async function archiveTask(id = editing) {
+    const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked()) return;
+    if (!(await ask('Archive this task?', `“${t.title}” will leave the active board. Nothing is deleted: its details, checklist, comments and history are kept. Search with Include archive, then choose Put back on the board to restore it.`, 'Archive task'))) return;
+    if (editing !== id) return;
+    await archiveNow({ taskId: id });
+    if (!state.tasks.some(x => x.id === id)) $('dlgCard').close();
+  }
+  async function archiveNow(explicitRules) {
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }
-    const rules = archRules(); let n = archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
-    const what = `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
-    if (!(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
+    const rules = explicitRules && explicitRules.taskId ? explicitRules : archRules(); let n = rules.taskId ? { tasks: 1, contacts: 0, history: 0 } : archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
+    const what = rules.taskId ? '1 task; nothing deleted, search Include archive to restore' : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
+    if (!rules.taskId && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
     if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
@@ -4531,14 +4606,17 @@ if (typeof window !== 'undefined') (() => {
       if (raw.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); roToast(); return; }
       fresh = normalise(raw);
     } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
-    const plan = archivePlan(clone(fresh), rules), years = Object.keys(plan); if (!years.length) { setStatus(''); toast('Nothing to archive yet'); return; }
+    let plan; try { plan = archivePlan(clone(fresh), rules); } catch (e) { setStatus('Archive failed', 'err'); toast(e.message, true); return; }
+    const years = Object.keys(plan); if (!years.length) { setStatus(''); toast('Nothing to archive yet'); return; }
     const msg = `Archive ${n.tasks} tasks, ${n.contacts} people`, moved = new Map(), hist = {}, counts = {};
     try {
+      await completeArchiveHistory(plan, rules, fresh);
       for (const y of years) {   // archive files first: if the board save fails after this, the items are in both places and the board copy wins
         for (let i = 0; i < 3; i++) { const { data, sha } = await readArchive(y), merged = archiveMerge(data ? clone(data) : null, plan[y], y);
+          if (rules.taskId) { const t = merged.tasks.find(x => x.id === rules.taskId), seen = new Set(); t.history = (merged.history[rules.taskId] || []).concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; }); delete merged.history[rules.taskId]; }
           if (await writeArchive(y, merged, sha, msg)) { counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; break; }
           delete archMem[archKey(y)]; if (i === 2) throw new Error('could not save ' + archPath(y)); }
-        plan[y].tasks.concat(plan[y].contacts).forEach(x => moved.set(x.id, JSON.stringify(x))); Object.assign(hist, plan[y].history);
+        plan[y].tasks.concat(plan[y].contacts).forEach(x => moved.set(x.id, JSON.stringify(rules.taskId ? fresh.tasks.find(t => t.id === x.id) : x))); Object.assign(hist, plan[y].history);
       }
     } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     let kept = 0;   // changed since the read above: it stays on the board (the next run archives it again, replacing the copy by id)
@@ -4547,7 +4625,7 @@ if (typeof window !== 'undefined') (() => {
       d.tasks = d.tasks.filter(t => !gone(t)); d.contacts = (d.contacts || []).filter(p => !gone(p));
       [...d.tasks, ...d.contacts].forEach(x => { const h = hist[x.id]; if (!h || !x.history) return; const gone = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !gone.has(JSON.stringify(e))); });
       d.archive = Object.assign({}, d.archive); d.archive.files = Object.assign({}, d.archive.files, counts); d.archive.last_run = nowIso();
-    }, msg, [], fresh);
+    }, msg, [], fresh, { recheckArchive: true });
     archived = null; renderArchiveBox();
     if (!ok) { toast('The archive files were written, but the board was not saved. Nothing was removed from the board; run Archive again.', true); return; }
     toast(`Archived ${what}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : ''));

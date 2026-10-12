@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v39 (schema 4)
+Individual tasks can be archived without deletion through the web task menu or `archive <id>`.
+All task details, checklist, comments and history are retained, and Search can find and restore the task.
+An unfinished agent claim must be released or finished before archival. The web task Contacts field suggests
+existing CRM people and stores an optional `person_id` plus compatible contact-detail snapshots; selecting one
+does not edit the CRM record or create a new person.
+- Run `kit-update` only. No data migration or scheduled-routine changes are required.
+- Check: `python3 board/keeptrack.py archive --help` shows the optional task reference. On a disposable board, archive a task,
+  find it with `archived`, restore it with `unarchive`, and confirm its details/checklist/comments/history remain.
+
 ### v38 (schema 4)
 Shared email scans prefer canonical `email-key` RFC822 Message-ID hashes, so copies seen by different board members
 are deduplicated per contact while later replies remain new activity. `touch-source` binds verified source keys to an

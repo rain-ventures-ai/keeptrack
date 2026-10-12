@@ -145,6 +145,19 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, code, out.getvalue())
         self.assertEqual(expect, board_counts(kt.load_board()))
 
+    def test_v39_contact_reference_survives_kit_update_and_save(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit39", "fixture.json"))
+        board_dir, _ = self.use_fixture("v4_kit39", meta)
+        expected = read_json(os.path.join(board_dir, "cards", "t_first.json"))["contacts"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        first = next(t for t in data["tasks"] if t["id"] == "t_first")
+        self.assertEqual(expected, first["contacts"])
+        first["details"] += " Updated fixture."
+        self.assertTrue(kt.save_changes(data, message="Fixture roundtrip"))
+        self.assertEqual(expected, read_json(os.path.join(board_dir, "cards", "t_first.json"))["contacts"])
+
 
 if __name__ == "__main__":
     unittest.main()

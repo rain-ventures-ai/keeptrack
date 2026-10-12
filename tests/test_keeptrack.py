@@ -94,6 +94,61 @@ class LocalBoard(unittest.TestCase):
         self.assertIn("t_old", [t["id"] for t in d["tasks"]])
         self.assertEqual(d["archive"]["files"]["2025"], {"tasks": 0, "contacts": 0})
 
+    def test_individual_archive_preserves_full_task_and_leaves_others(self):
+        data = self.read()
+        target = data["tasks"][1]
+        target.update(num=12, details="Full details", comments=[{"by": "osouthgate", "text": "Keep me"}],
+                      links=[{"url": "https://example.com"}], contacts=[{"name": "Casey"}],
+                      history=[{"text": str(i)} for i in range(240)])
+        year = str(kt.board_today(data).year)
+        os.makedirs(os.path.join(self.dir.name, "board", "archive"))
+        older = [{"text": "old event"}]
+        write(os.path.join(self.dir.name, "board", "archive", "2024.json"), {"tasks": [], "contacts": [], "history": {"t_live": older}})
+        write(os.path.join(self.dir.name, "board", "archive", year + ".json"), {"tasks": [], "contacts": [], "history": {"t_live": older}})
+        data["archive"] = {"files": {"2024": {"tasks": 0, "contacts": 0}, year: {"tasks": 0, "contacts": 0}}}
+        write(self.file, data)
+        before = copy.deepcopy(target)
+        before["history"] = older + before["history"]
+        args = Args(ref="#12", done_days=None, lost_days=None, keep_history=None, dry_run=True)
+        self.quiet(kt.cmd_archive, args)
+        self.assertEqual(self.read(), data)
+        args.dry_run = False
+        self.quiet(kt.cmd_archive, args)
+        arch = os.path.join(self.dir.name, "board", "archive", str(kt.dt.date.today().year) + ".json")
+        self.assertEqual(read_json(arch)["tasks"], [before])
+        self.assertEqual([t["id"] for t in self.read()["tasks"]], ["t_old"])
+        self.quiet(kt.cmd_unarchive, Args(ref="#12"))
+        restored = next(t for t in self.read()["tasks"] if t["id"] == "t_live")
+        for field in ("details", "comments", "links", "contacts", "todos"):
+            self.assertEqual(restored[field], before[field])
+        self.assertEqual(restored["history"][:-1], before["history"])
+
+    def test_individual_archive_refuses_live_claim_and_bulk_flags(self):
+        data = self.read(); data["tasks"][1]["claim"] = {"status": "running", "agent": "claude"}; write(self.file, data)
+        args = Args(ref="t_live", done_days=None, lost_days=None, keep_history=None, dry_run=False)
+        with self.assertRaises(SystemExit): self.quiet(kt.cmd_archive, args)
+        self.assertEqual(self.read(), data)
+        args.done_days = 1
+        with self.assertRaises(SystemExit): self.quiet(kt.cmd_archive, args)
+        self.assertEqual(self.read(), data)
+
+    def test_individual_archive_rechecks_claim_after_conflict(self):
+        real = kt.save_changes
+        calls = []
+        def racing(data, base, msg, **kwargs):
+            if not calls:
+                calls.append(1); current = self.read()
+                current["tasks"][1]["claim"] = {"agent": "claude", "status": "running"}
+                write(self.file, current); return False
+            return real(data, base, msg, **kwargs)
+        kt.save_changes = racing
+        try:
+            with self.assertRaises(SystemExit):
+                self.quiet(kt.cmd_archive, Args(ref="t_live", done_days=None, lost_days=None, keep_history=None, dry_run=False))
+            self.assertEqual(len(self.read()["tasks"]), 2)
+            self.assertEqual(self.read()["tasks"][1]["claim"]["status"], "running")
+        finally: kt.save_changes = real
+
     def test_contact_methods_keep_legacy_first_values(self):
         p = {"id": "p_casey", "name": "Casey", "company": "Acme", "email": "work@example.test", "phone": "+44 20",
              "linkedin": "https://linkedin.com/in/casey", "links": [], "emails": [], "phones": []}

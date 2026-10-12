@@ -738,6 +738,8 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .cmcard.mine { border-left: 3px solid var(--accent); }
 .sugwrap { position: relative; }
 .suggest { position: absolute; left: 0; right: 0; top: calc(100% - 2px); z-index: var(--z-popover); background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: 0 8px 24px rgba(0,0,0,.28); padding: var(--sp-1); max-height: 240px; overflow: auto; } .suggest[hidden] { display: none; }
+.contact-suggest { position: static; margin-top: var(--sp-1); }
+.contact-suggest .sug { flex-wrap: wrap; gap: var(--sp-1); min-height: var(--touch); }
 .sug { display: flex; gap: var(--sp-4); align-items: baseline; width: 100%; text-align: left; border: 0; background: transparent; padding: 7px var(--sp-4); border-radius: var(--r-md); cursor: pointer; min-height: 0; color: var(--text); } .sug.on, .sug:hover { background: var(--accent-soft); } .sug .sm { color: var(--muted); font-size: var(--fs-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 @media (max-width: 760px) { .sug { min-height: var(--touch); align-items: center; } }
 .hint.ok { color: var(--ok); } .hint.bad { color: var(--danger); }
