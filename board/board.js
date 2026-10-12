@@ -2311,7 +2311,7 @@ if (typeof window !== 'undefined') (() => {
       if (mode === 'smart') peers = peers.filter(x => x.priority === t.priority);
       let at = beforeId ? peers.findIndex(x => x.id === beforeId) : peers.length; if (at < 0) at = peers.length;
       const lower = at ? peers[at - 1] : null, upper = at < peers.length ? peers[at] : null;
-      let a = lower && validRank(lower.rank) ? lower.rank : null, b = upper && validRank(upper.rank) ? upper.rank : null; if (a !== null && b !== null && a >= b) a = null;
+      let a = lower && validRank(lower.rank) ? lower.rank : null, b = upper && validRank(upper.rank) ? upper.rank : null; if (a !== null && b !== null && a >= b) a = peers.reduce((m, x) => validRank(x.rank) && x.rank < b && (m === null || x.rank > m) ? x.rank : m, null);   // equal neighbours: just below b, as keeptrack.py move does
       t.rank = keyBetween(a, b); stamp(t); return;
     }
     const [t] = n.tasks.splice(i, 1); const from = t.column; t.column = colId; reopenOutcome(n, t, from, colId); stamp(t);
@@ -4219,6 +4219,7 @@ if (typeof window !== 'undefined') (() => {
     if (ro) { roToast(); return false; }
     if (!inboxOn() || !splitMeta) { inboxSay('The Review Inbox needs split storage (schema 4).', true); return false; }
     let got; try { got = await splitSnapshot(true); } catch (e) { inboxSay('Could not read the board: ' + (e.message || e), true); return false; }
+    if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return false; }   // the board now needs a newer kit than this page
     const p = proposalIn(got.meta, id);
     if (!p) { inboxSay('That proposal is no longer on the board.', true); await load(true); return false; }
     if (p.status !== 'pending') { inboxSay(alreadyMsg(p), true); await load(true); return false; }
@@ -4278,6 +4279,7 @@ if (typeof window !== 'undefined') (() => {
   async function undoDecision(id) {
     if (ro) { roToast(); return false; }
     let got; try { got = await splitSnapshot(true); } catch (e) { inboxSay('Could not read the board: ' + (e.message || e), true); return false; }
+    if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return false; }
     const p = proposalIn(got.meta, id), d = p && p.decision, u = d && d.undo;
     if (!p || p.status !== 'accepted' || !d.result || !u) { inboxSay('Only an accepted proposal with an undo record can be undone.', true); return false; }
     const fresh = normalise(got.data);
@@ -5510,7 +5512,9 @@ if (typeof window !== 'undefined') (() => {
     const message = 'Archive board items'; setStatus('Archiving…');
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const got = await splitSnapshot(true), fresh = normalise(got.data), plan = archivePlan(clone(fresh), rules), years = Object.keys(plan);
+        const got = await splitSnapshot(true);
+        if (minKitOf(got.data)) { setKitRo(got.data); setStatus(''); roToast(); return; }   // these saves skip mutate: the same kit check here
+        const fresh = normalise(got.data), plan = archivePlan(clone(fresh), rules), years = Object.keys(plan);
         await completeArchiveHistory(plan, rules, fresh, got.meta);
         if (!years.length) { setStatus(''); toast('Nothing to archive yet'); return; }
         const extras = {}, gone = new Set(), histories = {}, counts = {};
@@ -5548,6 +5552,7 @@ if (typeof window !== 'undefined') (() => {
     try { const res = await gh('GET'); if (!res.ok) throw new Error('GitHub error ' + res.status); const { raw } = await fileJson(res);
       if (Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA) { newerSchema = raw.version; checkKit(); writeBlocked(); return; }
       if (raw.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); roToast(); return; }
+      if (minKitOf(raw)) { setKitRo(raw); setStatus(''); roToast(); return; }   // before the archive files are written
       fresh = normalise(raw);
     } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     let plan; try { plan = archivePlan(clone(fresh), rules); } catch (e) { setStatus('Archive failed', 'err'); toast(e.message, true); return; }
@@ -5579,7 +5584,7 @@ if (typeof window !== 'undefined') (() => {
     if (isSplit(state)) {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
       for (let attempt = 0; attempt < 4; attempt++) {
-        try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (!entry) break; const nextArchive = clone(entry.obj), fresh = normalise(got.data);
+        try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } if (!entry) break; const nextArchive = clone(entry.obj), fresh = normalise(got.data);
           const arch = (entry.obj[k] || []).find(x => x.id === item.id), h = (entry.obj.history || {})[item.id];   // the archive as it is now, not the copy the dialog showed
           const src = arch ? (h && h.length ? Object.assign({}, arch, { history: h.concat(arch.history || []) }) : arch) : item;
           if (!fresh[k].some(x => x.id === item.id)) { const x = clone(src); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }

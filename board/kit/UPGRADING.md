@@ -33,9 +33,10 @@ A safety release with small fixes to Inbox questions: no data migration, the boa
   upgrade writes none; leave it as it is (43 once anyone has used `wait`, 44 once an agent has asked a question).
   Raise it (`settings-set --min-kit N`) only for a later release whose notes ask for it, and only after every copy is
   upgraded: this repo, plugin copies, relay, routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v44 ignore the
-  value, so it cannot shut them out. A typo above every kit is not a lock-out: `settings-set --min-kit N` on its own
-  lowers it to at most this kit (never below what the cards and questions need), and `doctor --fix` lowers a value
-  above the published kit to the published kit.
+  value, so it cannot shut them out. A typo above every kit is not a lock-out: when the stored value is above the published kit,
+  `settings-set --min-kit N` on its own lowers it to at most this kit (never below what the cards and questions need),
+  and `doctor --fix` lowers it to the published kit. A value the published kit reaches is real: both refuse, and the
+  answer is `kit-update`.
 - **`doctor --fix` and `DUPLICATE_RANK`:** the fix now breaks only the tied ranks and keeps every other card's rank and
   order. Before, it re-ranked the whole column by priority and due date.
 - **`kit-update`** takes every file from one commit of the kit, checks that the fetched `keeptrack.py` is the release
@@ -44,11 +45,15 @@ A safety release with small fixes to Inbox questions: no data migration, the boa
   any more: set it only for a custom kit; when it fails, the update stops instead of using the official kit.
 - **`.board-claim.json`** now records each claimed card with its session. An existing one-card record is still read
   and is rewritten in the new shape at the next claim; the hook script is unchanged. Agents running parallel sessions
-  in one clone should give each its own `BOARD_SESSION` (a random id, never the claude.ai session id).
+  in one clone should give each its own `BOARD_SESSION` (a random id, never the claude.ai session id). Update plugin
+  copies (the `keeptrack` plugin's hook runs its own `keeptrack.py`) at the same time as this repo: a v44 copy writes
+  the old one-card record on `claim`, `done` or `release`, which drops the other sessions' cards from it, so they get no
+  automatic heartbeats and go STALE after 30 minutes.
 - **Refresh this repo's `AGENTS.md`** (and `CLAUDE.md` where it repeats them) from `board/kit/templates/AGENTS.md`:
-  rule 1 must ban hand edits of every board JSON file (`tasks.json`, `cards/`, `people/`, `archive/`), rule 3 and the
-  heartbeat line must say 15 minutes (30 minutes to STALE), and the `wait` line must warn never to `unwait` a wait you
-  did not set or one on someone else. `kit-check` now prints `template drift (warning)` while rule 1 or the heartbeat
+  rule 1 must ban hand edits of every board JSON file (`tasks.json`, `cards/`, `people/`, `projects/`, `proposals/`,
+  `archive/`), rule 3 and the heartbeat line must say 15 minutes (30 minutes to STALE), and the `wait` line must warn
+  never to `unwait` a wait you did not set or one on someone else. `kit-check` now prints `template drift (warning)`
+  while rule 1 leaves out a board folder this repo has (any wording that names them all is fine) or the heartbeat
   minutes lag the template.
 - Web page: after the upgrade, hard-refresh every open tab once. Settings codes made by older pages still import; a
   code copied without "Include tokens and keys" removes this browser's tokens on import.

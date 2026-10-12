@@ -555,7 +555,16 @@ class Waiting(unittest.TestCase):
         self.assertEqual(self.read()["settings"]["waiting_days"], 3)
         self.assertIn("between", self.refusal(self.settings_set, waiting_days=400))
 
+    def published_kit(self, v):
+        self.addCleanup(setattr, kt, "kit_fetch", kt.kit_fetch)
+        def fetch(name, src=None):
+            if v is None:
+                raise kt.KitError("offline")
+            return json.dumps({"version": v}).encode()
+        kt.kit_fetch = fetch
+
     def test_a_typo_min_kit_above_this_kit_can_only_come_down_to_it(self):
+        self.published_kit(kt.KIT_VERSION)
         self.wait(1)   # the board's content needs kit v43
         self.edit(lambda d: d["settings"].update(min_kit=450))
         self.assertIn("lower --min-kit on its own", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION, title="New"))
@@ -568,6 +577,22 @@ class Waiting(unittest.TestCase):
         self.assertIn("between", self.refusal(self.settings_set, min_kit=42))         # from here: never lowered again
         self.settings_set(title="New")
         self.assertEqual("New", self.read()["settings"]["title"])
+
+    def test_settings_set_never_lowers_a_min_kit_the_published_kit_reaches(self):
+        self.wait(1)
+        self.edit(lambda d: d["settings"].update(min_kit=kt.KIT_VERSION + 2)); before = self.read()
+        self.published_kit(kt.KIT_VERSION + 5)   # a newer kit is out: the value is real, not a typo
+        self.assertIn("kit-update", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION))
+        self.assertEqual(before, self.read())
+        self.published_kit(None)   # can't tell a typo from a newer kit: refuse
+        self.assertIn("could not be checked", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION))
+        self.assertEqual(before, self.read())
+        self.published_kit(kt.KIT_VERSION + 2)   # exactly the published kit: still real
+        self.assertIn("is not lowered", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION))
+        self.assertEqual(before, self.read())
+        self.published_kit(kt.KIT_VERSION + 1)   # above the published kit: a typo, may come down
+        self.settings_set(min_kit=kt.KIT_VERSION)
+        self.assertEqual(kt.KIT_VERSION, self.read()["settings"]["min_kit"])
 
     def test_doctor_fix_lowers_a_min_kit_above_the_published_kit_only(self):
         self.addCleanup(setattr, kt, "kit_fetch", kt.kit_fetch)

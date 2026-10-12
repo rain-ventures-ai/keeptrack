@@ -37,7 +37,7 @@ class SkillParity(unittest.TestCase):
 class Templates(unittest.TestCase):
     def test_rule_one_covers_every_board_json_file(self):
         rule = TEMPLATE.split("1. ", 1)[1].split(" 2. ", 1)[0]
-        for part in ("JSON files under `board/`", "tasks.json", "cards/", "people/", "archive/"):
+        for part in ("JSON files under `board/`", "tasks.json", "cards/", "people/", "projects/", "proposals/", "archive/"):
             self.assertIn(part, rule)
 
     def test_heartbeat_and_stale_timing_match_the_code(self):
@@ -52,6 +52,10 @@ class Templates(unittest.TestCase):
         self.assertIn("never your claude.ai session id", TEMPLATE)
         self.assertIn("short random id you generate for this run as `BOARD_SESSION` (never your claude.ai session id", claude)
         self.assertNotRegex(TEMPLATE + claude, r"Claude session id as `BOARD_SESSION`")
+
+    def test_upgrade_notes_say_to_update_plugin_copies_with_the_claim_record(self):
+        v45 = read("UPGRADING.md").split("### v45", 1)[1].split("### v44", 1)[0]
+        self.assertRegex(v45, r"Update plugin copies .* at the same time as this repo")
 
     def test_template_has_the_wait_rules(self):
         self.assertRegex(TEMPLATE, r"never `unwait` a wait you did not set")

@@ -1170,6 +1170,19 @@ class KitUpdateSafety(unittest.TestCase):
         self.assertIn("rule 1", drift[0]); self.assertIn("5, 10 minutes", drift[1])
         shutil.copy(os.path.join(self.KIT, "templates", "AGENTS.md"), agents)
         self.assertEqual([], kt.kit_drift())
+        for d in ("cards", "people", "projects", "proposals", "archive"):
+            os.makedirs(os.path.join(self.temp.name, "board", d))
+        self.assertEqual([], kt.kit_drift())   # the template names every board folder
+        with open(agents, "w") as f:   # any wording that names every folder is fine (consulting's rule 1)
+            f.write("## Rules\n1. **Never edit the board JSON files by hand:** `board/tasks.json` and everything in `board/cards/`, "
+                    "`board/people/`, `board/projects/`, `board/proposals/` and `board/archive/`. Use `python3 board/keeptrack.py ...`.\n")
+        self.assertEqual([], kt.kit_drift())
+        with open(agents, "w") as f:   # the v44 template's rule 1: projects/ and proposals/ missing
+            f.write("1. **Never edit the JSON files under `board/` by hand (`tasks.json`, `cards/`, `people/`, `archive/`)**\n"
+                    "2. Elsewhere: `projects/` and `proposals/` do not count outside rule 1.\n")
+        drift = kt.kit_drift()
+        self.assertEqual(1, len(drift)); self.assertIn("projects/, proposals/", drift[0])
+        shutil.copy(os.path.join(self.KIT, "templates", "AGENTS.md"), agents)
         with contextlib.redirect_stdout(io.StringIO()) as out:
             kt.cmd_kit_check(Args(source=self.kit, card=False))
         self.assertIn("board kit is current", out.getvalue())   # a warning never fails kit-check
@@ -1288,6 +1301,27 @@ class MoveInPlace(unittest.TestCase):
             kt.cmd_move(Args(id=third["id"], column=None, column_pos=None, before="t_second", after=None, top=False, priority=None, note=None))
         moved = next(t for t in kt.load()[0]["tasks"] if t["id"] == third["id"])
         self.assertTrue(kt.valid_rank(moved["rank"])); self.assertLess(moved["rank"], "a0")   # as the page does: below the pair
+
+    def test_move_next_to_equal_ranks_lands_beside_them_not_at_the_top(self):
+        add = lambda title: kt.cmd_add(Args(title=title, column=None, client=None, project=None, priority="medium", due=None, assign=None,
+                                            label=None, details=None, todo=None, all=True))
+        with contextlib.redirect_stdout(io.StringIO()):
+            add("Above"); add("Moved")
+        tasks = kt.load()[0]["tasks"]
+        above, moved = (next(t for t in tasks if t["title"] == x) for x in ("Above", "Moved"))
+        ranks = {"t_first": "a2", "t_second": "a2", above["id"]: "a1"}   # A=a1, then B and C tied at a2 (two concurrent appends)
+        for t in tasks:
+            if t["column"] == above["column"] and t["id"] not in ranks and t["id"] != moved["id"]:
+                ranks[t["id"]] = "a0"   # anything else in the column sits above A
+        for tid, rank in ranks.items():
+            path = os.path.join(self.board_dir, "cards", f"{tid}.json"); c = read_json(path); c["rank"] = rank; write(path, c)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_move(Args(id=moved["id"], column=None, column_pos=None, before="t_second", after=None, top=False, priority=None, note=None))
+        col = [t for t in kt.sort_tasks(kt.load()[0])["tasks"] if t["column"] == above["column"]]
+        order = [t["id"] for t in col]
+        self.assertEqual(order.index(above["id"]) + 1, order.index(moved["id"]))   # just below A, next to the pair, not at the top
+        rank = next(t["rank"] for t in col if t["id"] == moved["id"])
+        self.assertTrue("a1" < rank < "a2"); self.assertEqual(1, [t["rank"] for t in col].count(rank))   # no new tie
 
     def test_appended_ranks_rarely_collide_and_keep_order(self):
         ranks = ["a0", "a1"]

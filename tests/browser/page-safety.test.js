@@ -159,6 +159,29 @@ const CLAUDE = { kb_agents: 'claude', kb_claude_url: 'https://api.anthropic.com/
       assert.match(await page.locator('#roBar').textContent(), new RegExp(`kit v${KIT + 2}`)); await page.close();
     }
 
+    { // ... also on the paths that re-read and save without mutate (archive) and before an Inbox accept opens its review
+      const api = new Github('acme/board', board('Kit', {}, [card('t_a', 1, 'First')])), page = await openBoard(browser, api);
+      api.edit('tasks.json', r => { r.settings.min_kit = KIT + 3; }); api.calls = [];
+      await page.locator('.card', { hasText: 'First' }).dblclick(); await page.locator('#dMore').click();
+      await page.getByRole('menuitem', { name: 'Archive task', exact: true }).click();
+      const d = page.getByRole('alertdialog'); await d.waitFor(); await d.getByRole('button', { name: 'Archive task', exact: true }).click();
+      await page.waitForFunction(() => document.body.classList.contains('ro'));
+      assert.equal(api.writes().length, 0, 'no archive file and no board write'); assert.ok(api.json('cards/t_a.json'), 'the card stays');
+      assert.ok(!Object.keys(api.files).some(k => k.startsWith('archive/'))); assert.deepEqual(page.errors, []); await page.close();
+    }
+    {
+      const prop = { id: 'r_kit0000001', version: 1, kind: 'task.update', status: 'pending', title: 'Make First high', source: { kind: 'other', id: 'x', revision: '1', title: 'x', date: '2026-10-08', url: '' },
+        run: { routine: 'r', run_id: '1', at: T0 }, action_key: 'akk', work_key: 'wkk', reason: 'r', target: { type: 'task', id: 't_a', base: { priority: 'medium' } }, change: { priority: 'high' },
+        likely_duplicates: [], decision: null, history: [], created: T0, createdBy: 'routine' };
+      const api = new Github('acme/board', board('Kit', {}, [card('t_a', 1, 'First')], { 'proposals/r_kit0000001.json': prop }));
+      const page = await openBoard(browser, api); await page.locator('#btnInbox').click(); await page.waitForSelector('#board.v-inbox .inbox');
+      api.edit('tasks.json', r => { r.settings.min_kit = KIT + 3; }); api.calls = [];
+      await page.locator('article.prop[data-id="r_kit0000001"] [data-act="accept"]').click();
+      await page.waitForFunction(() => document.body.classList.contains('ro'));
+      assert.equal(api.writes().length, 0, 'no write'); assert.equal(api.json('cards/t_a.json').priority, 'medium');
+      assert.equal(api.json('proposals/r_kit0000001.json').status, 'pending'); assert.deepEqual(page.errors, []); await page.close();
+    }
+
     // ---- 3. the agent limit is decided on the board as saved; clearing a wait too ----
     {
       const api = new Github('acme/board', board('Limit', { max_agent_claims: 1 }, [card('t_a', 1, 'First'), card('t_b', 2, 'Second')])), cron = [];

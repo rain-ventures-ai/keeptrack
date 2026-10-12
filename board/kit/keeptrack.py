@@ -2425,7 +2425,8 @@ def cmd_move(a):
                 lo = peers[-1].get("rank") if peers else None; hi = None
             if lo is not None and not valid_rank(lo): lo = None
             if hi is not None and not valid_rank(hi): hi = None
-            if lo is not None and hi is not None and lo >= hi: lo = None   # equal neighbours (two concurrent appends): as the page does
+            if lo is not None and hi is not None and lo >= hi:   # equal neighbours (two concurrent appends): as the page does,
+                lo = max((x["rank"] for x in peers if valid_rank(x.get("rank")) and x["rank"] < hi), default=None)   # just below hi
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
@@ -2690,6 +2691,15 @@ def kit_ref():
     return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
 
 
+def kit_published():
+    """The published kit's version (manifest.json), or None when it can't be read: then a min_kit above this kit may be real."""
+    try:
+        v = json.loads(kit_fetch("manifest.json"))["version"]
+    except (KitError, ValueError, KeyError, TypeError, OSError):
+        return None
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
 def kit_source():
     if not _KIT_SRC:
         if KIT_URL:
@@ -2764,9 +2774,14 @@ def kit_drift():
             split = json.load(f).get("layout") == "split"
     except (OSError, ValueError, AttributeError):
         split = os.path.isdir(os.path.join(ROOT, os.path.dirname(PATH), "cards"))
-    if split and "Never edit the JSON files under `board/` by hand" not in text:
-        out.append("AGENTS.md rule 1 does not ban hand edits of every JSON file under board/ (split storage keeps cards and people "
-                   "in their own files): copy rule 1 from the kit's templates/AGENTS.md")
+    if split:   # rule 1 must name every board folder (any wording): cards/ and people/, and the others where they exist
+        rule1 = next(iter(re.findall(r"(?m)^\s*1\.\s.*$", text)), "")
+        board_dir = os.path.join(ROOT, os.path.dirname(PATH))
+        folders = ["cards", "people"] + [d for d in ("projects", "proposals", "archive") if os.path.isdir(os.path.join(board_dir, d))]
+        missing = [f"{d}/" for d in folders if f"{d}/" not in rule1]
+        if missing:
+            out.append(f"AGENTS.md rule 1 does not ban hand edits of {', '.join(missing)} (split storage keeps each card, person, "
+                       "project and question in its own file): copy rule 1 from the kit's templates/AGENTS.md")
     mins = sorted({int(n) for n in re.findall(r"every ~?(\d+) minutes", text)} - {HEARTBEAT_EVERY // 60})
     if mins:
         out.append(f"AGENTS.md gives heartbeat timing of {', '.join(map(str, mins))} minutes; the tools beat every "
@@ -3035,8 +3050,8 @@ def doctor_board(fix=False):
         problem("SETTINGS", "tasks.json", f"settings.min_kit {raw_min!r} must be a whole number (a kit version).")
     if min_kit > KIT_VERSION:
         problem("KIT_OLD", "tasks.json", f"This keeptrack.py is kit v{KIT_VERSION}, but the board needs kit v{min_kit} (settings.min_kit): "
-                "it may not know a rule a card relies on. Update the board tools (kit-update) before writing; if the value is a typo "
-                f"(above the published kit), doctor --fix or settings-set --min-kit {KIT_VERSION} lowers it.")
+                "it may not know a rule a card relies on. Update the board tools (kit-update) before writing. Only a value above the "
+                "published kit is a typo, which doctor --fix lowers.")
     local_kit = kit_local() if ROOT else 0   # a plugin copy has no clone: only the constant above is checked
     if local_kit and min_kit > local_kit and local_kit != KIT_VERSION:
         problem("KIT_OLD", "board/KIT_VERSION", f"This repo's board kit is v{local_kit}, but the board needs kit v{min_kit} (settings.min_kit).")
@@ -3093,11 +3108,8 @@ def doctor_board(fix=False):
 
     typo_kit = 0   # min_kit above even the published kit is a typo: --fix lowers it to the published kit (this one at most)
     if fix and min_kit > KIT_VERSION:
-        try:
-            published = json.loads(kit_fetch("manifest.json"))["version"]
-        except (KitError, ValueError, KeyError, TypeError, OSError):
-            published = None   # can't tell a typo from a newer kit: leave it (and the board) alone
-        if isinstance(published, int) and not isinstance(published, bool) and min_kit > published:
+        published = kit_published()   # None: can't tell a typo from a newer kit: leave it (and the board) alone
+        if published is not None and min_kit > published:
             typo_kit = max(needed, min(published, KIT_VERSION))
     if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)) and (min_kit <= KIT_VERSION or typo_kit):
         before = json.loads(json.dumps(data))
@@ -4975,6 +4987,13 @@ def cmd_settings_set(a):
         if getattr(a, "min_kit", None) is not None:
             cur = st.get("min_kit") if isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) else 0
             if cur > KIT_VERSION:   # a typo that locks every tool out: it may come down, to a kit this one is, never below the content
+                if _MUT.get("published") is None:
+                    _MUT["published"] = kit_published() or 0   # once per run: fn may run again after a lost race
+                if not _MUT["published"] or cur <= _MUT["published"]:   # within the published kit (or can't tell): real, not a typo
+                    sys.exit(f"this board needs kit v{cur} (settings.min_kit), and "
+                             + (f"the published kit is v{_MUT['published']}" if _MUT["published"] else "the published kit could not be checked")
+                             + ", so it is not lowered (only a value above the published kit is a typo). Upgrade the board tools: "
+                             "python3 board/keeptrack.py kit-update")
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "max_agent_claims",
                                                                   "rename_stage", "stages")):
@@ -5027,7 +5046,7 @@ def cmd_settings_set(a):
     try:
         mutate(fn, "Board settings")
     finally:
-        _MUT["lower_min_kit"] = False
+        _MUT["lower_min_kit"] = False; _MUT.pop("published", None)
 
 
 def cmd_client_link(a):
@@ -6804,7 +6823,7 @@ def main():
                    help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
     s.add_argument("--min-kit", dest="min_kit", type=int,
                    help="the oldest board kit that may write this board; only between the stored value and this kit's version "
-                        "(a stored value above this kit, a typo, may come down to it)")
+                        "(a stored value above the published kit, a typo, may come down to it)")
     s.set_defaults(f=cmd_settings_set)
     s = sub.add_parser("proposal-add", help="add one proposal, or a JSON list, to the Review Inbox")
     s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")
