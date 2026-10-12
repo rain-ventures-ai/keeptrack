@@ -1008,6 +1008,10 @@ if (typeof window !== 'undefined') (() => {
         }
         const protectedRemoval = pre.contacts.find(p => memberOf(p, pre) && !latest.contacts.some(x => x.id === p.id));
         if (protectedRemoval) { state = pre; render(); fail('Board members’ own records cannot be removed from the CRM.'); return false; }
+        const missingCompany = latest.people.find(m => memberCompanies(m).some(company => !latest.clients.includes(company)));
+        if (missingCompany) { state = pre; render(); fail('A board member company cannot be removed while linked. Explicitly unlink it in Board → Members first.'); return false; }
+        const removedCompanyMember = pre.people.find(m => memberCompanies(m).length && !latest.people.some(x => x.github === m.github));
+        if (removedCompanyMember) { state = pre; render(); fail('Explicitly unlink this member’s own companies before removing the member.'); return false; }
         fixNums(latest, pre); ensureRanks(latest);
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
@@ -2619,6 +2623,13 @@ if (typeof window !== 'undefined') (() => {
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
   $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
+  $('dlgCard').addEventListener('dblclick', e => {
+    const drawer = $('dlgCard'), r = drawer.getBoundingClientRect();
+    // Native dialog backdrops target the dialog itself. Padding inside the drawer is not backdrop.
+    if (e.target !== drawer || (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)) return;
+    if (document.querySelector('dialog[open]:not(#dlgCard)')) return;   // never dismiss a task underneath a confirmation
+    $('cClose').click();   // reuse title/description saves, context cleanup and native focus restoration
+  });
   // a card link always names its board (?repo=…), whatever the address bar holds, so whoever opens it lands on the right repo
   const copyTaskLink = () => { const t = taskNow(); if (t) copyText(`${location.origin}${DEMO ? location.pathname + location.search : boardUrl()}#${t.num}`, `Link to #${t.num} copied`); };
   // the ⋯ menu: copy link or reference, the GitHub issue, Markdown, delete
@@ -2895,7 +2906,7 @@ if (typeof window !== 'undefined') (() => {
     ['agEmail', 'mail', 'Email contact sync', 'A scheduled routine records contact history from Gmail or Outlook.']];
   function agentChips() {
     const codex = $('sUseCodex').checked; setChip($('agLocalChip'), codex ? '@codex on' : 'In your app', codex ? 'ok' : 'neutral');
-    const em = $('sUseEmail').checked; setChip($('agEmailChip'), em ? 'On' : 'Off', em ? 'ok' : 'neutral');
+    const em = $('sUseEmail').checked; setChip($('agEmailChip'), em ? 'Marked as set up' : 'Not marked', 'neutral');
     const box = $('agChooser'); box.textContent = '';
     AG_PICKS.forEach(([id, ic, title, text]) => {
       const b = el('button', 'agpick'), t = el('span', 'agpick__t'), chip = $(id + 'Chip').cloneNode(true); b.type = 'button'; chip.removeAttribute('id'); chip.removeAttribute('role');
@@ -3047,6 +3058,25 @@ if (typeof window !== 'undefined') (() => {
       (c.repo ? `\nI already have a board: ${c.repo}. My GitHub username is ${c.me || '(ask me)'}.` : ''), 'Setup prompt copied. Paste it into a new chat with Claude, Codex or Cursor.'];
   }
   function copyPrompt(kind) { const [text, msg] = setupPrompt(kind); copyText(text, msg); }
+  if ($('routineSetupCopy')) $('routineSetupCopy').onclick = () => {
+    const c = cfg(), workflows = { notes: 'post-meeting notes and action proposals', email: 'contact-email history', cleanup: 'safe board cleanup proposals', tasks: 'task agent requests', custom: 'custom goals or briefing' };
+    const kind = $('routineWorkflow').value, workflow = workflows[kind] || workflows.custom;
+    const prompt = [
+      `Help me set up a Keeptrack routine for ${workflow}, one step at a time.`,
+      `Board: ${c.repo || '(ask me)'}; branch: ${c.branch}; board path: ${c.path}; owner: ${c.me || '(ask me)'}.`,
+      `My goals/instructions: ${$('routineGoals').value.trim() || '(ask me what outcome I want)'}.`,
+      `Requested schedule/time zone: ${$('routineSchedule').value.trim() || '(ask me)'}.`,
+      'Read https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/ROUTINES.md and https://github.com/rain-ventures-ai/keeptrack/blob/main/docs/help/schedules.md first, plus the specialist notes/email/task skill when relevant.',
+      'First inspect existing routine registrations and their actual scheduler. Reuse a matching board+owner+workflow binding; do not create a duplicate. Ask which supported runner to use and report unsupported setup honestly. Never treat browser preferences or a repo registration as a working schedule.',
+      'Confirm the owner, board context, approved sources/accounts, output location, goals, time zone and schedule with me before provisioning or enabling anything. Give each board/owner its own binding and checkpoints, with separate cursors per source. Never carry context or credentials between boards. Verify access with read-only checks.',
+      'Default to read-only analysis and proposals. Never create, complete, assign, edit, delete or archive tasks or contacts without action-specific approval. Contact-history imports need explicit scope approval; task-agent execution needs an explicit authorized request. Cleanup must propose candidates and reasons first, never silently delete or archive.',
+      'Do not publish private email content. Shared-message summaries require explicit sharing approval and evidence that every intended recipient received that specific message, not just another reply in its thread. Never send messages or change a mailbox. Do not store secrets, raw email bodies or private source content in prompts, repo reports or checkpoints.',
+      'Before writes, verify explicit board+branch+path+owner and source scope using keeptrack.py. Plan overlap handling: owner-specific IDs/checkpoints, canonical source keys for shared imports and a safe publication guard for a shared output; local locks alone do not coordinate separate runners.',
+      'After approved scheduler setup, register its real ID, runtime, management location, schedule/time zone and allowed connections in automation/routines/<owner-workflow-id>.json; leave unknown observations null/unverified. Never invent a live status or successful run.',
+      'Follow the routine start/finish reporting contract with a unique run ID, pushed start report before work and pushed completion report with observed summary/counts. Preserve history and source checkpoints. Run an approved bounded test, report evidence and where to manage/pause the schedule.'
+    ].join('\n\n');
+    copyText(prompt, 'Routine setup prompt copied. Nothing has been scheduled.');
+  };
   $('hSetupPrompt').onclick = () => copyPrompt('start');
   function renderTools() {
     const pick = LS.get('kb_tool', 'desktop'), bar = $('agTools'), body = $('agToolBody'), c = cfg();
@@ -3070,7 +3100,7 @@ if (typeof window !== 'undefined') (() => {
     const c = cfg(), generation = ++routineLoad, box = $('routineRegister');
     box.textContent = 'Loading routine reports…';
     if (DEMO || !c.repo) { box.textContent = 'Connect a board to see its routine reports.'; return; }
-    const current = () => generation === routineLoad && cfg().repo === c.repo && cfg().branch === c.branch;
+    const current = () => generation === routineLoad && cfg().repo === c.repo && cfg().branch === c.branch && cfg().path === c.path;
     try {
       const r = await ghGet(`/repos/${c.repo}/contents/automation/routines?ref=${encodeURIComponent(c.branch)}`, null, c);
       if (!current()) return;
@@ -3083,18 +3113,42 @@ if (typeof window !== 'undefined') (() => {
         return JSON.parse(b64d((await response.json()).content));
       }));
       if (!current()) return;
-      box.textContent = reports.length ? '' : 'No routines registered yet.';
-      reports.forEach(report => {
-        const item = el('section', 'agcard'), last = report.last_run;
-        item.append(el('b', null, report.name || report.id), el('p', 'hint', `${report.status || 'unverified'} · ${report.runtime || 'Unknown runtime'} · ${report.schedule || 'Schedule unverified'}`));
-        item.append(el('p', 'hint', `Owner: ${report.owner ? '@' + String(report.owner).replace(/^@/, '') : 'Not reported'}`));
-        if (report.config && report.config.management_location) item.append(el('p', 'hint', 'Managed at: ' + String(report.config.management_location)));
-        item.append(el('p', 'hint', 'Connections: ' + (report.connections || []).map(x => `${x.provider}: ${x.account_label || x.name || ''}`).join(', ')));
-        item.append(el('p', 'hint', `Last success: ${report.last_successful_run_at || 'Not reported'} · Last attempt: ${report.last_started_at || 'Not reported'}`));
-        if (report.current_run) item.append(el('p', 'hint', `Running since ${report.current_run.started_at}; completion has not been reported.`));
-        if (last) item.append(el('p', null, `${last.status}: ${last.summary || 'No summary'}`));
-        if (last && last.counts) item.append(el('p', 'hint', Object.entries(last.counts).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join(' · ')));
-        if (/^https:\/\//.test(report.management_url || '')) { const link = el('a', null, 'Manage routine'); link.href = report.management_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; item.append(link); }
+      const matches = report => report && typeof report === 'object' && !Array.isArray(report) &&
+        (!report.board_repo || String(report.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!report.branch || report.branch === c.branch) && (!report.board_path || report.board_path === c.path);
+      const scoped = reports.filter(matches); box.textContent = scoped.length ? '' : 'No routines registered for this board context yet.';
+      if (scoped.length < reports.length) box.append(el('p', 'hint', 'Registrations for other board contexts are not shown.'));
+      const friendlyTime = value => { const d = new Date(value); return value && Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Not reported'; };
+      scoped.forEach(report => {
+        const item = el('section', 'routine-card'), last = report.last_run, head = el('div', 'routine-card__head');
+        const statuses = { active: 'Recorded active', paused: 'Recorded paused', retired: 'Recorded retired', unverified: 'Setup unverified' };
+        head.append(el('h4', null, report.name || report.id || 'Unnamed routine'), el('span', 'ui-pill ui-pill--neutral', statuses[report.status] || 'Setup unverified')); item.append(head);
+        item.append(el('p', 'routine-card__scope', `${report.owner ? '@' + String(report.owner).replace(/^@/, '') : 'Owner not reported'} · ${report.runtime || 'Runner not reported'}`));
+        if (report.purpose) item.append(el('p', null, String(report.purpose)));
+        item.append(el('p', 'hint', `Schedule: ${report.schedule || 'Not verified'}${report.timezone ? ' · ' + report.timezone : ''}`));
+        const runStatuses = { success: 'Succeeded', partial: 'Partially completed', failed: 'Failed', blocked: 'Blocked' };
+        item.append(el('p', 'routine-card__result', last ? `Last reported run: ${runStatuses[last.status] || 'Status unknown'} — ${last.summary || 'No summary reported'}` : 'No completed run reported yet.'));
+        item.append(el('p', 'hint', `Last success: ${friendlyTime(report.last_successful_run_at)} · Last attempt: ${friendlyTime(report.last_started_at)} (your local time)`));
+        if (report.current_run) item.append(el('p', 'hint', `Unfinished attempt started ${friendlyTime(report.current_run.started_at)}. No completion reported; check the runner before assuming it is still working.`));
+        const details = el('details', 'sfold routine-card__details'); details.append(el('summary', null, 'Run details, sources and management'));
+        const info = el('dl', 'routine-facts');
+        const fact = (label, value) => { info.append(el('dt', null, label), el('dd', null, String(value || 'Not reported'))); };
+        fact('Registration', report.id); fact('Scheduler ID', report.scheduler_id);
+        fact('Managed at', report.config && report.config.management_location || report.runtime);
+        fact('Board scope', `${report.board_repo || c.repo} · ${report.branch || c.branch} · ${report.board_path || c.path}${report.board_repo && report.branch && report.board_path ? '' : ' (legacy scope; verify before running)'}`);
+        fact('Checkpoint', report.checkpoint_path);
+        fact('Last success (UTC)', report.last_successful_run_at); fact('Last attempt (UTC)', report.last_started_at);
+        details.append(info);
+        const connections = Array.isArray(report.connections) ? report.connections : [];
+        details.append(el('h5', null, 'Approved connections')); const sources = el('ul', 'routine-sources');
+        connections.forEach(x => { if (x && typeof x === 'object') sources.append(el('li', null, [x.provider, x.account_label || x.name, x.access].filter(Boolean).join(' · '))); });
+        details.append(sources.children.length ? sources : el('p', 'hint', 'No connections reported.'));
+        if (last && last.counts && typeof last.counts === 'object' && !Array.isArray(last.counts)) {
+          const counts = el('dl', 'routine-facts routine-counts'); Object.entries(last.counts).forEach(([k, v]) => { counts.append(el('dt', null, k.replace(/_/g, ' ')), el('dd', null, String(v))); }); details.append(el('h5', null, 'Last-run counts'), counts);
+        }
+        details.append(el('p', 'hint', 'This is a saved report, not a live scheduler check. Change or pause the real schedule in its runner; refresh its register after verification.'));
+        item.append(details);
+        if (/^https:\/\//.test(report.management_url || '') && safeUrl(report.management_url)) { const link = el('a', null, 'Open scheduler / manage routine ↗'); link.href = safeUrl(report.management_url); link.target = '_blank'; link.rel = 'noopener noreferrer'; item.append(link); }
+        else item.append(el('p', 'hint', 'No management link reported. Ask the owner to verify where this runs.'));
         box.append(item);
       });
     } catch (err) { if (current()) box.textContent = err.message || 'Routine reports could not be loaded.'; }
@@ -3500,6 +3554,9 @@ if (typeof window !== 'undefined') (() => {
   const contactOnly = p => !memberOf(p);
   function memberPill(p) { const b = el('span', 'stagepill memberpill', isMe(p) ? 'You' : 'Board member'); b.title = `@${memberOf(p).github} is a member of this board: their own record, not a contact`; return b; }
   const clientInfo = name => (state.client_info || {})[name] || { links: [] };
+  const memberCompanies = m => Array.isArray(m.own_companies) ? [...new Set(m.own_companies.filter(x => typeof x === 'string' && x))] : [];
+  const companyMembers = (company, board = state) => (board.people || []).filter(m => memberCompanies(m).includes(company));
+  const companyIdentity = company => { const members = companyMembers(company); return members.length ? members.some(m => String(m.github).toLowerCase() === String(cfg().me).toLowerCase()) ? 'Your company' : 'Board member company' : ''; };
   const doneCol = () => doneColId();
 
   function renderMemberBar() {
@@ -3576,6 +3633,7 @@ if (typeof window !== 'undefined') (() => {
     const tile = iconTile('building-2'); tile.id = 'clTile';
     drawerHead('cl', { kind: 'Client', tile, more: openClientMenu });
     const name = el('h2', 'dtitle dtitle--static'); name.id = 'clName';
+    const identity = el('p', 'hint'); identity.id = 'clIdentity';
     const people = el('span', 'dval'); people.id = 'clPeople';
     const tasks = el('span', 'dval dmuted'); tasks.id = 'clTaskSum';
     const props = el('div', 'dprops'); props.append(ui.props([{ label: 'People', icon: 'users', value: people }, { label: 'Tasks', icon: 'square-check', value: tasks }]));
@@ -3585,7 +3643,7 @@ if (typeof window !== 'undefined') (() => {
       onAdd: (title, url) => addClientFile(editingClient, title, url) });
     const files = crmSection('clFilesSec', { title: 'Files and folders', body: [dlist('clFiles'), fileAdd, dhint(FILES_HINT)] }, 'clFileCount', true);
     files.querySelector('.ui-section__text').id = 'clFilesH';
-    $('clBody').append(name, props,
+    $('clBody').append(name, identity, props,
       crmSection('clNorthSec', { title: 'North star', body: dnote('clNorth', 'North star', 'What we are trying to solve and what success looks like.', 4) }),
       crmSection('clProjSec', { title: 'Projects', body: [dlist('clProjects'), projAdd] }, 'clProjCount', true),
       files);
@@ -3598,8 +3656,9 @@ if (typeof window !== 'undefined') (() => {
   function fillClientDrawer(force) {
     const co = editingClient; if (!co) return;
     const info = clientInfo(co), prs = projectsForClient(co), people = state.contacts.filter(p => p.company === co), tasks = state.tasks.filter(t => t.client === co);
-    const sig = JSON.stringify([co, info, prs, people.map(p => [p.id, p.name]), tasks.map(t => t.column === doneColId())]); if (!force && sig === clSig) return; clSig = sig;
+    const sig = JSON.stringify([co, info, prs, people.map(p => [p.id, p.name]), tasks.map(t => t.column === doneColId()), companyMembers(co), cfg().me]); if (!force && sig === clSig) return; clSig = sig;
     $('clName').textContent = co; $('clTile').style.setProperty('--dtile-c', `hsl(${clientHue(co)} 72% 52%)`);
+    $('clIdentity').hidden = !companyIdentity(co); $('clIdentity').textContent = companyIdentity(co) ? `${companyIdentity(co)} · ${companyMembers(co).map(m => '@' + m.github).join(', ')}. Protected from removal while linked in Board → Members. This is separate from CRM employer details.` : '';
     const pbox = $('clPeople'); pbox.textContent = '';
     people.sort((a, b) => a.name.localeCompare(b.name)).forEach(p => pbox.append(roKeep(ui.person({ name: p.name || '(no name)', onClick: () => { $('dlgClient').close(); openContact(p.id); } }))));
     if (!people.length) pbox.append(el('span', 'dmuted', 'Nobody yet'));
@@ -3768,6 +3827,7 @@ if (typeof window !== 'undefined') (() => {
     return true;
   }
   async function memberRemove(m) {
+    if (memberCompanies(m).length) { toast('Explicitly unlink this member’s own companies first.', true); return; }
     const claims = memberClaims(m.github), open = memberTasks(m.github);
     if (claims.length) { toast(`@${m.github} has active claims on ${claims.map(t => '#' + t.num).join(', ')}. Release them first.`, true); return; }
     const body = [`@${m.github} will no longer be offered when assigning work. Their name stays in card history.`];
@@ -3789,7 +3849,7 @@ if (typeof window !== 'undefined') (() => {
     if (you) tags.append(ui.pill({ text: 'You', tone: 'info' })); if (owner) tags.append(ui.pill({ text: 'Upgrade owner', tone: 'neutral' }));
     head.append(ui.avatar(m.name || gh, { key: gh }), name, tags);
     if (edit) {
-      const why = owner ? 'This member is the upgrade owner. Give that to someone else first (keeptrack.py kit-owner).' : state.people.length <= 1 ? 'A board needs at least one member.' : '';
+      const why = owner ? 'This member is the upgrade owner. Give that to someone else first (keeptrack.py kit-owner).' : memberCompanies(m).length ? 'Unlink this member’s own companies before removing them.' : state.people.length <= 1 ? 'A board needs at least one member.' : '';
       const rb = ui.button({ label: 'Remove', variant: 'ghost', size: 'sm', icon: 'user-minus', disabled: !!why, title: why || `Remove @${gh} from this board`, onClick: () => memberRemove(memberNow(gh)) }); rb.setAttribute('aria-label', `Remove @${gh}`); head.append(rb);
       if (why) head.append(el('span', 'hint memwhy', why));
     }
@@ -3807,7 +3867,22 @@ if (typeof window !== 'undefined') (() => {
     zone.onchange = () => setZone(zone.value); zone.onkeydown = e => { if (e.key === 'Enter') zone.blur(); else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); zone.value = memberNow(gh).timezone || ''; zone.blur(); } };
     const zoneRow = [zone]; const dz = deviceZone();
     if (edit && !m.timezone && dz) zoneRow.push((() => { const b = ui.button({ label: `Use ${dz}`, variant: 'ghost', size: 'sm', title: 'The time zone this browser is set to', onClick: () => setZone(dz) }); b.setAttribute('aria-label', `Use ${dz} for @${gh}`); return b; })());
-    card.append(head, ui.props([{ label: 'GitHub', icon: 'github', value: '@' + gh }, { label: 'Emails', icon: 'mail', value: emails }, { label: 'Time zone', icon: 'globe', value: zoneRow }]));
+    const companies = el('div', 'memcompanies');
+    memberCompanies(m).forEach(company => companies.append(ui.pill({ text: company, icon: 'building-2', onClick: () => { $('dlgSettings').close(); openClient(company); },
+      onRemove: edit ? async () => {
+        const affected = [state.tasks.filter(t => t.client === company).length + ' tasks', projectsForClient(company).length + ' projects', state.contacts.filter(p => p.company === company).length + ' CRM employer references'];
+        const others = companyMembers(company).filter(x => x.github !== gh);
+        if (!(await ask(`Unlink ${company} from @${gh}?`, [`This removes only the own-company identity link. The company, files, ${affected.join(', ')} and their history stay unchanged.`, others.length ? `Still protected for ${others.map(x => '@' + x.github).join(', ')}.` : 'No other member link currently protects it; ordinary task/project/contact references still prevent CLI removal.', UNDO_HINT], 'Unlink'))) return;
+        memberEdit(gh, x => { x.own_companies = memberCompanies(x).filter(c => c !== company); if (!x.own_companies.length) delete x.own_companies; }, `Unlink own company: ${gh} / ${company}`);
+      } : undefined, removeLabel: `Unlink own company ${company} from @${gh}` })));
+    if (edit) {
+      const picker = el('select', 'ui-select'); picker.setAttribute('aria-label', `Link an own company for @${gh}`); const none = el('option', null, 'Link your company…'); none.value = ''; picker.append(none);
+      state.clients.filter(c => !memberCompanies(m).includes(c)).forEach(company => { const option = el('option', null, company); option.value = company; picker.append(option); });
+      picker.onchange = () => { const company = picker.value; if (!company) return; memberEdit(gh, x => { x.own_companies = [...new Set([...memberCompanies(x), company])]; }, `Link own company: ${gh} / ${company}`); };
+      companies.append(picker);
+    }
+    companies.append(el('p', 'hint', 'Explicit identity links only, not inferred from CRM employers. Multiple own companies are allowed; linking does not assign tasks or change contact details.'));
+    card.append(head, ui.props([{ label: 'GitHub', icon: 'github', value: '@' + gh }, { label: 'Emails', icon: 'mail', value: emails }, { label: 'Time zone', icon: 'globe', value: zoneRow }, { label: 'Own companies', icon: 'building-2', value: companies }]));
     return card;
   }
   function renderMembersBox() {

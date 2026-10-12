@@ -434,6 +434,17 @@ dialog.settings[open] { animation: slidein .22s ease; }
 .warntext { color: var(--warn); font-weight: 600; }
 /* Agents & integrations: the chooser */
 .agpicks { display: grid; gap: var(--sp-2); }
+.routine-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--sp-4); margin-bottom: var(--sp-3); overflow-wrap: anywhere; }
+.routine-card__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.routine-card h4 { margin: 0; font-size: var(--fs-md); }
+.routine-card h5 { margin: var(--sp-3) 0 var(--sp-1); font-size: var(--fs-sm); }
+.routine-card p { margin: var(--sp-2) 0; }
+.routine-card__scope { color: var(--muted); font-size: var(--fs-sm); }
+.routine-card__result { font-weight: 600; }
+.routine-facts { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); }
+.routine-facts dt { color: var(--muted); } .routine-facts dd { margin: 0; }
+.routine-sources { padding-left: var(--sp-5); font-size: var(--fs-sm); }
+#agRoutineSetup textarea { min-height: 88px; }
 .agpick { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--sp-4); width: 100%; min-height: 56px; padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--card); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .agpick:hover:not(:disabled) { border-color: var(--accent); background: var(--card-hover, var(--card)); }
 .agpick > .ui-i { width: 20px; height: 20px; color: var(--accent); }

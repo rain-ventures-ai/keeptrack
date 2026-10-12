@@ -2306,6 +2306,9 @@ def doctor_board(fix=False):
     board_modes = (data.get("settings") or {}).get("modes") or ["tasks", "crm"]
     for m in [x for x in (data.get("people") or []) if isinstance(x, dict)]:
         gh_user = m.get("github")
+        companies = m.get("own_companies")
+        if companies is not None and (not isinstance(companies, list) or any(not isinstance(c, str) or not c or c not in clients for c in companies)):
+            problem("MEMBER_COMPANY", "tasks.json", f"Board member {gh_user!r}: own_companies must list existing company names; identity is explicit, never inferred from CRM employers.")
         if m.get("emails") is not None and not isinstance(m.get("emails"), list):
             problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r}: emails must be a list.")
         for e in m.get("emails") if isinstance(m.get("emails"), list) else []:
@@ -3642,12 +3645,24 @@ def _client_refs(data, name):
             [c for c in data.get("contacts", []) if c.get("company") == name])
 
 
+def own_companies(member):
+    """Explicit member identity links only; CRM employer and client presence never imply ownership."""
+    value = member.get("own_companies", [])
+    return list(dict.fromkeys(x for x in value if isinstance(x, str) and x)) if isinstance(value, list) else []
+
+
+def company_members(data, company):
+    return [m for m in data.get("people", []) if company in own_companies(m)]
+
+
 def cmd_clients(a):
     data, _ = load()
     for c in data.get("clients", []):
         tasks, projects, people = _client_refs(data, c)
         ns = (data.get("client_info", {}).get(c, {}) or {}).get("north_star", "")
-        print(f"{c}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + (f"  north star: {ns}" if ns else ""))
+        members = company_members(data, c)
+        marker = "  [Board member company: " + ", ".join("@" + m["github"] for m in members) + "]" if members else ""
+        print(f"{c}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + marker + (f"  north star: {ns}" if ns else ""))
     if not data.get("clients"):
         print("(no clients)")
 
@@ -3655,6 +3670,7 @@ def cmd_clients(a):
 def cmd_client_rename(a):
     """Rename a client everywhere: the client list, its info, tasks, projects and CRM people's company."""
     def fn(data):
+        _MUT["rerun"] = _MUT["recheck"] = True
         clients = data.setdefault("clients", [])
         if a.client not in clients:
             sys.exit(f"no client '{a.client}'. Clients: {', '.join(clients) or '(none)'}")
@@ -3667,6 +3683,9 @@ def cmd_client_rename(a):
             sys.exit(f"client '{new}' already exists; renaming onto it would merge two clients. Do that by hand in the web board")
         tasks, projects, people = _client_refs(data, a.client)
         data["clients"] = [new if c == a.client else c for c in clients]
+        for member in data.get("people", []):
+            if a.client in own_companies(member):
+                member["own_companies"] = [new if company == a.client else company for company in own_companies(member)]
         info = data.setdefault("client_info", {})
         if a.client in info:
             info[new] = info.pop(a.client)
@@ -3694,9 +3713,14 @@ def cmd_client_rename(a):
 def cmd_client_rm(a):
     """Remove a client that nothing uses any more (no tasks, projects or people)."""
     def fn(data):
+        _MUT["rerun"] = _MUT["recheck"] = True
         clients = data.setdefault("clients", [])
         if a.client not in clients:
             sys.exit(f"no client '{a.client}'")
+        members = company_members(data, a.client)
+        if members:
+            sys.exit(f"'{a.client}' is a board member company linked to " + ", ".join("@" + m["github"] for m in members) +
+                     "; explicitly unlink each member first with member-set USER --remove-own-company NAME. This does not remove tasks, projects or CRM employer references.")
         tasks, projects, people = _client_refs(data, a.client)
         if tasks or projects or people:
             sys.exit(f"'{a.client}' is still used by {len(tasks)} tasks, {len(projects)} projects and {len(people)} people; "
@@ -3823,6 +3847,8 @@ def cmd_members(a):
         ident = "  ".join(x for x in [", ".join(member_emails(m)), tz] if x)   # the same filters as identity_line
         if ident:
             print("    " + clean(ident))
+        if own_companies(m):
+            print("    Own companies: " + clean(", ".join(own_companies(m))))
     print("agents: " + (clean(", ".join(map(str, data.get("agents", [])))) or "-"))
 
 
@@ -3987,6 +4013,28 @@ def cmd_member_set(a):
         if a.name is not None:
             m["name"] = a.name.strip() or m["github"]
         set_identity(m, getattr(a, "email", None), getattr(a, "remove_email", None), getattr(a, "timezone", None))
+        add = getattr(a, "own_company", None) or []
+        remove = getattr(a, "remove_own_company", None) or []
+        if add or remove:
+            _MUT["rerun"] = True
+            companies = own_companies(m)
+            for company in add:
+                if company not in data.get("clients", []):
+                    sys.exit(f"no client '{company}'; create the company explicitly first (client-set NAME --north-star ...)")
+                if company not in companies:
+                    companies.append(company)
+            for company in remove:
+                if company not in companies:
+                    sys.exit(f"@{m['github']} has no own-company link to '{company}'")
+                companies.remove(company)
+                tasks, projects, contacts = _client_refs(data, company)
+                others = [x for x in company_members(data, company) if x is not m]
+                print(f"unlinked '{company}' from @{m['github']}; kept {len(tasks)} tasks, {len(projects)} projects and {len(contacts)} CRM employer references" +
+                      ("; still protected for " + ", ".join("@" + x["github"] for x in others) if others else "; company remains on the board"))
+            if companies:
+                m["own_companies"] = companies
+            else:
+                m.pop("own_companies", None)
         print(f"member {identity_line(m)}")
     mutate(fn, f"Update member: {a.user}")
 
@@ -3995,12 +4043,15 @@ def cmd_member_rm(a):
     """Remove a board member. Refuses while they have open tasks, an active claim or are the upgrade owner,
     unless --unassign (takes them off open tasks). History keeps their name."""
     def fn(data):
+        _MUT["rerun"] = True
         u = a.user.strip().lstrip("@")   # match the stored login as it is, even an old odd one
         people = data.setdefault("people", [])
         m = next((m for m in people if m.get("github", "").lower() == u.lower()), None)
         if not m:
             sys.exit(f"{u} is not a board member")
         u = m["github"]
+        if own_companies(m):
+            sys.exit(f"@{u} has own-company links; explicitly unlink them with member-set --remove-own-company before removing the member")
         if len(people) == 1:
             sys.exit("a board needs at least one member")
         st = data.setdefault("settings", {})
@@ -4998,7 +5049,9 @@ def main():
     s = sub.add_parser("member-add", help="add a board member"); s.add_argument("user", help="GitHub username"); s.add_argument("--name")
     s.add_argument("--email", action="append", default=[], help="a work email address (repeatable; never a personal one)")
     s.add_argument("--timezone", help="their time zone, e.g. Europe/London"); s.set_defaults(f=cmd_member_add)
-    s = sub.add_parser("member-set", help="change a member's name, email addresses or time zone"); s.add_argument("user"); s.add_argument("--name")
+    s = sub.add_parser("member-set", help="change a member's identity and explicit own-company links"); s.add_argument("user"); s.add_argument("--name")
+    s.add_argument("--own-company", action="append", default=[], help="link an existing company as this member's own (repeatable; never inferred from CRM)")
+    s.add_argument("--remove-own-company", action="append", default=[], help="explicitly unlink own-company protection; tasks/projects/CRM references remain")
     s.add_argument("--email", action="append", default=[], help="add an email address (repeatable)")
     s.add_argument("--remove-email", dest="remove_email", action="append", default=[], help="remove an email address (repeatable)")
     s.add_argument("--timezone", help="set the time zone, e.g. Europe/London ('' clears it)"); s.set_defaults(f=cmd_member_set)

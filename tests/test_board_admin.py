@@ -140,6 +140,62 @@ class OneFile(unittest.TestCase):
         self.assertNotIn("Unused", self.data()["clients"])
 
     # members
+    def test_explicit_own_companies_multiple_members_rename_unlink(self):
+        self.assertEqual([], kt.company_members(self.data(), "Acme"), "CRM employer is not member identity")
+        run(kt.cmd_member_set, user="osouthgate", name=None, own_company=["Acme", "Unused"])
+        run(kt.cmd_member_set, user="BEA", name=None, own_company=["Unused"])
+        self.assertEqual(["Acme", "Unused"], self.data()["people"][0]["own_companies"])
+        self.assertIn("board member company", refuses(self, kt.cmd_client_rm, client="Unused"))
+        self.assertIn("own-company links", refuses(self, kt.cmd_member_rm, user="bea", unassign=True))
+        run(kt.cmd_client_rename, client="Unused", new="unused ltd")
+        self.assertEqual(["Acme", "unused ltd"], self.data()["people"][0]["own_companies"])
+        self.assertEqual(["unused ltd"], self.data()["people"][1]["own_companies"])
+        self.assertIn("already exists", refuses(self, kt.cmd_client_rename, client="unused ltd", new="ACME"))
+        out = run(kt.cmd_member_set, user="osouthgate", name=None, remove_own_company=["unused ltd"])
+        self.assertIn("still protected for @bea", out)
+        self.assertIn("board member company", refuses(self, kt.cmd_client_rm, client="unused ltd"))
+        run(kt.cmd_member_set, user="bea", name=None, remove_own_company=["unused ltd"])
+        run(kt.cmd_client_rm, client="unused ltd")
+        self.assertNotIn("unused ltd", self.data()["clients"])
+        self.assertIn("Acme", self.data()["people"][0]["own_companies"])
+        self.assertEqual("Acme", self.data()["contacts"][0]["company"])
+        self.assertIn("no client", refuses(self, kt.cmd_member_set, user="bea", name=None, own_company=["Unknown"]))
+
+    def test_company_remove_rechecks_concurrent_member_link(self):
+        from unittest.mock import patch
+        save = kt.save
+        attempts = []
+        def race(data, state, message):
+            attempts.append(data)
+            if len(attempts) == 1:
+                fresh = self.data(); fresh["people"][1]["own_companies"] = ["Unused"]; write(self.file, fresh)
+                return False
+            return save(data, state, message)
+        with patch.object(kt, "save", side_effect=race), patch.object(kt.time, "sleep"):
+            self.assertIn("board member company", refuses(self, kt.cmd_client_rm, client="Unused"))
+        self.assertEqual(1, len(attempts))
+        self.assertIn("Unused", self.data()["clients"])
+
+    def test_company_rename_rechecks_new_member_link(self):
+        from unittest.mock import patch
+        save = kt.save
+        calls = []
+        def race(data, state, message):
+            calls.append(data)
+            if len(calls) == 1:
+                fresh = self.data(); fresh["people"][1]["own_companies"] = ["Unused"]; write(self.file, fresh)
+                return False
+            return save(data, state, message)
+        with patch.object(kt, "save", side_effect=race), patch.object(kt.time, "sleep"):
+            run(kt.cmd_client_rename, client="Unused", new="Own Co")
+        self.assertEqual(["Own Co"], self.data()["people"][1]["own_companies"])
+
+    def test_doctor_checks_own_company_shape_and_references(self):
+        data = self.data(); data["people"][0]["own_companies"] = ["Missing"]; write(self.file, data)
+        self.assertTrue(any(issue["code"] == "MEMBER_COMPANY" for issue in kt.doctor_board(False)[0]))
+        data["people"][0]["own_companies"] = "Acme"; write(self.file, data)
+        self.assertTrue(any(issue["code"] == "MEMBER_COMPANY" for issue in kt.doctor_board(False)[0]))
+
     def test_members_add_rename_remove(self):
         run(kt.cmd_member_add, user="@carol", name="Carol")
         self.assertIn({"github": "carol", "name": "Carol"}, self.data()["people"])

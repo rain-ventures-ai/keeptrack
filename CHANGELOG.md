@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Routine reports distinguish recorded setup, observed completion and unfinished attempts, with
+  source/scope/management details and local-time display. A configurable routine setup form copies safe, board-scoped
+  prompts without scheduling work. Members can explicitly link their own companies, protected from removal while
+  linked. Double-clicking outside a task drawer closes it through the normal save/cleanup path.
+
 - **2026-10-12** — Task Contacts suggests existing CRM people while typing, with keyboard and touch selection,
   stable CRM references and duplicate prevention. Individual tasks can be archived without losing their details,
   checklist, comments or history, then found and restored through Search.
@@ -31,6 +36,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [40] — 2026-10-12
+
+- Optional member `own_companies` records explicit identity links, not CRM-employer inference. CLI member-set supports
+  repeatable link/unlink options; company/member removal guards and client renames preserve identity protection on retries.
+- Doctor checks optional company links, and company/member listings explain linked identity. No schema migration,
+  board data changes or routine provisioning is required for this upgrade.
 
 ### [39] — 2026-10-12
 

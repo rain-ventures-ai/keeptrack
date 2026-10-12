@@ -158,6 +158,19 @@ class FixtureBoards(unittest.TestCase):
         self.assertTrue(kt.save_changes(data, message="Fixture roundtrip"))
         self.assertEqual(expected, read_json(os.path.join(board_dir, "cards", "t_first.json"))["contacts"])
 
+    def test_v40_member_company_links_survive_kit_update_and_save(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit40", "fixture.json"))
+        board_dir, _ = self.use_fixture("v4_kit40", meta)
+        expected = read_json(os.path.join(board_dir, "tasks.json"))["people"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        self.assertEqual(expected, data["people"])
+        self.assertEqual(["alex"], [m["github"] for m in kt.company_members(data, "Acme")])
+        data["tasks"][0]["details"] += " Updated fixture."
+        self.assertTrue(kt.save_changes(data, message="Identity fixture roundtrip"))
+        self.assertEqual(expected, read_json(os.path.join(board_dir, "tasks.json"))["people"])
+
 
 if __name__ == "__main__":
     unittest.main()

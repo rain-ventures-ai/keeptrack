@@ -25,6 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v40 (schema 4)
+Board members may explicitly link multiple existing companies with optional `own_companies` in their member record.
+These identity links are never inferred from CRM employers. Linked companies and members are protected from removal
+until explicitly unlinked; unlinking retains company files, tasks, projects, CRM employer references and history.
+Client renames update identity links, and guarded writes recheck changed board state on retries.
+The hosted web app also improves saved routine reports, offers goal-focused setup prompts without creating schedules,
+and closes task drawers on a double-click on the outside backdrop while keeping ordinary drawer clicks safe.
+- Run `kit-update` only. No migration, identity linking or schedule provisioning is performed by the upgrade.
+- Check: `member-set --help` lists `--own-company` and `--remove-own-company`; `doctor` checks optional links.
+- Upgrade older CLI copies before relying on removal safeguards. Direct repository access bypasses these application guards.
+
 ### v39 (schema 4)
 Individual tasks can be archived without deletion through the web task menu or `archive <id>`.
 All task details, checklist, comments and history are retained, and Search can find and restore the task.
