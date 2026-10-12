@@ -1252,6 +1252,7 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 /* Today → To review (Review Inbox) */
 .treview__hint { margin: 0 0 12px; font-size: var(--fs-sm); }
 #board.v-today { overflow-anchor: none; } /* Explicit review anchors own restoration when the view is rebuilt. */
+.treview .trow { content-visibility: visible; contain-intrinsic-size: none; } /* Five reviewed rows need their real height, including offscreen expanded evidence. */
 .treview .trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin-bottom: 8px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg, 10px); flex-wrap: wrap; }
 .trow__tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .trow__text { display: grid; min-width: 0; flex: 1 1 220px; }
