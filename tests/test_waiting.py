@@ -259,6 +259,27 @@ class Waiting(unittest.TestCase):
         self.assertTrue(self.card(2)["history"][-1]["text"].startswith("unwait: approved (was waiting on Acme finance"))
         self.assertFalse(self.card(2).get("agent_cleared"))
 
+    def test_an_agent_cant_move_its_own_wait_off_another_party(self):
+        with self.agent():
+            self.wait(1, session="s1", who="JezHub")
+            self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1"))           # who dropped
+            self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1", who="claude"))
+            self.wait(1, on="Jez, again", session="s1", who="jezhub")                            # same party: allowed
+            self.assertIn("another party", self.refusal(self.unwait, 1, session="s1"))
+        self.assertEqual(self.card(1)["waiting"]["who"], "JezHub")
+
+    def test_board_agent_named_as_a_person_does_not_make_that_person_the_agent(self):
+        self.claim(1, "s1")
+        with self.agent():
+            self.wait(1, session="s1", who="JezHub")
+        with self.agent("JezHub"):
+            self.assertIn("another party", self.refusal(self.unwait, 1, session="s1"))
+        self.claim(2, "s2")
+        self.wait(2, session="person", who="p_acme")
+        with self.agent("p_acme"):
+            self.done(2, session="s2")
+        self.assertEqual([x["what"] for x in self.card(2)["agent_cleared"]], ["done while waiting"])
+
     def test_attended_does_not_let_an_agent_clear_someone_elses_wait(self):
         self.wait(1, session="person", who="JezHub")
         os.environ["BOARD_ATTENDED"] = "1"
@@ -293,7 +314,9 @@ class Waiting(unittest.TestCase):
         out = self.unwait(1)
         self.assertIn("stays blocked", out)
         c = self.card(1)["claim"]
-        self.assertEqual(c["status"], "blocked")
+        self.assertEqual(c["status"], "blocked"); self.assertTrue(c["blocked_by_wait"])   # still live: no other session takes it
+        with self.agent():
+            self.assertIn("refused", self.refusal(self.release, 1, session="s9"))
         self.assertIsNone(self.card(1)["waiting"])
         self.claim(3, "s3", attended=True)
         self.wait(3, session="s3")
@@ -393,6 +416,47 @@ class Waiting(unittest.TestCase):
         self.assertNotIn("#3 Card 3  waiting", out)
         self.assertIn("waiting, not due for a chase yet: 1 card", out)
 
+    def test_today_with_only_waits_not_yet_due_does_not_say_nothing_to_follow_up(self):
+        self.edit(lambda d: d.update(tasks=d["tasks"][:1]))
+        self.wait(1, nudge="+30")
+        out = self.out(kt.cmd_today, Args())
+        self.assertIn("not due for a chase yet: 1 card", out); self.assertNotIn("nothing to follow up", out)
+
+    def test_waiting_on_me_without_a_user_refuses(self):
+        self.wait(1, who="JezHub")
+        os.environ.pop("BOARD_USER", None)
+        real = kt.default_user; kt.default_user = lambda: ""
+        try:
+            self.assertIn("BOARD_USER", self.refusal(self.listing, waiting_on="me"))
+        finally:
+            kt.default_user = real
+
+    def test_a_leftover_wait_ends_when_the_card_reaches_done_or_leaves_it(self):
+        self.edit(lambda d: d["tasks"][0].update(waiting={"on": "x", "who": "", "since": "2026-10-01"}))
+        d = self.read(); kt.move_task_to_column(d, d["tasks"][0], "done")
+        self.assertIsNone(d["tasks"][0]["waiting"])
+        self.assertTrue(d["tasks"][0]["history"][-1]["text"].startswith("wait ended by move to done"))
+        self.edit(lambda d: d["tasks"][1].update(column="done", waiting={"on": "y", "who": "", "since": "2026-10-01"}))
+        self.out(kt.cmd_move, Args(id="t_c2", column="todo", column_pos=None, session=None, force=False, before=None,
+                                   after=None, top=False, priority=None, note=None))
+        self.assertIsNone(self.card(2)["waiting"])
+        self.claim(2, "s2")                                                  # the old wait did not come back
+
+    def test_a_persons_wait_blocks_a_stuck_claim_too(self):
+        self.claim(1, "s1")
+        self.set_claim(1, status="stuck")
+        self.wait(1)
+        c = self.card(1)["claim"]
+        self.assertEqual(c["status"], "blocked"); self.assertTrue(c["blocked_by_wait"])
+        self.assertNotIn(("CLAIM_BLOCKED", "card t_c1"), self.doctor_codes()[0])
+
+    def test_an_agents_permitted_self_unwait_is_not_flagged_at_the_next_claim(self):
+        with self.agent():
+            self.wait(1, session="s1", who="claude")
+            self.unwait(1, session="s1")
+            self.claim(1, "s1")
+        self.assertFalse(self.card(1).get("agent_cleared"))
+
     def test_waiting_days_zero_turns_the_automatic_chase_off(self):
         self.edit(lambda d: d["settings"].update(waiting_days=0))
         self.wait(1)
@@ -483,6 +547,10 @@ class Waiting(unittest.TestCase):
         with self.agent("codex"):
             self.wait(1, session="s2")
         self.assertIn(("AGENT_CLEARED", "card t_c1"), self.doctor_codes()[0])
+
+    def test_doctor_skips_agent_cleared_entries_older_than_the_window(self):
+        self.edit(lambda d: d["tasks"][0].update(agent_cleared=[{"what": "unwait", "by": "x", "session": "s", "at": OLD}]))
+        self.assertNotIn(("AGENT_CLEARED", "card t_c1"), self.doctor_codes()[0])
 
     def test_doctor_without_a_clone_does_not_crash(self):
         old = kt.ROOT

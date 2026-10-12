@@ -1625,8 +1625,9 @@ if (typeof window !== 'undefined') (() => {
     if (waitingOf(t)) { toast(waitingBlock(t), true); return; }
     { const full = agentLimitFull(id); if (full) { toast(full, true); rlog(t.num, 'Not sent', full, false); return; } }
     const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), request = '@claude Work on this task. Read the card title, description, checklist, links and recent comments as the request.';
-    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); stamp(card); }, `Assign #${t.num} to Claude`, [id]);
+    const saved = await mutate(n => { const card = n.tasks.find(x => x.id === id); if (!card || waitingOf(card) || activeClaim(card)) return; card.comments.push({ id: cid, at: nowIso(), by: who, text: request }); if (!card.assignees.includes(who)) card.assignees.push(who); card.claim = pendingClaudeClaim(who); stamp(card); }, `Assign #${t.num} to Claude`, [id]);
     const current = state.tasks.find(x => x.id === id); if (saved && current && current.comments.some(c => c.id === cid)) await triggerClaude(current, who, cid);
+    else if (saved && current && (waitingOf(current) || activeClaim(current))) toast(waitingOf(current) ? waitingBlock(current) : 'Someone took this task meanwhile; Claude was not started.', true);   // the newer board won
   }
   async function postComment() {
     const ta = $('cmText'), text = ta.value.trim(), id = commentsFor; if (!text || !id) return;
@@ -1808,7 +1809,7 @@ if (typeof window !== 'undefined') (() => {
   // Waiting-for (kit v43): the same rules as keeptrack.py's wait / unwait. A waiting card stays in its column, keeps its due
   // date, and is never sent to an agent (claim refuses it); its chase day is the nudge, else since + settings.waiting_days.
   const WAITING_KIT = 43, DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-  const waitingOf = t => t && t.column !== doneColId() && t.waiting && typeof t.waiting === 'object' && !Array.isArray(t.waiting) ? t.waiting : null;
+  const waitingOf = t => t && t.column !== doneColId() && t.waiting && typeof t.waiting === 'object' && !Array.isArray(t.waiting) && Object.keys(t.waiting).length ? t.waiting : null;
   const waitingDays = () => { const v = state.settings.waiting_days; return Number.isInteger(v) && v >= 0 && v <= 365 ? v : 7; };
   const dayNum = s => Math.round(new Date(s + 'T00:00:00Z').getTime() / 864e5);
   function chaseDate(w) {
@@ -2492,24 +2493,26 @@ if (typeof window !== 'undefined') (() => {
       const old = waitingOf(t);
       t.waiting = { on, who: who || '', since: (old && old.since) || todayIso(), nudge: DAY_RE.test(nudge || '') ? nudge : '', note: (old && old.note) || '', by: cfg().me || 'someone', by_session: '' };
       if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= WAITING_KIT)) n.settings.min_kit = WAITING_KIT;   // tells v43+ tools (doctor, relay) a card relies on it
-      const c = t.claim; if (c && (c.status === 'running' || c.status === 'blocked')) { c.status = 'blocked'; c.blocked_by_wait = true; c.note = 'waiting on ' + on; }   // a person's wait blocks the claim, as `wait` does
+      const c = t.claim; if (c && (c.status === 'running' || c.status === 'blocked' || c.status === 'stuck')) { c.status = 'blocked'; c.blocked_by_wait = true; c.note = 'waiting on ' + on; }   // a person's wait blocks the claim, as `wait` does
     }, `Waiting: ${titleOf(id)}`);
   }
-  function clearWait(id) {
-    edit(id, (t, n) => {
-      t.waiting = null; const c = t.claim;
+  async function clearWait(id) {
+    let full = '';
+    const ok = await edit(id, (t, n) => {
+      full = ''; t.waiting = null; const c = t.claim;   // a retry runs this again on the newer board
       if (c && c.status === 'blocked' && c.blocked_by_wait) {
-        delete c.blocked_by_wait;
         if (claimState({ ...c, status: 'running' }) === 'stale') {   // its session is gone: release the claim, back to To do (at the end)
-          t.claim = null;
+          delete c.blocked_by_wait; t.claim = null;
           if (t.column !== 'todo' && n.columns.some(x => x.id === 'todo')) {
             const last = n.tasks.filter(x => x !== t && x.column === 'todo' && validRank(x.rank)).map(x => x.rank).sort().pop() || null;
             t.column = 'todo'; if (isSplit(n)) t.rank = keyBetween(last, null);
           }
         }
-        else if (c.attended || !agentLimitFull(id)) { c.status = 'running'; c.heartbeat_at = nowIso(); }
+        else if (c.attended || !agentLimitFull(id)) { delete c.blocked_by_wait; c.status = 'running'; c.heartbeat_at = nowIso(); }
+        else full = agentLimitFull(id);   // keeps blocked_by_wait: still live, as `unwait` does
       }
     }, `Wait cleared: ${titleOf(id)}`);
+    if (ok && full) toast(`The wait is cleared, but the claim stays blocked: ${full}`, true);
   }
   function openPeopleMenu(anchor) {
     const t = taskNow(); if (!t) return; const items = [], me = cfg().me;
