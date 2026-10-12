@@ -1,0 +1,12 @@
+{
+  "label": "v4 split with Review Inbox questions (answered and acted on, pending approval), a proposal and an old review_inbox off setting (kit v44)",
+  "schema": 4,
+  "layout": "split",
+  "kit_before_update": 43,
+  "counts": {
+    "tasks": 2,
+    "contacts": 1,
+    "clients": 1,
+    "projects": 1
+  }
+}

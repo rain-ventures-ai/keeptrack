@@ -38,10 +38,10 @@ class ReviewInboxCli(unittest.TestCase):
         return json.loads(self.kt("proposals", "--json").stdout)
 
     def test_meeting_and_email_extraction_then_review(self):
-        self.assertEqual(2, self.kt("proposal-add", os.path.join(FIX, "meeting-proposals.json"), ok=False).returncode,
-                         "the Inbox is off until the board turns it on")
-        out = self.kt("settings-set", "review_inbox.enabled", "true").stdout
-        self.assertIn("does not create, edit or activate a routine", out)
+        # Kit v44: the Inbox is always on for a split board; the old switch is a no-op and cannot turn it off.
+        self.assertIn("review_inbox.enabled: true", self.kt("settings").stdout)
+        self.assertIn("always on", self.kt("settings-set", "review_inbox.enabled", "true").stdout)
+        self.assertEqual(2, self.kt("settings-set", "review_inbox.enabled", "false", ok=False).returncode)
         live, listing = self.snapshot("cards", "people"), self.kt("list").stdout
 
         # Extraction: proposals only. Live cards and people stay byte-identical; list and counts do not change.

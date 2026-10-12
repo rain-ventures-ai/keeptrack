@@ -1232,6 +1232,17 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .propchanged { background: var(--accent-soft); }
 .prop__approval { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
 .prop__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* kit v44: questions (ask.*) answered in the Inbox and on Today */
+.ask { display: grid; gap: 8px; margin-top: 8px; }
+.ask__q { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.ask__subject { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.ask__subject p { margin: 0; overflow-wrap: anywhere; }
+.ask__links { margin: 0; padding-left: 18px; font-size: var(--fs-sm); }
+.ask__link { overflow-wrap: anywhere; }
+.ask__answers { display: flex; flex-wrap: wrap; gap: 8px; }
+.ask__other { display: flex; gap: 8px; align-items: flex-start; }
+.ask__other input, .ask__other textarea { flex: 1 1 auto; min-height: 36px; min-width: 0; box-sizing: border-box; }
+.ask__note { min-height: 36px; width: 100%; box-sizing: border-box; }
 .propform { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .propform__row { display: grid; gap: 4px; font-size: var(--fs-sm); }
 .propform__row input, .propform__row select, .propform__row textarea { min-height: 36px; width: 100%; box-sizing: border-box; }

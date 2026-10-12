@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
+- **2026-10-12** — Review Inbox questions (kit v44): Choose, Approve and Question items show the question, its links
+  and answer buttons in the Inbox and in Today's review, with an optional note, "Who answers" for a named person,
+  Dismiss, and Change answer (Undo) until the agent has acted. Answers write only the question's file. The Inbox is
+  always on for split boards; the Settings switch is gone.
+
 - **2026-10-12** — Waiting-for: tasks can be marked as waiting on someone or something, with an optional member and
   chase day, from a Waiting row in the task drawer. Cards show a "waiting on .., Nd" chip that turns amber once the
   chase day has passed (and "waiting on you" on your own waits), a Waiting filter, and Needs attention includes waits
@@ -64,6 +69,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-08** — Schema 2 with kit v1–v5: `keeptrack.py` kit commands (`kit-check`, `kit-update`, `migrate`), `init`, multi-repo `use` / `where`, rename from `board.py` to `keeptrack.py` (kit v5).
 
 ## Kit versions
+
+### [44] — 2026-10-12
+
+- The Review Inbox is always on for split-storage boards; `settings.review_inbox` is no longer read. `settings` still
+  prints `review_inbox.enabled: true` (or `false (needs split storage …)`) for older skill copies, and
+  `settings-set review_inbox.enabled true` is a no-op (`false` is refused). New boards get no `review_inbox` setting.
+- Questions: `ask.choose`, `ask.approve` and `ask.question` items, with status `answered`. `proposal-answer` (a person
+  only, and only the item's `decider` when set), `proposal-result` (the asking agent reads its own answer),
+  `proposal-done` (once, just before acting; an approval needs the matching `--content-hash`), `proposals --mine`
+  and `--status answered`. `proposal-reopen` returns an answer not yet acted on to pending. Accept and merge refuse
+  questions. The first question raises `settings.min_kit` to 44, and `doctor` reports `MIN_KIT_LOWERED` below that.
 
 ### [43] — 2026-10-12
 
