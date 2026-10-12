@@ -219,6 +219,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     await page.keyboard.press('i'); await page.waitForFunction(() => /Ignored/.test(document.querySelector('#inboxLive').textContent));
     assert.equal(api.json('proposals/r_touch00001.json').status, 'ignored'); assert.equal(api.json('people/p_casey.json').comments.length, 0, 'an ignored interaction is never logged');
     assert.equal(await page.locator('#inboxBadge').textContent(), '1', 'only the race proposal is still pending');
+    assert.equal(await page.locator('#viewSw .ui-tab[data-view="today"] .todaycount').textContent(), '1', 'the Today count follows each decision');
     await page.close();
 
     // Two reviewers accept the same proposal at the same moment: both start from pending, one commit wins, the other

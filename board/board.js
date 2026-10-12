@@ -4625,9 +4625,9 @@ if (typeof window !== 'undefined') (() => {
       x.setAttribute('aria-label', 'Dismiss the tour'); x.title = 'Dismiss'; x.append(svgIcon('x')); start.onclick = startTour; x.onclick = () => { LS.set('kb_tour', 'dismissed'); render(); };
       inv.append(svgIcon('compass'), el('span', 'ti', 'New here? Take a one-minute tour of Today, Kanban and People.'), start, x); wrap.append(inv);
     }
+    if (toReview.length) wrap.append(todayReview(toReview));   // decisions first: proposals wait for a person, the tiles only navigate
     if (go.childElementCount) wrap.append(go);
     renderTodayWidgets(wrap);
-    if (toReview.length) wrap.append(todayReview(toReview));
     const addGroups = list => list.forEach(([[ic, title], items]) => {
       if (!items.length) return; const sec = ui.section({ title, count: items.length, icon: ic }); sec.classList.add('tsec');
       items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec.body); wrap.append(sec);

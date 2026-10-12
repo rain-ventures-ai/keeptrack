@@ -1245,4 +1245,4 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 
 /* Review Inbox count on the Today tab (header strip and phone dock) */
 #viewSw .ui-tab[data-view="today"], #dock .dtab[data-grp="today"] { position: relative; }
-.todaycount { top: -4px; right: -4px; }
+#viewSw .ui-tab .todaycount, #dock .dtab .todaycount { top: 1px; right: 1px; }   /* inside the tab: the narrow header strip clips anything above it (header .badge would win otherwise) */
