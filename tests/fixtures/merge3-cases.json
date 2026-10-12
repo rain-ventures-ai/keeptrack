@@ -1,0 +1,669 @@
+{
+  "_about": "Shared merge3 cases: tests/test_merge_parity.py runs each through keeptrack.py merge3 and board.js merge3. merged and clashes are the expected results; a missing side in a clash is null.",
+  "cases": [
+    {
+      "name": "clean merge: different fields both survive",
+      "base": {
+        "a": 1,
+        "b": 1
+      },
+      "mine": {
+        "a": 2,
+        "b": 1
+      },
+      "theirs": {
+        "a": 1,
+        "b": 2
+      },
+      "merged": {
+        "a": 2,
+        "b": 2
+      },
+      "clashes": []
+    },
+    {
+      "name": "clean merge: a key added on one side, another removed on the other",
+      "base": {
+        "a": 1,
+        "b": 1
+      },
+      "mine": {
+        "a": 1,
+        "b": 1,
+        "c": 3
+      },
+      "theirs": {
+        "a": 1
+      },
+      "merged": {
+        "a": 1,
+        "c": 3
+      },
+      "clashes": []
+    },
+    {
+      "name": "same change on both sides is not a clash",
+      "base": {
+        "a": 1
+      },
+      "mine": {
+        "a": 2
+      },
+      "theirs": {
+        "a": 2
+      },
+      "merged": {
+        "a": 2
+      },
+      "clashes": []
+    },
+    {
+      "name": "clash: same field, different values keeps theirs",
+      "base": {
+        "title": "x"
+      },
+      "mine": {
+        "title": "mine"
+      },
+      "theirs": {
+        "title": "theirs"
+      },
+      "merged": {
+        "title": "theirs"
+      },
+      "clashes": [
+        {
+          "path": [
+            "title"
+          ],
+          "base": "x",
+          "mine": "mine",
+          "theirs": "theirs"
+        }
+      ]
+    },
+    {
+      "name": "clash: one side removes a field the other edits",
+      "base": {
+        "due": "2026-10-01"
+      },
+      "mine": {},
+      "theirs": {
+        "due": "2026-10-09"
+      },
+      "merged": {
+        "due": "2026-10-09"
+      },
+      "clashes": [
+        {
+          "path": [
+            "due"
+          ],
+          "base": "2026-10-01",
+          "mine": null,
+          "theirs": "2026-10-09"
+        }
+      ]
+    },
+    {
+      "name": "nested objects merge field by field",
+      "base": {
+        "claim": {
+          "agent": "a",
+          "status": "running",
+          "note": ""
+        }
+      },
+      "mine": {
+        "claim": {
+          "agent": "a",
+          "status": "running",
+          "note": "mine"
+        }
+      },
+      "theirs": {
+        "claim": {
+          "agent": "a",
+          "status": "done",
+          "note": ""
+        }
+      },
+      "merged": {
+        "claim": {
+          "agent": "a",
+          "status": "done",
+          "note": "mine"
+        }
+      },
+      "clashes": []
+    },
+    {
+      "name": "list by id: items added on both sides are kept",
+      "base": {
+        "comments": [
+          {
+            "id": "c1",
+            "text": "one"
+          }
+        ]
+      },
+      "mine": {
+        "comments": [
+          {
+            "id": "c1",
+            "text": "one"
+          },
+          {
+            "id": "c2",
+            "text": "mine"
+          }
+        ]
+      },
+      "theirs": {
+        "comments": [
+          {
+            "id": "c1",
+            "text": "one"
+          },
+          {
+            "id": "c3",
+            "text": "theirs"
+          }
+        ]
+      },
+      "merged": {
+        "comments": [
+          {
+            "id": "c1",
+            "text": "one"
+          },
+          {
+            "id": "c3",
+            "text": "theirs"
+          },
+          {
+            "id": "c2",
+            "text": "mine"
+          }
+        ]
+      },
+      "clashes": []
+    },
+    {
+      "name": "list by id: removed on one side and untouched on the other is removed",
+      "base": {
+        "x": [
+          {
+            "id": "d1",
+            "text": "a"
+          },
+          {
+            "id": "d2",
+            "text": "b"
+          }
+        ]
+      },
+      "mine": {
+        "x": [
+          {
+            "id": "d1",
+            "text": "a"
+          }
+        ]
+      },
+      "theirs": {
+        "x": [
+          {
+            "id": "d2",
+            "text": "b"
+          }
+        ]
+      },
+      "merged": {
+        "x": []
+      },
+      "clashes": []
+    },
+    {
+      "name": "list by id: item edited on both sides merges field by field",
+      "base": [
+        {
+          "id": "d1",
+          "text": "a",
+          "done": false
+        }
+      ],
+      "mine": [
+        {
+          "id": "d1",
+          "text": "a",
+          "done": true
+        }
+      ],
+      "theirs": [
+        {
+          "id": "d1",
+          "text": "a2",
+          "done": false
+        }
+      ],
+      "merged": [
+        {
+          "id": "d1",
+          "text": "a2",
+          "done": true
+        }
+      ],
+      "clashes": []
+    },
+    {
+      "name": "list by id: same field of one item clashes",
+      "base": [
+        {
+          "id": "d1",
+          "text": "a"
+        }
+      ],
+      "mine": [
+        {
+          "id": "d1",
+          "text": "mine"
+        }
+      ],
+      "theirs": [
+        {
+          "id": "d1",
+          "text": "theirs"
+        }
+      ],
+      "merged": [
+        {
+          "id": "d1",
+          "text": "theirs"
+        }
+      ],
+      "clashes": [
+        {
+          "path": [
+            "d1",
+            "text"
+          ],
+          "base": "a",
+          "mine": "mine",
+          "theirs": "theirs"
+        }
+      ]
+    },
+    {
+      "name": "list by id: edited on one side, removed on the other clashes",
+      "base": {
+        "todos": [
+          {
+            "id": "d1",
+            "text": "a"
+          }
+        ]
+      },
+      "mine": {
+        "todos": [
+          {
+            "id": "d1",
+            "text": "edited"
+          }
+        ]
+      },
+      "theirs": {
+        "todos": []
+      },
+      "merged": {
+        "todos": []
+      },
+      "clashes": [
+        {
+          "path": [
+            "todos",
+            "d1"
+          ],
+          "base": {
+            "id": "d1",
+            "text": "a"
+          },
+          "mine": {
+            "id": "d1",
+            "text": "edited"
+          },
+          "theirs": null
+        }
+      ]
+    },
+    {
+      "name": "list by id: removed by me while they edited it keeps theirs",
+      "base": {
+        "todos": [
+          {
+            "id": "d1",
+            "text": "a"
+          }
+        ]
+      },
+      "mine": {
+        "todos": []
+      },
+      "theirs": {
+        "todos": [
+          {
+            "id": "d1",
+            "text": "edited"
+          }
+        ]
+      },
+      "merged": {
+        "todos": [
+          {
+            "id": "d1",
+            "text": "edited"
+          }
+        ]
+      },
+      "clashes": [
+        {
+          "path": [
+            "todos",
+            "d1"
+          ],
+          "base": {
+            "id": "d1",
+            "text": "a"
+          },
+          "mine": null,
+          "theirs": {
+            "id": "d1",
+            "text": "edited"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list by id: my reorder wins when they did not reorder",
+      "base": [
+        {
+          "id": "a"
+        },
+        {
+          "id": "b"
+        },
+        {
+          "id": "c"
+        }
+      ],
+      "mine": [
+        {
+          "id": "c"
+        },
+        {
+          "id": "a"
+        },
+        {
+          "id": "b"
+        }
+      ],
+      "theirs": [
+        {
+          "id": "a"
+        },
+        {
+          "id": "b"
+        },
+        {
+          "id": "c"
+        },
+        {
+          "id": "d"
+        }
+      ],
+      "merged": [
+        {
+          "id": "c"
+        },
+        {
+          "id": "a"
+        },
+        {
+          "id": "b"
+        },
+        {
+          "id": "d"
+        }
+      ],
+      "clashes": []
+    },
+    {
+      "name": "list without ids merges by content",
+      "base": {
+        "labels": [
+          "a",
+          "b"
+        ]
+      },
+      "mine": {
+        "labels": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "theirs": {
+        "labels": [
+          "b",
+          "d"
+        ]
+      },
+      "merged": {
+        "labels": [
+          "b",
+          "d",
+          "c"
+        ]
+      },
+      "clashes": []
+    },
+    {
+      "name": "list of objects without ids merges by content",
+      "base": [
+        {
+          "k": 1
+        }
+      ],
+      "mine": [
+        {
+          "k": 1
+        },
+        {
+          "k": 2
+        }
+      ],
+      "theirs": [],
+      "merged": [
+        {
+          "k": 2
+        }
+      ],
+      "clashes": []
+    },
+    {
+      "name": "volatile: updated and heartbeat_at keep mine, never a clash",
+      "base": {
+        "id": "t_a",
+        "title": "A",
+        "column": "todo",
+        "labels": [],
+        "todos": [],
+        "comments": [],
+        "claim": {
+          "status": "running",
+          "heartbeat_at": "2026-10-01T10:00:00Z"
+        },
+        "updated": "2026-10-01T10:00:00Z"
+      },
+      "mine": {
+        "id": "t_a",
+        "title": "A",
+        "column": "todo",
+        "labels": [],
+        "todos": [],
+        "comments": [],
+        "claim": {
+          "status": "running",
+          "heartbeat_at": "2026-10-01T10:05:00Z"
+        },
+        "updated": "2026-10-01T10:05:00Z",
+        "updatedBy": "mine"
+      },
+      "theirs": {
+        "id": "t_a",
+        "title": "A",
+        "column": "todo",
+        "labels": [],
+        "todos": [],
+        "comments": [],
+        "claim": {
+          "status": "running",
+          "heartbeat_at": "2026-10-01T10:04:00Z"
+        },
+        "updated": "2026-10-01T10:04:00Z",
+        "updatedBy": "theirs"
+      },
+      "merged": {
+        "id": "t_a",
+        "title": "A",
+        "column": "todo",
+        "labels": [],
+        "todos": [],
+        "comments": [],
+        "claim": {
+          "status": "running",
+          "heartbeat_at": "2026-10-01T10:05:00Z"
+        },
+        "updated": "2026-10-01T10:05:00Z",
+        "updatedBy": "mine"
+      },
+      "clashes": []
+    },
+    {
+      "name": "volatile: next_num keeps the higher",
+      "base": {
+        "next_num": 5
+      },
+      "mine": {
+        "next_num": 6
+      },
+      "theirs": {
+        "next_num": 7
+      },
+      "merged": {
+        "next_num": 7
+      },
+      "clashes": []
+    },
+    {
+      "name": "volatile: settings.min_kit keeps the higher",
+      "base": {
+        "settings": {}
+      },
+      "mine": {
+        "settings": {
+          "min_kit": 44
+        }
+      },
+      "theirs": {
+        "settings": {
+          "min_kit": 43
+        }
+      },
+      "merged": {
+        "settings": {
+          "min_kit": 44
+        }
+      },
+      "clashes": []
+    },
+    {
+      "name": "volatile: a non-integer min_kit keeps mine",
+      "base": {
+        "settings": {
+          "min_kit": 40
+        }
+      },
+      "mine": {
+        "settings": {
+          "min_kit": "44"
+        }
+      },
+      "theirs": {
+        "settings": {
+          "min_kit": 43
+        }
+      },
+      "merged": {
+        "settings": {
+          "min_kit": "44"
+        }
+      },
+      "clashes": []
+    },
+    {
+      "name": "a card: their move and my comment both land, the same title change is no clash",
+      "base": {
+        "id": "t_a",
+        "title": "A",
+        "column": "todo",
+        "labels": [],
+        "todos": [],
+        "comments": [],
+        "claim": null,
+        "updated": "2026-10-01T00:00:00Z"
+      },
+      "mine": {
+        "id": "t_a",
+        "title": "B",
+        "column": "todo",
+        "labels": [],
+        "todos": [],
+        "comments": [
+          {
+            "id": "c1",
+            "text": "hi"
+          }
+        ],
+        "claim": null,
+        "updated": "2026-10-01T00:00:00Z"
+      },
+      "theirs": {
+        "id": "t_a",
+        "title": "B",
+        "column": "done",
+        "labels": [],
+        "todos": [],
+        "comments": [],
+        "claim": null,
+        "updated": "2026-10-01T00:00:00Z"
+      },
+      "merged": {
+        "id": "t_a",
+        "title": "B",
+        "column": "done",
+        "labels": [],
+        "todos": [],
+        "comments": [
+          {
+            "id": "c1",
+            "text": "hi"
+          }
+        ],
+        "claim": null,
+        "updated": "2026-10-01T00:00:00Z"
+      },
+      "clashes": []
+    }
+  ]
+}

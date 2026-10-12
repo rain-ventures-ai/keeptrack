@@ -11,7 +11,9 @@ Contacts are personal data (UK GDPR). If the repo is **public**, everybody can r
 ## Your token
 - The token is kept only in this browser (local storage). It is sent only to `api.github.com`.
 - Make the token for **one repo only**, with **Contents: Read and write**.
-- **Settings → Connection → Advanced → Copy setup link** and **Copy settings code** include every token saved in this browser, and each asks before it copies. Send them only to yourself.
+- **Settings → Connection → Advanced → Copy setup link** and **Copy settings code** leave tokens and keys out unless you tick **Include tokens and keys**. With the box ticked they hold every token saved in this browser. Each asks before it copies. Send them only to yourself.
+- The page has a Content-Security-Policy: it can talk only to GitHub's API, cron-job.org (the Claude relay) and Open-Meteo (the weather widget), and runs only its own scripts.
+- Each browser tab stays on the board it opened. Switching boards in another tab never makes this tab save into that board.
 - To remove the token from this browser: **Settings → Connection → Advanced → Forget token**. This also removes the copy of the board and its archive that this browser keeps (in IndexedDB) so that the page opens quickly.
 - A token with **Contents: Read** only is safe for people who must only look. The board then shows a **Read-only** banner and does not let them change anything.
 - If a token leaks, delete it on GitHub: **Settings → Developer settings → Personal access tokens**.

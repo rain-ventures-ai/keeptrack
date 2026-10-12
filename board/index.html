@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Content-Security-Policy: only what this page loads. Scripts: this origin, the bootstrap below (by hash; tests/test_web_page.py checks it)
+     and the blob: copies it runs. connect-src: the GitHub API, cron-job.org (the Claude relay), Open-Meteo (weather widget); api.test and
+     cron.test are reserved test names (RFC 2606) that never resolve, used by the browser tests' kb_api / kb_cron_api. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-f+XvldMIXluE/x0IbqTLkMGFyigtBauOzGKMSn9nH6M='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#243447">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -268,7 +272,8 @@
         <div data-banner="danger">These copy or remove secrets. Each one asks first. Use them only on your own devices.</div>
         <div data-props>
           <div data-row="Move settings to another device" id="secMove"><div class="srowstack">
-            <p class="hint">Copies every board, token and key saved in this browser, <b>unencrypted</b>. Treat it like a password and delete the message you send it in.</p>
+            <p class="hint">Copies every board and setting saved in this browser, <b>unencrypted</b>. Tokens and keys are left out unless you tick the box; with them, treat it like a password and delete the message you send it in.</p>
+            <label class="schk"><input type="checkbox" id="xSecrets"> Include tokens and keys</label>
             <div class="sbtns"><button id="xCode" type="button" class="small"><i data-i="clipboard-copy"></i> Copy settings code</button><button id="xLink" type="button" class="small"><i data-i="link"></i> Copy setup link</button></div>
             <textarea id="xPaste" rows="2" placeholder="Paste a settings code or setup link here" aria-label="Settings code to import"></textarea>
             <div class="sbtns"><button id="xImport" type="button" class="small"><i data-i="download"></i> Import settings</button></div>
@@ -496,7 +501,8 @@
     if (!m || +m[1] !== MARKUP) return kbStalePage();                                      // a board.js from another deploy: never run it on this markup
     window.__kbAssets = { css: a[0], js: a[4], extra: a.slice(1, 4).join('\n') };
     CSS.forEach(function (u, i) { var st = document.createElement('style'); st.textContent = a[i] + '\n/*# sourceURL=' + u + ' */'; document.head.appendChild(st); }); reveal();
-    JS.forEach(function (u, i) { var sc = document.createElement('script'); sc.textContent = a[CSS.length + i] + '\n//# sourceURL=' + u; document.body.appendChild(sc); });
+    JS.forEach(function (u, i) { var sc = document.createElement('script'), b = URL.createObjectURL(new Blob([a[CSS.length + i] + '\n//# sourceURL=' + u], { type: 'text/javascript' }));
+      sc.src = b; sc.async = false; sc.onload = sc.onerror = function () { URL.revokeObjectURL(b); }; document.body.appendChild(sc); });   // blob: URLs, not inline text: the CSP allows no inline script
   }
   function tags() {   // last resort (fetch unavailable, e.g. a file:// page): the board.js tag cannot be checked before it runs, so check after
     CSS.forEach(function (u) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = u; document.head.appendChild(l); });

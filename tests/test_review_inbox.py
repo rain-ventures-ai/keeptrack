@@ -101,6 +101,33 @@ class ReviewInbox(unittest.TestCase):
         self.assertEqual(("Send the final plan", "2026-10-20"), (card["title"], card["due"]))
         self.assertEqual("Send the final plan", p["decision"]["edited"]["title"])
 
+    def test_03b_accept_rechecks_a_hand_written_change(self):
+        # A proposal file written straight into proposals/ (not through propose) must not set claim, num, waiting, id ...
+        ident = self.add(proposal(kind="task.update", change={"title": "Renamed"},
+                                  target={"type": "task", "id": "t_first", "base": {"title": self.card("t_first")["title"]}}))
+        path = os.path.join(self.board, "proposals", ident + ".json")
+        with open(path, encoding="utf-8") as src: raw = json.load(src)
+        raw["change"].update(claim={"by": "mallory"}, num=1, waiting={"on": "x"})
+        with open(path, "w", encoding="utf-8") as dst: json.dump(raw, dst)
+        cards = self.files("cards")
+        err = io.StringIO()
+        for fn, args in ((kt.cmd_proposal_accept, Args(id=ident, edit=None, json=False)),
+                         (kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="claim,num"))):
+            with self.assertRaises(SystemExit) as e, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                fn(args)
+            self.assertEqual(2, e.exception.code)
+        self.assertIn("may not set: claim, num, waiting", err.getvalue())
+        self.assertEqual(cards, self.files("cards"))
+        self.assertEqual("pending", self.load_proposal(ident)["status"])
+        raw["change"] = {"title": "Renamed"}; raw["kind"] = "task.rewrite"
+        with open(path, "w", encoding="utf-8") as dst: json.dump(raw, dst)
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            kt.cmd_proposal_accept(Args(id=ident, edit=None, json=False))
+        self.assertIn("unknown kind", err.getvalue())
+
+    def card(self, ident):
+        with open(os.path.join(self.board, "cards", ident + ".json"), encoding="utf-8") as src: return json.load(src)
+
     def test_04b_agent_merge_to_done_of_a_waiting_card_is_recorded(self):
         path = os.path.join(self.board, "cards", "t_first.json")
         with open(path) as src: card = json.load(src)

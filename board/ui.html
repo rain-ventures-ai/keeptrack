@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Content-Security-Policy: this origin and the catalogue script below (by hash; tests/test_web_page.py checks it). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-U4FzqztHJ/JIae9zYioL+f8nkvM/cCTWwwB/UihKGkI='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Keeptrack UI components</title>
 <script src="theme.js"></script>

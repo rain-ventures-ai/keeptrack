@@ -14,7 +14,12 @@ Small, hand-checked boards used by `tests/test_fixture_boards.py` and browser te
 | `v4_kit41/` | v4 split with optional browser-weather configuration | kit v41 | Frozen widget configuration preservation fixture |
 | `v4_kit43/` | v4 split with a waiting card, a wait-blocked claim, `agent_cleared` and `settings.min_kit` | kit v43 | Frozen waiting-for and flag preservation fixture |
 | `v4_kit44/` | v4 split with Review Inbox questions (answered and acted on, pending approval), a proposal and an old `review_inbox` off setting | kit v44 | Frozen always-on Inbox and question preservation fixture |
+| `v4_kit46/` | v4 split with the v44 Review Inbox questions and a rank with a random tail (`a1Qx`) | kit v46 | Frozen appended-rank, question and no-new-`min_kit` fixture |
 
 **When you bump schema or kit:** add a row here, add a frozen directory under `tests/fixtures/`, extend the fixture tests, and add entries to the repo root `CHANGELOG.md` and `board/kit/UPGRADING.md`. The live `demo/` board stays the current showcase only.
 
 Each fixture may include `fixture.json` with expected entity counts and the kit version to simulate before `kit-update`.
+
+`merge3-cases.json` is not a board: it holds shared three-way merge cases (clean merge, clash, lists by id and by content, volatile fields) that `tests/test_merge_parity.py` runs through both `keeptrack.py` and `board.js`. Add a case there when either merge changes.
+
+`proposal-change-cases.json` is not a board either: it holds shared Review Inbox accept checks (allowed fields and value types) that `tests/test_proposal_parity.py` runs through `keeptrack.py` and `board.js`, and `tests/browser/page-safety.test.js` through the page. Add a case there when either check changes.

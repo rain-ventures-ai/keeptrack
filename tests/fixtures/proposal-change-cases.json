@@ -1,0 +1,28 @@
+{
+  "about": "Shared accept-time checks on a stored proposal's change: keeptrack.py (check_stored_change) and board.js (proposalRefusal) must refuse exactly the same ones. ok: true means it may be applied.",
+  "cases": [
+    {"name": "task update priority", "kind": "task.update", "change": {"priority": "high"}, "ok": true},
+    {"name": "task create with lists", "kind": "task.create", "change": {"title": "Plan", "due": "2026-10-20", "labels": ["a"], "comments": [{"text": "hi"}], "todos": [{"text": "do"}], "links": [{"url": "https://example.com"}]}, "ok": true},
+    {"name": "empty due date", "kind": "task.update", "change": {"due": ""}, "ok": true},
+    {"name": "person upsert", "kind": "person.upsert", "change": {"name": "Casey", "emails": [{"address": "x"}], "next_due": "2026-11-01"}, "ok": true},
+    {"name": "contact touch", "kind": "contact.touch", "change": {"text": "", "channel": "email", "source_message_ids": ["m1"]}, "ok": true},
+    {"name": "unknown kind", "kind": "task.delete", "change": {"title": "x"}, "ok": false},
+    {"name": "empty change", "kind": "task.update", "change": {}, "ok": false},
+    {"name": "change is a list", "kind": "task.update", "change": ["title"], "ok": false},
+    {"name": "field not allowed", "kind": "task.update", "change": {"claim": {"agent": "x"}}, "ok": false},
+    {"name": "touch may not set title", "kind": "contact.touch", "change": {"title": "x"}, "ok": false},
+    {"name": "title not text", "kind": "task.create", "change": {"title": 5}, "ok": false},
+    {"name": "owner null", "kind": "task.update", "change": {"owner": null}, "ok": false},
+    {"name": "bad due date", "kind": "task.update", "change": {"due": "next week"}, "ok": false},
+    {"name": "due not text", "kind": "task.update", "change": {"due": 20261020}, "ok": false},
+    {"name": "labels not a list", "kind": "task.update", "change": {"labels": "a"}, "ok": false},
+    {"name": "labels with a number", "kind": "task.update", "change": {"labels": ["a", 1]}, "ok": false},
+    {"name": "links not objects", "kind": "task.update", "change": {"links": ["https://example.com"]}, "ok": false},
+    {"name": "comment without text", "kind": "task.update", "change": {"comments": [{"text": "  "}]}, "ok": false},
+    {"name": "todo text not a string", "kind": "task.update", "change": {"todos": [{"text": 3}]}, "ok": false},
+    {"name": "link without url", "kind": "task.update", "change": {"links": [{"title": "x"}]}, "ok": false},
+    {"name": "bad priority", "kind": "task.update", "change": {"priority": "urgent"}, "ok": false},
+    {"name": "phones not objects", "kind": "person.upsert", "change": {"phones": ["123"]}, "ok": false},
+    {"name": "source ids not text", "kind": "contact.touch", "change": {"source_message_ids": [1]}, "ok": false}
+  ]
+}

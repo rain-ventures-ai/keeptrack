@@ -20,4 +20,4 @@ You act for the board's upgrade owner (`python3 board/keeptrack.py kit-owner`). 
 
 If the card is still open after the merge and the schema changed, run `python3 board/keeptrack.py migrate` from the default branch, then finish the card.
 
-Never push kit changes to the default branch yourself, and never edit `board/tasks.json` by hand.
+Never push kit changes to the default branch yourself, and never edit `board/tasks.json` or any other board JSON file (`board/cards/`, `board/people/`, `board/projects/`, `board/proposals/`, `board/archive/`) by hand.

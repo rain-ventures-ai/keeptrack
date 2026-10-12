@@ -1,0 +1,12 @@
+{
+  "label": "v4 split with the v44 Review Inbox questions and a rank with a random tail, as v46 appends write (kit v46)",
+  "schema": 4,
+  "layout": "split",
+  "kit_before_update": 45,
+  "counts": {
+    "tasks": 2,
+    "contacts": 1,
+    "clients": 1,
+    "projects": 1
+  }
+}

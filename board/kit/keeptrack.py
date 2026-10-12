@@ -41,7 +41,7 @@ Board structure (labels, clients, members, settings) lives in tasks.json; change
   ID may also be a task number: '#12' (quote the # in a shell).
 
 ID may be any unique prefix. Defaults: BOARD_REPO, BOARD_BRANCH, BOARD_PATH, BOARD_AGENT, BOARD_USER,
-BOARD_SESSION (or CLAUDE_SESSION_ID / CODEX_SESSION_ID).
+BOARD_SESSION (or CLAUDE_SESSION_ID / CODEX_SESSION_ID). With --session or BOARD_SESSION a run owns only that session's claims.
 
 Auth: uses the `gh` CLI if it is installed and BOARD_TOKEN is not set. Otherwise (cloud sandboxes, CI) it
 calls the GitHub API directly with a fine-grained token from BOARD_TOKEN, GH_TOKEN or GITHUB_TOKEN
@@ -60,7 +60,7 @@ From any other project (Claude plugin "board"): name the board once, then use th
 
 Board kit (shared tools, kept in one place and copied into each board repo):
   keeptrack.py kit-check [--card]  # is this repo's kit older than the published one? --card adds an upgrade task for the upgrade owner
-  keeptrack.py kit-update [--from DIR]   # copy the published kit into this repo and set board/KIT_VERSION (does not commit)
+  keeptrack.py kit-update [--from DIR] [--allow-downgrade]   # copy the published kit (one commit) into this repo and set board/KIT_VERSION (does not commit)
   keeptrack.py migrate             # bring tasks.json up to v3 (safe to run twice)
   keeptrack.py migrate --to 4 [--dry-run]  # split a v3 board into one file per card and person (install the v8 web page first)
   keeptrack.py doctor [--fix] [--json]     # check the board; repair only safe problems with --fix
@@ -77,6 +77,10 @@ try:
     import msvcrt
 except ImportError:   # POSIX
     msvcrt = None
+try:
+    import select as select_mod
+except ImportError:
+    select_mod = None
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -199,9 +203,12 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 45  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
-KIT_URL = os.environ.get("BOARD_KIT_URL", "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack/main/board/kit")
+KIT_VERSION = 46  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
+KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
+# Board data: kit-update never writes or removes these, whatever a manifest says.
+KIT_NEVER = ("board/tasks.json", "board/cards", "board/people", "board/projects", "board/proposals", "board/archive")
 
 
 def _default_branch():
@@ -338,7 +345,8 @@ def write_private(path, text):
 # The active claim, for the heartbeat hook. A board repo keeps it at its root (gitignored there); any other project
 # keeps it in its own .keeptrack/ folder, so two projects never share one.
 CLAIM_FILE = (os.path.join(ROOT, ".board-claim.json") if ROOT and not PROJECT_DIR else os.path.join(_local_dir(), "claim.json"))
-HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats
+HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats of one card
+HEARTBEAT_RETRY = 60   # seconds before the hook looks again (after a failed beat too)
 ATTENDED_STALE_MINUTES = 12 * 60  # an attended claim (a person drives the session) sends no heartbeats
 
 
@@ -360,13 +368,38 @@ def http(method, path, body=None, accept="application/vnd.github+json"):
                                  headers={"Authorization": f"Bearer {t}", "Accept": accept,
                                           "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "board-cli",
                                           **({"Content-Type": "application/json"} if body is not None else {})})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return 0, r.read().decode(), ""
-    except urllib.error.HTTPError as e:
-        return 1, e.read().decode(errors="replace"), f"HTTP {e.code}: {e.reason}"
-    except (urllib.error.URLError, OSError) as e:
-        return 1, "", f"network error: {e}"
+    for attempt in range(RATE_TRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return 0, r.read().decode(), ""
+        except urllib.error.HTTPError as e:
+            out = e.read().decode(errors="replace")
+            wait = _rate_wait(e.code, e.headers, out, attempt)
+            if wait is None:
+                return 1, out, f"HTTP {e.code}: {e.reason}"
+            if attempt == RATE_TRIES:
+                return 1, out, f"HTTP {e.code}: rate limited"
+            time.sleep(wait)
+        except (urllib.error.URLError, OSError) as e:
+            return 1, "", f"network error: {e}"
+
+
+RATE_TRIES = 3   # retries after a GitHub rate-limit answer, each after a short wait (the hook's 20 s timeout cuts long waits)
+
+
+def _rate_limited(code, headers, text):
+    """A 403 or 429 that is GitHub's rate limit (primary or secondary), not a missing permission."""
+    headers = headers or {}
+    return code in (403, 429) and (code == 429 or bool(headers.get("Retry-After")) or headers.get("x-ratelimit-remaining") == "0"
+                                   or "rate limit" in (text or "").lower())
+
+
+def _rate_wait(code, headers, text, attempt):
+    """Seconds to wait before retrying a rate-limited call, or None when it is not rate limited."""
+    if not _rate_limited(code, headers, text):
+        return None
+    ra = str((headers or {}).get("Retry-After") or "")
+    return min(int(ra) if ra.isdigit() else 2 ** (attempt + 1), 30)
 
 
 def gh(*args, body=None):
@@ -380,9 +413,14 @@ def gh(*args, body=None):
             rc, out, err = http("GET", "user")
             return (rc, json.loads(out).get("login", "") if rc == 0 else out, err)
         return http(method, path, body)
-    p = subprocess.run(["gh", "api", *args], input=json.dumps(body) if body is not None else None,
-                       capture_output=True, text=True)
-    return p.returncode, p.stdout, p.stderr
+    for attempt in range(RATE_TRIES + 1):
+        p = subprocess.run(["gh", "api", *args], input=json.dumps(body) if body is not None else None,
+                           capture_output=True, text=True)
+        m = re.search(r"HTTP (403|429)", p.stderr) if p.returncode else None
+        wait = _rate_wait(int(m.group(1)), {}, p.stdout + p.stderr, attempt) if m else None   # gh shows no headers: the message says it
+        if wait is None or attempt == RATE_TRIES:
+            return p.returncode, p.stdout, p.stderr
+        time.sleep(wait)
 
 
 def assign_nums(data):
@@ -491,6 +529,12 @@ def valid_rank(key):
         return all(c in RANK_DIGITS for c in fraction) and not fraction.endswith(RANK_DIGITS[0])
     except (TypeError, ValueError):
         return False
+
+
+def append_rank(ranks):
+    """A rank after every one in `ranks`, with a short random tail: two saves that append to one column at once read the
+    same last rank, and without it both pick the same key (DUPLICATE_RANK). Still below the next integer key."""
+    return key_between(max(ranks) if ranks else None, None) + secrets.choice(RANK_DIGITS) + secrets.choice(RANK_DIGITS[1:])
 
 
 def key_between(a, b):
@@ -971,10 +1015,23 @@ def _api_error(rc, out, err):
         raise UseGit()
     detail = (err.strip() + (f" ({msg})" if msg else "")) or out.strip()
     hint = ""
-    if "403" in err or "404" in err:
+    if "rate limit" in (err + " " + msg).lower() or "HTTP 429" in err:
+        hint = ("\nGitHub rate limited these requests (too many in a short time), even after waiting and retrying. The token is fine: "
+                "wait a few minutes and run the command again.")
+    elif "403" in err or "404" in err:
         hint = (f"\nThe token can read this repo but cannot write it. It needs Contents: Read and write on {REPO}. "
                 "A person or agent cannot fix this from the board: tell a human.")
     sys.exit(f"write failed: {detail}{hint}")
+
+
+def _sha_mismatch(out, err):
+    """A contents PUT or DELETE refused because the file changed (or appeared) since this command read it."""
+    try:
+        msg = str(json.loads(out).get("message", ""))
+    except (ValueError, AttributeError):
+        msg = ""
+    text = f"{err} {msg}"
+    return "409" in err or "does not match" in text or ("422" in err and "sha" in text.lower())
 
 
 def _api_save_changes(changes, deletes, state, message):
@@ -992,9 +1049,9 @@ def _api_save_changes(changes, deletes, state, message):
             rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{_remote_path(rel)}", "--input", "-", body=body)
         if rc == 0:
             return True
-        if "409" in err or "422" in err or "does not match" in err:
-            return False
-        _api_error(rc, out, err)
+        if _sha_mismatch(out, err):
+            return False   # someone saved this file first: the caller merges or re-runs
+        _api_error(rc, out, err)   # any other 422 (bad path, too large, a rule on the branch) is not a race: six retries would not help
     entries = []
     for rel, text in changes.items():
         rc, out, err = gh("-X", "POST", f"repos/{REPO}/git/blobs", "--input", "-",
@@ -1058,11 +1115,12 @@ class UseGit(Exception):
     """The API refused the write because of the sandbox proxy: switch to the git transport and retry."""
 
 
-_MUT = {"base": None, "extra": {}, "recheck": False, "rerun": False}   # while fn runs inside mutate: the board state it reads, the extra files it wants saved with it,
+_MUT = {"base": None, "extra": {}, "recheck": False, "rerun": False, "after": []}   # while fn runs inside mutate: the board state it reads, the extra files it wants saved with it,
 # whether its checks read the whole board (recheck: a lost race re-runs fn on the newer board instead of merging, and an API
 # save takes the commit path, whose ref update notices any save), and whether a check on one card must hold on the newer
 # board (rerun: the same re-run after a lost race, with the save path unchanged: a one-file contents PUT already fails
-# when that card's file changed)
+# when that card's file changed). "after": calls fn(saved data) once the save worked (a merged save renumbers new cards,
+# so what fn printed of a #number would be stale; the local claim record changes only once the board did)
 
 
 def rewrite_archives(data, edit):
@@ -1196,6 +1254,11 @@ def _renumber(merged, theirs):
     return assign_nums(merged)
 
 
+def num_of(data, tid):
+    """The #number a card has in `data` (after a merged save, the renumbered one), else '?'."""
+    return next((x.get("num", "?") for x in data.get("tasks", []) if x.get("id") == tid), "?")
+
+
 def mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
@@ -1205,7 +1268,7 @@ def mutate(fn, message):
         try:
             return _mutate(fn, message)
         finally:
-            _MUT["recheck"] = _MUT["rerun"] = False
+            _MUT["recheck"] = _MUT["rerun"] = _MUT["lower_min_kit"] = False; _MUT["after"] = []
             if owner:
                 _REC.clear()
 
@@ -1226,7 +1289,7 @@ def _mutate(fn, message):
             # read may have changed.
             base = copy.deepcopy(data)
             out = io.StringIO()  # fn's messages are printed only once the save has worked, so a retry does not repeat them
-            _MUT["base"], _MUT["extra"], _MUT["recheck"], _MUT["rerun"] = sha, {}, False, False
+            _MUT["base"], _MUT["extra"], _MUT["recheck"], _MUT["rerun"], _MUT["after"] = sha, {}, False, False, []
             with contextlib.redirect_stdout(out):
                 result = fn(data)
             assign_nums(data)
@@ -1252,17 +1315,40 @@ def _mutate(fn, message):
             continue
         if ok:
             print(out.getvalue(), end="")
+            for after in _MUT["after"]:
+                after(data)
             return result
         lost = (base, copy.deepcopy(data), bool(extra) or _MUT["recheck"] or _MUT["rerun"])
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not save after retries (board busy)")
 
 
-def guard_schema(data):
+def board_min_kit(data):
+    """settings.min_kit as a whole number, else 0: a missing or malformed value never blocks (doctor reports it)."""
+    mk = (data.get("settings") or {}).get("min_kit") if isinstance(data.get("settings"), dict) else None
+    return mk if isinstance(mk, int) and not isinstance(mk, bool) else 0
+
+
+def min_kit_needed(data):
+    """(the oldest kit the board's own content needs, what needs it): settings.min_kit must never go below it."""
+    needed = WAITING_KIT if any(waiting_of(t) for t in data.get("tasks", []) or [] if isinstance(t, dict)) else 0
+    what = "Cards carry `waiting`"
+    if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
+        needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
+    return needed, what
+
+
+def guard_schema(data, write=True):
     v = data.get("version", 1)
     if isinstance(v, int) and v > SCHEMA:
         sys.exit(f"tasks.json is schema v{v}, but this keeptrack.py only knows v{SCHEMA}, so it will not write (it could lose data).\n"
                  "Update the board tools first: python3 board/keeptrack.py kit-update (see board/UPGRADING.md).")
+    # Same rule as the web page: a board that needs a newer kit (settings.min_kit) is read-only here. Reads still work.
+    # The one exception: settings-set --min-kit lowering a stored value above this kit (a typo) back to one it knows.
+    if write and board_min_kit(data) > KIT_VERSION and not _MUT.get("lower_min_kit"):
+        sys.exit(f"this board needs kit v{board_min_kit(data)} (settings.min_kit), but this keeptrack.py is kit v{KIT_VERSION}, "
+                 "so it will not write (it may not know a rule a card relies on).\n"
+                 "Upgrade the board kit first: python3 board/keeptrack.py kit-update (see board/UPGRADING.md); a plugin copy updates with the plugin.")
 
 
 # Data migrations: MIGRATIONS[n] turns a schema-n file into schema n+1. Each step must be safe to run twice.
@@ -1402,6 +1488,21 @@ def session_for(a):
     return sid or recorded_session() or uuid.uuid4().hex[:8]
 
 
+def explicit_session(a=None):
+    """--session or BOARD_SESSION, when usable: an id this run was given on purpose. Then it alone is this run's: parallel
+    sessions in one clone share the local claim record, so the record's session is not trusted on top of it."""
+    return usable_session(getattr(a, "session", None) or os.environ.get("BOARD_SESSION"))
+
+
+def my_sessions(a, task_id=None):
+    """The session ids whose claims this run owns: the explicit id alone, else session_for's id and the sessions this
+    clone's record holds (the clone's latest, and the one recorded for task_id)."""
+    sid = explicit_session(a)
+    if sid:
+        return {sid}
+    return {session_for(a), recorded_session(), recorded_session(task_id) if task_id else ""} - {""}
+
+
 def redact_session(sid):
     """A session id shown to whoever did not claim the card: enough to recognise it, not enough to pass as it."""
     sid = str(sid or "")
@@ -1480,12 +1581,129 @@ def _record_changed(info):
         _REC["info"] = info
 
 
+def record_cards(info):
+    """The cards a local claim record holds, {card id: {"session", "agent", "user", "by_person"}}, oldest claim first. Reads
+    the one-card record of kit v45 and older ({"id", "session", ...}) too. by_person, not "attended": the hook greps the
+    record for '"attended": true' (every card driven by a person: no beats, no python)."""
+    if not isinstance(info, dict):
+        return {}
+    cards = info.get("cards")
+    if isinstance(cards, dict):
+        return {k: v for k, v in cards.items() if isinstance(k, str) and k and isinstance(v, dict)}
+    if info.get("id") and isinstance(info["id"], str):
+        return {info["id"]: {"session": info.get("session"), "agent": info.get("agent"), "user": info.get("user"),
+                             "by_person": bool(info.get("attended"))}}
+    return {}
+
+
+def record_json(cards, session):
+    """The record for `cards`. Its top level keeps the older one-card shape (a card that gets beats, else the latest one;
+    attended only when every card is) for the hook's grep; "session" is the clone's session for an env-less run."""
+    beat = [k for k, v in cards.items() if not v.get("by_person")]
+    top = (beat or list(cards))[-1:]
+    rec = {"session": session}
+    if top:
+        v = cards[top[0]]
+        rec = {"id": top[0], "agent": v.get("agent"), "user": v.get("user"), "session": v.get("session"), "attended": not beat}
+    if cards:
+        rec["cards"] = cards
+    return rec
+
+
+@contextlib.contextmanager
+def record_lock():
+    """An exclusive lock (<record>.lock, beside it) around one re-read and rewrite of the local claim record, so parallel
+    sessions in one clone never write over each other's entries. Never follows a symlink at the lock's path."""
+    fd = os.open(CLAIM_FILE + ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "a+b") as f:   # closing the file releases the lock
+        if fcntl:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        elif msvcrt:
+            f.seek(0); msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        yield
+
+
+def _record_on_disk():
+    """The record as it is on disk now (no cached read, no git probe: the caller's own read or ensure_local_dir vouched
+    for it), or None. A symlinked record raises OSError: it is nobody's, so it is never rewritten either."""
+    try:
+        with os.fdopen(os.open(CLAIM_FILE, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))) as f:
+            info = json.load(f)
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def rewrite_claim_record(change, session=None):
+    """Re-read the record under record_lock(), let change(cards) edit only this command's own card entries (it returns
+    False for "nothing to change"), and write it back atomically (a temp file renamed over it). The record goes when
+    no card and no usable session is left. Returns the record now on disk."""
+    with record_lock():
+        info = _record_on_disk()
+        cards = record_cards(info)
+        if change(cards) is False:
+            return info
+        session = session or (info or {}).get("session")
+        if not cards and not usable_session(session):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(CLAIM_FILE)
+            _record_changed(None); return None
+        rec = record_json(cards, session)
+        if os.path.islink(CLAIM_FILE):
+            raise OSError(f"{CLAIM_FILE} is a symlink; Keeptrack will not replace it")
+        fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".part", dir=os.path.dirname(os.path.abspath(CLAIM_FILE)))   # 0600
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(rec)); f.flush(); os.fsync(f.fileno())
+            os.replace(tmp, CLAIM_FILE)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            raise
+        _record_changed(rec); return rec
+
+
+def claimant_key():
+    """Which Claude Code session made a claim, as the heartbeat hook can tell it: a short hash of the Claude session id
+    (CLAUDE_CODE_SESSION_ID, else CLAUDE_SESSION_ID), or '' outside Claude Code. Only matches a hook to its own cards;
+    it is never a claim id and proves no ownership."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or ""
+    return session_hash(sid) if sid else ""
+
+
+def hook_claimant_key():
+    """The heartbeat hook's own Claude session, hashed like claimant_key(): from its environment, else the session_id in
+    the hook's JSON input on stdin. '' when neither says (the hook then beats every card of the clone, as before)."""
+    key = claimant_key()
+    if key:
+        return key
+    try:
+        sid = json.loads(hook_input() or "{}").get("session_id")
+    except (ValueError, AttributeError):
+        return ""
+    return session_hash(sid) if isinstance(sid, str) and sid else ""
+
+
+def hook_input():
+    """The JSON Claude Code hands a hook on stdin, or '' (a terminal, nothing within a second, or no stdin)."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return ""
+        if select_mod and not select_mod.select([sys.stdin], [], [], 1)[0]:
+            return ""
+        return sys.stdin.read(65536)
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def recorded_session(task_id=None):
-    """The session in this clone's local claim record (for this card when task_id is given), else ''. A clone is one
-    trust domain: the record it wrote is its session, whichever card it claimed last."""
+    """The session in this clone's local claim record (the one recorded for this card when task_id is given), else ''.
+    Without an explicit id a clone is one trust domain: the record it wrote is its session, whichever card it claimed last."""
     info = claim_record()
-    ok = info is not None and usable_session(info.get("session")) and (task_id is None or info.get("id") == task_id)
-    return info["session"] if ok else ""
+    sid = (info or {}).get("session") if task_id is None else (record_cards(info).get(task_id) or {}).get("session")
+    return sid if usable_session(sid) else ""
 
 
 def claim_owner_check(data, t, a, action):
@@ -1504,12 +1722,16 @@ def claim_owner_check(data, t, a, action):
         return   # no live claim (older cards kept a finished one)
     state = claim_state(data, c)
     own = c.get("session_id")
-    if own and not is_placeholder_claim(c) and own in {session_for(a), recorded_session()}:
+    if own and not is_placeholder_claim(c) and own in my_sessions(a, t.get("id")):
         return   # a claim with no session id is nobody's: only --force finishes it
     if action == "release" and state in ("stale", "stuck", "blocked") \
             and not (state == "blocked" and c.get("blocked_by_wait") and agent_run()):
         return   # a stale placeholder (the routine never started) is a dead run too. A claim `wait` blocked (v43) is live for
         # release: only its own session, a person (no BOARD_AGENT) or --force; else blocking it would hand any session the card
+    if explicit_session(a) and (record_cards(claim_record()).get(t["id"]) or {}).get("session") == own:
+        sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')} from this clone under a different session id ({state}): "
+                 "if BOARD_SESSION (or --session) changed since the claim, rerun with the id you claimed with; it is not "
+                 "this session's otherwise (use --force only if a person told you to)")   # the record says this clone claimed it
     sys.exit(f"refused: {t['id']} is claimed by {c.get('agent')}, another session ({state}); it is not this session's "
              "(use --force only if a person told you to; never pass --session with an id you did not generate)")
 
@@ -1599,7 +1821,7 @@ def holds_claim(t, a):
     c = t.get("claim") or {}
     sid = c.get("session_id")
     return bool(c) and c.get("status") != "done" and bool(sid) and not is_placeholder_claim(c) \
-        and sid in {session_for(a), recorded_session()}
+        and sid in my_sessions(a, t.get("id"))
 
 
 def note_agent_cleared(t, what, sid):
@@ -1839,9 +2061,15 @@ def write_claim_record():
     rec = _PENDING_CLAIM.pop("rec", None)
     if not rec or FILE:
         return
+    entry = {"session": rec["session"], "agent": rec["agent"], "user": rec["user"], "by_person": bool(rec["attended"]),
+             "beat_at": int(time.time())}   # the claim was this card's beat
+    if claimant_key():
+        entry["claimant"] = claimant_key()   # the hook of this Claude session beats this card; other sessions' hooks leave it
+    def change(cards):
+        cards.pop(rec["id"], None); cards[rec["id"]] = entry   # parallel sessions in one clone: one entry per card, the others kept
     try:
         ensure_local_dir(CLAIM_FILE)
-        write_private(CLAIM_FILE, json.dumps(rec))
+        rewrite_claim_record(change, rec["session"])
     except OSError as e:
         print(f"note: no local claim record, so no automatic heartbeat ({e}); pass --session {rec.get('session')} "
               "(or export BOARD_SESSION) to heartbeat, done or release the card", file=sys.stderr)
@@ -1879,7 +2107,7 @@ def do_claim(a, tid, data):
     cs = claim_state(data, t.get("claim"))
     # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
     _MUT["recheck"] = True   # a lost race re-runs this on the newer board: never a three-way merge of two claims
-    mine = {sid, recorded_session()} - {""}   # this run's id, and the session this clone's record holds (one clone is one session)
+    mine = {sid} | my_sessions(a, t.get("id"))   # this run's id, and without an explicit one the clone's recorded sessions
     if t.get("claim") and t["claim"].get("session_id") in mine:
         sid = t["claim"]["session_id"]   # re-claiming its own card keeps the id the claim already carries
     if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") in mine and cs == "running"):
@@ -1920,10 +2148,21 @@ def do_claim(a, tid, data):
     return t["id"]
 
 
+def with_record(run):
+    """run() with one read of the local claim record, shared by its mutate and the record write after the save."""
+    owner = not _REC.get("on")
+    if owner:
+        _REC.clear(); _REC["on"] = True
+    try:
+        return run()
+    finally:
+        if owner:
+            _REC.clear()
+
+
 def cmd_claim(a):
     _PENDING_CLAIM.clear()
-    mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}")
-    write_claim_record()
+    with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
 
 
 def cmd_next(a):
@@ -1940,8 +2179,7 @@ def cmd_next(a):
                 return do_claim(a, t["id"], data)
         sys.exit(f"nothing claimable in 'todo' for @{user}")
     _PENDING_CLAIM.clear()
-    mutate(fn, "Agent claim: next task")
-    write_claim_record()
+    with_record(lambda: (mutate(fn, "Agent claim: next task"), write_claim_record()))
 
 
 def must_claim(t):
@@ -1985,10 +2223,12 @@ def drop_claim_file(task_id=None):
             return   # nothing read this command (no record, one git did not vouch for, or one that appeared meanwhile): not ours to forget
         ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=info is None)   # the same guard as the write (the read already asked git when it found a record)
         if task_id:
-            if info and info.get("id") and info.get("id") != task_id:
-                return
-            if info and usable_session(info.get("session")):
-                write_private(CLAIM_FILE, json.dumps({"session": info["session"]})); _record_changed({"session": info["session"]}); return
+            def change(cards):   # the record as it is now: another session in this clone may have written since this command read it
+                if cards and task_id not in cards:
+                    return False
+                cards.pop(task_id, None)
+            rewrite_claim_record(change)
+            return
         os.remove(CLAIM_FILE); _record_changed(None)
     except OSError:
         pass
@@ -2006,7 +2246,7 @@ def move_task_to_column(data, task, column, a=None):
     if data.get("layout") == "split":
         ranks = [x.get("rank") for x in data.get("tasks", [])
                  if x is not task and x.get("column") == column and valid_rank(x.get("rank"))]
-        task["rank"] = key_between(max(ranks) if ranks else None, None)
+        task["rank"] = append_rank(ranks)
     task["column"] = column
     return old
 
@@ -2020,7 +2260,7 @@ def cmd_release(a):
         claim_owner_check(data, t, a, "release"); hist(t, "released" + (f" to {a.column}" if a.column else ""))
         if a.column and a.column != "done" and t.get("column") == "done" and waiting_of(t):
             drop_leftover_wait(t, "reopening", data, a)   # while the claim is still there: its session is recorded too
-        t["claim"] = None; drop_claim_file(t["id"])
+        t["claim"] = None; tid = t["id"]; _MUT["after"].append(lambda d: drop_claim_file(tid))   # only once the save worked
         if a.column: move_task_to_column(data, t, a.column, a)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
@@ -2053,7 +2293,8 @@ def cmd_done(a):
             t["last_run"]["outcome"] = outcome   # the run record never disagrees with the card
         link = (c or {}).get("session_url", "")
         hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
-        move_task_to_column(data, t, "done"); t["updated"] = now(); drop_claim_file(t["id"])
+        move_task_to_column(data, t, "done"); t["updated"] = now(); tid = t["id"]
+        _MUT["after"].append(lambda d: drop_claim_file(tid))   # only once the save worked: a failed one leaves the claim provably ours
         print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
 
@@ -2092,7 +2333,7 @@ def cmd_wait(a):
         c = t.get("claim")
         hist(t, f"waiting on {on}" + (f" ({who})" if who else "") + (f", chase {nudge}" if nudge else "") + (f": {note}" if note else ""))
         if c and c.get("status") in ("running", "blocked", "stuck"):   # stuck too: else doctor's CLAIM_BLOCKED fires at once
-            own = bool(c.get("session_id")) and not is_placeholder_claim(c) and c["session_id"] in {sid, recorded_session()}
+            own = bool(c.get("session_id")) and not is_placeholder_claim(c) and c["session_id"] in my_sessions(a, t.get("id"))
             if own or not agent_run():
                 if c.get("status") != "blocked":
                     hist(t, f"claim blocked: waiting on {on}")
@@ -2139,7 +2380,8 @@ def cmd_unwait(a):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
             if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
                 hist(t, f"released to todo: the claim's session sent no heartbeat for {_age(age)}")
-                t["claim"] = None; move_task_to_column(data, t, "todo"); drop_claim_file(t["id"])
+                t["claim"] = None; move_task_to_column(data, t, "todo"); tid = t["id"]
+                _MUT["after"].append(lambda d: drop_claim_file(tid))
                 msg += "; its old claim is released and the card is back in To do"
             elif c.get("before_wait") == "stuck":
                 c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
@@ -2187,6 +2429,8 @@ def cmd_move(a):
                 lo = peers[-1].get("rank") if peers else None; hi = None
             if lo is not None and not valid_rank(lo): lo = None
             if hi is not None and not valid_rank(hi): hi = None
+            if lo is not None and hi is not None and lo >= hi:   # equal neighbours (two concurrent appends): as the page does,
+                lo = max((x["rank"] for x in peers if valid_rank(x.get("rank")) and x["rank"] < hi), default=None)   # just below hi
             t["rank"] = key_between(lo, hi)
         elif any((getattr(a, "before", None), getattr(a, "after", None), getattr(a, "top", False))):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
@@ -2321,30 +2565,57 @@ def cmd_history(a):
 
 
 def cmd_auto_heartbeat(a):
-    """Hook entry point. Never fails loudly: a hook must not break the agent's session."""
+    """Hook entry point. Never fails loudly: a hook must not break the agent's session. The record's mtime is a cheap gate
+    (at most one look a minute); each card entry keeps its own beat time (beat_at), so every session in the clone gets its
+    beats, and a failed beat is tried again about a minute later, not at every tool call."""
     try:
         if os.path.islink(os.path.dirname(CLAIM_FILE)):
             return   # lstat/utime follow symlinks in parent components; reject the personal folder before touching its target
         st = os.lstat(CLAIM_FILE)   # a symlinked record is nobody's: its target is never read, touched or followed
-        if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_EVERY:
+        if stat.S_ISLNK(st.st_mode) or time.time() - st.st_mtime < HEARTBEAT_RETRY:
             return
-        os.utime(CLAIM_FILE, follow_symlinks=False)  # throttle first: even if git or the network call stalls, the next tool calls skip this
+        os.utime(CLAIM_FILE, follow_symlinks=False)   # before the save: a beat that fails (refused, offline, rate limited, the
+        # hook's timeout) is tried again after HEARTBEAT_RETRY, and the next tool calls meanwhile skip the read
         _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
         info = claim_record()   # None for a record git tracks: it came with the repo, so it names no card of this clone's
-        if not info or info.get("attended") or not info.get("id"):
-            return  # a person drives this session, or no card is active: no automatic heartbeats
+        only = explicit_session()   # BOARD_SESSION in the hook's environment: that session's cards only
+        key = hook_claimant_key()   # this Claude session's own cards only; entries with no claimant (older kits, no Claude
+        # session at claim time) are beaten by any hook in the clone, as before
+        due = time.time() - HEARTBEAT_EVERY
+        cards = {k: v for k, v in record_cards(info).items() if not v.get("by_person") and usable_session(v.get("session"))
+                 and (not only or v.get("session") == only) and (not key or not v.get("claimant") or v.get("claimant") == key)
+                 and not (isinstance(v.get("beat_at"), (int, float)) and v["beat_at"] > due)}
+        if not cards:
+            return  # a person drives this session, no card is active, or this session's cards had their beat
+        gone, beaten = [], []
 
         def fn(data):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
-            t = find(data, info["id"]); c = t.get("claim")
-            if not c or c.get("status") == "done" or c.get("session_id") != info.get("session"):
-                drop_claim_file(info["id"]); return  # released, finished, or taken over: forget the card, keep the clone's session
-            if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
-                print(f"keeptrack: claim {info['id']} is stale and the board's agent limit is full; it stays stale "
-                      "(another session may take the card)", file=sys.stderr)
-                return
-            c["heartbeat_at"] = now(); t["updated"] = now()
-        mutate(fn, f"Agent heartbeat: {info['id']}")
+            gone.clear(); beaten.clear()
+            for tid, v in cards.items():   # every card this session (or the clone's, or BOARD_SESSION's) claimed and still holds
+                t = next((x for x in data.get("tasks", []) if x.get("id") == tid), None); c = (t or {}).get("claim")
+                if not c or c.get("status") == "done" or c.get("session_id") != v.get("session"):
+                    gone.append(tid); continue  # released, finished, taken over or deleted: forget the card, keep the clone's session
+                if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
+                    print(f"keeptrack: claim {tid} is stale and the board's agent limit is full; it stays stale "
+                          "(another session may take the card)", file=sys.stderr)
+                    continue
+                c["heartbeat_at"] = now(); t["updated"] = now(); beaten.append(tid)
+        mutate(fn, "Agent heartbeat: " + ", ".join(cards))
+        at = int(time.time())
+
+        def change(entries):   # the record as it is now: only the entries this beat saw, and only while they are the same claim
+            for tid in gone + beaten:
+                v = entries.get(tid)
+                if not v or v.get("session") != cards[tid].get("session"):
+                    continue   # claimed again meanwhile (by this clone or another session): that entry is not this beat's
+                if tid in gone:
+                    entries.pop(tid)
+                else:
+                    v["beat_at"] = at   # the full throttle, for this card only
+        if gone or beaten:
+            ensure_local_dir(CLAIM_FILE, warn=False, check_tracked=False)   # the read above asked git
+            rewrite_claim_record(change)
     except BaseException:
         return
     finally:
@@ -2370,9 +2641,10 @@ def cmd_add(a):
             print(f"created label {x}")
         t["labels"] = list(dict.fromkeys(check_label_name(x) for x in a.label or []))
         if data.get("layout") == "split":
-            t["rank"] = key_between(max(ranks) if ranks else None, None)
+            t["rank"] = append_rank(ranks)
         hist(t, "created")
-        data["tasks"].append(t); assign_nums(data); print(f"added #{t['num']} ({t['id']})")
+        data["tasks"].append(t); assign_nums(data); tid = t["id"]
+        _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})"))   # the saved #number: a lost race renumbers ours
     mutate(fn, f"Add task: {a.title}")
 
 
@@ -2387,26 +2659,90 @@ def kit_fetch(name, src=None):
             return open(os.path.join(src, name), "rb").read()
         except OSError as e:
             raise KitError(f"cannot read {name} from the kit: {e}")
+    kind, where, sha = kit_source()
+    if kind == "dir":
+        return kit_fetch(name, where)
     try:
-        with urllib.request.urlopen(urllib.request.Request(f"{KIT_URL}/{name}", headers={"User-Agent": "board-cli"}), timeout=30) as r:
+        with urllib.request.urlopen(urllib.request.Request(f"{where}/{name}", headers={"User-Agent": "board-cli"}), timeout=30) as r:
             return r.read()
-    except (urllib.error.URLError, OSError):
-        return kit_fetch(name, kit_clone())
+    except (urllib.error.URLError, OSError) as e:
+        if KIT_URL:   # a custom kit that fails stops here: never a quiet switch to the official one
+            raise KitError(f"cannot fetch {name} from BOARD_KIT_URL ({KIT_URL}): {e}. Fix or unset BOARD_KIT_URL")
+        _KIT_SRC[0] = ("dir", kit_clone(sha), sha)   # raw.githubusercontent.com blocked: the same commit through git
+        return kit_fetch(name, _KIT_SRC[0][1])
 
 
 _KIT_DIR = None
+_KIT_SRC = []   # [(kind, where, sha)], chosen once per run, so the manifest and every file come from the same commit
 
 
-def kit_clone():
-    """Fallback when raw.githubusercontent.com is blocked: a shallow git clone of the kit repo (public, no token)."""
+def kit_ref():
+    """The commit the kit's main branch is at now (git, else the API), or "" when neither answers."""
+    sha = ""
+    try:
+        p = subprocess.run(["git", "ls-remote", KIT_GIT, "refs/heads/main"], capture_output=True, text=True, timeout=30)
+        sha = p.stdout.split()[0] if p.returncode == 0 and p.stdout.strip() else ""
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        try:
+            req = urllib.request.Request("https://api.github.com/repos/rain-ventures-ai/keeptrack/commits/main",
+                                         headers={"Accept": "application/vnd.github.sha", "User-Agent": "board-cli"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                sha = r.read().decode().strip()
+        except (urllib.error.URLError, OSError, UnicodeError):
+            sha = ""
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
+
+
+def kit_published():
+    """The published kit's version (manifest.json), or None when it can't be read: then a min_kit above this kit may be real."""
+    try:
+        v = json.loads(kit_fetch("manifest.json"))["version"]
+    except (KitError, ValueError, KeyError, TypeError, OSError):
+        return None
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def kit_source():
+    if not _KIT_SRC:
+        if KIT_URL:
+            _KIT_SRC.append(("url", KIT_URL.rstrip("/"), ""))
+        else:
+            sha = kit_ref()
+            _KIT_SRC.append(("url", f"{KIT_RAW}/{sha}/board/kit", sha) if sha else ("dir", kit_clone(), ""))
+    return _KIT_SRC[0]
+
+
+def kit_clone(sha=""):
+    """Fallback when raw.githubusercontent.com is blocked: a shallow git clone of the kit repo (public, no token), at sha if given."""
     global _KIT_DIR
     if not _KIT_DIR:
         d = tempfile.mkdtemp(prefix="board-kit-")
         p = subprocess.run(["git", "clone", "-q", "--depth", "1", KIT_GIT, d], capture_output=True, text=True)
         if p.returncode:
-            raise KitError(f"cannot fetch the board kit from {KIT_URL} or {KIT_GIT}: {p.stderr.strip()}")
+            raise KitError(f"cannot fetch the board kit from {KIT_RAW} or {KIT_GIT}: {p.stderr.strip()}")
+        head = subprocess.run(["git", "-C", d, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        if sha and head != sha:
+            p = subprocess.run(["git", "-C", d, "fetch", "-q", "--depth", "1", "origin", sha], capture_output=True, text=True)
+            p = p if p.returncode else subprocess.run(["git", "-C", d, "checkout", "-q", sha], capture_output=True, text=True)
+            if p.returncode:
+                raise KitError(f"cannot fetch kit commit {sha[:12]} from {KIT_GIT}: {p.stderr.strip()}")
         _KIT_DIR = os.path.join(d, "board", "kit")
     return _KIT_DIR
+
+
+def kit_dest(root, dest):
+    """A manifest path made safe: inside the repo and never board data (KIT_NEVER), whatever the manifest says."""
+    if not isinstance(dest, str) or not dest or os.path.isabs(dest) or "\\" in dest:
+        raise ValueError(f"unsafe path in manifest: {dest!r}")
+    path = os.path.abspath(os.path.join(root, dest))
+    if os.path.commonpath([root, path]) != root or path == root:
+        raise ValueError(f"unsafe path in manifest: {dest}")
+    rel = os.path.relpath(path, root).replace(os.sep, "/").lower()
+    if any(rel == n or rel.startswith(n + "/") or n.startswith(rel + "/") for n in KIT_NEVER):
+        raise ValueError(f"the manifest names {dest}, which is board data: kit-update never writes or removes it")
+    return path
 
 
 def need_repo_clone():
@@ -2429,8 +2765,38 @@ def kit_owner(data):
     return s if s else (people[0] if people else "")
 
 
+def kit_drift():
+    """Warnings where this repo's AGENTS.md (copied from templates/ once, at init) lags the current template. Never an error."""
+    try:
+        with open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    out = []
+    try:
+        with open(os.path.join(ROOT, PATH), encoding="utf-8") as f:
+            split = json.load(f).get("layout") == "split"
+    except (OSError, ValueError, AttributeError):
+        split = os.path.isdir(os.path.join(ROOT, os.path.dirname(PATH), "cards"))
+    if split:   # rule 1 must name every board folder (any wording): cards/ and people/, and the others where they exist
+        rule1 = next(iter(re.findall(r"(?m)^\s*1\.\s.*$", text)), "")
+        board_dir = os.path.join(ROOT, os.path.dirname(PATH))
+        folders = ["cards", "people"] + [d for d in ("projects", "proposals", "archive") if os.path.isdir(os.path.join(board_dir, d))]
+        missing = [f"{d}/" for d in folders if f"{d}/" not in rule1]
+        if missing:
+            out.append(f"AGENTS.md rule 1 does not ban hand edits of {', '.join(missing)} (split storage keeps each card, person, "
+                       "project and question in its own file): copy rule 1 from the kit's templates/AGENTS.md")
+    mins = sorted({int(n) for n in re.findall(r"every ~?(\d+) minutes", text)} - {HEARTBEAT_EVERY // 60})
+    if mins:
+        out.append(f"AGENTS.md gives heartbeat timing of {', '.join(map(str, mins))} minutes; the tools beat every "
+                   f"{HEARTBEAT_EVERY // 60}: copy the heartbeat lines from the kit's templates/AGENTS.md")
+    return out
+
+
 def cmd_kit_check(a):
     need_repo_clone()
+    for w in kit_drift():
+        print(f"template drift (warning): {w}")
     try:
         m = json.loads(kit_fetch("manifest.json", a.source))
     except (KitError, ValueError) as e:
@@ -2442,7 +2808,7 @@ def cmd_kit_check(a):
         mk = None
     if isinstance(mk, int) and not isinstance(mk, bool) and mk > have:
         if mk > want:
-            print(f"settings.min_kit is {mk}, above the published kit v{want}: probably a typo (doctor reports it)")
+            print(f"settings.min_kit is {mk}, above the published kit v{want}: probably a typo (doctor --fix lowers it)")
         else:
             print(f"this board needs kit v{mk} (settings.min_kit), but this repo has v{have}: upgrade before an older tool saves it")
     if have >= want:
@@ -2459,7 +2825,7 @@ def cmd_kit_check(a):
             ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == "todo" and valid_rank(t.get("rank"))]
             t = {"id": new_board_id(data, "t_", "cards"), "title": title, "column": "todo", "client": "", "priority": "medium", "due": "",
                  "labels": ["board"] if any(l.get("name") == "board" for l in data.get("labels", [])) else [],
-                 "assignees": [owner] if owner else [], "links": [{"title": "Upgrade notes", "url": f"{KIT_GIT}/blob/master/board/kit/UPGRADING.md"}],
+                 "assignees": [owner] if owner else [], "links": [{"title": "Upgrade notes", "url": f"{KIT_GIT}/blob/main/board/kit/UPGRADING.md"}],
                  "details": f"This repo's board tools are kit v{have}; the published kit is v{want}.\n\n"
                             f"@{owner or 'upgrade owner'}: comment `@claude upgrade the board kit` to start your routine. It follows "
                             ".claude/skills/board-upgrade/SKILL.md: copies the kit on a branch, runs the migrations, keeps this repo's own "
@@ -2469,9 +2835,10 @@ def cmd_kit_check(a):
                                             "Checks pass", "Open and link the PR"]],
                  "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
             if data.get("layout") == "split":
-                t["rank"] = key_between(max(ranks) if ranks else None, None)
+                t["rank"] = append_rank(ranks)
             hist(t, "created by kit-check")
-            data["tasks"].append(t); assign_nums(data); print(f"added #{t['num']} for @{owner or '?'}: {title}")
+            data["tasks"].append(t); assign_nums(data); tid = t["id"]
+            _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} for @{owner or '?'}: {title}"))   # the saved #number
         mutate(fn, f"Add task: Upgrade board tools to kit v{want}")
         return  # with --card the caller carries on with its own work
     sys.exit(3)
@@ -2489,20 +2856,22 @@ def cmd_kit_update(a):
                 if wanted or os.path.exists(os.path.join(ROOT, dest)):
                     files[dest] = kit_fetch(src, a.source)
         root = os.path.abspath(ROOT)
-        removals = []
-        for dest in m.get("remove", []):
-            if not isinstance(dest, str) or os.path.isabs(dest):
-                raise ValueError(f"unsafe removal path in manifest: {dest}")
-            path = os.path.abspath(os.path.join(root, dest))
-            if os.path.commonpath([root, path]) != root or path == root:
-                raise ValueError(f"unsafe removal path in manifest: {dest}")
-            removals.append((dest, path))
-    except (KitError, ValueError) as e:
+        targets = {dest: kit_dest(root, dest) for dest in files}
+        removals = [(dest, kit_dest(root, dest)) for dest in m.get("remove", [])]
+        # The fetched keeptrack.py must be the release the manifest names (a half-published or mixed kit is refused).
+        got = re.search(rb"^KIT_VERSION = (\d+)", files.get("board/keeptrack.py", b""), re.M)
+        if not got or int(got.group(1)) != m["version"]:
+            raise ValueError(f"the fetched board/keeptrack.py is kit v{got.group(1).decode() if got else '?'}, but the manifest is "
+                             f"v{m['version']}: the kit is being published or is broken; try again in a few minutes")
+    except (KitError, ValueError, KeyError, TypeError, AttributeError) as e:
         sys.exit(f"kit-update stopped, nothing changed: {e}")
     have = kit_local()
+    if have > m["version"] and not getattr(a, "allow_downgrade", False):
+        sys.exit(f"kit-update stopped, nothing changed: this repo has kit v{have}, newer than the fetched kit v{m['version']}. "
+                 "Pass --allow-downgrade only if you mean to go back.")
     changed = []
     for dest, new in files.items():
-        path = os.path.join(ROOT, dest)
+        path = targets[dest]
         old = open(path, "rb").read() if os.path.exists(path) else None
         if old != new:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2678,21 +3047,19 @@ def doctor_board(fix=False):
     if mac is not None and not claim_limit(data):
         problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
                 "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
-    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. Detects, never prevents.
+    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. From v46 an older kit will not write.
     raw_min = (data.get("settings") or {}).get("min_kit")
     min_kit = raw_min if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 0
     if raw_min is not None and not min_kit:
         problem("SETTINGS", "tasks.json", f"settings.min_kit {raw_min!r} must be a whole number (a kit version).")
     if min_kit > KIT_VERSION:
         problem("KIT_OLD", "tasks.json", f"This keeptrack.py is kit v{KIT_VERSION}, but the board needs kit v{min_kit} (settings.min_kit): "
-                "it may not know a rule a card relies on. Update the board tools (kit-update) before writing.")
+                "it may not know a rule a card relies on. Update the board tools (kit-update) before writing. Only a value above the "
+                "published kit is a typo, which doctor --fix lowers.")
     local_kit = kit_local() if ROOT else 0   # a plugin copy has no clone: only the constant above is checked
     if local_kit and min_kit > local_kit and local_kit != KIT_VERSION:
         problem("KIT_OLD", "board/KIT_VERSION", f"This repo's board kit is v{local_kit}, but the board needs kit v{min_kit} (settings.min_kit).")
-    needed = WAITING_KIT if any(waiting_of(t) for t in tasks) else 0
-    what = "Cards carry `waiting`"
-    if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
-        needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
+    needed, what = min_kit_needed(data)
     if needed > min_kit:
         problem("MIN_KIT_LOWERED", "tasks.json", f"{what}, which needs kit v{needed}, but settings.min_kit is "
                 f"{raw_min if raw_min is not None else 'not set'}; set it back: keeptrack.py settings-set --min-kit {needed}.")
@@ -2743,15 +3110,29 @@ def doctor_board(fix=False):
             if entry.get("size", len(entry["text"].encode())) > 200 * 1024:
                 problem("FILE_SIZE", rel, "This board file is larger than 200 KB.")
 
-    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)):
+    typo_kit = 0   # min_kit above even the published kit is a typo: --fix lowers it to the published kit (this one at most)
+    if fix and min_kit > KIT_VERSION:
+        published = kit_published()   # None: can't tell a typo from a newer kit: leave it (and the board) alone
+        if published is not None and min_kit > published:
+            typo_kit = max(needed, min(published, KIT_VERSION))
+    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)) and (min_kit <= KIT_VERSION or typo_kit):
         before = json.loads(json.dumps(data))
+        if typo_kit:
+            data["settings"]["min_kit"] = typo_kit
+            fixes.append(f"lowered settings.min_kit from {min_kit} (above the published kit) to {typo_kit}")
         if missing_nums or not isinstance(data.get("next_num"), int) or data.get("next_num", 0) <= maximum:
             assign_nums(data); fixes.append("assigned missing task numbers and raised next_num")
         for column in bad_rank_columns:
-            previous = None
-            for t in sorted([x for x in tasks if x.get("column") == column], key=task_order_key):
-                t["rank"] = key_between(previous, None); previous = t["rank"]
-            fixes.append(f"rebuilt ranks in column {column!r}")
+            # Break only the ties: walk the column in its shown order (rank, then number; a missing rank last) and give a card
+            # whose rank is missing or not above the one before a new rank between its neighbours. Every other card keeps its rank.
+            cards = sort_tasks({"tasks": [x for x in tasks if x.get("column") == column]})["tasks"]
+            previous, moved = None, 0
+            for i, t in enumerate(cards):
+                if valid_rank(t.get("rank")) and (previous is None or t["rank"] > previous):
+                    previous = t["rank"]; continue
+                upper = next((x["rank"] for x in cards[i + 1:] if valid_rank(x.get("rank")) and (previous is None or x["rank"] > previous)), None)
+                t["rank"] = key_between(previous, upper); previous = t["rank"]; moved += 1
+            fixes.append(f"re-ranked {moved} card(s) in column {column!r} (duplicate or missing ranks; the order is kept)")
         for item in tasks + people:
             for comment in item.get("comments", []):
                 if not comment.get("id"):
@@ -2899,7 +3280,7 @@ def _migrate_v4(a):
     with (contextlib.nullcontext() if getattr(a, "dry_run", False) else local_lock()):
         tag = None
         for attempt in range(6):
-            data, state = load(); guard_schema(data)
+            data, state = load(); guard_schema(data, write=not getattr(a, "dry_run", False))
             version = data.get("version", 1)
             if version == 4:
                 sys.exit("tasks.json is already schema v4; migration refused")
@@ -4609,7 +4990,21 @@ def cmd_settings_set(a):
             st["waiting_days"] = a.waiting_days; print(f"waiting_days: {a.waiting_days or 'off (no automatic chase)'}")
         if getattr(a, "min_kit", None) is not None:
             cur = st.get("min_kit") if isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) else 0
-            if not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
+            if cur > KIT_VERSION:   # a typo that locks every tool out: it may come down, to a kit this one is, never below the content
+                if _MUT.get("published") is None:
+                    _MUT["published"] = kit_published() or 0   # once per run: fn may run again after a lost race
+                if not _MUT["published"] or cur <= _MUT["published"]:   # within the published kit (or can't tell): real, not a typo
+                    sys.exit(f"this board needs kit v{cur} (settings.min_kit), and "
+                             + (f"the published kit is v{_MUT['published']}" if _MUT["published"] else "the published kit could not be checked")
+                             + ", so it is not lowered (only a value above the published kit is a typo). Upgrade the board tools: "
+                             "python3 board/keeptrack.py kit-update")
+                needed = min_kit_needed(data)[0]
+                if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "max_agent_claims",
+                                                                  "rename_stage", "stages")):
+                    sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
+                if not needed <= a.min_kit <= KIT_VERSION:
+                    sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
+            elif not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
                 sys.exit(f"min kit must be between the stored value ({cur or 'none'}) and this kit's version ({KIT_VERSION})")
             st["min_kit"] = a.min_kit; print(f"min_kit: {a.min_kit}")
         if getattr(a, "max_agent_claims", None) is not None:
@@ -4651,7 +5046,11 @@ def cmd_settings_set(a):
                     return k
                 arch = rewrite_archives(data, edit)
                 print(f"moved {moved} people to the renamed stage(s)" + (f" and {arch} archived" if arch else ""))
-    mutate(fn, "Board settings")
+    _MUT["lower_min_kit"] = getattr(a, "min_kit", None) is not None   # guard_schema lets this command in; fn decides
+    try:
+        mutate(fn, "Board settings")
+    finally:
+        _MUT["lower_min_kit"] = False; _MUT.pop("published", None)
 
 
 def cmd_client_link(a):
@@ -4976,7 +5375,7 @@ def apply_staging(data, st, label):
         if contact: x["contact"] = contact
         if data.get("layout") == "split":
             ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
-            x["rank"] = key_between(max(ranks) if ranks else None, None)
+            x["rank"] = append_rank(ranks)
         hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
         say(f"+ task     {title}{' [' + client + ']' if client else ''}"); out["added"] += 1
     return out
@@ -4985,7 +5384,7 @@ def apply_staging(data, st, label):
 def cmd_import(a):
     st = read_staging(a.path)
     label = a.source or _s(st.get("source")) or f"import of {os.path.basename(a.path)}"
-    data, _ = load(); guard_schema(data); migrate_data(data)
+    data, _ = load(); guard_schema(data, write=not a.dry_run); migrate_data(data)
     errs = check_staging(data, st)
     if errs:
         sys.exit("the staging file has problems, so nothing was imported:\n  " + "\n  ".join(errs[:50])
@@ -5475,7 +5874,7 @@ def _new_task(data, proposal, change):
         todo.setdefault("id", "d_" + uuid.uuid4().hex[:6]); todo.setdefault("done", False)
     for comment in task["comments"]:
         comment.setdefault("id", "c_" + uuid.uuid4().hex[:6]); comment.setdefault("at", ts); comment.setdefault("by", who_am_i())
-    task["rank"] = key_between(max(ranks) if ranks else None, None)
+    task["rank"] = append_rank(ranks)
     hist(task, f"created from proposal {proposal['id']}")
     data.setdefault("tasks", []).append(task); assign_nums(data)
     return task, False
@@ -5576,7 +5975,23 @@ def _decide(proposal, action, result=None, edited=None, undo=None):
     proposal.setdefault("history", []).append({"at": ts, "by": by, "text": action + (f" as {result['id']}" if result else "")})
 
 
+def check_stored_change(proposal):
+    """Accept time: a proposal file may have been written by hand, not by `propose`. Check its kind and change again, so it can
+    never set claim, num, waiting, history, id or any other field outside the allow-list."""
+    kind, change = proposal.get("kind"), proposal.get("change")
+    if kind not in PROPOSAL_KINDS:
+        proposal_error(f"refused: proposal {proposal.get('id')} has an unknown kind {kind!r}; nothing was changed")
+    if not isinstance(change, dict) or not change:
+        proposal_error(f"refused: proposal {proposal.get('id')} has no change to apply; nothing was changed")
+    bad = sorted(set(change) - _proposal_change_fields(kind))
+    if bad:
+        proposal_error(f"refused: proposal {proposal.get('id')} sets field(s) a {kind} proposal may not set: " + ", ".join(bad)
+                       + "; nothing was changed. Ignore it, or add a corrected proposal.")
+    check_change_values(kind, change)
+
+
 def _edit_change(proposal, path):
+    check_stored_change(proposal)
     if not path: return copy.deepcopy(proposal["change"]), None
     try:
         with open(path, encoding="utf-8") as src:
@@ -5635,7 +6050,7 @@ def _append_unique(record, field, values):
 def cmd_proposal_merge(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "merged")
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "merged"); check_stored_change(proposal)
         _check_proposal_base(data, proposal)
         target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
         record = _target_record(data, target); before = copy.deepcopy(record)
@@ -6015,7 +6430,7 @@ def _cmd_archive(a):
     global WRITE
     for attempt in range(6):
         data, base = load()
-        guard_schema(data); migrate_data(data, min(SCHEMA, 3))
+        guard_schema(data, write=not getattr(a, "dry_run", False)); migrate_data(data, min(SCHEMA, 3))
         rules = archive_rules(data)
         for k in ("done_days", "lost_days", "keep_history"):
             if getattr(a, k) is not None:
@@ -6148,7 +6563,7 @@ def _cmd_unarchive(a):
         if not any(x["id"] == item["id"] for x in data.setdefault(k, [])):
             if k == "tasks" and data.get("layout") == "split" and not valid_rank(item.get("rank")):
                 ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
-                item["rank"] = key_between(max(ranks) if ranks else None, None)
+                item["rank"] = append_rank(ranks)
             item.setdefault("history", []).append({"at": now(), "by": who_am_i(item), "text": f"restored from {archive_path(y)}"})
             data[k].append(item)
         cur[k] = [x for x in cur[k] if x["id"] != item["id"]]
@@ -6300,6 +6715,7 @@ def main():
     s = sub.add_parser("kit-check"); s.add_argument("--card", action="store_true"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_kit_check)
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
     s.add_argument("--visibility-alarm", action="store_true", help="install the optional visibility alarm workflow (kept current once installed)")
+    s.add_argument("--allow-downgrade", action="store_true", help="install a kit older than this repo's board/KIT_VERSION")
     s.set_defaults(f=cmd_kit_update)
     s = sub.add_parser("migrate"); s.add_argument("--to", type=int, help="4 = split storage; without --to the board goes up to v3 only"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_migrate)
     s = sub.add_parser("verify"); s.add_argument("--against", required=True, help="backup tag, branch or commit, or a tasks.json file"); s.set_defaults(f=cmd_verify)
@@ -6410,7 +6826,8 @@ def main():
     s.add_argument("--waiting-days", dest="waiting_days", type=int,
                    help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
     s.add_argument("--min-kit", dest="min_kit", type=int,
-                   help="the oldest board kit that may write this board; only between the stored value and this kit's version")
+                   help="the oldest board kit that may write this board; only between the stored value and this kit's version "
+                        "(a stored value above the published kit, a typo, may come down to it)")
     s.set_defaults(f=cmd_settings_set)
     s = sub.add_parser("proposal-add", help="add one proposal, or a JSON list, to the Review Inbox")
     s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")

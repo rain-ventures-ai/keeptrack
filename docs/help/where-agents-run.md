@@ -52,8 +52,8 @@ You can do everything without a computer. You use two things:
 2. Follow the three steps of the wizard (see [Getting started](getting-started.md)). The repo and token pages open in
    the browser. Copy the token and paste it into the wizard, never into a chat.
 
-Already have a board on your computer? There, open **⚙️ Settings → Connection → Advanced → Copy setup link**, send the link to
-yourself and open it on your phone. The link holds your token, so send it only to yourself. Tip: use your browser's
+Already have a board on your computer? There, open **⚙️ Settings → Connection → Advanced**, tick **Include tokens and keys**, click **Copy setup link**, send the link to
+yourself and open it on your phone. The link then holds your token, so send it only to yourself. Tip: use your browser's
 **Add to Home Screen** to open the board like an app.
 
 ### 2. Connect Claude to the board (once)
@@ -74,7 +74,7 @@ Each new session needs the board repo selected again. To keep going, open the sa
   for the **Code** tab: the board repo already has the skill and the tool.
 - **@claude on the board** needs a routine, an API trigger token and a cron-job.org job (see
   [ROUTINE-SETUP.md](../../board/kit/ROUTINE-SETUP.md)). Create the routine at https://claude.ai/code/routines in a
-  browser. It is easier on a computer; afterwards **Copy settings code** moves the board's settings to your phone.
+  browser. It is easier on a computer; afterwards **Copy settings code** (with **Include tokens and keys** ticked) moves the board's settings to your phone.
 
 ## Which set-up is best for me?
 
