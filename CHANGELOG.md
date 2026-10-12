@@ -89,6 +89,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
+### [47] — 2026-10-12
+
+- `archive --done-days` (a one-off value) no longer shortens how long an unacted answer is kept; the board's
+  `archive.done_days` decides.
+- `proposal-done --not-acted` by a person is refused unless they are the question's `decider` (when one is set).
+- Slimming after 30 days also removes the `proposal-done --note` text from `decision.done` and its history line.
+- The hints after a rejection, a missing hash or a changed hash name `--not-acted --answer-id <answer_id>`.
+
 ### [46] — 2026-10-12
 
 - `settings.min_kit` now prevents: `keeptrack.py` refuses to write a board whose `min_kit` is an integer above its
