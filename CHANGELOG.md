@@ -9,10 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **2026-10-12** — Kit v45: each browser tab stays on the board it opened: switching boards in another tab can no
   longer make this tab save into the wrong repo. A board whose `settings.min_kit` is newer than the page is read-only, with a
   banner. The agent-claim limit, and whether a cleared wait may restart a blocked claim, are decided on the board as it
-  is saved, with a whole-board commit. Accepting a Review Inbox proposal re-checks its field allow-list. The page has a
-  Content-Security-Policy (GitHub's API, cron-job.org and Open-Meteo only; the bootstrap runs its scripts from `blob:`
-  URLs). "Copy settings code" and "Copy setup link" leave tokens and keys out unless "Include tokens and keys" is
-  ticked. Undo keeps 5 changes and stores them for the next visit only while they fit in about 1 MB.
+  is saved, with a whole-board commit. Accepting a Review Inbox proposal re-checks its field allow-list and value types,
+  the same checks as `keeptrack.py`. The page has a Content-Security-Policy (GitHub's API, cron-job.org and Open-Meteo
+  only; the bootstrap runs its scripts from `blob:` URLs). "Copy settings code" and "Copy setup link" leave tokens and
+  keys out unless "Include tokens and keys" is ticked. Undo still keeps 20 changes in this tab, but stores at most the
+  newest 5 for the next visit, and only while they fit in about 1 MB.
 
 - **2026-10-12** — Review Inbox questions (kit v44): Choose, Approve and Question items show the question, its links
   and answer buttons in the Inbox and in Today's review, with an optional note, "Who answers" for a named person,
@@ -82,7 +83,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `settings.min_kit` now prevents: `keeptrack.py` refuses to write a board whose `min_kit` is an integer above its
   `KIT_VERSION`, and says to run `kit-update`. Reads, `import`/`migrate`/`archive --dry-run` and plain `doctor` still
-  work; `doctor --fix` writes nothing on such a board. A missing or non-integer value never blocks.
+  work; `doctor --fix` writes nothing on such a board. A missing or non-integer value never blocks. A typo cannot lock
+  every tool out: `settings-set --min-kit N` (on its own) may lower a stored value above this kit to at most this kit and
+  never below what the board's cards and questions need, and `doctor --fix` lowers a value above the published kit to
+  the published kit.
 - `kit-update` and `kit-check` take the manifest and every file from one commit of the kit (raw at that sha, or a git
   clone checked out at it). `kit-update` checks that the fetched `keeptrack.py` is the release the manifest names,
   refuses a downgrade unless `--allow-downgrade` is given, and never writes or removes board data (`tasks.json`,
@@ -99,9 +103,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `add` and `kit-check --card` print the #number the card has after saving; before, a save that lost a race could print
   a number that belonged to someone else's card.
 - Ranks appended to a column get a short random tail, so concurrent saves no longer create `DUPLICATE_RANK`, and
-  `move --before`/`--after` next to two equal ranks no longer crashes.
+  `move --before`/`--after` next to two equal ranks no longer crashes. `doctor --fix` breaks only the duplicate-rank
+  ties, giving the later card of a tie a new rank between its neighbours; every other card keeps its rank and order.
 - `proposal-accept` and `proposal-merge` re-check the stored change against the field allow-list, so a hand-written
-  proposal cannot set `claim`, `num` or `waiting`.
+  proposal cannot set `claim`, `num` or `waiting`. The web page now runs the same value checks; shared cases in
+  `tests/fixtures/proposal-change-cases.json`.
 - GitHub rate limits (403/429) are retried with a short back-off and reported as rate limited, not as a token without
   write access. On the one-file save, a 422 that is not a sha mismatch is reported instead of retried.
 - Plugin `keeptrack` skill: the v43 waiting-for rules (`wait`; never `unwait` a wait you did not set or one on someone

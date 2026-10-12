@@ -759,14 +759,39 @@ class Doctor(unittest.TestCase):
         first_path = os.path.join(self.board_dir, "cards", "t_first.json")
         second_path = os.path.join(self.board_dir, "cards", "t_second.json")
         first, second = read_json(first_path), read_json(second_path)
-        order = [t["id"] for t in sorted([first, second], key=kt.task_order_key)]
         second["rank"] = first["rank"]; write(second_path, second)
+        order = [t["id"] for t in kt.sort_tasks({"tasks": [first, second]})["tasks"]]
         _, fixes, _ = kt.doctor_board(True)
-        self.assertTrue(any("rebuilt ranks" in x for x in fixes))
+        self.assertTrue(any("re-ranked 1 card(s)" in x for x in fixes), fixes)
         first, second = read_json(first_path), read_json(second_path)
         self.assertNotEqual(first["rank"], second["rank"])
-        self.assertEqual(order, [t["id"] for t in sorted([first, second], key=kt.task_order_key)])
+        self.assertEqual(order, [t["id"] for t in kt.sort_tasks({"tasks": [first, second]})["tasks"]])
         self.assertEqual(([], [], 0), kt.doctor_board(False))
+
+    def test_fix_breaks_only_rank_ties_and_keeps_every_other_card_where_it_is(self):
+        # One column, shown order a0 a1 a1 a2 (missing) with priorities and due dates that task_order_key would reshuffle.
+        root = read_json(kt.FILE)
+        cards_dir = os.path.join(self.board_dir, "cards")
+        for name in os.listdir(cards_dir):
+            os.remove(os.path.join(cards_dir, name))
+        specs = [("t_r1", 1, "a0", "low", "2026-12-01"), ("t_r2", 2, "a1", "medium", ""), ("t_r3", 3, "a1", "high", "2026-01-01"),
+                 ("t_r4", 4, "a2", "low", ""), ("t_r5", 5, None, "high", "")]
+        for tid, num, rank, prio, due in specs:
+            c = {"id": tid, "num": num, "title": tid, "column": "todo", "client": "", "priority": prio, "due": due, "labels": [],
+                 "assignees": [], "details": "", "links": [], "contacts": [], "todos": [], "comments": [], "history": [], "claim": None,
+                 "created": "2026-10-01T08:00:00Z", "updated": "2026-10-01T08:00:00Z"}
+            if rank:
+                c["rank"] = rank
+            write(os.path.join(cards_dir, tid + ".json"), c)
+        root["next_num"] = 6; write(kt.FILE, root)
+        issues, fixes, _ = kt.doctor_board(True)
+        self.assertTrue({"DUPLICATE_RANK", "RANK"} <= {x["code"] for x in issues}, issues)
+        self.assertTrue(any("re-ranked 2 card(s)" in x for x in fixes), fixes)
+        after = {tid: read_json(os.path.join(cards_dir, tid + ".json"))["rank"] for tid, *_ in specs}
+        self.assertEqual(("a0", "a1", "a2"), (after["t_r1"], after["t_r2"], after["t_r4"]))   # untouched
+        self.assertTrue("a1" < after["t_r3"] < "a2", after)                                  # the tie broken between its neighbours
+        self.assertTrue(after["t_r5"] > "a2", after)                                         # a missing rank goes last, as shown
+        self.assertEqual([], [x["code"] for x in kt.doctor_board(False)[0] if x["code"] in ("DUPLICATE_RANK", "RANK")])
 
     def test_fix_on_a_v3_board_keeps_one_file(self):
         shutil.rmtree(self.board_dir)

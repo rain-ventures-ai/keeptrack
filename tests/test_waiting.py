@@ -555,6 +555,37 @@ class Waiting(unittest.TestCase):
         self.assertEqual(self.read()["settings"]["waiting_days"], 3)
         self.assertIn("between", self.refusal(self.settings_set, waiting_days=400))
 
+    def test_a_typo_min_kit_above_this_kit_can_only_come_down_to_it(self):
+        self.wait(1)   # the board's content needs kit v43
+        self.edit(lambda d: d["settings"].update(min_kit=450))
+        self.assertIn("lower --min-kit on its own", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION, title="New"))
+        self.assertIn("between what the board needs (43)", self.refusal(self.settings_set, min_kit=42))
+        self.assertIn("between", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION + 1))
+        self.assertEqual(450, self.read()["settings"]["min_kit"])
+        self.assertIn("will not write", self.refusal(self.settings_set, title="New"))   # only --min-kit gets past the guard
+        self.settings_set(min_kit=43)
+        self.assertEqual(43, self.read()["settings"]["min_kit"])
+        self.assertIn("between", self.refusal(self.settings_set, min_kit=42))         # from here: never lowered again
+        self.settings_set(title="New")
+        self.assertEqual("New", self.read()["settings"]["title"])
+
+    def test_doctor_fix_lowers_a_min_kit_above_the_published_kit_only(self):
+        self.addCleanup(setattr, kt, "kit_fetch", kt.kit_fetch)
+        published = {"v": kt.KIT_VERSION}
+        kt.kit_fetch = lambda name, src=None: json.dumps({"version": published["v"]}).encode()
+        self.wait(1); self.edit(lambda d: d["settings"].update(min_kit=450))
+        _, fixes, _ = kt.doctor_board(True)
+        self.assertEqual(kt.KIT_VERSION, self.read()["settings"]["min_kit"])
+        self.assertTrue(any("lowered settings.min_kit from 450" in f for f in fixes))
+        published["v"] = kt.KIT_VERSION + 5   # a newer kit is out: a min_kit within it is real, not a typo
+        self.edit(lambda d: d["settings"].update(min_kit=kt.KIT_VERSION + 2)); before = self.read()
+        self.assertEqual(([], before), (kt.doctor_board(True)[1], self.read()))
+        def offline(name, src=None):
+            raise kt.KitError("offline")
+        kt.kit_fetch = offline   # can't tell: leave it alone
+        self.edit(lambda d: d["settings"].update(min_kit=450)); before = self.read()
+        self.assertEqual(([], before), (kt.doctor_board(True)[1], self.read()))
+
     def doctor_codes(self):
         issues, _, code = kt.doctor_board()
         return [(x["code"], x["path"]) for x in issues], code
@@ -634,6 +665,8 @@ class Waiting(unittest.TestCase):
                                             project=None, client=None, label=None))
         self.assertIn("Card 1", listed)
         self.edit(lambda d: d["tasks"][4].pop("num")); before = self.read()   # a fault doctor --fix would repair
+        self.addCleanup(setattr, kt, "kit_fetch", kt.kit_fetch)   # a genuinely newer kit is published: not a typo
+        kt.kit_fetch = lambda name, src=None: json.dumps({"version": kt.KIT_VERSION + 1}).encode()
         issues, fixes, _ = kt.doctor_board(True)   # doctor still reports, but --fix writes nothing
         self.assertEqual(([], before), (fixes, self.read()))
         self.assertIn("KIT_OLD", [x["code"] for x in issues])

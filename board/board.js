@@ -883,8 +883,8 @@ if (typeof window !== 'undefined') (() => {
 
   // Undo restores only the fields touched by a saved operation. Unrelated newer work is left alone, and mutate's
   // normal conflict screen still protects a field if somebody else changed that same field after our save.
-  // Each entry holds two whole-board copies, so memory keeps 5 and IndexedDB keeps the newest that fit in about 1 MB (none on a bigger board; kb_undo_bytes overrides it for tests).
-  const undoStack = [], UNDO_LIMIT = 5, UNDO_PERSIST_LIMIT = 5, UNDO_PERSIST_BYTES = (() => { try { return +localStorage.getItem('kb_undo_bytes') || 1e6; } catch { return 1e6; } })(); let undoPersist = Promise.resolve();
+  // Each entry holds two whole-board copies, so memory keeps 20 and IndexedDB keeps at most the newest 5 that fit in about 1 MB (none on a bigger board; kb_undo_bytes overrides it for tests).
+  const undoStack = [], UNDO_LIMIT = 20, UNDO_PERSIST_LIMIT = 5, UNDO_PERSIST_BYTES = (() => { try { return +localStorage.getItem('kb_undo_bytes') || 1e6; } catch { return 1e6; } })(); let undoPersist = Promise.resolve();
   const undoKey = () => 'kb_undo:' + boardStoreId();
   function undoToPersist() { const out = []; let bytes = 0;
     for (let i = undoStack.length - 1; i >= 0 && out.length < UNDO_PERSIST_LIMIT; i--) { bytes += JSON.stringify(undoStack[i]).length; if (bytes > UNDO_PERSIST_BYTES) break; out.unshift(clone(undoStack[i])); }
@@ -4030,11 +4030,30 @@ if (typeof window !== 'undefined') (() => {
     person: ['name', 'company', 'role', 'email', 'phone', 'linkedin', 'github', 'emails', 'phones', 'stage', 'value', 'source', 'notes', 'next', 'due', 'next_due', 'links', 'comments'],
     touch: ['text', 'channel', 'at', 'source_id', 'source_message_ids', 'next', 'due', 'next_due'] };
   const PROPOSAL_KINDS = ['task.create', 'task.update', 'person.upsert', 'contact.touch'];
+  // Value types too, the same rules as check_change_values in keeptrack.py (shared cases: tests/fixtures/proposal-change-cases.json).
+  const STR_FIELDS = ['title', 'column', 'client', 'project', 'contact', 'owner', 'details', 'name', 'company', 'role', 'email', 'phone',
+    'linkedin', 'github', 'stage', 'value', 'source', 'notes', 'next', 'text', 'channel', 'at', 'source_id'];
+  const DATE_FIELDS = ['due', 'next_due'], STR_LIST_FIELDS = ['labels', 'assignees', 'source_message_ids'];
+  const DICT_LIST_FIELDS = ['links', 'contacts', 'todos', 'comments', 'emails', 'phones'];
+  function changeValueRefusal(change) {
+    for (const [key, value] of Object.entries(change)) {
+      if (STR_FIELDS.includes(key) && typeof value !== 'string') return `change.${key} must be text`;
+      if (DATE_FIELDS.includes(key) && (typeof value !== 'string' || (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)))) return `change.${key} must be a YYYY-MM-DD date or empty`;
+      if (STR_LIST_FIELDS.includes(key) && (!Array.isArray(value) || !value.every(x => typeof x === 'string'))) return `change.${key} must be a list of text`;
+      if (DICT_LIST_FIELDS.includes(key) && (!Array.isArray(value) || !value.every(isObj))) return `change.${key} must be a list of objects`;
+      if ((key === 'comments' || key === 'todos') && !value.every(x => typeof x.text === 'string' && x.text.trim())) return `each change.${key} item needs text`;
+      if (key === 'links' && !value.every(x => typeof x.url === 'string' && x.url.trim())) return 'each change.links item needs a url';
+      if (key === 'priority' && !['high', 'medium', 'low'].includes(value)) return 'change.priority must be high, medium or low';
+    }
+    return '';
+  }
   function proposalRefusal(p, change) {   // '' when the proposal may be applied, else why not
     const kind = String(p.kind || ''); if (!PROPOSAL_KINDS.includes(kind)) return `Not saved: unknown proposal kind ${JSON.stringify(kind)}.`;
-    if (!change || typeof change !== 'object' || Array.isArray(change)) return 'Not saved: the proposal has no valid change.';
+    if (!isObj(change) || !Object.keys(change).length) return 'Not saved: the proposal has no valid change.';
     const ok = CHANGE_FIELDS[kind.startsWith('task.') ? 'task' : kind === 'person.upsert' ? 'person' : 'touch'], bad = Object.keys(change).filter(k => !ok.includes(k));
-    return bad.length ? `Not saved: a ${kind} proposal may not set ${bad.join(', ')}. Ignore it, or fix the proposal file.` : '';
+    if (bad.length) return `Not saved: a ${kind} proposal may not set ${bad.join(', ')}. Ignore it, or fix the proposal file.`;
+    const why = changeValueRefusal(change);
+    return why ? `Not saved: ${why}. Ignore it, or fix the proposal file.` : '';
   }
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
   const inboxOpen = {};   // proposal id -> 'edit' | 'merge' (the inline form that is open)

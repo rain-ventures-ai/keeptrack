@@ -33,7 +33,11 @@ A safety release: no data migration, the board stays on schema 4, and v44 tools 
   upgrade writes none; leave it as it is (43 once anyone has used `wait`, 44 once an agent has asked a question).
   Raise it (`settings-set --min-kit N`) only for a later release whose notes ask for it, and only after every copy is
   upgraded: this repo, plugin copies, relay, routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v44 ignore the
-  value, so it cannot shut them out.
+  value, so it cannot shut them out. A typo above every kit is not a lock-out: `settings-set --min-kit N` on its own
+  lowers it to at most this kit (never below what the cards and questions need), and `doctor --fix` lowers a value
+  above the published kit to the published kit.
+- **`doctor --fix` and `DUPLICATE_RANK`:** the fix now breaks only the tied ranks and keeps every other card's rank and
+  order. Before, it re-ranked the whole column by priority and due date.
 - **`kit-update`** takes every file from one commit of the kit, checks that the fetched `keeptrack.py` is the release
   `manifest.json` names, refuses a downgrade unless `--allow-downgrade` is given, and never writes or removes board
   data (`tasks.json`, `cards/`, `people/`, `projects/`, `proposals/`, `archive/`). `BOARD_KIT_URL` has no default

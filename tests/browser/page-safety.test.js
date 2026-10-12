@@ -4,8 +4,8 @@
 //     removing the board another tab switched to removes its live keys too
 //  2. settings.min_kit above this page's kit makes the board read-only with a banner, also when it rises between load and save
 //  3. the agent-claim limit and clearing a wait are decided again on the board as saved, and the claim is one whole-board commit
-//  4. accepting a proposal re-checks its field allow-list
-//  5. Undo keeps at most 5 entries and persists only what fits the size limit
+//  4. accepting a proposal re-checks its field allow-list and value types (shared cases with keeptrack.py)
+//  5. Undo keeps 20 entries in memory but persists at most 5, and only what fits the size limit
 //  6. the settings code leaves tokens out unless "Include tokens and keys" is ticked
 // Run: node page-safety.test.js
 
@@ -17,6 +17,7 @@ const crypto = require('node:crypto');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '../..');
+const CHANGE_CASES = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/proposal-change-cases.json'), 'utf8')).cases;
 const KIT = JSON.parse(fs.readFileSync(path.join(ROOT, 'board/kit/manifest.json'), 'utf8')).version;
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 const server = http.createServer((req, res) => {
@@ -207,8 +208,28 @@ const CLAUDE = { kb_agents: 'claude', kb_claude_url: 'https://api.anthropic.com/
       assert.equal(api.writes().length, 0); assert.equal(api.json('cards/t_a.json').claim, null); assert.equal(api.json('proposals/r_bad0000001.json').status, 'pending');
       assert.deepEqual(page.errors, []); await page.close();
     }
+    // ... and so is an allowed field with a malformed value, the same cases keeptrack.py refuses (tests/fixtures/proposal-change-cases.json)
+    {
+      const bad = CHANGE_CASES.find(c => c.name === 'bad priority');
+      const prop = { id: 'r_bad0000002', version: 1, kind: bad.kind, status: 'pending', title: 'Make First urgent', source: { kind: 'other', id: 'x', revision: '1', title: 'x', date: '2026-10-08', url: '' },
+        run: { routine: 'r', run_id: '1', at: T0 }, action_key: 'ak2', work_key: 'wk2', reason: 'r', target: { type: 'task', id: 't_a', base: { priority: 'medium' } }, change: bad.change,
+        likely_duplicates: [], decision: null, history: [], created: T0, createdBy: 'routine' };
+      const api = new Github('acme/board', board('Inbox', {}, [card('t_a', 1, 'First')], { 'proposals/r_bad0000002.json': prop }));
+      const page = await openBoard(browser, api); await page.locator('#btnInbox').click(); await page.waitForSelector('#board.v-inbox .inbox');
+      api.calls = []; await page.locator('article.prop[data-id="r_bad0000002"] [data-act="accept"]').click();
+      await page.waitForFunction(() => /change\.priority must be high, medium or low/.test(document.querySelector('#inboxLive').textContent));
+      assert.equal(api.writes().length, 0); assert.equal(api.json('cards/t_a.json').priority, 'medium'); assert.equal(api.json('proposals/r_bad0000002.json').status, 'pending');
+      assert.deepEqual(page.errors, []); await page.close();
+    }
+    // every shared case, through the page's own proposalRefusal (cut from board.js, as tests/test_proposal_parity.py does)
+    {
+      const src = fs.readFileSync(path.join(ROOT, 'board/board.js'), 'utf8'), a = src.indexOf('  const CHANGE_FIELDS = {'), b = src.indexOf('  let inboxF = ');
+      assert.ok(a > 0 && b > a, 'proposalRefusal block found in board.js');
+      const refusal = new Function('const isObj = v => !!v && typeof v === "object" && !Array.isArray(v);\n' + src.slice(a, b) + '\nreturn proposalRefusal;')();
+      for (const c of CHANGE_CASES) assert.equal(refusal({ kind: c.kind }, c.change) === '', c.ok, c.name);
+    }
 
-    // ---- 5. Undo: at most 5 entries in memory and in IndexedDB; none persisted past the size limit ----
+    // ---- 5. Undo: 20 entries in memory, at most 5 in IndexedDB; none persisted past the size limit ----
     {
       const undoSaved = page => page.evaluate(() => new Promise(ok => { const r = indexedDB.open('keeptrack', 1); r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').get('kb_undo:acme/board:main:board/tasks.json'); g.onsuccess = () => ok(g.result); }; }));
       const api = new Github('acme/board', board('Undo', {}, [card('t_a', 1, 'First')])), page = await openBoard(browser, api);
@@ -216,8 +237,8 @@ const CLAUDE = { kb_agents: 'claude', kb_claude_url: 'https://api.anthropic.com/
       await page.waitForFunction(() => /Add task: Task 7/.test(document.getElementById('btnUndo').title));
       await page.waitForTimeout(200); const saved = await undoSaved(page);
       assert.deepEqual(saved.map(e => e.message), [3, 4, 5, 6, 7].map(i => 'Add task: Task ' + i), 'the newest 5 are kept');
-      for (let i = 0; i < 6; i++) { if (await page.evaluate(() => document.getElementById('btnUndo').disabled)) break; await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.keyboard.press('Control+z'); await page.waitForFunction(() => !/Saving/.test(document.querySelector('#status').textContent)); await page.waitForTimeout(150); }
-      assert.deepEqual(titles(api), ['First', 'Task 1', 'Task 2'], 'five undos, then nothing older is kept in memory');
+      for (let i = 0; i < 8; i++) { if (await page.evaluate(() => document.getElementById('btnUndo').disabled)) break; await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.keyboard.press('Control+z'); await page.waitForFunction(() => !/Saving/.test(document.querySelector('#status').textContent)); await page.waitForTimeout(150); }
+      assert.deepEqual(titles(api), ['First'], 'all seven undo from memory, beyond the five persisted');
       await page.close();
       const small = new Github('acme/board', board('Undo', {}, [card('t_a', 1, 'First')])), p2 = await openBoard(browser, small, { kb_undo_bytes: '500' });
       await addTask(p2, 'Big'); await synced(p2); await p2.waitForTimeout(200);

@@ -1268,7 +1268,7 @@ def mutate(fn, message):
         try:
             return _mutate(fn, message)
         finally:
-            _MUT["recheck"] = _MUT["rerun"] = False; _MUT["after"] = []
+            _MUT["recheck"] = _MUT["rerun"] = _MUT["lower_min_kit"] = False; _MUT["after"] = []
             if owner:
                 _REC.clear()
 
@@ -1329,13 +1329,23 @@ def board_min_kit(data):
     return mk if isinstance(mk, int) and not isinstance(mk, bool) else 0
 
 
+def min_kit_needed(data):
+    """(the oldest kit the board's own content needs, what needs it): settings.min_kit must never go below it."""
+    needed = WAITING_KIT if any(waiting_of(t) for t in data.get("tasks", []) or [] if isinstance(t, dict)) else 0
+    what = "Cards carry `waiting`"
+    if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
+        needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
+    return needed, what
+
+
 def guard_schema(data, write=True):
     v = data.get("version", 1)
     if isinstance(v, int) and v > SCHEMA:
         sys.exit(f"tasks.json is schema v{v}, but this keeptrack.py only knows v{SCHEMA}, so it will not write (it could lose data).\n"
                  "Update the board tools first: python3 board/keeptrack.py kit-update (see board/UPGRADING.md).")
     # Same rule as the web page: a board that needs a newer kit (settings.min_kit) is read-only here. Reads still work.
-    if write and board_min_kit(data) > KIT_VERSION:
+    # The one exception: settings-set --min-kit lowering a stored value above this kit (a typo) back to one it knows.
+    if write and board_min_kit(data) > KIT_VERSION and not _MUT.get("lower_min_kit"):
         sys.exit(f"this board needs kit v{board_min_kit(data)} (settings.min_kit), but this keeptrack.py is kit v{KIT_VERSION}, "
                  "so it will not write (it may not know a rule a card relies on).\n"
                  "Upgrade the board kit first: python3 board/keeptrack.py kit-update (see board/UPGRADING.md); a plugin copy updates with the plugin.")
@@ -2779,7 +2789,7 @@ def cmd_kit_check(a):
         mk = None
     if isinstance(mk, int) and not isinstance(mk, bool) and mk > have:
         if mk > want:
-            print(f"settings.min_kit is {mk}, above the published kit v{want}: probably a typo (doctor reports it)")
+            print(f"settings.min_kit is {mk}, above the published kit v{want}: probably a typo (doctor --fix lowers it)")
         else:
             print(f"this board needs kit v{mk} (settings.min_kit), but this repo has v{have}: upgrade before an older tool saves it")
     if have >= want:
@@ -3025,14 +3035,12 @@ def doctor_board(fix=False):
         problem("SETTINGS", "tasks.json", f"settings.min_kit {raw_min!r} must be a whole number (a kit version).")
     if min_kit > KIT_VERSION:
         problem("KIT_OLD", "tasks.json", f"This keeptrack.py is kit v{KIT_VERSION}, but the board needs kit v{min_kit} (settings.min_kit): "
-                "it may not know a rule a card relies on. Update the board tools (kit-update) before writing.")
+                "it may not know a rule a card relies on. Update the board tools (kit-update) before writing; if the value is a typo "
+                f"(above the published kit), doctor --fix or settings-set --min-kit {KIT_VERSION} lowers it.")
     local_kit = kit_local() if ROOT else 0   # a plugin copy has no clone: only the constant above is checked
     if local_kit and min_kit > local_kit and local_kit != KIT_VERSION:
         problem("KIT_OLD", "board/KIT_VERSION", f"This repo's board kit is v{local_kit}, but the board needs kit v{min_kit} (settings.min_kit).")
-    needed = WAITING_KIT if any(waiting_of(t) for t in tasks) else 0
-    what = "Cards carry `waiting`"
-    if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
-        needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
+    needed, what = min_kit_needed(data)
     if needed > min_kit:
         problem("MIN_KIT_LOWERED", "tasks.json", f"{what}, which needs kit v{needed}, but settings.min_kit is "
                 f"{raw_min if raw_min is not None else 'not set'}; set it back: keeptrack.py settings-set --min-kit {needed}.")
@@ -3083,15 +3091,32 @@ def doctor_board(fix=False):
             if entry.get("size", len(entry["text"].encode())) > 200 * 1024:
                 problem("FILE_SIZE", rel, "This board file is larger than 200 KB.")
 
-    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)) and min_kit <= KIT_VERSION:
+    typo_kit = 0   # min_kit above even the published kit is a typo: --fix lowers it to the published kit (this one at most)
+    if fix and min_kit > KIT_VERSION:
+        try:
+            published = json.loads(kit_fetch("manifest.json"))["version"]
+        except (KitError, ValueError, KeyError, TypeError, OSError):
+            published = None   # can't tell a typo from a newer kit: leave it (and the board) alone
+        if isinstance(published, int) and not isinstance(published, bool) and min_kit > published:
+            typo_kit = max(needed, min(published, KIT_VERSION))
+    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)) and (min_kit <= KIT_VERSION or typo_kit):
         before = json.loads(json.dumps(data))
+        if typo_kit:
+            data["settings"]["min_kit"] = typo_kit
+            fixes.append(f"lowered settings.min_kit from {min_kit} (above the published kit) to {typo_kit}")
         if missing_nums or not isinstance(data.get("next_num"), int) or data.get("next_num", 0) <= maximum:
             assign_nums(data); fixes.append("assigned missing task numbers and raised next_num")
         for column in bad_rank_columns:
-            previous = None
-            for t in sorted([x for x in tasks if x.get("column") == column], key=task_order_key):
-                t["rank"] = key_between(previous, None); previous = t["rank"]
-            fixes.append(f"rebuilt ranks in column {column!r}")
+            # Break only the ties: walk the column in its shown order (rank, then number; a missing rank last) and give a card
+            # whose rank is missing or not above the one before a new rank between its neighbours. Every other card keeps its rank.
+            cards = sort_tasks({"tasks": [x for x in tasks if x.get("column") == column]})["tasks"]
+            previous, moved = None, 0
+            for i, t in enumerate(cards):
+                if valid_rank(t.get("rank")) and (previous is None or t["rank"] > previous):
+                    previous = t["rank"]; continue
+                upper = next((x["rank"] for x in cards[i + 1:] if valid_rank(x.get("rank")) and (previous is None or x["rank"] > previous)), None)
+                t["rank"] = key_between(previous, upper); previous = t["rank"]; moved += 1
+            fixes.append(f"re-ranked {moved} card(s) in column {column!r} (duplicate or missing ranks; the order is kept)")
         for item in tasks + people:
             for comment in item.get("comments", []):
                 if not comment.get("id"):
@@ -4949,7 +4974,14 @@ def cmd_settings_set(a):
             st["waiting_days"] = a.waiting_days; print(f"waiting_days: {a.waiting_days or 'off (no automatic chase)'}")
         if getattr(a, "min_kit", None) is not None:
             cur = st.get("min_kit") if isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) else 0
-            if not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
+            if cur > KIT_VERSION:   # a typo that locks every tool out: it may come down, to a kit this one is, never below the content
+                needed = min_kit_needed(data)[0]
+                if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "max_agent_claims",
+                                                                  "rename_stage", "stages")):
+                    sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
+                if not needed <= a.min_kit <= KIT_VERSION:
+                    sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
+            elif not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
                 sys.exit(f"min kit must be between the stored value ({cur or 'none'}) and this kit's version ({KIT_VERSION})")
             st["min_kit"] = a.min_kit; print(f"min_kit: {a.min_kit}")
         if getattr(a, "max_agent_claims", None) is not None:
@@ -4991,7 +5023,11 @@ def cmd_settings_set(a):
                     return k
                 arch = rewrite_archives(data, edit)
                 print(f"moved {moved} people to the renamed stage(s)" + (f" and {arch} archived" if arch else ""))
-    mutate(fn, "Board settings")
+    _MUT["lower_min_kit"] = getattr(a, "min_kit", None) is not None   # guard_schema lets this command in; fn decides
+    try:
+        mutate(fn, "Board settings")
+    finally:
+        _MUT["lower_min_kit"] = False
 
 
 def cmd_client_link(a):
@@ -6751,7 +6787,8 @@ def main():
     s.add_argument("--waiting-days", dest="waiting_days", type=int,
                    help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
     s.add_argument("--min-kit", dest="min_kit", type=int,
-                   help="the oldest board kit that may write this board; only between the stored value and this kit's version")
+                   help="the oldest board kit that may write this board; only between the stored value and this kit's version "
+                        "(a stored value above this kit, a typo, may come down to it)")
     s.set_defaults(f=cmd_settings_set)
     s = sub.add_parser("proposal-add", help="add one proposal, or a JSON list, to the Review Inbox")
     s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")
