@@ -942,6 +942,8 @@ if (typeof window !== 'undefined') (() => {
           if (pick === 'discard') { state = pre; render(); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
           mg.clashes.forEach((c, i) => { if (pick[i].side === 'mine') setAt(latest, c.path, c.mine === undefined ? undefined : clone(c.mine)); else if (pick[i].side === 'edit') setAt(latest, c.path, pick[i].value); });
         }
+        const protectedRemoval = pre.contacts.find(p => memberOf(p, pre) && !latest.contacts.some(x => x.id === p.id));
+        if (protectedRemoval) { state = pre; render(); fail('Board members’ own records cannot be removed from the CRM.'); return false; }
         fixNums(latest, pre); ensureRanks(latest);
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
@@ -2953,6 +2955,39 @@ if (typeof window !== 'undefined') (() => {
   // ---- settings ---------------------------------------------------------------
   // ---- Settings → Connection → Health: test each step of the connection and say what is wrong (never shows the token) ----------
   const ghGet = (path, accept, c = cfg()) => fetch(c.api + path, { cache: 'no-store', headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
+  let routineLoad = 0;
+  async function renderRoutineRegister() {
+    const c = cfg(), generation = ++routineLoad, box = $('routineRegister');
+    box.textContent = 'Loading routine reports…';
+    if (DEMO || !c.repo) { box.textContent = 'Connect a board to see its routine reports.'; return; }
+    const current = () => generation === routineLoad && cfg().repo === c.repo && cfg().branch === c.branch;
+    try {
+      const r = await ghGet(`/repos/${c.repo}/contents/automation/routines?ref=${encodeURIComponent(c.branch)}`, null, c);
+      if (!current()) return;
+      if (r.status === 404) { box.textContent = 'No routine register is visible in this repo. Existing routines may still run elsewhere; register them to track their results.'; return; }
+      if (!r.ok) throw new Error('Cannot read the routine register. Check repository access.');
+      const files = (await r.json()).filter(x => x.type === 'file' && /^[a-z0-9_-]+\.json$/.test(x.name));
+      const reports = await Promise.all(files.map(async file => {
+        const response = await ghGet(`/repos/${c.repo}/contents/automation/routines/${encodeURIComponent(file.name)}?ref=${encodeURIComponent(c.branch)}`, null, c);
+        if (!response.ok) throw new Error('A routine report could not be read.');
+        return JSON.parse(b64d((await response.json()).content));
+      }));
+      if (!current()) return;
+      box.textContent = reports.length ? '' : 'No routines registered yet.';
+      reports.forEach(report => {
+        const item = el('section', 'agcard'), last = report.last_run;
+        item.append(el('b', null, report.name || report.id), el('p', 'hint', `${report.status || 'unverified'} · ${report.runtime || 'Unknown runtime'} · ${report.schedule || 'Schedule unverified'}`));
+        item.append(el('p', 'hint', 'Connections: ' + (report.connections || []).map(x => `${x.provider}: ${x.account_label || x.name || ''}`).join(', ')));
+        item.append(el('p', 'hint', `Last success: ${report.last_successful_run_at || 'Not reported'} · Last attempt: ${report.last_started_at || 'Not reported'}`));
+        if (report.current_run) item.append(el('p', 'hint', `Running since ${report.current_run.started_at}; completion has not been reported.`));
+        if (last) item.append(el('p', null, `${last.status}: ${last.summary || 'No summary'}`));
+        if (last && last.counts) item.append(el('p', 'hint', Object.entries(last.counts).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join(' · ')));
+        if (/^https:\/\//.test(report.management_url || '')) { const link = el('a', null, 'Manage routine'); link.href = report.management_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; item.append(link); }
+        box.append(item);
+      });
+    } catch (err) { if (current()) box.textContent = err.message || 'Routine reports could not be loaded.'; }
+  }
+  $('routineRefresh').onclick = renderRoutineRegister;
   async function tokenRepos(c = cfg()) { try { const r = await ghGet('/user/repos?per_page=100&sort=updated', null, c); return r.ok ? (await r.json()).map(x => x.full_name) : []; } catch { return []; } }
   async function nearRepos(repo, c = cfg()) {   // repos this token can see, closest names first (same owner, then shared words)
     if (!c.token) return []; const all = await tokenRepos(c), [o, n] = String(repo).toLowerCase().split('/'), words = String(n || '').split(/[-_.]/).filter(Boolean);
@@ -3110,7 +3145,7 @@ if (typeof window !== 'undefined') (() => {
     if (tab === 'conn') { renderBoards(); showEdit(!!cfg().repo && !cfg().token && !DEMO && !SETUP); autoCheck(); }   // ?setup: never open the old board's form
     if (tab === 'agents') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key');
       const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); $('sUseEmail').checked = !!LS.get('kb_email_sync'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
-      $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
+      renderRoutineRegister(); $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
   }
   function settingsTab(name, over) {   // a deep link: an old tab name, a tab, or a section (see SET_LINKS)
     const [tab, sec] = SET_LINKS[name] || [SET_TABS.some(t => t[0] === name) ? name : 'prefs'];
@@ -3346,8 +3381,8 @@ if (typeof window !== 'undefined') (() => {
   // A person whose GitHub login is a board member's is that member's own record, not a contact: it shows as "You" (or
   // "Board member") and stays out of follow-ups, the pipeline and "Help me with my contact". Worked out from people[], never stored.
   // only the ONE person with a member's login counts (v34): duplicates all stay contacts, so a member's login can't hide anyone
-  const memberOf = p => { const g = String((p && p.github) || '').toLowerCase(); if (!g) return null; const m = (state.people || []).find(x => String(x.github || '').toLowerCase() === g);
-    return m && state.contacts.filter(x => String(x.github || '').toLowerCase() === g).length === 1 ? m : null; };
+  const memberOf = (p, board = state) => { const g = String((p && p.github) || '').toLowerCase(); if (!g) return null; const m = (board.people || []).find(x => String(x.github || '').toLowerCase() === g);
+    return m && board.contacts.filter(x => String(x.github || '').toLowerCase() === g).length === 1 ? m : null; };
   const isMe = p => { const m = memberOf(p), meV = String(cfg().me || '').toLowerCase(); return !!m && !!meV && String(m.github).toLowerCase() === meV; };
   const contactOnly = p => !memberOf(p);
   function memberPill(p) { const b = el('span', 'stagepill memberpill', isMe(p) ? 'You' : 'Board member'); b.title = `@${memberOf(p).github} is a member of this board: their own record, not a contact`; return b; }
@@ -4138,6 +4173,7 @@ if (typeof window !== 'undefined') (() => {
   $('pClose').onclick = () => $('dlgContact').close();
   $('dlgContact').addEventListener('close', () => { editingContact = null; render(); });
   async function deletePerson() {
+    const own = contactNow(); if (own && memberOf(own)) { toast('Board members’ own records cannot be deleted from the CRM.', true); return; }
     const p = contactNow(); if (!p || ro || !(await ask('Delete person?', [`Delete the person “${p.name}”?`, 'This removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.'], 'Delete', true))) return;
     const id = p.id; $('dlgContact').close();
     mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`);
@@ -4149,7 +4185,7 @@ if (typeof window !== 'undefined') (() => {
     const p = contactNow(); if (!p) return;
     const items = [{ label: 'Copy for AI', icon: 'bot', onSelect: copyPerson }];
     if (p.company) items.push({ label: `Open client ${p.company}`, icon: 'building-2', onSelect: openPersonClient });
-    if (!ro) items.push({ separator: true }, { label: 'Delete person', icon: 'trash-2', danger: true, onSelect: deletePerson });
+    if (!ro && !memberOf(p)) items.push({ separator: true }, { label: 'Delete person', icon: 'trash-2', danger: true, onSelect: deletePerson });
     ui.menu(anchor, items, { label: `Actions for ${p.name || 'this person'}` });
   }
   function personPrompt(p) {
@@ -4271,7 +4307,7 @@ if (typeof window !== 'undefined') (() => {
     const part = y => plan[y] || (plan[y] = { tasks: [], contacts: [], history: {} });
     d.tasks = d.tasks.filter(t => { const live = t.claim && t.claim.status !== 'done';
       if (t.column === dc && stamp(t).slice(0, 10) < cutT && !live) { part(stamp(t).slice(0, 4)).tasks.push(t); return false; } return true; });
-    d.contacts = (d.contacts || []).filter(p => { if (String(p.stage || '').toLowerCase() === 'lost' && stamp(p).slice(0, 10) < cutP && !((p.next_due || '') >= today)) { part(stamp(p).slice(0, 4)).contacts.push(p); return false; } return true; });
+    d.contacts = (d.contacts || []).filter(p => { if (!memberOf(p, d) && String(p.stage || '').toLowerCase() === 'lost' && stamp(p).slice(0, 10) < cutP && !((p.next_due || '') >= today)) { part(stamp(p).slice(0, 4)).contacts.push(p); return false; } return true; });
     const n = rules.keep_history;
     if (n) [...d.tasks, ...d.contacts].forEach(x => { const h = x.history || []; if (h.length > n) { part(today.slice(0, 4)).history[x.id] = h.slice(0, h.length - n); x.history = h.slice(-n); } });
     return plan;

@@ -33,12 +33,16 @@ least-privilege routine, incremental checkpoint, last-run log and copyable promp
 
   ```bash
   keeptrack.py touch '<person id>' 'Email received: confirmed the Friday call.' --channel email \
-    --at '2026-10-08T09:30:00Z' \
+    --at '2026-10-08T09:30:00Z' --preserve-stage \
+    --source-message-id 'email:<sha256 of provider account id + individual message id>' \
     --source-id 'email:<sha256 of provider account id + thread id + sorted new message ids in this touch>'
   ```
 
 - Hash the provider's opaque account id, thread id and the sorted stable ids of the new messages represented by that
   touch before passing `--source-id`. Never put an address, subject or message text in that field.
+  Also pass one `--source-message-id` for every represented message. Read existing `source messages` via `person`
+  before grouping: omit already represented messages even if the checkpoint missed them. Partial overlap is refused;
+  regroup only new messages and recalculate the summary. Use `--preserve-stage` for every imported touch.
 - Set a next step or due date only when the exchange contains an explicit commitment or deadline. Do not infer a sales
   stage, company, role, phone number or replacement address from a signature. Report useful proposed profile changes
   for a person to approve.

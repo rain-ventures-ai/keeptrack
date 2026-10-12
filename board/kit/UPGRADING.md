@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v37 (schema 4)
+Board-member CRM records cannot be deleted through the web board or `person-rm`. Routines can keep a repo-owned
+register and consistent bounded run reports with `routine <id> show|start|finish`; see `board/ROUTINES.md`.
+Email imports use `touch --preserve-stage` and repeatable `--source-message-id` to preserve sales stages and prevent
+duplicate messages when retry groups change. Member records also stay on the board during archival.
+Run `kit-update` only. No data migration. Register existing routines only after verifying where they run and their
+connections; preserve dedicated ingestion checkpoints and use null for unobserved run timestamps.
+
 ### v36 (schema 4)
 Claim-ownership follow-ups from the review of v35. The local claim record is read once per command; a record git tracks is ignored with a note, and writing one at a board repo's root warns when `.gitignore` does not list it. A `heartbeat`, `done` or `release` whose save loses a race re-runs on the newer board, so it never lands on another session's fresh claim. The web page computes its agent-limit check once per render.
 - Run `kit-update` only. There is no board-data migration.

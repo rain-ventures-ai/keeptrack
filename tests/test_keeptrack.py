@@ -131,6 +131,7 @@ class LocalBoard(unittest.TestCase):
             "notes": "", "next": "", "next_due": "", "comments": [], "history": []}]; write(self.file, data)
         source_id = "email:" + "a" * 64
         args = Args(ref="p_casey", text="Email received: confirmed Friday's call.", channel="email", draft=False,
+                    preserve_stage=True, source_message_id=["email:" + "1" * 64, "email:" + "2" * 64],
                     at="2026-10-08T10:30:00+01:00", source_id=source_id, company=None, role=None, email=None,
                     phone=None, linkedin=None, value=None, source=None, notes=None, next=None, stage=None, due=None)
         self.quiet(kt.cmd_touch, args); self.quiet(kt.cmd_touch, args)
@@ -138,7 +139,36 @@ class LocalBoard(unittest.TestCase):
         self.assertEqual(1, len(person["comments"]))
         self.assertEqual("2026-10-08T09:30:00Z", person["comments"][0]["at"])
         self.assertEqual(source_id, person["comments"][0]["source_id"])
-        self.assertEqual("Contacted", person["stage"])
+        self.assertEqual("New", person["stage"])
+        args.source_id = "email:" + "b" * 64
+        args.source_message_id.append("email:" + "3" * 64)
+        with self.assertRaises(SystemExit) as overlap:
+            self.quiet(kt.cmd_touch, args)
+        self.assertIn("regroup", str(overlap.exception))
+        self.assertEqual(1, len(self.read()["contacts"][0]["comments"]))
+        args.source_message_id = ["email:" + "3" * 64]
+        self.quiet(kt.cmd_touch, args)
+        self.assertEqual(2, len(self.read()["contacts"][0]["comments"]))
+
+    def test_person_delete_rechecks_membership_after_a_save_race(self):
+        data = self.read()
+        data["contacts"] = [{"id": "p_me", "name": "Oliver", "github": "osouthgate", "stage": "New", "comments": [], "history": []}]
+        data["people"] = []; write(self.file, data)
+        original = kt.save
+        attempted = []
+        def race(next_data, sha, message):
+            attempted.append(True)
+            latest = self.read(); latest["people"] = [{"github": "osouthgate", "name": "Oliver"}]; write(self.file, latest)
+            return False
+        try:
+            kt.save = race
+            with self.assertRaises(SystemExit) as blocked:
+                self.quiet(kt.cmd_person_rm, Args(ref="p_me", yes=True))
+            self.assertIn("cannot be deleted", str(blocked.exception))
+            self.assertEqual(1, len(attempted))
+            self.assertEqual("p_me", self.read()["contacts"][0]["id"])
+        finally:
+            kt.save = original
 
     def test_task_link_accepts_local_resource_path(self):
         self.quiet(kt.cmd_link, Args(id="t_live", url="/srv/tasks/live", title="Working folder"))
@@ -989,6 +1019,10 @@ class CrmProjects(unittest.TestCase):
             kt.cmd_people(Args(stage=None, q=None))
         self.assertIn("p_me  Oliver  [board member @osouthgate: own record, not a contact]", out.getvalue())
         self.assertIn("[New]", out.getvalue())   # Bea is still a contact
+        with self.assertRaises(SystemExit) as blocked:
+            kt.cmd_person_rm(Args(ref="p_me", yes=True))
+        self.assertIn("cannot be deleted", str(blocked.exception))
+        self.assertTrue(any(p["id"] == "p_me" for p in read_json(self.file)["contacts"]))
 
     def test_a_members_login_on_two_people_hides_neither(self):
         """v34: only the ONE person with a member's login is their own record; a duplicate can't hide a real contact."""
@@ -1244,6 +1278,9 @@ class AdminRemoveAndAgents(unittest.TestCase):
 
     def test_person_rm_split_deletes_the_person_file(self):
         self.use(self.split)
+        self.assertIn("cannot be deleted", refused(self, kt.cmd_person_rm, ref="p_acme", yes=True))
+        person_path = os.path.join(self.split, "people", "p_acme.json")
+        person = read_json(person_path); person.pop("github", None); write(person_path, person)
         refused(self, kt.cmd_person_rm, ref="p_acme", yes=False)
         self.assertTrue(os.path.exists(os.path.join(self.split, "people", "p_acme.json")))
         before = tree_bytes(self.split)
@@ -1254,6 +1291,29 @@ class AdminRemoveAndAgents(unittest.TestCase):
         self.assertNotIn("contact", read_json(os.path.join(self.split, "cards", "t_second.json")))
         issues, _, code = kt.doctor_board(False)
         self.assertEqual(0, code, issues)
+
+    def test_routine_reports_refuse_overlap_and_preserve_success_on_failure(self):
+        self.use(self.one)
+        old_root = kt.ROOT
+        try:
+            kt.ROOT = self.temp.name
+            path = os.path.join(kt.ROOT, "automation", "routines", "email.json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write(path, {"version": 1, "id": "email", "last_successful_run_at": None, "runs": []})
+            run_quiet(kt.cmd_routine, id="email", action="start", run_id="first")
+            self.assertIn("already", refused(self, kt.cmd_routine, id="email", action="start", run_id="second"))
+            self.assertIn("explicit --status", refused(self, kt.cmd_routine, id="email", action="finish", run_id="first"))
+            self.assertIn("does not match", refused(self, kt.cmd_routine, id="email", action="finish", run_id="second", status="success"))
+            run_quiet(kt.cmd_routine, id="email", action="finish", run_id="first", status="success", summary="One touch", count=["touches_logged=1"])
+            first = read_json(path)["last_successful_run_at"]
+            run_quiet(kt.cmd_routine, id="email", action="start", run_id="next")
+            run_quiet(kt.cmd_routine, id="email", action="finish", run_id="next", status="failed", summary="Mailbox unavailable", count=[])
+            report = read_json(path)
+            self.assertEqual(first, report["last_successful_run_at"])
+            self.assertEqual("failed", report["last_run"]["status"])
+            self.assertIsNone(report["current_run"])
+        finally:
+            kt.ROOT = old_root
 
     def test_agents_add_list_remove(self):
         for d in (self.one, self.split):

@@ -1,5 +1,10 @@
 # Recurring meeting-notes imports
 
+Register this routine in `automation/routines/meeting-notes.json` following `board/ROUTINES.md`. Record where it is
+managed, its owner, schedule and connection labels without secrets. Report every attempt using `keeptrack.py routine
+meeting-notes start|finish` with a unique run id, outcome, summary and counts; commit those reports alongside the
+dedicated ingestion checkpoint. Never invent a last-run timestamp from file modification times.
+
 Use a separate scheduled routine for a notes source such as Google Drive. Do not add a Drive connector to the
 comment-triggered `@claude` board assistant: task comments are untrusted input, and that assistant does not need access
 to meeting files. Give the notes routine read access only to the source it needs and write access only to the private
