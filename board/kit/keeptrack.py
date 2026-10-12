@@ -203,7 +203,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 45  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 46  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1583,7 +1583,7 @@ def _record_changed(info):
 
 def record_cards(info):
     """The cards a local claim record holds, {card id: {"session", "agent", "user", "by_person"}}, oldest claim first. Reads
-    the one-card record of kit v43 and older ({"id", "session", ...}) too. by_person, not "attended": the hook greps the
+    the one-card record of kit v45 and older ({"id", "session", ...}) too. by_person, not "attended": the hook greps the
     record for '"attended": true' (every card driven by a person: no beats, no python)."""
     if not isinstance(info, dict):
         return {}
@@ -3043,7 +3043,7 @@ def doctor_board(fix=False):
     if mac is not None and not claim_limit(data):
         problem("SETTINGS", "tasks.json", f"settings.max_agent_claims {mac!r} must be a whole number 1-100 (it is ignored until fixed; "
                 "keeptrack.py settings-set --max-agent-claims N, 0 removes it).")
-    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. From v45 an older kit will not write.
+    # settings.min_kit (kit v43): the oldest kit that understands every rule field on the cards. From v46 an older kit will not write.
     raw_min = (data.get("settings") or {}).get("min_kit")
     min_kit = raw_min if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 0
     if raw_min is not None and not min_kit:

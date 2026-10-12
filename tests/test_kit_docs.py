@@ -54,8 +54,8 @@ class Templates(unittest.TestCase):
         self.assertNotRegex(TEMPLATE + claude, r"Claude session id as `BOARD_SESSION`")
 
     def test_upgrade_notes_say_to_update_plugin_copies_with_the_claim_record(self):
-        v45 = read("UPGRADING.md").split("### v45", 1)[1].split("### v44", 1)[0]
-        self.assertRegex(v45, r"Update plugin copies .* at the same time as this repo")
+        v46 = read("UPGRADING.md").split("### v46", 1)[1].split("### v45", 1)[0]
+        self.assertRegex(v46, r"Update plugin copies .* at the same time as this repo")
 
     def test_template_has_the_wait_rules(self):
         self.assertRegex(TEMPLATE, r"never `unwait` a wait you did not set")

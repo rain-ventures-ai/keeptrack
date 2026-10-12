@@ -25,14 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v45 (schema 4)
-A safety release with small fixes to Inbox questions: no data migration, the board stays on schema 4, and v44 tools keep reading and writing a v45 board.
+### v46 (schema 4)
+A safety release: no data migration, the board stays on schema 4, and v45 tools keep reading and writing a v46 board.
 - **`settings.min_kit` now prevents, not only detects.** `keeptrack.py` and the web page refuse to write a board whose
   `settings.min_kit` is an integer above their own kit version (reads, dry runs and plain `doctor` still work;
-  `doctor --fix` writes nothing). A missing or non-integer value never blocks. v45 needs no new `min_kit`, and the
+  `doctor --fix` writes nothing). A missing or non-integer value never blocks. v46 needs no new `min_kit`, and the
   upgrade writes none; leave it as it is (43 once anyone has used `wait`, 44 once an agent has asked a question).
   Raise it (`settings-set --min-kit N`) only for a later release whose notes ask for it, and only after every copy is
-  upgraded: this repo, plugin copies, relay, routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v44 ignore the
+  upgraded: this repo, plugin copies, relay, routines' clones and the hosted page. Before that, an older copy cannot write at all. Kits up to v45 ignore the
   value, so it cannot shut them out. A typo above every kit is not a lock-out: when the stored value is above the published kit,
   `settings-set --min-kit N` on its own lowers it to at most this kit (never below what the cards and questions need),
   and `doctor --fix` lowers it to the published kit. A value the published kit reaches is real: both refuse, and the
@@ -46,7 +46,7 @@ A safety release with small fixes to Inbox questions: no data migration, the boa
 - **`.board-claim.json`** now records each claimed card with its session. An existing one-card record is still read
   and is rewritten in the new shape at the next claim; the hook script is unchanged. Agents running parallel sessions
   in one clone should give each its own `BOARD_SESSION` (a random id, never the claude.ai session id). Update plugin
-  copies (the `keeptrack` plugin's hook runs its own `keeptrack.py`) at the same time as this repo: a v44 copy writes
+  copies (the `keeptrack` plugin's hook runs its own `keeptrack.py`) at the same time as this repo: a v45 copy writes
   the old one-card record on `claim`, `done` or `release`, which drops the other sessions' cards from it, so they get no
   automatic heartbeats and go STALE after 30 minutes.
 - **Refresh this repo's `AGENTS.md`** (and `CLAUDE.md` where it repeats them) from `board/kit/templates/AGENTS.md`:
@@ -57,12 +57,17 @@ A safety release with small fixes to Inbox questions: no data migration, the boa
   minutes lag the template.
 - Web page: after the upgrade, hard-refresh every open tab once. Settings codes made by older pages still import; a
   code copied without "Include tokens and keys" removes this browser's tokens on import.
+- Check: `cat board/KIT_VERSION` says 46; `keeptrack.py doctor` shows no `KIT_OLD`; `keeptrack.py kit-check` shows no
+  template drift; the web board loads and saves.
+
+### v45 (schema 4)
+Small fixes to Inbox questions. No data migration.
+- Run `kit-update` only.
 - `proposal-done --not-acted --answer-id <answer_id> --note "why"` closes an answer the agent will not act on (rejected, content changed, no
   longer needed). Routines that ask for approvals should use it after a rejection, so the item does not stay open.
 - An answer nobody acts on is kept whole for `archive.done_days` (90 by default), then slimmed and archived.
 - `proposal-done` refuses an `ask.approve` with no `content_hash`.
-- Check: `cat board/KIT_VERSION` says 45; `keeptrack.py doctor` shows no `KIT_OLD`; `keeptrack.py kit-check` shows no
-  template drift; `keeptrack.py proposal-done --help` lists `--not-acted`; the web board loads and saves.
+- Check: `keeptrack.py proposal-done --help` lists `--not-acted`.
 
 ### v44 (schema 4)
 The Review Inbox is **always on** for split-storage boards, and it holds **questions** as well as proposals: an agent

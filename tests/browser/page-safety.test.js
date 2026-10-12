@@ -1,5 +1,5 @@
 'use strict';
-// Web-page safety (kit v45 review fixes), with a faked GitHub that has real commit parents (a ref update that is not a fast-forward is refused):
+// Web-page safety (kit v46 review fixes), with a faked GitHub that has real commit parents (a ref update that is not a fast-forward is refused):
 //  1. two tabs on different boards share localStorage: each tab keeps saving into its own board (and the CSP lets the real api.github.com through);
 //     removing the board another tab switched to removes its live keys too
 //  2. settings.min_kit above this page's kit makes the board read-only with a banner, also when it rises between load and save

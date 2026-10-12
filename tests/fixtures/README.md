@@ -14,7 +14,7 @@ Small, hand-checked boards used by `tests/test_fixture_boards.py` and browser te
 | `v4_kit41/` | v4 split with optional browser-weather configuration | kit v41 | Frozen widget configuration preservation fixture |
 | `v4_kit43/` | v4 split with a waiting card, a wait-blocked claim, `agent_cleared` and `settings.min_kit` | kit v43 | Frozen waiting-for and flag preservation fixture |
 | `v4_kit44/` | v4 split with Review Inbox questions (answered and acted on, pending approval), a proposal and an old `review_inbox` off setting | kit v44 | Frozen always-on Inbox and question preservation fixture |
-| `v4_kit45/` | v4 split with the v44 Review Inbox questions and a rank with a random tail (`a1Qx`) | kit v45 | Frozen appended-rank, question and no-new-`min_kit` fixture |
+| `v4_kit46/` | v4 split with the v44 Review Inbox questions and a rank with a random tail (`a1Qx`) | kit v46 | Frozen appended-rank, question and no-new-`min_kit` fixture |
 
 **When you bump schema or kit:** add a row here, add a frozen directory under `tests/fixtures/`, extend the fixture tests, and add entries to the repo root `CHANGELOG.md` and `board/kit/UPGRADING.md`. The live `demo/` board stays the current showcase only.
 

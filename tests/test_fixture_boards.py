@@ -229,9 +229,9 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, code, issues)
         self.assertFalse({x["code"] for x in issues} & {"KIT_OLD", "MIN_KIT_LOWERED"}, issues)
 
-    def test_v45_tailed_rank_and_v44_data_survive_kit_update_save_and_doctor(self):
-        meta = read_json(os.path.join(FIXTURES, "v4_kit45", "fixture.json"))
-        board_dir, _ = self.use_fixture("v4_kit45", meta)
+    def test_v46_tailed_rank_and_v44_data_survive_kit_update_save_and_doctor(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit46", "fixture.json"))
+        board_dir, _ = self.use_fixture("v4_kit46", meta)
         settings = read_json(os.path.join(board_dir, "tasks.json"))["settings"]
         folder = os.path.join(board_dir, "proposals")
         before = {n: read_json(os.path.join(folder, n)) for n in sorted(os.listdir(folder))}
@@ -239,7 +239,7 @@ class FixtureBoards(unittest.TestCase):
             kt.cmd_kit_update(Args(source=KIT, quiet=True))
         data = kt.load_board()
         second = next(t for t in data["tasks"] if t["id"] == "t_second")
-        self.assertEqual("a1Qx", second["rank"])   # a v45 append's random tail is a valid rank
+        self.assertEqual("a1Qx", second["rank"])   # a v46 append's random tail is a valid rank
         rank = kt.append_rank([t["rank"] for t in data["tasks"] if t["column"] == "todo"])
         self.assertTrue(kt.valid_rank(rank) and rank > "a1Qx" and rank < "a3", rank)
         second["details"] = (second.get("details") or "") + " Updated fixture."

@@ -6,13 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Web board
 
-- **2026-10-12** — Inbox questions closed with `proposal-done --not-acted` show "Closed without acting by …" (kit v45).
-
-- **2026-10-12** — Kanban cards show compact relative creation and last-activity ages, progressing from hours through
-  days, weeks, months and years, with exact timestamps on hover. Activity includes task edits, comments, history and
-  agent runs.
-
-- **2026-10-12** — Kit v45: each browser tab stays on the board it opened: switching boards in another tab can no
+- **2026-10-12** — Kit v46: each browser tab stays on the board it opened: switching boards in another tab can no
   longer make this tab save into the wrong repo. A board whose `settings.min_kit` is newer than the page is read-only, with a
   banner; archiving, restoring from the archive and Inbox decisions check it on the board they re-read too. A drop
   next to two cards with equal ranks lands just above them, not at the top of the column. The agent-claim limit, and whether a cleared wait may restart a blocked claim, are decided on the board as it
@@ -21,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   only; the bootstrap runs its scripts from `blob:` URLs). "Copy settings code" and "Copy setup link" leave tokens and
   keys out unless "Include tokens and keys" is ticked. Undo still keeps 20 changes in this tab, but stores at most the
   newest 5 for the next visit, and only while they fit in about 1 MB.
+
+- **2026-10-12** — Inbox questions closed with `proposal-done --not-acted` show "Closed without acting by …" (kit v45).
+
+- **2026-10-12** — Kanban cards show compact relative creation and last-activity ages, progressing from hours through
+  days, weeks, months and years, with exact timestamps on hover. Activity includes task edits, comments, history and
+  agent runs.
 
 - **2026-10-12** — Mobile Find results keep the full height of wrapped titles and metadata when the on-screen keyboard
   reduces the available space, scrolling the result list instead of overlapping adjacent rows.
@@ -89,7 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Kit versions
 
-### [45] — 2026-10-12
+### [46] — 2026-10-12
 
 - `settings.min_kit` now prevents: `keeptrack.py` refuses to write a board whose `min_kit` is an integer above its
   `KIT_VERSION`, and says to run `kit-update`. Reads, `import`/`migrate`/`archive --dry-run` and plain `doctor` still
@@ -124,10 +124,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   write access. On the one-file save, a 422 that is not a sha mismatch is reported instead of retried.
 - Plugin `keeptrack` skill: the v43 waiting-for rules (`wait`; never `unwait` a wait you did not set or one on someone
   else), the 15-minute heartbeat with the 30-minute stale default, and `done --cancel`. The Codex and Cursor plugin
-  manifests carry the same version as the Claude plugin (0.45.0). The `AGENTS.md` template's rule 1 names every board
+  manifests carry the same version as the Claude plugin (0.46.0). The `AGENTS.md` template's rule 1 names every board
   JSON file, rule 3 gives the 15-minute heartbeat, and its `wait` line warns against `unwait`.
 - Tests: shared `merge3` cases (`tests/fixtures/merge3-cases.json`) run through both `keeptrack.py` and `board.js`; the
-  key rules are checked in both board skills; frozen board `v4_kit45`. No schema migration.
+  key rules are checked in both board skills; frozen board `v4_kit46`. No schema migration.
+
+### [45] — 2026-10-12
+
 - `proposal-done --not-acted --answer-id <id> [--note]` closes an answered question without acting (`decision.done.acted: false`), so
   a rejected approval or a changed content hash no longer stays open for ever.
 - An answered question that is not done is kept whole only for `archive.done_days`; after that it is slimmed and

@@ -1177,7 +1177,7 @@ class KitUpdateSafety(unittest.TestCase):
             f.write("## Rules\n1. **Never edit the board JSON files by hand:** `board/tasks.json` and everything in `board/cards/`, "
                     "`board/people/`, `board/projects/`, `board/proposals/` and `board/archive/`. Use `python3 board/keeptrack.py ...`.\n")
         self.assertEqual([], kt.kit_drift())
-        with open(agents, "w") as f:   # the v44 template's rule 1: projects/ and proposals/ missing
+        with open(agents, "w") as f:   # the v45 template's rule 1: projects/ and proposals/ missing
             f.write("1. **Never edit the JSON files under `board/` by hand (`tasks.json`, `cards/`, `people/`, `archive/`)**\n"
                     "2. Elsewhere: `projects/` and `proposals/` do not count outside rule 1.\n")
         drift = kt.kit_drift()
