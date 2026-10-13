@@ -145,6 +145,19 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, code, out.getvalue())
         self.assertEqual(expect, board_counts(kt.load_board()))
 
+    def test_v48_upgrade_preserves_routine_checkpoint_outside_board(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit48", "fixture.json"))
+        board_dir, expect = self.use_fixture("v4_kit48", meta)
+        automation = os.path.join(self.temp.name, "automation")
+        os.makedirs(automation)
+        checkpoint = os.path.join(automation, "email.json")
+        frozen = '{"version":1,"last_successful_run_at":"2026-10-12T08:00:00Z","messages":{"sha256:legacy":{}},"runs":[{"status":"success"}]}\n'
+        with open(checkpoint, "w", encoding="utf-8") as f: f.write(frozen)
+        with contextlib.redirect_stdout(io.StringIO()): kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        with open(checkpoint, encoding="utf-8") as f: self.assertEqual(frozen, f.read())
+        self.assertEqual(expect, board_counts(kt.load_board()))
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_v39_contact_reference_survives_kit_update_and_save(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit39", "fixture.json"))
         board_dir, _ = self.use_fixture("v4_kit39", meta)

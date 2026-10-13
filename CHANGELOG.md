@@ -4,6 +4,13 @@ All notable changes to the **board kit** (`board/kit/`) and **board data schema*
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Kit v48 — 2026-10-13
+
+- Added owner-bound `checkpoint show|save` for registered routines: privacy-safe typed progress, compare-and-save,
+  active-run and board binding checks, immutable processed message keys and fixed-window resume. Partial/failed
+  attempts retain the last successful window. Multiple mailboxes keep independent account state; legacy history is preserved.
+- No board schema migration or automatic Review Inbox decisions.
+
 ## Web board
 
 - **2026-10-12** — The task drawer groups Status with Priority and Due date with Waiting for, while People, Labels and

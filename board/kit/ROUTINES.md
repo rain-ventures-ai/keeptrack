@@ -4,6 +4,64 @@ Each private board repo owns a routine register in `automation/routines/<id>.jso
 schedule and credentials; this register records where to manage it and what it last did. Each board, including
 private-tasks, keeps its own register. Register only verified integrations: unknown means unknown, not Off.
 Ignore `automation/routines/*.lock` in git; these are local concurrency locks.
+Also ignore checkpoint `automation/**/*.json.lock` files; never commit local locks.
+
+## Durable checkpoints through the CLI (kit v48)
+
+`checkpoint <routine-id> show` returns `{sha256, checkpoint}` from that register's existing `checkpoint_path`.
+`checkpoint <routine-id> save <input.json> --expect-sha <sha256> --run-id <id> --status running|partial|failed|blocked|success`
+updates only that checkpoint in a local clone. It does not publish git, change the register, or touch board records.
+Use `missing` as the expected SHA for a new file. The registered owner and active `routine start` ID are required;
+the register's repo, branch and board path must match `where`. Paths and locks cannot follow symlinks.
+
+The input allows exactly these fields (write it outside the clone):
+
+```json
+{
+  "window": {"from": "2026-10-10T08:00:00Z", "to": "2026-10-13T08:00:00Z"},
+  "progress": {
+    "account_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "contact_ids": ["p_example"],
+    "completed_queries": [],
+    "query_ordinal": 0,
+    "cursor": null,
+    "boundary": null,
+    "processed_keys": [],
+    "exhausted": false
+  },
+  "messages": {},
+  "counts": {"proposals_added": 0, "failures": 0}
+}
+```
+
+Hash the verified provider/account identity locally; never store addresses or literal search queries. The first save
+binds the legacy root to that mailbox, so verify its existing `provider`/`account_label` first. Its old messages, runs,
+metadata and successful window are retained. A second mailbox hash uses `accounts[hash]` with its own messages,
+window, cursor and runs; it never inherits the first mailbox's successful window. For example Private Tasks may have
+Personal and Work hashes, while Consulting uses only its verified Work hash. Select the appropriate account state
+from `show` before choosing its first seven-day window or resuming its last successful end with two-day overlap.
+
+The contact IDs are an explicit, ordered query plan (an empty list means there are no contacts). Ordinals refer to
+that plan. Within an incomplete window neither plan nor window may change; completed ordinals/processed keys are
+merged without removal and query ordinal cannot regress. `cursor` is only an opaque connector paging token;
+`boundary` is only a stable opaque time/ID boundary for expired-cursor recovery, not prose or a query. Use null to
+clear a consumed cursor. Do not put encoded bodies, subjects or addresses in tokens. All timestamps use UTC `Z`.
+`messages` is keyed by full `rfc822:`, `email:` or legacy `sha256:` hashes and allows only `contact_id`, hashed `thread`,
+`occurred_at`, `direction` (`sent`/`received`), status-code `result` and `logged_at`; an existing key cannot be replaced.
+Add keys only after their proposal/write succeeds (or returns `exists`). Never accept Inbox proposals in the routine.
+
+Publish `routine start` before processing. Save and publish running progress, then save and publish partial or failed
+progress before `routine finish` of the same ID. A later attempt resumes that account's durable fixed window, even if
+the prior attempt failed. Only success advances its watermark: every planned query must be complete, cursor cleared,
+failures zero and `progress.exhausted` explicitly true after all required pages and writes succeed. A retained boundary
+is a scan-recovery marker, not an outstanding page. Save/publish the successful checkpoint **before** finishing the
+register successfully. Keep the successful watermark unchanged for partial/failed/blocked results.
+
+Local locks serialize checkpoint and register writes; the SHA rejects a stale local writer. They do not coordinate
+different clones. Before publishing fetch/rebase current branch. A rejected push or checkpoint conflict requires
+rereading current register, checkpoint and proposals, regrouping and retrying the CLI; never overwrite/rebase away
+another worker's progress or mark the run successful before checkpoint publication. Commit explicit checkpoint and
+register paths only. No prune operation is provided; legacy history is preserved and run summaries are bounded to 30.
 
 Use owner-specific IDs for shared boards: `contact-email-sync-osouthgate`, `contact-email-sync-jezhub`,
 `meeting-notes-osouthgate` and `task-assignment-osouthgate`. A binding is board + owner + workflow, not just

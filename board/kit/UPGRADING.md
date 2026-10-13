@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v48 (schema 4)
+Owner-bound durable routine checkpoints through the CLI. No board-data migration.
+- Run `kit-update` only. The new `checkpoint <routine-id> show|save` commands read the register's existing
+  `checkpoint_path`; they do not rename the routine or reset its history. Commit checkpoint changes separately.
+- Legacy single-mailbox v1 state stays at the root. Its first save binds a verified mailbox hash; additional
+  mailboxes get independent `accounts[hash]` state, never copies of the first mailbox's watermark.
+- See `ROUTINES.md` for input fields, compare-and-save, partial resume and publication order. Never hand-edit
+  checkpoints, accept proposals during a scan, or mark success before all required pages and writes are published.
+- Check: `keeptrack.py checkpoint <routine-id> show` returns the preserved state and its SHA-256; `kit-check` says v48.
+
 ### v47 (schema 4)
 Four small fixes to Inbox questions. No data migration.
 - Run `kit-update` only. A board on v45 does the v46 steps first.
