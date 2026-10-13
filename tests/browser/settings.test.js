@@ -346,7 +346,8 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       }
       await page.waitForTimeout(3000);   // the queued save has finished by now
       const ls = await page.evaluate(() => ({ repo: localStorage.getItem('kb_repo'), branch: localStorage.getItem('kb_branch'), tok: localStorage.getItem('kb_token'), url: location.search }));
-      assert.deepEqual(ls, { repo: 'acme/board', branch: 'main', tok: 'test', url: '?repo=acme/board&branch=main&path=board/tasks.json' }, how + ': nothing switched');   // the address bar names the board it opened
+      assert.deepEqual({ repo: ls.repo, branch: ls.branch, tok: ls.tok }, { repo: 'acme/board', branch: 'main', tok: 'test' }, how + ': nothing switched');
+      const query = new URLSearchParams(ls.url); assert.deepEqual(['repo', 'branch', 'path'].map(k => query.get(k)), ['acme/board', 'main', 'board/tasks.json'], how + ': address names its own board'); assert.equal(query.has('token'), false);
       assert.ok(page.api.root().labels.some(l => l.name === 'urgent'), how + ': the queued save still finished');
       assert.equal(await page.locator('#sSave').isDisabled(), false); assert.equal(await page.locator('#sSave').textContent(), 'Save & connect');
       assert.deepEqual(page.errors, []); await page.close();

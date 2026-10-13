@@ -3060,11 +3060,11 @@ if (typeof window !== 'undefined') (() => {
   let contextRestored = false;
   function restoreBoardContext() {
     if (contextRestored || !lastSyncOk || SETUP) return; contextRestored = true;
-    if (location.hash) { applyRoute(); return; }
+    if (location.hash) { if (!backStack.length && !BACK_DIALOGS.some(id => $(id)?.open)) applyRoute(); return; } // a user-opened drawer already owns this route; late startup restoration must not close it
     const id = boardContext().card; if (!id) return;
     if (state.tasks.some(t => t.id === id)) openCard(id); else { clearDraft(id); saveBoardContext({ view, card: '' }); }
   }
-  window.addEventListener('hashchange', () => { if (closingHash) { closingHash = false; return; } applyRoute(); });
+  window.addEventListener('hashchange', () => { if (closingHash) { closingHash = false; if (hashNum() === null) return; } applyRoute(); });
   function refreshDrawer() { const t = taskNow(); if (!t) { $('dlgCard').close(); return; } fillDrawer(t, false); }   // board data changed underneath an open card
 
   let backdropClicks = 0;
@@ -3079,7 +3079,7 @@ if (typeof window !== 'undefined') (() => {
     $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
-  $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
+  $('cClose').onclick = () => { $('dlgCard').close(); }; // the normal close/Back path clears the URL after its history step, not before
   $('dlgCard').addEventListener('click', e => {
     const drawer = $('dlgCard'), r = drawer.getBoundingClientRect();
     const outside = e.target === drawer && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
@@ -3094,7 +3094,7 @@ if (typeof window !== 'undefined') (() => {
     $('cClose').click();   // reuse title/description saves, context cleanup and native focus restoration
   });
   // a card link always names its board (?repo=…), whatever the address bar holds, so whoever opens it lands on the right repo
-  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(`${location.origin}${DEMO ? location.pathname + location.search : boardUrl()}#${t.num}`, `Link to #${t.num} copied`); };
+  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(navigationLink('#' + t.num), `Link to #${t.num} copied`); };
   // the ⋯ menu: copy link or reference, the GitHub issue, Markdown, delete
   function openDrawerMenu(anchor) {
     const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
@@ -3150,7 +3150,7 @@ if (typeof window !== 'undefined') (() => {
     } catch (e) { toast('Could not reach GitHub', true); } finally { issueBusy = false; }
   }
   function copyForAgent() { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); }
-  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // closing never loses typed text
+  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null && !backPending) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // pending Back clears the old hash only once its close has settled
   async function deleteTask() {
     const id = editing, title = titleOf(id);
     const body = el('div'); body.append(el('p', 'ui-sheet__text', `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`));
