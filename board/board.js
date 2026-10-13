@@ -2995,7 +2995,11 @@ if (typeof window !== 'undefined') (() => {
     routeApplying = true;
     try {
       if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(v) ? v : 'today', true); }
-      else if (q.has('settings')) { const name = q.get('settings'); if (!$('dlgSettings').open) $('btnSettings').click(); settingsTab(Object.hasOwn(SET_LINKS, name) || SET_TABS.some(t => t[0] === name) ? name : 'prefs'); }
+      else if (q.has('settings')) { const name = q.get('settings'), valid = Object.hasOwn(SET_LINKS, name) || SET_TABS.some(t => t[0] === name) ? name : 'prefs', alreadyOpen = $('dlgSettings').open;
+        if (!alreadyOpen) $('btnSettings').click();
+        // Restoring the same URL after a delayed load must not reset an open
+        // settings section (e.g. collapse the connection form after token reuse).
+        if (!alreadyOpen || settingsRoute !== valid) settingsTab(valid); }
       else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
       else if (h === 'menu') { const docked = window.kbLayout && window.kbLayout.get() === 'dock', pop = docked ? 'dockPop' : 'morePop', trigger = docked ? 'dockMenu' : 'btnMore'; if ($(pop).hidden) $(trigger).click(); }
       else { const id = Object.keys(routeDialogs).find(id => routeDialogs[id] === h); if (id && $(id) && !$(id).open) { if (id === 'dlgSearch') openSearch(); else if (id === 'dlgAddPerson') openAddPersonForm(); else if (id === 'dlgCopy') $('btnCopy').click(); else $(id).showModal(); } }
