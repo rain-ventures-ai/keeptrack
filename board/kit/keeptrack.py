@@ -203,7 +203,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 48  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 49  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2642,6 +2642,7 @@ def cmd_add(a):
         t["labels"] = list(dict.fromkeys(check_label_name(x) for x in a.label or []))
         if data.get("layout") == "split":
             t["rank"] = append_rank(ranks)
+        append_priority_rank(data, t)
         hist(t, "created")
         data["tasks"].append(t); assign_nums(data); tid = t["id"]
         _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})"))   # the saved #number: a lost race renumbers ours
@@ -2996,6 +2997,7 @@ def doctor_board(fix=False):
     valid_stages = set(stages(data))
     bad_rank_columns = set()
     ranks = {}
+    priority_ranks = {}
     for t in tasks:
         path = f"card {t.get('id', '?')}"
         if t.get("column") not in columns:
@@ -3009,6 +3011,16 @@ def doctor_board(fix=False):
         if t.get("project") and t["project"] not in {x.get("id") for x in projects}:
             problem("PROJECT", path, f"Project {t.get('project')!r} does not exist.")
         rank = t.get("rank")
+        if "value" in t and t["value"] is not None and not (type(t["value"]) is int and 1 <= t["value"] <= 5):
+            problem("TASK_VALUE", path, "Value must be an integer 1–5, null or absent.")
+        if "effort" in t and t["effort"] not in (None, *EFFORT_WEIGHTS):
+            problem("TASK_EFFORT", path, "Effort must be XS, S, M, L, XL, null or absent.")
+        if "priority_rank" in t and not valid_rank(t["priority_rank"]):
+            problem("PRIORITY_RANK", path, "Board-wide priority rank is invalid.")
+        elif valid_rank(t.get("priority_rank")):
+            if t["priority_rank"] in priority_ranks:
+                problem("DUPLICATE_PRIORITY_RANK", path, "Board-wide priority rank is also used by " + priority_ranks[t["priority_rank"]] + ". Number/id breaks the tie; move a card in Prioritise to choose its order.")
+            priority_ranks[t["priority_rank"]] = t.get("id", "?")
         if split and not valid_rank(rank):
             problem("RANK", path, "The rank is missing or invalid."); bad_rank_columns.add(t.get("column"))
         elif split:
@@ -4268,11 +4280,53 @@ def cmd_project_person(a):
     mutate(fn, f"Project people: {a.ref}")
 
 
+EFFORT_WEIGHTS = {"XS": 1, "S": 2, "M": 3, "L": 5, "XL": 8}
+
+
+def priority_order(tasks):
+    """Board-wide order, independent of column order and Git tree enumeration."""
+    return sorted(tasks, key=lambda t: (0 if valid_rank(t.get("priority_rank")) else 1,
+                                       t.get("priority_rank") if valid_rank(t.get("priority_rank")) else "",
+                                       t.get("num") or 9007199254740991, t.get("id", "")))
+
+
+def append_priority_rank(data, task):
+    """Unranked boards need no migration. Once ranked, append after every existing card.
+
+    Missing legacy ranks are materialised in deterministic number/id order first.
+    Archived cards retain their own priority rank; column moves never touch it.
+    """
+    tasks = [t for t in data.get("tasks", []) if t is not task]
+    if not any(valid_rank(t.get("priority_rank")) for t in tasks):
+        return
+    previous = None
+    for current in priority_order(tasks):
+        if not valid_rank(current.get("priority_rank")):
+            current["priority_rank"] = append_rank([previous] if previous else [])
+        previous = current["priority_rank"]
+    task["priority_rank"] = append_rank([previous] if previous else [])
+
+
+def task_score(task):
+    value, effort = task.get("value"), task.get("effort")
+    return value / EFFORT_WEIGHTS[effort] if type(value) is int and 1 <= value <= 5 and isinstance(effort, str) and effort in EFFORT_WEIGHTS else None
+
+
 def cmd_task_set(a):
     """Change a task's fields. Empty string clears client, project, contact, details or due."""
     def fn(data):
         t = find(data, a.id)
         changed = []
+        for field in ("value", "effort"):
+            value = getattr(a, field, None)
+            if field == "value" and value not in (None, ""):
+                value = int(value)
+            if value is not None and value != t.get(field):
+                if value == "":
+                    t.pop(field, None)
+                else:
+                    t[field] = value
+                changed.append(f"{field}: {value or 'cleared'}")
         if a.client is not None and a.client != t.get("client", ""):
             t["client"] = a.client; changed.append(f"client: {a.client or 'cleared'}")
             if a.client and a.client not in data.setdefault("clients", []):
@@ -5376,6 +5430,7 @@ def apply_staging(data, st, label):
         if data.get("layout") == "split":
             ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
             x["rank"] = append_rank(ranks)
+        append_priority_rank(data, x)
         hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
         say(f"+ task     {title}{' [' + client + ']' if client else ''}"); out["added"] += 1
     return out
@@ -5421,7 +5476,7 @@ PROPOSAL_ROOT_FIELDS = {"id", "version", "kind", "status", "title", "source", "r
 PROPOSAL_SOURCE_FIELDS = {"kind", "id", "revision", "title", "date", "url", "recipients_confirmed"}
 PROPOSAL_RUN_FIELDS = {"routine", "run_id", "at"}
 TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priority", "due", "labels", "owner", "assignees",
-                      "details", "links", "contacts", "todos", "comments"}
+                      "details", "links", "contacts", "todos", "comments", "value", "effort", "priority_rank"}
 PERSON_CHANGE_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "github", "emails", "phones",
                         "stage", "value", "source", "notes", "next", "due", "next_due", "links", "comments"}
 TOUCH_CHANGE_FIELDS = {"text", "channel", "at", "source_id", "source_message_ids", "next", "due", "next_due"}
@@ -5491,7 +5546,7 @@ EMAIL_METADATA_TITLE = re.compile(r"Email (?:from|to|with) [^\n]{1,80}")
 def check_change_values(kind, change):
     """Value types, not only field names: a malformed value must never reach a live record."""
     for key, value in change.items():
-        if key in STR_FIELDS and not isinstance(value, str):
+        if key in STR_FIELDS and not (key == "value" and kind.startswith("task.")) and not isinstance(value, str):
             proposal_error(f"change.{key} must be text")
         if key in DATE_FIELDS and (not isinstance(value, str) or (value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))):
             proposal_error(f"change.{key} must be a YYYY-MM-DD date or empty")
@@ -5505,6 +5560,12 @@ def check_change_values(kind, change):
             proposal_error("each change.links item needs a url")
         if key == "priority" and value not in ("high", "medium", "low"):
             proposal_error("change.priority must be high, medium or low")
+        if kind.startswith("task.") and key == "value" and value is not None and not (type(value) is int and 1 <= value <= 5):
+            proposal_error("change.value must be an integer 1–5 or null")
+        if kind.startswith("task.") and key == "effort" and value not in (None, *EFFORT_WEIGHTS):
+            proposal_error("change.effort must be XS, S, M, L, XL or null")
+        if key == "priority_rank" and not valid_rank(value):
+            proposal_error("change.priority_rank must be a valid fractional rank")
 
 
 def proposal_base_fields(kind, target_type, change):
@@ -5875,6 +5936,11 @@ def _new_task(data, proposal, change):
     for comment in task["comments"]:
         comment.setdefault("id", "c_" + uuid.uuid4().hex[:6]); comment.setdefault("at", ts); comment.setdefault("by", who_am_i())
     task["rank"] = append_rank(ranks)
+    for field in ("value", "effort", "priority_rank"):
+        if field in change:
+            task[field] = copy.deepcopy(change[field])
+    if "priority_rank" not in task:
+        append_priority_rank(data, task)
     hist(task, f"created from proposal {proposal['id']}")
     data.setdefault("tasks", []).append(task); assign_nums(data)
     return task, False
@@ -6960,6 +7026,8 @@ def main():
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
     s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s.add_argument("--value", choices=["", "1", "2", "3", "4", "5"], help="optional value 1–5; empty clears")
+    s.add_argument("--effort", choices=["", *EFFORT_WEIGHTS], help="optional effort size; empty clears")
     s = sub.add_parser("task-rm", help="delete a task created by mistake (needs --yes)"); s.add_argument("id"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_task_rm)
     s = sub.add_parser("unlink", help="remove a link from a task"); s.add_argument("id"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_unlink)
     s = sub.add_parser("labels", help="list labels and how many cards use each"); s.set_defaults(f=cmd_labels)

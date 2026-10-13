@@ -8,6 +8,9 @@ npx playwright install chromium
 npm test
 ```
 
+`node prioritise.test.js` exercises the optional List prioritisation layout using fictional
+GitHub API fixtures, including save conflicts, filtered moves, scroll/focus preservation and phone layout.
+
 The tests start a local server for the board page. They mock the GitHub REST API with Playwright routes. No token or network access is used.
 
 ## UI change acceptance

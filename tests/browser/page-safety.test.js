@@ -248,7 +248,7 @@ const CLAUDE = { kb_agents: 'claude', kb_claude_url: 'https://api.anthropic.com/
     {
       const src = fs.readFileSync(path.join(ROOT, 'board/board.js'), 'utf8'), a = src.indexOf('  const CHANGE_FIELDS = {'), b = src.indexOf('  let inboxF = ');
       assert.ok(a > 0 && b > a, 'proposalRefusal block found in board.js');
-      const refusal = new Function('const isObj = v => !!v && typeof v === "object" && !Array.isArray(v);\n' + src.slice(a, b) + '\nreturn proposalRefusal;')();
+      const refusal = new Function('validRank', 'const isObj = v => !!v && typeof v === "object" && !Array.isArray(v);\n' + src.slice(a, b) + '\nreturn proposalRefusal;')(require(path.join(ROOT, 'board/board.js')).validRank);
       for (const c of CHANGE_CASES) assert.equal(refusal({ kind: c.kind }, c.change) === '', c.ok, c.name);
     }
 

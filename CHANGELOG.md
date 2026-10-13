@@ -4,6 +4,12 @@ All notable changes to the **board kit** (`board/kit/`) and **board data schema*
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Kit v49 — 2026-10-13
+
+Optional Prioritise layout in List: inline value/effort, derived score, independent board-wide manual
+ranking, and mobile controls. Standard List now honours its selected sort. Scoring fields are additive,
+preserved through CLI edits, proposals and archiving; disabling the layout leaves board data intact.
+
 ## Kit v48 — 2026-10-13
 
 - Added owner-bound `checkpoint show|save` for registered routines: privacy-safe typed progress, compare-and-save,

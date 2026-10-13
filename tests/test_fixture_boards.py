@@ -5,7 +5,9 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
+import types
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -159,6 +161,7 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, kt.doctor_board(False)[2])
 
     def test_v39_contact_reference_survives_kit_update_and_save(self):
+        # Older contact fields still round-trip alongside newer scoring fields.
         meta = read_json(os.path.join(FIXTURES, "v4_kit39", "fixture.json"))
         board_dir, _ = self.use_fixture("v4_kit39", meta)
         expected = read_json(os.path.join(board_dir, "cards", "t_first.json"))["contacts"]
@@ -170,6 +173,72 @@ class FixtureBoards(unittest.TestCase):
         first["details"] += " Updated fixture."
         self.assertTrue(kt.save_changes(data, message="Fixture roundtrip"))
         self.assertEqual(expected, read_json(os.path.join(board_dir, "cards", "t_first.json"))["contacts"])
+
+    def test_prioritise_fields_survive_upgrade_migration_and_edit(self):
+        meta = read_json(os.path.join(FIXTURES, "v3_prioritise", "fixture.json"))
+        board_dir, _ = self.use_fixture("v3_prioritise", meta)
+        expected = {t["id"]: {k: t[k] for k in ("value", "effort", "priority_rank") if k in t}
+                    for t in kt.load_board()["tasks"]}
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+            kt.cmd_migrate(Args(to=4, dry_run=False))
+        data = kt.load_board()
+        data["tasks"][0]["details"] = "Ordinary edit preserves additive fields."
+        self.assertTrue(kt.save_changes(data, message="Scoring roundtrip"))
+        actual = {t["id"]: {k: t[k] for k in ("value", "effort", "priority_rank") if k in t}
+                  for t in kt.load_board()["tasks"]}
+        self.assertEqual(expected, actual)
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
+    def test_frozen_v48_cli_preserves_priority_fields_on_ordinary_edit(self):
+        # This exact pre-feature source is retained in Git, rather than pretending
+        # a current CLI with a changed version constant is an older client.
+        source = subprocess.run(["git", "show", "88da022:board/kit/keeptrack.py"], cwd=REPO,
+                                text=True, capture_output=True)
+        if source.returncode:
+            self.skipTest("frozen v48 Git source unavailable in this source export")
+        old = types.ModuleType("frozen_v48")
+        old.__file__ = os.path.join(KIT, "keeptrack.py")
+        exec(compile(source.stdout, old.__file__, "exec"), old.__dict__)
+        self.assertEqual(48, old.KIT_VERSION)
+        meta = read_json(os.path.join(FIXTURES, "v3_prioritise", "fixture.json"))
+        self.use_fixture("v3_prioritise", meta)
+        old.FILE, old.ROOT, old.REPO, old.WRITE = kt.FILE, kt.ROOT, "", "local"
+        data = old.load_board()
+        before = {t["id"]: {k: t[k] for k in ("value", "effort", "priority_rank") if k in t} for t in data["tasks"]}
+        data["tasks"][0]["details"] = "Ordinary v48 edit."
+        self.assertTrue(old.save_changes(data, message="Frozen client roundtrip"))
+        after = {t["id"]: {k: t[k] for k in ("value", "effort", "priority_rank") if k in t} for t in old.load_board()["tasks"]}
+        self.assertEqual(before, after)
+
+    def test_priority_fields_survive_individual_archive_restore(self):
+        meta = read_json(os.path.join(FIXTURES, "v3_prioritise", "fixture.json"))
+        self.use_fixture("v3_prioritise", meta)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        before = next(t for t in kt.load_board()["tasks"] if t["id"] == "t_scored")
+        expected = {k: before[k] for k in ("value", "effort", "priority_rank")}
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_archive(Args(ref="t_scored", dry_run=False, done_days=None, lost_days=None, keep_history=None))
+            kt.cmd_unarchive(Args(ref="t_scored"))
+        restored = next(t for t in kt.load_board()["tasks"] if t["id"] == "t_scored")
+        self.assertEqual(expected, {k: restored[k] for k in expected})
+
+    def test_cli_scoring_set_and_clear_preserve_rank(self):
+        meta = read_json(os.path.join(FIXTURES, "v3_prioritise", "fixture.json"))
+        self.use_fixture("v3_prioritise", meta)
+        args = dict(id="t_scored", client=None, project=None, contact=None, title=None,
+                    details=None, priority=None, due=None, label=None, unlabel=None)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_task_set(Args(**args, value="5", effort="XS"))
+        task = next(t for t in kt.load_board()["tasks"] if t["id"] == "t_scored")
+        self.assertEqual((5, "XS", "a1"), (task["value"], task["effort"], task["priority_rank"]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_task_set(Args(**args, value="", effort=""))
+        task = next(t for t in kt.load_board()["tasks"] if t["id"] == "t_scored")
+        self.assertNotIn("value", task)
+        self.assertNotIn("effort", task)
+        self.assertEqual("a1", task["priority_rank"])
 
     def test_v40_member_company_links_survive_kit_update_and_save(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit40", "fixture.json"))

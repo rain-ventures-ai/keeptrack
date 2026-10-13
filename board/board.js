@@ -198,7 +198,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 48;
+  const PAGE_KIT = 49;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -857,6 +857,9 @@ if (typeof window !== 'undefined') (() => {
       const p = P.get(t.id), add = text => { t.history.push({ at: nowIso(), by: who, text }); if (t.history.length > 200) t.history.splice(0, t.history.length - 200); };
       if (!p) { add('created'); return; }
       if (p.column !== t.column) add(`moved ${colName(p.column)} → ${colName(t.column)}`);
+      if (p.value !== t.value) add('value: ' + (t.value ?? 'not scored'));
+      if (p.effort !== t.effort) add('effort: ' + (t.effort || 'not estimated'));
+      if (p.priority_rank !== t.priority_rank && (p.updated !== t.updated || validRank(p.priority_rank))) add('board-wide priority order changed');
       if (p.title !== t.title) add(`renamed (was "${p.title}")`);
       if (JSON.stringify(p.assignees) !== JSON.stringify(t.assignees)) add('assignees: ' + (t.assignees.map(a => '@' + a).join(', ') || 'none'));
       if ((p.due || '') !== (t.due || '')) add('due: ' + (t.due || 'cleared'));
@@ -1079,6 +1082,8 @@ if (typeof window !== 'undefined') (() => {
   const me = () => cfg().me;
   const stamp = t => { t.updated = nowIso(); if (me()) t.updatedBy = me(); };
   function ensureRanks(d) {
+    // Once board-wide ordering exists, newly created tasks join its end; status changes never change it.
+    if (d.tasks.some(t => validRank(t.priority_rank))) ensurePriorityRanks(d);
     if (!isSplit(d)) return d;
     d.columns.forEach(c => { let last = null; d.tasks.filter(t => t.column === c.id && validRank(t.rank)).forEach(t => { if (last === null || t.rank > last) last = t.rank; });
       d.tasks.filter(t => t.column === c.id && !validRank(t.rank)).forEach(t => { t.rank = keyBetween(last, null); last = t.rank; }); });
@@ -1333,6 +1338,34 @@ if (typeof window !== 'undefined') (() => {
   }
   const sortKey = () => 'kb_sort:' + cfg().repo;
   const sortMode = () => ['smart', 'manual', 'due', 'newest'].includes(LS.get(sortKey())) ? LS.get(sortKey()) : 'smart';
+  const prioritiseKey = () => 'kb_prioritise:' + cfg().repo + ':' + cfg().branch + ':' + cfg().path;
+  const prioritising = () => LS.get(prioritiseKey()) === 'on';
+  const effortWeights = { XS: 1, S: 2, M: 3, L: 5, XL: 8 };
+  const taskScore = t => Number.isInteger(t.value) && t.value >= 1 && t.value <= 5 && Object.hasOwn(effortWeights, t.effort) ? t.value / effortWeights[t.effort] : null;
+  const priorityOrder = items => items.slice().sort((a, b) => {
+    const ar = validRank(a.priority_rank), br = validRank(b.priority_rank);
+    const tie = (a.num || Number.MAX_SAFE_INTEGER) - (b.num || Number.MAX_SAFE_INTEGER) || (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
+    return ar && br ? (a.priority_rank < b.priority_rank ? -1 : a.priority_rank > b.priority_rank ? 1 : 0) || tie : ar ? -1 : br ? 1 : tie;
+  });
+  function ensurePriorityRanks(n) {
+    let last = priorityOrder(n.tasks).filter(t => validRank(t.priority_rank)).map(t => t.priority_rank).pop() || null;
+    priorityOrder(n.tasks).filter(t => !validRank(t.priority_rank)).forEach(t => { t.priority_rank = keyBetween(last, null); last = t.priority_rank; });
+  }
+  const prioritiseExpanded = new Set();
+  function listPosition() {
+    if (view !== 'list') return null;
+    const b = $('board'), rows = [...b.querySelectorAll('[data-list-task]')], edge = b.getBoundingClientRect().top;
+    const row = rows.find(r => r.getBoundingClientRect().bottom > edge), active = document.activeElement;
+    return { top: b.scrollTop, id: row && row.dataset.listTask, offset: row && row.getBoundingClientRect().top - edge,
+      focus: active && active.closest('[data-list-task]') ? { id: active.closest('[data-list-task]').dataset.listTask, key: active.dataset.listControl } : null };
+  }
+  function restoreListPosition(pos) {
+    if (!pos) return;
+    const b = $('board'), rows = [...b.querySelectorAll('[data-list-task]')], row = rows.find(r => r.dataset.listTask === pos.id);
+    b.scrollTop = pos.top;
+    if (row) b.scrollTop += row.getBoundingClientRect().top - b.getBoundingClientRect().top - pos.offset;
+    if (pos.focus) { const r = rows.find(r => r.dataset.listTask === pos.focus.id), c = r && [...r.querySelectorAll('[data-list-control]')].find(c => c.dataset.listControl === pos.focus.key); if (c) c.focus({ preventScroll: true }); }
+  }
   let cinemaCol = '';
   const rankOf = t => validRank(t.rank) ? t.rank : 'zzzzzzzzzzzz';
   const numOf = t => Number.isInteger(t.num) ? t.num : Number.MAX_SAFE_INTEGER;
@@ -1412,11 +1445,13 @@ if (typeof window !== 'undefined') (() => {
     if ($('dlgCard').open && editing) markSeen(editing);
     applyModes(); syncInboxButton(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
     if (view !== 'board') {
+      const listPos = listPosition();
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
       ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox })[view](); board.scrollTop = st; renderLegend(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
+      if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
     }
     const board = $('board');
@@ -1905,6 +1940,7 @@ if (typeof window !== 'undefined') (() => {
 
   function listRow(t) {
     const row = paint(el('div', 'trow' + (isDoneTask(t) ? ' done' : '')), t);
+    row.dataset.listTask = t.id;
     const c0 = el('div', 'c-check'); c0.append(doneCircle(t));
     const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); { const d = changedDot(t); if (d) title.prepend(d); } task.append(title);
     const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title
@@ -1941,9 +1977,19 @@ if (typeof window !== 'undefined') (() => {
 
   function renderList() {
     const board = $('board'), hideDone = $('fHideDone').checked; let collapsed; try { collapsed = new Set(JSON.parse(LS.get('kb_collapsed', '[]'))); } catch { collapsed = new Set(); }
+    const toolbar = el('div', 'prioritise-bar');
+    const toggle = ui.button({ label: prioritising() ? 'Standard list' : 'Prioritise', size: 'sm', onClick: () => { LS.set(prioritiseKey(), prioritising() ? 'off' : 'on'); render(); } });
+    toggle.id = 'listPrioritise'; toggle.setAttribute('aria-pressed', String(prioritising())); toolbar.append(toggle);
+    if (prioritising()) {
+      const sort = el('select'); sort.id = 'prioritiseSort'; sort.setAttribute('aria-label', 'Prioritise order');
+      [['manual', 'Manual order'], ['score', 'Highest score'], ['due', 'Due date'], ['newest', 'Newest']].forEach(([v, label]) => { const o = el('option', null, label); o.value = v; sort.append(o); });
+      sort.value = LS.get(prioritiseKey() + ':sort', 'manual'); sort.onchange = () => { LS.set(prioritiseKey() + ':sort', sort.value); render(); }; toolbar.append(sort);
+      toolbar.append(el('span', 'muted', 'Score = value ÷ effort. Rank is your decision.')); board.append(toolbar); renderPrioritise(hideDone, sort.value); return;
+    }
+    board.append(toolbar);
     state.columns.forEach(col => {
       if (hideDone && col.id === 'done') return;
-      const items = state.tasks.filter(t => t.column === col.id && filtered(t)), shut = collapsed.has(col.id);
+      const items = displayTasks(state.tasks.filter(t => t.column === col.id && filtered(t))), shut = collapsed.has(col.id);
       const sec = el('section', 'lsec'); sec.dataset.col = col.id;
       const head = el('button', 'lhead'); head.setAttribute('aria-expanded', String(!shut));
       head.append(el('span', 'spill', col.name), el('span', 'ui-count', String(items.length)), el('span', 'spacer'), el('span', 'caret', shut ? '▸' : '▾'));
@@ -1952,6 +1998,61 @@ if (typeof window !== 'undefined') (() => {
       if (!shut) { const sc = el('div', 'tscroll'); if (items.length) sc.append(tableOf(items, 'l:' + col.id)); else sc.append(emptyNote('Nothing here.', 'list')); sec.append(addRow(col.id), sc); }
       board.append(sec);
     });
+  }
+
+  function renderPrioritise(hideDone, mode) {
+    const all = priorityOrder(state.tasks), rank = new Map(all.map((t, i) => [t.id, i + 1]));
+    let items = all.filter(t => filtered(t) && !(hideDone && isDoneTask(t)));
+    const tie = (a, b) => rank.get(a.id) - rank.get(b.id);
+    if (mode === 'score') items.sort((a, b) => (taskScore(b) ?? -1) - (taskScore(a) ?? -1) || tie(a, b));
+    if (mode === 'due') items.sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || tie(a, b));
+    if (mode === 'newest') items.sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')) || tie(a, b));
+    const box = el('div', 'prioritise-table'), header = el('div', 'prioritise-head');
+    ['Rank', 'Task', 'Value', 'Effort', 'Score', 'Status & assignment'].forEach(s => header.append(el('span', null, s))); box.append(header);
+    const visible = items.map(t => t.id);
+    capList('prioritise', items, t => {
+      const row = el('article', 'prioritise-row'); row.dataset.listTask = t.id;
+      const pos = visible.indexOf(t.id), ordering = el('div', 'prioritise-rank'); ordering.append(el('span', null, String(rank.get(t.id))));
+      [-1, 1].forEach(dir => {
+        const label = dir < 0 ? 'Move up' : 'Move down', b = ui.button({ label: dir < 0 ? '↑' : '↓', size: 'sm', onClick: () => movePriority(t.id, visible[pos + dir], dir) });
+        b.setAttribute('aria-label', `${label}: ${t.title}`); b.dataset.listControl = dir < 0 ? 'up' : 'down'; b.disabled = ro || mode !== 'manual' || pos + dir < 0 || pos + dir >= visible.length;
+        b.title = mode !== 'manual' ? 'Choose Manual order to prioritise' : label; ordering.append(b);
+      });
+      const task = el('div', 'prioritise-task'), title = ui.button({ label: `#${t.num} ${t.title}`, variant: 'ghost', onClick: () => openCard(t.id) }); title.dataset.listControl = 'open'; task.append(title);
+      const meta = el('div', 'prioritise-meta'); if (t.client) meta.append(clientTag(t)); if (t.due) meta.append(duePill(t)); meta.append(...labelTags(t, 2)); task.append(meta);
+      const mini = el('span', 'prioritise-score-mini', 'Score ' + (taskScore(t) === null ? '—' : Number(taskScore(t).toFixed(2)))); meta.append(mini);
+      const value = prioritySelect(t, 'value', [['', '—'], ['1', '1 · Small'], ['2', '2'], ['3', '3 · Useful'], ['4', '4'], ['5', '5 · Major']]);
+      const effort = prioritySelect(t, 'effort', [['', '—'], ...Object.entries(effortWeights).map(([s, w]) => [s, `${s} · ${w}`])]);
+      const score = el('div', 'prioritise-score', taskScore(t) === null ? '—' : taskScore(t).toFixed(2).replace(/0$/, '').replace(/\.0$/, ''));
+      score.setAttribute('aria-label', `Score: ${score.textContent}`);
+      const actions = taskQuickActions(t); actions.querySelectorAll('button, select').forEach((c, i) => { c.dataset.listControl = 'action' + i; if (ro) c.disabled = true; });
+      const expand = ui.button({ label: prioritiseExpanded.has(t.id) ? 'Less' : 'Scoring', size: 'sm', variant: 'ghost', onClick: () => { prioritiseExpanded.has(t.id) ? prioritiseExpanded.delete(t.id) : prioritiseExpanded.add(t.id); render(); } });
+      expand.classList.add('prioritise-expand'); expand.dataset.listControl = 'expand'; expand.setAttribute('aria-expanded', String(prioritiseExpanded.has(t.id))); task.append(expand);
+      row.classList.toggle('is-expanded', prioritiseExpanded.has(t.id)); row.append(ordering, task, value, effort, score, actions);
+      row.addEventListener('keydown', e => { if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && mode === 'manual' && !ro) { const dir = e.key === 'ArrowUp' ? -1 : 1; if (visible[pos + dir]) { e.preventDefault(); movePriority(t.id, visible[pos + dir], dir); } } });
+      return row;
+    }, box);
+    if (!items.length) box.append(emptyNote('No tasks match these filters.', 'list'));
+    $('board').append(box);
+  }
+  function prioritySelect(t, field, opts) {
+    const cell = el('div', 'prioritise-' + field), label = el('label', null, field === 'value' ? 'Value' : 'Effort'), select = el('select');
+    select.id = `prioritise-${field}-${t.id}`; label.htmlFor = select.id; select.dataset.listControl = field; select.setAttribute('aria-label', `${field === 'value' ? 'Value' : 'Effort'} for task #${t.num}`);
+    opts.forEach(([v, name]) => { const o = el('option', null, name); o.value = v; select.append(o); }); select.value = t[field] == null ? '' : String(t[field]); select.disabled = ro;
+    select.title = field === 'value' ? 'Value towards your goals: 1 small benefit, 3 useful, 5 major benefit. Blank means not scored.' : 'Relative effort: XS 1, S 2, M 3, L 5, XL 8. Blank means not estimated.';
+    select.onchange = () => { const v = select.value; mutate(n => { const card = n.tasks.find(x => x.id === t.id); if (!card) return; if (!v) delete card[field]; else card[field] = field === 'value' ? Number(v) : v; stamp(card); }, `Set ${field}: ${t.title}`, [t.id]); };
+    cell.append(label, select); return cell;
+  }
+  function movePriority(id, neighbourId, dir) {
+    if (!neighbourId || ro) return;
+    // Replay the relative move on every latest revision, not an obsolete numeric position.
+    mutate(n => {
+      const task = n.tasks.find(t => t.id === id), neighbour = n.tasks.find(t => t.id === neighbourId); if (!task || !neighbour) return;
+      ensurePriorityRanks(n); const peers = priorityOrder(n.tasks.filter(t => t.id !== id)); let at = peers.findIndex(t => t.id === neighbourId); if (dir > 0) at++;
+      let lower = at ? peers[at - 1].priority_rank : null, upper = at < peers.length ? peers[at].priority_rank : null;
+      if (lower !== null && upper !== null && lower >= upper) { let prev = null; peers.forEach(t => { t.priority_rank = keyBetween(prev, null); prev = t.priority_rank; }); lower = at ? peers[at - 1].priority_rank : null; upper = at < peers.length ? peers[at].priority_rank : null; }
+      task.priority_rank = keyBetween(lower, upper); stamp(task);
+    }, `Prioritise: ${titleOf(id)}`, [id], null, { recheck: true });
   }
 
   function renderSched() {
@@ -4096,7 +4197,7 @@ if (typeof window !== 'undefined') (() => {
   // The fields a proposal may change, the same lists as keeptrack.py (TASK_CHANGE_FIELDS, PERSON_CHANGE_FIELDS, TOUCH_CHANGE_FIELDS).
   // `propose` checks them, but a proposal file can be written by hand: accept checks them again and refuses anything else (claim, num, id…).
   const CHANGE_FIELDS = {
-    task: ['title', 'column', 'client', 'project', 'contact', 'priority', 'due', 'labels', 'owner', 'assignees', 'details', 'links', 'contacts', 'todos', 'comments'],
+    task: ['title', 'column', 'client', 'project', 'contact', 'priority', 'due', 'labels', 'owner', 'assignees', 'details', 'links', 'contacts', 'todos', 'comments', 'value', 'effort', 'priority_rank'],
     person: ['name', 'company', 'role', 'email', 'phone', 'linkedin', 'github', 'emails', 'phones', 'stage', 'value', 'source', 'notes', 'next', 'due', 'next_due', 'links', 'comments'],
     touch: ['text', 'channel', 'at', 'source_id', 'source_message_ids', 'next', 'due', 'next_due'] };
   const PROPOSAL_KINDS = ['task.create', 'task.update', 'person.upsert', 'contact.touch'];
@@ -4105,15 +4206,18 @@ if (typeof window !== 'undefined') (() => {
     'linkedin', 'github', 'stage', 'value', 'source', 'notes', 'next', 'text', 'channel', 'at', 'source_id'];
   const DATE_FIELDS = ['due', 'next_due'], STR_LIST_FIELDS = ['labels', 'assignees', 'source_message_ids'];
   const DICT_LIST_FIELDS = ['links', 'contacts', 'todos', 'comments', 'emails', 'phones'];
-  function changeValueRefusal(change) {
+  function changeValueRefusal(change, kind) {
     for (const [key, value] of Object.entries(change)) {
-      if (STR_FIELDS.includes(key) && typeof value !== 'string') return `change.${key} must be text`;
+      if (STR_FIELDS.includes(key) && !(key === 'value' && kind.startsWith('task.')) && typeof value !== 'string') return `change.${key} must be text`;
       if (DATE_FIELDS.includes(key) && (typeof value !== 'string' || (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)))) return `change.${key} must be a YYYY-MM-DD date or empty`;
       if (STR_LIST_FIELDS.includes(key) && (!Array.isArray(value) || !value.every(x => typeof x === 'string'))) return `change.${key} must be a list of text`;
       if (DICT_LIST_FIELDS.includes(key) && (!Array.isArray(value) || !value.every(isObj))) return `change.${key} must be a list of objects`;
       if ((key === 'comments' || key === 'todos') && !value.every(x => typeof x.text === 'string' && x.text.trim())) return `each change.${key} item needs text`;
       if (key === 'links' && !value.every(x => typeof x.url === 'string' && x.url.trim())) return 'each change.links item needs a url';
       if (key === 'priority' && !['high', 'medium', 'low'].includes(value)) return 'change.priority must be high, medium or low';
+      if (kind.startsWith('task.') && key === 'value' && value !== null && !(Number.isInteger(value) && value >= 1 && value <= 5)) return 'change.value must be an integer 1–5 or null';
+      if (kind.startsWith('task.') && key === 'effort' && ![null, 'XS', 'S', 'M', 'L', 'XL'].includes(value)) return 'change.effort must be XS, S, M, L, XL or null';
+      if (key === 'priority_rank' && !validRank(value)) return 'change.priority_rank must be a valid fractional rank';
     }
     return '';
   }
@@ -4122,7 +4226,7 @@ if (typeof window !== 'undefined') (() => {
     if (!isObj(change) || !Object.keys(change).length) return 'Not saved: the proposal has no valid change.';
     const ok = CHANGE_FIELDS[kind.startsWith('task.') ? 'task' : kind === 'person.upsert' ? 'person' : 'touch'], bad = Object.keys(change).filter(k => !ok.includes(k));
     if (bad.length) return `Not saved: a ${kind} proposal may not set ${bad.join(', ')}. Ignore it, or fix the proposal file.`;
-    const why = changeValueRefusal(change);
+    const why = changeValueRefusal(change, kind);
     return why ? `Not saved: ${why}. Ignore it, or fix the proposal file.` : '';
   }
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
@@ -4201,6 +4305,7 @@ if (typeof window !== 'undefined') (() => {
         due: change.due || '', labels: clone(change.labels || []), assignees, details: change.details || '', links: clone(change.links || []), contacts: clone(change.contacts || []),
         todos: [], comments: [], history: [], claim: null, created: ts, createdBy: inboxMe(), updated: ts, updatedBy: inboxMe() };
       appendUnique(t, 'todos', change.todos || []); appendUnique(t, 'comments', change.comments || []);
+      ['value', 'effort', 'priority_rank'].forEach(k => { if (Object.hasOwn(change, k)) t[k] = clone(change[k]); });
       histAdd(t, `created from proposal ${p.id}`); n.tasks.push(t); return;
     }
     if (p.kind === 'person.upsert' && !p.target) {

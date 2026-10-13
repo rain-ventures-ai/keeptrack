@@ -18,6 +18,18 @@ Filters: client, **project**, assignee (including "Claimed by an agent"), label,
 
 ## Split storage (schema 4)
 
+### Prioritise List (optional)
+
+Switch List to **Prioritise** for a board-wide priority order and inline scoring. Standard List remains
+available; switching back does not delete the optional task fields. Kanban order is independent.
+Value is 1–5: agree anchors with your team (for example 1 = minor benefit, 3 = meaningful goal progress,
+5 = major near-term goal impact). Effort is XS/S/M/L/XL with relative weights 1/2/3/5/8.
+Score is value divided by effort, not a promise or automatic priority. Missing inputs show unscored.
+Use manual order for judgement, or explicitly sort by score. Move controls only apply in manual order;
+filtered moves use neighbouring visible tasks while leaving the other tasks' relative order intact.
+`task-set <id> --value 4 --effort M` edits scoring from the CLI; empty arguments clear either input.
+Existing boards need no migration. Turning the layout off is the safe rollback, not restoring old data.
+
 Schema v4 keeps each card and CRM person in a separate file:
 
 ```text
