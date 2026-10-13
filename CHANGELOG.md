@@ -4,6 +4,14 @@ All notable changes to the **board kit** (`board/kit/`) and **board data schema*
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Kit v51 — 2026-10-13
+
+The heartbeat hook refreshes only its own agent's claims; re-claiming an attended claim unattended counts
+against `max_agent_claims`; the "limit full" note prints once. Emails are ASCII only (CLI and web board).
+Text cleaning keeps ZWJ emoji sequences whole, and `person` output is cleaned. A non-object contact no longer
+crashes `today`, `people` or `doctor` (`PERSON_NOT_OBJECT`); `person-add`/`person-set` warn on a shared login.
+No schema migration.
+
 ## Kit v50 — 2026-10-13
 
 CLI `list --sort score|priority` exposes estimates, derived score and board-wide rank.

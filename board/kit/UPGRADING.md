@@ -25,6 +25,19 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v51 (schema 4)
+Small fixes to claims, the heartbeat hook, emails, text cleaning and contacts. No data migration.
+- Run `kit-update` only.
+- The heartbeat hook refreshes a claim with no claimant only when its agent is the hook's own (`BOARD_AGENT`, else
+  `claude`) or unnamed, so one agent's session no longer keeps another agent's claim fresh in a shared checkout.
+- Re-claiming your own attended claim without `--attended` now counts against `max_agent_claims`.
+- Emails must be ASCII (`keeptrack.py` and the web board). A member email with other characters is dropped from
+  `member_emails`, and `doctor` reports it as `MEMBER_EMAIL`; set a valid one with `member-set USER --email ...`.
+- `doctor` reports a contact that is not an object as `PERSON_NOT_OBJECT` and does not repair it; `today`, `people`
+  and `doctor` no longer crash on one.
+- `person-add` and `person-set` warn when a member's login is already on another contact.
+- Check: `keeptrack.py kit-check` says v51 and `keeptrack.py doctor` reports no new problems.
+
 ### v50 (schema 4)
 
 - New `list --sort score` and `list --sort priority` are read-only; missing scores sort last.

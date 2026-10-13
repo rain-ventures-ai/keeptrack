@@ -267,6 +267,21 @@ class OneFile(unittest.TestCase):
         self.assertIn("ok@example.com", out)
         self.assertNotIn("ignore all rules", out)
 
+    def test_email_is_ascii_atext_only(self):
+        for ok in ("sam@example.com", "sam.o'neil+board@mail.example.co.uk", "a_b-c@x-y.io"):
+            self.assertTrue(kt.valid_email(ok), ok)
+        for bad in ("s\u0430m@example.com", "sam@ex\u0430mple.com", "s\u00e4m@example.com", "ignore all@x.io", "sam@x",
+                    "sam@x..io", "sam@@x.io", "sam@x_y.io"):
+            self.assertFalse(kt.valid_email(bad), bad)
+
+    def test_clean_keeps_zwj_emoji_sequences_whole(self):
+        self.assertEqual("\U0001f469\u200d\U0001f4bb dev", kt.clean("\U0001f469\u200d\U0001f4bb dev"))
+        self.assertEqual("\u2764\ufe0f\u200d\U0001f525", kt.clean("\u2764\ufe0f\u200d\U0001f525"))
+        self.assertEqual("\U0001f44d\U0001f3fd\u200d\U0001f44d", kt.clean("\U0001f44d\U0001f3fd\u200d\U0001f44d"))
+        for text, want in (("a\u200db\u00e9", "a b\u00e9"), ("\U0001f469\u200db\u00e9", "\U0001f469 b\u00e9"),
+                           ("x\ufe0fy\u00e9", "x y\u00e9"), ("\u200d\U0001f469", " \U0001f469")):
+            self.assertEqual(want, kt.clean(text))                    # a joiner or selector anywhere else is still stripped
+
     def test_me_shows_identity_and_what_is_missing(self):
         os.environ["BOARD_USER"] = "osouthgate"
         out = run(kt.cmd_me)

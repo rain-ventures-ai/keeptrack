@@ -203,7 +203,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 50  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 51  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1686,6 +1686,15 @@ def hook_claimant_key():
     return session_hash(sid) if isinstance(sid, str) and sid else ""
 
 
+def hook_agent_matches(entry):
+    """The heartbeat hook runs in Claude Code, so its agent is BOARD_AGENT, else 'claude'. A record entry with no claimant
+    hash is beaten only if its agent is that one, or unnamed ('' or the default 'agent', as older kits wrote): in a shared
+    checkout a dead Codex run's claim (agent 'codex') is never kept fresh by a Claude session's hook."""
+    mine = (os.environ.get("BOARD_AGENT") or "claude").strip().lower()
+    agent = str(entry.get("agent") or "").strip().lower()
+    return agent in ("", "agent", mine)
+
+
 def hook_input():
     """The JSON Claude Code hands a hook on stdin, or '' (a terminal, nothing within a second, or no stdin)."""
     try:
@@ -2117,7 +2126,9 @@ def do_claim(a, tid, data):
     mine = {sid} | my_sessions(a, t.get("id"))   # this run's id, and without an explicit one the clone's recorded sessions
     if t.get("claim") and t["claim"].get("session_id") in mine:
         sid = t["claim"]["session_id"]   # re-claiming its own card keeps the id the claim already carries
-    if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") in mine and cs == "running"):
+    # an attended claim never counted: the same session re-claiming it unattended takes the check too
+    if not attended(a) and not (t.get("claim") and t["claim"].get("session_id") in mine and cs == "running"
+                                and not t["claim"].get("attended")):
         busy = busy_over_limit(data, t)
         if busy:
             sys.exit(f"refused: {limit_message(data, busy)} (raise settings.max_agent_claims, or use --attended for a session a person drives)")
@@ -2586,29 +2597,31 @@ def cmd_auto_heartbeat(a):
         _REC.clear(); _REC["on"] = True   # one read of the record for this beat, shared with the mutate below
         info = claim_record()   # None for a record git tracks: it came with the repo, so it names no card of this clone's
         only = explicit_session()   # BOARD_SESSION in the hook's environment: that session's cards only
-        key = hook_claimant_key()   # this Claude session's own cards only; entries with no claimant (older kits, no Claude
-        # session at claim time) are beaten by any hook in the clone, as before
+        key = hook_claimant_key()   # this Claude session's own cards only; an entry with no claimant (older kits, no Claude
+        # session at claim time) is beaten only when its agent is this hook's (hook_agent_matches): never a Codex run's claim
         due = time.time() - HEARTBEAT_EVERY
         cards = {k: v for k, v in record_cards(info).items() if not v.get("by_person") and usable_session(v.get("session"))
-                 and (not only or v.get("session") == only) and (not key or not v.get("claimant") or v.get("claimant") == key)
+                 and (not only or v.get("session") == only)
+                 and (v.get("claimant") == key if key and v.get("claimant") else hook_agent_matches(v))
                  and not (isinstance(v.get("beat_at"), (int, float)) and v["beat_at"] > due)}
         if not cards:
             return  # a person drives this session, no card is active, or this session's cards had their beat
-        gone, beaten = [], []
+        gone, beaten, full = [], [], []
 
         def fn(data):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
-            gone.clear(); beaten.clear()
+            gone.clear(); beaten.clear(); full.clear()
             for tid, v in cards.items():   # every card this session (or the clone's, or BOARD_SESSION's) claimed and still holds
                 t = next((x for x in data.get("tasks", []) if x.get("id") == tid), None); c = (t or {}).get("claim")
                 if not c or c.get("status") == "done" or c.get("session_id") != v.get("session"):
                     gone.append(tid); continue  # released, finished, taken over or deleted: forget the card, keep the clone's session
                 if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
-                    print(f"keeptrack: claim {tid} is stale and the board's agent limit is full; it stays stale "
-                          "(another session may take the card)", file=sys.stderr)
-                    continue
+                    full.append(tid); continue   # said once, after the save: a lost race re-runs fn
                 c["heartbeat_at"] = now(); t["updated"] = now(); beaten.append(tid)
         mutate(fn, "Agent heartbeat: " + ", ".join(cards))
+        for tid in full:
+            print(f"keeptrack: claim {tid} is stale and the board's agent limit is full; it stays stale "
+                  "(another session may take the card)", file=sys.stderr)
         at = int(time.time())
 
         def change(entries):   # the record as it is now: only the entries this beat saw, and only while they are the same claim
@@ -2953,6 +2966,10 @@ def doctor_board(fix=False):
     data["tasks"], data["contacts"], data["projects"] = tasks, people, projects
     if split and proposals:
         data["proposals"] = proposals
+    bad_people = [p for p in people if not isinstance(p, dict)]   # a hand-edited null, string or list: reported, never read
+    for p in bad_people:
+        problem("PERSON_NOT_OBJECT", "tasks.json", f"A CRM person entry is not an object: {clean(repr(p), 80)}; remove or fix it by hand.")
+    people = [p for p in people if isinstance(p, dict)]
 
     ids, duplicate_ids = {}, False
     for kind, items in (("task", tasks), ("person", people), ("project", projects), ("proposal", proposals if split else [])):
@@ -2984,7 +3001,7 @@ def doctor_board(fix=False):
         for rel, obj in parsed.items():
             folder = ("cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else
                       "projects" if rel.startswith("projects/") else "proposals" if rel.startswith("proposals/") else None)
-            if folder and rel.endswith(".json") and obj.get("id") and rel != f"{folder}/{obj['id']}.json":
+            if folder and rel.endswith(".json") and isinstance(obj, dict) and obj.get("id") and rel != f"{folder}/{obj['id']}.json":
                 problem("FILE_NAME", rel, f"The file name does not match id {obj['id']}.")
                 if f"{folder}/{obj['id']}.json" in state["files"]:
                     rename_conflict = True
@@ -3106,7 +3123,7 @@ def doctor_board(fix=False):
             if not valid_email(e.strip() if isinstance(e, str) else e):
                 problem("MEMBER_EMAIL", "tasks.json", f"Board member {gh_user!r} has an invalid email address {e!r}.")
         # The CRM person is optional: only suggest one while the board shows the CRM.
-        same = [p for p in data.get("contacts", []) if gh_user and str(p.get("github") or "").lower() == str(gh_user).lower()]
+        same = [p for p in people if gh_user and str(p.get("github") or "").lower() == str(gh_user).lower()]
         if len(same) > 1:
             problem("MEMBER_PERSON_DUP", "tasks.json", f"{len(same)} CRM people share board member {gh_user!r}'s GitHub login, so none "
                     "counts as their own record and all stay contacts; keep it on one (person-set <id> --github '').")
@@ -3134,7 +3151,7 @@ def doctor_board(fix=False):
         published = kit_published()   # None: can't tell a typo from a newer kit: leave it (and the board) alone
         if published is not None and min_kit > published:
             typo_kit = max(needed, min(published, KIT_VERSION))
-    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)) and (min_kit <= KIT_VERSION or typo_kit):
+    if fix and not (isinstance(version, int) and version > SCHEMA) and not (split and (duplicate_ids or rename_conflict)) and not bad_people and (min_kit <= KIT_VERSION or typo_kit):
         before = json.loads(json.dumps(data))
         if typo_kit:
             data["settings"]["min_kit"] = typo_kit
@@ -3161,7 +3178,7 @@ def doctor_board(fix=False):
             for rel, obj in parsed.items():
                 folder = ("cards" if rel.startswith("cards/") else "people" if rel.startswith("people/") else
                           "projects" if rel.startswith("projects/") else "proposals" if rel.startswith("proposals/") else None)
-                canonical = f"{folder}/{obj.get('id')}.json" if folder and obj.get("id") else rel
+                canonical = f"{folder}/{obj.get('id')}.json" if folder and isinstance(obj, dict) and obj.get("id") else rel
                 if folder and rel != canonical and canonical not in state["files"]:
                     fixes.append(f"renamed {rel} to {canonical}")
         # Invalid JSON entries are removed from the change tracker. They remain
@@ -3699,8 +3716,8 @@ def person_for_github(data, github):
     g = (github or "").lower()
     if not g:
         return None
-    for p in data.get("contacts", []):
-        if (p.get("github") or "").lower() == g:
+    for p in data.get("contacts") or []:
+        if isinstance(p, dict) and str(p.get("github") or "").lower() == g:
             return p
     return None
 
@@ -3896,11 +3913,21 @@ def member_of(data, p):
     return own_member(p, member_logins(data))
 
 
+def next_due(p):
+    """A person's next-step date as a string ('' for none): a hand-edited number or list never crashes a sort or a compare."""
+    return str(p.get("next_due") or "")
+
+
+def crm_people(data):
+    """The board's CRM people that are objects: a hand-edited null or string entry is skipped here (doctor reports it)."""
+    return [p for p in (data.get("contacts") or []) if isinstance(p, dict)]
+
+
 def person_line(p, data=None, ml=None, today=None):
     m = own_member(p, ml if ml is not None else member_logins(data)) if (data or ml) else None
     if m:
         return f"{clean(p.get('id', ''), 40)}  {clean(p.get('name', ''), 120)}  [board member @{clean(m.get('github'), 40)}: own record, not a contact]"
-    due = p.get("next_due") or ""
+    due = next_due(p)
     ti = (today or board_today(data)).isoformat() if due else ""
     flag = " OVERDUE" if due and due < ti else (" TODAY" if due == ti else "")
     who = ", ".join(clean(x, 80) for x in (p.get("role"), p.get("company")) if x)
@@ -3940,6 +3967,23 @@ def sync_person_methods(p):
     return p
 
 
+_NOTED = set()   # stderr notes already printed by this run
+
+
+def note_shared_member_login(data, p, login):
+    """A stderr note when p now shares a board member's login with another CRM person: then neither counts as the
+    member's own record (own_member), so both show as contacts and doctor warns MEMBER_PERSON_DUP."""
+    g = str(login).lower()
+    if not any(isinstance(m, dict) and str(m.get("github") or "").lower() == g for m in (data.get("people") or [])):
+        return
+    others = [x for x in crm_people(data) if x is not p and str(x.get("github") or "").lower() == g]
+    if others and ("login", g) not in _NOTED:   # once per run: a save that lost a race re-runs set_fields
+        _NOTED.add(("login", g))
+        print(f"note: {clean(others[0].get('name') or others[0].get('id') or '?', 80)} already carries board member "
+              f"@{clean(login, 40)}'s login, so neither counts as their own record now; keep it on one person "
+              "(person-set <id> --github '')", file=sys.stderr)
+
+
 def set_fields(data, p, a):
     changed = []
     sync_person_methods(p)
@@ -3947,6 +3991,8 @@ def set_fields(data, p, a):
         v = getattr(a, k, None)
         if v is not None and v != p.get(k, ""):
             p[k] = v; changed.append(f"{k}: {v or 'cleared'}")
+            if k == "github" and v:
+                note_shared_member_login(data, p, v)
     for kind in ("email", "phone"):
         v = getattr(a, kind, None)
         if v is None or v == p.get(kind, ""):
@@ -3978,13 +4024,13 @@ def set_fields(data, p, a):
 
 
 def cmd_people(a):
-    data, _ = load(); people = data.get("contacts", [])
+    data, _ = load(); people = crm_people(data)
     if a.stage:
         st = check_stage(data, a.stage); people = [p for p in people if p.get("stage") == st]
     if a.q:
         q = a.q.lower(); people = [p for p in people if q in json.dumps(p).lower()]
     ml = member_logins(data); t = board_today(data); by_who, _ = waiting_index(data)
-    for p in sorted(people, key=lambda p: p.get("name", "").lower()):
+    for p in sorted(people, key=lambda p: str(p.get("name") or "").lower()):
         n = len(person_waits(p, by_who, ml))
         print(person_line(p, ml=ml, today=t) + (f"  [waiting on them: {n}]" if n else ""))
     if not people: print("(nobody)")
@@ -3996,15 +4042,15 @@ def cmd_today(a):
     print(f"Today is {ti} ({zone.key})" if zone else f"Today is {ti} (host clock; set a time zone with member-set --timezone Area/City)"); wk = (t + dt.timedelta(days=7)).isoformat()
     closed = {s.lower() for s in ("won", "lost")}
     ml = member_logins(data)
-    open_ = [p for p in data.get("contacts", []) if str(p.get("stage", "")).lower() not in closed and not own_member(p, ml)]   # members are never follow-ups
-    groups = [("OVERDUE", [p for p in open_ if p.get("next_due") and p["next_due"] < ti]),
-              ("TODAY", [p for p in open_ if p.get("next_due") == ti]),
-              ("NEXT 7 DAYS", [p for p in open_ if p.get("next_due") and ti < p["next_due"] <= wk]),
-              ("NO NEXT STEP", [p for p in open_ if not p.get("next_due")])]
+    open_ = [p for p in crm_people(data) if str(p.get("stage", "")).lower() not in closed and not own_member(p, ml)]   # members are never follow-ups
+    groups = [("OVERDUE", [p for p in open_ if next_due(p) and next_due(p) < ti]),
+              ("TODAY", [p for p in open_ if next_due(p) == ti]),
+              ("NEXT 7 DAYS", [p for p in open_ if next_due(p) and ti < next_due(p) <= wk]),
+              ("NO NEXT STEP", [p for p in open_ if not next_due(p)])]
     for title, ps in groups:
         if ps:
             print(f"{title} ({len(ps)})")
-            for p in sorted(ps, key=lambda p: (p.get("next_due") or "", p.get("name", ""))):
+            for p in sorted(ps, key=lambda p: (next_due(p), str(p.get("name") or ""))):
                 print("  " + person_line(p, today=t))
     tasks = [x for x in data.get("tasks", []) if x.get("due") and x["due"] <= ti and x.get("column") != "done"]
     due_ids = {x.get("id") for x in tasks}   # a card both due and waiting stays in TASKS DUE: a deadline is still a deadline
@@ -4032,20 +4078,21 @@ def cmd_today(a):
 def cmd_person(a):
     data, _ = load(); p = find_person(data, a.ref)
     print(person_line(p, data))
-    for k in ("role", "company", "value", "source"):
-        if p.get(k): print(f"  {k}: {p[k]}")
-    for x in person_methods(p, "email"): print(f"  email ({x['label']}): {x['value']}")
-    for x in person_methods(p, "phone"): print(f"  phone ({x['label']}): {x['value']}")
-    if p.get("notes"): print("  notes:", p["notes"])
-    lt = last_touch(p); print(f"  last contact: {lt[:10] if lt else 'never'}")
-    for l in person_links(p): print(f"  profile/reference link: {l.get('title') or l['url']}  {l['url']}")
+    for k in ("role", "company", "value", "source"):   # board data: every field printed through clean()
+        if p.get(k): print(f"  {k}: {clean(p[k], 160)}")
+    for x in person_methods(p, "email"): print(f"  email ({clean(x['label'], 40)}): {clean(x['value'], 160)}")
+    for x in person_methods(p, "phone"): print(f"  phone ({clean(x['label'], 40)}): {clean(x['value'], 160)}")
+    if p.get("notes"): print("  notes:", clean_lines(p["notes"], "    "))
+    lt = str(last_touch(p)); print(f"  last contact: {clean(lt[:10], 10) if lt else 'never'}")
+    for l in person_links(p): print(f"  profile/reference link: {clean(l.get('title') or l['url'], 160)}  {clean(l['url'], 500)}")
     info = (data.get("client_info") or {}).get(p.get("company") or "", {})
     resources = info.get("links", [])
-    for l in resources: print(f"  file/folder resource ({p['company']}): {l.get('title') or l['url']}  {l['url']}")
+    for l in resources: print(f"  file/folder resource ({clean(p['company'], 160)}): {clean(l.get('title') or l['url'], 160)}  {clean(l['url'], 500)}")
     if resources: print("  access: cloud resources need the matching connector/plugin/MCP and account; local paths need a session on that computer. Ask the user if access fails.")
     for c in p.get("comments", []):
-        print(f"  [{c['at'][:16]}] {c.get('channel', 'note')}{' DRAFT (not sent) ' + c['id'] if c.get('draft') else ''} {c.get('by', '?')}: {c['text']}")
-        if c.get("source_message_ids"): print("    source messages: " + ", ".join(c["source_message_ids"]))
+        print(f"  [{clean(str(c['at'])[:16], 16)}] {clean(c.get('channel', 'note'), 40)}{' DRAFT (not sent) ' + clean(c['id'], 40) if c.get('draft') else ''} "
+              f"{clean(c.get('by', '?'), 80)}: {clean_lines(c['text'], '    ')}")
+        if c.get("source_message_ids"): print("    source messages: " + ", ".join(clean(x, 200) for x in c["source_message_ids"]))
     tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
     for x in tasks: print("  task: " + line(data, x))
     by_who, cards = waiting_index(data)
@@ -4778,9 +4825,10 @@ def cmd_members(a):
 # A member record is the person's identity on the board: GitHub login, name, work email address(es) and a time
 # zone. It is not a CRM person (those are optional and come and go with the CRM section); the upgrade owner's record
 # can't be removed. Agents read it to recognise the owner's own mail and to read times in their zone.
-_EMAIL_BAD = "@\\s<>,;\\x00-\\x1f\\x7f-\\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f"
 EMAIL_MAX = 254
-EMAIL_RE = re.compile(f"[^{_EMAIL_BAD}]+@[^{_EMAIL_BAD}]+\\.[^{_EMAIL_BAD}]+")
+# ASCII only: the local part is RFC 5322 atext and dots, the domain is dot-separated letters, digits and hyphens, so an
+# "address" can carry no look-alike letters, spaces or invisible characters. The web board's EMAIL_RE is the same rule.
+EMAIL_RE = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 
 
 def check_email(e):
@@ -4851,6 +4899,20 @@ def unsafe_char(c):
             or "\ufe00" <= c <= "\ufe0f" or "\U000e0100" <= c <= "\U000e01ef" or c in _FILLERS)
 
 
+def _is_emoji(c):
+    import unicodedata
+    return bool(c) and (unicodedata.category(c) == "So" or "\U0001f3fb" <= c <= "\U0001f3ff")   # symbols, skin tones
+
+
+def _emoji_joinable(out, c, nxt):
+    """clean(): keep U+FE0F (emoji presentation) right after an emoji, and U+200D (zero width joiner) only between two
+    emoji (an optional U+FE0F after the first); every other use of either is still stripped."""
+    if c == "\ufe0f":
+        return _is_emoji(out[-1])
+    before = out[-2] if out[-1] == "\ufe0f" and len(out) > 1 else out[-1]
+    return _is_emoji(before) and _is_emoji(nxt)
+
+
 def clean(text, limit=None):
     """Board data printed to a terminal or an agent: no control, zero-width, bidi or other invisible characters,
     optionally capped."""
@@ -4859,8 +4921,10 @@ def clean(text, limit=None):
         t = UNSAFE_TEXT.sub(" ", t)
     else:   # a run of unsafe characters becomes one space, as UNSAFE_TEXT does
         out, prev = [], False
-        for c in t:
+        for i, c in enumerate(t):
             bad = unsafe_char(c)
+            if bad and c in "\u200d\ufe0f" and out and _emoji_joinable(out, c, t[i + 1:i + 2]):
+                bad = False   # a ZWJ emoji sequence (👩‍💻, ❤️‍🔥) stays whole: visible on both sides, so it hides nothing
             if not bad:
                 out.append(c)
             elif not prev:
@@ -4868,6 +4932,11 @@ def clean(text, limit=None):
             prev = bad
         t = "".join(out)
     return t[:limit] if limit else t
+
+
+def clean_lines(text, indent=""):
+    """clean() line by line, keeping the line breaks of multi-line text (notes, comments); later lines get indent."""
+    return ("\n" + indent).join(clean(x) for x in str(text).splitlines())
 
 
 def valid_email(e):
