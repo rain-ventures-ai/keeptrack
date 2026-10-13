@@ -170,8 +170,10 @@ let base;
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await page.screenshot({ path: '/tmp/prioritise-' + width + '-light.png', fullPage: true });
       await page.evaluate(() => window.kbTheme.set('dark'));
+      await page.waitForTimeout(300); // wait for token-driven button transitions before visual proof
       await page.screenshot({ path: '/tmp/prioritise-' + width + '-dark.png', fullPage: true });
       await page.evaluate(() => window.kbTheme.set('light'));
+      await page.waitForTimeout(300);
     }
     // Mobile controls are disclosed, with no horizontal scrolling.
     await page.setViewportSize({ width: 350, height: 780 });
