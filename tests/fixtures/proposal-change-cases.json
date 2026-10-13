@@ -23,6 +23,13 @@
     {"name": "link without url", "kind": "task.update", "change": {"links": [{"title": "x"}]}, "ok": false},
     {"name": "bad priority", "kind": "task.update", "change": {"priority": "urgent"}, "ok": false},
     {"name": "phones not objects", "kind": "person.upsert", "change": {"phones": ["123"]}, "ok": false},
-    {"name": "source ids not text", "kind": "contact.touch", "change": {"source_message_ids": [1]}, "ok": false}
+    {"name": "source ids not text", "kind": "contact.touch", "change": {"source_message_ids": [1]}, "ok": false},
+    {"name": "task scoring", "kind": "task.update", "change": {"value": 5, "effort": "XS", "priority_rank": "a0"}, "ok": true},
+    {"name": "clear scoring", "kind": "task.update", "change": {"value": null, "effort": null}, "ok": true},
+    {"name": "boolean not task value", "kind": "task.update", "change": {"value": true}, "ok": false},
+    {"name": "string not task value", "kind": "task.update", "change": {"value": "5"}, "ok": false},
+    {"name": "invalid effort", "kind": "task.update", "change": {"effort": "tiny"}, "ok": false},
+    {"name": "invalid board rank", "kind": "task.update", "change": {"priority_rank": "!"}, "ok": false},
+    {"name": "CRM money value stays text", "kind": "person.upsert", "change": {"value": "5000"}, "ok": true}
   ]
 }

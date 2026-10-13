@@ -1,0 +1,14 @@
+{
+  "version": 3,
+  "settings": {},
+  "people": [{"github": "alex", "name": "Alex"}],
+  "agents": ["codex"],
+  "columns": [{"id": "todo", "name": "To do"}, {"id": "done", "name": "Done"}],
+  "clients": [],
+  "labels": [],
+  "contacts": [{"id": "p_fictional", "name": "Casey Example", "stage": "New", "email": "", "phone": "", "history": [], "comments": []}],
+  "tasks": [
+    {"id": "t_scored", "num": 1, "title": "Fictional scored task", "column": "todo", "priority": "medium", "value": 4, "effort": "M", "priority_rank": "a1", "due": "", "labels": [], "assignees": [], "todos": [], "comments": [], "links": [], "contacts": [], "history": [], "created": "2026-10-13T09:00:00Z", "updated": "2026-10-13T09:00:00Z"},
+    {"id": "t_unscored", "num": 2, "title": "Fictional unscored task", "column": "done", "priority": "low", "priority_rank": "a0", "due": "", "labels": [], "assignees": [], "todos": [], "comments": [], "links": [], "contacts": [], "history": [], "created": "2026-10-13T09:00:00Z", "updated": "2026-10-13T09:00:00Z"}
+  ]
+}

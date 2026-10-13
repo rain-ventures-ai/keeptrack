@@ -13,7 +13,7 @@ NODE = r"""
 const src = require('fs').readFileSync(process.argv[1], 'utf8');
 const a = src.indexOf('  const CHANGE_FIELDS = {'), b = src.indexOf('  let inboxF = ');
 if (a < 0 || b < a) { console.error('proposalRefusal block not found in board.js'); process.exit(2); }
-const refusal = new Function('const isObj = v => !!v && typeof v === "object" && !Array.isArray(v);\n' + src.slice(a, b) + '\nreturn proposalRefusal;')();
+const refusal = new Function('validRank', 'const isObj = v => !!v && typeof v === "object" && !Array.isArray(v);\n' + src.slice(a, b) + '\nreturn proposalRefusal;')(require(process.argv[1]).validRank);
 let raw = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', x => raw += x);
 process.stdin.on('end', () => process.stdout.write(JSON.stringify(JSON.parse(raw).map(c => refusal({ kind: c.kind }, c.change)))));
 """

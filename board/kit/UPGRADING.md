@@ -25,6 +25,18 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v49 (schema 4)
+Optional Prioritise layout in List. No migration or reset of existing ordering.
+- Run `kit-update` only. Task `value` (integer 1–5), `effort` (XS/S/M/L/XL), and `priority_rank`
+  (board-wide fractional rank) are optional additive fields. Kanban `rank` stays independent.
+- Enable Prioritise from List on each browser/board. Standard List remains available. Switching back
+  hides the scoring controls without removing saved values, effort or board-wide ranks.
+- Score is derived from value divided by effort (1, 2, 3, 5, 8), never stored. It guides discussion;
+  manual rank stays the default. Missing inputs are unscored, not zero.
+- CLI: `task-set <id> --value 4 --effort M`; pass an empty string to clear either field.
+- Check: existing cards survive `kit-update`/`doctor`; status changes and archive/restore retain
+  board-wide rank. Do not restore an old backup to disable the trial: it could remove subsequent work.
+
 ### v48 (schema 4)
 Owner-bound durable routine checkpoints through the CLI. No board-data migration.
 - Run `kit-update` only. The new `checkpoint <routine-id> show|save` commands read the register's existing

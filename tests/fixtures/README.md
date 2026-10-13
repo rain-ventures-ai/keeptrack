@@ -1,5 +1,8 @@
 # Frozen board fixtures
 
+`v3_prioritise` freezes optional task value/effort/board-wide ranks. Tests verify upgrade,
+split migration, ordinary current/frozen-v48 CLI edits, and archive/restore preserve these fields.
+
 Small, hand-checked boards used by `tests/test_fixture_boards.py` and browser tests. Each fixture is a **board folder** (the same layout as `board/` in a real repo: `tasks.json`, and for schema v4 split also `cards/`, `people/`, and optionally `projects/`).
 
 | Directory | Schema | Kit era | Source in git history |
