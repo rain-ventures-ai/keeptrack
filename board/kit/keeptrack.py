@@ -203,7 +203,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 49  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 50  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1966,6 +1966,11 @@ def cmd_list(a):
     _default_scope(a)
     data, _ = load()
     ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
+    sort = getattr(a, "sort", None)
+    if sort == "priority":
+        ordered = priority_order(data["tasks"])
+    elif sort == "score":
+        ordered = sorted(priority_order(data["tasks"]), key=lambda t: (task_score(t) is None, -(task_score(t) or 0)))
     query = (getattr(a, "q", None) or "").casefold()
     today = board_today(data).isoformat()
     wait_on = (getattr(a, "waiting_on", None) or "").strip().lstrip("@").lower()
@@ -1993,7 +1998,9 @@ def cmd_list(a):
         if getattr(a, "client", None) and t.get("client") != a.client: continue
         if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
         cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
-        print(line(data, t, today=today) + cleared)
+        scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
+                   + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
+        print(line(data, t, today=today) + cleared + scoring)
 
 
 def cmd_show(a):
@@ -3606,7 +3613,7 @@ def _here(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "add", "task-set", "move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
+    "tasks": ["list", "show", "add", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
     "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
@@ -4288,6 +4295,45 @@ def priority_order(tasks):
     return sorted(tasks, key=lambda t: (0 if valid_rank(t.get("priority_rank")) else 1,
                                        t.get("priority_rank") if valid_rank(t.get("priority_rank")) else "",
                                        t.get("num") or 9007199254740991, t.get("id", "")))
+
+
+def move_priority_task(data, task, anchor=None, before=False, top=False):
+    """Move across columns. Materialise legacy/equal ranks only on an explicit write."""
+    if anchor and anchor["id"] == task["id"]:
+        sys.exit("a task cannot be ranked before or after itself")
+    ordered = priority_order(data.get("tasks", []))
+    peers = [t for t in ordered if t["id"] != task["id"]]
+    at = peers.index(anchor) + (0 if before else 1) if anchor else (0 if top else len(peers))
+    desired = peers[:at] + [task] + peers[at:]
+    if [t["id"] for t in desired] == [t["id"] for t in ordered]:
+        return False
+    previous = None
+    for peer in peers:
+        rank = peer.get("priority_rank")
+        if not valid_rank(rank) or (previous is not None and rank <= previous):
+            peer["priority_rank"] = key_between(previous, None)
+        previous = peer["priority_rank"]
+    task["priority_rank"] = key_between(peers[at - 1]["priority_rank"] if at else None,
+                                        peers[at]["priority_rank"] if at < len(peers) else None)
+    return True
+
+
+def cmd_priority_move(a):
+    resolved = {}
+    def fn(data):
+        _MUT["rerun"] = True  # Re-resolve neighbours on latest data after a competing move.
+        _MUT["recheck"] = True  # Whole-head CAS: a different card's changed rank is also a conflict.
+        task = find(data, resolved.get("task", a.id))
+        anchor = find(data, resolved.get("anchor", a.before or a.after)) if a.before or a.after else None
+        resolved["task"] = task["id"]
+        if anchor:
+            resolved["anchor"] = anchor["id"]
+        changed = move_priority_task(data, task, anchor, bool(a.before), a.top)
+        if changed:
+            hist(task, "board-wide priority order changed")
+            task["updated"] = now()
+        print(f"#{task['num']} {task['title']}: " + ("priority order changed" if changed else "already in position"))
+    mutate(fn, f"Priority move: {a.id}")
 
 
 def append_priority_rank(data, task):
@@ -6910,7 +6956,14 @@ def main():
     s.add_argument("--project", help="project id or name prefix"); s.add_argument("--client", help="client name")
     s.add_argument("--label", help="label name, exactly as on the card (the web board's label filter)")
     s.add_argument("--all", action="store_true", help="ignore this repo's default project")
+    s.add_argument("--sort", choices=["score", "priority"], help="score descending (unscored last), or board-wide priority order; reading never changes ranks")
     s.set_defaults(f=cmd_list)
+    s = sub.add_parser("priority-move", help="change board-wide priority order without changing Kanban status or rank")
+    s.add_argument("id")
+    position = s.add_mutually_exclusive_group(required=True)
+    position.add_argument("--before", metavar="ID"); position.add_argument("--after", metavar="ID")
+    position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
+    s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)

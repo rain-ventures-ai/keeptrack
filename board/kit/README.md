@@ -28,6 +28,12 @@ Score is value divided by effort, not a promise or automatic priority. Missing i
 Use manual order for judgement, or explicitly sort by score. Move controls only apply in manual order;
 filtered moves use neighbouring visible tasks while leaving the other tasks' relative order intact.
 `task-set <id> --value 4 --effort M` edits scoring from the CLI; empty arguments clear either input.
+`list --sort score` shows scored tasks first, highest score first (ties use board-wide priority order).
+`list --sort priority` reads manual board-wide order. Both accept the normal list filters and never write ranks.
+`priority-move '#12' --before '#7'` changes manual board-wide ranking; `--after`, `--top` and `--bottom`
+are alternatives. Anchors may be in another column. Status and Kanban rank stay unchanged, and a
+concurrent save re-resolves the neighbours on the latest board. Ranking applies to the full board,
+not a filtered subset. Archived tasks retain their ranks; use `unarchive` before moving one.
 Existing boards need no migration. Turning the layout off is the safe rollback, not restoring old data.
 
 Schema v4 keeps each card and CRM person in a separate file:

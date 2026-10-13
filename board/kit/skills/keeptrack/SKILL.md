@@ -119,6 +119,9 @@ Waiting on a person (a decision, an approval, a reply) or an event: `wait`, a co
 Change a task or the board's structure with commands too, never by editing JSON:
 ```bash
 $B task-set '#12' --title ".." --priority high --due +3 --label relay --unlabel call   # any task field; --due "" clears
+$B list --sort score --column todo             # value / effort, unscored last; ties use board-wide order
+$B list --sort priority                       # board-wide manual order, read-only
+$B priority-move '#12' --before '#8'           # only when asked to reorder; also --after, --top, --bottom
 $B labels | label-add NAME --color "#hex" | label-set NAME --rename NEW | label-rm NAME [--force]
 $B clients | client-rename OLD NEW | client-rm NAME | client-unlink CLIENT URL
 $B columns | column-add NAME [--after ID] | column-set ID --rename NAME | column-move ID --before|--after ID | column-rm ID [--move-to ID]
@@ -128,6 +131,13 @@ $B agents | agent-add NAME | agent-rm NAME [--unassign]
 $B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)
 $B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW
 ```
+
+Prioritise scoring is optional: `task-set '#12' --value 4 --effort M` (value 1–5;
+effort XS/S/M/L/XL has weights 1/2/3/5/8). Score is guidance, not authority to change
+priority. `priority-move` changes the **whole board's** independent manual order,
+even if a preceding list was project/client filtered. Other cards keep their relative
+order, status and Kanban ranks. It retries relative intent against fresh board data;
+never write `priority_rank` directly or treat a filtered list as the whole board.
 Ask the user before a rename, a delete, removing a member, `done --cancel` or `--force`; the commands print what they will touch.
 In a board repo the `board-admin` skill has the full table.
 

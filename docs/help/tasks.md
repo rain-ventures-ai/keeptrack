@@ -1,5 +1,18 @@
 # Tasks
 
+## Prioritise and saved filters
+
+In **List**, choose **Prioritise** to edit value and effort, see their calculated score,
+and move tasks in board-wide manual order. The URL records selected clients, status,
+other filters, layout and sort. Reloading or updating the web app keeps those choices;
+Back and Forward restore earlier choices. Copy the URL to share the same filtered view.
+Links include filter names, so avoid putting private information in search fields when
+sharing them. Tokens and setup codes are never copied into navigation links.
+
+Agents can use `list --sort score`, `list --sort priority`, and
+`priority-move '#12' --before '#8'` (or `--after`, `--top`, `--bottom`) with kit v50.
+Ranking is board-wide even when a list is filtered; status and Kanban ranks are unchanged.
+
 If you selected **Tasks** when you made your board, you also have these views. They are under **Tasks** in the view bar (the people views are under **People**):
 - **Kanban:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Click or tap a card to open it, or focus it and press Enter or Space. Inline controls still work without opening the card. Each card shows compact **Created** and **Active** ages; activity includes edits, comments, history and agent runs. Hover a relative time for its exact date and time.
 - **List**, **Calendar** and **Schedule:** the same tasks by group, by due date and by week.
