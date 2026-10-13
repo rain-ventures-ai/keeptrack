@@ -63,16 +63,20 @@ In Agent chat: `/add-plugin https://github.com/rain-ventures-ai/keeptrack`. A te
 
 ## ChatGPT, Grok and Claude chat (no shell)
 These apps cannot run `keeptrack.py`. They reach a board through the **Relay connector**, a small remote MCP server
-the owner hosts (`connector/README.md` in `rain-ventures-ai/keeptrack-relay`). It runs the board's own `keeptrack.py`
+the owner hosts (`connector/README.md` in `rain-ventures-ai/keeptrack-relay`, a private repo: ask the board owner). It runs the board's own `keeptrack.py`
 for every read and write, puts new cards in Backlog, and lets only an app the owner marks `approve` move a card to
-To do. Each app gets its own URL and token.
+To do (and starts the dispatcher, or edits cards already approved). Each app gets its own URL,
+`https://<host>/mcp/<client token>`. That URL is a secret: anyone who has it can act as that app, so rotate it if it
+leaks.
 
-- **ChatGPT:** Settings, Apps and Connectors, developer mode, Create, the app's own URL, "No authentication".
+- **ChatGPT:** Settings, Apps and Connectors, developer mode, Create, the app's own URL, "No authentication". Write
+  tools need a plan that allows them.
 - **Grok:** grok.com/connectors, New Connector, Custom, the app's own URL.
-- **Claude chat** (claude.ai, Desktop, mobile): Customize, Connectors, Add custom connector, the app's own URL.
+- **Claude chat** (claude.ai, Desktop, mobile): Customize, Connectors, Add custom connector, the app's own URL, "No
+  sign in". Add it on the web or Desktop; it then works on mobile.
 
 Set-up for every place an assistant runs (chat apps, Claude Code projects and terminals, Codex, Grok Bot, routines):
-`relay/ENVIRONMENTS.md` in `keeptrack-relay`. Without the connector, use **🤖 Copy for AI** on a person in the web
+`relay/ENVIRONMENTS.md` in `keeptrack-relay` (private). Without the connector, use **🤖 Copy for AI** on a person in the web
 board: paste it into the app, get the draft, and log it on the board yourself.
 
 ## Each project: which board?
