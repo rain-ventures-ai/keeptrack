@@ -294,10 +294,10 @@ body:not([data-view="board"]) #tabs { display: none !important; }
 .c-people { display: flex; padding-left: 14px !important; } .c-labels { display: flex; gap: var(--sp-1); flex-wrap: wrap; } .c-more { display: flex; gap: 5px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 .m-only { display: none; }
 .v-list { overflow-anchor: none; }
-.prioritise-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.prioritise-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .prioritise-bar select { min-height: 36px; }
 .prioritise-table { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--card); }
-.prioritise-row, .prioritise-head { display: grid; grid-template-columns: 96px minmax(180px, 1fr) 130px 108px 70px minmax(190px, .65fr); align-items: center; gap: 12px; padding: 12px 16px; }
+.prioritise-row, .prioritise-head { display: grid; grid-template-columns: 76px minmax(150px, 1fr) 64px 64px 48px 200px; align-items: center; gap: 8px; padding: 9px 12px; }
 .prioritise-head { background: var(--panel); color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
 .prioritise-row { border-top: 1px solid var(--border); }
 .prioritise-row > * { min-width: 0; }
@@ -307,29 +307,33 @@ body:not([data-view="board"]) #tabs { display: none !important; }
 .prioritise-task > .ui-btn { text-align: left; justify-content: flex-start; white-space: normal; overflow-wrap: anywhere; padding: 0; font-weight: 600; }
 .prioritise-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .prioritise-score-mini { display: none; }
-.prioritise-value label, .prioritise-effort label, .prioritise-task .prioritise-expand { display: none; }
+.prioritise-value label, .prioritise-effort label, .prioritise-task > .ui-btn.prioritise-expand { display: none; }
 .prioritise-row select { width: 100%; min-height: 36px; }
 .prioritise-score { font-variant-numeric: tabular-nums; font-weight: 600; }
-.prioritise-row .taskactions { display: flex; flex-wrap: wrap; gap: 6px; }
-@media (max-width: 1000px) {
+.prioritise-row .taskactions { display: flex; flex-wrap: nowrap; gap: 6px; }
+.prioritise-row .taskactions > select { width: 110px; min-width: 0; }
+@media (max-width: 759px) {
   .prioritise-head { display: none; }
-  .prioritise-row { grid-template-columns: 92px minmax(0, 1fr); gap: 10px; }
-  .prioritise-row > .taskactions { grid-column: 2; }
+  .prioritise-row { grid-template-columns: 48px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 10px; }
+  .prioritise-row > .prioritise-task { grid-column: 2 / -1; }
+  .prioritise-row > .taskactions { grid-column: 2 / -1; }
   .prioritise-row > .prioritise-value, .prioritise-row > .prioritise-effort, .prioritise-row > .prioritise-score { display: none; }
-  .prioritise-row.is-expanded > .prioritise-value, .prioritise-row.is-expanded > .prioritise-effort, .prioritise-row.is-expanded > .prioritise-score { display: block; grid-column: 2; }
+  .prioritise-row.is-expanded > .prioritise-value { display: block; grid-column: 2; }
+  .prioritise-row.is-expanded > .prioritise-effort { display: block; grid-column: 3; }
+  .prioritise-row.is-expanded > .prioritise-score { display: none; }
   .prioritise-value label, .prioritise-effort label { display: block; color: var(--muted); margin-bottom: 4px; }
-  .prioritise-task .prioritise-expand { display: inline-flex; margin-top: 8px; }
+  .prioritise-task > .ui-btn.prioritise-expand { display: inline-flex; margin-top: 4px; min-height: 32px; padding: 2px 6px; font-weight: 400; }
   .prioritise-score-mini { display: inline; font-size: var(--fs-sm); color: var(--muted); }
   .prioritise-row.is-expanded > .prioritise-score::before { content: 'Score '; color: var(--muted); font-weight: 400; }
   .prioritise-row .ui-btn, .prioritise-row select { min-height: 44px; }
-  .prioritise-rank { flex-wrap: wrap; align-content: center; }
+  .prioritise-rank { flex-wrap: wrap; align-content: center; grid-row: span 2; }
   .prioritise-rank > span { width: 100%; text-align: center; }
   .prioritise-rank .ui-btn { min-width: 44px; padding: 4px; }
-  .prioritise-row .taskactions select { max-width: 100%; }
+  .prioritise-row .taskactions select { max-width: 140px; }
+  .prioritise-hint { display: none; }
 }
 @media (max-width: 600px) {
-  .prioritise-row > .taskactions { grid-column: 1 / -1; }
-  .prioritise-row .taskactions > select { flex: 1 1 150px; width: auto; }
+  .prioritise-row .taskactions > select { flex: 0 1 140px; width: auto; }
 }
 @media (max-width: 900px) {
   .tscroll { overflow-x: visible; } .ttable { min-width: 0; } .trow.thead { display: none; }

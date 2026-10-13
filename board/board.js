@@ -1321,6 +1321,9 @@ if (typeof window !== 'undefined') (() => {
   const newBadge = n => el('span', 'newb', `${n} new`);
 
   function filtered(t) {
+    const status = $('fStatus').value;
+    if (status === '__open' && isDoneTask(t)) return false;
+    if (status && status !== '__open' && t.column !== status) return false;
     if (freshOnly && !isFresh(t)) return false;
     const fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fprio = $('fPrio').value, fproj = $('fProject').value;
     if (fc.length && !fc.includes(t.client)) return false;
@@ -1600,7 +1603,14 @@ if (typeof window !== 'undefined') (() => {
     return L.join('\n');
   }
 
+  function syncStatusFilter() {
+    const statusFilter = $('fStatus'), selectedStatus = statusFilter.value;
+    statusFilter.replaceChildren();
+    [['', 'All statuses'], ['__open', 'Open tasks'], ...state.columns.map(c => [c.id, c.name])].forEach(([value, name]) => { const option = el('option', null, name); option.value = value; statusFilter.append(option); });
+    statusFilter.value = selectedStatus;
+  }
   function renderStats() {
+    syncStatusFilter();
     const attn = state.tasks.filter(t => t.column !== doneColId() && needsAttention(t)).length;
     const attnTasks = state.tasks.filter(t => t.column !== doneColId() && needsAttention(t)), on = $('fAttn').checked, ab = $('btnAttn');
     ab.hidden = !attn && !on; $('attnN').textContent = String(attn); $('attnT').textContent = attn === 1 ? ' needs attention' : ' need attention'; $('attnS').textContent = ' attention'; ab.setAttribute('role', 'switch'); ab.setAttribute('aria-checked', String(on)); ab.classList.toggle('on', on); $('attnCount').textContent = attn ? `(${attn})` : '';
@@ -1609,7 +1619,7 @@ if (typeof window !== 'undefined') (() => {
     bd.textContent = fresh > 99 ? '99+' : String(fresh); bd.hidden = !fresh; bell.classList.toggle('on', freshOnly);
     bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes${freshOnly ? ' (showing only these; click to show all)' : ' (click to show only these)'}` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
     document.title = (fresh ? `(${fresh}) ` : '') + (state.settings.title || 'Keeptrack');
-    const nf = ['fWho', 'fDoneBy', 'fLabel', 'fPrio'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fWaiting').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
+    const nf = ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fPrio', 'fProject'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fWaiting').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
     fb.textContent = String(nf); fb.hidden = !nf; $('btnFilter').title = nf ? `Filters (${nf} on)` : 'Filters'; renderTopbar();
   }
 
@@ -1976,15 +1986,19 @@ if (typeof window !== 'undefined') (() => {
   }
 
   function renderList() {
+    syncStatusFilter();
     const board = $('board'), hideDone = $('fHideDone').checked; let collapsed; try { collapsed = new Set(JSON.parse(LS.get('kb_collapsed', '[]'))); } catch { collapsed = new Set(); }
     const toolbar = el('div', 'prioritise-bar');
     const toggle = ui.button({ label: prioritising() ? 'Standard list' : 'Prioritise', size: 'sm', onClick: () => { LS.set(prioritiseKey(), prioritising() ? 'off' : 'on'); render(); } });
     toggle.id = 'listPrioritise'; toggle.setAttribute('aria-pressed', String(prioritising())); toolbar.append(toggle);
+    const status = $('fStatus').cloneNode(true); status.id = 'listStatus'; status.setAttribute('aria-label', 'Filter by status'); status.value = $('fStatus').value;
+    status.onchange = () => { $('fStatus').value = status.value; if (status.value && status.value !== '__open') $('fHideDone').checked = false; render(); $('listStatus').focus({ preventScroll: true }); }; toolbar.append(status);
+    toolbar.append(ui.button({ label: 'More filters', icon: 'sliders-horizontal', size: 'sm', onClick: e => { e.stopPropagation(); $('btnFilter').click(); } }));
     if (prioritising()) {
       const sort = el('select'); sort.id = 'prioritiseSort'; sort.setAttribute('aria-label', 'Prioritise order');
       [['manual', 'Manual order'], ['score', 'Highest score'], ['due', 'Due date'], ['newest', 'Newest']].forEach(([v, label]) => { const o = el('option', null, label); o.value = v; sort.append(o); });
       sort.value = LS.get(prioritiseKey() + ':sort', 'manual'); sort.onchange = () => { LS.set(prioritiseKey() + ':sort', sort.value); render(); }; toolbar.append(sort);
-      toolbar.append(el('span', 'muted', 'Score = value ÷ effort. Rank is your decision.')); board.append(toolbar); renderPrioritise(hideDone, sort.value); return;
+      const hint = el('span', 'prioritise-hint muted', 'Score = value ÷ effort. Rank is your decision.'); toolbar.append(hint); board.append(toolbar); renderPrioritise(hideDone, sort.value); return;
     }
     board.append(toolbar);
     state.columns.forEach(col => {
@@ -2021,8 +2035,8 @@ if (typeof window !== 'undefined') (() => {
       const task = el('div', 'prioritise-task'), title = ui.button({ label: `#${t.num} ${t.title}`, variant: 'ghost', onClick: () => openCard(t.id) }); title.dataset.listControl = 'open'; task.append(title);
       const meta = el('div', 'prioritise-meta'); if (t.client) meta.append(clientTag(t)); if (t.due) meta.append(duePill(t)); meta.append(...labelTags(t, 2)); task.append(meta);
       const mini = el('span', 'prioritise-score-mini', 'Score ' + (taskScore(t) === null ? '—' : Number(taskScore(t).toFixed(2)))); meta.append(mini);
-      const value = prioritySelect(t, 'value', [['', '—'], ['1', '1 · Small'], ['2', '2'], ['3', '3 · Useful'], ['4', '4'], ['5', '5 · Major']]);
-      const effort = prioritySelect(t, 'effort', [['', '—'], ...Object.entries(effortWeights).map(([s, w]) => [s, `${s} · ${w}`])]);
+      const value = prioritySelect(t, 'value', [['', '—'], ...[1, 2, 3, 4, 5].map(v => [String(v), String(v)])]);
+      const effort = prioritySelect(t, 'effort', [['', '—'], ...Object.keys(effortWeights).map(s => [s, s])]);
       const score = el('div', 'prioritise-score', taskScore(t) === null ? '—' : taskScore(t).toFixed(2).replace(/0$/, '').replace(/\.0$/, ''));
       score.setAttribute('aria-label', `Score: ${score.textContent}`);
       const actions = taskQuickActions(t); actions.querySelectorAll('button, select').forEach((c, i) => { c.dataset.listControl = 'action' + i; if (ro) c.disabled = true; });
@@ -2193,6 +2207,7 @@ if (typeof window !== 'undefined') (() => {
     if (fw) { const a = agentAssignments().find(x => x.value === fw); out.push(fw === '__none' ? 'unassigned' : fw === '__agent' ? 'assigned to any active agent' : a ? 'assigned to ' + a.label : 'assigned to @' + fw); }
     if (fd) { const x = completionOptions().find(x => completionFilterValue(x) === fd); if (x) out.push('completed by ' + x.label); }
     if (fl) out.push('label ' + fl); if (fp) out.push('priority ' + fp);
+    if ($('fStatus').value) out.push('status ' + $('fStatus').selectedOptions[0].textContent);
     if ($('fAttn').checked) out.push('needs attention'); if ($('fWaiting').checked) out.push('waiting'); if (freshOnly) out.push('new for me');
     if ($('fHideDone').checked && view !== 'activity') out.push('done hidden');
     return out.join(', ');
@@ -3903,14 +3918,14 @@ if (typeof window !== 'undefined') (() => {
   $('clientPop').addEventListener('click', e => e.stopPropagation()); POPS.add($('clientPop'));
   document.addEventListener('click', () => closePops()); document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (popOpen) { closePops(true); return; } if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
-  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fWaiting').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
+  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fWaiting').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
   { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(() => { renderTopbar(); layoutCinemaCards(); }, 60); };
     window.addEventListener('resize', refit);
     const wrap = document.querySelector('.clientwrap');
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
-  ['fClient', 'fWho', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', render));
+  ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again

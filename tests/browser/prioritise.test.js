@@ -141,6 +141,40 @@ let base;
     assert.equal(JSON.parse(api.files['cards/t_two.json']).priority_rank, hiddenRank);
     assert((await order()).indexOf('t_4') < (await order()).indexOf('t_one'), 'filtered move crosses the neighbouring visible task across columns');
     assert.deepEqual((await order()).filter(id => id !== 't_one'), fullOrderBeforeFiltered.filter(id => id !== 't_one'), 'all untouched visible and hidden tasks retain relative order');
+    // Status is discoverable inline and shares one state with the global filter panel.
+    await page.locator('#listStatus').selectOption('__open');
+    assert.equal(await page.locator('#fStatus').inputValue(), '__open');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'listStatus', 'status filtering retains keyboard focus');
+    assert((await order()).every(id => JSON.parse(api.files['cards/' + id + '.json']).column !== 'done'));
+    await page.locator('#listStatus').selectOption('done');
+    assert((await order()).every(id => JSON.parse(api.files['cards/' + id + '.json']).column === 'done'));
+    await page.locator('#btnFilter').click(); await page.locator('#fClear').click();
+    assert.equal(await page.locator('#listStatus').inputValue(), '');
+    assert.equal(await page.locator('#filterBadge').isVisible(), false);
+    const customRoot = JSON.parse(api.files['tasks.json']); customRoot.columns.push({ id: 'review', name: 'Review needed' }); api.files['tasks.json'] = text(customRoot);
+    const customCard = JSON.parse(api.files['cards/t_35.json']); customCard.column = 'review'; api.files['cards/t_35.json'] = text(customCard); api.head = 'custom-status-head';
+    await page.locator('#btnRefresh').click();
+    await page.locator('#listStatus option[value="review"]').waitFor({ state: 'attached' });
+    await page.locator('#listStatus').selectOption('review'); assert.deepEqual(await order(), ['t_35'], 'custom columns are filterable');
+    await page.locator('#listStatus').selectOption('');
+    await page.locator('#btnFilter').click(); await page.locator('#fHideDone').check(); await page.locator('#btnFilter').click();
+    await page.locator('#listStatus').selectOption('done'); assert.equal(await page.locator('#fHideDone').isChecked(), false, 'explicit status overrides hide done');
+    await page.locator('#btnFilter').click(); await page.locator('#fHideDone').check();
+    assert.equal(await page.locator('#fStatus').inputValue(), '', 'hide done clears conflicting Done status');
+    await page.locator('#fClear').click();
+    for (const width of [768, 980]) {
+      await page.setViewportSize({ width, height: 860 });
+      await page.locator('#board').evaluate(b => b.scrollTop = 0);
+      assert(await page.locator('.prioritise-head').isVisible(), 'tablet retains compact table');
+      assert(await page.locator('[data-list-task="t_one"] select[data-list-control="value"]').isVisible());
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.screenshot({ path: '/tmp/prioritise-' + width + '-light.png', fullPage: true });
+      await page.evaluate(() => window.kbTheme.set('dark'));
+      await page.waitForTimeout(300); // wait for token-driven button transitions before visual proof
+      await page.screenshot({ path: '/tmp/prioritise-' + width + '-dark.png', fullPage: true });
+      await page.evaluate(() => window.kbTheme.set('light'));
+      await page.waitForTimeout(300);
+    }
     // Mobile controls are disclosed, with no horizontal scrolling.
     await page.setViewportSize({ width: 350, height: 780 });
     await page.locator('#board').evaluate(b => b.scrollTop = 0);
