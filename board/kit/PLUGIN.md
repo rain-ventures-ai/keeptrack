@@ -1,4 +1,4 @@
-# Keeptrack plugins: Claude, Codex, Cursor (and ChatGPT)
+# Keeptrack plugins: Claude, Codex, Cursor (and chat apps)
 
 One plugin folder serves every tool: `board/kit/` in `rain-ventures-ai/keeptrack`. It holds `keeptrack.py` (the command-line tool), `skills/keeptrack/SKILL.md` (daily use and board-status audits), `skills/keeptrack-notes/SKILL.md` (meeting transcript and notes import), `skills/keeptrack-email/SKILL.md` (mailbox-to-contact reconciliation), `skills/onboard-keeptrack/SKILL.md` (guided CRM/task import) and one small manifest for each tool. The specialist skills are also copied into every board repo by the kit, so they can be discovered before or after opening the board repo.
 
@@ -40,7 +40,7 @@ The plugin gives the skill `keeptrack:keeptrack`, `keeptrack.py` at `${CLAUDE_PL
 ## Claude Desktop and Cowork (no terminal)
 First look in **Customize → Plugins**: if **keeptrack** is already installed, just check it is switched on. If the **rain-ventures-ai/keeptrack** marketplace is already listed, install **keeptrack** from it. Otherwise: **Customize → Plugins → Add → Add marketplace**, type `rain-ventures-ai/keeptrack`, then install **keeptrack**. A Team or Enterprise admin can add the marketplace for the whole organisation. Then say, for example, "Who do I need to follow up with today?" or "Help me write a LinkedIn message to the CEO of Acme".
 
-The plugin is not used by the **Code** tab of the Claude phone or desktop app, or by claude.ai/code: those are Claude Code cloud (above). Ordinary Claude chat on claude.ai or the phone app cannot run `keeptrack.py`.
+The plugin is not used by the **Code** tab of the Claude phone or desktop app, or by claude.ai/code: those are Claude Code cloud (above). Ordinary Claude chat on claude.ai or the phone app cannot run `keeptrack.py`; it uses the Relay connector (below).
 
 Not yet checked: whether the Cowork sandbox lets `keeptrack.py` reach api.github.com. If it cannot, use Claude Code on the web or in the Claude app's **Code** tab, in a session on the board repo: it saves with no token.
 
@@ -56,13 +56,24 @@ Then install **keeptrack** from the plugin browser (`/plugins`). The marketplace
     keeptrack/
       SKILL.md                 <- board/kit/skills/keeptrack/SKILL.md
 ```
-That is `.agents/skills/keeptrack/` for the skill and `.agents/keeptrack.py` for the CLI (not `.agents/skills/keeptrack.py`). The same shape works under `~/.agents/`. Use `BOARD_AGENT=codex`.
+That is `.agents/skills/keeptrack/` for the skill and `.agents/keeptrack.py` for the CLI (not `.agents/skills/keeptrack.py`). The same shape works under `~/.agents/`. Use `BOARD_AGENT=codex` and your own `BOARD_SESSION`. Codex has no heartbeat hook: while it holds a claim it runs `keeptrack.py heartbeat` itself at least every 15 minutes.
 
 ## Cursor
 In Agent chat: `/add-plugin https://github.com/rain-ventures-ai/keeptrack`. A team admin can import the repo under **Dashboard → Settings → Plugins → Team Marketplaces**. The manifests are `.cursor-plugin/marketplace.json` and `board/kit/.cursor-plugin/plugin.json`. Use `BOARD_AGENT=cursor`.
 
-## ChatGPT
-ChatGPT's own GitHub app can only read repositories, so it cannot update the board. To let ChatGPT update Keeptrack we need a small hosted MCP server (a later step). Until then, use **🤖 Copy for AI** on a person in the web board: paste it into ChatGPT, get the draft, and log it on the board yourself.
+## ChatGPT, Grok and Claude chat (no shell)
+These apps cannot run `keeptrack.py`. They reach a board through the **Relay connector**, a small remote MCP server
+the owner hosts (`connector/README.md` in `rain-ventures-ai/keeptrack-relay`). It runs the board's own `keeptrack.py`
+for every read and write, puts new cards in Backlog, and lets only an app the owner marks `approve` move a card to
+To do. Each app gets its own URL and token.
+
+- **ChatGPT:** Settings, Apps and Connectors, developer mode, Create, the app's own URL, "No authentication".
+- **Grok:** grok.com/connectors, New Connector, Custom, the app's own URL.
+- **Claude chat** (claude.ai, Desktop, mobile): Customize, Connectors, Add custom connector, the app's own URL.
+
+Set-up for every place an assistant runs (chat apps, Claude Code projects and terminals, Codex, Grok Bot, routines):
+`relay/ENVIRONMENTS.md` in `keeptrack-relay`. Without the connector, use **🤖 Copy for AI** on a person in the web
+board: paste it into the app, get the draft, and log it on the board yourself.
 
 ## Each project: which board?
 In a project that is not the board repo, run (or ask the agent to run):
