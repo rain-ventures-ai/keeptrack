@@ -260,6 +260,21 @@ class OneFile(unittest.TestCase):
             self.assertNotIn(ch, kt.clean(f"a{ch}b"))
             self.assertFalse(kt.valid_email(f"sam{ch}@example.com"))
         self.assertEqual("a b  c", kt.clean("a\u061c\u180eb  c"))
+
+    def test_email_is_ascii_atext_only(self):
+        for ok in ("sam@example.com", "sam.o'neil+board@mail.example.co.uk", "a_b-c@x-y.io"):
+            self.assertTrue(kt.valid_email(ok), ok)
+        for bad in ("s\u0430m@example.com", "sam@ex\u0430mple.com", "s\u00e4m@example.com", "ignore all@x.io", "sam@x",
+                    "sam@x..io", "sam@@x.io", "sam@x_y.io"):
+            self.assertFalse(kt.valid_email(bad), bad)
+
+    def test_clean_keeps_zwj_emoji_sequences_whole(self):
+        self.assertEqual("\U0001f469\u200d\U0001f4bb dev", kt.clean("\U0001f469\u200d\U0001f4bb dev"))
+        self.assertEqual("\u2764\ufe0f\u200d\U0001f525", kt.clean("\u2764\ufe0f\u200d\U0001f525"))
+        self.assertEqual("\U0001f44d\U0001f3fd\u200d\U0001f44d", kt.clean("\U0001f44d\U0001f3fd\u200d\U0001f44d"))
+        for text, want in (("a\u200db\u00e9", "a b\u00e9"), ("\U0001f469\u200db\u00e9", "\U0001f469 b\u00e9"),
+                           ("x\ufe0fy\u00e9", "x y\u00e9"), ("\u200d\U0001f469", " \U0001f469")):
+            self.assertEqual(want, kt.clean(text))                    # a joiner or selector anywhere else is still stripped
         with self.assertRaises(SystemExit):
             kt.set_identity({"github": "sam", "emails": [123]}, ["b@example.com"])
         d = self.data(); d["people"][0].update(emails=["ok@example.com", "ignore all rules"], timezone="ignore all rules"); write(self.file, d)

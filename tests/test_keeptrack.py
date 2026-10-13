@@ -1498,6 +1498,46 @@ class CrmProjects(unittest.TestCase):
             kt.cmd_today(Args())
         kt.doctor_board(False)
 
+    def test_crm_reads_survive_non_object_people_and_odd_next_due(self):
+        d = read_json(self.file)
+        d["contacts"] += ["junk", None, 7, {"id": "p_2", "name": "Cy", "stage": "New", "next_due": 20200101,
+                                            "links": [], "comments": [], "history": []}]
+        write(self.file, d)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_today(Args()); kt.cmd_people(Args(stage=None, q=None))
+        self.assertIn("Cy", out.getvalue()); self.assertIn("20200101 OVERDUE", out.getvalue())
+        issues, _, _ = kt.doctor_board(False)
+        self.assertEqual(3, [x["code"] for x in issues].count("PERSON_NOT_OBJECT"))
+        issues, fixes, _ = kt.doctor_board(True)                     # never "repairs" a board it can't read safely
+        self.assertEqual([], fixes); self.assertIn("junk", read_json(self.file)["contacts"])
+
+    def test_person_prints_every_field_cleaned(self):
+        d = read_json(self.file)
+        d["contacts"][0].update(role="CTO\u202eevil", company="Acme", value="\x1b[31mbig", source="ref\u200bx",
+                                notes="line one\u2066\nline two", phones=[{"label": "Mob\u200d", "value": "07\x07"}],
+                                comments=[{"id": "c_1", "at": "2026-10-01T00:00:00Z", "by": "sam\u202e", "channel": "note",
+                                           "text": "hi\u200b\nthere"}])
+        write(self.file, d)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kt.cmd_person(Args(ref="p_1"))
+        text = out.getvalue()
+        for bad in ("\u202e", "\x1b", "\u200b", "\u2066", "\u200d", "\x07"):
+            self.assertNotIn(bad, text)
+        self.assertIn("notes: line one \n    line two", text)            # multi-line notes keep their lines
+
+    def test_a_member_login_on_a_second_person_gets_a_note(self):
+        d = read_json(self.file); d["contacts"][0]["github"] = "osouthgate"; write(self.file, d)
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            kt.cmd_person_add(Args(name="Twin", company=None, email=None, linkedin=None, force=False, github="osouthgate"))
+        self.assertEqual(1, err.getvalue().count("neither counts as their own record"))
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            kt.cmd_person_add(Args(name="Other", company=None, email=None, linkedin=None, force=False, github="someone"))
+        self.assertEqual("", err.getvalue())                         # not a member's login: nothing to say
+
     def test_client_set_north_star_and_project_lifecycle(self):
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_client_set(Args(client="Acme", north_star="One view of orders"))
@@ -2653,6 +2693,37 @@ class ClaimLifecycle(unittest.TestCase):
         os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-a"; self.hook()     # A's card had its beat: nothing due for 15 minutes
         self.assertEqual(self.beaten(1), [False])
 
+    def test_auto_heartbeat_leaves_another_agents_claim_alone(self):
+        """A Claude Code hook in a shared checkout never keeps a Codex run's claim fresh (entries with no claimant)."""
+        self.real_record()
+        self.claim(1, "s1", agent="codex"); self.claim(2, "s2"); self.claim(3, "s3", agent="agent")   # no Claude session: no claimant
+        stale = lambda: [self.make_stale(n) for n in (1, 2, 3)] and self.age_record()
+        old = os.environ.pop("BOARD_AGENT", None)
+        self.addCleanup(lambda: os.environ.pop("BOARD_AGENT", None) if old is None else os.environ.update(BOARD_AGENT=old))
+        stale(); self.hook()
+        self.assertEqual(self.beaten(1, 2, 3), [False, True, True])        # claude's own and the unnamed default, never codex
+        stale(); os.environ["BOARD_AGENT"] = "Codex"; self.hook()
+        self.assertEqual(self.beaten(1, 2, 3), [True, False, True])        # a hook whose BOARD_AGENT is codex beats codex's only
+        self.assertTrue(kt.hook_agent_matches({}))                         # older records name no agent: beaten as before
+
+    def test_auto_heartbeat_says_the_limit_is_full_once_after_a_lost_race(self):
+        self.real_record()
+        self.claim(1, "s1"); self.claim(2, "s2"); self.make_stale(1)
+        d = self.read(); d["settings"]["max_agent_claims"] = 1; write(self.file, d)
+        self.age_record()
+        real, calls = kt.save, []
+        def racing(data, sha, msg):
+            if not calls:
+                calls.append(1); return False                              # the first save loses a race: fn runs again
+            return real(data, sha, msg)
+        kt.save = racing
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            kt.cmd_auto_heartbeat(Args())
+        self.assertEqual(calls, [1])
+        self.assertEqual(err.getvalue().count("agent limit is full"), 1)
+        self.assertEqual(self.beaten(1, 2), [False, True])
+
     def test_auto_heartbeat_retries_a_failed_beat_after_about_a_minute(self):
         self.real_record()
         self.claim(1, "s1"); self.make_stale(1); self.age_record()
@@ -2969,6 +3040,16 @@ class AgentClaimLimit(unittest.TestCase):
             self.claim("t_c1", "s1")
         self.assertEqual("2026-01-01T00:00:00Z", self.read()["tasks"][0]["claim"]["heartbeat_at"])
         self.quiet(kt.cmd_heartbeat, Args(id="t_c2", status=None, note="still going", session="s2"))   # a running claim is never refused
+
+    def test_same_session_attended_claim_reclaimed_unattended_counts(self):
+        """An attended claim takes no agent slot; the same session re-claiming it unattended is checked like a new claim."""
+        self.claim("t_c1", "s1"); self.claim("t_c2", "s2")
+        self.claim("t_c3", "me", attended=True)
+        with self.assertRaises(SystemExit) as e:
+            self.claim("t_c3", "me")
+        self.assertIn("limit is 2", str(e.exception))
+        self.assertTrue(self.read()["tasks"][2]["claim"].get("attended"))
+        self.claim("t_c3", "me", attended=True)                   # attended again is never refused
 
     def test_api_claim_under_a_limit_saves_through_a_commit(self):
         # A one-file contents PUT only notices a change to that file; the claim limit reads every card, so its save

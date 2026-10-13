@@ -4025,8 +4025,19 @@ if (typeof window !== 'undefined') (() => {
   // A person whose GitHub login is a board member's is that member's own record, not a contact: it shows as "You" (or
   // "Board member") and stays out of follow-ups, the pipeline and "Help me with my contact". Worked out from people[], never stored.
   // only the ONE person with a member's login counts (v34): duplicates all stay contacts, so a member's login can't hide anyone
+  // login -> how many people carry it, counted once per contacts list and tick (a render's many memberOf calls share it;
+  // the next tick, a new list or a changed length counts again), not once per call: the People sort calls it O(N log N) times
+  let loginCounts = null;
+  const loginCount = (contacts, g) => {
+    if (!(loginCounts && loginCounts.arr === contacts && loginCounts.len === contacts.length)) {
+      const map = new Map(); for (const x of contacts) { const k = String((x && x.github) || '').toLowerCase(); if (k) map.set(k, (map.get(k) || 0) + 1); }
+      if (!loginCounts) queueMicrotask(() => { loginCounts = null; });
+      loginCounts = { arr: contacts, len: contacts.length, map };
+    }
+    return loginCounts.map.get(g) || 0;
+  };
   const memberOf = (p, board = state) => { const g = String((p && p.github) || '').toLowerCase(); if (!g) return null; const m = (board.people || []).find(x => String(x.github || '').toLowerCase() === g);
-    return m && board.contacts.filter(x => String(x.github || '').toLowerCase() === g).length === 1 ? m : null; };
+    return m && loginCount(board.contacts || [], g) === 1 ? m : null; };
   const isMe = p => { const m = memberOf(p), meV = String(cfg().me || '').toLowerCase(); return !!m && !!meV && String(m.github).toLowerCase() === meV; };
   const contactOnly = p => !memberOf(p);
   function memberPill(p) { const b = el('span', 'stagepill memberpill', isMe(p) ? 'You' : 'Board member'); b.title = `@${memberOf(p).github} is a member of this board: their own record, not a contact`; return b; }
@@ -4877,8 +4888,8 @@ if (typeof window !== 'undefined') (() => {
   let colRemoving = '';   // the column whose "move its cards to" row is open
   // ---- Settings → Board → Members: the people work can be assigned to (state.people). Each has a name, the work email
   // address(es) and a time zone (kit v28); keeptrack.py member-add / member-set / member-rm change the same fields.
-  const EMAIL_BAD = '@\\s<>,;\\x00-\\x1f\\x7f-\\x9f\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff';
-  const EMAIL_RE = new RegExp(`^[^${EMAIL_BAD}]+@[^${EMAIL_BAD}]+\\.[^${EMAIL_BAD}]+$`);
+  // ASCII only, the same rule as keeptrack.py's EMAIL_RE: atext and dots @ dot-separated letters, digits and hyphens
+  const EMAIL_RE = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
   const deviceZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } };
   const zoneList = () => { try { return Intl.supportedValuesOf('timeZone'); } catch { return []; } };
   function checkZone(v) {   // a name like Europe/London (any case); '' when it is not a time zone
