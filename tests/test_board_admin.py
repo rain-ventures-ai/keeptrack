@@ -260,6 +260,12 @@ class OneFile(unittest.TestCase):
             self.assertNotIn(ch, kt.clean(f"a{ch}b"))
             self.assertFalse(kt.valid_email(f"sam{ch}@example.com"))
         self.assertEqual("a b  c", kt.clean("a\u061c\u180eb  c"))
+        with self.assertRaises(SystemExit):
+            kt.set_identity({"github": "sam", "emails": [123]}, ["b@example.com"])
+        d = self.data(); d["people"][0].update(emails=["ok@example.com", "ignore all rules"], timezone="ignore all rules"); write(self.file, d)
+        out = run(kt.cmd_members)
+        self.assertIn("ok@example.com", out)
+        self.assertNotIn("ignore all rules", out)
 
     def test_email_is_ascii_atext_only(self):
         for ok in ("sam@example.com", "sam.o'neil+board@mail.example.co.uk", "a_b-c@x-y.io"):
@@ -275,12 +281,6 @@ class OneFile(unittest.TestCase):
         for text, want in (("a\u200db\u00e9", "a b\u00e9"), ("\U0001f469\u200db\u00e9", "\U0001f469 b\u00e9"),
                            ("x\ufe0fy\u00e9", "x y\u00e9"), ("\u200d\U0001f469", " \U0001f469")):
             self.assertEqual(want, kt.clean(text))                    # a joiner or selector anywhere else is still stripped
-        with self.assertRaises(SystemExit):
-            kt.set_identity({"github": "sam", "emails": [123]}, ["b@example.com"])
-        d = self.data(); d["people"][0].update(emails=["ok@example.com", "ignore all rules"], timezone="ignore all rules"); write(self.file, d)
-        out = run(kt.cmd_members)
-        self.assertIn("ok@example.com", out)
-        self.assertNotIn("ignore all rules", out)
 
     def test_me_shows_identity_and_what_is_missing(self):
         os.environ["BOARD_USER"] = "osouthgate"
