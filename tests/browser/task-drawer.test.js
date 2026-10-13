@@ -92,9 +92,10 @@ async function assertFits(page, where) {
     assert.equal(await page.locator('#cTitle').inputValue(), 'First');
     assert.equal(await page.locator('#dNum').textContent(), '#1');
     // the page was opened with no ?repo=: the address bar gets it, and a copied card link names the board
-    assert.equal(await page.evaluate(() => location.search), '?repo=acme/board&branch=main&path=board/tasks.json');
+    assert.deepEqual(await page.evaluate(() => { const q = new URLSearchParams(location.search); return ['repo', 'branch', 'path', 'filters', 'board_view'].map(k => q.get(k)); }), ['acme/board', 'main', 'board/tasks.json', '1', 'board']);
     await page.evaluate(() => { window.__copied = ''; }); await page.locator('#dNum').click(); await page.waitForFunction(() => window.__copied);
-    assert.match(await page.evaluate(() => window.__copied), /\/board\/index\.html\?repo=acme\/board&branch=main&path=board\/tasks\.json#1$/);
+    assert.deepEqual(await page.evaluate(() => { const u = new URL(window.__copied); return ['repo', 'branch', 'path', 'filters', 'board_view'].map(k => u.searchParams.get(k)).concat(u.hash); }), ['acme/board', 'main', 'board/tasks.json', '1', 'board', '#1']);
+    assert.equal(await page.evaluate(() => { const u = new URL(window.__copied); return u.origin === location.origin && u.pathname === location.pathname && !['token', 'pat', 'kbcfg'].some(k => u.searchParams.has(k)); }), true, 'copied task route uses this page and excludes credentials');
     assert.deepEqual(await page.locator('#cHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['Task #1, copy link', 'Undo last board change', 'Copy for agent', 'More actions', 'Close']);
     assert.deepEqual(await page.locator('#cProps .ui-props__label').allTextContents(), ['Status', 'Priority', 'Due date', 'Waiting for', 'People', 'Client & project', 'Labels']);
     const propRows = await page.locator('#cProps .ui-props__row').evaluateAll(rows => rows.map(row => { const r = row.getBoundingClientRect(); return { top: Math.round(r.top), width: Math.round(r.width) }; }));

@@ -124,7 +124,7 @@ const CLAUDE = { kb_agents: 'claude', kb_claude_url: 'https://api.anthropic.com/
       // a token change for tab 1's own board in another tab is followed; tab 1's board entry in kb_boards keeps its values
       assert.equal(JSON.parse(await a.evaluate(() => localStorage.getItem('kb_boards')))['acme/one'].token, 'token-one');
       await a.reload(); await a.locator('.card', { hasText: 'Added in tab one' }).waitFor();
-      assert.match(a.url(), /repo=acme\/one/, 'a reload keeps the tab on its board');
+      assert.equal(new URL(a.url()).searchParams.get('repo'), 'acme/one', 'a reload keeps the tab on its board');
       // removing the board another tab switched this browser to also removes its live keys (kb_repo, its token), not only kb_boards
       await b.reload(); await b.locator('.card', { hasText: 'Two card' }).waitFor();
       assert.equal(await a.evaluate(() => localStorage.getItem('kb_token')), 'token-two');

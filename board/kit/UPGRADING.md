@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v50 (schema 4)
+
+- New `list --sort score` and `list --sort priority` are read-only; missing scores sort last.
+- New `priority-move ID --before ID|--after ID|--top|--bottom` changes independent board-wide order,
+  not Kanban column ranks. Whole-board head checks retry concurrent neighbour changes safely.
+- No migration is needed. Reading lists never materialises ranks. Existing values, ranks,
+  routines and proposals are preserved. URL-backed web filters need no board upgrade.
+
 ### v49 (schema 4)
 Optional Prioritise layout in List. No migration or reset of existing ordering.
 - Run `kit-update` only. Task `value` (integer 1–5), `effort` (XS/S/M/L/XL), and `priority_rank`

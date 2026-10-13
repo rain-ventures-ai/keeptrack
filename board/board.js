@@ -198,7 +198,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 49;
+  const PAGE_KIT = 50;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1175,8 +1175,9 @@ if (typeof window !== 'undefined') (() => {
       return { name: n, open: open.length, lvl: open.reduce((m, t) => Math.max(m, urgency(t).lvl), -1), rec: ts.reduce((m, t) => (t.updated > m ? t.updated : m), '') }; })
       .sort((a, b) => b.lvl - a.lvl || ((state.clients.indexOf(a.name) + 1 || 999) - (state.clients.indexOf(b.name) + 1 || 999)) || a.name.localeCompare(b.name));   // stable: only a change in urgency reorders
   }
-  const clearClients = () => { setClientValues([]); closePops(); render(); };
+  const clearClients = () => { deferredFilterRoute.delete('client'); setClientValues([]); closePops(); render(); };
   const toggleClient = v => {
+    deferredFilterRoute.delete('client');
     const selected = new Set(clientValues()); if (selected.has(v)) selected.delete(v); else selected.add(v);
     setClientValues(selected); render();
     document.querySelectorAll('#clientPop [data-client]').forEach(b => { const on = selected.has(b.dataset.client); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
@@ -1444,6 +1445,9 @@ if (typeof window !== 'undefined') (() => {
     fillSelect($('fDoneBy'), completionOptions().map(x => [completionFilterValue(x), x.label]), 'Anyone');
     fillSelect($('fLabel'), state.labels.map(l => [l.name, l.name]), 'All');
     fillProjectSelect(sortedProjects().map(p => [p.id, projectPickerLabel(p)]));
+    syncStatusFilter();
+    restoreFilterRoute();
+    writeFilterRoute();
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
     applyModes(); syncInboxButton(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
@@ -1992,7 +1996,7 @@ if (typeof window !== 'undefined') (() => {
     const toggle = ui.button({ label: prioritising() ? 'Standard list' : 'Prioritise', size: 'sm', onClick: () => { LS.set(prioritiseKey(), prioritising() ? 'off' : 'on'); render(); } });
     toggle.id = 'listPrioritise'; toggle.setAttribute('aria-pressed', String(prioritising())); toolbar.append(toggle);
     const status = $('fStatus').cloneNode(true); status.id = 'listStatus'; status.setAttribute('aria-label', 'Filter by status'); status.value = $('fStatus').value;
-    status.onchange = () => { $('fStatus').value = status.value; if (status.value && status.value !== '__open') $('fHideDone').checked = false; render(); $('listStatus').focus({ preventScroll: true }); }; toolbar.append(status);
+    status.onchange = () => { deferredFilterRoute.delete('status'); $('fStatus').value = status.value; if (status.value && status.value !== '__open') $('fHideDone').checked = false; render(); $('listStatus').focus({ preventScroll: true }); }; toolbar.append(status);
     toolbar.append(ui.button({ label: 'More filters', icon: 'sliders-horizontal', size: 'sm', onClick: e => { e.stopPropagation(); $('btnFilter').click(); } }));
     if (prioritising()) {
       const sort = el('select'); sort.id = 'prioritiseSort'; sort.setAttribute('aria-label', 'Prioritise order');
@@ -2901,9 +2905,82 @@ if (typeof window !== 'undefined') (() => {
   const bareUrl = () => location.pathname + location.search;
   const routeDialogs = { dlgSettings: 'settings', dlgHelp: 'help', dlgSearch: 'search', dlgAddPerson: 'add-person', dlgCopy: 'copy' };
   let routeApplying = false, settingsRoute = 'prefs';
+  // A complete, explicit snapshot. Empty selections override old browser preferences;
+  // only this allowlist is copied to navigation links (never tokens or setup payloads).
+  const FILTER_SELECTS = { who: 'fWho', status: 'fStatus', completed: 'fDoneBy', label: 'fLabel', project: 'fProject', priority: 'fPrio' };
+  const FILTER_CHECKS = { attention: 'fAttn', waiting: 'fWaiting', hide_done: 'fHideDone' };
+  const FILTER_KEYS = ['filters', 'client', ...Object.keys(FILTER_SELECTS), ...Object.keys(FILTER_CHECKS), 'unread', 'sort', 'layout', 'order', 'board_view', 'people_query', 'stage', 'activity_range', 'activity_day', 'activity_who', 'activity_agents', 'inbox_status', 'inbox_kind', 'inbox_source', 'inbox_reviewer'];
+  let pendingFilterRoute = new URLSearchParams(location.search), filterRouteReady = false;
+  const deferredFilterRoute = new Map();
+  const routeBoardKey = () => [cfg().repo, cfg().branch, cfg().path].join('\n');
+  const filterBoardKey = routeBoardKey();
+  function restoreFilterRoute() {
+    if (lastSyncOk && deferredFilterRoute.size) {
+      const pending = new Map(deferredFilterRoute); deferredFilterRoute.clear();
+      pending.forEach((values, key) => { if (key === 'client') setClientValues(values);
+        else { const sel = $(FILTER_SELECTS[key]); sel.value = [...sel.options].some(o => o.value === values[0]) ? values[0] : ''; } });
+    }
+    // Cached board options are authoritative enough to restore a link before the
+    // fresh network load. Otherwise a user edit in that visible snapshot is later
+    // overwritten by the old URL when the slow request completes.
+    if ((!lastSyncOk && !fromSnap) || !pendingFilterRoute) return;
+    const q = pendingFilterRoute; pendingFilterRoute = null;
+    if (routeBoardKey() !== filterBoardKey) return;
+    if (q.get('filters') === '1') {
+      setClientValues(q.getAll('client').slice(0, 100));
+      if (!lastSyncOk && q.getAll('client').some(v => ![...$('fClient').options].some(o => o.value === v))) deferredFilterRoute.set('client', q.getAll('client').slice(0, 100));
+      Object.entries(FILTER_SELECTS).forEach(([key, id]) => { const value = q.get(key) || '', sel = $(id), known = [...sel.options].some(o => o.value === value); sel.value = known ? value : ''; if (!lastSyncOk && value && !known) deferredFilterRoute.set(key, [value]); });
+      Object.entries(FILTER_CHECKS).forEach(([key, id]) => { $(id).checked = q.get(key) === '1'; });
+      freshOnly = q.get('unread') === '1';
+      LS.set(sortKey(), ['smart', 'manual', 'due', 'newest'].includes(q.get('sort')) ? q.get('sort') : 'smart');
+      LS.set(prioritiseKey(), q.get('layout') === 'prioritise' ? 'on' : 'off');
+      LS.set(prioritiseKey() + ':sort', ['manual', 'score', 'due', 'newest'].includes(q.get('order')) ? q.get('order') : 'manual');
+      peopleQ = (q.get('people_query') || '').slice(0, 200); peopleStage = stages().includes(q.get('stage')) ? q.get('stage') : '';
+      actRange = ['today', 'yday', '7d', 'day'].includes(q.get('activity_range')) ? q.get('activity_range') : 'today';
+      actDay = /^\d{4}-\d{2}-\d{2}$/.test(q.get('activity_day') || '') && !Number.isNaN(Date.parse(q.get('activity_day'))) ? q.get('activity_day') : todayIso();
+      actWho = ['', '__me', '__agents', ...state.people.map(p => p.github)].includes(q.get('activity_who')) ? q.get('activity_who') : '__me';
+      actAgents = q.get('activity_agents') !== '0';
+      inboxF = { status: ['pending', 'accepted', 'answered', 'ignored', 'all'].includes(q.get('inbox_status')) ? q.get('inbox_status') : 'pending',
+        kind: Object.hasOwn(KIND_LABEL, q.get('inbox_kind')) ? q.get('inbox_kind') : '', source: Object.hasOwn(SRC_LABEL, q.get('inbox_source')) ? q.get('inbox_source') : '',
+        reviewer: /^[a-z\d-]{1,39}$/i.test(q.get('inbox_reviewer') || '') ? q.get('inbox_reviewer') : '' };
+      const v = q.get('board_view'); if (['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(v)) view = v;
+    }
+    filterRouteReady = true;
+  }
+  function filterRouteParams() {
+    const q = new URLSearchParams(); q.set('filters', '1');
+    clientValues().forEach(v => q.append('client', v));
+    Object.entries(FILTER_SELECTS).forEach(([key, id]) => { if ($(id).value) q.set(key, $(id).value); });
+    deferredFilterRoute.forEach((values, key) => { q.delete(key); values.forEach(v => q.append(key, v)); });
+    Object.entries(FILTER_CHECKS).forEach(([key, id]) => { if ($(id).checked) q.set(key, '1'); });
+    if (freshOnly) q.set('unread', '1');
+    q.set('sort', sortMode()); q.set('layout', prioritising() ? 'prioritise' : 'standard');
+    q.set('order', ['manual', 'score', 'due', 'newest'].includes(LS.get(prioritiseKey() + ':sort')) ? LS.get(prioritiseKey() + ':sort') : 'manual');
+    q.set('board_view', view);
+    if (peopleQ) q.set('people_query', peopleQ); if (peopleStage) q.set('stage', peopleStage);
+    q.set('activity_range', actRange); if (actRange === 'day') q.set('activity_day', actDay);
+    if (actWho) q.set('activity_who', actWho); q.set('activity_agents', actAgents ? '1' : '0');
+    Object.entries(inboxF).forEach(([k, v]) => { if (v) q.set('inbox_' + k, v); }); return q;
+  }
+  function writeFilterRoute() {
+    if (!filterRouteReady || pendingFilterRoute || routeApplying || routeBoardKey() !== filterBoardKey) return;
+    try {
+      const u = new URL(location.href), q = filterRouteParams(), old = new URLSearchParams();
+      FILTER_KEYS.forEach(k => u.searchParams.getAll(k).forEach(v => old.append(k, v)));
+      const changed = old.toString() !== q.toString();
+      const oldFilters = new URLSearchParams(old), newFilters = new URLSearchParams(q); oldFilters.delete('board_view'); newFilters.delete('board_view');
+      const filtersChanged = oldFilters.toString() !== newFilters.toString();
+      const hadSnapshot = u.searchParams.get('filters') === '1';
+      const clean = new URL(location.pathname, location.href);
+      ['repo', 'branch', 'path', 'demo'].forEach(k => { if (u.searchParams.has(k)) clean.searchParams.set(k, u.searchParams.get(k)); });
+      q.forEach((v, k) => clean.searchParams.append(k, v)); clean.hash = u.hash;
+      if (clean.href !== u.href) history[changed && filtersChanged && hadSnapshot ? 'pushState' : 'replaceState'](history.state, '', clean);
+    } catch {}
+  }
   function navigationLink(hash = location.hash || '#view=' + view) {
     const u = new URL(location.pathname, location.href), source = new URLSearchParams(location.search);
     ['repo', 'branch', 'path', 'demo'].forEach(k => { if (source.has(k)) u.searchParams.set(k, source.get(k)); });
+    if (filterRouteReady) filterRouteParams().forEach((v, k) => u.searchParams.append(k, v));
     if (!DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
     const safe = /^\d{1,5}$/.test(h) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
@@ -2918,7 +2995,11 @@ if (typeof window !== 'undefined') (() => {
     routeApplying = true;
     try {
       if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(v) ? v : 'today', true); }
-      else if (q.has('settings')) { const name = q.get('settings'); if (!$('dlgSettings').open) $('btnSettings').click(); settingsTab(Object.hasOwn(SET_LINKS, name) || SET_TABS.some(t => t[0] === name) ? name : 'prefs'); }
+      else if (q.has('settings')) { const name = q.get('settings'), valid = Object.hasOwn(SET_LINKS, name) || SET_TABS.some(t => t[0] === name) ? name : 'prefs', alreadyOpen = $('dlgSettings').open;
+        if (!alreadyOpen) $('btnSettings').click();
+        // Restoring the same URL after a delayed load must not reset an open
+        // settings section (e.g. collapse the connection form after token reuse).
+        if (!alreadyOpen || settingsRoute !== valid) settingsTab(valid); }
       else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
       else if (h === 'menu') { const docked = window.kbLayout && window.kbLayout.get() === 'dock', pop = docked ? 'dockPop' : 'morePop', trigger = docked ? 'dockMenu' : 'btnMore'; if ($(pop).hidden) $(trigger).click(); }
       else { const id = Object.keys(routeDialogs).find(id => routeDialogs[id] === h); if (id && $(id) && !$(id).open) { if (id === 'dlgSearch') openSearch(); else if (id === 'dlgAddPerson') openAddPersonForm(); else if (id === 'dlgCopy') $('btnCopy').click(); else $(id).showModal(); } }
@@ -2952,7 +3033,10 @@ if (typeof window !== 'undefined') (() => {
     else backStack.splice(i, 1);   // closed under another one: leave its entry, it only goes back to the board
   }
   window.addEventListener('popstate', () => {
-    if (backClosing) { backClosing--; setTimeout(() => { closingHash = false; }, 0); if (backDone) backDone(); return; }   // our own history.back() after a close; no hashchange is possible for non-routed drawers
+    deferredFilterRoute.clear();
+    pendingFilterRoute = new URLSearchParams(location.search);
+    restoreFilterRoute(); // restore before history's view wins, not inside setView's render
+    if (backClosing) { backClosing--; render(); setTimeout(() => { closingHash = false; }, 0); if (backDone) backDone(); return; }   // restore the underlying filter snapshot even when closing a drawer
     const want = (history.state || {}).kbDlg;
     while (backStack.length && backStack[backStack.length - 1] !== want) {   // close everything opened after the entry we are now on
       const d = $(backStack[backStack.length - 1]); backStack.pop();
@@ -2960,7 +3044,7 @@ if (typeof window !== 'undefined') (() => {
     }
     const v = (history.state || {}).kbView;   // Back/Forward between views
     if (v && v !== view && !backStack.length) setView(v, true);
-    applyRoute();
+    render(); applyRoute();
   });
   // the address bar names the board too: a page opened without ?repo= (a bookmark, a home-screen icon) gets it, keeping the #N
   try { if (!DEMO && !SETUP && LS.get('kb_repo') && !new URLSearchParams(location.search).get('repo')) history.replaceState(history.state, '', boardUrl() + location.hash); } catch {}
@@ -2976,11 +3060,11 @@ if (typeof window !== 'undefined') (() => {
   let contextRestored = false;
   function restoreBoardContext() {
     if (contextRestored || !lastSyncOk || SETUP) return; contextRestored = true;
-    if (location.hash) { applyRoute(); return; }
+    if (location.hash) { if (!backStack.length && !BACK_DIALOGS.some(id => $(id)?.open)) applyRoute(); return; } // a user-opened drawer already owns this route; late startup restoration must not close it
     const id = boardContext().card; if (!id) return;
     if (state.tasks.some(t => t.id === id)) openCard(id); else { clearDraft(id); saveBoardContext({ view, card: '' }); }
   }
-  window.addEventListener('hashchange', () => { if (closingHash) { closingHash = false; return; } applyRoute(); });
+  window.addEventListener('hashchange', () => { if (closingHash) { closingHash = false; if (hashNum() === null) return; } applyRoute(); });
   function refreshDrawer() { const t = taskNow(); if (!t) { $('dlgCard').close(); return; } fillDrawer(t, false); }   // board data changed underneath an open card
 
   let backdropClicks = 0;
@@ -2995,7 +3079,7 @@ if (typeof window !== 'undefined') (() => {
     $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
   }
-  $('cClose').onclick = () => { if (hashNum() !== null) setHash(''); $('dlgCard').close(); };
+  $('cClose').onclick = () => { $('dlgCard').close(); }; // the normal close/Back path clears the URL after its history step, not before
   $('dlgCard').addEventListener('click', e => {
     const drawer = $('dlgCard'), r = drawer.getBoundingClientRect();
     const outside = e.target === drawer && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
@@ -3010,7 +3094,7 @@ if (typeof window !== 'undefined') (() => {
     $('cClose').click();   // reuse title/description saves, context cleanup and native focus restoration
   });
   // a card link always names its board (?repo=…), whatever the address bar holds, so whoever opens it lands on the right repo
-  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(`${location.origin}${DEMO ? location.pathname + location.search : boardUrl()}#${t.num}`, `Link to #${t.num} copied`); };
+  const copyTaskLink = () => { const t = taskNow(); if (t) copyText(navigationLink('#' + t.num), `Link to #${t.num} copied`); };
   // the ⋯ menu: copy link or reference, the GitHub issue, Markdown, delete
   function openDrawerMenu(anchor) {
     const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
@@ -3066,7 +3150,7 @@ if (typeof window !== 'undefined') (() => {
     } catch (e) { toast('Could not reach GitHub', true); } finally { issueBusy = false; }
   }
   function copyForAgent() { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); }
-  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // closing never loses typed text
+  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null && !backPending) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // pending Back clears the old hash only once its close has settled
   async function deleteTask() {
     const id = editing, title = titleOf(id);
     const body = el('div'); body.append(el('p', 'ui-sheet__text', `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`));
@@ -3918,14 +4002,14 @@ if (typeof window !== 'undefined') (() => {
   $('clientPop').addEventListener('click', e => e.stopPropagation()); POPS.add($('clientPop'));
   document.addEventListener('click', () => closePops()); document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (popOpen) { closePops(true); return; } if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
-  $('fClear').onclick = () => { setClientValues([]); ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fWaiting').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
+  $('fClear').onclick = () => { deferredFilterRoute.clear(); setClientValues([]); ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fWaiting').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
   { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(() => { renderTopbar(); layoutCinemaCards(); }, 60); };
     window.addEventListener('resize', refit);
     const wrap = document.querySelector('.clientwrap');
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
-  ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
+  ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { deferredFilterRoute.delete(i === 'fClient' ? 'client' : Object.keys(FILTER_SELECTS).find(k => FILTER_SELECTS[k] === i)); if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again

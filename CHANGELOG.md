@@ -4,6 +4,15 @@ All notable changes to the **board kit** (`board/kit/`) and **board data schema*
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Kit v50 — 2026-10-13
+
+CLI `list --sort score|priority` exposes estimates, derived score and board-wide rank.
+`priority-move` moves a task before/after another task or to the top/bottom, preserving
+Kanban ranks and retrying the intent against the latest whole-board commit.
+The web board keeps selected filters, layout and ordering in shareable URLs across
+reloads and upgrades; browser Back/Forward restores them without carrying secrets.
+No schema migration or automatic board data changes.
+
 ## Kit v49 — 2026-10-13
 
 Optional Prioritise layout in List: inline value/effort, derived score, independent board-wide manual
