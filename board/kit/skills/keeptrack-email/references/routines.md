@@ -7,6 +7,12 @@ move, label or mark-read actions, even when its connector exposes them.
 
 ## Window and checkpoint
 
+Use `keeptrack.py checkpoint <registered-routine-id> show|save` (kit v48) for checkpoint reads and writes, never
+hand-edit its JSON. See `board/ROUTINES.md` for the exact typed input, SHA compare-and-save, independent account
+namespaces and publication order. Preserve a legacy routine's existing ID/path. Start/publish its routine report
+before saving checkpoint progress, and save/publish the successful checkpoint before `routine finish success`.
+Partial/failed attempts retain fixed-window progress for the next run; do not clear it or discard a missed gap.
+
 Keep routine state in `automation/contact-email-sync-<github-owner>.json`, outside `board/`. Use a separate routine
 binding for each board + owner + workflow. Each approved mailbox has a separate successful-window cursor; the example
 below represents one account. On the first run, use a seven-calendar-day
@@ -72,8 +78,8 @@ Retain message hashes for at least 90 days and the latest
 30 run summaries. Older message hashes may be pruned because every board touch also carries the hashed `source_id` and
 therefore remains idempotent. Keep `last_successful_run_at` unchanged after a partial or failed run.
 
-At the start, write and commit `last_started_at` plus `current_run` with status `running`. At the end, append the run
-summary, clear `current_run`, and advance `last_successful_run_at` only after every intended board write succeeds. If a
+At the start, use the checkpoint CLI to save and commit `last_started_at` plus `current_run` with status `running`.
+At the end, save a run summary; only success clears `current_run` and advances `last_successful_run_at` after every intended board write succeeds. If a
 run crashes, `current_run` remains visible as the last attempt. Pull/rebase before checkpoint commits because
 `keeptrack.py` may have advanced the default branch while saving contact touches.
 

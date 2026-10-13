@@ -203,7 +203,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 47  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 48  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3595,7 +3595,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "add", "task-set", "move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine"],
+    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -6592,13 +6592,168 @@ def _cmd_unarchive(a):
     sys.exit("could not restore after retries (board busy)")
 
 
+def _automation_path(relative):
+    """Only real, repo-owned automation files; never follow a symlink (including locks)."""
+    if not ROOT or not isinstance(relative, str) or not re.fullmatch(r"automation/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+\.json", relative):
+        sys.exit("checkpoint path must be a JSON file under automation/")
+    path = os.path.join(ROOT, relative)
+    cur = ROOT
+    for part in (relative + ".lock").split("/"):
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur): sys.exit("automation paths must not contain symlinks")
+    if os.path.islink(path): sys.exit("automation paths must not contain symlinks")
+    return path
+
+
+def _checkpoint_time(value):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", value):
+        sys.exit("checkpoint times must be UTC ISO timestamps")
+    try: return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError: sys.exit("invalid checkpoint timestamp")
+
+
+def _checkpoint_token(value, kind="opaque"):
+    patterns = {"key": r"(?:rfc822|email|sha256):[a-f0-9]{64}", "contact": r"p_[A-Za-z0-9_-]{1,100}",
+                "opaque": r"[A-Za-z0-9_./+=:-]{1,4096}"}
+    if not isinstance(value, str) or not re.fullmatch(patterns[kind], value) or "://" in value:
+        sys.exit("checkpoint values must be IDs, hashes or opaque tokens, never addresses, queries or email text")
+
+
+def _checkpoint_payload(payload):
+    if not isinstance(payload, dict) or set(payload) - {"window", "progress", "messages", "counts"}:
+        sys.exit("checkpoint input allows only window, progress, messages and counts")
+    window = payload.get("window")
+    if not isinstance(window, dict) or set(window) != {"from", "to"} or _checkpoint_time(window["from"]) >= _checkpoint_time(window["to"]):
+        sys.exit("checkpoint needs a fixed increasing window {from,to}")
+    progress = payload.get("progress", {})
+    if not isinstance(progress, dict) or set(progress) - {"account_hash", "contact_ids", "completed_queries", "query_ordinal", "cursor", "boundary", "processed_keys", "exhausted"}:
+        sys.exit("unknown checkpoint progress field")
+    for key, value in progress.items():
+        if key == "exhausted":
+            if type(value) is not bool: sys.exit("exhausted must be a boolean")
+        elif key == "query_ordinal":
+            if type(value) is not int or value < 0: sys.exit("query_ordinal must be a nonnegative integer")
+        elif key == "completed_queries":
+            if not isinstance(value, list) or any(type(v) is not int or v < 0 for v in value): sys.exit("completed_queries must be nonnegative ordinals")
+        elif key in ("contact_ids", "processed_keys"):
+            if not isinstance(value, list): sys.exit("checkpoint ID fields must be lists")
+            for v in value: _checkpoint_token(v, "contact" if key == "contact_ids" else "key")
+        elif key == "account_hash": _checkpoint_token(value, "key")
+        elif value is not None: _checkpoint_token(value)
+    counts = payload.get("counts", {})
+    if not isinstance(counts, dict) or any(not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", k) or type(v) is not int or v < 0 for k, v in counts.items()):
+        sys.exit("checkpoint counts must be named nonnegative integers")
+    messages = payload.get("messages", {})
+    if not isinstance(messages, dict): sys.exit("messages must be a hash-keyed object")
+    for key, message in messages.items():
+        _checkpoint_token(key, "key")
+        if not isinstance(message, dict) or set(message) - {"contact_id", "thread", "occurred_at", "direction", "result", "logged_at"}:
+            sys.exit("unknown checkpoint message field")
+        for k, v in message.items():
+            if k == "contact_id": _checkpoint_token(v, "contact")
+            elif k == "thread": _checkpoint_token(v, "key")
+            elif k in ("occurred_at", "logged_at"): _checkpoint_time(v)
+            elif k == "direction" and v not in ("received", "sent"): sys.exit("invalid message direction")
+            elif k == "result" and not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", str(v)): sys.exit("result must be a status code, not email text")
+    return window, progress, messages, counts
+
+
+def cmd_checkpoint(a):
+    """Update an owner-bound register's durable state, without touching board data or publishing git."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", a.id): sys.exit("invalid routine id")
+    register_path = _automation_path("automation/routines/" + a.id + ".json")
+    if not os.path.isfile(register_path): sys.exit("routine register is missing")
+    # Same lock as routine start/finish: a worker cannot checkpoint after another process finishes its run.
+    with open(register_path + ".lock", "a+b") as register_lock:
+        if fcntl: fcntl.flock(register_lock, fcntl.LOCK_EX)
+        elif msvcrt: register_lock.seek(0); msvcrt.locking(register_lock.fileno(), msvcrt.LK_LOCK, 1)
+        with open(register_path, encoding="utf-8") as f: register = json.load(f)
+        if register.get("version") != 1 or register.get("id") != a.id: sys.exit("routine register version/id mismatch")
+        if not FILE:
+            _check_git_clone()
+            if (register.get("board_repo"), register.get("branch"), register.get("board_path")) != (REPO, BRANCH, PATH):
+                sys.exit("routine register does not match the resolved board/branch/path")
+        path = _automation_path(register.get("checkpoint_path"))
+        if path == register_path or "/routines/" in path: sys.exit("checkpoint cannot replace a routine register")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".lock", "a+b") as lock:
+            if fcntl: fcntl.flock(lock, fcntl.LOCK_EX)
+            elif msvcrt: lock.seek(0); msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            raw = None
+            if os.path.isfile(path):
+                with open(path, "rb") as f: raw = f.read()
+            digest = hashlib.sha256(raw).hexdigest() if raw is not None else "missing"
+            data = json.loads(raw) if raw is not None else {"version": 1, "messages": {}, "runs": []}
+            if not isinstance(data, dict) or data.get("version") != 1: sys.exit("unsupported checkpoint version")
+            if a.action == "show":
+                print(json.dumps({"sha256": digest, "checkpoint": data}, indent=2)); return
+            if register.get("owner", "").lower() != default_user().strip().lower(): sys.exit("checkpoint can only be updated by the registered owner")
+            current = register.get("current_run") or {}
+            if not a.run_id or current.get("id") != a.run_id: sys.exit("run id does not match the running attempt")
+            if not a.expect_sha or digest != a.expect_sha: sys.exit("checkpoint changed; reread and regroup before saving")
+            if not a.input: sys.exit("checkpoint save requires a JSON input file")
+            with open(a.input, encoding="utf-8") as f: payload = json.load(f)
+            window, progress, messages, counts = _checkpoint_payload(payload)
+            if not progress.get("account_hash"): sys.exit("progress.account_hash is required to bind the mailbox")
+            account_hash = progress["account_hash"]
+            # The first account keeps the legacy root intact; other mailboxes have independent state.
+            state = data
+            if data.get("account_hash") and data["account_hash"] != account_hash:
+                accounts = data.setdefault("accounts", {})
+                if not isinstance(accounts, dict): sys.exit("invalid account checkpoint namespace")
+                state = accounts.setdefault(account_hash, {"version": 1, "account_hash": account_hash, "messages": {}, "runs": []})
+                if not isinstance(state, dict) or state.get("version") != 1 or state.get("account_hash") != account_hash:
+                    sys.exit("account checkpoint version/binding mismatch")
+            previous = state.get("current_run") or {}
+            if previous and previous.get("window") != window: sys.exit("incomplete checkpoint window must be resumed, not replaced")
+            previous_progress = previous.get("progress") or {}
+            if not previous_progress and "contact_ids" not in progress:
+                sys.exit("new checkpoint window needs an explicit ordered contact_ids plan (empty is allowed)")
+            if "contact_ids" in previous_progress and progress.get("contact_ids", previous_progress["contact_ids"]) != previous_progress["contact_ids"]:
+                sys.exit("incomplete checkpoint contact query order must be preserved")
+            if progress.get("query_ordinal", previous_progress.get("query_ordinal", 0)) < previous_progress.get("query_ordinal", 0):
+                sys.exit("checkpoint query ordinal cannot move backwards")
+            old_end = (state.get("last_window") or {}).get("to")
+            if old_end and (_checkpoint_time(window["from"]) > _checkpoint_time(old_end) or _checkpoint_time(window["to"]) < _checkpoint_time(old_end)):
+                sys.exit("checkpoint window must retain the missed gap and not move backwards")
+            merged_progress = dict(previous_progress, **progress)
+            for key in ("completed_queries", "processed_keys"):
+                merged_progress[key] = list(dict.fromkeys(previous_progress.get(key, []) + progress.get(key, [])))
+            if any(n >= len(merged_progress["contact_ids"]) for n in merged_progress["completed_queries"]):
+                sys.exit("completed query ordinal is outside the fixed contact plan")
+            if a.status == "success":
+                if not progress.get("exhausted"): sys.exit("success requires explicit progress.exhausted=true after all pages and proposals are published")
+                if merged_progress.get("cursor"): sys.exit("success cannot retain an unconsumed paging cursor")
+                if counts.get("failures", 0): sys.exit("success cannot have failures")
+                if "contact_ids" in merged_progress and set(merged_progress["completed_queries"]) != set(range(len(merged_progress["contact_ids"]))):
+                    sys.exit("success requires every planned contact query to be completed")
+            saved_messages = state.setdefault("messages", {})
+            for key, value in messages.items():
+                if key in saved_messages and saved_messages[key] != value: sys.exit("existing processed message cannot be replaced")
+            saved_messages.update(messages)
+            state["account_hash"] = account_hash
+            attempt = {"id": a.run_id, "started_at": current["started_at"], "window": window, "progress": merged_progress, "status": a.status, "counts": counts}
+            state["last_started_at"] = current["started_at"]
+            state["current_run"] = attempt
+            if a.status != "running":
+                report = {k: v for k, v in attempt.items() if k != "progress"}
+                report["finished_at"] = now()
+                state["runs"] = (state.get("runs", []) + [report])[-30:]
+                if a.status == "success":
+                    state["last_window"] = window
+                    state["last_successful_run_at"] = report["finished_at"]
+                    state["current_run"] = None
+            atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            print(f"{a.id}: checkpoint {a.status}; commit {os.path.relpath(path, ROOT)} before finishing the routine report")
+
+
 def cmd_routine(a):
     """Repo-owned routine inventory and bounded run reports; scheduler credentials stay outside git."""
     if not ROOT:
         sys.exit("routine commands need a board repo clone")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", a.id):
         sys.exit("routine id must use lowercase letters, digits, hyphens or underscores")
-    path = os.path.join(ROOT, "automation", "routines", a.id + ".json")
+    path = _automation_path("automation/routines/" + a.id + ".json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".lock", "a+b") as lock:
         if fcntl: fcntl.flock(lock, fcntl.LOCK_EX)
@@ -6664,6 +6819,13 @@ def main():
     s.add_argument("--summary", help="brief outcome; no secrets or email text")
     s.add_argument("--count", action="append", default=[], help="structured count such as touches_logged=3")
     s.set_defaults(f=cmd_routine)
+    s = sub.add_parser("checkpoint", help="read/save a registered routine's owner-bound durable checkpoint (local clone; commit separately)")
+    s.add_argument("id"); s.add_argument("action", choices=["show", "save"])
+    s.add_argument("input", nargs="?", help="privacy-safe JSON input for save")
+    s.add_argument("--expect-sha", help="sha256 from show, or missing; stale updates are refused")
+    s.add_argument("--run-id", help="the active routine start's run id")
+    s.add_argument("--status", choices=["running", "partial", "failed", "blocked", "success"], default="running")
+    s.set_defaults(f=cmd_checkpoint)
     global _SUBPARSERS
     _SUBPARSERS = sub
     p.epilog = "Commands by topic: keeptrack.py help [topic]"
