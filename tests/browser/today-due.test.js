@@ -74,14 +74,14 @@ class Github {
     await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_tour', 'done'); sessionStorage.setItem('kb_view', 'today'); });
     await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.tdue');
     const sec = page.locator('.tdue');
-    const visible = async () => (await sec.locator('.sitem:visible .stitle').allTextContents()).map(s => s.trim());
+    const visible = async () => (await sec.locator('.ttoday:visible .pwho b').allTextContents()).map(s => s.trim().replace(/^#\d+ /, ''));
     const want = ['Late task', 'Today task', ...(api.plan.week ? ['Week task'] : [])];
-    assert.deepEqual((await visible()).map(s => s.replace(/Acme.*$/, '')), want, 'overdue, today and this week show; next week is closed');
+    assert.deepEqual((await visible()).map(s => s.replace(/^#\d+ /, '')), want, 'overdue, today and this week show; next week is closed');
     assert.equal(await sec.locator('.sday.overdue').count(), 1, 'an Overdue group');
     assert.equal(await sec.locator('.sday.today').count(), 1, 'a Today group');
     const next = sec.locator('details.calundated'); assert.equal(await next.evaluate(x => x.open), false, 'next week is closed by default');
-    assert.match(await next.locator('summary').textContent(), /Next week \(1\)/);
-    await next.locator('summary').click(); assert((await visible()).includes('Next week task'));
+    assert.match(await next.locator(':scope > summary').textContent(), /Next week \(1\)/);
+    await next.locator(':scope > summary').click(); assert((await visible()).includes('Next week task'));
     assert(!(await visible()).includes('Far task'), 'nothing after next week'); assert(!(await visible()).includes('Done task'));
     await shot(page, 'today-due');
     await sec.getByRole('button', { name: 'Show full schedule' }).click(); await page.waitForSelector('.sched .caltitle');

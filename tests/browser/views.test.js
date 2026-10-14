@@ -170,7 +170,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       assert(await page.locator('.calcell .pill .ui-prio.ui-prio--dot.ui-pill').count() > 0, 'calendar tasks carry the compact priority pill');
       await page.done();
       const crm = await open(browser, { demo: 'crm', view: 'today' });
-      assert(await crm.locator('.tdue .sitem .ui-prio.ui-pill').count() > 0, 'Today task rows are Schedule rows, with the priority pill');
+      assert(await crm.locator('.ttoday .ui-prio.ui-pill').count() > 0, 'Today task rows use the priority pill');
       assert(await crm.locator('.prow .ui-due.ui-pill').count() > 0, 'Today people rows use the due pill');
       await crm.locator('#viewSw [data-view="pipeline"]').click(); await crm.waitForSelector('.pcard');
       assert(await crm.locator('.pcard .ui-due.ui-pill').count() > 0, 'pipeline cards use the due pill');

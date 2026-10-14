@@ -2123,6 +2123,28 @@ if (typeof window !== 'undefined') (() => {
     const c = elI('span', 'chip waitchip' + (chaseNow(t) ? ' late' : ''), 'alarm-clock', `waiting on ${on.length > 40 ? on.slice(0, 39) + '…' : on}, ${days}d`);
     const chase = chaseDate(w); c.title = `Waiting on ${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} since ${w.since || '?'}${chase ? ', chase ' + chase : ''}${w.note ? '\n' + w.note : ''}`; return c;
   }
+  // After (card dependencies): the card ids a card runs after, the same rules as keeptrack.py's after_links. A hint and a
+  // gate, never a trigger: the page only shows them; relay's can-start refuses a card while any of them is not done. An
+  // id no longer on the board counts as done only if the archive (once loaded) holds it as Done, else it is missing.
+  const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
+  const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
+  function afterLinks(t) {
+    let loaded = null; try { loaded = archived; } catch { loaded = null; }   // declared further down this file
+    const arch = new Map(((loaded && loaded.tasks) || []).map(x => [x.item.id, x.item]));
+    return afterIds(t).map(id => {
+      const live = state.tasks.find(x => x.id === id);
+      if (live) return { id, num: live.num, title: live.title || '', live: true, state: finishedDone(live) ? 'done' : live.column === doneColId() ? 'cancelled' : (colName(live.column) || live.column || '?') };
+      const old = arch.get(id); return { id, num: old ? old.num : null, title: old ? old.title || '' : '', live: false, state: finishedDone(old) ? 'done' : 'missing' };
+    });
+  }
+  const afterRef = x => x.num != null ? '#' + x.num : x.id;
+  function chipsAfter(t) {   // the card face: one chip per link not done yet; when every link is done, one quiet "ready" chip
+    const links = afterLinks(t); if (!links.length || isDoneTask(t)) return [];
+    const open = links.filter(x => x.state !== 'done');
+    if (!open.length) { const c = elI('span', 'chip afterchip ok', 'check', 'after ' + links.map(afterRef).join(', ')); c.title = 'Every card this one runs after is done'; return [c]; }
+    return open.map(x => { const bad = x.state === 'missing' || x.state === 'cancelled'; const c = elI('span', 'chip afterchip' + (bad ? ' late' : ''), 'arrow-right', 'after ' + afterRef(x));
+      c.title = `Runs after ${afterRef(x)}${x.title ? ' ' + x.title : ''} (${x.state})`; return c; });
+  }
   const cancelledRun = t => t && t.column === doneColId() && t.outcome === 'cancelled' ? (t.last_run || {}) : null;   // v35 done always sets the card's outcome
   const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') ? s : s.slice(0, Math.min(3, Math.floor(s.length / 2))) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
   function chipOutcome(t) { const r = cancelledRun(t); if (!r) return null; const c = el('span', 'chip cancelledchip', 'cancelled'); c.title = 'Closed as cancelled' + (r.note ? ': ' + r.note : ''); return c; }
@@ -2150,7 +2172,7 @@ if (typeof window !== 'undefined') (() => {
     if (t.due) mm.append(duePill(t));
     mm.append(prioPill(t));
     mm.append(...labelTags(t)); { const c = clientTag(t); if (c) mm.append(c); }
-    [chipMention(t), chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
+    [chipMention(t), chipWaiting(t), ...chipsAfter(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t));
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
@@ -2158,7 +2180,7 @@ if (typeof window !== 'undefined') (() => {
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
     const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
     const pr = el('div', 'c-prio'); pr.append(prioPill(t));
-    const more = el('div', 'c-more'); [chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
+    const more = el('div', 'c-more'); [chipWaiting(t), ...chipsAfter(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     row.append(c0, task, desc, ppl, lab, due, pr, more); return row;
@@ -2271,11 +2293,11 @@ if (typeof window !== 'undefined') (() => {
     const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && extra.append(x));
     row.append(circ, el('div', 'stime', colName(t.column)), title, extra, avs); row.onclick = () => openCard(t.id); return row;
   }
-  function schedDay(prefix, key, label, list, cls) {
+  function schedDay(prefix, key, label, list, cls, make) {   // make: the row; the Schedule's own by default
     const d = new Date(key + 'T00:00:00'), sec = el('section', 'sday' + (cls || ''));
     const dl = el('div', 'sdate');
     if (label) dl.append(el('span', 'sdn lbl', label)); else dl.append(el('span', 'sdn', String(d.getDate())), el('span', 'sdl', d.toLocaleDateString('en-GB', { month: 'short', weekday: 'short' }).replace(' ', ', ')));
-    const items = el('div', 'sitems'); capList(prefix + (key || label), list, t => schedItem(t, !key), items); if (!list.length) items.append(emptyNote('Nothing due', 'calendar-days'));
+    const items = el('div', 'sitems'); capList(prefix + (key || label), list, make || (t => schedItem(t, !key)), items); if (!list.length) items.append(emptyNote('Nothing due', 'calendar-days'));
     sec.append(dl, items); return sec;
   }
   function renderSched() {
@@ -2594,7 +2616,7 @@ if (typeof window !== 'undefined') (() => {
       if (context.childNodes.length) c.append(context);
     }
     const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
-    [chipMention(t), chipWaiting(t), chipRelated(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+    [chipMention(t), chipWaiting(t), chipRelated(t), ...chipsAfter(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
       other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t), chipOutcome(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
@@ -2751,7 +2773,8 @@ if (typeof window !== 'undefined') (() => {
       { label: 'Labels', icon: 'tag', value: [chips, labelAdd, labelNew, labelList] }
     ]);
     [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
-    $('cProps').append(props);
+    const after = el('div', 'dafter'); after.id = 'cAfter'; after.hidden = true;   // "Runs after": only on a card with after links
+    $('cProps').append(props, after);
     // sections: Description, Checklist, Links, Contacts, Comments, History
     const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
     const todos = el('div', 'dtodos'); todos.id = 'cTodos';
@@ -2960,6 +2983,20 @@ if (typeof window !== 'undefined') (() => {
     if (!state.tasks.some(x => x.id === srcId)) { toast(`Merged #${src.num} into #${dst.num}`); if (editing === srcId) openCard(dstId); else { const t = taskNow(); if (t) renderRelated(t); } }
     else { toast(`#${src.num} is merged but not archived yet. Open the card and choose Finish merge.`, true); const t = taskNow(); if (t) renderRelated(t); }
   }
+  // Runs after: each card this one runs after, with its state; a card on the board opens on click. Set with
+  // keeptrack.py task-set --after (or a front door); the page shows the links and never moves a card because of them.
+  function renderAfter(t) {
+    const box = $('cAfter'); if (!box) return; box.textContent = ''; const links = afterLinks(t); box.hidden = !links.length; if (!links.length) return;
+    let loaded = null; try { loaded = archived; } catch { loaded = null; }
+    if (links.some(x => !x.live) && !loaded && archYears().length) loadArchived().then(() => { if (editing === t.id) renderAfter(state.tasks.find(x => x.id === t.id) || t); }).catch(() => {});   // an archived Done card counts as done
+    const open = links.filter(x => x.state !== 'done');
+    box.append(elI('span', 'dafter__label', 'arrow-right', open.length ? 'Runs after' : 'Runs after (all done: ready to approve)'));
+    links.forEach(x => {
+      const tone = x.state === 'done' ? 'ok' : x.state === 'missing' || x.state === 'cancelled' ? 'warn' : 'neutral';
+      const p = ui.pill({ text: `after ${afterRef(x)}${x.title ? ' ' + x.title : ''} · ${x.state}`, tone, size: 'sm', onClick: x.live ? () => openCard(x.id) : undefined });
+      p.dataset.after = x.id; p.title = x.state === 'missing' ? 'Not on the board, and not archived as Done' : `${afterRef(x)} is ${x.state}`; box.append(p);
+    });
+  }
   function renderWaiting(t) {
     const box = $('cWaitVal'); box.textContent = ''; const w = waitingOf(t);
     if (w) {
@@ -3146,7 +3183,7 @@ if (typeof window !== 'undefined') (() => {
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderWaiting(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
+    renderWaiting(t); renderAfter(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
@@ -4567,14 +4604,14 @@ if (typeof window !== 'undefined') (() => {
   // The fields a proposal may change, the same lists as keeptrack.py (TASK_CHANGE_FIELDS, PERSON_CHANGE_FIELDS, TOUCH_CHANGE_FIELDS).
   // `propose` checks them, but a proposal file can be written by hand: accept checks them again and refuses anything else (claim, num, id…).
   const CHANGE_FIELDS = {
-    task: ['title', 'column', 'client', 'project', 'contact', 'priority', 'due', 'labels', 'owner', 'assignees', 'details', 'links', 'contacts', 'todos', 'comments', 'value', 'effort', 'priority_rank'],
+    task: ['title', 'column', 'client', 'project', 'contact', 'priority', 'due', 'labels', 'owner', 'assignees', 'details', 'links', 'contacts', 'todos', 'comments', 'value', 'effort', 'priority_rank', 'after'],
     person: ['name', 'company', 'role', 'email', 'phone', 'linkedin', 'github', 'emails', 'phones', 'stage', 'value', 'source', 'notes', 'next', 'due', 'next_due', 'links', 'comments'],
     touch: ['text', 'channel', 'at', 'source_id', 'source_message_ids', 'next', 'due', 'next_due'] };
   const PROPOSAL_KINDS = ['task.create', 'task.update', 'person.upsert', 'contact.touch'];
   // Value types too, the same rules as check_change_values in keeptrack.py (shared cases: tests/fixtures/proposal-change-cases.json).
   const STR_FIELDS = ['title', 'column', 'client', 'project', 'contact', 'owner', 'details', 'name', 'company', 'role', 'email', 'phone',
     'linkedin', 'github', 'stage', 'value', 'source', 'notes', 'next', 'text', 'channel', 'at', 'source_id'];
-  const DATE_FIELDS = ['due', 'next_due'], STR_LIST_FIELDS = ['labels', 'assignees', 'source_message_ids'];
+  const DATE_FIELDS = ['due', 'next_due'], STR_LIST_FIELDS = ['labels', 'assignees', 'source_message_ids', 'after'];
   const DICT_LIST_FIELDS = ['links', 'contacts', 'todos', 'comments', 'emails', 'phones'];
   function changeValueRefusal(change, kind) {
     for (const [key, value] of Object.entries(change)) {
@@ -4691,6 +4728,7 @@ if (typeof window !== 'undefined') (() => {
         todos: [], comments: [], history: [], claim: null, created: ts, createdBy: inboxMe(), updated: ts, updatedBy: inboxMe() };
       appendUnique(t, 'todos', change.todos || []); appendUnique(t, 'comments', change.comments || []);
       ['value', 'effort', 'priority_rank'].forEach(k => { if (Object.hasOwn(change, k)) t[k] = clone(change[k]); });
+      { const after = [...new Set((change.after || []).filter(x => typeof x === 'string' && x && x !== t.id))]; if (after.length) t.after = after; }   // ids: keeptrack.py's propose resolved them
       histAdd(t, `created from proposal ${p.id}`); n.tasks.push(t); markSimilar(n, t); return;
     }
     if (p.kind === 'person.upsert' && !p.target) {
@@ -4715,6 +4753,7 @@ if (typeof window !== 'undefined') (() => {
     Object.entries(change).forEach(([k, v]) => {
       if (LIST_FIELDS.includes(k) && Array.isArray(v)) appendUnique(rec, k, v);
       else if (k === 'owner') { if (p.target.type === 'task' && isMemberLogin(v)) rec.assignees = [v]; }
+      else if (k === 'after' && p.target.type === 'task') { const a = [...new Set(v.filter(x => x !== rec.id))]; if (a.length) rec.after = a; else delete rec.after; }   // never itself
       else rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k] = clone(v);
     });
     rec.updated = ts; rec.updatedBy = inboxMe(); histAdd(rec, `accepted proposal ${p.id}`);
@@ -5019,14 +5058,14 @@ if (typeof window !== 'undefined') (() => {
   function proposalChange(p) {   // rows of field / current / proposed
     const c = p.change || {}, adds = proposalPlan(p).adds, rec = p.target && !adds ? findRef(state, p.target) : null, wrap = el('section', 'prop__changes'), tbl = el('table', 'proptbl');
     const touch = p.kind === 'contact.touch', keys = Object.keys(c).filter(k => !(touch && TECH_FIELDS.includes(k))), label = k => touch ? TOUCH_LABEL[k] || k : k;
-    wrap.append(el('h5', null, adds ? 'What will be added' : 'What will change'));
+    wrap.append(el('h5', null, adds ? (p.status === 'pending' ? 'What will be added' : 'What was proposed') : 'What will change'));
     const hd = el('tr'); hd.append(el('th', null, 'Field')); if (rec) hd.append(el('th', null, 'Current')); hd.append(el('th', null, adds ? 'To add' : 'Proposed'));
     const th = el('thead'); th.append(hd); tbl.append(th); const tb = el('tbody');
     keys.forEach(k => { const tr = el('tr'); tr.append(el('th', null, LIST_FIELDS.includes(k) ? 'Add ' + k : label(k))); if (rec) { const current = el('td'); if (LIST_FIELDS.includes(k)) { current.append(el('span', 'muted', 'Existing entries are kept')); if ((rec[k] || []).length) { const details = el('details', 'prop__context'); details.append(el('summary', null, 'View existing ' + k), el('div', null, fmtVal(rec[k]))); current.append(details); } } else current.textContent = fmtVal(rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k]); tr.append(current); }
       const td = el('td', null, k === 'at' && touch && c[k] ? whenText(c[k]) : fmtVal(c[k])); td.dataset.label = LIST_FIELDS.includes(k) || adds ? 'To add' : 'Proposed'; if (rec) tr.children[1].dataset.label = 'Current'; if (rec && !LIST_FIELDS.includes(k) && !sameJson(rec[k], c[k])) td.classList.add('propchanged'); tr.append(td); tb.append(tr); });
     tbl.append(tb);
     if (!Object.keys(c).length) return el('p', 'muted', 'The details of this decided proposal were removed after 30 days.');
-    wrap.append(tbl);
+    if (keys.length) wrap.append(tbl);
     const tech = TECH_FIELDS.filter(k => touch && k in c);
     if (tech.length) { const d = el('details', 'prop__context'); d.append(el('summary', null, 'Message keys (used to skip this email next time)'), el('div', 'muted', tech.map(k => k + ': ' + fmtVal(c[k])).join(' · '))); wrap.append(d); }
     return wrap;
@@ -5127,7 +5166,7 @@ if (typeof window !== 'undefined') (() => {
     art.append(proposalChange(p));
     if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
-    const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => options.today ? todayInboxAct(p, act) : inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).length)))) b.disabled = true; acts.append(b); };
+    const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => options.today ? todayInboxAct(p, act) : inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).some(d => d.type !== 'proposal'))))) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
     if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Leave pending if anything needs checking.')); btn('accept', plan.verb, 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
@@ -5571,6 +5610,68 @@ if (typeof window !== 'undefined') (() => {
     if (active.length) { const t = active.sort((a, b) => numOf(a) - numOf(b))[0], b = el('button', 'kwwactive', `${agentLabel(t.claim)} · #${t.num} ${t.title}`); b.type = 'button'; b.onclick = () => openCard(t.id, 'comments'); box.append(b); }
     return box;
   }
+  // ---- Prep for call: a brief for a meeting with another board member, built from the board alone (no AI, no network) ----
+  let prepWho = null;   // the member the brief is for; null = panel closed. Per page load only.
+  const prepKey = () => 'kb_prep:' + boardStoreId();
+  const prepOthers = () => state.people.filter(p => p.github && p.github.toLowerCase() !== (cfg().me || '').toLowerCase());
+  function prepBrief(who) {
+    const meL = (cfg().me || '').toLowerCase(), whoL = String(who || '').toLowerCase(), both = [meL, whoL].filter(Boolean), today = todayIso();
+    const weekAgo = Date.now() - 7 * 864e5, done = doneColId(), used = new Set();
+    const person = l => state.people.find(p => String(p.github || '').toLowerCase() === l) || { github: l, name: l };
+    const owner = by => String(by || '').toLowerCase().split('@').pop();   // "claude@JezHub" counts as JezHub
+    const has = (t, l) => t.assignees.some(a => a.toLowerCase() === l);
+    // "Discuss X with Ollie": a talk verb, then "with" and a word that starts like either person's name or login (Ollie ~ Oliver)
+    // and it belongs to the call only when the person it names is one of you and the card is the other one's (or nobody's)
+    const stems = l => [l, String(person(l).name || '').toLowerCase()].filter(s => s.length >= 2).map(s => s.slice(0, 2));
+    const talk = t => { const m = /\b(discuss|sync|talk|catch[- ]?up|agree|decide|ask|check|review)\b.*?\bwith\s+@?([a-z][\w-]+)/i.exec(t.title); if (!m) return false;
+      const named = m[2].toLowerCase().slice(0, 2), mine = !t.assignees.length;
+      return both.some(l => stems(l).includes(named) && (mine || both.some(o => o !== l && has(t, o)))); };
+    const mentions = (text, l) => new RegExp('(?<![\\w@#&/])@' + l.replace(/[^\w-]/g, '') + '(?![\\w-])', 'i').test(String(text || ''));
+    const open = state.tasks.filter(t => t.column !== done), ours = t => both.some(l => has(t, l));
+    const pick = (list, why) => list.filter(t => !used.has(t.id)).sort((a, b) => numOf(a) - numOf(b)).map(t => { used.add(t.id); return { t, why: typeof why === 'function' ? why(t) : why }; });
+    const sections = [];
+    const add = (key, title, icon, rows) => { if (rows.length) sections.push({ key, title, icon, rows }); };
+    add('goals', 'Goals', 'flag', pick(open.filter(t => /^goal\b/i.test(t.title) || t.labels.some(l => /^goals?$/i.test(l))), ''));
+    add('discuss', 'To discuss', 'message-square', pick(open.filter(talk), t => t.assignees.map(a => '@' + a).join(', ')));
+    add('waiting', 'Waiting on one of you', 'alarm-clock', pick(open.filter(t => { const w = waitingOf(t); return w && both.includes(String(w.who || '').toLowerCase()); }), t => 'Waiting on ' + (waitingOf(t).on || '@' + waitingOf(t).who)));
+    add('stuck', 'Overdue or stuck', 'triangle-alert', pick(open.filter(t => ours(t) && needsAttention(t)), t => t.due && t.due < today ? 'Due ' + t.due : 'Needs attention'));
+    const asks = c => Date.parse(c.at) >= weekAgo && both.includes(owner(c.by)) && both.some(l => l !== owner(c.by) && mentions(c.text, l));
+    add('mentions', 'Asked of each other this week', 'bell', pick(open.filter(t => t.comments.some(asks)), t => { const c = t.comments.slice().reverse().find(asks); return c ? (c.by || '') + ': ' + String(c.text || '').replace(/\s+/g, ' ').slice(0, 120) : ''; }));
+    add('shared', 'Shared cards', 'users', pick(open.filter(t => both.every(l => has(t, l)) && t.column !== 'backlog'), t => colName(t.column)));
+    add('done', 'Done in the last 7 days', 'circle-check', pick(state.tasks.filter(t => { const c = completionOf(t); return c && Date.parse(c.at) >= weekAgo && (ours(t) || both.includes(owner(c.person || c.owner))); }), t => 'by ' + completionOf(t).label));
+    const inbox = inboxOn() ? inboxPending() : [];
+    return { who: person(whoL), sections, inbox };
+  }
+  function prepText(b) {
+    const L = [`# Prep for call with ${b.who.name || b.who.github} (@${b.who.github}), ${todayIso()}`, `Board: ${cfg().repo}`];
+    b.sections.forEach(s => { L.push('', `## ${s.title}`); s.rows.forEach(r => L.push(`- #${r.t.num} ${r.t.title}${r.why ? ' (' + r.why + ')' : ''}`)); });
+    if (b.inbox.length) { L.push('', `## Review Inbox (${b.inbox.length} to review)`); b.inbox.slice(0, 10).forEach(p => L.push(`- ${p.title || p.id}`)); }
+    if (!b.sections.length && !b.inbox.length) L.push('', 'Nothing on the board for this call.');
+    return L.join('\n');
+  }
+  function prepPanel() {
+    const others = prepOthers(), sec = ui.section({ title: 'Prep for call', icon: 'phone' }); sec.classList.add('tsec', 'tprep');
+    if (!others.some(p => p.github === prepWho)) prepWho = others[0].github;
+    const bar = el('div', 'tprep__bar');
+    const who = ui.select({ label: 'Call with', value: prepWho, options: others.map(p => ({ value: p.github, label: `${p.name || p.github} (@${p.github})` })), onChange: v => { prepWho = v; LS.set(prepKey(), v); render(); } });
+    const b = prepBrief(prepWho), text = prepText(b);
+    const copy = ui.button({ label: 'Copy brief', icon: 'clipboard-copy', size: 'sm' }); copy.onclick = () => copyText(text, 'Brief copied');
+    const ai = ui.button({ label: 'Copy for AI', icon: 'bot', size: 'sm', variant: 'ghost' }); ai.title = 'Copy the brief with a prompt for Claude, Codex or ChatGPT to turn it into an agenda';
+    ai.onclick = () => copyText(`I have a call with @${b.who.github} today. Below is a brief from our Keeptrack board (${cfg().repo}). Read the cards it names on the board, then give me a short agenda: the 3 to 5 things we must decide or unblock first, what I owe them and what they owe me, and anything to close. UK English, short.\n\n` + text, 'Copied with a prompt for AI');
+    const close = ui.button({ label: 'Close', size: 'sm', variant: 'ghost' }); close.onclick = () => { prepWho = null; render(); };
+    bar.append(who, copy, ai, close); sec.body.append(bar);
+    if (!cfg().me) sec.body.append(el('p', 'hint', 'Set your GitHub username in Settings to include your own cards.'));
+    b.sections.forEach(s => {
+      const h = el('h4', 'tprep__h'); h.append(svgIcon(s.icon), el('span', null, s.title), el('span', 'muted', String(s.rows.length))); sec.body.append(h);
+      const list = el('ul', 'tprep__list'); sec.body.append(list);
+      s.rows.slice(0, 8).forEach(r => { const li = el('li'), btn = el('button', 'tprep__row'); btn.type = 'button'; btn.onclick = () => openCard(r.t.id);
+        btn.append(el('b', null, `#${r.t.num} ${r.t.title}`), r.why ? el('span', 'muted', r.why) : ''); li.append(btn); list.append(li); });
+      if (s.rows.length > 8) list.append(el('li', 'muted', `and ${s.rows.length - 8} more (in Copy brief)`));
+    });
+    if (b.inbox.length) { const go = el('button', 'tprep__row'); go.type = 'button'; go.onclick = () => setView('inbox'); go.append(el('b', null, `Review Inbox: ${b.inbox.length} to review`), el('span', 'muted', 'Suggested changes from notes and email')); sec.body.append(go); }
+    if (!b.sections.length && !b.inbox.length) sec.body.append(el('p', 'muted', 'Nothing on the board for this call yet.'));
+    return sec;
+  }
   function renderTodayWidgets(wrap) {
     if (!widgetsEnabled()) return;
     if (widgetMeta.key !== boardStoreId()) return;
@@ -5606,14 +5707,16 @@ if (typeof window !== 'undefined') (() => {
     if (hasTasks) { const live = state.tasks.filter(x => x.column !== doneColId()), doing = live.filter(x => x.column === 'in-progress').length;
       go.append(goCard('square-kanban', 'Tasks · Kanban', `${live.length} open` + (doing ? ` · ${doing} in progress` : ''), 'board')); }
     if (inboxOn()) go.append(goCard('inbox', 'Review Inbox', toReview.length ? `${toReview.length} to review` : 'Nothing to review', 'inbox'));
+    if (hasTasks && prepOthers().length) { const tile = goCard('phone', 'Prep for call', prepWho ? 'Brief for @' + prepWho : 'A brief for a call with a teammate', 'today'); tile.onclick = () => { prepWho = prepWho ? null : (LS.get(prepKey(), '') || prepOthers()[0].github); render(); }; tile.setAttribute('aria-expanded', String(!!prepWho)); go.append(tile); }
     if (hasCrm) go.append(goCard('user', 'People · CRM', peopleDue ? `${peopleDue} to contact today` : `${state.contacts.length} ${state.contacts.length === 1 ? 'person' : 'people'}`, 'people'));
     if (!LS.get('kb_tour', '') && go.childElementCount) {   // offered until the tour is finished, skipped or dismissed
       const inv = el('div', 'tourinvite'), start = el('button', 'primary', 'Show me around'), x = el('button', 'tix'); start.type = x.type = 'button';
       x.setAttribute('aria-label', 'Dismiss the tour'); x.title = 'Dismiss'; x.append(svgIcon('x')); start.onclick = startTour; x.onclick = () => { LS.set('kb_tour', 'dismissed'); render(); };
       inv.append(svgIcon('compass'), el('span', 'ti', 'New here? Take a one-minute tour of Today, Kanban and People.'), start, x); wrap.append(inv);
     }
-    if (toReview.length) wrap.append(todayReview(toReview));   // decisions first: proposals wait for a person, the tiles only navigate
-    if (go.childElementCount) wrap.append(go);
+    if (go.childElementCount) wrap.append(go);   // the tiles first (Ollie, 2026-10-14), then the brief they open, then proposals to review
+    if (prepWho && hasTasks && prepOthers().length) wrap.append(prepPanel());
+    if (toReview.length) wrap.append(todayReview(toReview));
     renderTodayWidgets(wrap);
     const addGroups = list => list.forEach(([[ic, title], items]) => {
       if (!items.length) return; const sec = ui.section({ title, count: items.length, icon: ic }); sec.classList.add('tsec');
@@ -5626,16 +5729,16 @@ if (typeof window !== 'undefined') (() => {
     if (hasCrm) wrap.append(addPersonBox()); board.append(wrap);
   }
 
-  // Tasks due on Today, grouped as on the Schedule: overdue, today, the rest of this week, and next week (closed by default).
+  // Tasks due on Today, in the Schedule's day blocks with Today's own rows (quick status, assign, done): overdue, today, the rest of this week, and next week (closed by default).
   function todayTasks(list, t, weekEnd) {
     const sec = ui.section({ title: 'Tasks due', count: list.length, icon: 'square-check' }); sec.classList.add('tsec', 'tdue');
     const box = el('div', 'sched'), byDay = items => { const m = new Map(); items.forEach(x => { if (!m.has(x.due)) m.set(x.due, []); m.get(x.due).push(x); }); return m; };
     const overdue = list.filter(x => x.due < t), week = list.filter(x => x.due > t && x.due <= weekEnd), next = list.filter(x => x.due > weekEnd);
-    if (overdue.length) box.append(schedDay('t:', '', 'Overdue', overdue, ' overdue'));
-    box.append(schedDay('t:', t, '', list.filter(x => x.due === t), ' today'));
-    if (week.length) { box.append(el('div', 'smonth', `Later this week (${week.length})`)); byDay(week).forEach((items, k) => box.append(schedDay('t:', k, '', items))); }
+    if (overdue.length) box.append(schedDay('t:', '', 'Overdue', overdue, ' overdue', taskTodayRow));
+    box.append(schedDay('t:', t, '', list.filter(x => x.due === t), ' today', taskTodayRow));
+    if (week.length) { box.append(el('div', 'smonth', `Later this week (${week.length})`)); byDay(week).forEach((items, k) => box.append(schedDay('t:', k, '', items, '', taskTodayRow))); }
     if (next.length) { const d = el('details', 'calundated'); d.open = LS.get('kb_today_next', '') === '1'; d.addEventListener('toggle', () => LS.set('kb_today_next', d.open ? '1' : ''));
-      d.append(el('summary', null, `Next week (${next.length})`)); byDay(next).forEach((items, k) => d.append(schedDay('t:', k, '', items))); box.append(d); }
+      d.append(el('summary', null, `Next week (${next.length})`)); byDay(next).forEach((items, k) => d.append(schedDay('t:', k, '', items, '', taskTodayRow))); box.append(d); }
     const more = ui.button({ label: 'Show full schedule', icon: 'calendar-days', variant: 'ghost', size: 'sm', onClick: () => setView('sched') }); more.classList.add('tdue__more');
     sec.body.append(box, more); return sec;
   }

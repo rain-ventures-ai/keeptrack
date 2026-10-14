@@ -27,7 +27,7 @@ const card = (id, num, title, extra) => ({ id, num, title, column: 'todo', clien
 // A small GitHub: contents API for reads and single-file writes, git data API for multi-file commits (same shape as split-storage.test.js).
 class Github {
   constructor() {
-    this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First', { client: 'Acme', priority: 'high', labels: ['pale', 'dark'], assignees: ['alex'], agent_cleared: CLEARED })), 'cards/t_two.json': text(card('t_two', 2, 'Second')) };
+    this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First', { client: 'Acme', priority: 'high', labels: ['pale', 'dark'], assignees: ['alex'], agent_cleared: CLEARED })), 'cards/t_two.json': text(card('t_two', 2, 'Second', { after: ['t_one', 't_gone'] })) };
     this.files['people/p_craig.json'] = text({ id: 'p_craig', name: 'Craig Example', company: 'Acme', role: 'Director', emails: [{ label: 'Work', value: 'craig@example.com' }], phones: [], links: [], comments: [], history: [] });
     this.files['people/p_chris.json'] = text({ id: 'p_chris', name: 'Chris Example', company: 'Other', emails: [{ label: 'Work', value: 'chris@example.com' }], phones: [], links: [], comments: [], history: [] });
     this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0;
@@ -86,6 +86,23 @@ async function assertFits(page, where) {
     await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
     const saved = () => page.waitForResponse(r => ['PUT', 'PATCH', 'DELETE'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
     const confirmSheet = page.locator('dialog.ui-sheet--alert[open]');
+
+    // after (card dependencies): #2 runs after #1 and a card that is no longer on the board. The page shows the links
+    // on the card and in the drawer (a missing one in amber) and never moves a card because of them.
+    const second = page.locator('.card', { hasText: 'Second' });
+    assert.deepEqual((await second.locator('.afterchip').allTextContents()).map(x => x.trim()), ['after #1', 'after t_gone']);
+    assert.deepEqual(await second.locator('.afterchip.late').count(), 1, 'a missing card is amber');
+    assert.equal(await page.locator('.card', { hasText: 'First' }).locator('.afterchip').count(), 0);
+    const writesBefore = api.writes;
+    await page.evaluate(() => { location.hash = '#2'; }); await page.locator('#dlgCard[open]').waitFor();
+    assert.equal(await page.locator('#cAfter').isVisible(), true);
+    assert.deepEqual((await page.locator('#cAfter .ui-pill').allTextContents()).map(x => x.trim()), ['after #1 First · To do', 'after t_gone · missing']);
+    await page.locator('#cAfter [data-after="t_one"]').click(); await page.waitForFunction(() => document.getElementById('cTitle').value === 'First');
+    assert.equal(await page.locator('#cAfter').isVisible(), false, 'a card with no after links shows no Runs after line');
+    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    assert.equal(api.writes, writesBefore, 'showing after links saves nothing');
+    assert.equal(api.card('t_two').column, 'todo');
+    await page.waitForFunction(() => !(history.state || {}).kbDlg && !location.hash);   // closed: the address has no card, so the next step opens #1 again
 
     // a #number in the address opens the card
     await page.evaluate(() => { location.hash = '#1'; }); await page.locator('#dlgCard[open]').waitFor();

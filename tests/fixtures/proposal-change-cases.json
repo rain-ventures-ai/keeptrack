@@ -30,6 +30,10 @@
     {"name": "string not task value", "kind": "task.update", "change": {"value": "5"}, "ok": false},
     {"name": "invalid effort", "kind": "task.update", "change": {"effort": "tiny"}, "ok": false},
     {"name": "invalid board rank", "kind": "task.update", "change": {"priority_rank": "!"}, "ok": false},
-    {"name": "CRM money value stays text", "kind": "person.upsert", "change": {"value": "5000"}, "ok": true}
+    {"name": "CRM money value stays text", "kind": "person.upsert", "change": {"value": "5000"}, "ok": true},
+    {"name": "task runs after card ids", "kind": "task.create", "change": {"title": "Phase two", "after": ["t_first"]}, "ok": true},
+    {"name": "after is a list, not one id", "kind": "task.update", "change": {"after": "t_first"}, "ok": false},
+    {"name": "after holds only text", "kind": "task.update", "change": {"after": [62]}, "ok": false},
+    {"name": "a person has no after", "kind": "person.upsert", "change": {"after": ["t_first"]}, "ok": false}
   ]
 }

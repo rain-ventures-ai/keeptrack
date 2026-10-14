@@ -6,12 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: **Prep for call** on Today. Select a teammate and the board shows a brief for the call from board data
+only: goals, "discuss with" cards, waits, overdue or stuck work, comments where you asked each other something this
+week, shared cards, work done in the last 7 days and the Review Inbox count. **Copy brief** and **Copy for AI** copy
+it as text. No network calls, no schema migration.
+
 Web board: a **Pull requests** panel (header button, shown when a card links a pull request). It reads each linked
 PR's state with the board login when opened (one batched GraphQL query, cached for two minutes, reads only), lists
 what waits on you first, flags merged PRs on cards that are not Done as "can be finished" (it never moves the card),
 and says "unknown" for a PR it cannot read. A relay-kit bar, like the board-kit bar, offers the upgrade owner one
 "Make the relay update card" when the repo's `relay/KIT_VERSION` is older than the published relay kit
 (`settings.relay_kit_source`, default `rain-ventures-ai/keeptrack-relay`). No schema migration.
+
+Cards can run after other cards: an optional `after` list of card ids. `task-set ID --after '#62'` (repeatable),
+`--not-after '#62'` and `--no-after`, and `add --after`, check that each card exists and refuse the card itself and
+loops. `show` and `list` show the links and their state (an archived card counts as done only if it was Done; else
+it is missing), the web board shows "after #62" chips on the card and a Runs after line in its details, proposals may
+set `after`, and `doctor` checks it (`AFTER`, warning `AFTER_MISSING`). A hint and a gate, never a trigger: nothing
+moves a card. No schema migration; older kits keep the field.
 
 ## Kit v52 — 2026-10-14
 
