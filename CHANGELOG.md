@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: **Prep for call** on Today. Select a teammate and the board shows a brief for the call from board data
+only: goals, "discuss with" cards, waits, overdue or stuck work, comments where you asked each other something this
+week, shared cards, work done in the last 7 days and the Review Inbox count. **Copy brief** and **Copy for AI** copy
+it as text. No network calls, no schema migration.
+
 Web board: a **Pull requests** panel (header button, shown when a card links a pull request). It reads each linked
 PR's state with the board login when opened (one batched GraphQL query, cached for two minutes, reads only), lists
 what waits on you first, flags merged PRs on cards that are not Done as "can be finished" (it never moves the card),

@@ -13,6 +13,16 @@ People at the stages **Won** and **Lost** are not shown on Today.
 
 Click a person to open their card.
 
+## Prep for call
+On a board with more than one member, Today has a **Prep for call** tile. Select it, then select the person you have a call with. The board makes a short brief from its own data. It uses no AI and sends nothing anywhere. The brief has these groups, and each card shows in one group only:
+
+- **Goals:** open cards with the label `goal` or a title that starts with "Goal".
+- **To discuss:** open cards such as "Discuss pricing with Sam": a word like discuss, agree, decide, ask, check or review, then "with" and a name. The name must be one of you, and the card must belong to the other person or to nobody. A short name matches when its first two letters match the member's name or login (Ollie matches Oliver).
+- **Waiting on one of you**, **Overdue or stuck**, **Asked of each other this week** (comments from the last 7 days where one of you mentions the other), **Shared cards** (assigned to both of you, not in Backlog) and **Done in the last 7 days**.
+- The number of items in the **Review Inbox**.
+
+**Copy brief** copies the brief as text. **Copy for AI** adds a prompt that asks Claude, Codex or ChatGPT to make a short agenda from it. The board remembers the last person you selected, in this browser only.
+
 ## Add a person
 Click **Add…** to open the form. **Name** is required; company, role, email, phone and LinkedIn are optional. After the person is added, their card opens so you can add a stage, next step, notes or anything else.
 
