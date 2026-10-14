@@ -25,7 +25,7 @@ the AGENTS.md template, the README agent protocol and `docs/help/tasks.md` point
 The entries below were merged before v55 and were listed under Unreleased; v55 is the first kit version that
 names them.
 
-Web board: an **@Mentions** view, next to Kanban, List, Calendar, Schedule and Activity. It lists every comment that
+Web board: an **@Mentions** view, between Kanban and List. It lists every comment that
 mentions you (`@` + your GitHub username in Settings), newest first, with the card, its description and the comment.
 Your own comments are left out, the filters apply, and "New" marks comments since you last opened the card. A row
 opens the card and scrolls to that comment, highlighted for a moment. Today shows an **@Mentions** tile when you have
