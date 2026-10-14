@@ -1360,6 +1360,18 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 /* Review Inbox count on the Today tab (header strip and phone dock) */
 #viewSw .ui-tab[data-view="today"], #dock .dtab[data-grp="today"] { position: relative; }
 #viewSw .ui-tab .todaycount, #dock .dtab .todaycount { top: 1px; right: 1px; }   /* inside the tab: the narrow header strip clips anything above it (header .badge would win otherwise) */
+
+/* Pull requests panel (#dlgPrs): rows of linked pull requests with their live state */
+.prsdialog > p { margin: var(--sp-4) 0; }
+.prsbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); margin-bottom: var(--sp-5); font-size: var(--fs-sm); }
+.prgroup { margin-bottom: var(--sp-7); } .prgroup h4 { margin: 0 0 var(--sp-3); font-size: var(--fs-base); } .prhint { margin: 0 0 var(--sp-3); font-size: var(--fs-sm); }
+.prrow { padding: var(--sp-4) 0; border-top: 1px solid var(--border); display: grid; gap: var(--sp-3); }
+.prtop { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2) var(--sp-4); }
+.prtitle { font-weight: 600; overflow-wrap: anywhere; } .prref { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.prtags, .prcards { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.prnote { margin: 0; font-size: var(--fs-sm); }
+.prcard { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+
 /* related cards (kit v52): possible duplicates and confirmed links, in the drawer and as a card chip */
 .chip.relchip { display: inline-flex; align-items: center; gap: 3px; color: var(--warn); background: var(--warn-soft); font-weight: 600; }
 .drel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--border); }

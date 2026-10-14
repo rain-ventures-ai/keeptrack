@@ -4,6 +4,15 @@ All notable changes to the **board kit** (`board/kit/`) and **board data schema*
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+Web board: a **Pull requests** panel (header button, shown when a card links a pull request). It reads each linked
+PR's state with the board login when opened (one batched GraphQL query, cached for two minutes, reads only), lists
+what waits on you first, flags merged PRs on cards that are not Done as "can be finished" (it never moves the card),
+and says "unknown" for a PR it cannot read. A relay-kit bar, like the board-kit bar, offers the upgrade owner one
+"Make the relay update card" when the repo's `relay/KIT_VERSION` is older than the published relay kit
+(`settings.relay_kit_source`, default `rain-ventures-ai/keeptrack-relay`). No schema migration.
+
 ## Kit v52 — 2026-10-14
 
 Similar cards: adding a card never stops, and close cards are marked as possible duplicates or additions on both

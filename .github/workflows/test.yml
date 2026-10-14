@@ -81,3 +81,6 @@ jobs:
       - name: Page safety (tab-bound board, min_kit, agent-limit recheck, proposal allow-list, undo cap, settings code, CSP)
         working-directory: tests/browser
         run: node page-safety.test.js
+      - name: PRs panel and relay-kit bar
+        working-directory: tests/browser
+        run: node prs-panel.test.js
