@@ -31,6 +31,7 @@ Similar cards: add first, then ask. No data migration.
 - `add`, the web board's Add and an accepted Inbox item no longer only add: after the add, close open cards (and close
   pending Inbox items) are marked as a possible duplicate or addition, on both cards (new optional card field `related`).
   Nothing is stopped. `add --no-check` skips the check.
+- A new-task Inbox item now lists open cards with a close title in `likely_duplicates`, not only the same title.
 - New commands: `similar`, `related`, `relate`, `unrelate`, `merge-card` (merge, then archive the merged card; nothing
   is deleted).
 - The web board shows a "#12?" chip on a card with a possible duplicate, and a Related cards section in the card drawer

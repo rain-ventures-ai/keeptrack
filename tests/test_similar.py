@@ -105,6 +105,16 @@ class SimilarCli(unittest.TestCase):
         self.assertIn("possible duplicate", self.kt("proposal-accept", pid).stdout)
         self.assertEqual("possible", self.card("#3")["related"][0]["status"])
 
+    def test_a_proposal_for_work_already_on_the_board_names_the_card(self):
+        prop = [{"kind": "task.create", "title": "call acme!", "source": {"kind": "other", "id": "chat-2", "revision": "1"},
+                 "action_key": "ak-call", "work_key": "wk-call", "reason": "said in a chat", "change": {"title": "call acme!"}}]
+        path = os.path.join(self.tmp.name, "p.json")
+        with open(path, "w") as f:
+            json.dump(prop, f)
+        self.kt("proposal-add", path)
+        pid = json.loads(self.kt("proposals", "--json").stdout)[0]["id"]
+        self.assertEqual([("t_first", "similar title")], [(d["id"], d["why"]) for d in json.loads(self.kt("proposal-show", pid).stdout)["likely_duplicates"]])
+
     def test_similar_lists_cards_and_pending_items(self):
         self.assertIn("#1 t_first", self.kt("similar", "Call Acme").stdout)
         self.assertIn("no open card", self.kt("similar", "Something else entirely").stdout)

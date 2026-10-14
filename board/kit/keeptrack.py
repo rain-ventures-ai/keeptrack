@@ -6121,6 +6121,10 @@ def proposal_duplicates(data, proposal):
         for task in data.get("tasks", []):
             if _norm(task.get("title")) == title and (not client or _norm(task.get("client")) == client):
                 out.append({"type": "task", "id": task["id"], "why": "same title" + (" and client" if client else "")})
+        if proposal["kind"] == "task.create":   # kit v52: close titles too, so a chat that proposes work already on the board is told
+            for h in similar_matches(data, c.get("title") or proposal["title"], c.get("client") or "", c.get("project") or ""):
+                if h["type"] == "task" and not any(d["id"] == h["id"] for d in out):
+                    out.append({"type": "task", "id": h["id"], "why": "similar title"})
     elif proposal["kind"] == "person.upsert":
         emails = {_norm(c.get("email"))} | {_norm(x.get("value")) for x in c.get("emails", []) if isinstance(x, dict)}
         emails.discard("")
