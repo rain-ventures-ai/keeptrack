@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 57;
+  const PAGE_KIT = 58;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1532,14 +1532,66 @@ if (typeof window !== 'undefined') (() => {
   const mentionsMe = text => { const me = (cfg().me || '').replace(/[^\w-]/g, ''); return !!me && new RegExp('(?<![\\w@#&/])@' + me + '(?![\\w-])', 'i').test(String(text || '')); };
   // Your own agents (by "<agent>@<you>") act for you: their history entries are your work, not news, and their comments are
   // news only when they @mention you (a question or a hand-back). Otherwise one busy agent marks every card it touches as new.
-  function freshInfo(t) {
-    const me = (cfg().me || '').toLowerCase(), m = loadSeen(); if (!me || !m) return { unread: 0, mention: false, changed: false };
+  function freshItems(t) {   // the comments and history entries that are news for me on this card (null: no username or no seen map)
+    const me = (cfg().me || '').toLowerCase(), m = loadSeen(); if (!me || !m) return null;
     const s = m[t.id] || { c: '', h: '' }, by = x => String(x.by || '').toLowerCase(), mine = x => by(x) === me || by(x).endsWith('@' + me);
-    const fresh = t.comments.filter(x => x.at > s.c && by(x) !== me && (!mine(x) || mentionsMe(x.text)));
-    return { unread: fresh.length, mention: fresh.some(x => mentionsMe(x.text)), changed: t.history.some(x => x.at > s.h && !mine(x)) };
+    return { comments: t.comments.filter(x => x.at > s.c && by(x) !== me && (!mine(x) || mentionsMe(x.text))), changes: t.history.filter(x => x.at > s.h && !mine(x)) };
+  }
+  function freshInfo(t) {
+    const f = freshItems(t); if (!f) return { unread: 0, mention: false, changed: false };
+    return { unread: f.comments.length, mention: f.comments.some(x => mentionsMe(x.text)), changed: f.changes.length > 0 };
   }
   const isFresh = t => { const f = freshInfo(t); return f.unread > 0 || f.changed; };
   const newBadge = n => el('span', 'newb', `${n} new`);
+
+  // The bell opens "New for you": every card with news for me, newest news first, with what is new (comments, then changes).
+  // A row opens the card (and marks it read). The footer filters the board to these cards, or marks everything read.
+  const NEWS_MAX = 100;
+  let newsSheet = null;
+  function newsData() {
+    return state.tasks.map(t => { const f = freshItems(t); if (!f || !(f.comments.length || f.changes.length)) return null; return { t, ...f, at: maxAt([...f.comments, ...f.changes]) }; })
+      .filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  }
+  function newsLine(x, text) {
+    const line = el('span', 'mnwho'), tm = el('time', null, ago2(x.at)); tm.title = x.at;
+    line.append(avatar(String(x.by || '?').replace(/@.*/, '')), el('b', null, x.by || '?'), tm); return [line, el('span', 'mnbody', snippet(text, 240))];
+  }
+  function openNewForYou() {
+    if (newsSheet) newsSheet.close();
+    const rows = newsData(), body = el('div', 'newsbody');
+    if (!cfg().me) body.append(ui.empty({ text: 'Set your GitHub username in Settings to see what is new for you.', icon: 'bell' }));
+    else if (!rows.length) body.append(ui.empty({ text: 'Nothing new for you. Changes by you and your own agents do not count.', icon: 'bell' }));
+    else {
+      body.append(el('p', 'muted newsintro', `${rows.length} ${rows.length === 1 ? 'card has' : 'cards have'} news from others since you last opened ${rows.length === 1 ? 'it' : 'them'}.`));
+      const list = el('div', 'mnlist');
+      rows.slice(0, NEWS_MAX).forEach(({ t, comments, changes }) => {
+        const r = el('button', 'mnrow fresh newsrow'); r.type = 'button'; r.dataset.task = t.id;
+        const parts = [comments.length && `${comments.length} new ${comments.length === 1 ? 'comment' : 'comments'}`, changes.length && `${changes.length} ${changes.length === 1 ? 'change' : 'changes'}`].filter(Boolean);
+        r.setAttribute('aria-label', `#${t.num} ${t.title}: ${parts.join(', ')}`);
+        const head = el('span', 'mnhead'); head.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title));
+        if (comments.some(x => mentionsMe(x.text))) head.append(el('span', 'chip mentionchip', '@ you'));
+        head.append(el('span', 'newb', parts.join(' · ')), el('span', 'ssub', cardSub(t)));
+        r.append(head);
+        const last = comments.length ? comments.reduce((a, b) => (b.at > a.at ? b : a)) : null;
+        if (last) { const cm = el('span', 'mncm'); cm.append(...newsLine(last, last.text)); r.append(cm); }
+        if (changes.length) {
+          const ch = el('span', 'mncm newschanges');
+          changes.slice().sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 3).forEach(x => ch.append(...newsLine(x, x.text)));
+          if (changes.length > 3) ch.append(el('span', 'muted', `and ${changes.length - 3} more in the card's history`));
+          r.append(ch);
+        }
+        r.onclick = () => { newsSheet && newsSheet.close(); openCard(t.id, last ? { comment: cmKey(last) } : undefined); };
+        list.append(r);
+      });
+      body.append(list);
+      if (rows.length > NEWS_MAX) body.append(el('p', 'muted', `Showing the newest ${NEWS_MAX} of ${rows.length}.`));
+    }
+    const footer = [];
+    if (rows.length || freshOnly) footer.push(ui.button({ label: freshOnly ? 'Show all cards' : 'Filter the board', icon: 'list', onClick: () => { freshOnly = !freshOnly; newsSheet.close(); render(); } }));
+    if (rows.length) footer.push(ui.button({ label: 'Mark all as read', icon: 'check', variant: 'primary', onClick: () => { markAllSeen(); freshOnly = false; newsSheet.close(); render(); toast('All cards marked as read'); } }));
+    newsSheet = ui.sheet({ title: 'New for you', body, footer, removeOnClose: true, onClose: () => { newsSheet = null; } }).open();
+    newsSheet.el.classList.add('newssheet');
+  }
 
   function filtered(t) {
     const status = $('fStatus').value;
@@ -1841,7 +1893,7 @@ if (typeof window !== 'undefined') (() => {
     ab.title = (on ? 'ON: showing only cards that need attention. Click to switch off.\n' : 'OFF: showing all cards. Click to show only cards that are overdue or have a stale, stuck or blocked agent.\n') + attnTasks.slice(0, 4).map(t => '• ' + t.title).join('\n') + (attnTasks.length > 4 ? `\n…and ${attnTasks.length - 4} more` : '');
     const fresh = state.tasks.filter(isFresh).length, bell = $('btnUnread'), bd = $('unreadBadge');
     bd.textContent = fresh > 99 ? '99+' : String(fresh); bd.hidden = !fresh; bell.classList.toggle('on', freshOnly);
-    bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes from others${freshOnly ? ' (showing only these; click to show all)' : ' (click to show only these)'}` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
+    bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes from others (click to see them)` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
     document.title = (fresh ? `(${fresh}) ` : '') + (state.settings.title || 'Keeptrack');
     const nf = ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fPrio', 'fProject'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fWaiting').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
     fb.textContent = String(nf); fb.hidden = !nf; $('btnFilter').title = nf ? `Filters (${nf} on)` : 'Filters'; renderTopbar();
@@ -4437,7 +4489,7 @@ if (typeof window !== 'undefined') (() => {
   $('tourBack').onclick = () => { if (tour.i > 0) { tour.i--; showTourStep(); } }; $('tourSkip').onclick = endTour;
   document.addEventListener('keydown', e => { if (!tour) return; if (e.key === 'Escape') { e.preventDefault(); endTour(); } else if (e.key === 'ArrowRight') $('tourNext').click(); else if (e.key === 'ArrowLeft') $('tourBack').click(); }, true);
   window.addEventListener('resize', () => placeTour(false));
-  $('btnUnread').onclick = () => { freshOnly = !freshOnly; render(); };
+  $('btnUnread').onclick = openNewForYou;
   $('sortMenu').value = sortMode();
   const setSort = v => { LS.set(sortKey(), v); $('sortMenu').value = v; render(); };
   $('sortMenu').onchange = e => setSort(e.target.value);

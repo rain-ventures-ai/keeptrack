@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v58 — 2026-10-14
+
+Web board: the bell opens **New for you**, a list of every card with news for you, newest first. Each row shows the
+card, the newest new comment (with an "@ you" marker when it mentions you) and up to three new changes. A row opens
+the card and marks it read. The footer has "Filter the board" (the old bell action: show only these cards) and "Mark
+all as read". No schema migration.
+
 ## Kit v57 — 2026-10-14
 
 Web board: the bell in the header counts only news from other people. Changes logged by your own agents

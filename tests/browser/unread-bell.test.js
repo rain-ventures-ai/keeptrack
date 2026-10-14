@@ -1,6 +1,7 @@
 'use strict';
-// The bell in the header counts cards with news for you since you last opened them. Changes logged by your own agents
-// (<agent>@<you>) are your work, not news; their comments count only when they @mention you. Run: node unread-bell.test.js
+// The bell in the header counts cards with news for you since you last opened them and opens a "New for you" list.
+// Changes logged by your own agents (<agent>@<you>) are your work, not news; their comments count only when they @mention
+// you. Run: node unread-bell.test.js
 
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -10,6 +11,7 @@ const crypto = require('node:crypto');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '../..');
+const SHOTS = process.env.SHOTS || '';   // a folder: also save screenshots
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
 const server = http.createServer((req, res) => {
   const rel = decodeURIComponent(new URL(req.url, 'http://local').pathname).replace(/^\/+/, '') || 'board/index.html';
@@ -73,11 +75,47 @@ class Github {
     await page.waitForFunction(() => document.getElementById('unreadBadge').textContent === '4', null, { timeout: 5000 }).catch(() => {});
     assert.equal(await page.locator('#unreadBadge').textContent(), '4', 'own agent question, Sam, Sam agent, look-alike');
     assert.match(await page.locator('#btnUnread').getAttribute('title'), /^4 cards with new comments or changes from others/);
+    assert.match(await page.locator('#btnUnread').getAttribute('title'), /click to see them/);
+
+    // The bell opens "New for you": one row per card with news, and what is new.
     await page.locator('#btnUnread').click();
-    await page.waitForFunction(() => !document.getElementById('board').textContent.includes('Own agent changed it'));
+    const sheet = page.locator('dialog.newssheet'); await sheet.waitFor();
+    assert.equal(await sheet.locator('.newsrow').count(), 4);
+    const rows = await sheet.locator('.newsrow').evaluateAll(els => els.map(e => e.dataset.task).sort());
+    assert.deepEqual(rows, ['t_c', 't_d', 't_e', 't_g']);
+    const ask = sheet.locator('.newsrow[data-task="t_c"]');
+    assert.match(await ask.textContent(), /@ you/); assert.match(await ask.textContent(), /1 new comment/); assert.match(await ask.textContent(), /let it finish/);
+    assert.match(await sheet.locator('.newsrow[data-task="t_d"]').textContent(), /1 change.*moved to Done/s);
+    if (SHOTS) { await page.screenshot({ path: path.join(SHOTS, 'news-desktop.png') }); }
+    // Phone width: the sheet fills the screen with no sideways scroll.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => { const d = document.querySelector('dialog.newssheet'), r = d.getBoundingClientRect(); return d.scrollWidth <= d.clientWidth + 1 && r.left >= -1 && r.right <= innerWidth + 1; });
+    if (SHOTS) await page.screenshot({ path: path.join(SHOTS, 'news-phone.png') });
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // "Filter the board" shows the board to the same 4 cards.
+    await sheet.getByRole('button', { name: 'Filter the board' }).click();
+    await page.waitForFunction(() => !document.querySelector('dialog.newssheet') && !document.getElementById('board').textContent.includes('Own agent changed it'));
     const shown = await page.locator('#board').textContent();
     for (const t of ['Own agent asks me', 'Sam changed it', 'Sam agent changed it', 'Look-alike agent']) assert.ok(shown.includes(t), t + ' is shown');
     for (const t of ['Own agent reported', 'I changed it']) assert.ok(!shown.includes(t), t + ' is hidden');
+
+    // A row opens the card and marks it read: the count goes down by one.
+    await page.locator('#btnUnread').click(); await sheet.waitFor();
+    await sheet.getByRole('button', { name: 'Show all cards' }).waitFor();
+    await sheet.locator('.newsrow[data-task="t_d"]').click();
+    await page.waitForFunction(() => document.getElementById('dlgCard').open && !document.querySelector('dialog.newssheet'));
+    await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('dlgCard').open);
+    assert.equal(await page.locator('#unreadBadge').textContent(), '3');
+
+    // "Mark all as read" empties the bell and the list.
+    await page.locator('#btnUnread').click(); await sheet.waitFor();
+    await sheet.getByRole('button', { name: 'Mark all as read' }).click();
+    await page.waitForFunction(() => document.getElementById('unreadBadge').hidden);
+    await page.locator('#btnUnread').click(); await sheet.waitFor();
+    assert.match(await sheet.textContent(), /Nothing new for you/);
+    assert.equal(await sheet.locator('.newsrow').count(), 0);
+
     assert.deepEqual(errors, []);
     console.log('unread bell: ok');
   } finally { await browser.close(); server.close(); }
