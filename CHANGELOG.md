@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v57 — 2026-10-14
+
+Web board: the bell in the header counts only news from other people. Changes logged by your own agents
+(`<agent>@<you>`, for example `claude@you`) are your work, so they no longer mark a card as new; a comment from one of
+your agents counts only when it @mentions you (a question or a hand-back). Other people's changes and their agents'
+changes still count. Before, one busy agent of yours could push the bell to 99+. No schema migration.
+
 ## Kit v56 — 2026-10-14
 
 Card numbers are links. `keeptrack.py card-link '#N'` prints `[#N](<card link>) Title`; `show` prints the card's
