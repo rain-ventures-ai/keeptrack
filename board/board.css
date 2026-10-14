@@ -1395,6 +1395,7 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 
 /* related cards (kit v52): possible duplicates and confirmed links, in the drawer and as a card chip */
 .chip.relchip { display: inline-flex; align-items: center; gap: 3px; color: var(--warn); background: var(--warn-soft); font-weight: 600; }
+.chip.fupchip { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 .drel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .drel:last-child { border-bottom: 0; }
 .drel__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
