@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 52  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 53  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3365,12 +3365,14 @@ def doctor_board(fix=False):
                 if f"{folder}/{obj['id']}.json" in state["files"]:
                     rename_conflict = True
 
-    archived_ids = {}
+    archived_ids, archived_task_ids = {}, set()
     for rel, obj in parsed.items():
         if rel.startswith("archive/"):
             for item in obj.get("tasks", []) + obj.get("contacts", []):
                 if item.get("id"):
                     archived_ids[item["id"]] = rel
+            archived_task_ids |= {x.get("id") for x in obj.get("tasks", []) if isinstance(x, dict) and x.get("id")}
+    task_ids = {t.get("id") for t in tasks if isinstance(t, dict) and t.get("id")}
     for ident in sorted(set(ids) & set(archived_ids)):
         problem("LIVE_AND_ARCHIVED", archived_ids[ident], f"{ident} is also on the live board. The live item wins.")
 
@@ -3400,7 +3402,7 @@ def doctor_board(fix=False):
             elif t.get("id") in raw:
                 problem("AFTER", path, "The card runs after itself; remove it with task-set --not-after.")
             else:
-                gone = [x for x in raw if x not in ids and x not in archived_ids]
+                gone = [x for x in raw if x not in task_ids and x not in archived_task_ids]   # card ids only
                 if gone:
                     problem("AFTER_MISSING", path, f"It runs after {', '.join(gone)}, which is not on the board or in the archive; "
                             "relay treats that as not done. Remove it with task-set --not-after.")
@@ -6664,6 +6666,12 @@ def cmd_proposal_merge(a):
                     record["assignees"] = [value]
             elif key == "due" and key in selected and record.get("id", "").startswith("p_"):
                 record["next_due"] = copy.deepcopy(value)
+            elif key == "after" and key in selected and record.get("id", "").startswith("t_"):   # as _apply_update
+                value = list(dict.fromkeys(x for x in value if x != record["id"]))
+                if after_cycle(data, record["id"], value):
+                    proposal_conflict(f"not saved: these after links would make a loop through {record.get('id')}; review it by hand")
+                if value: record["after"] = value
+                else: record.pop("after", None)
             elif key in selected: record[key] = copy.deepcopy(value)
         if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
             drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update
