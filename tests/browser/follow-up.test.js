@@ -1,5 +1,5 @@
 'use strict';
-// Follow-up cards (kit v53) on a writable board with a faked GitHub API: a to-do's "Move to a new card" adds a Backlog card
+// Follow-up cards (kit v54) on a writable board with a faked GitHub API: a to-do's "Move to a new card" adds a Backlog card
 // with the card's client, labels and priority, links both cards (relation, links, comments), rewords and ticks the to-do,
 // and both cards show a follow-up chip and a Follow-up / Split from row in Related cards. Run: node follow-up.test.js
 

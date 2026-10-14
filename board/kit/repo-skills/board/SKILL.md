@@ -50,7 +50,7 @@ python3 board/keeptrack.py todo-rm <id> <N>
 python3 board/keeptrack.py history <id>            # automatic log of claims, progress notes, ticks and moves
 ```
 
-Moved work is never lost (kit v53). When the rest of the card is done but one step must wait (for a person, an event or
+Moved work is never lost (kit v54). When the rest of the card is done but one step must wait (for a person, an event or
 later work), move it with `todo-move`: one save adds a follow-up card (Backlog, the same client, project, labels,
 priority and assignees, the step as its checklist), links both cards ("Follow-up #N" and "Split from #M", with a board
 relation), rewords the step to "Moved to #N (t_id): ..." and ticks it, and comments on both cards. Never reword a step to

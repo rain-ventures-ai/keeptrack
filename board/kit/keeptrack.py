@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 53  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 54  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2421,7 +2421,7 @@ def has_follow_up(t, o):
 
 
 def check_moved_todos(data, t, cancel=False):
-    """Before a card goes to Done (kit v53): every to-do moved to a follow-up card ("Moved to #N (t_id): ...", as
+    """Before a card goes to Done (kit v54): every to-do moved to a follow-up card ("Moved to #N (t_id): ...", as
     todo-move and relay write it) must point at a card that exists, linked to this one. A missing link is added now; a
     card that is on neither the board nor the archive refuses (only warns with cancel), so moved work is never lost with
     the card. Returns the numbers it linked."""
@@ -2624,7 +2624,7 @@ def cmd_move(a):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
         if column == "done" and t["column"] != "done":
             _MUT["rerun"] = True   # a lost race re-runs this: a claim absent or stale here may be live on the newer board
-            linked = check_moved_todos(data, t)   # as done: moved work is never lost with the card (kit v53)
+            linked = check_moved_todos(data, t)   # as done: moved work is never lost with the card (kit v54)
             if linked:
                 print("linked follow-up card" + ("s " if len(linked) > 1 else " ") + ", ".join(f"#{n}" for n in linked))
             if claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
@@ -2735,7 +2735,7 @@ def cmd_todo_edit(a):
 
 
 def cmd_todo_move(a):
-    """Move open to-do N to a new follow-up card (kit v53), in one save: the new card (Backlog, the same client,
+    """Move open to-do N to a new follow-up card (kit v54), in one save: the new card (Backlog, the same client,
     project, labels, priority and assignees, the to-do as its checklist), a follow-up relation and a link on each card
     to the other, the to-do reworded "Moved to #N (t_id): ..." and ticked, and a comment on both cards."""
     tid, ident = todo_target(a)
@@ -2897,8 +2897,8 @@ SIMILAR_DUPLICATE = 0.8    # this close or closer: "possible duplicate"
 SIMILAR_RELATED = 0.7      # this close, in the same client or project: "possible addition" (related work)
 SIMILAR_MAX = 3            # at most this many marks for one new card
 RELATED_KINDS = ("duplicate", "addition", "related")
-# A follow-up link (kit v53) is kind "related" with "from": the id of the card the work was split from. Older kits keep and
-# accept it (their doctor knows the kind) and show it as related; v53 shows "Follow-up #N" / "Split from #M".
+# A follow-up link (kit v54) is kind "related" with "from": the id of the card the work was split from. Older kits keep and
+# accept it (their doctor knows the kind) and show it as related; v54 shows "Follow-up #N" / "Split from #M".
 RELATE_KINDS = RELATED_KINDS + ("follow-up",)   # relate --kind: follow-up writes kind related + from
 MOVED_TODO = re.compile(r"^Moved to #(\d{1,6}) \((t_[a-z0-9]+)\)")   # a to-do moved to a follow-up card (todo-move, relay move_todo)
 RELATED_STATUSES = ("possible", "confirmed", "not-related", "merged")
@@ -3497,12 +3497,14 @@ def doctor_board(fix=False):
                 if f"{folder}/{obj['id']}.json" in state["files"]:
                     rename_conflict = True
 
-    archived_ids = {}
+    archived_ids, archived_task_ids = {}, set()
     for rel, obj in parsed.items():
         if rel.startswith("archive/"):
             for item in obj.get("tasks", []) + obj.get("contacts", []):
                 if item.get("id"):
                     archived_ids[item["id"]] = rel
+            archived_task_ids |= {x.get("id") for x in obj.get("tasks", []) if isinstance(x, dict) and x.get("id")}
+    task_ids = {t.get("id") for t in tasks if isinstance(t, dict) and t.get("id")}
     for ident in sorted(set(ids) & set(archived_ids)):
         problem("LIVE_AND_ARCHIVED", archived_ids[ident], f"{ident} is also on the live board. The live item wins.")
 
@@ -3532,7 +3534,7 @@ def doctor_board(fix=False):
             elif t.get("id") in raw:
                 problem("AFTER", path, "The card runs after itself; remove it with task-set --not-after.")
             else:
-                gone = [x for x in raw if x not in ids and x not in archived_ids]
+                gone = [x for x in raw if x not in task_ids and x not in archived_task_ids]   # card ids only
                 if gone:
                     problem("AFTER_MISSING", path, f"It runs after {', '.join(gone)}, which is not on the board or in the archive; "
                             "relay treats that as not done. Remove it with task-set --not-after.")
@@ -6796,6 +6798,12 @@ def cmd_proposal_merge(a):
                     record["assignees"] = [value]
             elif key == "due" and key in selected and record.get("id", "").startswith("p_"):
                 record["next_due"] = copy.deepcopy(value)
+            elif key == "after" and key in selected and record.get("id", "").startswith("t_"):   # as _apply_update
+                value = list(dict.fromkeys(x for x in value if x != record["id"]))
+                if after_cycle(data, record["id"], value):
+                    proposal_conflict(f"not saved: these after links would make a loop through {record.get('id')}; review it by hand")
+                if value: record["after"] = value
+                else: record.pop("after", None)
             elif key in selected: record[key] = copy.deepcopy(value)
         if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
             drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: search puts a numbered card first. Type `26` or `#26` and card #26 is the top result, then cards whose
+number starts with 26, then the other matches. No schema migration.
+
 Web board: **Prep for call** on Today. Select a teammate and the board shows a brief for the call from board data
 only: goals, "discuss with" cards, waits, overdue or stuck work, comments where you asked each other something this
 week, shared cards, work done in the last 7 days and the Review Inbox count. **Copy brief** and **Copy for AI** copy
@@ -29,7 +32,7 @@ Web board: the card's **Client and project** picker has a search box. It narrows
 (MiniSearch: word starts and small typos) plus a plain "contains" match. A client also matches by its project names,
 and with a search the project list covers every client. No schema migration.
 
-## Kit v53 — 2026-10-14
+## Kit v54 — 2026-10-14
 
 Moved work is never lost. `todo-move ID N [--title] [--details]` moves an open to-do to a new follow-up card in one
 save: the card goes to Backlog with the same client, project, labels, priority and assignees, the to-do as its
@@ -39,6 +42,14 @@ checklist; both cards get a link to the other ("Follow-up #N", "Split from #M") 
 from #M". `done` and `move ... done` check every "Moved to #N (t_id)" to-do: a missing link is added, and a card on
 neither the board nor the archive refuses (`done --cancel` only warns). The web board shows "Follow-up #N" / "From #M" chips on the card, Follow-up and Split from rows in Related
 cards, and a "Move to a new card" action on each open to-do in the drawer. No schema migration.
+
+## Kit v53 — 2026-10-14
+
+Card dependency (`after`) follow-ups. The web board shows a link to a card that is not on the board as "unknown" until
+the archive is loaded, then done, cancelled (an archived cancelled card), archived without Done or missing; before, an
+archived Done card showed as an amber "missing" chip. Review Inbox Accept refuses `after` links to a card on neither
+the board nor its archive, and links that make a loop, like `keeptrack.py` (the card itself is dropped). `doctor` checks `after` against card ids
+only (a person's or project's id is `AFTER_MISSING`). No schema migration.
 
 ## Kit v52 — 2026-10-14
 

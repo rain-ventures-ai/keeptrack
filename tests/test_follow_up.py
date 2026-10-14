@@ -1,4 +1,4 @@
-"""Follow-up cards (kit v53): moved to-dos are never lost. todo-move, relate --kind follow-up and the done check.
+"""Follow-up cards (kit v54): moved to-dos are never lost. todo-move, relate --kind follow-up and the done check.
 Fictional data only (the v4 fixture board: Acme, alex)."""
 import json, os, shutil, subprocess, sys, tempfile, unittest
 

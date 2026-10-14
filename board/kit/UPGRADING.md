@@ -25,7 +25,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v53 (schema 4)
+### v54 (schema 4)
 Moved work is never lost. No data migration.
 - Run `kit-update` only.
 - New `todo-move ID N [--title T] [--details D]`: one open to-do becomes a new follow-up card (Backlog, or To do on a
@@ -40,8 +40,16 @@ Moved work is never lost. No data migration.
 - Older pages and older `keeptrack.py` keep the `from` field when they save and show the pair as related.
 - Rules: the board skill, AGENTS template and routine prompt say a step that must wait goes to `todo-move`, never a hand
   reword or tick.
-- Check: `keeptrack.py kit-check` says v53 and `keeptrack.py doctor` reports no new problems. For an earlier hand move
+- Check: `keeptrack.py kit-check` says v54 and `keeptrack.py doctor` reports no new problems. For an earlier hand move
   (a "Moved to #N" to-do), `keeptrack.py relate '#M' '#N' --kind follow-up` adds the relation.
+
+### v53 (schema 4)
+Card dependency follow-ups. No data migration.
+- Run `kit-update` only.
+- The web board shows a link to a card that is not on the board as "unknown" until the card's archive is loaded.
+- Review Inbox Accept refuses `after` links to a card on neither the board nor its archive, and loops.
+- `doctor` reports an `after` link to a person's or project's id as `AFTER_MISSING`.
+- Check: `keeptrack.py kit-check` says v53 and `keeptrack.py doctor` reports no new problems.
 
 ### v52 (schema 4)
 Similar cards: add first, then ask. No data migration.

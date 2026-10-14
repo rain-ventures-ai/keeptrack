@@ -122,7 +122,7 @@ $B unrelate '#31' '#12'                        # not related: the check never as
 ```
 Put a piece of work on the board once: add a card **or** propose it in the Review Inbox, never both.
 
-Moved work is never lost (kit v53): a step that must wait while the rest of the card is done goes to a follow-up card with `todo-move` (linked both ways, the step reworded "Moved to #N" and ticked). Never reword or tick it by hand. `relate '#12' '#31' --kind follow-up` links an existing card as #12's follow-up. `done` refuses a card whose "Moved to #N" card is missing.
+Moved work is never lost (kit v54): a step that must wait while the rest of the card is done goes to a follow-up card with `todo-move` (linked both ways, the step reworded "Moved to #N" and ticked). Never reword or tick it by hand. `relate '#12' '#31' --kind follow-up` links an existing card as #12's follow-up. `done` refuses a card whose "Moved to #N" card is missing.
 
 Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them.
 Only work on tasks assigned to the user you act for.

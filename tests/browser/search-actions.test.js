@@ -22,13 +22,16 @@ const server = http.createServer((req, res) => {
     const HOUR = 60 * 60 * 1000, DAY = 24 * HOUR;
     const before = ms => new Date(Date.now() - ms).toISOString();
     const makeTask = (id, num, title, created, updated, extra = {}) => ({ id, num, title, column: 'todo', priority: 'medium', assignees: [], labels: [], comments: [], todos: [], history: [], links: [], created, updated, ...extra });
-    const board = { version: 3, columns: [{ id: 'todo', name: 'To do' }], people: [], contacts: [], clients: [], agents: [], labels: [], settings: {},
+    const board = { version: 3, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [], contacts: [], clients: [], agents: [], labels: [], settings: {},
       tasks: [makeTask('t_search', 1, 'Search example card', before(800 * DAY), before(90 * DAY)),
         makeTask('t_new_1', 2, 'Research: personal AI benchmark for testing new models', before(22 * DAY), before(3 * HOUR)),
         makeTask('t_new_2', 3, 'Review new follow-ups from the latest Keeptrack release and record reads', before(20 * DAY), before(8 * DAY), { comments: [{ by: 'ollie', at: before(2 * HOUR), text: 'Latest note' }] }),
         makeTask('t_new_3', 4, 'Prepare a new proposal with the full heartbeat and feature plan', before(90 * DAY), before(15 * DAY)),
         makeTask('t_new_4', 5, 'Upgrade the new board tools after checking every shared workspace', before(3 * DAY), before(2 * DAY)),
-        makeTask('t_new_5', 6, 'Plan the next new family bike trip with train and weather options', before(5 * HOUR), before(2 * HOUR))] };
+        makeTask('t_new_5', 6, 'Plan the next new family bike trip with train and weather options', before(5 * HOUR), before(2 * HOUR)),
+        makeTask('t_num_96', 96, 'Order 26 chairs', before(5 * DAY), before(DAY), { column: 'done', details: '26 chairs, 26 legs' }),
+        makeTask('t_num_260', 260, 'Number prefix card', before(5 * DAY), before(DAY), { column: 'done' }),
+        makeTask('t_num_26', 26, 'Number target card', before(5 * DAY), before(DAY), { column: 'done' })] };
     await page.route('https://api.test/**', route => { if (route.request().method() !== 'GET') writes++;
       const url = route.request().url();
       if (url.includes('/contents/board/tasks.json')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sha: 'one', encoding: 'base64', content: Buffer.from(JSON.stringify(board)).toString('base64') }) });
@@ -82,6 +85,11 @@ const server = http.createServer((req, res) => {
     mobileLayout.rows.forEach((row, i) => assert.equal(row.contentBottom <= row.bottom, true, `search result ${i + 1} contains its wrapped title and metadata`));
     mobileLayout.rows.slice(1).forEach((row, i) => assert.equal(row.top >= mobileLayout.rows[i].bottom, true, `search result ${i + 2} does not overlap the previous result`));
     await page.locator('#qClose').click(); await page.setViewportSize({ width: 1280, height: 720 });
+    // A number puts the card with that number first, then cards whose number starts with it, then other matches
+    for (const query of ['26', '#26']) { await search(query);
+      assert.deepEqual((await page.locator('#qRes .qhit:not(.qgo):not(.qaction) .qt').allTextContents()).slice(0, 3), ['Number target card', 'Number prefix card', 'Order 26 chairs'], query); }
+    await page.locator('#qQ').press('Enter'); assert.equal(await page.locator('#dlgCard').evaluate(dialog => dialog.open), true, 'Enter opens the numbered card');
+    await page.locator('#dlgCard').evaluate(dialog => dialog.close());
     await search('example card'); await page.getByRole('button', { name: /Search example card/ }).click();
     assert.equal(await page.locator('#dlgCard').evaluate(dialog => dialog.open), true);
     assert.equal(writes, 0); assert.deepEqual(errors, []);
