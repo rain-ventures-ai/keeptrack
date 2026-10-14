@@ -196,14 +196,15 @@ async function assertFits(page, where) {
     // search narrows both lists: word starts, small typos and "contains"; the current choice stays in view
     const clientList = () => workSheet.locator('.dworkcol').first().locator('.dworkchoice:not(.dworkchoice--add) strong').allTextContents();
     assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'cWorkFind', 'the search box has focus on a desktop');
-    await page.locator('#cWorkFind').fill('zzqx'); assert.deepEqual(await clientList(), ['Acme'], 'no match keeps only the current client');
+    await page.locator('#cWorkFind').fill('zzqx'); assert.deepEqual(await clientList(), ['No client', 'Acme'], 'no match keeps only the current client');
     assert.equal(await workSheet.locator('.dworkempty').count(), 1, 'an empty project list says so');
-    assert.equal(await workSheet.locator('.dworkchoice', { hasText: 'No client' }).count(), 0, 'a search hides the "No" choices');
-    await page.locator('#cWorkFind').fill('north'); assert.deepEqual(await clientList(), ['Acme', 'Northwind Traders']);
+    await page.locator('#cWorkFind').fill('north'); assert.deepEqual(await clientList(), ['No client', 'Acme', 'Northwind Traders']);
     await shot(page, 'phone-client-project-search');
-    await page.waitForFunction(() => window.MiniSearch); await page.locator('#cWorkFind').fill('bluebel evnts'); assert.deepEqual(await clientList(), ['Acme', 'Bluebell Events'], 'small typos still match');
-    await page.locator('#cWorkFind').fill('wind'); assert.deepEqual(await clientList(), ['Acme', 'Northwind Traders'], 'a part of a word matches');
-    await page.locator('#cWorkFind').fill(''); assert.deepEqual(await clientList(), ['No client', 'Acme', 'Bluebell Events', 'Northwind Traders']);
+    await page.waitForFunction(() => window.MiniSearch); await page.locator('#cWorkFind').fill('bluebel evnts'); assert.deepEqual(await clientList(), ['No client', 'Acme', 'Bluebell Events'], 'small typos still match');
+    await page.locator('#cWorkFind').fill('wind'); assert.deepEqual(await clientList(), ['No client', 'Acme', 'Northwind Traders'], 'a part of a word matches');
+    await page.locator('#cWorkFind').fill('north'); await page.locator('#cWorkFind').press('Escape');
+    assert.equal(await page.locator('#cWorkFind').inputValue(), '', 'Escape clears the search'); assert.equal(await workSheet.isVisible(), true, 'and keeps the sheet open');
+    assert.deepEqual(await clientList(), ['No client', 'Acme', 'Bluebell Events', 'Northwind Traders']);
     await workSheet.getByRole('button', { name: 'Add a new client', exact: true }).click(); const prompt = page.locator('dialog.ui-sheet--alert[open]'); await prompt.waitFor();
     await prompt.locator('input').fill('Beta Ltd'); await prompt.locator('button', { hasText: 'Add client' }).click(); await prompt.waitFor({ state: 'detached' });
     assert.equal(api.card().client, 'Acme', 'the picker is a draft until Apply');
