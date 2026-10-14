@@ -29,6 +29,14 @@ Web board: the card's **Client and project** picker has a search box. It narrows
 (MiniSearch: word starts and small typos) plus a plain "contains" match. A client also matches by its project names,
 and with a search the project list covers every client. No schema migration.
 
+## Kit v53 — 2026-10-14
+
+Card dependency (`after`) follow-ups. The web board shows a link to a card that is not on the board as "unknown" until
+the archive is loaded, then done, cancelled (an archived cancelled card), archived without Done or missing; before, an
+archived Done card showed as an amber "missing" chip. Review Inbox Accept refuses `after` links to a card not on the
+board, to the card itself and links that make a loop, like `keeptrack.py`. `doctor` checks `after` against card ids
+only (a person's or project's id is `AFTER_MISSING`). No schema migration.
+
 ## Kit v52 — 2026-10-14
 
 Similar cards: adding a card never stops, and close cards are marked as possible duplicates or additions on both

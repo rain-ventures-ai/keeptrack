@@ -138,6 +138,9 @@ class After(unittest.TestCase):
         d = self.doctor()
         self.assertEqual(["AFTER_MISSING"], [x["code"] for x in d["issues"] if x["code"].startswith("AFTER")])
         self.assertIn("AFTER_MISSING", [x["code"] for x in d["warnings"]], "a missing card is tolerated: a warning")
+        self.edit(lambda d: (d["projects"].append({"id": "pr_x", "name": "X"}), d["tasks"][2].update(after=["pr_x"])))
+        self.assertIn("AFTER_MISSING", [x["code"] for x in self.doctor()["issues"]], "a project's id is not a card")
+        self.edit(lambda d: d["projects"].clear())
         self.edit(lambda d: d["tasks"][2].update(after="t_c1"))
         self.assertIn("AFTER", [x["code"] for x in self.doctor()["issues"]])
         self.edit(lambda d: (d["tasks"][0].update(after=["t_c2"]), d["tasks"][1].update(after=["t_c1"]), d["tasks"][2].pop("after")))
@@ -206,6 +209,37 @@ class AfterProposals(unittest.TestCase):
         self.assertEqual(2, p.returncode)
         self.assertIn("change.after", p.stderr)
 
+
+
+# board.js keeps afterRefusal inside the page closure: cut it (with afterCycle) out and run it in node.
+AFTER_NODE = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const a = src.indexOf('  function afterCycle('), b = src.indexOf('  function proposalRefusal(');
+if (a < 0 || b < a) { console.error('afterRefusal block not found in board.js'); process.exit(2); }
+const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
+const refusal = new Function('afterIds', src.slice(a, b) + '\nreturn afterRefusal;')(afterIds);
+const board = { tasks: [{ id: 't_a', num: 1 }, { id: 't_b', num: 2, after: ['t_a'] }, { id: 't_c', num: 3, after: ['t_b'] }] };
+const up = (id, after) => refusal(board, { kind: 'task.update', target: { type: 'task', id } }, { after });
+process.stdout.write(JSON.stringify({
+  ok: up('t_c', ['t_a']), create: refusal(board, { kind: 'task.create' }, { after: ['t_a', 't_c'] }),
+  unknown: up('t_c', ['t_zz']), self: up('t_c', ['t_c']), loop: up('t_a', ['t_c']),
+  noBoard: refusal(null, { kind: 'task.update', target: { id: 't_a' } }, { after: ['t_zz'] }) }));
+"""
+
+
+class AfterProposalAcceptInPage(unittest.TestCase):
+    """The web board's Accept refuses after links to an unknown card, the card itself and a loop, like keeptrack.py."""
+    def test_board_js_refuses_unknown_self_and_loop(self):
+        if not shutil.which("node"):
+            self.skipTest("node is not installed")
+        p = subprocess.run(["node", "-e", AFTER_NODE, os.path.join(REPO, "board", "board.js")], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(("", "", ""), (r["ok"], r["create"], r["noBoard"]))
+        self.assertIn("t_zz", r["unknown"])
+        self.assertIn("itself", r["self"])
+        self.assertIn("loop", r["loop"])
+        self.assertIn("#3", r["loop"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 52;
+  const PAGE_KIT = 53;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -2125,7 +2125,8 @@ if (typeof window !== 'undefined') (() => {
   }
   // After (card dependencies): the card ids a card runs after, the same rules as keeptrack.py's after_links. A hint and a
   // gate, never a trigger: the page only shows them; relay's can-start refuses a card while any of them is not done. An
-  // id no longer on the board counts as done only if the archive (once loaded) holds it as Done, else it is missing.
+  // id no longer on the board counts as done only if the archive (once loaded) holds it as Done; until the archive is
+  // loaded it is unknown, and once loaded it is cancelled, archived without Done or missing.
   const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
   const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
   function afterLinks(t) {
@@ -2134,16 +2135,20 @@ if (typeof window !== 'undefined') (() => {
     return afterIds(t).map(id => {
       const live = state.tasks.find(x => x.id === id);
       if (live) return { id, num: live.num, title: live.title || '', live: true, state: finishedDone(live) ? 'done' : live.column === doneColId() ? 'cancelled' : (colName(live.column) || live.column || '?') };
-      const old = arch.get(id); return { id, num: old ? old.num : null, title: old ? old.title || '' : '', live: false, state: finishedDone(old) ? 'done' : 'missing' };
+      const old = arch.get(id);   // the archive not loaded yet (and the board has one): unknown, not missing
+      let years = 0; try { years = archYears().length; } catch { years = 0; }   // also declared further down
+      if (!old && !loaded && years) return { id, num: null, title: '', live: false, state: 'unknown' };
+      return { id, num: old ? old.num : null, title: old ? old.title || '' : '', live: false, state: finishedDone(old) ? 'done' : old && old.column === doneColId() ? 'cancelled' : old ? 'archived without Done' : 'missing' };
     });
   }
   const afterRef = x => x.num != null ? '#' + x.num : x.id;
+  const AFTER_BAD = ['missing', 'cancelled', 'archived without Done'];   // links that stop a chain (amber)
   function chipsAfter(t) {   // the card face: one chip per link not done yet; when every link is done, one quiet "ready" chip
     const links = afterLinks(t); if (!links.length || isDoneTask(t)) return [];
     const open = links.filter(x => x.state !== 'done');
     if (!open.length) { const c = elI('span', 'chip afterchip ok', 'check', 'after ' + links.map(afterRef).join(', ')); c.title = 'Every card this one runs after is done'; return [c]; }
-    return open.map(x => { const bad = x.state === 'missing' || x.state === 'cancelled'; const c = elI('span', 'chip afterchip' + (bad ? ' late' : ''), 'arrow-right', 'after ' + afterRef(x));
-      c.title = `Runs after ${afterRef(x)}${x.title ? ' ' + x.title : ''} (${x.state})`; return c; });
+    return open.map(x => { const bad = AFTER_BAD.includes(x.state); const c = elI('span', 'chip afterchip' + (bad ? ' late' : ''), 'arrow-right', 'after ' + afterRef(x));
+      c.title = x.state === 'unknown' ? `Runs after ${x.id}: not on the board; open the card to look it up in the archive` : `Runs after ${afterRef(x)}${x.title ? ' ' + x.title : ''} (${x.state})`; return c; });
   }
   const cancelledRun = t => t && t.column === doneColId() && t.outcome === 'cancelled' ? (t.last_run || {}) : null;   // v35 done always sets the card's outcome
   const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') ? s : s.slice(0, Math.min(3, Math.floor(s.length / 2))) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
@@ -3018,9 +3023,9 @@ if (typeof window !== 'undefined') (() => {
     const open = links.filter(x => x.state !== 'done');
     box.append(elI('span', 'dafter__label', 'arrow-right', open.length ? 'Runs after' : 'Runs after (all done: ready to approve)'));
     links.forEach(x => {
-      const tone = x.state === 'done' ? 'ok' : x.state === 'missing' || x.state === 'cancelled' ? 'warn' : 'neutral';
+      const tone = x.state === 'done' ? 'ok' : AFTER_BAD.includes(x.state) ? 'warn' : 'neutral';
       const p = ui.pill({ text: `after ${afterRef(x)}${x.title ? ' ' + x.title : ''} · ${x.state}`, tone, size: 'sm', onClick: x.live ? () => openCard(x.id) : undefined });
-      p.dataset.after = x.id; p.title = x.state === 'missing' ? 'Not on the board, and not archived as Done' : `${afterRef(x)} is ${x.state}`; box.append(p);
+      p.dataset.after = x.id; p.title = x.state === 'missing' ? 'Not on the board, and not in the archive' : x.state === 'unknown' ? 'Not on the board: loading the archive' : `${afterRef(x)} is ${x.state}`; box.append(p);
     });
   }
   function renderWaiting(t) {
@@ -4654,12 +4659,28 @@ if (typeof window !== 'undefined') (() => {
     }
     return '';
   }
-  function proposalRefusal(p, change) {   // '' when the proposal may be applied, else why not
+  // A chain of card ids from ids back to tid (a loop), else null; live cards only, like keeptrack.py after_cycle.
+  function afterCycle(board, tid, ids) {
+    const byId = new Map((board.tasks || []).map(t => [t.id, t])), seen = new Set(), stack = ids.map(i => [i, [i]]);
+    while (stack.length) { const [cur, path] = stack.pop(); if (cur === tid) return path; if (seen.has(cur)) continue; seen.add(cur); afterIds(byId.get(cur)).forEach(x => stack.push([x, path.concat(x)])); }
+    return null;
+  }
+  // change.after on a task proposal: every id a card on the board, never the card itself, and no loop (keeptrack.py resolve_after
+  // checked them at propose time; the board may have changed since, and a proposal file can be written by hand).
+  function afterRefusal(board, p, change) {
+    if (!board || !String(p.kind || '').startsWith('task.') || !Array.isArray(change.after)) return '';   // no board: the shape checks only
+    const tid = p.kind === 'task.update' && p.target ? p.target.id : null, live = new Set((board.tasks || []).map(t => t.id));
+    const unknown = change.after.filter(x => !live.has(x)); if (unknown.length) return `change.after names ${unknown.join(', ')}, which is not a card on the board`;
+    if (tid && change.after.includes(tid)) return 'change.after names the card itself';
+    const loop = tid ? afterCycle(board, tid, change.after) : null; if (loop) return `change.after would make a loop (${loop.map(i => { const x = (board.tasks || []).find(t => t.id === i); return x && x.num != null ? '#' + x.num : i; }).join(' -> ')} -> back to this card)`;
+    return '';
+  }
+  function proposalRefusal(p, change, board) {   // '' when the proposal may be applied, else why not; board: the model it goes into
     const kind = String(p.kind || ''); if (!PROPOSAL_KINDS.includes(kind)) return `Not saved: unknown proposal kind ${JSON.stringify(kind)}.`;
     if (!isObj(change) || !Object.keys(change).length) return 'Not saved: the proposal has no valid change.';
     const ok = CHANGE_FIELDS[kind.startsWith('task.') ? 'task' : kind === 'person.upsert' ? 'person' : 'touch'], bad = Object.keys(change).filter(k => !ok.includes(k));
     if (bad.length) return `Not saved: a ${kind} proposal may not set ${bad.join(', ')}. Ignore it, or fix the proposal file.`;
-    const why = changeValueRefusal(change, kind);
+    const why = changeValueRefusal(change, kind) || afterRefusal(board, p, change);
     return why ? `Not saved: ${why}. Ignore it, or fix the proposal file.` : '';
   }
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
@@ -4731,7 +4752,7 @@ if (typeof window !== 'undefined') (() => {
   // The change a decision makes to the board model n. ctx: { resultId, into, fields }.
   function applyProposal(n, p, action, change, ctx) {
     if (action === 'ignore') return;
-    { const why = proposalRefusal(p, change); if (why) throw new Error(why); }   // decideProposal refuses first; this is the last guard
+    { const why = proposalRefusal(p, change, n); if (why) throw new Error(why); }   // decideProposal refuses first; this is the last guard
     const ts = nowIso();
     if (action === 'merge') {
       const rec = findRef(n, ctx.into); if (!rec) return;
@@ -4825,7 +4846,7 @@ if (typeof window !== 'undefined') (() => {
       todayQueue.reviewed.delete(id); await load(true); inboxSay('Not saved: this proposal changed. Expand Review again to read the latest evidence.', true); return false;
     }
     const fresh = normalise(got.data), change = clone(opts.change || p.change || {});
-    if (action !== 'ignore') { const why = proposalRefusal(p, change); if (why) { inboxSay(why, true); return false; } }
+    if (action !== 'ignore') { const why = proposalRefusal(p, change, state); if (why) { inboxSay(why, true); return false; } }
     const edited = opts.change ? Object.fromEntries(Object.entries(opts.change).filter(([k, v]) => !sameJson((p.change || {})[k], v))) : null;
     let expect = {}, note = '';
     if (action !== 'ignore' && p.target) {
