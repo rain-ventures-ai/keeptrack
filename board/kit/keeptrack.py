@@ -25,6 +25,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py link ID URL [--title ...]            # attach a link, e.g. the pull request
   keeptrack.py unlink ID URL                        # remove a link (by URL or title)
   keeptrack.py task-set ID [--title ..] [--details ..] [--priority ..] [--due ..] [--label x] [--unlabel y] [--client ..] [--project ..]
+  keeptrack.py task-set ID --after '#62' [--after ..] | --not-after '#62' | --no-after   # runs after those cards: a hint and a gate, never a trigger
   keeptrack.py wait ID --on "Acme finance" [--who p_id|login] [--nudge +3|YYYY-MM-DD] [--note ..]   # park a card: not claimable until unwait
   keeptrack.py unwait ID --note "why"   # end the wait (agents: only a wait they set in this session that names nobody else)
 
@@ -1895,6 +1896,102 @@ def drop_leftover_wait(t, how, data=None, a=None):
         t["claim"].pop("blocked_by_wait", None); t["claim"].pop("before_wait", None)
 
 
+# Card dependencies ("after"): a card may list the card ids it runs after. They are a hint and a gate, never a
+# trigger: nothing here moves a card. The board shows them; relay's can-start refuses a card while any of them is not
+# done. An id that is no longer on the board is tolerated: an archived card counts as done only if it was Done (and
+# not cancelled), anything else shows as missing.
+def after_ids(t):
+    """The card ids t runs after, as stored (strings only, no duplicates); [] when absent or malformed."""
+    v = (t or {}).get("after")
+    return list(dict.fromkeys(x for x in v if isinstance(x, str) and x)) if isinstance(v, list) else []
+
+
+def finished_done(t):
+    """Done and not cancelled: the only state that lets a card that runs after t start."""
+    return isinstance(t, dict) and t.get("column") == "done" and t.get("outcome") != "cancelled"
+
+
+def after_cycle(data, tid, new_ids):
+    """A chain of #numbers that would lead from new_ids back to tid (a cycle), else None. Follows live cards only."""
+    by_id = {t.get("id"): t for t in data.get("tasks", []) if isinstance(t, dict)}
+    seen, stack = set(), [(i, [i]) for i in new_ids]
+    while stack:
+        cur, path = stack.pop()
+        if cur == tid:
+            return path
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend((n, path + [n]) for n in after_ids(by_id.get(cur)))
+    return None
+
+
+def resolve_after(data, t, refs):
+    """Card ids for refs ('#62' or an id or unique id prefix), each a card on the board; exits on an unknown card,
+    on t itself, or when the links would make a cycle."""
+    out = []
+    for ref in refs:
+        ref = str(ref).strip()
+        if not ref:
+            continue
+        other = find(data, ref)
+        if t is not None and other.get("id") == t.get("id"):
+            sys.exit(f"#{t.get('num', '?')} can't run after itself")
+        if other["id"] not in out:
+            out.append(other["id"])
+    if t is not None:
+        path = after_cycle(data, t.get("id"), out)
+        if path:
+            nums = {x.get("id"): x.get("num", "?") for x in data.get("tasks", [])}
+            chain = " -> ".join(f"#{nums.get(i, '?')}" for i in path)
+            sys.exit(f"refused: #{t.get('num', '?')} after {chain} makes a loop (#{t.get('num', '?')} would wait on itself)")
+    return out
+
+
+def archived_tasks(data, base):
+    """{id: archived task} from every archive file the board lists (read only when a link is not on the board)."""
+    out = {}
+    for y in archive_years(data):
+        cur, _ = read_archive(y, base)
+        for x in (cur or {}).get("tasks", []):
+            if isinstance(x, dict) and x.get("id"):
+                out.setdefault(x["id"], x)
+    return out
+
+
+def after_links(data, t, archived=None):
+    """[{id, num, title, state}] for each card t runs after. state: 'done', 'cancelled' (Done with outcome cancelled),
+    the live column (not done yet), or 'missing' (not on the board, and not archived as Done). archived: {id: task}
+    from archived_tasks(), or None to skip the archive (an id not on the board then shows as missing)."""
+    by_id = {x.get("id"): x for x in data.get("tasks", []) if isinstance(x, dict)}
+    out = []
+    for i in after_ids(t):
+        x = by_id.get(i)
+        if x is not None:
+            state = "done" if finished_done(x) else "cancelled" if x.get("column") == "done" else str(x.get("column") or "?")
+        else:
+            x = (archived or {}).get(i)
+            state = "done" if finished_done(x) else "missing"
+        out.append({"id": i, "num": (x or {}).get("num"), "title": (x or {}).get("title", ""), "state": state})
+    return out
+
+
+def after_ref(x):
+    """'#62' for one after_links() entry, or its id when the card has no number (missing)."""
+    return f"#{x['num']}" if x.get("num") is not None else x["id"]
+
+
+def num_ref(data, tid):
+    """'#62' for a card id on the board, else the id itself."""
+    n = num_of(data, tid)
+    return f"#{n}" if n != "?" else tid
+
+
+def after_text(links):
+    """'#62 (done), #63 (in-progress), t_ab12 (missing)' for after_links() output."""
+    return ", ".join(f"{after_ref(x)} ({x['state']})" for x in links)
+
+
 def waiting_index(data):
     """Built once per command: open waits by lower-case `who` ({who: [card ids]}) and an {id: task} map, so `people`
     and `person` never scan the card list per person."""
@@ -1943,7 +2040,11 @@ def line(data, t, wait_suffix="list", today=None):
     elif w:
         chase = today and chase_now(data, t, today)
         wt = f"  [waiting: {waiting_text(w)}{', chase now' if chase else ''}]"
-    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {t['title']}{pr}{cm}{wt}{cl}"
+    af = ""
+    if after_ids(t) and t.get("column") != "done":   # the links on the board not done yet (show ID reads the archive)
+        todo = [after_ref(x) for x in after_links(data, t) if x["state"] not in ("done", "missing")]
+        af = f"  [after {', '.join(todo)}]" if todo else ""
+    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {t['title']}{pr}{cm}{wt}{af}{cl}"
 
 
 def _default_scope(a, data=None):
@@ -2013,8 +2114,13 @@ def cmd_list(a):
 
 
 def cmd_show(a):
-    data, _ = load()
+    data, base = load()
     t = find(data, a.id)
+    links = []
+    if after_ids(t):
+        live = {x.get("id") for x in data.get("tasks", [])}
+        archived = archived_tasks(data, base) if any(i not in live for i in after_ids(t)) else None
+        links = after_links(data, t, archived)
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
     hs = t.pop("history", []); cms = t.pop("comments", [])
     for k in ("claim", "last_run"):   # a session id is a claim's proof of ownership (and a session may hold other cards): shown only in part
@@ -2026,6 +2132,9 @@ def cmd_show(a):
         if why.endswith(")") and " (session " in why:
             why = why.rsplit(" (session ", 1)[0]
         print("\noutcome: cancelled" + (f" ({why})" if why else ""))
+    if links:
+        waiting_on = [x for x in links if x["state"] != "done"]
+        print("\nafter: " + after_text(links) + ("" if waiting_on else "; all done"))
     if t.get("links"):
         print("\nresource access: cloud links need the matching connector/plugin/MCP and signed-in account; local paths need a session on the computer that holds them. Ask the user if access fails.")
     if t.get("todos"):
@@ -2660,6 +2769,9 @@ def cmd_add(a):
         for x in ensure_labels(data, a.label or []):
             print(f"created label {x}")
         t["labels"] = list(dict.fromkeys(check_label_name(x) for x in a.label or []))
+        after = resolve_after(data, None, getattr(a, "after", None) or [])   # a new card can't be in a loop yet
+        if after:
+            t["after"] = after
         if data.get("layout") == "split":
             t["rank"] = append_rank(ranks)
         append_priority_rank(data, t)
@@ -3034,6 +3146,19 @@ def doctor_board(fix=False):
                 problem("ASSIGNEE", path, f"Assignee {user!r} does not exist.")
         if t.get("project") and t["project"] not in {x.get("id") for x in projects}:
             problem("PROJECT", path, f"Project {t.get('project')!r} does not exist.")
+        if "after" in t:   # card dependencies: the card ids this one runs after
+            raw = t["after"]
+            if not isinstance(raw, list) or not all(isinstance(x, str) and x for x in raw):
+                problem("AFTER", path, "after must be a list of card ids; fix it with task-set --no-after and --after.")
+            elif t.get("id") in raw:
+                problem("AFTER", path, "The card runs after itself; remove it with task-set --not-after.")
+            else:
+                gone = [x for x in raw if x not in ids and x not in archived_ids]
+                if gone:
+                    problem("AFTER_MISSING", path, f"It runs after {', '.join(gone)}, which is not on the board or in the archive; "
+                            "relay treats that as not done. Remove it with task-set --not-after.")
+                elif after_cycle({"tasks": [x for x in tasks if isinstance(x, dict)]}, t.get("id"), raw):
+                    problem("AFTER", path, "Its after links make a loop, so no card in it can start; remove one with task-set --not-after.")
         rank = t.get("rank")
         if "value" in t and t["value"] is not None and not (type(t["value"]) is int and 1 <= t["value"] <= 5):
             problem("TASK_VALUE", path, "Value must be an integer 1–5, null or absent.")
@@ -3666,7 +3791,7 @@ _SUBPARSERS = None
 COMMAND_HELP = {   # one line each, for commands whose parser has none
     "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention, --waiting, --waiting-on WHO)",
     "show": "one card in full: details, links, checklist, claim, latest comments",
-    "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo)",
+    "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo, --after '#N')",
     "move": "move a card to a column, or reorder it (--before, --after, --top); --priority",
     "assign": "hand a card to people (replaces, or --add / --remove)",
     "link": "attach a link to a card, e.g. its pull request",
@@ -3709,7 +3834,8 @@ def cmd_where(a):
 CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
 DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS",
-                             "KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "AGENT_CLEARED", "WAITING"})   # v43: detect, never stop the board
+                             "KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "AGENT_CLEARED", "WAITING",
+                             "AFTER_MISSING"})   # v43: detect, never stop the board; a missing after card is tolerated
 
 
 def person_for_github(data, github):
@@ -4452,6 +4578,21 @@ def cmd_task_set(a):
             new = [x for x in cur if x not in drop] + [x for x in dict.fromkeys(add) if x not in cur and x not in drop]
             if new != cur:
                 t["labels"] = new; changed.append("labels: " + (", ".join(new) or "none"))
+        add_after, drop_after = getattr(a, "after", None) or [], getattr(a, "not_after", None) or []
+        if getattr(a, "no_after", False) or add_after or drop_after:
+            cur = after_ids(t)
+            gone = {x if x in cur else find(data, x)["id"] for x in (str(y).strip() for y in drop_after)}   # a missing card by its id
+            keep = [] if getattr(a, "no_after", False) else [x for x in cur if x not in gone]
+            new = list(dict.fromkeys(keep + resolve_after(data, t, add_after)))
+            path = after_cycle(data, t["id"], new) if new else None
+            if path:   # resolve_after checked the new links; this checks the kept ones too
+                sys.exit(f"refused: #{t.get('num')} would wait on itself through {', '.join(num_ref(data, i) for i in path)}")
+            if new != cur or ("after" in t and not isinstance(t.get("after"), list)):
+                if new:
+                    t["after"] = new
+                else:
+                    t.pop("after", None)
+                changed.append("after: " + (", ".join(num_ref(data, i) for i in new) or "none"))
         if not changed:
             print(f"#{t['num']} unchanged"); return
         for x in changed:
@@ -5591,7 +5732,7 @@ PROPOSAL_ROOT_FIELDS = {"id", "version", "kind", "status", "title", "source", "r
 PROPOSAL_SOURCE_FIELDS = {"kind", "id", "revision", "title", "date", "url", "recipients_confirmed"}
 PROPOSAL_RUN_FIELDS = {"routine", "run_id", "at"}
 TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priority", "due", "labels", "owner", "assignees",
-                      "details", "links", "contacts", "todos", "comments", "value", "effort", "priority_rank"}
+                      "details", "links", "contacts", "todos", "comments", "value", "effort", "priority_rank", "after"}
 PERSON_CHANGE_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "github", "emails", "phones",
                         "stage", "value", "source", "notes", "next", "due", "next_due", "links", "comments"}
 TOUCH_CHANGE_FIELDS = {"text", "channel", "at", "source_id", "source_message_ids", "next", "due", "next_due"}
@@ -5650,7 +5791,7 @@ def _proposal_change_fields(kind):
 STR_FIELDS = {"title", "column", "client", "project", "contact", "owner", "details", "name", "company", "role", "email", "phone",
               "linkedin", "github", "stage", "value", "source", "notes", "next", "text", "channel", "at", "source_id"}
 DATE_FIELDS = {"due", "next_due"}
-STR_LIST_FIELDS = {"labels", "assignees", "source_message_ids"}
+STR_LIST_FIELDS = {"labels", "assignees", "source_message_ids", "after"}
 DICT_LIST_FIELDS = {"links", "contacts", "todos", "comments", "emails", "phones"}
 ADDITIVE_FIELDS = {"comments", "todos", "links"}
 # Text that can carry what an email said. Without --recipients-confirmed an email proposal holds none of it.
@@ -5941,6 +6082,14 @@ def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
             st = data.setdefault("settings", {})
             if not (isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) and st["min_kit"] >= ASK_KIT):
                 st["min_kit"] = ASK_KIT   # an older page would "accept" a question without an answer: doctor flags older kits
+        if proposal["kind"].startswith("task.") and "after" in proposal["change"]:
+            # '#62' or an id becomes the card's id now, so the stored proposal names cards, never numbers
+            target = proposal.get("target") or {}
+            me = next((t for t in data.get("tasks", []) if t.get("id") == target.get("id")), None) if target.get("id") else None
+            try:
+                proposal["change"]["after"] = resolve_after(data, me, proposal["change"]["after"])
+            except SystemExit as e:
+                proposal_error(f"change.after: {e}")
         proposal["likely_duplicates"] = proposal_duplicates(data, proposal)
         proposal["history"].append({"at": proposal["created"], "by": proposal["createdBy"], "text": "proposed"})
         data.setdefault("proposals", []).append(proposal)
@@ -6054,6 +6203,9 @@ def _new_task(data, proposal, change):
     for field in ("value", "effort", "priority_rank"):
         if field in change:
             task[field] = copy.deepcopy(change[field])
+    after = [x for x in change.get("after") or [] if isinstance(x, str) and x and x != ident]
+    if after:
+        task["after"] = list(dict.fromkeys(after))
     if "priority_rank" not in task:
         append_priority_rank(data, task)
     hist(task, f"created from proposal {proposal['id']}")
@@ -6111,6 +6263,13 @@ def _apply_update(data, record, proposal, change):
             if isinstance(value, str) and any(value.casefold() == str(m.get("github", "")).casefold() for m in data.get("people", [])):
                 record["assignees"] = [value]
             continue
+        if key == "after" and record.get("id", "").startswith("t_"):
+            value = list(dict.fromkeys(x for x in value if x != record["id"]))
+            if after_cycle(data, record["id"], value):
+                proposal_conflict(f"not saved: these after links would make a loop through {record.get('id')}; review it by hand")
+            if not value:
+                record.pop("after", None)
+                continue
         record["next_due" if key == "due" and record.get("id", "").startswith("p_") else key] = copy.deepcopy(value)
     if record.get("id", "").startswith("t_") and record.get("column") == "done" and not was_done:
         drop_leftover_wait(record, "proposal to done", data)
@@ -7072,6 +7231,7 @@ def main():
     s.add_argument("--priority", default="medium", choices=["high", "medium", "low"]); s.add_argument("--due")
     s.add_argument("--assign", action="append"); s.add_argument("--label", action="append"); s.add_argument("--details")
     s.add_argument("--todo", action="append", help="initial checklist item (repeatable)")
+    s.add_argument("--after", action="append", metavar="REF", help="runs after this card, '#62' or an id (repeatable); a hint and a gate, never a trigger")
     s.set_defaults(f=cmd_add)
     s = sub.add_parser("kit-check"); s.add_argument("--card", action="store_true"); s.add_argument("--from", dest="source"); s.set_defaults(f=cmd_kit_check)
     s = sub.add_parser("kit-update"); s.add_argument("--from", dest="source", help="a local kit folder instead of the published one (testing)")
@@ -7143,13 +7303,16 @@ def main():
     s = sub.add_parser("project-unlink", help="remove a link from a project"); s.add_argument("ref"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_project_unlink)
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
-    s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project or contact")
+    s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project, contact or after")
     s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details"); s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
     s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
     s.add_argument("--value", choices=["", "1", "2", "3", "4", "5"], help="optional value 1–5; empty clears")
     s.add_argument("--effort", choices=["", *EFFORT_WEIGHTS], help="optional effort size; empty clears")
+    s.add_argument("--after", action="append", metavar="REF", help="add a card this one runs after: '#62' or an id (repeatable); refuses itself and loops")
+    s.add_argument("--not-after", dest="not_after", action="append", metavar="REF", help="remove one card from the after list (repeatable)")
+    s.add_argument("--no-after", dest="no_after", action="store_true", help="clear the after list (with --after: replace it)")
     s = sub.add_parser("task-rm", help="delete a task created by mistake (needs --yes)"); s.add_argument("id"); s.add_argument("--yes", action="store_true", help="confirm the delete"); s.set_defaults(f=cmd_task_rm)
     s = sub.add_parser("unlink", help="remove a link from a task"); s.add_argument("id"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_unlink)
     s = sub.add_parser("labels", help="list labels and how many cards use each"); s.set_defaults(f=cmd_labels)

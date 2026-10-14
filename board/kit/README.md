@@ -137,6 +137,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
     "claim": null,                                 // see below
     "last_run": null,                              // set by `done`: the finished claim, shown as one "Last run" line
     "waiting": null,                               // v43, see "Waiting for" below
+    "after": ["t_ab12cd35"],                       // optional: card ids this card runs after, see "Runs after" below
     "agent_cleared": [],                           // v43, optional: newest 20 {what, by, session, at} where an agent run ended or overrode a wait
     "created": "…", "createdBy": "osouthgate", "updated": "…", "updatedBy": "osouthgate"
   }]
@@ -207,6 +208,23 @@ person (no `BOARD_AGENT`); such a claim never goes stale, and only its own sessi
 the agent itself. These rules are advisory: anything with write access to the repo can edit a card, so the kit records
 what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `CLAIM_BLOCKED`, `KIT_OLD` and
 `MIN_KIT_LOWERED`. The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.
+
+### Runs after (card dependencies)
+A card may carry `after`: a list of card ids it runs after (absent or `[]` when it has none). It is a hint and a gate,
+never a trigger: nothing moves a card because of it, and only a person moves a card into To do.
+```bash
+python3 board/keeptrack.py task-set '#63' --after '#62' [--after ..]   # '#N' or an id; stores the card id
+python3 board/keeptrack.py task-set '#63' --not-after '#62'            # remove one; --no-after clears (with --after: replace)
+python3 board/keeptrack.py add "Phase two" --column backlog --after '#62'
+```
+Each id must be a card on the board. A card can't run after itself, and a link that would make a loop is refused.
+`show` prints `after: #62 (done), #64 (in-progress)`; `list` adds `[after #62]` for links on the board not done yet. A card that
+is no longer on the board counts as done only if the archive holds it as Done (and not cancelled); otherwise it shows as
+`missing`. The web board shows an "after #62" chip per link not done yet (amber when missing or cancelled) and every
+link in the card's details. A `task.create` or `task.update` proposal may set `after`: `proposal-add` turns `#N` into
+the card id. `doctor` reports a malformed list or a loop (`AFTER`) and warns about a card that is gone (`AFTER_MISSING`).
+No migration: older kits keep the field as it is and ignore it. Relay's `can-start` reads it (it refuses a card while
+any card it runs after is not done).
 
 ## People (schema 3)
 Schema 3 (migration step 2 to 3) adds the Keeptrack CRM: `contacts` (default `[]`), `client_info` (default `{}`) and `settings.stages` (default New, Contacted, Talking, Proposal, Won, Lost). A person in `contacts`:

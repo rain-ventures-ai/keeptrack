@@ -2062,6 +2062,28 @@ if (typeof window !== 'undefined') (() => {
     const c = elI('span', 'chip waitchip' + (chaseNow(t) ? ' late' : ''), 'alarm-clock', `waiting on ${on.length > 40 ? on.slice(0, 39) + '…' : on}, ${days}d`);
     const chase = chaseDate(w); c.title = `Waiting on ${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} since ${w.since || '?'}${chase ? ', chase ' + chase : ''}${w.note ? '\n' + w.note : ''}`; return c;
   }
+  // After (card dependencies): the card ids a card runs after, the same rules as keeptrack.py's after_links. A hint and a
+  // gate, never a trigger: the page only shows them; relay's can-start refuses a card while any of them is not done. An
+  // id no longer on the board counts as done only if the archive (once loaded) holds it as Done, else it is missing.
+  const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
+  const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
+  function afterLinks(t) {
+    let loaded = null; try { loaded = archived; } catch { loaded = null; }   // declared further down this file
+    const arch = new Map(((loaded && loaded.tasks) || []).map(x => [x.item.id, x.item]));
+    return afterIds(t).map(id => {
+      const live = state.tasks.find(x => x.id === id);
+      if (live) return { id, num: live.num, title: live.title || '', live: true, state: finishedDone(live) ? 'done' : live.column === doneColId() ? 'cancelled' : (colName(live.column) || live.column || '?') };
+      const old = arch.get(id); return { id, num: old ? old.num : null, title: old ? old.title || '' : '', live: false, state: finishedDone(old) ? 'done' : 'missing' };
+    });
+  }
+  const afterRef = x => x.num != null ? '#' + x.num : x.id;
+  function chipsAfter(t) {   // the card face: one chip per link not done yet; when every link is done, one quiet "ready" chip
+    const links = afterLinks(t); if (!links.length || isDoneTask(t)) return [];
+    const open = links.filter(x => x.state !== 'done');
+    if (!open.length) { const c = elI('span', 'chip afterchip ok', 'check', 'after ' + links.map(afterRef).join(', ')); c.title = 'Every card this one runs after is done'; return [c]; }
+    return open.map(x => { const bad = x.state === 'missing' || x.state === 'cancelled'; const c = elI('span', 'chip afterchip' + (bad ? ' late' : ''), 'arrow-right', 'after ' + afterRef(x));
+      c.title = `Runs after ${afterRef(x)}${x.title ? ' ' + x.title : ''} (${x.state})`; return c; });
+  }
   const cancelledRun = t => t && t.column === doneColId() && t.outcome === 'cancelled' ? (t.last_run || {}) : null;   // v35 done always sets the card's outcome
   const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') ? s : s.slice(0, Math.min(3, Math.floor(s.length / 2))) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
   function chipOutcome(t) { const r = cancelledRun(t); if (!r) return null; const c = el('span', 'chip cancelledchip', 'cancelled'); c.title = 'Closed as cancelled' + (r.note ? ': ' + r.note : ''); return c; }
@@ -2089,7 +2111,7 @@ if (typeof window !== 'undefined') (() => {
     if (t.due) mm.append(duePill(t));
     mm.append(prioPill(t));
     mm.append(...labelTags(t)); { const c = clientTag(t); if (c) mm.append(c); }
-    [chipMention(t), chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
+    [chipMention(t), chipWaiting(t), ...chipsAfter(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t));
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
@@ -2097,7 +2119,7 @@ if (typeof window !== 'undefined') (() => {
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
     const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
     const pr = el('div', 'c-prio'); pr.append(prioPill(t));
-    const more = el('div', 'c-more'); [chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
+    const more = el('div', 'c-more'); [chipWaiting(t), ...chipsAfter(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     row.append(c0, task, desc, ppl, lab, due, pr, more); return row;
@@ -2531,7 +2553,7 @@ if (typeof window !== 'undefined') (() => {
       if (context.childNodes.length) c.append(context);
     }
     const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
-    [chipMention(t), chipWaiting(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+    [chipMention(t), chipWaiting(t), ...chipsAfter(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
       other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t), chipOutcome(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
@@ -2685,7 +2707,8 @@ if (typeof window !== 'undefined') (() => {
       { label: 'Labels', icon: 'tag', value: [chips, labelAdd, labelNew, labelList] }
     ]);
     [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
-    $('cProps').append(props);
+    const after = el('div', 'dafter'); after.id = 'cAfter'; after.hidden = true;   // "Runs after": only on a card with after links
+    $('cProps').append(props, after);
     // sections: Description, Checklist, Links, Contacts, Comments, History
     const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
     const todos = el('div', 'dtodos'); todos.id = 'cTodos';
@@ -2828,6 +2851,20 @@ if (typeof window !== 'undefined') (() => {
   // optionally a member and a follow-up day. Keeping this out of the property grid stops a phone keyboard crushing it.
   // Clear ends it as keeptrack.py unwait does: a claim the wait blocked runs again, or goes back to To do once it is stale.
   let waitSheet = null;
+  // Runs after: each card this one runs after, with its state; a card on the board opens on click. Set with
+  // keeptrack.py task-set --after (or a front door); the page shows the links and never moves a card because of them.
+  function renderAfter(t) {
+    const box = $('cAfter'); if (!box) return; box.textContent = ''; const links = afterLinks(t); box.hidden = !links.length; if (!links.length) return;
+    let loaded = null; try { loaded = archived; } catch { loaded = null; }
+    if (links.some(x => !x.live) && !loaded && archYears().length) loadArchived().then(() => { if (editing === t.id) renderAfter(state.tasks.find(x => x.id === t.id) || t); }).catch(() => {});   // an archived Done card counts as done
+    const open = links.filter(x => x.state !== 'done');
+    box.append(elI('span', 'dafter__label', 'arrow-right', open.length ? 'Runs after' : 'Runs after (all done: ready to approve)'));
+    links.forEach(x => {
+      const tone = x.state === 'done' ? 'ok' : x.state === 'missing' || x.state === 'cancelled' ? 'warn' : 'neutral';
+      const p = ui.pill({ text: `after ${afterRef(x)}${x.title ? ' ' + x.title : ''} · ${x.state}`, tone, size: 'sm', onClick: x.live ? () => openCard(x.id) : undefined });
+      p.dataset.after = x.id; p.title = x.state === 'missing' ? 'Not on the board, and not archived as Done' : `${afterRef(x)} is ${x.state}`; box.append(p);
+    });
+  }
   function renderWaiting(t) {
     const box = $('cWaitVal'); box.textContent = ''; const w = waitingOf(t);
     if (w) {
@@ -3014,7 +3051,7 @@ if (typeof window !== 'undefined') (() => {
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderWaiting(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
+    renderWaiting(t); renderAfter(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
@@ -4435,14 +4472,14 @@ if (typeof window !== 'undefined') (() => {
   // The fields a proposal may change, the same lists as keeptrack.py (TASK_CHANGE_FIELDS, PERSON_CHANGE_FIELDS, TOUCH_CHANGE_FIELDS).
   // `propose` checks them, but a proposal file can be written by hand: accept checks them again and refuses anything else (claim, num, id…).
   const CHANGE_FIELDS = {
-    task: ['title', 'column', 'client', 'project', 'contact', 'priority', 'due', 'labels', 'owner', 'assignees', 'details', 'links', 'contacts', 'todos', 'comments', 'value', 'effort', 'priority_rank'],
+    task: ['title', 'column', 'client', 'project', 'contact', 'priority', 'due', 'labels', 'owner', 'assignees', 'details', 'links', 'contacts', 'todos', 'comments', 'value', 'effort', 'priority_rank', 'after'],
     person: ['name', 'company', 'role', 'email', 'phone', 'linkedin', 'github', 'emails', 'phones', 'stage', 'value', 'source', 'notes', 'next', 'due', 'next_due', 'links', 'comments'],
     touch: ['text', 'channel', 'at', 'source_id', 'source_message_ids', 'next', 'due', 'next_due'] };
   const PROPOSAL_KINDS = ['task.create', 'task.update', 'person.upsert', 'contact.touch'];
   // Value types too, the same rules as check_change_values in keeptrack.py (shared cases: tests/fixtures/proposal-change-cases.json).
   const STR_FIELDS = ['title', 'column', 'client', 'project', 'contact', 'owner', 'details', 'name', 'company', 'role', 'email', 'phone',
     'linkedin', 'github', 'stage', 'value', 'source', 'notes', 'next', 'text', 'channel', 'at', 'source_id'];
-  const DATE_FIELDS = ['due', 'next_due'], STR_LIST_FIELDS = ['labels', 'assignees', 'source_message_ids'];
+  const DATE_FIELDS = ['due', 'next_due'], STR_LIST_FIELDS = ['labels', 'assignees', 'source_message_ids', 'after'];
   const DICT_LIST_FIELDS = ['links', 'contacts', 'todos', 'comments', 'emails', 'phones'];
   function changeValueRefusal(change, kind) {
     for (const [key, value] of Object.entries(change)) {
@@ -4544,6 +4581,7 @@ if (typeof window !== 'undefined') (() => {
         todos: [], comments: [], history: [], claim: null, created: ts, createdBy: inboxMe(), updated: ts, updatedBy: inboxMe() };
       appendUnique(t, 'todos', change.todos || []); appendUnique(t, 'comments', change.comments || []);
       ['value', 'effort', 'priority_rank'].forEach(k => { if (Object.hasOwn(change, k)) t[k] = clone(change[k]); });
+      { const after = [...new Set((change.after || []).filter(x => typeof x === 'string' && x && x !== t.id))]; if (after.length) t.after = after; }   // ids: keeptrack.py's propose resolved them
       histAdd(t, `created from proposal ${p.id}`); n.tasks.push(t); return;
     }
     if (p.kind === 'person.upsert' && !p.target) {
@@ -4568,6 +4606,7 @@ if (typeof window !== 'undefined') (() => {
     Object.entries(change).forEach(([k, v]) => {
       if (LIST_FIELDS.includes(k) && Array.isArray(v)) appendUnique(rec, k, v);
       else if (k === 'owner') { if (p.target.type === 'task' && isMemberLogin(v)) rec.assignees = [v]; }
+      else if (k === 'after' && p.target.type === 'task') { const a = [...new Set(v.filter(x => x !== rec.id))]; if (a.length) rec.after = a; else delete rec.after; }   // never itself
       else rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k] = clone(v);
     });
     rec.updated = ts; rec.updatedBy = inboxMe(); histAdd(rec, `accepted proposal ${p.id}`);
