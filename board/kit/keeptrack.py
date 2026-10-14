@@ -2403,7 +2403,7 @@ def card_url(num):
 
 def link_follow_up(t, o):
     """Card o is the follow-up of card t: a follow-up relation and a link on each card to the other. Idempotent."""
-    set_relation(t, o, "follow-up", "confirmed", src=t["id"])
+    set_relation(t, o, "related", "confirmed", src=t["id"])
     for x, y, title in ((t, o, f"Follow-up #{o.get('num')}"), (o, t, f"Split from #{t.get('num')}")):
         url = card_url(y.get("num"))
         links = x.setdefault("links", [])
@@ -2413,26 +2413,37 @@ def link_follow_up(t, o):
 
 def has_follow_up(t, o):
     r = relation(t, o["id"])
-    if r and r.get("status") == "confirmed":
+    if is_follow_up(r) and r.get("status") == "confirmed":
         return True
-    n = o.get("num")
-    return any(str(l.get("title") or "") == f"Follow-up #{n}" or str(l.get("url") or "").endswith(f"#{n}")
+    n, url = o.get("num"), card_url(o.get("num"))
+    return any(str(l.get("title") or "") == f"Follow-up #{n}" or (url and l.get("url") == url)
                for l in t.get("links") or [] if isinstance(l, dict))
 
 
-def check_moved_todos(data, t):
-    """Before a card goes to Done (kit v53): every to-do moved to a follow-up card ("Moved to #N ...") must point at a
-    card on the board, linked to this one. A missing link is added now; a missing #N refuses, so moved work is never
-    lost with the card. Returns the numbers it linked."""
-    added = []
+def check_moved_todos(data, t, cancel=False):
+    """Before a card goes to Done (kit v53): every to-do moved to a follow-up card ("Moved to #N (t_id): ...", as
+    todo-move and relay write it) must point at a card that exists, linked to this one. A missing link is added now; a
+    card that is on neither the board nor the archive refuses (only warns with cancel), so moved work is never lost with
+    the card. Returns the numbers it linked."""
+    added, archived = [], None
     for d in t.get("todos") or []:
         m = MOVED_TODO.match(str((d or {}).get("text") or "")) if isinstance(d, dict) else None
         if not m:
             continue
-        o = next((x for x in data.get("tasks", []) if x.get("num") == int(m.group(1))), None)
-        if o is None or o["id"] == t["id"]:
-            sys.exit(f"refused: {t['id']} has a to-do moved to #{m.group(1)}, which is not on the board, so the moved work "
-                     "would be lost. Make the follow-up card (keeptrack.py todo-move moves an open to-do), or fix the to-do")
+        num, oid = int(m.group(1)), m.group(2)
+        if oid == t["id"]:
+            sys.exit(f"refused: a to-do on {t['id']} says it moved to this same card; fix the to-do (todo-edit)")
+        o = next((x for x in data.get("tasks", []) if x.get("id") == oid), None)
+        if o is None:
+            if archived is None:
+                archived = archived_tasks(data, _MUT.get("base"))
+            if oid in archived:
+                continue   # the follow-up card is finished and archived: nothing is lost
+            msg = (f"{t['id']} has a to-do moved to #{num} ({oid}), which is on neither the board nor the archive, so the "
+                   "moved work would be lost. Make the follow-up card (keeptrack.py todo-move moves an open to-do), or fix the to-do")
+            if cancel:
+                print("warning: " + msg, file=sys.stderr); continue
+            sys.exit("refused: " + msg)
         if not has_follow_up(t, o):
             link_follow_up(t, o); hist(t, f"follow-up card: {o['id']}"); hist(o, f"split from {t['id']}")
             added.append(o.get("num"))
@@ -2453,7 +2464,7 @@ def cmd_done(a):
             first = ", ".join(str(d.get("text", "")) for d in open_todos[:3]) + (", ..." if len(open_todos) > 3 else "")
             sys.exit(f"refused: {t['id']} has {len(open_todos)} open to-dos ({first}); tick them with todo-done, "
                      "remove them, or close the card with --cancel --note \"why\"")
-        linked = check_moved_todos(data, t)
+        linked = check_moved_todos(data, t, cancel)
         if linked:
             _MUT["rerun"] = True   # the links change the follow-up cards too
             print("linked follow-up card" + ("s " if len(linked) > 1 else " ") + ", ".join(f"#{n}" for n in linked))
@@ -2613,6 +2624,9 @@ def cmd_move(a):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
         if column == "done" and t["column"] != "done":
             _MUT["rerun"] = True   # a lost race re-runs this: a claim absent or stale here may be live on the newer board
+            linked = check_moved_todos(data, t)   # as done: moved work is never lost with the card (kit v53)
+            if linked:
+                print("linked follow-up card" + ("s " if len(linked) > 1 else " ") + ", ".join(f"#{n}" for n in linked))
             if claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
                 claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
             close_waiting(t, a, "move to done", data)
@@ -2882,8 +2896,11 @@ SIMILAR_STOP = {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "w
 SIMILAR_DUPLICATE = 0.8    # this close or closer: "possible duplicate"
 SIMILAR_RELATED = 0.7      # this close, in the same client or project: "possible addition" (related work)
 SIMILAR_MAX = 3            # at most this many marks for one new card
-RELATED_KINDS = ("duplicate", "addition", "related", "follow-up")   # follow-up (kit v53): "from" names the card it was split from
-MOVED_TODO = re.compile(r"^Moved to #(\d{1,6})\b")   # a to-do moved to a follow-up card (todo-move, relay move_todo)
+RELATED_KINDS = ("duplicate", "addition", "related")
+# A follow-up link (kit v53) is kind "related" with "from": the id of the card the work was split from. Older kits keep and
+# accept it (their doctor knows the kind) and show it as related; v53 shows "Follow-up #N" / "Split from #M".
+RELATE_KINDS = RELATED_KINDS + ("follow-up",)   # relate --kind: follow-up writes kind related + from
+MOVED_TODO = re.compile(r"^Moved to #(\d{1,6}) \((t_[a-z0-9]+)\)")   # a to-do moved to a follow-up card (todo-move, relay move_todo)
 RELATED_STATUSES = ("possible", "confirmed", "not-related", "merged")
 
 
@@ -2968,7 +2985,8 @@ def relation(t, other_id):
 
 def set_relation(a, b, kind, status, score=None, into=None, src=None):
     """Write the same relation on both cards (a list item per other card, keyed by its id, so saves merge).
-    src: for kind follow-up, the id of the card the work was split from (kept on both cards as "from")."""
+    src: a follow-up link, the id of the card the work was split from (kept on both cards as "from"); "" clears it;
+    None leaves it as it is (unrelate keeps it)."""
     for x, y in ((a, b), (b, a)):
         r = relation(x, y["id"])
         if r is None:
@@ -2978,16 +2996,20 @@ def set_relation(a, b, kind, status, score=None, into=None, src=None):
             r["score"] = round(score, 2)
         if into:
             r["into"] = into
-        if kind == "follow-up":
-            r["from"] = src or r.get("from") or a["id"]
-        else:
+        if src:
+            r["from"] = src
+        elif src == "":
             r.pop("from", None)
         x["updated"] = now()
 
 
+def is_follow_up(r):
+    return isinstance(r, dict) and r.get("kind") == "related" and isinstance(r.get("from"), str) and bool(r.get("from"))
+
+
 def relation_word(t, r, num):
     """How a relation reads on card t: 'Follow-up #N' / 'Split from #N' for follow-up links, else the kind."""
-    if r.get("kind") == "follow-up":
+    if is_follow_up(r):
         return ("Follow-up " if r.get("from") == t.get("id") else "Split from ") + (f"#{num}" if num else "(not on the board)")
     return f"{r.get('kind')}: " + (f"#{num}" if num else "(not on the board)")
 
@@ -3067,7 +3089,8 @@ def cmd_relate(a):
     def fn(data):
         x, y = find(data, a.a), find(data, a.b)
         if x["id"] == y["id"]: sys.exit("a card cannot be related to itself")
-        set_relation(x, y, a.kind, "confirmed", src=x["id"])   # follow-up: B is the follow-up of A
+        fup = a.kind == "follow-up"
+        set_relation(x, y, "related" if fup else a.kind, "confirmed", src=x["id"] if fup else "")   # follow-up: B is A's follow-up
         if a.kind == "follow-up":
             hist(x, f"follow-up card: {y['id']}"); hist(y, f"split from {x['id']}")
             print(f"#{y.get('num')} is a follow-up of #{x.get('num')}"); return
@@ -7617,7 +7640,7 @@ def main():
     s = sub.add_parser("related", help="a card's related cards; without an id, every possible duplicate still to check")
     s.add_argument("id", nargs="?"); s.set_defaults(f=cmd_related)
     s = sub.add_parser("relate", help="link two cards (confirmed): --kind duplicate|addition|related|follow-up (B is the follow-up of A)")
-    s.add_argument("a"); s.add_argument("b"); s.add_argument("--kind", default="related", choices=RELATED_KINDS); s.set_defaults(f=cmd_relate)
+    s.add_argument("a"); s.add_argument("b"); s.add_argument("--kind", default="related", choices=RELATE_KINDS); s.set_defaults(f=cmd_relate)
     s = sub.add_parser("unrelate", help="mark two cards as not related; the similar check will not ask again")
     s.add_argument("a"); s.add_argument("b"); s.set_defaults(f=cmd_unrelate)
     s = sub.add_parser("merge-card", help="merge card FROM into card INTO (details, to-dos, links, comments), then archive FROM")

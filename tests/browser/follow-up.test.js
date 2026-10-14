@@ -90,7 +90,7 @@ class Github {
     assert.match(fresh.details, /^Split from #1 \(t_one\)/);
     assert.equal(one.todos[1].text, `Moved to #4 (${fresh.id}): Owner turns it on`); assert.equal(one.todos[1].done, true);
     const r1 = one.related.find(r => r.id === fresh.id), r2 = fresh.related.find(r => r.id === 't_one');
-    assert.deepEqual([r1.kind, r1.status, r1.from], ['follow-up', 'confirmed', 't_one']); assert.deepEqual([r2.kind, r2.status, r2.from], ['follow-up', 'confirmed', 't_one']);
+    assert.deepEqual([r1.kind, r1.status, r1.from], ['related', 'confirmed', 't_one']); assert.deepEqual([r2.kind, r2.status, r2.from], ['related', 'confirmed', 't_one']);
     assert(one.links.some(l => l.title === 'Follow-up #4' && /repo=acme%2Fboard/.test(l.url) && l.url.endsWith('#4')), 'link to the follow-up');
     assert(fresh.links.some(l => l.title === 'Split from #1' && l.url.endsWith('#1')), 'link back');
     assert.match(one.comments.at(-1).text, /moved to follow-up card #4/); assert.match(fresh.comments.at(-1).text, /Split from #1/);

@@ -33,11 +33,11 @@ and with a search the project list covers every client. No schema migration.
 
 Moved work is never lost. `todo-move ID N [--title] [--details]` moves an open to-do to a new follow-up card in one
 save: the card goes to Backlog with the same client, project, labels, priority and assignees, the to-do as its
-checklist; both cards get a link to the other ("Follow-up #N", "Split from #M") and a new relation kind `follow-up`
-(its `from` names the original card); the to-do is reworded "Moved to #N (t_id): ..." and ticked; both cards get a
-comment. `relate A B --kind follow-up` links an existing card as A's follow-up, and `related` shows "Follow-up #N" /
-"Split from #M". `done` checks every "Moved to #N" to-do: a missing link is added, a #N that is not on the board
-refuses. The web board shows "Follow-up #N" / "From #M" chips on the card, Follow-up and Split from rows in Related
+checklist; both cards get a link to the other ("Follow-up #N", "Split from #M") and a `related` relation with `from`
+(the original card's id); the to-do is reworded "Moved to #N (t_id): ..." and ticked; both cards get a comment.
+`relate A B --kind follow-up` links an existing card as A's follow-up, and `related` shows "Follow-up #N" / "Split
+from #M". `done` and `move ... done` check every "Moved to #N (t_id)" to-do: a missing link is added, and a card on
+neither the board nor the archive refuses (`done --cancel` only warns). The web board shows "Follow-up #N" / "From #M" chips on the card, Follow-up and Split from rows in Related
 cards, and a "Move to a new card" action on each open to-do in the drawer. No schema migration.
 
 ## Kit v52 — 2026-10-14

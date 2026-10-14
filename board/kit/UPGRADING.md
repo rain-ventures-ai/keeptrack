@@ -30,15 +30,14 @@ Moved work is never lost. No data migration.
 - Run `kit-update` only.
 - New `todo-move ID N [--title T] [--details D]`: one open to-do becomes a new follow-up card (Backlog, or To do on a
   board without Backlog; the same client, project, labels, priority and assignees). Both cards are linked
-  ("Follow-up #N", "Split from #M") and related (new relation kind `follow-up`, with `from` = the original card's id),
-  the to-do is reworded "Moved to #N (t_id): ..." and ticked, and both cards get a comment.
+  ("Follow-up #N", "Split from #M") and related (kind `related` with `from` = the original card's id, so older kits
+  accept it), the to-do is reworded "Moved to #N (t_id): ..." and ticked, and both cards get a comment.
 - `relate A B --kind follow-up` marks B as A's follow-up; `related ID` shows "Follow-up #N" and "Split from #M".
-- `done` checks every to-do that starts "Moved to #N": it adds a missing link (both ways) and refuses when #N is not on
-  the board.
+- `done` and `move ID done` check every to-do that starts "Moved to #N (t_id)": they add a missing link (both ways) and
+  refuse when that card is on neither the board nor the archive (`done --cancel` only warns).
 - Web board: "Follow-up #N" / "From #M" chips on cards with a follow-up link, Follow-up and Split from rows in the
   drawer's Related cards (Unlink only), and a "Move to a new card" button on each open to-do in the drawer.
-- Older pages and older `keeptrack.py` keep the field when they save; an older `doctor` reports a `follow-up` relation as
-  `RELATED` (a warning) until the board is on v53.
+- Older pages and older `keeptrack.py` keep the `from` field when they save and show the pair as related.
 - Rules: the board skill, AGENTS template and routine prompt say a step that must wait goes to `todo-move`, never a hand
   reword or tick.
 - Check: `keeptrack.py kit-check` says v53 and `keeptrack.py doctor` reports no new problems. For an earlier hand move

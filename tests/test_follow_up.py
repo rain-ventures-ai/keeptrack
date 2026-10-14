@@ -46,7 +46,7 @@ class FollowUpCli(unittest.TestCase):
         self.assertEqual(f"Moved to #4 ({new['id']}): owner turns it on", moved["text"]); self.assertTrue(moved["done"])
         for x, y in ((old, new), (new, old)):
             r = next(r for r in x["related"] if r["id"] == y["id"])
-            self.assertEqual(("follow-up", "confirmed", old["id"]), (r["kind"], r["status"], r["from"]))
+            self.assertEqual(("related", "confirmed", old["id"]), (r["kind"], r["status"], r["from"]))   # kind related + from: older kits accept it
         self.assertIn({"title": "Follow-up #4", "url": "https://rain-ventures-ai.github.io/keeptrack/board/?repo=acme%2Fboard&branch=main&path=board%2Ftasks.json#4"}, old["links"])
         self.assertTrue(any(l["title"] == "Split from #3" and l["url"].endswith("#3") for l in new["links"]))
         self.assertIn("moved to follow-up card #4", self.kt("comments", "#3").stdout)
@@ -78,9 +78,23 @@ class FollowUpCli(unittest.TestCase):
         self.assertIn("Split from #3", self.kt("related", "#1").stdout)
         self.kt("add", "Another", "--todo", "x", "--no-check")
         self.kt("todo-edit", "#4", "1", "Moved to #99 (t_gone): x"); self.kt("todo-done", "#4", "1")
-        p = self.kt("done", "#4", "--note", "shipped", ok=False)
-        self.assertNotEqual(0, p.returncode); self.assertIn("not on the board", p.stderr + p.stdout)
-        self.assertNotEqual("done", self.card("#4")["column"])
+        for args in (("done", "#4", "--note", "shipped"), ("move", "#4", "done")):
+            p = self.kt(*args, ok=False)
+            self.assertNotEqual(0, p.returncode); self.assertIn("neither the board nor the archive", p.stderr + p.stdout)
+            self.assertNotEqual("done", self.card("#4")["column"])
+        p = self.kt("done", "#4", "--cancel", "--note", "dropped")   # a cancel only warns
+        self.assertIn("warning", p.stderr); self.assertEqual("done", self.card("#4")["column"])
+
+    def test_a_typed_moved_to_line_is_not_a_move(self):
+        self.kt("add", "Office", "--todo", "Moved to #1 Main St office", "--no-check"); self.kt("todo-done", "#3", "1")
+        self.assertNotIn("linked", self.kt("done", "#3", "--note", "done").stdout)
+        self.assertNotIn("related", self.card("#1"))
+
+    def test_an_archived_follow_up_does_not_block_done(self):
+        self.with_todos(); self.kt("todo-done", "#3", "1"); self.kt("todo-move", "#3", "2")
+        self.kt("todo-done", "#4", "1"); self.kt("done", "#4", "--note", "on"); self.kt("archive", "#4")
+        self.assertNotIn("#4 ", self.kt("list").stdout)   # off the board, in the archive
+        self.assertEqual(0, self.kt("done", "#3", "--note", "shipped").returncode)
 
 
 if __name__ == "__main__":
