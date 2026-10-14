@@ -64,6 +64,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       assert.equal(await page.locator('#panelBoard').isVisible(), true);
       await page.locator('#sClose').click();
       await page.locator('#dlgSettings').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => location.hash === '#view=today');   // closing takes a history step back: let it land, or it undoes #help
       await page.evaluate(() => { location.hash = 'help'; });
       await page.locator('#dlgHelp').waitFor({ state: 'visible' });
       await page.locator('#hClose').click();
