@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 52  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 54  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2393,6 +2393,63 @@ def cmd_release(a):
     mutate(fn, f"Agent release: {a.id}")
 
 
+def card_url(num):
+    """The web board's link that opens card #num (the board's own #N route); '' without a board repo (--file)."""
+    if not REPO:
+        return ""
+    return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(
+        {"repo": REPO, "branch": BRANCH, "path": PATH}) + f"#{num}"
+
+
+def link_follow_up(t, o):
+    """Card o is the follow-up of card t: a follow-up relation and a link on each card to the other. Idempotent."""
+    set_relation(t, o, "related", "confirmed", src=t["id"])
+    for x, y, title in ((t, o, f"Follow-up #{o.get('num')}"), (o, t, f"Split from #{t.get('num')}")):
+        url = card_url(y.get("num"))
+        links = x.setdefault("links", [])
+        if url and not any(l.get("url") == url or l.get("title") == title for l in links if isinstance(l, dict)):
+            links.append({"title": title, "url": url})
+
+
+def has_follow_up(t, o):
+    r = relation(t, o["id"])
+    if is_follow_up(r) and r.get("status") == "confirmed":
+        return True
+    n, url = o.get("num"), card_url(o.get("num"))
+    return any(str(l.get("title") or "") == f"Follow-up #{n}" or (url and l.get("url") == url)
+               for l in t.get("links") or [] if isinstance(l, dict))
+
+
+def check_moved_todos(data, t, cancel=False):
+    """Before a card goes to Done (kit v54): every to-do moved to a follow-up card ("Moved to #N (t_id): ...", as
+    todo-move and relay write it) must point at a card that exists, linked to this one. A missing link is added now; a
+    card that is on neither the board nor the archive refuses (only warns with cancel), so moved work is never lost with
+    the card. Returns the numbers it linked."""
+    added, archived = [], None
+    for d in t.get("todos") or []:
+        m = MOVED_TODO.match(str((d or {}).get("text") or "")) if isinstance(d, dict) else None
+        if not m:
+            continue
+        num, oid = int(m.group(1)), m.group(2)
+        if oid == t["id"]:
+            sys.exit(f"refused: a to-do on {t['id']} says it moved to this same card; fix the to-do (todo-edit)")
+        o = next((x for x in data.get("tasks", []) if x.get("id") == oid), None)
+        if o is None:
+            if archived is None:
+                archived = archived_tasks(data, _MUT.get("base"))
+            if oid in archived:
+                continue   # the follow-up card is finished and archived: nothing is lost
+            msg = (f"{t['id']} has a to-do moved to #{num} ({oid}), which is on neither the board nor the archive, so the "
+                   "moved work would be lost. Make the follow-up card (keeptrack.py todo-move moves an open to-do), or fix the to-do")
+            if cancel:
+                print("warning: " + msg, file=sys.stderr); continue
+            sys.exit("refused: " + msg)
+        if not has_follow_up(t, o):
+            link_follow_up(t, o); hist(t, f"follow-up card: {o['id']}"); hist(o, f"split from {t['id']}")
+            added.append(o.get("num"))
+    return added
+
+
 def cmd_done(a):
     def fn(data):
         t = find(data, a.id)
@@ -2407,6 +2464,10 @@ def cmd_done(a):
             first = ", ".join(str(d.get("text", "")) for d in open_todos[:3]) + (", ..." if len(open_todos) > 3 else "")
             sys.exit(f"refused: {t['id']} has {len(open_todos)} open to-dos ({first}); tick them with todo-done, "
                      "remove them, or close the card with --cancel --note \"why\"")
+        linked = check_moved_todos(data, t, cancel)
+        if linked:
+            _MUT["rerun"] = True   # the links change the follow-up cards too
+            print("linked follow-up card" + ("s " if len(linked) > 1 else " ") + ", ".join(f"#{n}" for n in linked))
         outcome = "cancelled" if cancel else "completed"
         close_waiting(t, a, "cancel" if cancel else "done", data)
         c = t.get("claim")
@@ -2563,6 +2624,9 @@ def cmd_move(a):
             sys.exit("--before, --after and --top need schema v4; run migrate --to 4")
         if column == "done" and t["column"] != "done":
             _MUT["rerun"] = True   # a lost race re-runs this: a claim absent or stale here may be live on the newer board
+            linked = check_moved_todos(data, t)   # as done: moved work is never lost with the card (kit v54)
+            if linked:
+                print("linked follow-up card" + ("s " if len(linked) > 1 else " ") + ", ".join(f"#{n}" for n in linked))
             if claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"):
                 claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
             close_waiting(t, a, "move to done", data)
@@ -2668,6 +2732,49 @@ def cmd_todo_edit(a):
         old = d.get("text", ""); d["text"] = a.text
         hist(t, f"edited to-do: {old} -> {a.text}"); t["updated"] = now(); print(f"to-do #{n} edited: {a.text}")
     mutate(fn, f"Edit to-do: {a.id}")
+
+
+def cmd_todo_move(a):
+    """Move open to-do N to a new follow-up card (kit v54), in one save: the new card (Backlog, the same client,
+    project, labels, priority and assignees, the to-do as its checklist), a follow-up relation and a link on each card
+    to the other, the to-do reworded "Moved to #N (t_id): ..." and ticked, and a comment on both cards."""
+    tid, ident = todo_target(a)
+    title, details = " ".join(str(a.title or "").split()), str(a.details or "").strip()
+
+    def fn(data):
+        _MUT["rerun"] = True   # adds a card and numbers it: a lost race re-runs on the newer board, never a merge
+        t = find(data, tid); n, d = todo_by_identity(t, ident)
+        text = str(d.get("text") or "").strip()
+        if d.get("done") or MOVED_TODO.match(text):
+            sys.exit(f"refused: to-do #{n} of {t['id']} is already done or moved; nothing changed")
+        cols = {c.get("id") for c in data.get("columns", []) if isinstance(c, dict)}
+        column = "backlog" if "backlog" in cols or not cols else "todo"
+        ranks = [x.get("rank") for x in data.get("tasks", []) if x.get("column") == column and valid_rank(x.get("rank"))]
+        num = t.get("num")
+        o = {"id": new_board_id(data, "t_", "cards"), "title": title or clean(text, 160), "column": column,
+             "client": t.get("client", ""), "project": t.get("project", ""),
+             "priority": t.get("priority") if t.get("priority") in ("high", "medium", "low") else "medium", "due": "",
+             "labels": list(t.get("labels") or []), "assignees": list(t.get("assignees") or []),
+             "details": (f"Split from #{num} ({t['id']}) {t.get('title', '')}." + (f"\n\n{details}" if details else "")),
+             "links": [], "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": text, "done": False}],
+             "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
+        if data.get("layout") == "split":
+            o["rank"] = append_rank(ranks)
+        append_priority_rank(data, o)
+        hist(o, f"created: split from {t['id']}, its to-do {n}")
+        data["tasks"].append(o); assign_nums(data); new = o.get("num")
+        link_follow_up(t, o)
+        d["text"] = f"Moved to #{new} ({o['id']}): {text}"
+        d["done"] = True; d["doneBy"] = who_am_i(t); d["doneAt"] = now()
+        hist(t, f"moved to-do to #{new} ({o['id']}): {text}")
+        url_new, url_old = card_url(new), card_url(num)
+        for x, msg in ((t, f"To-do {n} moved to follow-up card #{new} ({o['id']})" + (f": {url_new}" if url_new else "")),
+                       (o, f"Split from #{num} ({t['id']}), its to-do {n}" + (f": {url_old}" if url_old else ""))):
+            x.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": msg})
+        t["updated"] = now(); oid = o["id"]
+        _MUT["after"].append(lambda dd: print(f"added #{num_of(dd, oid)} ({oid}): follow-up of #{num}; to-do {n} moved and ticked, "
+                                              "both cards linked and commented"))
+    mutate(fn, f"Move to-do: {a.id} {a.n}")
 
 
 def cmd_comment(a):
@@ -2790,6 +2897,10 @@ SIMILAR_DUPLICATE = 0.8    # this close or closer: "possible duplicate"
 SIMILAR_RELATED = 0.7      # this close, in the same client or project: "possible addition" (related work)
 SIMILAR_MAX = 3            # at most this many marks for one new card
 RELATED_KINDS = ("duplicate", "addition", "related")
+# A follow-up link (kit v54) is kind "related" with "from": the id of the card the work was split from. Older kits keep and
+# accept it (their doctor knows the kind) and show it as related; v54 shows "Follow-up #N" / "Split from #M".
+RELATE_KINDS = RELATED_KINDS + ("follow-up",)   # relate --kind: follow-up writes kind related + from
+MOVED_TODO = re.compile(r"^Moved to #(\d{1,6}) \((t_[a-z0-9]+)\)")   # a to-do moved to a follow-up card (todo-move, relay move_todo)
 RELATED_STATUSES = ("possible", "confirmed", "not-related", "merged")
 
 
@@ -2872,8 +2983,10 @@ def relation(t, other_id):
     return next((r for r in t.get("related") or [] if isinstance(r, dict) and r.get("id") == other_id), None)
 
 
-def set_relation(a, b, kind, status, score=None, into=None):
-    """Write the same relation on both cards (a list item per other card, keyed by its id, so saves merge)."""
+def set_relation(a, b, kind, status, score=None, into=None, src=None):
+    """Write the same relation on both cards (a list item per other card, keyed by its id, so saves merge).
+    src: a follow-up link, the id of the card the work was split from (kept on both cards as "from"); "" clears it;
+    None leaves it as it is (unrelate keeps it)."""
     for x, y in ((a, b), (b, a)):
         r = relation(x, y["id"])
         if r is None:
@@ -2883,7 +2996,22 @@ def set_relation(a, b, kind, status, score=None, into=None):
             r["score"] = round(score, 2)
         if into:
             r["into"] = into
+        if src:
+            r["from"] = src
+        elif src == "":
+            r.pop("from", None)
         x["updated"] = now()
+
+
+def is_follow_up(r):
+    return isinstance(r, dict) and r.get("kind") == "related" and isinstance(r.get("from"), str) and bool(r.get("from"))
+
+
+def relation_word(t, r, num):
+    """How a relation reads on card t: 'Follow-up #N' / 'Split from #N' for follow-up links, else the kind."""
+    if is_follow_up(r):
+        return ("Follow-up " if r.get("from") == t.get("id") else "Split from ") + (f"#{num}" if num else "(not on the board)")
+    return f"{r.get('kind')}: " + (f"#{num}" if num else "(not on the board)")
 
 
 def mark_similar(data, t):
@@ -2941,7 +3069,7 @@ def cmd_related(a):
         t = find(data, a.id); rs = [r for r in t.get("related") or [] if isinstance(r, dict)]
         for r in rs:
             n = nums.get(r.get("id"))
-            print(f"{r.get('status')} {r.get('kind')}: {'#' + str(n) if n else '(not on the board)'} {r.get('id')} {clean(titles.get(r.get('id'), ''), 100)}")
+            print(f"{r.get('status')} {relation_word(t, r, n)} {r.get('id')} {clean(titles.get(r.get('id'), ''), 100)}")
         if not rs: print("(no related cards)")
         return
     seen, n = set(), 0
@@ -2961,7 +3089,11 @@ def cmd_relate(a):
     def fn(data):
         x, y = find(data, a.a), find(data, a.b)
         if x["id"] == y["id"]: sys.exit("a card cannot be related to itself")
-        set_relation(x, y, a.kind, "confirmed")
+        fup = a.kind == "follow-up"
+        set_relation(x, y, "related" if fup else a.kind, "confirmed", src=x["id"] if fup else "")   # follow-up: B is A's follow-up
+        if a.kind == "follow-up":
+            hist(x, f"follow-up card: {y['id']}"); hist(y, f"split from {x['id']}")
+            print(f"#{y.get('num')} is a follow-up of #{x.get('num')}"); return
         hist(x, f"related ({a.kind}) to {y['id']}"); hist(y, f"related ({a.kind}) to {x['id']}")
         print(f"#{x.get('num')} and #{y.get('num')} are linked ({a.kind})")
     mutate(fn, f"Relate: {a.a} {a.b}")
@@ -3365,12 +3497,14 @@ def doctor_board(fix=False):
                 if f"{folder}/{obj['id']}.json" in state["files"]:
                     rename_conflict = True
 
-    archived_ids = {}
+    archived_ids, archived_task_ids = {}, set()
     for rel, obj in parsed.items():
         if rel.startswith("archive/"):
             for item in obj.get("tasks", []) + obj.get("contacts", []):
                 if item.get("id"):
                     archived_ids[item["id"]] = rel
+            archived_task_ids |= {x.get("id") for x in obj.get("tasks", []) if isinstance(x, dict) and x.get("id")}
+    task_ids = {t.get("id") for t in tasks if isinstance(t, dict) and t.get("id")}
     for ident in sorted(set(ids) & set(archived_ids)):
         problem("LIVE_AND_ARCHIVED", archived_ids[ident], f"{ident} is also on the live board. The live item wins.")
 
@@ -3400,7 +3534,7 @@ def doctor_board(fix=False):
             elif t.get("id") in raw:
                 problem("AFTER", path, "The card runs after itself; remove it with task-set --not-after.")
             else:
-                gone = [x for x in raw if x not in ids and x not in archived_ids]
+                gone = [x for x in raw if x not in task_ids and x not in archived_task_ids]   # card ids only
                 if gone:
                     problem("AFTER_MISSING", path, f"It runs after {', '.join(gone)}, which is not on the board or in the archive; "
                             "relay treats that as not done. Remove it with task-set --not-after.")
@@ -4008,7 +4142,7 @@ def _here(a):
 HELP_TOPICS = {
     "tasks": ["list", "show", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
     "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint"],
-    "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "comment", "comments", "history"],
+    "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
@@ -4051,7 +4185,7 @@ COMMAND_HELP = {   # one line each, for commands whose parser has none
     "release": "give a card back without finishing it (--column to move it)",
     "done": "finish a claimed card (--note result and links)",
     "auto-heartbeat": "for hooks: refresh the active claim at most every 15 minutes (never for --attended claims); silent otherwise",
-    "todo-add": "add a checklist item", "todo-done": "tick checklist item N", "todo-undo": "untick checklist item N",
+    "todo-add": "add a checklist item", "todo-move": "move to-do N to a new follow-up card, linked both ways", "todo-done": "tick checklist item N", "todo-undo": "untick checklist item N",
     "todo-rm": "remove checklist item N", "comment": "post a comment on a card", "comments": "read a card's comments",
     "history": "a card's history log",
     "init": "set up a new board repo (--person github-user:Name)",
@@ -6664,6 +6798,12 @@ def cmd_proposal_merge(a):
                     record["assignees"] = [value]
             elif key == "due" and key in selected and record.get("id", "").startswith("p_"):
                 record["next_due"] = copy.deepcopy(value)
+            elif key == "after" and key in selected and record.get("id", "").startswith("t_"):   # as _apply_update
+                value = list(dict.fromkeys(x for x in value if x != record["id"]))
+                if after_cycle(data, record["id"], value):
+                    proposal_conflict(f"not saved: these after links would make a loop through {record.get('id')}; review it by hand")
+                if value: record["after"] = value
+                else: record.pop("after", None)
             elif key in selected: record[key] = copy.deepcopy(value)
         if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
             drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update
@@ -7482,6 +7622,9 @@ def main():
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
+    s = sub.add_parser("todo-move", help="move open to-do N to a new follow-up card (Backlog), linked both ways")
+    s.add_argument("id"); s.add_argument("n"); s.add_argument("--title", help="the new card's title (default: the to-do's text)")
+    s.add_argument("--details", help="what must happen, and who or what it waits on"); s.set_defaults(f=cmd_todo_move)
     s = sub.add_parser("todo-edit", help="change the text of checklist item N in place"); s.add_argument("id"); s.add_argument("n"); s.add_argument("text"); s.set_defaults(f=cmd_todo_edit)
     s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column"); s.add_argument("--session")
     s.add_argument("--force", action="store_true", help="move a card another session holds to done (a person told you to)")
@@ -7504,8 +7647,8 @@ def main():
     s.add_argument("title"); s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_similar)
     s = sub.add_parser("related", help="a card's related cards; without an id, every possible duplicate still to check")
     s.add_argument("id", nargs="?"); s.set_defaults(f=cmd_related)
-    s = sub.add_parser("relate", help="link two cards (confirmed): --kind duplicate|addition|related")
-    s.add_argument("a"); s.add_argument("b"); s.add_argument("--kind", default="related", choices=RELATED_KINDS); s.set_defaults(f=cmd_relate)
+    s = sub.add_parser("relate", help="link two cards (confirmed): --kind duplicate|addition|related|follow-up (B is the follow-up of A)")
+    s.add_argument("a"); s.add_argument("b"); s.add_argument("--kind", default="related", choices=RELATE_KINDS); s.set_defaults(f=cmd_relate)
     s = sub.add_parser("unrelate", help="mark two cards as not related; the similar check will not ask again")
     s.add_argument("a"); s.add_argument("b"); s.set_defaults(f=cmd_unrelate)
     s = sub.add_parser("merge-card", help="merge card FROM into card INTO (details, to-dos, links, comments), then archive FROM")

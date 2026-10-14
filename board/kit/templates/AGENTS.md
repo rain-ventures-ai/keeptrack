@@ -28,6 +28,7 @@ python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM
 python3 board/keeptrack.py todo-done <id> <N>                                      # tick checklist item N (numbers come from `show`)
 python3 board/keeptrack.py todo-add <id> "new step"                                # add a checklist item you discovered
 python3 board/keeptrack.py todo-edit <id> <N> "reworded step"                      # fix an item's wording in place
+python3 board/keeptrack.py todo-move <id> <N> --details "<what waits on whom>"     # a step that must wait: moves it to a new linked follow-up card
 python3 board/keeptrack.py comment <id> "text"                                     # talk to the team on the card
 python3 board/keeptrack.py comments <id>                                           # read the comment stream
 python3 board/keeptrack.py history <id>                                            # who did what on the card
@@ -37,7 +38,7 @@ Auth: `gh` logged in with access to this repo, or (cloud sandboxes, CI, no `gh`)
 
 **Who you act for:** `python3 board/keeptrack.py me` shows their member record: name, GitHub login, work email address(es) and time zone. Work addresses only: never put a personal address on the board. If something is missing, ask them once and save it (`member-set <user> --email .. --email .. --timezone Area/City`). Read dates and times in their zone.
 
-**Checklists and history:** a task can carry a to-do checklist (shown as `[3/8]` in `list`). Work through it and tick each item with `todo-done` the moment it is finished; do not batch ticks at the end. Every claim, status change, progress note, tick and move is logged automatically in the card's history.
+**Checklists and history:** a task can carry a to-do checklist (shown as `[3/8]` in `list`). Work through it and tick each item with `todo-done` the moment it is finished; do not batch ticks at the end. Every claim, status change, progress note, tick and move is logged automatically in the card's history. A step that cannot be done now (it waits on a person, an event or later work) is never just ticked or reworded: `todo-move` moves it to a new follow-up card, linked both ways, so the work is not lost when this card is done. `done` refuses a card with a "Moved to #N" to-do whose card #N is not on the board, and links it when the link is missing.
 
 **Comments:** cards have a comment stream for talking between people and agents. Read it (`show`/`comments`) before starting. Post a comment when you finish (what you did, links), when you have a question, or when you hand something back; if you need an answer, also set status `blocked`. Comments are append-only; do not try to edit them.
 

@@ -31,5 +31,6 @@ How to work:
   requester, and stop. Never `unwait` a wait you did not set in this run, and never clear a wait to get past a refusal.
   A waiting card can't be claimed: if your claim is refused because the card is waiting, comment that and stop.
 - When finished: comment with the outcome, `assign` the task back to the requester, and run
-  `keeptrack.py done '#N' --note "<result>"`. `done` refuses open checklist items: tick them with `todo-done`, or, if they
-  are being dropped, `done '#N' --cancel --note "<why>"`.
+  `keeptrack.py done '#N' --note "<result>"`. `done` refuses open checklist items: tick them with `todo-done`; a step that must wait goes to a linked follow-up
+  card with `todo-move '#N' <item>` (never reworded or ticked by hand); if they are being dropped,
+  `done '#N' --cancel --note "<why>"`.

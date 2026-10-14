@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 52;
+  const PAGE_KIT = 54;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1251,17 +1251,32 @@ if (typeof window !== 'undefined') (() => {
   const stamp = t => { t.updated = nowIso(); if (me()) t.updatedBy = me(); };
   // related cards (kit v52): one item per other card on BOTH cards, keyed by its id, so saves merge like keeptrack.py set_relation
   const relationOf = (t, id) => (Array.isArray(t.related) ? t.related : []).find(r => r && r.id === id);
-  function setRelation(n, aId, bId, kind, status, score, into) {
+  // a follow-up link (kit v54) is kind related with "from" (the id of the card the work was split from) on both cards;
+  // src sets it, '' clears it, undefined leaves it (Unlink keeps the direction)
+  function setRelation(n, aId, bId, kind, status, score, into, src) {
     const a = n.tasks.find(x => x.id === aId), b = n.tasks.find(x => x.id === bId); if (!a || !b || a === b) return false;
     [[a, b], [b, a]].forEach(([x, y]) => {
       if (!Array.isArray(x.related)) x.related = [];
       let r = relationOf(x, y.id); if (!r) { r = { id: y.id }; x.related.push(r); }
       Object.assign(r, { kind, status, by: me() || 'someone', at: nowIso() }); if (score != null) r.score = Math.round(score * 100) / 100; if (into) r.into = into;
+      if (src) r.from = src; else if (src === '') delete r.from;
       stamp(x);
     });
     return true;
   }
   // after a card is added: mark close open cards as possibly related (never stops the add); returns the matches
+  // the web board's link to one card (#N route), as keeptrack.py card_url: the same link on every follow-up pair
+  const cardUrl = num => { const u = new URL(location.pathname, location.href); if (cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k])); u.hash = '#' + num; return u.toString(); };
+  const MOVED_TODO = /^Moved to #(\d{1,6}) \((t_[a-z0-9]+)\)/;
+  const isFollowUp = r => !!r && r.kind === 'related' && typeof r.from === 'string' && !!r.from;
+  // the same as keeptrack.py link_follow_up: a follow-up relation and a link on each card to the other
+  function linkFollowUp(n, t, o) {
+    setRelation(n, t.id, o.id, 'related', 'confirmed', null, null, t.id);
+    [[t, o, `Follow-up #${o.num}`], [o, t, `Split from #${t.num}`]].forEach(([x, y, title]) => {
+      const url = cardUrl(y.num); if (!Array.isArray(x.links)) x.links = [];
+      if (!x.links.some(l => l && (l.url === url || l.title === title))) x.links.push({ title, url });
+    });
+  }
   function markSimilar(n, t) {
     const hits = similarMatches(n, t.title, t.client || '', t.project || '', t.id, doneColId()).slice(0, SIMILAR_MAX);
     hits.forEach(h => setRelation(n, t.id, h.id, h.kind, 'possible', h.score)); return hits;
@@ -1837,6 +1852,34 @@ if (typeof window !== 'undefined') (() => {
   function removeTodo(tid, did) {
     return mutate(n => { const t = n.tasks.find(x => x.id === tid); if (!t) return; t.todos = t.todos.filter(x => x.id !== did); stamp(t); }, `Remove to-do: ${titleOf(tid)}`, [tid]);
   }
+  // kit v54, as keeptrack.py todo-move: one open to-do becomes a new Backlog card (same client, project, labels, priority,
+  // assignees), linked both ways as a follow-up; the to-do is reworded "Moved to #N (t_id): ..." and ticked; both cards get a comment
+  async function askMoveTodo(tid, did) {
+    const t = state.tasks.find(x => x.id === tid), d = t && t.todos.find(x => x.id === did); if (!d) return;
+    const title = await ui.promptText({ title: 'Move to a new card', label: 'New card title', value: d.text, confirmLabel: 'Move',
+      body: `The new card goes to Backlog with this card's client, project, labels and priority. Both cards are linked, and the to-do here is ticked as "Moved to #N".` });
+    if (title == null || !title.trim()) return;
+    return moveTodo(tid, did, title.trim());
+  }
+  function moveTodo(tid, did, title) {
+    let made = null;
+    return mutate(n => {
+      made = null; const t = n.tasks.find(x => x.id === tid), d = t && t.todos.find(x => x.id === did);
+      if (!d || d.done || MOVED_TODO.test(String(d.text || ''))) return;
+      const cols = (n.columns || []).map(c => c.id), col = cols.includes('backlog') || !cols.length ? 'backlog' : 'todo';   // as keeptrack.py todo-move
+      const o = { id: uid(), title, column: col, client: t.client || '', project: t.project || '', priority: ['high', 'medium', 'low'].includes(t.priority) ? t.priority : 'medium', due: '',
+        labels: [...(t.labels || [])], assignees: [...(t.assignees || [])], details: `Split from #${t.num} (${t.id}) ${t.title}.`, links: [], contacts: [],
+        todos: [{ id: todoId(), text: d.text, done: false }], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+      if (me()) { o.createdBy = me(); o.updatedBy = me(); }
+      n.tasks.push(o); assignNums(n); linkFollowUp(n, t, o);
+      const who = me() || 'someone', at = nowIso(), text = d.text;
+      d.text = `Moved to #${o.num} (${o.id}): ${text}`; d.done = true; d.doneBy = who; d.doneAt = at;
+      t.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `To-do moved to follow-up card #${o.num} (${o.id}): ${cardUrl(o.num)}` });
+      o.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `Split from #${t.num} (${t.id}): ${cardUrl(t.num)}` });
+      stamp(t); made = o.id;
+    }, `Move to-do to a new card: ${titleOf(tid)}`, [tid], null, { recheckArchive: true })   // adds and numbers a card: a lost race runs again on the newer board
+      .then(ok => { const o = made && state.tasks.find(x => x.id === made); if (ok && o) { toast(`Moved to #${o.num}. Both cards are linked.`); if (editing === tid) { renderDlgTodos(true); const t = taskNow(); if (t) renderRelated(t); } } return ok; });
+  }
   function todoList(t) {   // a card's expanded checklist (the drawer has its own, renderDlgTodos)
     const box = el('div', 'todos');
     t.todos.forEach(d => {
@@ -1857,7 +1900,9 @@ if (typeof window !== 'undefined') (() => {
       const row = el('label', 'todo dtodo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
       cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); renderDlgTodos(); };
       const x = ui.iconButton({ icon: 'x', label: `Remove “${d.text}”`, size: 'sm', onClick: async e => { e.preventDefault(); if (!(await askRemoval(`the checklist item “${d.text}”`))) return; await removeTodo(t.id, d.id); renderDlgTodos(); } });
-      row.append(cb, el('span', null, d.text), x); box.append(row);
+      const mv = !d.done && !MOVED_TODO.test(String(d.text || '')) && !ro && ui.iconButton({ icon: 'arrow-up-right', label: `Move “${d.text}” to a new card`, size: 'sm', onClick: e => { e.preventDefault(); askMoveTodo(t.id, d.id); } });
+      if (mv) mv.dataset.act = 'move-todo';
+      row.append(cb, el('span', null, d.text), ...(mv ? [mv] : []), x); box.append(row);
     });
     $('cTodoCount').textContent = t.todos.length ? `${t.todos.filter(d => d.done).length}/${t.todos.length}` : '';
   }
@@ -2120,6 +2165,15 @@ if (typeof window !== 'undefined') (() => {
     const r = possibleRelation(t); if (!r) return null; const o = state.tasks.find(x => x.id === r.id);
     const c = elI('span', 'chip relchip', 'copy', `#${o.num}?`); c.title = `Possible ${r.kind || 'duplicate'} of #${o.num}: open the card to merge, link or dismiss`; return c;
   }
+  // kit v54: a confirmed follow-up link on the card face: "Follow-up #N" (its work moved on to #N) or "From #M" (split from #M)
+  function chipFollowUp(t) {
+    const rs = liveRelations(t).filter(r => isFollowUp(r) && r.status === 'confirmed'); if (!rs.length) return null;
+    const num = r => (state.tasks.find(x => x.id === r.id) || {}).num, fwd = rs.filter(r => r.from === t.id), back = rs.filter(r => r.from !== t.id);
+    const text = fwd.length ? `Follow-up #${num(fwd[0])}${fwd.length > 1 ? ' +' + (fwd.length - 1) : ''}` : `From #${num(back[0])}`;
+    const c = elI('span', 'chip fupchip', fwd.length ? 'arrow-right' : 'arrow-up-right', text);
+    c.title = [fwd.length ? 'Follow-up card' + (fwd.length > 1 ? 's ' : ' ') + fwd.map(r => '#' + num(r)).join(', ') : '', back.length ? 'Split from ' + back.map(r => '#' + num(r)).join(', ') : ''].filter(Boolean).join('. ') + ': open the card for the link';
+    return c;
+  }
   function chipWaiting(t) {
     const w = waitingOf(t); if (!w) return null;
     const days = DAY_RE.test(w.since || '') ? Math.max(0, dayNum(todayIso()) - dayNum(w.since)) : 0, on = waitingOnMe(w) ? 'you' : String(w.on || '?');
@@ -2128,25 +2182,30 @@ if (typeof window !== 'undefined') (() => {
   }
   // After (card dependencies): the card ids a card runs after, the same rules as keeptrack.py's after_links. A hint and a
   // gate, never a trigger: the page only shows them; relay's can-start refuses a card while any of them is not done. An
-  // id no longer on the board counts as done only if the archive (once loaded) holds it as Done, else it is missing.
+  // id no longer on the board counts as done only if the archive (once loaded) holds it as Done; until the archive is
+  // loaded it is unknown, and once loaded it is cancelled, archived without Done or missing.
   const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
   const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
   function afterLinks(t) {
-    let loaded = null; try { loaded = archived; } catch { loaded = null; }   // declared further down this file
+    let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }   // declared further down this file; a stale copy counts as not loaded
     const arch = new Map(((loaded && loaded.tasks) || []).map(x => [x.item.id, x.item]));
     return afterIds(t).map(id => {
       const live = state.tasks.find(x => x.id === id);
       if (live) return { id, num: live.num, title: live.title || '', live: true, state: finishedDone(live) ? 'done' : live.column === doneColId() ? 'cancelled' : (colName(live.column) || live.column || '?') };
-      const old = arch.get(id); return { id, num: old ? old.num : null, title: old ? old.title || '' : '', live: false, state: finishedDone(old) ? 'done' : 'missing' };
+      const old = arch.get(id);   // the archive not loaded yet (and the board has one): unknown, not missing
+      let years = 0; try { years = archYears().length; } catch { years = 0; }   // also declared further down
+      if (!old && !loaded && years) return { id, num: null, title: '', live: false, state: 'unknown' };
+      return { id, num: old ? old.num : null, title: old ? old.title || '' : '', live: false, state: finishedDone(old) ? 'done' : old && old.column === doneColId() ? 'cancelled' : old ? 'archived without Done' : 'missing' };
     });
   }
   const afterRef = x => x.num != null ? '#' + x.num : x.id;
+  const AFTER_BAD = ['missing', 'cancelled', 'archived without Done'];   // links that stop a chain (amber)
   function chipsAfter(t) {   // the card face: one chip per link not done yet; when every link is done, one quiet "ready" chip
     const links = afterLinks(t); if (!links.length || isDoneTask(t)) return [];
     const open = links.filter(x => x.state !== 'done');
     if (!open.length) { const c = elI('span', 'chip afterchip ok', 'check', 'after ' + links.map(afterRef).join(', ')); c.title = 'Every card this one runs after is done'; return [c]; }
-    return open.map(x => { const bad = x.state === 'missing' || x.state === 'cancelled'; const c = elI('span', 'chip afterchip' + (bad ? ' late' : ''), 'arrow-right', 'after ' + afterRef(x));
-      c.title = `Runs after ${afterRef(x)}${x.title ? ' ' + x.title : ''} (${x.state})`; return c; });
+    return open.map(x => { const bad = AFTER_BAD.includes(x.state); const c = elI('span', 'chip afterchip' + (bad ? ' late' : ''), 'arrow-right', 'after ' + afterRef(x));
+      c.title = x.state === 'unknown' ? `Runs after ${x.id}: not on the board; open the card to look it up in the archive` : `Runs after ${afterRef(x)}${x.title ? ' ' + x.title : ''} (${x.state})`; return c; });
   }
   const cancelledRun = t => t && t.column === doneColId() && t.outcome === 'cancelled' ? (t.last_run || {}) : null;   // v35 done always sets the card's outcome
   const shortSid = s => { s = String(s || ''); return !s || s.startsWith('pending-') ? s : s.slice(0, Math.min(3, Math.floor(s.length / 2))) + '…'; };   // enough to recognise a session, not to pass as it   // the run record of a card that was closed as cancelled
@@ -2668,7 +2727,7 @@ if (typeof window !== 'undefined') (() => {
       if (context.childNodes.length) c.append(context);
     }
     const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
-    [chipMention(t), chipWaiting(t), chipRelated(t), ...chipsAfter(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+    [chipMention(t), chipWaiting(t), chipRelated(t), chipFollowUp(t), ...chipsAfter(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
       other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t), chipOutcome(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
@@ -3008,6 +3067,13 @@ if (typeof window !== 'undefined') (() => {
       const o = state.tasks.find(x => x.id === r.id), row = el('div', 'drel'), head = el('div', 'drel__head');
       const open = el('button', 'drel__title linkish', `#${o.num} ${o.title}`); open.type = 'button'; open.onclick = () => openCard(o.id);
       const word = r.kind === 'duplicate' ? 'duplicate' : r.kind === 'addition' ? 'addition' : 'related';
+      if (isFollowUp(r)) {   // kit v54: a moved to-do's follow-up card, or the card it was split from
+        const fwd = r.from === t.id;
+        head.append(ui.pill({ text: fwd ? 'Follow-up' : 'Split from', icon: fwd ? 'arrow-right' : 'arrow-up-right', size: 'sm', tone: 'accent' }), open);
+        row.append(head); row.dataset.kind = 'follow-up';
+        if (!ro) { const acts = el('div', 'drel__acts'), x = ui.button({ label: 'Unlink', variant: 'ghost', size: 'sm', onClick: () => answerRelation(t.id, o.id, r.kind, 'not-related') }); x.dataset.act = 'dismiss'; acts.append(x); row.append(acts); }
+        box.append(row); return;
+      }
       head.append(ui.pill({ text: r.status === 'possible' ? 'Possible ' + word : r.status === 'merged' ? 'Merged, not archived yet' : 'Linked: ' + word, icon: r.kind === 'duplicate' ? 'copy' : 'link', size: 'sm', tone: r.status === 'possible' ? 'warn' : 'neutral' }), open);
       row.append(head);
       if (!ro && r.status === 'merged') {
@@ -3065,14 +3131,14 @@ if (typeof window !== 'undefined') (() => {
   // keeptrack.py task-set --after (or a front door); the page shows the links and never moves a card because of them.
   function renderAfter(t) {
     const box = $('cAfter'); if (!box) return; box.textContent = ''; const links = afterLinks(t); box.hidden = !links.length; if (!links.length) return;
-    let loaded = null; try { loaded = archived; } catch { loaded = null; }
+    let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }
     if (links.some(x => !x.live) && !loaded && archYears().length) loadArchived().then(() => { if (editing === t.id) renderAfter(state.tasks.find(x => x.id === t.id) || t); }).catch(() => {});   // an archived Done card counts as done
     const open = links.filter(x => x.state !== 'done');
     box.append(elI('span', 'dafter__label', 'arrow-right', open.length ? 'Runs after' : 'Runs after (all done: ready to approve)'));
     links.forEach(x => {
-      const tone = x.state === 'done' ? 'ok' : x.state === 'missing' || x.state === 'cancelled' ? 'warn' : 'neutral';
+      const tone = x.state === 'done' ? 'ok' : AFTER_BAD.includes(x.state) ? 'warn' : 'neutral';
       const p = ui.pill({ text: `after ${afterRef(x)}${x.title ? ' ' + x.title : ''} · ${x.state}`, tone, size: 'sm', onClick: x.live ? () => openCard(x.id) : undefined });
-      p.dataset.after = x.id; p.title = x.state === 'missing' ? 'Not on the board, and not archived as Done' : `${afterRef(x)} is ${x.state}`; box.append(p);
+      p.dataset.after = x.id; p.title = x.state === 'missing' ? 'Not on the board, and not in the archive' : x.state === 'unknown' ? 'Not on the board: loading the archive' : `${afterRef(x)} is ${x.state}`; box.append(p);
     });
   }
   function renderWaiting(t) {
@@ -4711,12 +4777,31 @@ if (typeof window !== 'undefined') (() => {
     }
     return '';
   }
-  function proposalRefusal(p, change) {   // '' when the proposal may be applied, else why not
+  // A chain of card ids from ids back to tid (a loop), else null; live cards only, like keeptrack.py after_cycle.
+  function afterCycle(board, tid, ids) {
+    const byId = new Map((board.tasks || []).map(t => [t.id, t])), seen = new Set(), stack = ids.map(i => [i, [i]]);
+    while (stack.length) { const [cur, path] = stack.pop(); if (cur === tid) return path; if (seen.has(cur)) continue; seen.add(cur); afterIds(byId.get(cur)).forEach(x => stack.push([x, path.concat(x)])); }
+    return null;
+  }
+  // change.after on a task proposal: every id a card on the board or in its archive, and no loop (keeptrack.py resolve_after
+  // checked them at propose time; the board may have changed since, and a proposal file can be written by hand). The card itself
+  // is dropped silently, as keeptrack.py does. archIds: the archive's card ids, or null when the archive is not loaded (an id
+  // off the board is then not refused: it may be archived). A merge checks only when it writes after, into ctx.into.
+  function afterRefusal(board, p, change, archIds, action, ctx) {
+    if (!board || !String(p.kind || '').startsWith('task.') || !Array.isArray(change.after)) return '';   // no board: the shape checks only
+    if (action === 'merge' && !(ctx && (ctx.fields || []).includes('after') && ctx.into && ctx.into.type === 'task')) return '';
+    const tid = action === 'merge' ? ctx.into.id : p.kind === 'task.update' && p.target ? p.target.id : null, live = new Set((board.tasks || []).map(t => t.id));
+    const ids = change.after.filter(x => x !== tid);
+    const unknown = archIds ? ids.filter(x => !live.has(x) && !archIds.has(x)) : []; if (unknown.length) return `change.after names ${unknown.join(', ')}, which is not a card on the board or in its archive`;
+    const loop = tid ? afterCycle(board, tid, ids) : null; if (loop) return `change.after would make a loop (${loop.map(i => { const x = (board.tasks || []).find(t => t.id === i); return x && x.num != null ? '#' + x.num : i; }).join(' -> ')} -> back to this card)`;
+    return '';
+  }
+  function proposalRefusal(p, change, board, action, ctx) {   // '' when the proposal may be applied, else why not; board: the model it goes into
     const kind = String(p.kind || ''); if (!PROPOSAL_KINDS.includes(kind)) return `Not saved: unknown proposal kind ${JSON.stringify(kind)}.`;
     if (!isObj(change) || !Object.keys(change).length) return 'Not saved: the proposal has no valid change.';
     const ok = CHANGE_FIELDS[kind.startsWith('task.') ? 'task' : kind === 'person.upsert' ? 'person' : 'touch'], bad = Object.keys(change).filter(k => !ok.includes(k));
     if (bad.length) return `Not saved: a ${kind} proposal may not set ${bad.join(', ')}. Ignore it, or fix the proposal file.`;
-    const why = changeValueRefusal(change, kind);
+    const why = changeValueRefusal(change, kind) || afterRefusal(board, p, change, board ? archIdsNow(board) : null, action, ctx);
     return why ? `Not saved: ${why}. Ignore it, or fix the proposal file.` : '';
   }
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
@@ -4788,7 +4873,7 @@ if (typeof window !== 'undefined') (() => {
   // The change a decision makes to the board model n. ctx: { resultId, into, fields }.
   function applyProposal(n, p, action, change, ctx) {
     if (action === 'ignore') return;
-    { const why = proposalRefusal(p, change); if (why) throw new Error(why); }   // decideProposal refuses first; this is the last guard
+    { const why = proposalRefusal(p, change, n, action, ctx); if (why) throw new Error(why); }   // decideProposal refuses first; this is the last guard
     const ts = nowIso();
     if (action === 'merge') {
       const rec = findRef(n, ctx.into); if (!rec) return;
@@ -4796,6 +4881,7 @@ if (typeof window !== 'undefined') (() => {
         if (LIST_FIELDS.includes(k) && Array.isArray(v)) appendUnique(rec, k, v);
         else if (!ctx.fields.includes(k)) return;
         else if (k === 'owner') { if (ctx.into.type === 'task' && isMemberLogin(v)) rec.assignees = [v]; }
+        else if (k === 'after' && ctx.into.type === 'task') { const a = [...new Set(v.filter(x => x !== rec.id))]; if (a.length) rec.after = a; else delete rec.after; }   // never itself
         else if (k === 'due' && ctx.into.type === 'person') rec.next_due = clone(v);
         else rec[k] = clone(v);
       });
@@ -4882,7 +4968,8 @@ if (typeof window !== 'undefined') (() => {
       todayQueue.reviewed.delete(id); await load(true); inboxSay('Not saved: this proposal changed. Expand Review again to read the latest evidence.', true); return false;
     }
     const fresh = normalise(got.data), change = clone(opts.change || p.change || {});
-    if (action !== 'ignore') { const why = proposalRefusal(p, change); if (why) { inboxSay(why, true); return false; } }
+    if (action !== 'ignore' && Array.isArray(change.after) && change.after.some(x => !fresh.tasks.some(t => t.id === x)) && !archIdsNow(fresh)) { try { await loadArchived(); } catch { /* not loaded: an off-board id is not refused */ } }
+    if (action !== 'ignore') { const why = proposalRefusal(p, change, fresh, action, opts.into ? { into: opts.into, fields: opts.fields || [] } : null); if (why) { inboxSay(why, true); return false; } }
     const edited = opts.change ? Object.fromEntries(Object.entries(opts.change).filter(([k, v]) => !sameJson((p.change || {})[k], v))) : null;
     let expect = {}, note = '';
     if (action !== 'ignore' && p.target) {
@@ -6250,6 +6337,12 @@ if (typeof window !== 'undefined') (() => {
     const res = await gh('PUT', { message, content: b64e(JSON.stringify(data, null, 2) + '\n'), branch: cfg().branch, ...(sha ? { sha } : {}) }, false, { path: archPath(y) });
     if (!res.ok) return false; const out = await res.json(); archMem[archKey(y)] = { data, sha: out.content.sha, etag: null }; return true;
   }
+  // the archive's card ids when the loaded copy is current, an empty set when the board has no archive, else null (not loaded)
+  function archIdsNow(board) {
+    const files = (board.archive || {}).files || {}; if (!Object.keys(files).length) return new Set();
+    return archived && archivedSig === JSON.stringify(files) ? new Set(archived.tasks.map(x => x.item.id)) : null;
+  }
+  const archFresh = () => !!archived && archivedSig === JSON.stringify((state.archive || {}).files || {});
   let archived = null, archivedSig = '';   // { tasks: [{ item, year }], contacts: [...] } once loaded; items still on the board are left out
   async function loadArchived() {
     const sig = JSON.stringify((state.archive || {}).files || {}); if (archived && archivedSig === sig) return archived;
@@ -6464,7 +6557,7 @@ if (typeof window !== 'undefined') (() => {
   let msIndex = null, msFor = null; const MS_MATCH = { prefix: true, fuzzy: 0.2, combineWith: 'AND' };   // word starts and small typos
   const commentText = x => (x.comments || []).map(c => c.text || '').join('\n');
   function searchDocs(withArch) {
-    const docs = [], task = (t, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 't:' + t.id, kind: 'task', ref: t.id, year: y || '', title: t.title || '', who: (t.assignees || []).join(' '), client: t.client || '',
+    const docs = [], task = (t, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 't:' + t.id, kind: 'task', ref: t.id, year: y || '', num: t.num ? String(t.num) : '', title: t.title || '', who: (t.assignees || []).join(' '), client: t.client || '',
       text: [t.details, (t.todos || []).map(x => x.text).join('\n'), commentText(t), (t.links || []).map(l => l.title || l.url).join(' '), t.num ? '#' + t.num : ''].join('\n'), sub: [t.num ? '#' + t.num : '', colName(t.column), t.client, t.due ? 'due ' + fmtDue(t.due) : ''].filter(Boolean).join(' · ') });
     const person = (p, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 'p:' + p.id, kind: 'person', ref: p.id, year: y || '', title: p.name || '', who: [p.role, p.email, p.phone, p.source].filter(Boolean).join(' '), client: p.company || '',
       text: [p.notes, p.next, commentText(p), (p.links || []).map(l => l.title || l.url).join(' ')].join('\n'), sub: [p.role, p.company, p.stage, p.next ? 'next: ' + p.next : ''].filter(Boolean).join(' · ') });
@@ -6497,7 +6590,7 @@ if (typeof window !== 'undefined') (() => {
     const q = $('qQ').value.trim(), withArch = $('qArch').checked, res = $('qRes'); let info = '';
     if (withArch && !archived && archYears().length) { $('qInfo').textContent = 'Loading the archive…'; try { await loadArchived(); } catch (e) { info = 'Could not load the archive: ' + (e.message || e); } }
     let MS; try { MS = await loadMs(); } catch (e) { $('qInfo').textContent = e.message; return; }
-    const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, ...MS_MATCH } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
+    const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'num', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, ...MS_MATCH } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
     res.textContent = '';
     // Views are part of search: an empty box lists them all ("Go to"), and typing "cal" offers Calendar first
     const ql = q.toLowerCase(), goes = VIEW_GROUPS.filter(g => !viewTabs[g.grp].hidden).flatMap(g => g.views).filter(v => !ql || v.label.toLowerCase().startsWith(ql));
@@ -6510,7 +6603,9 @@ if (typeof window !== 'undefined') (() => {
         button.append(elI('span', 'qic', action.icon), el('span', 'qt', action.label));
         button.onclick = () => { $('dlgSearch').close(); action.run(); }; res.append(button); }); }
     if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} people and tasks` + (matchMedia('(pointer: fine)').matches ? ' · press / anywhere to search' : ''); if (res.firstElementChild) res.querySelector('.qhit').classList.add('first'); return; }
-    const hits = msIndex.search(q).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
+    // A number ("26" or "#26") puts that card first, then cards whose number starts with it, then the other hits (sort is stable)
+    const numQ = (q.match(/^#?(\d+)$/) || [])[1], numRank = h => !numQ || !h.num ? 2 : h.num === numQ ? 0 : h.num.startsWith(numQ) ? 1 : 2;
+    const hits = msIndex.search(q).sort((a, b) => numRank(a) - numRank(b)).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
     $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
     hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
       b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }

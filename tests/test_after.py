@@ -138,6 +138,9 @@ class After(unittest.TestCase):
         d = self.doctor()
         self.assertEqual(["AFTER_MISSING"], [x["code"] for x in d["issues"] if x["code"].startswith("AFTER")])
         self.assertIn("AFTER_MISSING", [x["code"] for x in d["warnings"]], "a missing card is tolerated: a warning")
+        self.edit(lambda d: (d["projects"].append({"id": "pr_x", "name": "X"}), d["tasks"][2].update(after=["pr_x"])))
+        self.assertIn("AFTER_MISSING", [x["code"] for x in self.doctor()["issues"]], "a project's id is not a card")
+        self.edit(lambda d: d["projects"].clear())
         self.edit(lambda d: d["tasks"][2].update(after="t_c1"))
         self.assertIn("AFTER", [x["code"] for x in self.doctor()["issues"]])
         self.edit(lambda d: (d["tasks"][0].update(after=["t_c2"]), d["tasks"][1].update(after=["t_c1"]), d["tasks"][2].pop("after")))
@@ -206,6 +209,61 @@ class AfterProposals(unittest.TestCase):
         self.assertEqual(2, p.returncode)
         self.assertIn("change.after", p.stderr)
 
+    def card(self, cid):
+        with open(os.path.join(self.board, "cards", cid + ".json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_merge_drops_the_card_itself_and_refuses_a_loop(self):
+        self.kt("task-set", "#2", "--after", "#1")
+        self.kt("proposal-add", "-", stdin=self.proposal(["#1", "#2"], "ak-m1"))
+        p = json.loads(self.kt("proposals", "--json").stdout)[0]
+        self.kt("proposal-merge", p["id"], "--into", "t_second", "--fields", "after")
+        self.assertEqual(["t_first"], self.card("t_second")["after"], "the card itself is dropped")
+        self.kt("proposal-add", "-", stdin=self.proposal(["#2"], "ak-m2"))
+        p = next(x for x in json.loads(self.kt("proposals", "--json").stdout) if x["status"] == "pending")
+        r = self.kt("proposal-merge", p["id"], "--into", "t_first", "--fields", "after", ok=False)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("loop", r.stderr)
+        self.assertNotIn("after", self.card("t_first"))
+
+
+
+# board.js keeps afterRefusal inside the page closure: cut it (with afterCycle) out and run it in node.
+AFTER_NODE = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const a = src.indexOf('  function afterCycle('), b = src.indexOf('  function proposalRefusal(');
+if (a < 0 || b < a) { console.error('afterRefusal block not found in board.js'); process.exit(2); }
+const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
+const refusal = new Function('afterIds', src.slice(a, b) + '\nreturn afterRefusal;')(afterIds);
+const board = { tasks: [{ id: 't_a', num: 1 }, { id: 't_b', num: 2, after: ['t_a'] }, { id: 't_c', num: 3, after: ['t_b'] }] };
+const none = new Set(), arch = new Set(['t_old']);
+const up = (id, after, ids = none) => refusal(board, { kind: 'task.update', target: { type: 'task', id } }, { after }, ids);
+const merge = (into, after, fields) => refusal(board, { kind: 'task.create' }, { after }, none, 'merge', { into: { type: 'task', id: into }, fields });
+process.stdout.write(JSON.stringify({
+  ok: up('t_c', ['t_a']), create: refusal(board, { kind: 'task.create' }, { after: ['t_a', 't_c'] }, none),
+  unknown: up('t_c', ['t_zz']), archived: up('t_c', ['t_old'], arch), notLoaded: up('t_c', ['t_zz'], null),
+  self: up('t_c', ['t_c']), loop: up('t_a', ['t_c']),
+  mergeNoAfter: merge('t_a', ['t_zz'], ['comments']), mergeLoop: merge('t_a', ['t_c'], ['after']),
+  noBoard: refusal(null, { kind: 'task.update', target: { id: 't_a' } }, { after: ['t_zz'] }, none) }));
+"""
+
+
+class AfterProposalAcceptInPage(unittest.TestCase):
+    """The web board's Accept refuses after links to a card on neither the board nor its archive (keeptrack.py checks
+    that at propose time; the page checks again at accept) and loops, like keeptrack.py; the card itself is dropped
+    silently, as keeptrack.py does."""
+    def test_board_js_refuses_unknown_and_loop(self):
+        if not shutil.which("node"):
+            self.skipTest("node is not installed")
+        p = subprocess.run(["node", "-e", AFTER_NODE, os.path.join(REPO, "board", "board.js")], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        for k in ("ok", "create", "archived", "notLoaded", "self", "mergeNoAfter", "noBoard"):
+            self.assertEqual("", r[k], k)
+        self.assertIn("t_zz", r["unknown"])
+        self.assertIn("loop", r["loop"])
+        self.assertIn("#3", r["loop"])
+        self.assertIn("loop", r["mergeLoop"], "a merge that writes after checks the card it merges into")
 
 if __name__ == "__main__":
     unittest.main()
