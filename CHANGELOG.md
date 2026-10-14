@@ -19,7 +19,9 @@ Similar cards: adding a card never stops, and close cards are marked as possible
 cards (`related`). New `similar`, `related`, `relate`, `unrelate` and `merge-card` (merge, then archive). The web board
 shows the mark on the card and Merge, Link and Not related in the drawer. A pending new-task Inbox item checks open
 cards again when shown, so a card added after the item was proposed shows as a possible duplicate. Shared scoring with a
-Python/JS parity test. No schema migration.
+Python/JS parity test. Pending Inbox items also check each other (similar new-task items show as possible
+duplicates). Today Inbox rows show a short summary and "N from this person this day" for separate emails from one
+person on one day; the email skill groups a person's emails of the day into one touch. No schema migration.
 
 ## Kit v51 — 2026-10-13
 

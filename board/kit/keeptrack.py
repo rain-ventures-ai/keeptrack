@@ -2760,7 +2760,7 @@ def relation(t, other_id):
     return next((r for r in t.get("related") or [] if isinstance(r, dict) and r.get("id") == other_id), None)
 
 
-def set_relation(a, b, kind, status, score=None):
+def set_relation(a, b, kind, status, score=None, into=None):
     """Write the same relation on both cards (a list item per other card, keyed by its id, so saves merge)."""
     for x, y in ((a, b), (b, a)):
         r = relation(x, y["id"])
@@ -2769,6 +2769,8 @@ def set_relation(a, b, kind, status, score=None):
         r.update({"kind": kind, "status": status, "by": who_am_i(), "at": now()})
         if score is not None:
             r["score"] = round(score, 2)
+        if into:
+            r["into"] = into
         x["updated"] = now()
 
 
@@ -2777,7 +2779,10 @@ def mark_similar(data, t):
     Never stops the add. Returns printable lines."""
     lines = []
     hits = similar_matches(data, t.get("title", ""), t.get("client", ""), t.get("project", ""), skip=t["id"])
-    for h in hits[:SIMILAR_MAX]:
+    hits = [h for h in hits if h["type"] == "task"][:SIMILAR_MAX] + [h for h in hits if h["type"] == "proposal"][:SIMILAR_MAX]
+    if hits:
+        _MUT["rerun"] = True   # the marks change other cards: a lost race runs the add again on the newer board, never a clash
+    for h in hits:
         if h["type"] == "task":
             other = next(x for x in data["tasks"] if x["id"] == h["id"])
             set_relation(t, other, h["kind"], "possible", h["score"])
@@ -2824,7 +2829,7 @@ def cmd_related(a):
         t = find(data, a.id); rs = [r for r in t.get("related") or [] if isinstance(r, dict)]
         for r in rs:
             n = nums.get(r.get("id"))
-            print(f"{r.get('status')} {r.get('kind')}: {'#' + str(n) if n else '(archived)'} {r.get('id')} {clean(titles.get(r.get('id'), ''), 100)}")
+            print(f"{r.get('status')} {r.get('kind')}: {'#' + str(n) if n else '(not on the board)'} {r.get('id')} {clean(titles.get(r.get('id'), ''), 100)}")
         if not rs: print("(no related cards)")
         return
     seen, n = set(), 0
@@ -2904,7 +2909,7 @@ def cmd_merge_card(a):
         if relation(d, sid) and relation(d, sid).get("status") == "merged":
             return   # a retry after the merge saved: only the archive is left
         merge_card_into(s, d)
-        set_relation(s, d, "duplicate", "merged")
+        set_relation(s, d, "duplicate", "merged", into=d["id"])
         hist(d, f"merged in #{s.get('num')} ({s['id']})"); hist(s, f"merged into #{d.get('num')} ({d['id']})")
     mutate(fn, f"Merge card: {a.src} into {a.into}")
     cmd_archive(argparse.Namespace(ref=sid, done_days=None, lost_days=None, keep_history=None, dry_run=False))
@@ -3281,12 +3286,12 @@ def doctor_board(fix=False):
             problem("TASK_VALUE", path, "Value must be an integer 1–5, null or absent.")
         if "effort" in t and t["effort"] not in (None, *EFFORT_WEIGHTS):
             problem("TASK_EFFORT", path, "Effort must be XS, S, M, L, XL, null or absent.")
-        if "priority_rank" in t and not valid_rank(t["priority_rank"]):
-            problem("PRIORITY_RANK", path, "Board-wide priority rank is invalid.")
         if "related" in t and not (isinstance(t["related"], list) and all(
                 isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"] and r.get("kind") in RELATED_KINDS
                 and r.get("status") in RELATED_STATUSES for r in t["related"])):
             problem("RELATED", path, "Related cards must be a list of {id, kind, status} (kit v52). keeptrack.py related ID shows them.")
+        if "priority_rank" in t and not valid_rank(t["priority_rank"]):
+            problem("PRIORITY_RANK", path, "Board-wide priority rank is invalid.")
         elif valid_rank(t.get("priority_rank")):
             if t["priority_rank"] in priority_ranks:
                 problem("DUPLICATE_PRIORITY_RANK", path, "Board-wide priority rank is also used by " + priority_ranks[t["priority_rank"]] + ". Number/id breaks the tie; move a card in Prioritise to choose its order.")
@@ -6121,10 +6126,10 @@ def proposal_duplicates(data, proposal):
         for task in data.get("tasks", []):
             if _norm(task.get("title")) == title and (not client or _norm(task.get("client")) == client):
                 out.append({"type": "task", "id": task["id"], "why": "same title" + (" and client" if client else "")})
-        if proposal["kind"] == "task.create":   # kit v52: close titles too, so a chat that proposes work already on the board is told
+        if proposal["kind"] == "task.create":   # kit v52: close titles too (cards and other pending items), duplicates only
             for h in similar_matches(data, c.get("title") or proposal["title"], c.get("client") or "", c.get("project") or ""):
-                if h["type"] == "task" and not any(d["id"] == h["id"] for d in out):
-                    out.append({"type": "task", "id": h["id"], "why": "similar title"})
+                if h["kind"] == "duplicate" and h["id"] != proposal.get("id") and not any(d["id"] == h["id"] for d in out):
+                    out.append({"type": h["type"], "id": h["id"], "why": "similar title" if h["type"] == "task" else "similar Inbox item"})
     elif proposal["kind"] == "person.upsert":
         emails = {_norm(c.get("email"))} | {_norm(x.get("value")) for x in c.get("emails", []) if isinstance(x, dict)}
         emails.discard("")
@@ -6457,9 +6462,13 @@ def cmd_proposal_accept(a):
         elif kind == "person.upsert" and target is None: result, recovered = _new_person(data, proposal, change); before = None
         elif kind == "contact.touch": result = target; _apply_touch(result, proposal, change)
         else: result = target; _apply_update(data, result, proposal, change)
+        if kind == "task.create":
+            proposal["status"] = "accepting"   # so the check below never matches this item itself; _decide sets the real status
+            marks = mark_similar(data, result)   # before the undo snapshot, so an undo still finds the card as the accept left it
+        else:
+            marks = []
         undo = {"before": before, "after": copy.deepcopy(result), "created": before is None}
         _decide(proposal, "edit" if a.edit else "accept", result, edited, undo)
-        marks = mark_similar(data, result) if kind == "task.create" else []   # after _decide: this item is no longer pending
         if a.json:
             print(json.dumps({"proposal": proposal["id"], "status": proposal["status"], "decision": proposal["decision"]}, ensure_ascii=False))
         else:
@@ -6547,6 +6556,11 @@ def cmd_proposal_undo(a):
         if undo.get("created"):
             key = "tasks" if result["type"] == "task" else "contacts"
             data[key] = [x for x in data[key] if x.get("id") != result["id"]]
+            for t in data.get("tasks", []) if key == "tasks" else []:   # the accept's similar-card marks go with the card
+                if any(isinstance(r, dict) and r.get("id") == result["id"] for r in t.get("related") or []):
+                    t["related"] = [r for r in t["related"] if not (isinstance(r, dict) and r.get("id") == result["id"])]
+                    if not t["related"]:
+                        del t["related"]
         else:
             record.clear(); record.update(copy.deepcopy(undo["before"]))
         old = copy.deepcopy(decision); proposal["status"] = "pending"; proposal["decision"] = None

@@ -1251,12 +1251,12 @@ if (typeof window !== 'undefined') (() => {
   const stamp = t => { t.updated = nowIso(); if (me()) t.updatedBy = me(); };
   // related cards (kit v52): one item per other card on BOTH cards, keyed by its id, so saves merge like keeptrack.py set_relation
   const relationOf = (t, id) => (Array.isArray(t.related) ? t.related : []).find(r => r && r.id === id);
-  function setRelation(n, aId, bId, kind, status, score) {
+  function setRelation(n, aId, bId, kind, status, score, into) {
     const a = n.tasks.find(x => x.id === aId), b = n.tasks.find(x => x.id === bId); if (!a || !b || a === b) return false;
     [[a, b], [b, a]].forEach(([x, y]) => {
       if (!Array.isArray(x.related)) x.related = [];
       let r = relationOf(x, y.id); if (!r) { r = { id: y.id }; x.related.push(r); }
-      Object.assign(r, { kind, status, by: me() || 'someone', at: nowIso() }); if (score != null) r.score = Math.round(score * 100) / 100;
+      Object.assign(r, { kind, status, by: me() || 'someone', at: nowIso() }); if (score != null) r.score = Math.round(score * 100) / 100; if (into) r.into = into;
       stamp(x);
     });
     return true;
@@ -2638,7 +2638,8 @@ if (typeof window !== 'undefined') (() => {
     const t = { id: uid(), title, column: col, client: fc || '', priority: 'medium', due: due || '', labels: [], assignees: as, details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
     if (me()) { t.createdBy = me(); t.updatedBy = me(); }
     let hits = [];
-    mutate(n => { const c = clone(t); n.tasks.push(c); hits = markSimilar(n, c); }, `Add task: ${title}`)
+    // recheckArchive: the marks change other cards, so a lost race runs the add again on the newer board (never a clash over a card you did not touch)
+    mutate(n => { const c = clone(t); n.tasks.push(c); hits = markSimilar(n, c); }, `Add task: ${title}`, [], null, { recheckArchive: true })
       .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: open the card to merge, link or dismiss.`); });
   }
 
@@ -2894,7 +2895,8 @@ if (typeof window !== 'undefined') (() => {
   // Clear ends it as keeptrack.py unwait does: a claim the wait blocked runs again, or goes back to To do once it is stale.
   let waitSheet = null;
   // Related cards: possible duplicates or additions found when a card was added, and links a person confirmed
-  const liveRelations = t => (Array.isArray(t.related) ? t.related : []).filter(r => r && ['possible', 'confirmed'].includes(r.status) && state.tasks.some(x => x.id === r.id));
+  // a merged relation stays visible while the merged card is still on the board (its archive did not finish): Finish merge
+  const liveRelations = t => (Array.isArray(t.related) ? t.related : []).filter(r => r && (['possible', 'confirmed'].includes(r.status) || (r.status === 'merged' && r.into)) && state.tasks.some(x => x.id === r.id));
   const possibleRelation = t => liveRelations(t).find(r => r.status === 'possible');
   function renderRelated(t) {
     const box = $('cRelList'), sec = $('cRelSec'), rs = liveRelations(t); box.textContent = '';
@@ -2903,9 +2905,12 @@ if (typeof window !== 'undefined') (() => {
       const o = state.tasks.find(x => x.id === r.id), row = el('div', 'drel'), head = el('div', 'drel__head');
       const open = el('button', 'drel__title linkish', `#${o.num} ${o.title}`); open.type = 'button'; open.onclick = () => openCard(o.id);
       const word = r.kind === 'duplicate' ? 'duplicate' : r.kind === 'addition' ? 'addition' : 'related';
-      head.append(ui.pill({ text: r.status === 'possible' ? 'Possible ' + word : 'Linked: ' + word, icon: r.kind === 'duplicate' ? 'copy' : 'link', size: 'sm', tone: r.status === 'possible' ? 'warn' : 'neutral' }), open);
+      head.append(ui.pill({ text: r.status === 'possible' ? 'Possible ' + word : r.status === 'merged' ? 'Merged, not archived yet' : 'Linked: ' + word, icon: r.kind === 'duplicate' ? 'copy' : 'link', size: 'sm', tone: r.status === 'possible' ? 'warn' : 'neutral' }), open);
       row.append(head);
-      if (!ro) {
+      if (!ro && r.status === 'merged') {
+        const acts = el('div', 'drel__acts'), src = r.into === t.id ? o : t;
+        const b = ui.button({ label: `Finish merge: archive #${src.num}`, variant: 'primary', size: 'sm', onClick: () => finishMerge(src.id, r.into) }); b.dataset.act = 'finish'; acts.append(b); row.append(acts);
+      } else if (!ro) {
         const acts = el('div', 'drel__acts'), older = (o.created || '') < (t.created || '') || ((o.created || '') === (t.created || '') && (o.num || 0) < (t.num || 0));
         const [src, dst] = older ? [t, o] : [o, t];
         const b = (label, variant, fn) => { const x = ui.button({ label, variant, size: 'sm', onClick: fn }); acts.append(x); return x; };
@@ -2936,7 +2941,7 @@ if (typeof window !== 'undefined') (() => {
     src.comments.forEach(c => { const x = clone(c); x.id = 'c_' + Math.random().toString(36).slice(2, 8); x.text = `[from #${src.num}] ` + String(x.text || ''); dst.comments.push(x); });
     const rank = { high: 0, medium: 1, low: 2 }; if ((rank[src.priority] ?? 1) < (rank[dst.priority] ?? 1)) dst.priority = src.priority;
     if (src.due && (!dst.due || src.due < dst.due)) dst.due = src.due;
-    setRelation(n, srcId, dstId, 'duplicate', 'merged');
+    setRelation(n, srcId, dstId, 'duplicate', 'merged', null, dstId);
   }
   async function mergeCards(srcId, dstId) {
     const src = state.tasks.find(x => x.id === srcId), dst = state.tasks.find(x => x.id === dstId); if (!src || !dst || writeBlocked()) return;
@@ -2944,8 +2949,14 @@ if (typeof window !== 'undefined') (() => {
     if (waitingOf(src)) { toast(`#${src.num} is waiting on something. Clear the wait first.`, true); return; }
     if (!(await ask('Merge these cards?', [`#${src.num} “${src.title}” goes into #${dst.num} “${dst.title}”.`, 'Its description, checklist, links, labels and comments are copied. Then it is archived: nothing is deleted, and Search with Include archive can put it back.'], 'Merge'))) return;
     const ok = await mutate(n => mergeCardInto(n, srcId, dstId), `Merge #${src.num} into #${dst.num}`, [srcId, dstId]); if (!ok) return;
+    await finishMerge(srcId, dstId);
+  }
+  async function finishMerge(srcId, dstId) {   // the archive half of a merge; also the retry when it did not finish
+    const src = state.tasks.find(x => x.id === srcId), dst = state.tasks.find(x => x.id === dstId); if (!src || !dst) return;
+    for (let i = 0; i < 100 && (busy || saving); i++) await new Promise(r => setTimeout(r, 100));   // archiveNow refuses while a save runs
     await archiveNow({ taskId: srcId });
     if (!state.tasks.some(x => x.id === srcId)) { toast(`Merged #${src.num} into #${dst.num}`); if (editing === srcId) openCard(dstId); else { const t = taskNow(); if (t) renderRelated(t); } }
+    else { toast(`#${src.num} is merged but not archived yet. Open the card and choose Finish merge.`, true); const t = taskNow(); if (t) renderRelated(t); }
   }
   function renderWaiting(t) {
     const box = $('cWaitVal'); box.textContent = ''; const w = waitingOf(t);
@@ -4546,7 +4557,7 @@ if (typeof window !== 'undefined') (() => {
   }
   const proposalIn = (meta, id) => { const f = meta && meta.files && meta.files.get(proposalPath(id)); return f && f.obj ? clone(f.obj) : null; };
   const inboxPending = () => inboxAll().filter(p => p.status === 'pending');
-  const KIND_LABEL = { 'task.create': 'New task', 'task.update': 'Task update', 'person.upsert': 'Person', 'contact.touch': 'Interaction',
+  const KIND_LABEL = { 'task.create': 'New task', 'task.update': 'Task edit', 'person.upsert': 'Person', 'contact.touch': 'CRM log entry',
     'ask.choose': 'Choose', 'ask.approve': 'Approve', 'ask.question': 'Question' };
   const STATUS_LABEL = { accepted: 'Accepted', answered: 'Answered', ignored: 'Ignored' };
   const SRC_LABEL = { meeting: 'Meeting', email: 'Email', other: 'Other' };
@@ -4593,10 +4604,13 @@ if (typeof window !== 'undefined') (() => {
   // proposal was made (a chat added it directly) still shows here, so Accept does not make a second copy.
   function proposalDuplicates(p) {
     const out = (p.likely_duplicates || []).filter(d => d && typeof d === 'object');
-    if (p.kind === 'task.create' && p.status === 'pending') {
-      const c = p.change || {};
-      similarMatches(state, c.title || p.title, c.client || '', c.project || '', null, doneColId()).slice(0, SIMILAR_MAX)
-        .forEach(h => { if (!out.some(d => d.type === 'task' && d.id === h.id)) out.push({ type: 'task', id: h.id, why: 'similar title' }); });
+    if (p.kind === 'task.create' && p.status === 'pending') {   // duplicates only: a looser "addition" never blocks an accept
+      const c = p.change || {}, title = c.title || p.title, add = (type, id, why) => { if (!out.some(d => d.type === type && d.id === id)) out.push({ type, id, why }); };
+      similarMatches(state, title, c.client || '', c.project || '', null, doneColId()).filter(h => h.kind === 'duplicate').slice(0, SIMILAR_MAX).forEach(h => add('task', h.id, 'similar title'));
+      inboxAll().filter(o => o.id !== p.id && o.kind === 'task.create' && o.status === 'pending').forEach(o => {   // another pending item for the same work
+        const oc = o.change || {}, same = similarScope(c.client || '', c.project || '', oc); if (same === null) return;
+        const ot = oc.title || o.title, score = similarScore(title, ot); if (similarKind(score, same, title, ot) === 'duplicate') add('proposal', o.id, 'similar Inbox item');
+      });
     }
     return out;
   }
@@ -4634,7 +4648,8 @@ if (typeof window !== 'undefined') (() => {
     return prefix + n.toString(36).slice(-10).padStart(10, '0');
   }
   const findRef = (n, ref) => !ref ? null : ref.type === 'task' ? (n.tasks || []).find(t => t.id === ref.id) : (n.contacts || []).find(x => x.id === ref.id);
-  const refTitle = ref => { const r = findRef(state, ref); return r ? (r.title || r.name || ref.id) : ref.id; };
+  const refTitle = ref => { if (ref && ref.type === 'proposal') { const o = inboxAll().find(x => x.id === ref.id); return 'Inbox item: ' + (o ? o.title || o.id : ref.id); }
+    const r = findRef(state, ref); return r ? (r.title || r.name || ref.id) : ref.id; };
   const isMemberLogin = v => typeof v === 'string' && state.people.some(m => String(m.github || '').toLowerCase() === v.toLowerCase());
   const histAdd = (x, text) => { (x.history = Array.isArray(x.history) ? x.history : []).push({ at: nowIso(), by: inboxMe(), text }); if (x.history.length > 200) x.history.splice(0, x.history.length - 200); };
   function appendUnique(rec, field, values) {   // merge never removes or reorders what is already there
@@ -4801,7 +4816,9 @@ if (typeof window !== 'undefined') (() => {
     const same = r => r && canonJ(norm(r)) === canonJ(norm(u.after));
     if (!same(findRef(fresh, d.result))) { inboxSay('Not undone: the record changed after it was accepted. Later edits are untouched.', true); return false; }
     const ok = await mutate(n => {
-      if (u.created) { const k = d.result.type === 'task' ? 'tasks' : 'contacts'; n[k] = n[k].filter(x => x.id !== d.result.id); return; }
+      if (u.created) { const k = d.result.type === 'task' ? 'tasks' : 'contacts'; n[k] = n[k].filter(x => x.id !== d.result.id);
+        if (k === 'tasks') n.tasks.forEach(t => { if (Array.isArray(t.related) && t.related.some(r => r && r.id === d.result.id)) { t.related = t.related.filter(r => !(r && r.id === d.result.id)); if (!t.related.length) delete t.related; } });   // the accept's similar-card marks go with the card
+        return; }
       const r = findRef(n, d.result); if (r && u.before) { Object.keys(r).forEach(k => { delete r[k]; }); Object.assign(r, clone(u.before)); }
     }, `Undo proposal: ${p.title}`.slice(0, 120), [d.result.id], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta) => {
       const cur = proposalIn(meta, id);
@@ -4919,6 +4936,11 @@ if (typeof window !== 'undefined') (() => {
     if (typeof v === 'object') return JSON.stringify(v);
     return String(v);
   }
+  // Other pending contact touches for the same person on the same source date (separate messages, not duplicates).
+  function sameDayTouches(p, items) {
+    if (p.kind !== 'contact.touch' || !p.target || !(p.source || {}).date) return 0;
+    return items.filter(o => o.id !== p.id && o.kind === 'contact.touch' && o.target && o.target.id === p.target.id && (o.source || {}).date === p.source.date).length;
+  }
   // A stable session queue: new remote proposals append, and only a successful decision refills a slot.
   function todayReview(items) {
     const sec = ui.section({ title: 'To review', count: items.length, icon: 'inbox' }); sec.classList.add('tsec', 'treview');
@@ -4939,7 +4961,10 @@ if (typeof window !== 'undefined') (() => {
       const tags = el('div', 'trow__tags'); tags.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm', tone: 'neutral' }));
       if (p.kind === 'task.update' && p.target) { const target = findRef(state, p.target); tags.append(ui.pill({ text: 'Updates ' + (target && target.num ? '#' + target.num : refTitle(p.target)), size: 'sm', tone: 'info' })); }
       if (otherProposalDuplicates(p).length) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
-      txt.append(tags, el('span', 'trow__title', p.title || '(no title)'), el('span', 'trow__meta muted', [SRC_LABEL[s.kind] || 'Source', s.date || ''].filter(Boolean).join(' · ')));
+      const sameDay = sameDayTouches(p, items);
+      if (sameDay) { const pl = ui.pill({ text: `${sameDay + 1} from this person this day`, size: 'sm', tone: 'info' }); pl.title = 'Different messages from the same person on the same day. Review each one.'; tags.append(pl); }
+      const gist = String((p.change || {}).text || p.reason || '').trim();
+      txt.append(tags, el('span', 'trow__title', p.title || '(no title)'), el('span', 'trow__meta muted', [SRC_LABEL[s.kind] || 'Source', s.date || '', gist.length > 80 ? gist.slice(0, 79) + '…' : gist].filter(Boolean).join(' · ')));
       const acts = el('div', 'trow__acts'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Review: ' + (p.title || p.id));
       const review = ui.button({ label: todayQueue.reviewed.has(p.id) ? 'Hide details' : 'Review', icon: 'arrow-right', variant: 'secondary', size: 'sm', onClick: () => {
         const pos = todayReviewPosition(); if (todayQueue.reviewed.has(p.id)) todayQueue.reviewed.delete(p.id); else todayQueue.reviewed.set(p.id, clone(p)); render(); restoreTodayReviewPosition(pos);
@@ -4990,15 +5015,19 @@ if (typeof window !== 'undefined') (() => {
     });
   }
   function proposalChange(p) {   // rows of field / current / proposed
-    const c = p.change || {}, rec = p.target ? findRef(state, p.target) : null, wrap = el('section', 'prop__changes'), tbl = el('table', 'proptbl');
-    wrap.append(el('h5', null, 'What will change'));
-    const hd = el('tr'); hd.append(el('th', null, 'Field')); if (rec) hd.append(el('th', null, 'Current')); hd.append(el('th', null, 'Proposed'));
+    const c = p.change || {}, adds = proposalPlan(p).adds, rec = p.target && !adds ? findRef(state, p.target) : null, wrap = el('section', 'prop__changes'), tbl = el('table', 'proptbl');
+    const touch = p.kind === 'contact.touch', keys = Object.keys(c).filter(k => !(touch && TECH_FIELDS.includes(k))), label = k => touch ? TOUCH_LABEL[k] || k : k;
+    wrap.append(el('h5', null, adds ? 'What will be added' : 'What will change'));
+    const hd = el('tr'); hd.append(el('th', null, 'Field')); if (rec) hd.append(el('th', null, 'Current')); hd.append(el('th', null, adds ? 'To add' : 'Proposed'));
     const th = el('thead'); th.append(hd); tbl.append(th); const tb = el('tbody');
-    Object.keys(c).forEach(k => { const tr = el('tr'); tr.append(el('th', null, LIST_FIELDS.includes(k) ? 'Add ' + k : k)); if (rec) { const current = el('td'); if (LIST_FIELDS.includes(k)) { current.append(el('span', 'muted', 'Existing entries are kept')); if ((rec[k] || []).length) { const details = el('details', 'prop__context'); details.append(el('summary', null, 'View existing ' + k), el('div', null, fmtVal(rec[k]))); current.append(details); } } else current.textContent = fmtVal(rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k]); tr.append(current); }
-      const td = el('td', null, fmtVal(c[k])); td.dataset.label = LIST_FIELDS.includes(k) ? 'To add' : 'Proposed'; if (rec) tr.children[1].dataset.label = 'Current'; if (rec && !LIST_FIELDS.includes(k) && !sameJson(rec[k], c[k])) td.classList.add('propchanged'); tr.append(td); tb.append(tr); });
+    keys.forEach(k => { const tr = el('tr'); tr.append(el('th', null, LIST_FIELDS.includes(k) ? 'Add ' + k : label(k))); if (rec) { const current = el('td'); if (LIST_FIELDS.includes(k)) { current.append(el('span', 'muted', 'Existing entries are kept')); if ((rec[k] || []).length) { const details = el('details', 'prop__context'); details.append(el('summary', null, 'View existing ' + k), el('div', null, fmtVal(rec[k]))); current.append(details); } } else current.textContent = fmtVal(rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k]); tr.append(current); }
+      const td = el('td', null, k === 'at' && touch && c[k] ? whenText(c[k]) : fmtVal(c[k])); td.dataset.label = LIST_FIELDS.includes(k) || adds ? 'To add' : 'Proposed'; if (rec) tr.children[1].dataset.label = 'Current'; if (rec && !LIST_FIELDS.includes(k) && !sameJson(rec[k], c[k])) td.classList.add('propchanged'); tr.append(td); tb.append(tr); });
     tbl.append(tb);
     if (!Object.keys(c).length) return el('p', 'muted', 'The details of this decided proposal were removed after 30 days.');
-    wrap.append(tbl); return wrap;
+    wrap.append(tbl);
+    const tech = TECH_FIELDS.filter(k => touch && k in c);
+    if (tech.length) { const d = el('details', 'prop__context'); d.append(el('summary', null, 'Message keys (used to skip this email next time)'), el('div', 'muted', tech.map(k => k + ': ' + fmtVal(c[k])).join(' · '))); wrap.append(d); }
+    return wrap;
   }
   const SCALAR_INPUT = { due: 'date', next_due: 'date' };
   function proposalEditForm(p) {
@@ -5046,6 +5075,19 @@ if (typeof window !== 'undefined') (() => {
     if (act === 'accept') inboxSay('Accepted.'); else if (act === 'ignore') inboxSay('Ignored. It will not come back for this source.');
     inboxFocus = next ? next.dataset.id : ''; render();
   }
+  // What Accept does, in plain words: one action, the record it touches, and whether it adds or edits.
+  const TOUCH_LABEL = { text: 'Log entry', channel: 'Channel', at: 'When', next: 'Next step', due: 'Follow-up date', next_due: 'Follow-up date' };
+  const TECH_FIELDS = ['source_id', 'source_message_ids'];
+  function proposalPlan(p) {
+    const c = p.change || {}, r = p.target ? findRef(state, p.target) : null, name = r ? (r.num ? '#' + r.num + ' ' : '') + (r.title || r.name) : refTitle(p.target || {});
+    if (p.kind === 'task.create') return { verb: 'Create task', adds: true, text: 'Accept creates a new task card on the board.' };
+    if (p.kind === 'task.update') return { verb: 'Apply edit', adds: false, text: `Accept edits the task ${name}. Only the fields below change.` };
+    if (p.kind === 'contact.touch') { const fu = c.next || c.due || c.next_due;
+      return { verb: 'Add log entry', adds: true, text: `Accept adds a log entry to ${name} in People (CRM)${fu ? ' and sets the follow-up' : ''}. No task is made and nothing else changes.` }; }
+    if (p.kind === 'person.upsert') return p.target ? { verb: 'Apply edit', adds: false, text: `Accept edits ${name} in People (CRM). Only the fields below change.` }
+      : { verb: 'Add person', adds: true, text: 'Accept adds a new person to People (CRM).' };
+    return { verb: 'Accept', adds: false, text: 'Accept applies these changes to the board.' };
+  }
   function proposalCard(p, options = {}) {
     const art = el('article', 'prop prop--' + p.status); art.tabIndex = 0; art.dataset.id = p.id; const hid = 'prop-' + p.id; art.setAttribute('aria-labelledby', hid);
     const top = el('div', 'prop__top'), t = el('h4', 'prop__title', p.title || '(no title)'); t.id = hid;
@@ -5064,6 +5106,8 @@ if (typeof window !== 'undefined') (() => {
       art.addEventListener('focus', () => { inboxFocus = p.id; });
       return art;
     }
+    const plan = proposalPlan(p);
+    if (p.status === 'pending') art.append(el('p', 'prop__plan', plan.text));
     if (options.today && p.source && /^https?:\/\//i.test(p.source.url || '')) { const source = el('a', 'inbox__srclink', 'Open the source'); source.href = p.source.url; source.target = '_blank'; source.rel = 'noopener noreferrer'; art.append(source); }
     if (p.target) { const r = findRef(state, p.target); const link = ui.button({ label: r ? `View ${p.target.type === 'task' && r.num ? '#' + r.num + ' · ' : ''}${r.title || r.name}` : 'Record no longer on board', variant: 'ghost', size: 'sm', onClick: () => { if (r) p.target.type === 'task' ? openCard(r.id) : openContact(r.id); } }); link.disabled = !r; art.append(link); }
     if (p.reason) art.append(el('p', 'prop__reason', p.reason));
@@ -5071,9 +5115,9 @@ if (typeof window !== 'undefined') (() => {
     const meta = el('dl', 'prop__meta'), add = (k, v) => { meta.append(el('dt', null, k)); const dd = el('dd'); if (v instanceof Node) dd.append(v); else dd.textContent = v; meta.append(dd); };
     const c = p.change || {};
     if (p.kind.startsWith('task.')) { const who = c.owner || (Array.isArray(c.assignees) ? c.assignees.join(', ') : ''); add('Owner', who || (p.kind === 'task.update' && !('owner' in c) && !('assignees' in c) ? 'Unchanged' : 'Unassigned')); add('Due', c.due || (p.kind === 'task.update' && !('due' in c) ? 'Unchanged' : 'No date')); }
-    else add('Follow-up', c.next_due || c.due || (p.target && !('next_due' in c) && !('due' in c) ? 'Unchanged' : 'No date'));
+    else if (p.kind !== 'contact.touch' || c.next_due || c.due) add('Follow-up', c.next_due || c.due || (p.target && !('next_due' in c) && !('due' in c) ? 'Unchanged' : 'No date'));
     if (p.reviewer) add('Reviewer', '@' + p.reviewer);
-    art.append(meta);
+    if (meta.children.length) art.append(meta);
     const flags = el('ul', 'prop__flags');
     otherProposalDuplicates(p).forEach(d => flags.append(el('li', 'propflag', `Looks like: ${refTitle(d)}${d.why ? ' (' + d.why + ')' : ''}`)));
     if (p.previously_ignored) flags.append(el('li', 'propflag', `You ignored this on ${String(p.previously_ignored.at || '').slice(0, 10) || 'an earlier date'} (${p.previously_ignored.proposal}).`));
@@ -5083,7 +5127,7 @@ if (typeof window !== 'undefined') (() => {
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
     const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => options.today ? todayInboxAct(p, act) : inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).length)))) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
-    if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Accept applies these changes to the board. Leave pending if anything needs checking.')); btn('accept', 'Accept', 'secondary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
+    if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Leave pending if anything needs checking.')); btn('accept', plan.verb, 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
     else if (p.status === 'ignored' && p.change) btn('reopen', 'Reopen', 'secondary');
     if (acts.children.length) art.append(acts);

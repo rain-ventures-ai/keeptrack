@@ -115,6 +115,27 @@ class SimilarCli(unittest.TestCase):
         pid = json.loads(self.kt("proposals", "--json").stdout)[0]["id"]
         self.assertEqual([("t_first", "similar title")], [(d["id"], d["why"]) for d in json.loads(self.kt("proposal-show", pid).stdout)["likely_duplicates"]])
 
+    def propose(self, *items):
+        path = os.path.join(self.tmp.name, "p.json")
+        with open(path, "w") as f:
+            json.dump([{"kind": "task.create", "title": t, "source": {"kind": "other", "id": "chat-" + k, "revision": "1"},
+                        "action_key": "ak-" + k, "work_key": "wk-" + k, "reason": "said in a chat", "change": {"title": t}}
+                       for k, t in items], f)
+        self.kt("proposal-add", path)
+        return {p["title"]: p["id"] for p in json.loads(self.kt("proposals", "--json").stdout)}
+
+    def test_undo_of_an_accept_that_found_a_match_works_and_drops_the_marks(self):
+        pid = self.propose(("u", "Call ACME"))["Call ACME"]
+        self.kt("proposal-accept", pid)
+        self.assertEqual(1, len(self.card("#1")["related"]))
+        self.kt("proposal-undo", pid)
+        self.assertNotIn("related", self.card("#1"))
+
+    def test_a_second_inbox_item_for_the_same_work_names_the_first(self):
+        ids = self.propose(("a", "Book the Leeds venue for March"), ("b", "Book the Leeds venue for march!"))
+        dups = json.loads(self.kt("proposal-show", ids["Book the Leeds venue for march!"]).stdout)["likely_duplicates"]
+        self.assertEqual([("proposal", ids["Book the Leeds venue for March"], "similar Inbox item")], [(d["type"], d["id"], d["why"]) for d in dups])
+
     def test_similar_lists_cards_and_pending_items(self):
         self.assertIn("#1 t_first", self.kt("similar", "Call Acme").stdout)
         self.assertIn("no open card", self.kt("similar", "Something else entirely").stdout)

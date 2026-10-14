@@ -1308,6 +1308,7 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .proptbl tbody th { width: 22%; font-weight: 600; }
 .propchanged { background: var(--accent-soft); }
 .prop__approval { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.prop__plan { margin: 8px 0 4px; padding: 8px 12px; border-left: 3px solid var(--accent, #3b6cf6); background: var(--surface-2, rgba(59,108,246,.06)); border-radius: 6px; font-weight: 600; }
 .prop__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 /* kit v44: questions (ask.*) answered in the Inbox and on Today */
 .ask { display: grid; gap: 8px; margin-top: 8px; }

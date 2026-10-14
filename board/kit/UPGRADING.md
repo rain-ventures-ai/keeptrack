@@ -39,6 +39,9 @@ Similar cards: add first, then ask. No data migration.
   whose card was added later shows "Possible duplicate" and offers Merge.
 - Older pages and older `keeptrack.py` keep the `related` field when they save; they do not show it.
 - `doctor` reports a malformed `related` list as `RELATED` (a warning).
+- Pending Inbox items also check each other: a new-task item close to another pending one shows "Possible duplicate".
+  Today rows show a short summary, and "2 from this person this day" when one person sent separate emails on one day.
+  The `keeptrack-email` skill now groups a person's new emails of one day into one proposal.
 - Check: `keeptrack.py kit-check` says v52 and `keeptrack.py doctor` reports no new problems.
 
 ### v51 (schema 4)
