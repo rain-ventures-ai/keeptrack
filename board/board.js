@@ -1576,21 +1576,21 @@ if (typeof window !== 'undefined') (() => {
         if (last) { const cm = el('span', 'mncm'); cm.append(...newsLine(last, last.text)); r.append(cm); }
         if (changes.length) {
           const ch = el('span', 'mncm newschanges');
-          changes.slice().sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 3).forEach(x => ch.append(...newsLine(x, x.text)));
+          changes.slice().sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).slice(0, 3).forEach(x => ch.append(...newsLine(x, x.text)));
           if (changes.length > 3) ch.append(el('span', 'muted', `and ${changes.length - 3} more in the card's history`));
           r.append(ch);
         }
-        r.onclick = () => { newsSheet && newsSheet.close(); openCard(t.id, last ? { comment: cmKey(last) } : undefined); };
+        r.onclick = () => { sh.close(); openCard(t.id, last ? { comment: cmKey(last) } : undefined); };
         list.append(r);
       });
       body.append(list);
       if (rows.length > NEWS_MAX) body.append(el('p', 'muted', `Showing the newest ${NEWS_MAX} of ${rows.length}.`));
     }
     const footer = [];
-    if (rows.length || freshOnly) footer.push(ui.button({ label: freshOnly ? 'Show all cards' : 'Filter the board', icon: 'list', onClick: () => { freshOnly = !freshOnly; newsSheet.close(); render(); } }));
-    if (rows.length) footer.push(ui.button({ label: 'Mark all as read', icon: 'check', variant: 'primary', onClick: () => { markAllSeen(); freshOnly = false; newsSheet.close(); render(); toast('All cards marked as read'); } }));
-    newsSheet = ui.sheet({ title: 'New for you', body, footer, removeOnClose: true, onClose: () => { newsSheet = null; } }).open();
-    newsSheet.el.classList.add('newssheet');
+    if (rows.length || freshOnly) footer.push(ui.button({ label: freshOnly ? 'Show all cards' : 'Filter the board', icon: 'list', onClick: () => { freshOnly = !freshOnly; sh.close(); render(); } }));
+    if (rows.length) footer.push(ui.button({ label: 'Mark all as read', icon: 'check', variant: 'primary', onClick: () => { markAllSeen(); freshOnly = false; sh.close(); render(); toast('All cards marked as read'); } }));
+    const sh = ui.sheet({ title: 'New for you', body, footer, removeOnClose: true, onClose: () => { if (newsSheet === sh) newsSheet = null; } });
+    newsSheet = sh; sh.el.classList.add('newssheet'); sh.open();
   }
 
   function filtered(t) {
