@@ -1884,12 +1884,13 @@ if (typeof window !== 'undefined') (() => {
         const tm = el('time', null, ago2(cm.at)); tm.title = cm.at; row.append(tm); box.append(row); return;
       }
       const row = el('div', 'cmcard' + (mentionsMe(cm.text) ? ' mine' : '')), head = el('div', 'cmhead');
-      row.dataset.cid = cm.id || cm.at;
+      row.dataset.cid = cmKey(cm);
       head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at; if (safeUrl(cm.session_url)) { const a = elI('a', 'cmsess', 'bot', 'Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
       const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
     });
   }
+  function cmKey(c) { return c.id || (c.at || '') + '|' + (c.by || ''); }   // a comment's key in the drawer and in @Mentions (older comments may have no id)
   const openComments = id => openCard(id, 'comments');
   const pendingClaudeClaim = who => ({ agent: 'claude', on_behalf_of: who, session_id: 'pending-' + Date.now().toString(36), session_url: '', host: 'cron-job.org relay', status: 'running', note: `Assigned to Claude by @${who}; waiting for the routine to start (about 1 to 2 minutes)`, claimed_at: nowIso(), heartbeat_at: nowIso() });
   async function triggerClaude(t, who, cid) {
@@ -2421,12 +2422,14 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- @Mentions: every comment that mentions you (@your-login), newest first, with its card and description ----------
   // Your own comments are left out. "New" means posted since you last opened that card. A row opens the card at that comment.
-  function mentionData() {
-    const me = (cfg().me || '').toLowerCase(), seen = loadSeen() || {}, hideDone = $('fHideDone').checked, rows = [];
+  // all: every card, whatever the filters (the Today tile, which shows no filters).
+  function mentionData(all) {
+    const me = (cfg().me || '').toLowerCase(), m = loadSeen(), seen = m || {}, hideDone = !all && $('fHideDone').checked, rows = [];
     if (!me) return rows;
-    state.tasks.filter(t => filtered(t) && !(hideDone && t.column === doneColId())).forEach(t => {
+    const at = '@' + me.replace(/[^\w-]/g, ''), re = new RegExp('(?<![\\w@#&/])' + at + '(?![\\w-])', 'i');   // compiled once: Today runs this on every render
+    state.tasks.filter(t => all || (filtered(t) && !(hideDone && t.column === doneColId()))).forEach(t => {
       const s = seen[t.id] || { c: '' };
-      t.comments.forEach(c => { if (c.type !== 'activity' && String(c.by || '').toLowerCase() !== me && mentionsMe(c.text)) rows.push({ t, c, fresh: !!loadSeen() && c.at > s.c }); });
+      t.comments.forEach(c => { const x = String(c.text || ''); if (c.type !== 'activity' && String(c.by || '').toLowerCase() !== me && x.toLowerCase().includes(at) && re.test(x)) rows.push({ t, c, fresh: !!m && c.at > s.c }); });
     });
     return rows.sort((a, b) => (a.c.at < b.c.at ? 1 : a.c.at > b.c.at ? -1 : 0));
   }
@@ -2442,7 +2445,8 @@ if (typeof window !== 'undefined') (() => {
     if (!rows.length) { wrap.append(ui.empty({ text: 'No comments mention you' + (filterDesc() ? ' with these filters.' : ' yet.'), icon: 'at-sign' })); board.append(wrap); return; }
     const list = el('div', 'mnlist');
     rows.slice(0, MENTIONS_MAX).forEach(({ t, c, fresh }) => {
-      const r = el('button', 'mnrow' + (fresh ? ' fresh' : '')); r.type = 'button'; r.dataset.task = t.id; r.dataset.cid = c.id || c.at;
+      const r = el('button', 'mnrow' + (fresh ? ' fresh' : '')); r.type = 'button'; r.dataset.task = t.id; r.dataset.cid = cmKey(c);
+      r.setAttribute('aria-label', `#${t.num} ${t.title}: ${c.by || 'someone'} mentioned you ${ago2(c.at)}` + (fresh ? ', new' : ''));
       const head = el('span', 'mnhead'); head.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title)); if (fresh) head.append(el('span', 'newb', 'New'));
       head.append(el('span', 'ssub', cardSub(t)));
       r.append(head);
@@ -2450,7 +2454,7 @@ if (typeof window !== 'undefined') (() => {
       const cm = el('span', 'mncm'), who = el('span', 'mnwho'), tm = el('time', null, ago2(c.at)); tm.title = c.at;
       who.append(avatar(String(c.by || '?').replace(/@.*/, '')), el('b', null, c.by || '?'), tm);
       cm.append(who, el('span', 'mnbody', snippet(c.text, 400))); r.append(cm);   // plain text: a link inside the row's button would be a button in a button
-      r.onclick = () => openCard(t.id, { comment: c.id || c.at });
+      r.onclick = () => openCard(t.id, { comment: cmKey(c) });
       list.append(r);
     });
     wrap.append(list);
@@ -5785,7 +5789,7 @@ if (typeof window !== 'undefined') (() => {
     const go = el('div', 'todaygo'), goCard = (ic, title, sub, v) => { const b = el('button', 'tgo'); b.type = 'button'; b.append(svgIcon(ic), el('span', 'tgt', title), el('span', 'tgs', sub), svgIcon('chevron-right')); b.dataset.go = v; b.onclick = () => setView(v); return b; };
     if (hasTasks) { const live = state.tasks.filter(x => x.column !== doneColId()), doing = live.filter(x => x.column === 'in-progress').length;
       go.append(goCard('square-kanban', 'Tasks · Kanban', `${live.length} open` + (doing ? ` · ${doing} in progress` : ''), 'board')); }
-    if (hasTasks && cfg().me) { const ms = mentionData(), nw = ms.filter(r => r.fresh).length; if (ms.length) go.append(goCard('at-sign', '@Mentions', nw ? `${nw} new` : `${ms.length} ${ms.length === 1 ? 'mention' : 'mentions'}`, 'mentions')); }
+    if (hasTasks && cfg().me) { const ms = mentionData(true), nw = ms.filter(r => r.fresh).length; if (ms.length) go.append(goCard('at-sign', '@Mentions', nw ? `${nw} new` : `${ms.length} ${ms.length === 1 ? 'mention' : 'mentions'}`, 'mentions')); }
     if (inboxOn()) go.append(goCard('inbox', 'Review Inbox', toReview.length ? `${toReview.length} to review` : 'Nothing to review', 'inbox'));
     if (hasTasks && prepOthers().length) { const tile = goCard('phone', 'Prep for call', prepWho ? 'Brief for @' + prepWho : 'A brief for a call with a teammate', 'today'); tile.onclick = () => { prepWho = prepWho ? null : (LS.get(prepKey(), '') || prepOthers()[0].github); render(); }; tile.setAttribute('aria-expanded', String(!!prepWho)); go.append(tile); }
     if (hasCrm) go.append(goCard('user', 'People · CRM', peopleDue ? `${peopleDue} to contact today` : `${state.contacts.length} ${state.contacts.length === 1 ? 'person' : 'people'}`, 'people'));

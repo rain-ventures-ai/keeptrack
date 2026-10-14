@@ -905,7 +905,7 @@ header .boardwrap { order: 0; }
 .cmcard.cmflash { animation: cmflash 2.4s ease-out; }
 @keyframes cmflash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .cmcard.cmflash { animation: none; outline: 3px solid var(--accent); } }
-@media (max-width: 420px) { header { column-gap: var(--sp-1); } #viewSw .ui-tab { min-width: 29px !important; padding: var(--sp-2) 2px; } }   /* five views still fit on one row */
+@media (max-width: 420px) { header { column-gap: var(--sp-1); } #viewSw .ui-tab { min-width: 29px !important; padding: var(--sp-2) 2px; } }   /* six task views still fit on one row */
 
 /* settings → checks */
 .cklist { list-style: none; padding: 0; margin: var(--sp-4) 0; display: grid; gap: var(--sp-2); }
