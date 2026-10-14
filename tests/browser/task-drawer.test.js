@@ -289,9 +289,11 @@ async function assertFits(page, where) {
 
     // the ⋯ menu
     await page.locator('#dMore').click();
-    assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Copy link', 'Copy reference #1', 'Create GitHub issue', 'Copy as Markdown', 'Archive task', 'Delete task']);
+    assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Copy link', 'Copy Markdown link [#1]', 'Create GitHub issue', 'Copy as Markdown', 'Archive task', 'Delete task']);
     await shot(page, 'phone-writable-menu');
     await menu.locator('[role=menuitem]', { hasText: 'Copy as Markdown' }).click(); await page.waitForFunction(() => /First/.test(window.__copied));
+    await page.locator('#dMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Copy Markdown link' }).click();
+    await page.waitForFunction(() => /^\[#1\]\(http[^)]*#1\)$/.test(window.__copied));   // kit v56: card numbers go out as links
     await page.locator('#cAgent').click(); await page.waitForFunction(() => /You are working from the Keeptrack board|#1/.test(window.__copied) && !/^#/.test(window.__copied));
 
     // Escape closes the drawer and clears the address; the hash opens it again

@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v56 (schema 4)
+Card numbers are links. No data migration.
+- Run `kit-update` only.
+- `keeptrack.py card-link '#N' ['#M' ...]` prints each card as a Markdown link to the web board with its title
+  (`[#12](<card link>) Title`). `show` prints `link: [#12](...)` after the card's JSON, `add` and `todo-move` end their
+  `added #N` line with the link, and `list --links` ends each line with it. With `--file` and no board repo, the output
+  stays as before.
+- The board and keeptrack skills, the routine prompt, the AGENTS.md template, the README agent protocol and
+  `board/CARDS.md` tell agents to write every card number they name (replies, comments, done notes, PRs, briefs) as
+  `[#N](<card link>)`. Add the same line to the board repo's own AGENTS.md "Task numbers" section if it has one.
+- Web board: a plain `#12` link now has the card's real address (copy, long-press, open in a new tab). A Markdown link
+  `[label](https://...)` in details, comments and history shows as its label; a card link of this board opens the card
+  here. The card menu's "Copy reference #N" is now "Copy Markdown link [#N]", and "Copy as Markdown" links the number.
+- Check: `kit-check` says v56, and `keeptrack.py card-link '#1'` prints a link.
+
 ### v55 (schema 4)
 What a good card is. No data migration.
 - Run `kit-update` only. It adds `board/CARDS.md`.

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v56 — 2026-10-14
+
+Card numbers are links. `keeptrack.py card-link '#N'` prints `[#N](<card link>) Title`; `show` prints the card's
+`link:`, `add` and `todo-move` print it after `added #N`, and `list --links` adds it to each line. The board and
+keeptrack skills, routine prompt, AGENTS.md template, README agent protocol and `board/CARDS.md` tell agents to write
+every card number they name as a Markdown link. Web board: plain `#12` links carry the card's real address, Markdown
+links show as their label (a card of this board opens in place), and the card menu copies `[#N](link)`. No schema
+migration.
+
 ## Kit v55 — 2026-10-14
 
 What a good card is. New `board/CARDS.md` (shipped to every board): the five tests of a good card, a bad card

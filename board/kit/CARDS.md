@@ -130,3 +130,5 @@ Why it is good:
 - When you find a card that fails a test while you work on it, fix the card if it is yours to change, or say so in a
   comment.
 - Keep the card short. Put long content in a document and link it.
+- When you name a card (in a reply, comment, done note, PR, brief or hand-off), write its number as a link:
+  `keeptrack.py card-link '#58'` prints `[#58](<card link>)`. A person can then tap straight to the card.

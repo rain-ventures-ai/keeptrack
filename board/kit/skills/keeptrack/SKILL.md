@@ -68,7 +68,9 @@ A card with only a title is a guess next week. Before you add, change or propose
 short: a plain-words title that says the outcome, details with what, why and what "done" means, to-dos a person can
 tick, and no internal codes a newcomer cannot read. **Every PR, issue, document, file, folder or web page the card
 mentions goes in its links section** (`$B link '#N' <full URL> --title "<what it is>"`) in the same run: a bare "#481"
-in the text is not a link. A private board is the person's own notebook, so be generous with this context. Keep secrets
+in the text is not a link. **Card numbers are links too:** when you name a card in a reply, comment, done note, PR,
+brief or hand-off, write `[#12](<card link>)` (`$B card-link '#12'` prints it; `show` and `add` print it as well), so
+a person can tap straight to the card. A private board is the person's own notebook, so be generous with this context. Keep secrets
 and confidential content out: link to where they live.
 
 ## 2. People and follow-ups (CRM)

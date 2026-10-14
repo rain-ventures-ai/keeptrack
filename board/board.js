@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 55;
+  const PAGE_KIT = 56;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -327,7 +327,25 @@ if (typeof window !== 'undefined') (() => {
   const safeUrl = u => { try { const x = new URL(u); return (x.protocol === 'https:' || x.protocol === 'http:') ? x.href : null; } catch { return null; } };
   const localResource = v => /^(?:file:\/\/|~?\/|\.\.?\/|[A-Za-z]:[\\/]|\\\\)/.test(String(v || '').trim());
 
+  // [label](https://…) Markdown links show as the label (kit v56: agents write card numbers as [#12](card link));
+  // a card link of this board opens the card here, like a plain #12
   function linkify(parent, text) { // build DOM (no innerHTML): plain text plus safe http(s) links
+    String(text || '').split(/(\[[^\]\n]{1,200}\]\(https?:\/\/[^\s<>"()]+\))/g).forEach((chunk, j) => {
+      const md = j % 2 === 1 && /^\[([^\]\n]+)\]\((.+)\)$/.exec(chunk), href = md && safeUrl(md[2]);
+      if (!href) { linkifyPlain(parent, chunk); return; }
+      const n = /^#(\d{1,5})$/.exec(md[1].trim()), t = n && state && state.tasks.find(x => x.num === Number(n[1])), mine = t && boardCardNum(href) === t.num;
+      const a = el('a', mine ? 'mref' : null, md[1]); a.href = href;
+      if (mine) { a.title = t.title; a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      parent.append(a);
+    });
+  }
+  function boardCardNum(href) { // the #N of a card link to this board (any host: a fork or a local copy of the page), else null
+    try { const u = new URL(href), q = u.searchParams, c = cfg(), m = /^#(\d{1,5})$/.exec(u.hash);
+      if (!m || !c.repo || String(q.get('repo') || '').toLowerCase() !== String(c.repo).toLowerCase()) return null;
+      if ((q.get('path') || 'board/tasks.json') !== (c.path || 'board/tasks.json') || (q.get('branch') && c.branch && q.get('branch') !== c.branch)) return null;
+      return Number(m[1]); } catch { return null; }
+  }
+  function linkifyPlain(parent, text) {
     String(text || '').split(/(https?:\/\/[^\s<>"')]+)/g).forEach((part, i) => {
       if (i % 2 === 1 && safeUrl(part)) { const a = el('a', null, part); a.href = safeUrl(part); a.target = '_blank'; a.rel = 'noopener noreferrer'; parent.append(a); }
       else if (part) decorate(parent, part);
@@ -341,7 +359,7 @@ if (typeof window !== 'undefined') (() => {
       if (tok[0] === '@') { const g = tok.slice(1).toLowerCase(), known = state && ((state.people || []).some(p => String(p.github).toLowerCase() === g) || (state.agents || []).some(a => String(a).toLowerCase() === g));
         if (known) { node = el('span', 'mention' + (g === (cfg().me || '').toLowerCase() ? ' me' : ''), tok); } }
       else { const t = state && state.tasks.find(x => x.num === Number(tok.slice(1)));
-        if (t) { node = el('a', 'mref', tok); node.href = '#'; node.title = t.title; node.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } }
+        if (t) { node = el('a', 'mref', tok); node.href = cardUrl(t.num); node.title = t.title; node.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } }
       if (!node) continue;
       if (m.index > last) parent.append(document.createTextNode(text.slice(last, m.index)));
       parent.append(node); last = m.index + tok.length;
@@ -2542,7 +2560,7 @@ if (typeof window !== 'undefined') (() => {
   const mdIndent = s => String(s || '').replace(/\r/g, '').split('\n').join('\n  ');
   const mdLine = s => String(s || '').replace(/\r?\n+/g, ' ');
   function taskMarkdown(t) {
-    const L = [`### #${t.num} ${mdLine(t.title)}`, ''];
+    const L = [`### [#${t.num}](${navigationLink('#' + t.num)}) ${mdLine(t.title)}`, ''];
     const meta = [`**Status:** ${colName(t.column)}`, `**Priority:** ${t.priority || 'medium'}`, t.due && `**Due:** ${t.due}`, t.client && `**Client:** ${t.client}`].filter(Boolean);
     L.push('- ' + meta.join(' · '));
     if (t.assignees.length) L.push('- **Assigned:** ' + t.assignees.map(a => '@' + a).join(', '));
@@ -3546,7 +3564,7 @@ if (typeof window !== 'undefined') (() => {
     const t = taskNow(); if (!t) return; const il = issueLinkOf(t);
     const items = [
       { label: 'Copy link', icon: 'link', onSelect: copyTaskLink },
-      { label: `Copy reference #${t.num}`, icon: 'copy', onSelect: () => copyText('#' + t.num, `Copied #${t.num}`) },
+      { label: `Copy Markdown link [#${t.num}]`, icon: 'copy', onSelect: () => copyText(`[#${t.num}](${navigationLink('#' + t.num)})`, `Copied #${t.num} as a Markdown link`) },
       { label: il ? `Open GitHub issue #${il.n}` : 'Create GitHub issue', icon: 'github', disabled: issueBusy || (!il && !!ro), onSelect: issueAction },
       { label: 'Copy as Markdown', icon: 'clipboard-copy', onSelect: () => { const x = taskNow(); if (x) copyText(taskMarkdown(x), 'Card copied as Markdown'); } }
     ];
