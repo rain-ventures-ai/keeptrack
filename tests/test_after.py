@@ -219,27 +219,33 @@ if (a < 0 || b < a) { console.error('afterRefusal block not found in board.js');
 const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
 const refusal = new Function('afterIds', src.slice(a, b) + '\nreturn afterRefusal;')(afterIds);
 const board = { tasks: [{ id: 't_a', num: 1 }, { id: 't_b', num: 2, after: ['t_a'] }, { id: 't_c', num: 3, after: ['t_b'] }] };
-const up = (id, after) => refusal(board, { kind: 'task.update', target: { type: 'task', id } }, { after });
+const none = new Set(), arch = new Set(['t_old']);
+const up = (id, after, ids = none) => refusal(board, { kind: 'task.update', target: { type: 'task', id } }, { after }, ids);
+const merge = (into, after, fields) => refusal(board, { kind: 'task.create' }, { after }, none, 'merge', { into: { type: 'task', id: into }, fields });
 process.stdout.write(JSON.stringify({
-  ok: up('t_c', ['t_a']), create: refusal(board, { kind: 'task.create' }, { after: ['t_a', 't_c'] }),
-  unknown: up('t_c', ['t_zz']), self: up('t_c', ['t_c']), loop: up('t_a', ['t_c']),
-  noBoard: refusal(null, { kind: 'task.update', target: { id: 't_a' } }, { after: ['t_zz'] }) }));
+  ok: up('t_c', ['t_a']), create: refusal(board, { kind: 'task.create' }, { after: ['t_a', 't_c'] }, none),
+  unknown: up('t_c', ['t_zz']), archived: up('t_c', ['t_old'], arch), notLoaded: up('t_c', ['t_zz'], null),
+  self: up('t_c', ['t_c']), loop: up('t_a', ['t_c']),
+  mergeNoAfter: merge('t_a', ['t_zz'], ['comments']), mergeLoop: merge('t_a', ['t_c'], ['after']),
+  noBoard: refusal(null, { kind: 'task.update', target: { id: 't_a' } }, { after: ['t_zz'] }, none) }));
 """
 
 
 class AfterProposalAcceptInPage(unittest.TestCase):
-    """The web board's Accept refuses after links to an unknown card, the card itself and a loop, like keeptrack.py."""
-    def test_board_js_refuses_unknown_self_and_loop(self):
+    """The web board's Accept refuses after links to a card on neither the board nor its archive, and loops, like
+    keeptrack.py; the card itself is dropped silently, as keeptrack.py does."""
+    def test_board_js_refuses_unknown_and_loop(self):
         if not shutil.which("node"):
             self.skipTest("node is not installed")
         p = subprocess.run(["node", "-e", AFTER_NODE, os.path.join(REPO, "board", "board.js")], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         r = json.loads(p.stdout)
-        self.assertEqual(("", "", ""), (r["ok"], r["create"], r["noBoard"]))
+        for k in ("ok", "create", "archived", "notLoaded", "self", "mergeNoAfter", "noBoard"):
+            self.assertEqual("", r[k], k)
         self.assertIn("t_zz", r["unknown"])
-        self.assertIn("itself", r["self"])
         self.assertIn("loop", r["loop"])
         self.assertIn("#3", r["loop"])
+        self.assertIn("loop", r["mergeLoop"], "a merge that writes after checks the card it merges into")
 
 if __name__ == "__main__":
     unittest.main()

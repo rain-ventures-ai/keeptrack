@@ -2130,7 +2130,7 @@ if (typeof window !== 'undefined') (() => {
   const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
   const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
   function afterLinks(t) {
-    let loaded = null; try { loaded = archived; } catch { loaded = null; }   // declared further down this file
+    let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }   // declared further down this file; a stale copy counts as not loaded
     const arch = new Map(((loaded && loaded.tasks) || []).map(x => [x.item.id, x.item]));
     return afterIds(t).map(id => {
       const live = state.tasks.find(x => x.id === id);
@@ -3018,7 +3018,7 @@ if (typeof window !== 'undefined') (() => {
   // keeptrack.py task-set --after (or a front door); the page shows the links and never moves a card because of them.
   function renderAfter(t) {
     const box = $('cAfter'); if (!box) return; box.textContent = ''; const links = afterLinks(t); box.hidden = !links.length; if (!links.length) return;
-    let loaded = null; try { loaded = archived; } catch { loaded = null; }
+    let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }
     if (links.some(x => !x.live) && !loaded && archYears().length) loadArchived().then(() => { if (editing === t.id) renderAfter(state.tasks.find(x => x.id === t.id) || t); }).catch(() => {});   // an archived Done card counts as done
     const open = links.filter(x => x.state !== 'done');
     box.append(elI('span', 'dafter__label', 'arrow-right', open.length ? 'Runs after' : 'Runs after (all done: ready to approve)'));
@@ -4665,22 +4665,25 @@ if (typeof window !== 'undefined') (() => {
     while (stack.length) { const [cur, path] = stack.pop(); if (cur === tid) return path; if (seen.has(cur)) continue; seen.add(cur); afterIds(byId.get(cur)).forEach(x => stack.push([x, path.concat(x)])); }
     return null;
   }
-  // change.after on a task proposal: every id a card on the board, never the card itself, and no loop (keeptrack.py resolve_after
-  // checked them at propose time; the board may have changed since, and a proposal file can be written by hand).
-  function afterRefusal(board, p, change) {
+  // change.after on a task proposal: every id a card on the board or in its archive, and no loop (keeptrack.py resolve_after
+  // checked them at propose time; the board may have changed since, and a proposal file can be written by hand). The card itself
+  // is dropped silently, as keeptrack.py does. archIds: the archive's card ids, or null when the archive is not loaded (an id
+  // off the board is then not refused: it may be archived). A merge checks only when it writes after, into ctx.into.
+  function afterRefusal(board, p, change, archIds, action, ctx) {
     if (!board || !String(p.kind || '').startsWith('task.') || !Array.isArray(change.after)) return '';   // no board: the shape checks only
-    const tid = p.kind === 'task.update' && p.target ? p.target.id : null, live = new Set((board.tasks || []).map(t => t.id));
-    const unknown = change.after.filter(x => !live.has(x)); if (unknown.length) return `change.after names ${unknown.join(', ')}, which is not a card on the board`;
-    if (tid && change.after.includes(tid)) return 'change.after names the card itself';
-    const loop = tid ? afterCycle(board, tid, change.after) : null; if (loop) return `change.after would make a loop (${loop.map(i => { const x = (board.tasks || []).find(t => t.id === i); return x && x.num != null ? '#' + x.num : i; }).join(' -> ')} -> back to this card)`;
+    if (action === 'merge' && !(ctx && (ctx.fields || []).includes('after') && ctx.into && ctx.into.type === 'task')) return '';
+    const tid = action === 'merge' ? ctx.into.id : p.kind === 'task.update' && p.target ? p.target.id : null, live = new Set((board.tasks || []).map(t => t.id));
+    const ids = change.after.filter(x => x !== tid);
+    const unknown = archIds ? ids.filter(x => !live.has(x) && !archIds.has(x)) : []; if (unknown.length) return `change.after names ${unknown.join(', ')}, which is not a card on the board or in its archive`;
+    const loop = tid ? afterCycle(board, tid, ids) : null; if (loop) return `change.after would make a loop (${loop.map(i => { const x = (board.tasks || []).find(t => t.id === i); return x && x.num != null ? '#' + x.num : i; }).join(' -> ')} -> back to this card)`;
     return '';
   }
-  function proposalRefusal(p, change, board) {   // '' when the proposal may be applied, else why not; board: the model it goes into
+  function proposalRefusal(p, change, board, action, ctx) {   // '' when the proposal may be applied, else why not; board: the model it goes into
     const kind = String(p.kind || ''); if (!PROPOSAL_KINDS.includes(kind)) return `Not saved: unknown proposal kind ${JSON.stringify(kind)}.`;
     if (!isObj(change) || !Object.keys(change).length) return 'Not saved: the proposal has no valid change.';
     const ok = CHANGE_FIELDS[kind.startsWith('task.') ? 'task' : kind === 'person.upsert' ? 'person' : 'touch'], bad = Object.keys(change).filter(k => !ok.includes(k));
     if (bad.length) return `Not saved: a ${kind} proposal may not set ${bad.join(', ')}. Ignore it, or fix the proposal file.`;
-    const why = changeValueRefusal(change, kind) || afterRefusal(board, p, change);
+    const why = changeValueRefusal(change, kind) || afterRefusal(board, p, change, board ? archIdsNow(board) : null, action, ctx);
     return why ? `Not saved: ${why}. Ignore it, or fix the proposal file.` : '';
   }
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
@@ -4752,7 +4755,7 @@ if (typeof window !== 'undefined') (() => {
   // The change a decision makes to the board model n. ctx: { resultId, into, fields }.
   function applyProposal(n, p, action, change, ctx) {
     if (action === 'ignore') return;
-    { const why = proposalRefusal(p, change, n); if (why) throw new Error(why); }   // decideProposal refuses first; this is the last guard
+    { const why = proposalRefusal(p, change, n, action, ctx); if (why) throw new Error(why); }   // decideProposal refuses first; this is the last guard
     const ts = nowIso();
     if (action === 'merge') {
       const rec = findRef(n, ctx.into); if (!rec) return;
@@ -4760,6 +4763,7 @@ if (typeof window !== 'undefined') (() => {
         if (LIST_FIELDS.includes(k) && Array.isArray(v)) appendUnique(rec, k, v);
         else if (!ctx.fields.includes(k)) return;
         else if (k === 'owner') { if (ctx.into.type === 'task' && isMemberLogin(v)) rec.assignees = [v]; }
+        else if (k === 'after' && ctx.into.type === 'task') { const a = [...new Set(v.filter(x => x !== rec.id))]; if (a.length) rec.after = a; else delete rec.after; }   // never itself
         else if (k === 'due' && ctx.into.type === 'person') rec.next_due = clone(v);
         else rec[k] = clone(v);
       });
@@ -4846,7 +4850,8 @@ if (typeof window !== 'undefined') (() => {
       todayQueue.reviewed.delete(id); await load(true); inboxSay('Not saved: this proposal changed. Expand Review again to read the latest evidence.', true); return false;
     }
     const fresh = normalise(got.data), change = clone(opts.change || p.change || {});
-    if (action !== 'ignore') { const why = proposalRefusal(p, change, state); if (why) { inboxSay(why, true); return false; } }
+    if (action !== 'ignore' && Array.isArray(change.after) && change.after.some(x => !fresh.tasks.some(t => t.id === x)) && !archIdsNow(fresh)) { try { await loadArchived(); } catch { /* not loaded: an off-board id is not refused */ } }
+    if (action !== 'ignore') { const why = proposalRefusal(p, change, fresh, action, opts.into ? { into: opts.into, fields: opts.fields || [] } : null); if (why) { inboxSay(why, true); return false; } }
     const edited = opts.change ? Object.fromEntries(Object.entries(opts.change).filter(([k, v]) => !sameJson((p.change || {})[k], v))) : null;
     let expect = {}, note = '';
     if (action !== 'ignore' && p.target) {
@@ -6213,6 +6218,12 @@ if (typeof window !== 'undefined') (() => {
     const res = await gh('PUT', { message, content: b64e(JSON.stringify(data, null, 2) + '\n'), branch: cfg().branch, ...(sha ? { sha } : {}) }, false, { path: archPath(y) });
     if (!res.ok) return false; const out = await res.json(); archMem[archKey(y)] = { data, sha: out.content.sha, etag: null }; return true;
   }
+  // the archive's card ids when the loaded copy is current, an empty set when the board has no archive, else null (not loaded)
+  function archIdsNow(board) {
+    const files = (board.archive || {}).files || {}; if (!Object.keys(files).length) return new Set();
+    return archived && archivedSig === JSON.stringify(files) ? new Set(archived.tasks.map(x => x.item.id)) : null;
+  }
+  const archFresh = () => !!archived && archivedSig === JSON.stringify((state.archive || {}).files || {});
   let archived = null, archivedSig = '';   // { tasks: [{ item, year }], contacts: [...] } once loaded; items still on the board are left out
   async function loadArchived() {
     const sig = JSON.stringify((state.archive || {}).files || {}); if (archived && archivedSig === sig) return archived;
