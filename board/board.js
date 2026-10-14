@@ -183,7 +183,7 @@ if (typeof window !== 'undefined') (() => {
   const boardContext = () => localBoardJson('context');
   function saveBoardContext(patch) { if (SANDBOX || !cfg().repo) return; saveLocalBoardJson('context', { ...boardContext(), ...patch, at: nowIso() }); }
   // ---- move settings between browsers/devices: one pasteable code or a setup link (token included) --------------
-  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity', 'mentions'] } };
+  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'mentions', 'list', 'cal', 'sched', 'activity'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
   const XFER_SECRETS = ['token', 'claude_token', 'cron_key'];   // left out of a code unless the person ticks "Include tokens and keys"
@@ -2085,9 +2085,9 @@ if (typeof window !== 'undefined') (() => {
   const VIEW_GROUPS = [
     { grp: 'today', label: 'Today', views: [{ value: 'today', icon: 'alarm-clock', label: 'Today', title: 'Today: people to contact and tasks due' }] },
     { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people by stage' }] },
-    { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'list', icon: 'list', label: 'List', title: 'List' },
-      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' },
-      { value: 'mentions', icon: 'at-sign', label: '@Mentions', title: '@Mentions: comments that mention you' }] }
+    { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'mentions', icon: 'at-sign', label: '@Mentions', title: '@Mentions: comments that mention you' },
+      { value: 'list', icon: 'list', label: 'List', title: 'List' },
+      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' }] }
   ];
   const tagViews = (tl, views) => { tl.querySelectorAll('.ui-tab').forEach((b, i) => { b.dataset.view = b.dataset.value; if (views[i].primary) b.classList.add('viewprimary'); }); return tl; };
   const viewTabs = {};   // group -> its ui.tabs in #viewSw
@@ -2138,7 +2138,7 @@ if (typeof window !== 'undefined') (() => {
       tasks && { title: 'Kanban: your tasks', text: 'Each card is a task. It moves through the columns from To do to Done: drag it, or change its status inside the card. This card opens the board.', view: 'today', at: ['.tgo[data-go="board"]'] },
       crm && { title: 'People: your CRM', text: 'Everyone you work with, each with a next step and a date. Log messages and calls in a person\'s card. Pipeline shows people by stage.', view: 'today', at: ['.tgo[data-go="people"]'] },
       dock ? { title: 'The bar at the bottom', text: 'It goes everywhere: Today, Tasks and People. In Tasks and People, the strip at the top switches between views such as Kanban, List, Calendar or Pipeline.', at: ['#dock'] }
-        : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, List, Calendar, Schedule, Activity and @Mentions here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
+        : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, @Mentions, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
       { title: 'Find anything', text: 'Search people, tasks, notes and messages. On a computer, press / from anywhere.', at: [dock ? '#dock [data-head-action="btnSearch"]' : '#btnSearch'] },
       { title: 'Filters', text: 'Show one client, one person, or only what needs attention. The number shows how many filters are on.', at: ['#btnFilter'] },
       { title: 'Undo', text: dock ? 'After a change, tap Undo in the message. You can also use Menu \u2192 Undo last change.' : 'After every change, a message with Undo appears for a few seconds. The Undo button and Ctrl+Z (\u2318Z on a Mac) work too.', at: [dock ? '#dockMenu' : '#btnUndo'] },
@@ -4795,7 +4795,7 @@ if (typeof window !== 'undefined') (() => {
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
-  const CRM_VIEWS = ['people', 'pipeline'], TASK_VIEWS = ['board', 'list', 'cal', 'sched', 'activity', 'mentions'];
+  const CRM_VIEWS = ['people', 'pipeline'], TASK_VIEWS = ['board', 'mentions', 'list', 'cal', 'sched', 'activity'];
   function syncModeSettings() {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');

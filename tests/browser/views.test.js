@@ -64,6 +64,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       assert.equal(await page.locator('#panelBoard').isVisible(), true);
       await page.locator('#sClose').click();
       await page.locator('#dlgSettings').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => location.hash === '#view=today');   // closing takes a history step back: let it land, or it undoes #help
       await page.evaluate(() => { location.hash = 'help'; });
       await page.locator('#dlgHelp').waitFor({ state: 'visible' });
       await page.locator('#hClose').click();
@@ -200,10 +201,10 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       assert.equal(await page.locator('#viewSw [role="tablist"].viewgroup').count(), 3, 'three header view groups, each a tablist');
       assert.equal(await page.locator('#viewSw [aria-selected="true"]').count(), 1, 'one selected view');
       await page.locator('#viewSw [data-view="board"]').focus(); await page.keyboard.press('ArrowRight');
-      await page.waitForFunction(() => document.body.dataset.view === 'list');
-      assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'list', 'focus moves with the selection');
-      assert.equal(await page.locator('#viewSw [data-view="list"]').getAttribute('aria-selected'), 'true');
-      await page.keyboard.press('End'); await page.waitForFunction(() => document.body.dataset.view === 'mentions');
+      await page.waitForFunction(() => document.body.dataset.view === 'mentions');
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'mentions', 'focus moves with the selection');
+      assert.equal(await page.locator('#viewSw [data-view="mentions"]').getAttribute('aria-selected'), 'true');
+      await page.keyboard.press('End'); await page.waitForFunction(() => document.body.dataset.view === 'activity');
       await page.keyboard.press('Home'); await page.waitForFunction(() => document.body.dataset.view === 'board');
       assert.equal(await page.locator('#viewSw [data-view="people"]').getAttribute('tabindex'), '0', 'a group with nothing selected keeps its first tab reachable');
       // Activity range: arrow keys re-render the view and the focus stays on the range
@@ -216,7 +217,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await page.locator('#tabConn').focus(); await page.keyboard.press('ArrowLeft'); assert.equal(await page.locator('#panelBoard').isVisible(), true, 'arrow keys switch settings sections');
       await page.done();
       const phone = await open(browser, { view: 'board', viewport: PHONE, layout: 'dock' });
-      assert.deepEqual(await phone.locator('#subnav [role="tab"]').allTextContents(), ['Kanban', 'List', 'Calendar', 'Schedule', 'Activity', '@Mentions']);
+      assert.deepEqual(await phone.locator('#subnav [role="tab"]').allTextContents(), ['Kanban', '@Mentions', 'List', 'Calendar', 'Schedule', 'Activity']);
       const cols = phone.locator('#tabs [role="tab"]'); assert(await cols.count() >= 2, 'column tabs');
       await cols.first().click(); await cols.first().focus(); await phone.keyboard.press('ArrowRight');
       const second = await cols.nth(1).getAttribute('data-value');
