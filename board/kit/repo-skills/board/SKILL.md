@@ -98,6 +98,11 @@ python3 board/keeptrack.py add "Title" --assign <user> --label <label> --due YYY
 ```
 `--client` is optional; leave it out for tasks that are not about a client.
 
+Write the card for a person who was not there: read `board/CARDS.md` (the five tests of a good card, with a bad and a
+good example) before you add, change or propose one. Every PR, issue, document, file, folder or web page the card
+mentions goes in its links section, with a title, in the same run: `python3 board/keeptrack.py link <id> <full URL>
+--title "<what it is>"`. A bare "#2296" in the text is not a link.
+
 To change a task after it exists (title, details, priority, due, labels, client, project, links) use `task-set` and
 `unlink`. To change the board's labels, clients, members or settings, use the `board-admin` skill. Never edit JSON.
 

@@ -29,6 +29,7 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | Label a card / take it off | `task-set '#12' --label relay --unlabel call` (a new label is created grey) |
 | Retitle, details, priority, due | `task-set '#12' --title ".." --details ".." --priority high --due 2026-11-01` (`--due ""` clears) |
 | Card's client or project | `task-set '#12' --client "Acme" --project "Rollout"` (project by name, id or prefix; stored as its id) |
+| Add a link (PR, issue, document, folder, web page) | `link '#12' <full URL> --title "<what it is>"` |
 | Remove a link | `unlink '#12' <url or title>` |
 | Remove a project or client link | `project-unlink "Rollout" <url or title>`, `client-unlink "Acme" <url or title>` |
 | Rename a client everywhere | `client-rename "Acme" "Acme Ltd"` (tasks, projects, people's company, client info) |
@@ -60,4 +61,6 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
   zone). CRM people (`person-add`) are separate, optional records; turning the CRM off never touches a member.
 - Renames reach archived items too (`archive/<year>.json` is rewritten in the same save). A client's working folder (for example `clients/<name>/` in the repo) is not renamed: say so.
 - Columns can't be changed from the CLI yet; tell the person and leave them as they are.
+- When you retitle or rewrite a card, follow `board/CARDS.md` (the five tests of a good card). If the card mentions a
+  PR, issue, document or page that is not in its links, add it with `link` in the same run.
 - After a structural change, run `python3 board/keeptrack.py doctor` and report anything it finds.

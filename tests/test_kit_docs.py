@@ -70,5 +70,27 @@ class Templates(unittest.TestCase):
         self.assertRegex(TEMPLATE, r"never `unwait` a wait you did not set")
 
 
+class GoodCards(unittest.TestCase):
+    # board/CARDS.md says what a good card is; every skill that writes cards points at it, and it ships to boards
+    def test_guide_ships_to_every_board(self):
+        import json
+        with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["files"].get("board/CARDS.md"), "CARDS.md")
+
+    def test_guide_has_the_links_rule_and_both_examples(self):
+        text = read("CARDS.md")
+        for part in ("## Example: a bad card", "## Example: the same card, written well", "links section",
+                     "is not a link"):
+            self.assertIn(part, text)
+
+    def test_card_writing_skills_point_at_the_guide(self):
+        for path in (("repo-skills", "board", "SKILL.md"), ("repo-skills", "board-admin", "SKILL.md"),
+                     ("skills", "keeptrack", "SKILL.md"), ("skills", "keeptrack-notes", "SKILL.md"),
+                     ("skills", "onboard-keeptrack", "SKILL.md"),
+                     ("skills", "onboard-keeptrack", "references", "tasks.md"),
+                     ("routine-prompt.md",), ("templates", "AGENTS.md")):
+            self.assertIn("CARDS.md", read(*path), "/".join(path))
+
+
 if __name__ == "__main__":
     unittest.main()

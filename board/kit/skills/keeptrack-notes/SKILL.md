@@ -66,6 +66,9 @@ Propose the smallest useful set of changes:
 - **New people:** add an attendee only when their identity is clear and they are useful to track; name is mandatory and
   other fields are optional.
 - **Source:** retain a link to the original notes or recording when one exists. Keep the source file where it already is.
+- **Card quality:** a new or changed task must pass the five tests in `CARDS.md` (next to `keeptrack.py`;
+  `board/CARDS.md` in a board repo): a plain-words title, what, why and what "done" means, steps a person can tick, and
+  every PR, document or page it mentions in its `links`, not only named in the text.
 
 Assign work only to matching board users. When a named owner is not a board user, leave the task unassigned and put the
 owner's name in concise details; do not create a board user or guess an assignee. If People mode is enabled and that

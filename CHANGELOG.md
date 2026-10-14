@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v55 — 2026-10-14
+
+What a good card is. New `board/CARDS.md` (shipped to every board): the five tests of a good card, a bad card
+and the same card written well, and how to put every PR, issue, document, folder and web page a card mentions in its
+links section. The board, board-admin, keeptrack, keeptrack-notes and onboard-keeptrack skills, the routine prompt,
+the AGENTS.md template, the README agent protocol and `docs/help/tasks.md` point at it. No schema migration.
+
 Web board: search puts a numbered card first. Type `26` or `#26` and card #26 is the top result, then cards whose
 number starts with 26, then the other matches. No schema migration.
 

@@ -1,5 +1,5 @@
 {
-  "version": 54,
+  "version": 55,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -8,6 +8,7 @@
     "board/ROUTINES.md": "ROUTINES.md",
     "board/keeptrack.py": "keeptrack.py",
     "board/README.md": "README.md",
+    "board/CARDS.md": "CARDS.md",
     "board/UPGRADING.md": "UPGRADING.md",
     "board/ROUTINE-SETUP.md": "ROUTINE-SETUP.md",
     "board/routine-loader.txt": "routine-loader.txt",

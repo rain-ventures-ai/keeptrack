@@ -63,9 +63,13 @@ update it with `member-set` (no need to ask for an address they just gave you; n
 Read due times and "tomorrow" in that time zone.
 
 ### Write cards someone can act on later
-A card with only a title is a guess next week. When you add or work a card, put in what it is, why, the next step, who
-is involved and links to the files, threads and PRs (`--details`, `link`, `comment`). A private board is the person's
-own notebook, so be generous with this context. Keep secrets and confidential content out: link to where they live.
+A card with only a title is a guess next week. Before you add, change or propose a card, read `CARDS.md` (next to
+`keeptrack.py`; `board/CARDS.md` in a board repo): the five tests of a good card, with a bad and a good example. In
+short: a plain-words title that says the outcome, details with what, why and what "done" means, to-dos a person can
+tick, and no internal codes a newcomer cannot read. **Every PR, issue, document, file, folder or web page the card
+mentions goes in its links section** (`$B link '#N' <full URL> --title "<what it is>"`) in the same run: a bare "#2296"
+in the text is not a link. A private board is the person's own notebook, so be generous with this context. Keep secrets
+and confidential content out: link to where they live.
 
 ## 2. People and follow-ups (CRM)
 A person has a stage (by default New, Contacted, Talking, Proposal, Won, Lost), a next step with a date, and a contact log.

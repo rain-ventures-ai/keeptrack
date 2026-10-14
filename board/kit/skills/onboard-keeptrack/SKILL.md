@@ -50,7 +50,8 @@ For each place the person named, read the matching file in `references/sources/`
 ### 3. Propose
 Write `onboarding/staging.json` (format: `references/staging-format.md`) and `onboarding/plan.md`, which a person can read:
 - the named clients first, then extra candidates with their evidence;
-- the tasks that move (`references/tasks.md`);
+- the tasks that move (`references/tasks.md`), each written to pass the good-card tests in `CARDS.md` (next to
+  `keeptrack.py`; `board/CARDS.md` in a board repo), with every document, PR or page it mentions in its `links`;
 - the folder link for each company (`references/folders.md`);
 - what you leave out, and why.
 Run `$B import onboarding/staging.json --dry-run` and show its summary. Ask: "Shall I import this? You can change any line, or say 'all fine'." Wait for the answer.
