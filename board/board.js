@@ -6406,7 +6406,7 @@ if (typeof window !== 'undefined') (() => {
   let msIndex = null, msFor = null; const MS_MATCH = { prefix: true, fuzzy: 0.2, combineWith: 'AND' };   // word starts and small typos
   const commentText = x => (x.comments || []).map(c => c.text || '').join('\n');
   function searchDocs(withArch) {
-    const docs = [], task = (t, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 't:' + t.id, kind: 'task', ref: t.id, year: y || '', title: t.title || '', who: (t.assignees || []).join(' '), client: t.client || '',
+    const docs = [], task = (t, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 't:' + t.id, kind: 'task', ref: t.id, year: y || '', num: t.num ? String(t.num) : '', title: t.title || '', who: (t.assignees || []).join(' '), client: t.client || '',
       text: [t.details, (t.todos || []).map(x => x.text).join('\n'), commentText(t), (t.links || []).map(l => l.title || l.url).join(' '), t.num ? '#' + t.num : ''].join('\n'), sub: [t.num ? '#' + t.num : '', colName(t.column), t.client, t.due ? 'due ' + fmtDue(t.due) : ''].filter(Boolean).join(' · ') });
     const person = (p, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 'p:' + p.id, kind: 'person', ref: p.id, year: y || '', title: p.name || '', who: [p.role, p.email, p.phone, p.source].filter(Boolean).join(' '), client: p.company || '',
       text: [p.notes, p.next, commentText(p), (p.links || []).map(l => l.title || l.url).join(' ')].join('\n'), sub: [p.role, p.company, p.stage, p.next ? 'next: ' + p.next : ''].filter(Boolean).join(' · ') });
@@ -6439,7 +6439,7 @@ if (typeof window !== 'undefined') (() => {
     const q = $('qQ').value.trim(), withArch = $('qArch').checked, res = $('qRes'); let info = '';
     if (withArch && !archived && archYears().length) { $('qInfo').textContent = 'Loading the archive…'; try { await loadArchived(); } catch (e) { info = 'Could not load the archive: ' + (e.message || e); } }
     let MS; try { MS = await loadMs(); } catch (e) { $('qInfo').textContent = e.message; return; }
-    const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, ...MS_MATCH } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
+    const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'num', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, ...MS_MATCH } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
     res.textContent = '';
     // Views are part of search: an empty box lists them all ("Go to"), and typing "cal" offers Calendar first
     const ql = q.toLowerCase(), goes = VIEW_GROUPS.filter(g => !viewTabs[g.grp].hidden).flatMap(g => g.views).filter(v => !ql || v.label.toLowerCase().startsWith(ql));
@@ -6452,7 +6452,9 @@ if (typeof window !== 'undefined') (() => {
         button.append(elI('span', 'qic', action.icon), el('span', 'qt', action.label));
         button.onclick = () => { $('dlgSearch').close(); action.run(); }; res.append(button); }); }
     if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} people and tasks` + (matchMedia('(pointer: fine)').matches ? ' · press / anywhere to search' : ''); if (res.firstElementChild) res.querySelector('.qhit').classList.add('first'); return; }
-    const hits = msIndex.search(q).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
+    // A number ("26" or "#26") puts that card first, then cards whose number starts with it, then the other hits (sort is stable)
+    const numQ = (q.match(/^#?(\d+)$/) || [])[1], numRank = h => !numQ || !h.num ? 2 : h.num === numQ ? 0 : h.num.startsWith(numQ) ? 1 : 2;
+    const hits = msIndex.search(q).sort((a, b) => numRank(a) - numRank(b)).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
     $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
     hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
       b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
