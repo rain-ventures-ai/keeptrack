@@ -57,7 +57,46 @@ function keyBetween(a, b) {
 }
 // File text, byte-identical to keeptrack.py json.dumps(indent=2, ensure_ascii=False) + "\n" for board data (strings, integers, booleans, null).
 const jsonText = o => JSON.stringify(o, null, 2) + '\n';
-if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText };
+// Similar cards (kit v52): the same scoring as keeptrack.py similar_score. Outside the browser closure so the
+// Python parity test (tests/test_similar_parity.py, tests/fixtures/similar-cases.json) can load it in Node.
+const SIMILAR_STOP = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'to', 'for', 'in', 'on', 'with', 'by', 'at', 'from', 'is']);
+const SIMILAR_DUPLICATE = 0.8, SIMILAR_RELATED = 0.7, SIMILAR_MAX = 3;
+function similarWords(text) { return (String(text == null ? '' : text).toLowerCase().match(/[a-z0-9]+/g) || []).filter(w => !SIMILAR_STOP.has(w)); }
+function similarScore(a, b) {
+  const wa = similarWords(a), wb = similarWords(b); if (!wa.length || !wb.length) return 0;
+  const ja = wa.join(' '), jb = wb.join(' '), pairs = s => { const o = new Set(); for (let i = 0; i < s.length - 1; i++) o.add(s.slice(i, i + 2)); return o; };
+  const pa = pairs(ja), pb = pairs(jb); let both = 0; pa.forEach(x => { if (pb.has(x)) both++; });
+  const dice = pa.size && pb.size ? 2 * both / (pa.size + pb.size) : (ja === jb ? 1 : 0);
+  const sa = new Set(wa), sb = new Set(wb); let inter = 0; sa.forEach(x => { if (sb.has(x)) inter++; });
+  const shared = Math.min(sa.size, sb.size) >= 3 ? inter / (sa.size + sb.size - inter) : 0;
+  return Math.max(dice, shared);
+}
+const similarNorm = v => String(v == null ? '' : v).toLowerCase().split(/\s+/).filter(Boolean).join(' ');
+function similarNumbers(text) { return new Set(similarWords(text).filter(w => /\d/.test(w))); }
+function similarKind(score, same, a, b) {   // titles with different numbers ("kit v36", "kit v37") are never duplicates
+  const na = similarNumbers(a), nb = similarNumbers(b), differ = na.size && nb.size && (na.size !== nb.size || [...na].some(x => !nb.has(x)));
+  if (score >= SIMILAR_DUPLICATE && !differ) return 'duplicate';
+  if (score >= SIMILAR_RELATED && same) return 'addition';
+  return null;
+}
+function similarScope(client, project, b) {   // null: a different client or project (never matched); else true when they share one
+  for (const [mine, theirs] of [[client, b.client], [project, b.project]]) if (mine && theirs && similarNorm(mine) !== similarNorm(theirs)) return null;
+  return !!((client && similarNorm(client) === similarNorm(b.client)) || (project && project === b.project));
+}
+// Open cards close to a title, closest first: [{ id, num, title, score, kind }]. skip: a card id left out, with the cards it already relates to.
+function similarMatches(d, title, client, project, skip, doneCol = 'done') {
+  const skipIds = new Set(skip ? [skip] : []), me = skip && (d.tasks || []).find(t => t.id === skip);
+  ((me && me.related) || []).forEach(r => r && skipIds.add(r.id));
+  const hits = [];
+  (d.tasks || []).forEach(t => {
+    if (!t || skipIds.has(t.id) || t.column === doneCol) return;
+    const same = similarScope(client, project, t); if (same === null) return;
+    const score = similarScore(title, t.title), kind = similarKind(score, same, title, t.title);
+    if (kind) hits.push({ id: t.id, num: t.num, title: t.title || '', score, kind });
+  });
+  return hits.sort((x, y) => y.score - x.score || (x.num || 0) - (y.num || 0));
+}
+if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText, similarScore, similarKind, similarScope, similarMatches };
 
 // A page and a board.js from different deploys (GitHub Pages and browsers cache index.html for ~10 minutes) never wire up:
 // refresh the cached page and reload once, and if the server still has the other version, say so. index.html has the same
@@ -198,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 51;
+  const PAGE_KIT = 52;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -867,6 +906,7 @@ if (typeof window !== 'undefined') (() => {
       if ((p.client || '') !== (t.client || '')) add('client: ' + (t.client || 'none'));
       if ((p.project || '') !== (t.project || '')) add('project: ' + (p.project || 'none'));
       if ((p.details || '') !== (t.details || '')) add('edited the description');
+      (Array.isArray(t.related) ? t.related : []).forEach(r => { const o = relationOf(p, r && r.id); if (r && r.id && (!o || o.status !== r.status)) add(`${r.status} ${r.kind || 'related'}: ${r.id}`); });
       JSON.stringify(p.labels) !== JSON.stringify(t.labels) && add('labels: ' + (t.labels.join(', ') || 'none'));
       t.links.filter(l => !p.links.some(x => x.url === l.url)).forEach(l => add('added link: ' + (l.title || l.url)));
       p.links.filter(l => !t.links.some(x => x.url === l.url)).forEach(l => add('removed link: ' + (l.title || l.url)));
@@ -1081,6 +1121,23 @@ if (typeof window !== 'undefined') (() => {
   const uid = () => boardId('t_');
   const me = () => cfg().me;
   const stamp = t => { t.updated = nowIso(); if (me()) t.updatedBy = me(); };
+  // related cards (kit v52): one item per other card on BOTH cards, keyed by its id, so saves merge like keeptrack.py set_relation
+  const relationOf = (t, id) => (Array.isArray(t.related) ? t.related : []).find(r => r && r.id === id);
+  function setRelation(n, aId, bId, kind, status, score) {
+    const a = n.tasks.find(x => x.id === aId), b = n.tasks.find(x => x.id === bId); if (!a || !b || a === b) return false;
+    [[a, b], [b, a]].forEach(([x, y]) => {
+      if (!Array.isArray(x.related)) x.related = [];
+      let r = relationOf(x, y.id); if (!r) { r = { id: y.id }; x.related.push(r); }
+      Object.assign(r, { kind, status, by: me() || 'someone', at: nowIso() }); if (score != null) r.score = Math.round(score * 100) / 100;
+      stamp(x);
+    });
+    return true;
+  }
+  // after a card is added: mark close open cards as possibly related (never stops the add); returns the matches
+  function markSimilar(n, t) {
+    const hits = similarMatches(n, t.title, t.client || '', t.project || '', t.id, doneColId()).slice(0, SIMILAR_MAX);
+    hits.forEach(h => setRelation(n, t.id, h.id, h.kind, 'possible', h.score)); return hits;
+  }
   function ensureRanks(d) {
     // Once board-wide ordering exists, newly created tasks join its end; status changes never change it.
     if (d.tasks.some(t => validRank(t.priority_rank))) ensurePriorityRanks(d);
@@ -1928,6 +1985,10 @@ if (typeof window !== 'undefined') (() => {
   const chaseNow = t => { const w = waitingOf(t), d = w && chaseDate(w); return !!d && d <= todayIso(); };
   const waitingOnMe = w => !!w && !!cfg().me && String(w.who || '').toLowerCase() === cfg().me.toLowerCase();
   const waitingBlock = t => `#${t.num} is waiting on ${(waitingOf(t) || {}).on || '?'}: clear the wait in the task first, so Claude can claim it.`;
+  function chipRelated(t) {
+    const r = possibleRelation(t); if (!r) return null; const o = state.tasks.find(x => x.id === r.id);
+    const c = elI('span', 'chip relchip', 'copy', `#${o.num}?`); c.title = `Possible ${r.kind || 'duplicate'} of #${o.num}: open the card to merge, link or dismiss`; return c;
+  }
   function chipWaiting(t) {
     const w = waitingOf(t); if (!w) return null;
     const days = DAY_RE.test(w.since || '') ? Math.max(0, dayNum(todayIso()) - dayNum(w.since)) : 0, on = waitingOnMe(w) ? 'you' : String(w.on || '?');
@@ -2403,7 +2464,7 @@ if (typeof window !== 'undefined') (() => {
       if (context.childNodes.length) c.append(context);
     }
     const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
-    [chipMention(t), chipWaiting(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+    [chipMention(t), chipWaiting(t), chipRelated(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
       other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t), chipOutcome(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
@@ -2448,7 +2509,9 @@ if (typeof window !== 'undefined') (() => {
     const as = w && w[0] !== '_' ? [w] : (w === '__none' ? [] : mine);
     const t = { id: uid(), title, column: col, client: fc || '', priority: 'medium', due: due || '', labels: [], assignees: as, details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
     if (me()) { t.createdBy = me(); t.updatedBy = me(); }
-    mutate(n => { n.tasks.push(t); }, `Add task: ${title}`);
+    let hits = [];
+    mutate(n => { const c = clone(t); n.tasks.push(c); hits = markSimilar(n, c); }, `Add task: ${title}`)
+      .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: open the card to merge, link or dismiss.`); });
   }
 
   // ---- edit dialog ----------------------------------------------------------
@@ -2569,8 +2632,10 @@ if (typeof window !== 'undefined') (() => {
     const contactAdd = drawerAddRow('cContactNew', { placeholder: 'Find a CRM contact, or Name | role | email | phone', ghostLabel: 'Add contact', label: 'Find a CRM contact or add a new task contact', onAdd: addContactLine });
     attachContactSuggest(contactAdd);
     const hist = el('ol', 'hist'); hist.id = 'cHist';
+    const rel = el('div', 'dlist'); rel.id = 'cRelList';
     const secs = [
       drawerSection('cDescSec', { title: 'Description', action: descBtn, body: $('cDescParts') }),
+      drawerSection('cRelSec', { title: 'Related cards', count: '', body: rel }),
       drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
       drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint] }),
       drawerSection('cContactSec', { title: 'Contacts', count: '', body: [contacts, contactAdd] }),
@@ -2579,7 +2644,7 @@ if (typeof window !== 'undefined') (() => {
     ];
     [['cTodoSec', 'todos', 'cTodoCount'], ['cLinkSec', 'links', 'cLinkCount'], ['cContactSec', 'contacts', 'cContactCount'], ['cmSec', '', 'cmCount'], ['cHistWrap', '', 'cHistCount']].forEach(([sid, k, cid]) => {
       const s = secs.find(x => x.id === sid); if (k) { s.dataset.sec = k; s.classList.add('optsec'); } s.querySelector('.ui-count').id = cid; });
-    roKeep(secs[5].querySelector('.ui-section__toggle'));
+    roKeep(secs.find(x => x.id === 'cHistWrap').querySelector('.ui-section__toggle'));
     $('cSecs').append(...secs);
   }
   buildDrawer();
@@ -2700,6 +2765,60 @@ if (typeof window !== 'undefined') (() => {
   // optionally a member and a follow-up day. Keeping this out of the property grid stops a phone keyboard crushing it.
   // Clear ends it as keeptrack.py unwait does: a claim the wait blocked runs again, or goes back to To do once it is stale.
   let waitSheet = null;
+  // Related cards: possible duplicates or additions found when a card was added, and links a person confirmed
+  const liveRelations = t => (Array.isArray(t.related) ? t.related : []).filter(r => r && ['possible', 'confirmed'].includes(r.status) && state.tasks.some(x => x.id === r.id));
+  const possibleRelation = t => liveRelations(t).find(r => r.status === 'possible');
+  function renderRelated(t) {
+    const box = $('cRelList'), sec = $('cRelSec'), rs = liveRelations(t); box.textContent = '';
+    sec.hidden = !rs.length; sec.querySelector('.ui-count').textContent = rs.length ? String(rs.length) : '';
+    rs.forEach(r => {
+      const o = state.tasks.find(x => x.id === r.id), row = el('div', 'drel'), head = el('div', 'drel__head');
+      const open = el('button', 'drel__title linkish', `#${o.num} ${o.title}`); open.type = 'button'; open.onclick = () => openCard(o.id);
+      const word = r.kind === 'duplicate' ? 'duplicate' : r.kind === 'addition' ? 'addition' : 'related';
+      head.append(ui.pill({ text: r.status === 'possible' ? 'Possible ' + word : 'Linked: ' + word, icon: r.kind === 'duplicate' ? 'copy' : 'link', size: 'sm', tone: r.status === 'possible' ? 'warn' : 'neutral' }), open);
+      row.append(head);
+      if (!ro) {
+        const acts = el('div', 'drel__acts'), older = (o.created || '') < (t.created || '') || ((o.created || '') === (t.created || '') && (o.num || 0) < (t.num || 0));
+        const [src, dst] = older ? [t, o] : [o, t];
+        const b = (label, variant, fn) => { const x = ui.button({ label, variant, size: 'sm', onClick: fn }); acts.append(x); return x; };
+        b(older ? `Merge into #${o.num}` : `Merge #${o.num} here`, 'primary', () => mergeCards(src.id, dst.id)).dataset.act = 'merge';
+        if (r.status === 'possible') b('Link', 'secondary', () => answerRelation(t.id, o.id, r.kind, 'confirmed')).dataset.act = 'link';
+        b(r.status === 'possible' ? 'Not related' : 'Unlink', 'ghost', () => answerRelation(t.id, o.id, r.kind, 'not-related')).dataset.act = 'dismiss';
+        row.append(acts);
+      }
+      box.append(row);
+    });
+  }
+  function answerRelation(aId, bId, kind, status) {
+    const a = state.tasks.find(x => x.id === aId), o = state.tasks.find(x => x.id === bId); if (!a || !o) return;
+    return mutate(n => { setRelation(n, aId, bId, kind, status); }, `${status === 'confirmed' ? 'Link' : 'Not related'}: #${a.num} and #${o.num}`, [aId, bId])
+      .then(ok => { if (ok) { toast(status === 'confirmed' ? `Linked #${a.num} and #${o.num}` : `Marked not related. The check will not ask about this pair again.`); const t = taskNow(); if (t) renderRelated(t); } });
+  }
+  // the same as keeptrack.py merge_card_into: nothing on the kept card is replaced
+  function mergeCardInto(n, srcId, dstId) {
+    const src = n.tasks.find(x => x.id === srcId), dst = n.tasks.find(x => x.id === dstId); if (!src || !dst) return;
+    if (relationOf(dst, srcId) && relationOf(dst, srcId).status === 'merged') return;
+    if ((src.details || '').trim() && !similarNorm(dst.details).includes(similarNorm(src.details)))
+      dst.details = ((dst.details || '').trimEnd() + `\n\nMerged from #${src.num} (${src.title}):\n` + src.details.trim()).trim();
+    const ids = new Set(dst.todos.map(d => d.id));
+    src.todos.forEach(d => { if (dst.todos.some(x => similarNorm(x.text) === similarNorm(d.text))) return; const c = clone(d); if (!c.id || ids.has(c.id)) c.id = 'd_' + Math.random().toString(36).slice(2, 8); ids.add(c.id); dst.todos.push(c); });
+    src.links.forEach(l => { if (!dst.links.some(x => x.url === l.url)) dst.links.push(clone(l)); });
+    ['labels', 'assignees'].forEach(k => src[k].forEach(v => { if (!dst[k].includes(v)) dst[k].push(v); }));
+    src.contacts.forEach(c => { if (!dst.contacts.some(x => jcanon(x) === jcanon(c))) dst.contacts.push(clone(c)); });
+    src.comments.forEach(c => { const x = clone(c); x.id = 'c_' + Math.random().toString(36).slice(2, 8); x.text = `[from #${src.num}] ` + String(x.text || ''); dst.comments.push(x); });
+    const rank = { high: 0, medium: 1, low: 2 }; if ((rank[src.priority] ?? 1) < (rank[dst.priority] ?? 1)) dst.priority = src.priority;
+    if (src.due && (!dst.due || src.due < dst.due)) dst.due = src.due;
+    setRelation(n, srcId, dstId, 'duplicate', 'merged');
+  }
+  async function mergeCards(srcId, dstId) {
+    const src = state.tasks.find(x => x.id === srcId), dst = state.tasks.find(x => x.id === dstId); if (!src || !dst || writeBlocked()) return;
+    if (src.claim && src.claim.status !== 'done') { toast(`An agent is working on #${src.num}. Release its claim first.`, true); return; }
+    if (waitingOf(src)) { toast(`#${src.num} is waiting on something. Clear the wait first.`, true); return; }
+    if (!(await ask('Merge these cards?', [`#${src.num} “${src.title}” goes into #${dst.num} “${dst.title}”.`, 'Its description, checklist, links, labels and comments are copied. Then it is archived: nothing is deleted, and Search with Include archive can put it back.'], 'Merge'))) return;
+    const ok = await mutate(n => mergeCardInto(n, srcId, dstId), `Merge #${src.num} into #${dst.num}`, [srcId, dstId]); if (!ok) return;
+    await archiveNow({ taskId: srcId });
+    if (!state.tasks.some(x => x.id === srcId)) { toast(`Merged #${src.num} into #${dst.num}`); if (editing === srcId) openCard(dstId); else { const t = taskNow(); if (t) renderRelated(t); } }
+  }
   function renderWaiting(t) {
     const box = $('cWaitVal'); box.textContent = ''; const w = waitingOf(t);
     if (w) {
@@ -2886,7 +3005,7 @@ if (typeof window !== 'undefined') (() => {
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderWaiting(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
+    renderWaiting(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
   }
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
@@ -4342,8 +4461,19 @@ if (typeof window !== 'undefined') (() => {
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
   const inboxOpen = {};   // proposal id -> 'edit' | 'merge' (the inline form that is open)
   let todayQueue = { key: '', order: [], visible: [], reviewed: new Map(), busy: new Set() };
+  // Stored duplicates plus, for a pending new task, the open cards that are close to it NOW: a card added after the
+  // proposal was made (a chat added it directly) still shows here, so Accept does not make a second copy.
+  function proposalDuplicates(p) {
+    const out = (p.likely_duplicates || []).filter(d => d && typeof d === 'object');
+    if (p.kind === 'task.create' && p.status === 'pending') {
+      const c = p.change || {};
+      similarMatches(state, c.title || p.title, c.client || '', c.project || '', null, doneColId()).slice(0, SIMILAR_MAX)
+        .forEach(h => { if (!out.some(d => d.type === 'task' && d.id === h.id)) out.push({ type: 'task', id: h.id, why: 'similar title' }); });
+    }
+    return out;
+  }
   function otherProposalDuplicates(p) {
-    return (p.likely_duplicates || []).filter(d => !(p.target && d.type === p.target.type && d.id === p.target.id));
+    return proposalDuplicates(p).filter(d => !(p.target && d.type === p.target.type && d.id === p.target.id));
   }
   const reviewedProposalMatches = (p, reviewed) => sameJson(p, reviewed);
   function todayReviewPosition() {
@@ -4416,7 +4546,7 @@ if (typeof window !== 'undefined') (() => {
         todos: [], comments: [], history: [], claim: null, created: ts, createdBy: inboxMe(), updated: ts, updatedBy: inboxMe() };
       appendUnique(t, 'todos', change.todos || []); appendUnique(t, 'comments', change.comments || []);
       ['value', 'effort', 'priority_rank'].forEach(k => { if (Object.hasOwn(change, k)) t[k] = clone(change[k]); });
-      histAdd(t, `created from proposal ${p.id}`); n.tasks.push(t); return;
+      histAdd(t, `created from proposal ${p.id}`); n.tasks.push(t); markSimilar(n, t); return;
     }
     if (p.kind === 'person.upsert' && !p.target) {
       if (n.contacts.some(x => x.id === ctx.resultId)) return;
@@ -4760,7 +4890,7 @@ if (typeof window !== 'undefined') (() => {
   function proposalMergeForm(p) {
     const f = el('form', 'propform'); f.setAttribute('aria-label', 'Merge into an existing record'); const type = p.kind.startsWith('task.') ? 'task' : 'person';
     const pool = type === 'task' ? state.tasks.map(t => ({ id: t.id, label: (t.num ? '#' + t.num + ' ' : '') + t.title })) : state.contacts.map(x => ({ id: x.id, label: x.name + (x.company ? ` (${x.company})` : '') }));
-    const dup = (p.likely_duplicates || []).filter(d => d.type === type).map(d => d.id), first = [...dup, ...(p.target ? [p.target.id] : [])];
+    const dup = proposalDuplicates(p).filter(d => d.type === type).map(d => d.id), first = [...dup, ...(p.target ? [p.target.id] : [])];
     pool.sort((a, b) => (first.includes(b.id) ? 1 : 0) - (first.includes(a.id) ? 1 : 0) || a.label.localeCompare(b.label));
     const sid = `pm-${p.id}`, l = el('label', 'propform__row'), s = el('select'); s.id = sid; l.htmlFor = sid; l.append(el('span', null, 'Merge into'));
     pool.forEach(x => { const o = el('option', null, x.label + (dup.includes(x.id) ? ' — likely duplicate' : '')); o.value = x.id; s.append(o); }); l.append(s); f.append(l);

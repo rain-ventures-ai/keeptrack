@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v52 (schema 4)
+Similar cards: add first, then ask. No data migration.
+- Run `kit-update` only.
+- `add`, the web board's Add and an accepted Inbox item no longer only add: after the add, close open cards (and close
+  pending Inbox items) are marked as a possible duplicate or addition, on both cards (new optional card field `related`).
+  Nothing is stopped. `add --no-check` skips the check.
+- New commands: `similar`, `related`, `relate`, `unrelate`, `merge-card` (merge, then archive the merged card; nothing
+  is deleted).
+- The web board shows a "#12?" chip on a card with a possible duplicate, and a Related cards section in the card drawer
+  with Merge, Link and Not related. The Review Inbox checks open cards again when it shows a new-task item, so an item
+  whose card was added later shows "Possible duplicate" and offers Merge.
+- Older pages and older `keeptrack.py` keep the `related` field when they save; they do not show it.
+- `doctor` reports a malformed `related` list as `RELATED` (a warning).
+- Check: `keeptrack.py kit-check` says v52 and `keeptrack.py doctor` reports no new problems.
+
 ### v51 (schema 4)
 Small fixes to claims, the heartbeat hook, emails, text cleaning and contacts. No data migration.
 - Run `kit-update` only.

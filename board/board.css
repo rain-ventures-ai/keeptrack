@@ -1360,3 +1360,11 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 /* Review Inbox count on the Today tab (header strip and phone dock) */
 #viewSw .ui-tab[data-view="today"], #dock .dtab[data-grp="today"] { position: relative; }
 #viewSw .ui-tab .todaycount, #dock .dtab .todaycount { top: 1px; right: 1px; }   /* inside the tab: the narrow header strip clips anything above it (header .badge would win otherwise) */
+/* related cards (kit v52): possible duplicates and confirmed links, in the drawer and as a card chip */
+.chip.relchip { display: inline-flex; align-items: center; gap: 3px; color: var(--warn); background: var(--warn-soft); font-weight: 600; }
+.drel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.drel:last-child { border-bottom: 0; }
+.drel__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.drel__title { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.drel__title:hover, .drel__title:focus-visible { text-decoration: underline; }
+.drel__acts { display: flex; flex-wrap: wrap; gap: 6px; }
