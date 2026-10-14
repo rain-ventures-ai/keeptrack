@@ -34,8 +34,7 @@ What a good card is. No data migration.
 - The board, board-admin, keeptrack, keeptrack-notes and onboard-keeptrack skills, the routine prompt, the AGENTS.md
   template and the README agent protocol now point at it. Every PR, document or page a card mentions goes in its links,
   not only in its text.
-- Also in this kit: the merged changes listed in the root `CHANGELOG.md` under Kit v55 (cards that run after other
-  cards, and web board changes).
+- Check: `kit-check` says v55, and `board/CARDS.md` exists.
 
 ### v54 (schema 4)
 Moved work is never lost. No data migration.

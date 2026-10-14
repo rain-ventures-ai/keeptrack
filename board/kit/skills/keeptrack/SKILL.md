@@ -64,10 +64,10 @@ Read due times and "tomorrow" in that time zone.
 
 ### Write cards someone can act on later
 A card with only a title is a guess next week. Before you add, change or propose a card, read `CARDS.md` (next to
-`keeptrack.py`; `board/CARDS.md` in a board repo): the five tests of a good card, with a bad and a good example. In
+`keeptrack.py`: `${CLAUDE_PLUGIN_ROOT}/CARDS.md` in the plugin, `board/CARDS.md` in a board repo): the five tests of a good card, with a bad and a good example. In
 short: a plain-words title that says the outcome, details with what, why and what "done" means, to-dos a person can
 tick, and no internal codes a newcomer cannot read. **Every PR, issue, document, file, folder or web page the card
-mentions goes in its links section** (`$B link '#N' <full URL> --title "<what it is>"`) in the same run: a bare "#2296"
+mentions goes in its links section** (`$B link '#N' <full URL> --title "<what it is>"`) in the same run: a bare "#481"
 in the text is not a link. A private board is the person's own notebook, so be generous with this context. Keep secrets
 and confidential content out: link to where they live.
 

@@ -13,6 +13,9 @@ and the same card written well, and how to put every PR, issue, document, folder
 links section. The board, board-admin, keeptrack, keeptrack-notes and onboard-keeptrack skills, the routine prompt,
 the AGENTS.md template, the README agent protocol and `docs/help/tasks.md` point at it. No schema migration.
 
+The entries below were merged before v55 and were listed under Unreleased; v55 is the first kit version that
+names them.
+
 Web board: search puts a numbered card first. Type `26` or `#26` and card #26 is the top result, then cards whose
 number starts with 26, then the other matches. No schema migration.
 
