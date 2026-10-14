@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 55  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 56  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2110,7 +2110,8 @@ def cmd_list(a):
         cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
-        print(line(data, t, today=today) + cleared + scoring)
+        url = f"  {card_url(t.get('num'))}" if getattr(a, "links", False) and card_url(t.get("num")) else ""
+        print(line(data, t, today=today) + cleared + scoring + url)
 
 
 def cmd_show(a):
@@ -2127,6 +2128,8 @@ def cmd_show(a):
         if t.get(k) and t[k].get("session_id"):
             t[k] = dict(t[k]); t[k]["session_id"] = redact_session(t[k]["session_id"])
     print(json.dumps(t, indent=2, ensure_ascii=False))
+    if card_url(t.get("num")):   # kit v56: the link to write whenever this card is named
+        print(f"\nlink: {card_md(t.get('num'))}")
     if t.get("outcome") == "cancelled" and t.get("column") == "done":
         why = next((h["text"][len("cancelled: "):] for h in reversed(hs) if str(h.get("text", "")).startswith("cancelled: ")), "")
         if why.endswith(")") and " (session " in why:
@@ -2399,6 +2402,26 @@ def card_url(num):
         return ""
     return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(
         {"repo": REPO, "branch": BRANCH, "path": PATH}) + f"#{num}"
+
+
+def card_md(num):
+    """Card #num as a Markdown link to the web board ([#12](url)), the way agents write card numbers in replies,
+    comments, PRs and briefs (kit v56); plain #num without a board repo (--file)."""
+    url = card_url(num)
+    return f"[#{num}]({url})" if url else f"#{num}"
+
+
+def link_note(num):
+    """'  [#12](url)' after an output line, or '' without a board repo, so --file output stays as it was."""
+    return f"  {card_md(num)}" if card_url(num) else ""
+
+
+def cmd_card_link(a):
+    """Each card as a Markdown link, with its title: what an agent pastes when it names a card (kit v56)."""
+    data, _ = load()
+    for ref in a.ids:
+        t = find(data, ref)
+        print(f"{card_md(t.get('num'))} {t.get('title', '')}")
 
 
 def link_follow_up(t, o):
@@ -2773,7 +2796,7 @@ def cmd_todo_move(a):
             x.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": msg})
         t["updated"] = now(); oid = o["id"]
         _MUT["after"].append(lambda dd: print(f"added #{num_of(dd, oid)} ({oid}): follow-up of #{num}; to-do {n} moved and ticked, "
-                                              "both cards linked and commented"))
+                                              "both cards linked and commented" + link_note(num_of(dd, oid))))
     mutate(fn, f"Move to-do: {a.id} {a.n}")
 
 
@@ -2885,7 +2908,7 @@ def cmd_add(a):
         hist(t, "created")
         data["tasks"].append(t); assign_nums(data); tid = t["id"]
         marks = [] if getattr(a, "no_check", False) else mark_similar(data, t)   # never stops the add
-        _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})"))   # the saved #number: a lost race renumbers ours
+        _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})" + link_note(num_of(d, tid))))   # the saved #number: a lost race renumbers ours
         _MUT["after"].append(lambda d: print_marks(marks))
     mutate(fn, f"Add task: {a.title}")
 
@@ -4140,7 +4163,7 @@ def _here(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
+    "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
     "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
@@ -4174,7 +4197,7 @@ def cmd_help(a):
 
 _SUBPARSERS = None
 COMMAND_HELP = {   # one line each, for commands whose parser has none
-    "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention, --waiting, --waiting-on WHO)",
+    "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention, --waiting, --waiting-on WHO; --links)",
     "show": "one card in full: details, links, checklist, claim, latest comments",
     "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo, --after '#N')",
     "move": "move a card to a column, or reorder it (--before, --after, --top); --priority",
@@ -7591,6 +7614,7 @@ def main():
     s.add_argument("--label", help="label name, exactly as on the card (the web board's label filter)")
     s.add_argument("--all", action="store_true", help="ignore this repo's default project")
     s.add_argument("--sort", choices=["score", "priority"], help="score descending (unscored last), or board-wide priority order; reading never changes ranks")
+    s.add_argument("--links", action="store_true", help="end each line with the card's web board link")
     s.set_defaults(f=cmd_list)
     s = sub.add_parser("priority-move", help="change board-wide priority order without changing Kanban status or rank")
     s.add_argument("id")
@@ -7599,6 +7623,8 @@ def main():
     position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
     s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
+    s = sub.add_parser("card-link", help="cards as Markdown links to the web board ([#12](url) title): write card numbers this way")
+    s.add_argument("ids", nargs="+", metavar="id"); s.set_defaults(f=cmd_card_link)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
     s.add_argument("--project"); s.add_argument("--all", action="store_true", help="ignore this repo's default project"); s.set_defaults(f=cmd_next)

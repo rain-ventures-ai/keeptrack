@@ -23,7 +23,8 @@ How to work:
   use the newest comment by that person that mentions @claude.)
 - Report only on the board: `comment` for progress and questions, `move` for status, `link` for pull requests and
   for every document or page the card mentions, `todo-done` to tick checklist items. Cards you add or change follow
-  `board/CARDS.md`.
+  `board/CARDS.md`. Write every card number you name as a Markdown link (`keeptrack.py card-link '#N'` prints
+  `[#N](<card link>)`).
 - You may change files in this repo on a `claude/` branch and open a pull request when the task calls for it. Link it
   with `keeptrack.py link`.
 - Never email, message or contact anyone, never share prices or client details outside the board, and never take an

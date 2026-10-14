@@ -66,7 +66,7 @@ After explaining, verify with `python3 board/keeptrack.py where` and `list` or `
 **Board kit:** `board/keeptrack.py`, the documentation and routine files in `board/`, and `.claude/skills/board*` are the shared board kit from `rain-ventures-ai/keeptrack` (`board/kit/`). The board data is `board/tasks.json`, `board/cards/`, `board/people/` and `board/archive/`. Do not edit kit files here; change the kit in Keeptrack. `board/KIT_VERSION` is this repo's version. Upgrades: `board/UPGRADING.md` and the `board-upgrade` skill.
 
 ## Task numbers and mentions
-Tasks have short numbers (`#12`); `keeptrack.py` accepts them in place of ids (quote the `#`). When you need a person, comment on the task with `@github-username` and say why. Humans see an "@ you" marker next time they open the board.
+Tasks have short numbers (`#12`); `keeptrack.py` accepts them in place of ids (quote the `#`). When you name a card in a reply, comment, done note, PR, issue, brief or hand-off, write its number as a Markdown link to the web board, `[#12](<card link>)`, so people can tap it: `python3 board/keeptrack.py card-link '#12'` prints it (`show` and `add` print it too). When you need a person, comment on the task with `@github-username` and say why. Humans see an "@ you" marker next time they open the board.
 
 ## Working from a GitHub issue (board-task)
 Issues created with the board's "Create issue" button carry `<!-- board-task: id=... num=N -->` and are titled `[#N] ...`. When you are asked to work such an issue:

@@ -103,6 +103,12 @@ good example) before you add, change or propose one. Every PR, issue, document, 
 mentions goes in its links section, with a title, in the same run: `python3 board/keeptrack.py link <id> <full URL>
 --title "<what it is>"`. A bare "#481" in the text is not a link.
 
+**Card numbers are links.** When you name a card in a reply, comment, done note, PR or issue text, brief or hand-off,
+write its number as a Markdown link to the web board, `[#12](<card link>)`, so a person can tap it.
+`python3 board/keeptrack.py card-link '#12'` prints the link with the title (`show` prints `link:`, `add` prints it,
+`list --links` adds it to each line). The web board shows `[#12](...)` as #12. Leave the to-do text that `todo-move`
+writes ("Moved to #N (t_id): ...") and link titles ("Follow-up #N") as the tools write them.
+
 To change a task after it exists (title, details, priority, due, labels, client, project, links) use `task-set` and
 `unlink`. To change the board's labels, clients, members or settings, use the `board-admin` skill. Never edit JSON.
 
