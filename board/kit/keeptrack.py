@@ -6666,6 +6666,12 @@ def cmd_proposal_merge(a):
                     record["assignees"] = [value]
             elif key == "due" and key in selected and record.get("id", "").startswith("p_"):
                 record["next_due"] = copy.deepcopy(value)
+            elif key == "after" and key in selected and record.get("id", "").startswith("t_"):   # as _apply_update
+                value = list(dict.fromkeys(x for x in value if x != record["id"]))
+                if after_cycle(data, record["id"], value):
+                    proposal_conflict(f"not saved: these after links would make a loop through {record.get('id')}; review it by hand")
+                if value: record["after"] = value
+                else: record.pop("after", None)
             elif key in selected: record[key] = copy.deepcopy(value)
         if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
             drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update

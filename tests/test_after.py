@@ -209,6 +209,23 @@ class AfterProposals(unittest.TestCase):
         self.assertEqual(2, p.returncode)
         self.assertIn("change.after", p.stderr)
 
+    def card(self, cid):
+        with open(os.path.join(self.board, "cards", cid + ".json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_merge_drops_the_card_itself_and_refuses_a_loop(self):
+        self.kt("task-set", "#2", "--after", "#1")
+        self.kt("proposal-add", "-", stdin=self.proposal(["#1", "#2"], "ak-m1"))
+        p = json.loads(self.kt("proposals", "--json").stdout)[0]
+        self.kt("proposal-merge", p["id"], "--into", "t_second", "--fields", "after")
+        self.assertEqual(["t_first"], self.card("t_second")["after"], "the card itself is dropped")
+        self.kt("proposal-add", "-", stdin=self.proposal(["#2"], "ak-m2"))
+        p = next(x for x in json.loads(self.kt("proposals", "--json").stdout) if x["status"] == "pending")
+        r = self.kt("proposal-merge", p["id"], "--into", "t_first", "--fields", "after", ok=False)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("loop", r.stderr)
+        self.assertNotIn("after", self.card("t_first"))
+
 
 
 # board.js keeps afterRefusal inside the page closure: cut it (with afterCycle) out and run it in node.
@@ -232,8 +249,9 @@ process.stdout.write(JSON.stringify({
 
 
 class AfterProposalAcceptInPage(unittest.TestCase):
-    """The web board's Accept refuses after links to a card on neither the board nor its archive, and loops, like
-    keeptrack.py; the card itself is dropped silently, as keeptrack.py does."""
+    """The web board's Accept refuses after links to a card on neither the board nor its archive (keeptrack.py checks
+    that at propose time; the page checks again at accept) and loops, like keeptrack.py; the card itself is dropped
+    silently, as keeptrack.py does."""
     def test_board_js_refuses_unknown_and_loop(self):
         if not shutil.which("node"):
             self.skipTest("node is not installed")
