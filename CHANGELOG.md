@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: search puts a numbered card first. Type `26` or `#26` and card #26 is the top result, then cards whose
+number starts with 26, then the other matches. No schema migration.
+
 Web board: **Prep for call** on Today. Select a teammate and the board shows a brief for the call from board data
 only: goals, "discuss with" cards, waits, overdue or stuck work, comments where you asked each other something this
 week, shared cards, work done in the last 7 days and the Review Inbox count. **Copy brief** and **Copy for AI** copy
