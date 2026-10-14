@@ -842,6 +842,8 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .dwaitform { display: grid; gap: var(--sp-5); }
 .dwaitform .ui-sheet__text { margin-bottom: var(--sp-1); }
 .dworkpicker { display: grid; gap: var(--sp-5); }
+.dworkfind { width: 100%; }
+.dworkempty { margin: 0; padding: var(--sp-2) var(--sp-3); color: var(--muted); font-size: var(--fs-sm); }
 .dworkcols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-5); }
 .dworkcol { min-width: 0; }
 .dworkcol h3 { margin: 0 0 var(--sp-2); color: var(--muted); font-size: var(--fs-sm); }

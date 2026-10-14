@@ -25,6 +25,10 @@ it is missing), the web board shows "after #62" chips on the card and a Runs aft
 set `after`, and `doctor` checks it (`AFTER`, warning `AFTER_MISSING`). A hint and a gate, never a trigger: nothing
 moves a card. No schema migration; older kits keep the field.
 
+Web board: the card's **Client and project** picker has a search box. It narrows both lists with the board search
+(MiniSearch: word starts and small typos) plus a plain "contains" match. A client also matches by its project names,
+and with a search the project list covers every client. No schema migration.
+
 ## Kit v51 — 2026-10-13
 
 The heartbeat hook refreshes only its own agent's claims; re-claiming an attended claim unattended counts
