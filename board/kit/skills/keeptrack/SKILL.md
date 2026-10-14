@@ -111,6 +111,16 @@ $B wait '#12' --on "<who: what>" --who <login-or-p_id>   # parked on a person or
 $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "<text>"
 ```
 
+Similar cards (kit v52): `add` never stops. It adds the card, then marks close open cards (and close pending Inbox items) as a possible duplicate or addition, on both cards. When `add` prints a `possible duplicate` line, tell the person in one line and ask: merge, link or not related. Do not merge without their answer.
+```bash
+$B similar "Title" --client "<company>"         # before you add or propose: is this already on the board or in the Inbox?
+$B related                                     # every possible duplicate still to answer
+$B merge-card '#31' '#12'                      # on the person's word: #31's work goes into #12, then #31 is archived
+$B relate '#31' '#12' --kind addition          # on the person's word: keep both, linked
+$B unrelate '#31' '#12'                        # not related: the check never asks about this pair again
+```
+Put a piece of work on the board once: add a card **or** propose it in the Review Inbox, never both.
+
 Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them.
 Only work on tasks assigned to the user you act for.
 Heartbeat at least every 15 minutes while you work (the Claude Code hook does it for you); a claim with none for 30 minutes (the default) shows as stale. `done` is refused while checklist items are open: tick them, or `done '#12' --cancel --note "<why>"`.

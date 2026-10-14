@@ -119,7 +119,8 @@ async function assertFits(page, where) {
     assert.equal(propRows[0].top, propRows[1].top, 'Status and Priority share a row');
     assert.equal(propRows[2].top, propRows[3].top, 'Due date and Waiting for share a row');
     assert(propRows[4].width > propRows[0].width * 1.8, 'People and the remaining long fields use the full drawer width');
-    assert.deepEqual(await page.locator('#cSecs .ui-section__text').allTextContents(), ['Description', 'Checklist', 'Links', 'Contacts', 'Comments', 'History']);
+    assert.equal(await page.locator('#cRelSec').isVisible(), false, 'Related cards is hidden while the card has none');
+    assert.deepEqual(await page.locator('#cSecs .ui-section__text:visible').allTextContents(), ['Description', 'Checklist', 'Links', 'Contacts', 'Comments', 'History']);
     assert.equal(await page.locator('#cHist').isVisible(), false, 'History starts closed');
     await assertFits(page, 'opened'); await shot(page, 'phone-writable-top');
 

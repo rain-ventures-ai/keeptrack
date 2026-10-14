@@ -88,6 +88,11 @@ each exchange instead, with `keeptrack.py proposal-add <file> --dry-run` and the
   `contact.touch` can be proposed that way: a task or person proposal from an email always needs
   `--recipients-confirmed`. On a board with one reader, that reader received the message. Never store a body, a
   private reply or an attachment.
+- One run makes at most one `contact.touch` proposal per person per day: group that person's new messages of the day
+  into it (all their keys in `source_message_ids`). Use separate proposals only for separate outcomes, and then, with
+  `--recipients-confirmed`, add a short topic to each title (`Email from Casey Example, 9 Oct: budget`) so a reviewer
+  can tell them apart. Without it, the Inbox shows "2 from this person this day" so the reviewer knows they are
+  different messages, not duplicates.
 - An explicit follow-up goes in `change.next` and `change.due`. A profile change for an existing person is a
   `person.upsert` proposal with that person as `target` and the current values in `target.base`.
 - A one-off scan in a chat may offer to accept the proposals the person names, with `proposal-accept <id>`. A

@@ -485,6 +485,15 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.match(await propCard(page, 'r_askmail001').textContent(), /Closed without acting by claude@alex/);
       await page.close(); }
 
+    // Kit v52: a card added AFTER a new-task item was proposed (its stored likely_duplicates is empty) still shows as a
+    // possible duplicate when the item is shown, and Merge offers that card first. The private-tasks double-card case.
+    { const files = fixture(); files['cards/t_late.json'] = text(card('t_late', 3, 'Send the revised plan'));
+      const api2 = new Github(files), p2 = await openBoard(browser, api2); await inbox(p2);
+      const item = propCard(p2, 'r_create0001');
+      assert.match(await item.textContent(), /Looks like: Send the revised plan \(similar title\)/, 'the item checks open cards again');
+      await item.locator('[data-act="merge"]').click();
+      assert.match(await item.locator('select').first().inputValue(), /t_late/, 'Merge offers the late card first');
+      await p2.close(); }
     console.log('review inbox browser tests passed');
   } finally { await browser.close(); server.close(); }
 })().catch(err => { console.error(err); server.close(); process.exitCode = 1; });

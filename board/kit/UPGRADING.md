@@ -25,6 +25,28 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v52 (schema 4)
+Similar cards: add first, then ask. No data migration.
+- Run `kit-update` only.
+- `add`, the web board's Add and an accepted Inbox item no longer only add: after the add, close open cards (and close
+  pending Inbox items) are marked as a possible duplicate or addition, on both cards (new optional card field `related`).
+  Nothing is stopped. `add --no-check` skips the check.
+- A new-task Inbox item now lists open cards with a close title in `likely_duplicates`, not only the same title.
+- New commands: `similar`, `related`, `relate`, `unrelate`, `merge-card` (merge, then archive the merged card; nothing
+  is deleted).
+- The web board shows a "#12?" chip on a card with a possible duplicate, and a Related cards section in the card drawer
+  with Merge, Link and Not related. The Review Inbox checks open cards again when it shows a new-task item, so an item
+  whose card was added later shows "Possible duplicate" and offers Merge.
+- Older pages and older `keeptrack.py` keep the `related` field when they save; they do not show it.
+- `doctor` reports a malformed `related` list as `RELATED` (a warning).
+- Pending Inbox items also check each other: a new-task item close to another pending one shows "Possible duplicate".
+  Today rows show a short summary, and "2 from this person this day" when one person sent separate emails on one day.
+  The `keeptrack-email` skill now groups a person's new emails of one day into one proposal.
+- Inbox cards say what Accept does; the button reads Create task, Add log entry, Add person or Apply edit.
+- Today's Tasks due shows Overdue, Today, Later this week and Next week (closed by default), as Schedule rows, and
+  links to the full Schedule.
+- Check: `keeptrack.py kit-check` says v52 and `keeptrack.py doctor` reports no new problems.
+
 ### v51 (schema 4)
 Small fixes to claims, the heartbeat hook, emails, text cleaning and contacts. No data migration.
 - Run `kit-update` only.

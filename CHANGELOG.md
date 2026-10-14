@@ -29,6 +29,18 @@ Web board: the card's **Client and project** picker has a search box. It narrows
 (MiniSearch: word starts and small typos) plus a plain "contains" match. A client also matches by its project names,
 and with a search the project list covers every client. No schema migration.
 
+## Kit v52 — 2026-10-14
+
+Similar cards: adding a card never stops, and close cards are marked as possible duplicates or additions on both
+cards (`related`). New `similar`, `related`, `relate`, `unrelate` and `merge-card` (merge, then archive). The web board
+shows the mark on the card and Merge, Link and Not related in the drawer. A pending new-task Inbox item checks open
+cards again when shown, so a card added after the item was proposed shows as a possible duplicate. Shared scoring with a
+Python/JS parity test. Pending Inbox items also check each other (similar new-task items show as possible
+duplicates). Today Inbox rows show a short summary and "N from this person this day" for separate emails from one
+person on one day; the email skill groups a person's emails of the day into one touch. Inbox cards say what Accept
+does (create a task, add a CRM log entry, edit) and name the button after it. Today's Tasks due uses the Schedule
+rows, grouped Overdue, Today, Later this week and Next week (closed), with "Show full schedule". No schema migration.
+
 ## Kit v51 — 2026-10-13
 
 The heartbeat hook refreshes only its own agent's claims; re-claiming an attended claim unattended counts

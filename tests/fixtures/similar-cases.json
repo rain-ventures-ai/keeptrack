@@ -1,0 +1,165 @@
+{
+ "about": "Shared cases for keeptrack.py similar_score/similar_kind and board.js similarScore/similarKind (kit v52). No expected values: the test checks that the two agree.",
+ "cases": [
+  {
+   "a": "Send Acme the plan",
+   "b": "send acme plan",
+   "same": false
+  },
+  {
+   "a": "Send Acme the plan",
+   "b": "send acme plan",
+   "same": true
+  },
+  {
+   "a": "Call Acme",
+   "b": "Write notes",
+   "same": false
+  },
+  {
+   "a": "Call Acme",
+   "b": "Write notes",
+   "same": true
+  },
+  {
+   "a": "the",
+   "b": "a",
+   "same": false
+  },
+  {
+   "a": "the",
+   "b": "a",
+   "same": true
+  },
+  {
+   "a": "",
+   "b": "",
+   "same": false
+  },
+  {
+   "a": "",
+   "b": "",
+   "same": true
+  },
+  {
+   "a": "Re-measure four parked replay cases after card #52",
+   "b": "Re-measure four parked replay cases after card #52",
+   "same": false
+  },
+  {
+   "a": "Re-measure four parked replay cases after card #52",
+   "b": "Re-measure four parked replay cases after card #52",
+   "same": true
+  },
+  {
+   "a": "Re-measure four parked replay cases",
+   "b": "Re-measure four parked replay cases after card #52",
+   "same": false
+  },
+  {
+   "a": "Re-measure four parked replay cases",
+   "b": "Re-measure four parked replay cases after card #52",
+   "same": true
+  },
+  {
+   "a": "Upgrade board tools to kit v36",
+   "b": "Upgrade board tools to kit v37",
+   "same": false
+  },
+  {
+   "a": "Upgrade board tools to kit v36",
+   "b": "Upgrade board tools to kit v37",
+   "same": true
+  },
+  {
+   "a": "Upgrade board kit v30 to v35",
+   "b": "Upgrade board tools to kit v37",
+   "same": false
+  },
+  {
+   "a": "Upgrade board kit v30 to v35",
+   "b": "Upgrade board tools to kit v37",
+   "same": true
+  },
+  {
+   "a": "Relay: let an agent close a card whose to-dos are all ticked",
+   "b": "Relay: a front door cannot close a card whose to-dos are ticked",
+   "same": false
+  },
+  {
+   "a": "Relay: let an agent close a card whose to-dos are all ticked",
+   "b": "Relay: a front door cannot close a card whose to-dos are ticked",
+   "same": true
+  },
+  {
+   "a": "Set up Wade with email account and site access",
+   "b": "Set up Rainshift email account for Wade",
+   "same": false
+  },
+  {
+   "a": "Set up Wade with email account and site access",
+   "b": "Set up Rainshift email account for Wade",
+   "same": true
+  },
+  {
+   "a": "Café menu – déjà vu",
+   "b": "cafe menu deja vu",
+   "same": false
+  },
+  {
+   "a": "Café menu – déjà vu",
+   "b": "cafe menu deja vu",
+   "same": true
+  },
+  {
+   "a": "A",
+   "b": "A",
+   "same": false
+  },
+  {
+   "a": "A",
+   "b": "A",
+   "same": true
+  },
+  {
+   "a": "x",
+   "b": "xy",
+   "same": false
+  },
+  {
+   "a": "x",
+   "b": "xy",
+   "same": true
+  },
+  {
+   "a": "Fix   login\tbug",
+   "b": "fix login bug!!",
+   "same": false
+  },
+  {
+   "a": "Fix   login\tbug",
+   "b": "fix login bug!!",
+   "same": true
+  },
+  {
+   "a": "Build #2156 Phase A: cited context",
+   "b": "Build #2156 Phase B: Run with agent",
+   "same": false
+  },
+  {
+   "a": "Build #2156 Phase A: cited context",
+   "b": "Build #2156 Phase B: Run with agent",
+   "same": true
+  },
+  {
+   "a": "ÉCOLE review",
+   "b": "école review",
+   "same": false
+  },
+  {
+   "a": "ÉCOLE review",
+   "b": "école review",
+   "same": true
+  }
+ ]
+}
