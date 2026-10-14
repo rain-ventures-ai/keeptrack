@@ -276,6 +276,11 @@ async function assertFits(page, where) {
     assert(conflictText.includes('Some detail') && conflictText.includes('Recovered local draft') && conflictText.includes('Changed by an agent'), 'draft conflict shows base, mine and GitHub');
     await page.locator('#cfBody input[value="mine"]').check(); w = saved(); await page.locator('#cfApply').click(); await w; assert.equal(api.card().details, 'Recovered local draft');
     // Undo history is per-board IndexedDB state, so the last save can still be undone after another tab recreation.
+    // The page writes it to IndexedDB just after the save returns: wait for that write, or the reload can lose the newest entry.
+    await page.waitForFunction(() => new Promise(ok => { const r = indexedDB.open('keeptrack', 1); r.onerror = () => ok(false); r.onsuccess = () => {
+      const st = r.result.transaction('kv').objectStore('kv'), q = st.getAllKeys(); q.onerror = () => ok(false);
+      q.onsuccess = () => { const k = q.result.find(x => String(x).startsWith('kb_undo:')); if (!k) return ok(false); const g = st.get(k); g.onerror = () => ok(false);
+        g.onsuccess = () => { const top = (g.result || []).slice(-1)[0]; ok(!!top && (top.after.tasks || []).some(t => t.details === 'Recovered local draft')); }; }; }; }));
     await page.evaluate(() => { sessionStorage.clear(); history.replaceState(null, '', location.pathname + location.search); location.reload(); }); await page.locator('#dlgCard[open]').waitFor();
     await page.waitForFunction(() => !document.getElementById('cUndo').disabled); w = saved(); await page.locator('#cUndo').click(); await w; assert.equal(api.card().details, 'Changed by an agent', 'Undo survives reload and restores the prior GitHub value');
     await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
