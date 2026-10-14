@@ -5458,6 +5458,68 @@ if (typeof window !== 'undefined') (() => {
     if (active.length) { const t = active.sort((a, b) => numOf(a) - numOf(b))[0], b = el('button', 'kwwactive', `${agentLabel(t.claim)} · #${t.num} ${t.title}`); b.type = 'button'; b.onclick = () => openCard(t.id, 'comments'); box.append(b); }
     return box;
   }
+  // ---- Prep for call: a brief for a meeting with another board member, built from the board alone (no AI, no network) ----
+  let prepWho = null;   // the member the brief is for; null = panel closed. Per page load only.
+  const prepKey = () => 'kb_prep:' + boardStoreId();
+  const prepOthers = () => state.people.filter(p => p.github && p.github.toLowerCase() !== (cfg().me || '').toLowerCase());
+  function prepBrief(who) {
+    const meL = (cfg().me || '').toLowerCase(), whoL = String(who || '').toLowerCase(), both = [meL, whoL].filter(Boolean), today = todayIso();
+    const weekAgo = Date.now() - 7 * 864e5, done = doneColId(), used = new Set();
+    const person = l => state.people.find(p => String(p.github || '').toLowerCase() === l) || { github: l, name: l };
+    const owner = by => String(by || '').toLowerCase().split('@').pop();   // "claude@JezHub" counts as JezHub
+    const has = (t, l) => t.assignees.some(a => a.toLowerCase() === l);
+    // "Discuss X with Ollie": a talk verb, then "with" and a word that starts like either person's name or login (Ollie ~ Oliver)
+    // and it belongs to the call only when the person it names is one of you and the card is the other one's (or nobody's)
+    const stems = l => [l, String(person(l).name || '').toLowerCase()].filter(s => s.length >= 2).map(s => s.slice(0, 2));
+    const talk = t => { const m = /\b(discuss|sync|talk|catch[- ]?up|agree|decide|ask|check|review)\b.*?\bwith\s+@?([a-z][\w-]+)/i.exec(t.title); if (!m) return false;
+      const named = m[2].toLowerCase().slice(0, 2), mine = !t.assignees.length;
+      return both.some(l => stems(l).includes(named) && (mine || both.some(o => o !== l && has(t, o)))); };
+    const mentions = (text, l) => new RegExp('(?<![\\w@#&/])@' + l.replace(/[^\w-]/g, '') + '(?![\\w-])', 'i').test(String(text || ''));
+    const open = state.tasks.filter(t => t.column !== done), ours = t => both.some(l => has(t, l));
+    const pick = (list, why) => list.filter(t => !used.has(t.id)).sort((a, b) => numOf(a) - numOf(b)).map(t => { used.add(t.id); return { t, why: typeof why === 'function' ? why(t) : why }; });
+    const sections = [];
+    const add = (key, title, icon, rows) => { if (rows.length) sections.push({ key, title, icon, rows }); };
+    add('goals', 'Goals', 'flag', pick(open.filter(t => /^goal\b/i.test(t.title) || t.labels.some(l => /^goals?$/i.test(l))), ''));
+    add('discuss', 'To discuss', 'message-square', pick(open.filter(talk), t => t.assignees.map(a => '@' + a).join(', ')));
+    add('waiting', 'Waiting on one of you', 'alarm-clock', pick(open.filter(t => { const w = waitingOf(t); return w && both.includes(String(w.who || '').toLowerCase()); }), t => 'Waiting on ' + (waitingOf(t).on || '@' + waitingOf(t).who)));
+    add('stuck', 'Overdue or stuck', 'triangle-alert', pick(open.filter(t => ours(t) && needsAttention(t)), t => t.due && t.due < today ? 'Due ' + t.due : 'Needs attention'));
+    const asks = c => Date.parse(c.at) >= weekAgo && both.includes(owner(c.by)) && both.some(l => l !== owner(c.by) && mentions(c.text, l));
+    add('mentions', 'Asked of each other this week', 'bell', pick(open.filter(t => t.comments.some(asks)), t => { const c = t.comments.slice().reverse().find(asks); return c ? (c.by || '') + ': ' + String(c.text || '').replace(/\s+/g, ' ').slice(0, 120) : ''; }));
+    add('shared', 'Shared cards', 'users', pick(open.filter(t => both.every(l => has(t, l)) && t.column !== 'backlog'), t => colName(t.column)));
+    add('done', 'Done in the last 7 days', 'circle-check', pick(state.tasks.filter(t => { const c = completionOf(t); return c && Date.parse(c.at) >= weekAgo && (ours(t) || both.includes(owner(c.person || c.owner))); }), t => 'by ' + completionOf(t).label));
+    const inbox = inboxOn() ? inboxPending() : [];
+    return { who: person(whoL), sections, inbox };
+  }
+  function prepText(b) {
+    const L = [`# Prep for call with ${b.who.name || b.who.github} (@${b.who.github}), ${todayIso()}`, `Board: ${cfg().repo}`];
+    b.sections.forEach(s => { L.push('', `## ${s.title}`); s.rows.forEach(r => L.push(`- #${r.t.num} ${r.t.title}${r.why ? ' (' + r.why + ')' : ''}`)); });
+    if (b.inbox.length) { L.push('', `## Review Inbox (${b.inbox.length} to review)`); b.inbox.slice(0, 10).forEach(p => L.push(`- ${p.title || p.id}`)); }
+    if (!b.sections.length && !b.inbox.length) L.push('', 'Nothing on the board for this call.');
+    return L.join('\n');
+  }
+  function prepPanel() {
+    const others = prepOthers(), sec = ui.section({ title: 'Prep for call', icon: 'phone' }); sec.classList.add('tsec', 'tprep');
+    if (!others.some(p => p.github === prepWho)) prepWho = others[0].github;
+    const bar = el('div', 'tprep__bar');
+    const who = ui.select({ label: 'Call with', value: prepWho, options: others.map(p => ({ value: p.github, label: `${p.name || p.github} (@${p.github})` })), onChange: v => { prepWho = v; LS.set(prepKey(), v); render(); } });
+    const b = prepBrief(prepWho), text = prepText(b);
+    const copy = ui.button({ label: 'Copy brief', icon: 'clipboard-copy', size: 'sm' }); copy.onclick = () => copyText(text, 'Brief copied');
+    const ai = ui.button({ label: 'Copy for AI', icon: 'bot', size: 'sm', variant: 'ghost' }); ai.title = 'Copy the brief with a prompt for Claude, Codex or ChatGPT to turn it into an agenda';
+    ai.onclick = () => copyText(`I have a call with @${b.who.github} today. Below is a brief from our Keeptrack board (${cfg().repo}). Read the cards it names on the board, then give me a short agenda: the 3 to 5 things we must decide or unblock first, what I owe them and what they owe me, and anything to close. UK English, short.\n\n` + text, 'Copied with a prompt for AI');
+    const close = ui.button({ label: 'Close', size: 'sm', variant: 'ghost' }); close.onclick = () => { prepWho = null; render(); };
+    bar.append(who, copy, ai, close); sec.body.append(bar);
+    if (!cfg().me) sec.body.append(el('p', 'hint', 'Set your GitHub username in Settings to include your own cards.'));
+    b.sections.forEach(s => {
+      const h = el('h4', 'tprep__h'); h.append(svgIcon(s.icon), el('span', null, s.title), el('span', 'muted', String(s.rows.length))); sec.body.append(h);
+      const list = el('ul', 'tprep__list'); sec.body.append(list);
+      s.rows.slice(0, 8).forEach(r => { const li = el('li'), btn = el('button', 'tprep__row'); btn.type = 'button'; btn.onclick = () => openCard(r.t.id);
+        btn.append(el('b', null, `#${r.t.num} ${r.t.title}`), r.why ? el('span', 'muted', r.why) : ''); li.append(btn); list.append(li); });
+      if (s.rows.length > 8) list.append(el('li', 'muted', `and ${s.rows.length - 8} more (in Copy brief)`));
+    });
+    if (b.inbox.length) { const go = el('button', 'tprep__row'); go.type = 'button'; go.onclick = () => setView('inbox'); go.append(el('b', null, `Review Inbox: ${b.inbox.length} to review`), el('span', 'muted', 'Suggested changes from notes and email')); sec.body.append(go); }
+    if (!b.sections.length && !b.inbox.length) sec.body.append(el('p', 'muted', 'Nothing on the board for this call yet.'));
+    return sec;
+  }
   function renderTodayWidgets(wrap) {
     if (!widgetsEnabled()) return;
     if (widgetMeta.key !== boardStoreId()) return;
@@ -5490,14 +5552,16 @@ if (typeof window !== 'undefined') (() => {
     if (hasTasks) { const live = state.tasks.filter(x => x.column !== doneColId()), doing = live.filter(x => x.column === 'in-progress').length;
       go.append(goCard('square-kanban', 'Tasks · Kanban', `${live.length} open` + (doing ? ` · ${doing} in progress` : ''), 'board')); }
     if (inboxOn()) go.append(goCard('inbox', 'Review Inbox', toReview.length ? `${toReview.length} to review` : 'Nothing to review', 'inbox'));
+    if (hasTasks && prepOthers().length) { const tile = goCard('phone', 'Prep for call', prepWho ? 'Brief for @' + prepWho : 'A brief for a call with a teammate', 'today'); tile.onclick = () => { prepWho = prepWho ? null : (LS.get(prepKey(), '') || prepOthers()[0].github); render(); }; tile.setAttribute('aria-expanded', String(!!prepWho)); go.append(tile); }
     if (hasCrm) go.append(goCard('user', 'People · CRM', peopleDue ? `${peopleDue} to contact today` : `${state.contacts.length} ${state.contacts.length === 1 ? 'person' : 'people'}`, 'people'));
     if (!LS.get('kb_tour', '') && go.childElementCount) {   // offered until the tour is finished, skipped or dismissed
       const inv = el('div', 'tourinvite'), start = el('button', 'primary', 'Show me around'), x = el('button', 'tix'); start.type = x.type = 'button';
       x.setAttribute('aria-label', 'Dismiss the tour'); x.title = 'Dismiss'; x.append(svgIcon('x')); start.onclick = startTour; x.onclick = () => { LS.set('kb_tour', 'dismissed'); render(); };
       inv.append(svgIcon('compass'), el('span', 'ti', 'New here? Take a one-minute tour of Today, Kanban and People.'), start, x); wrap.append(inv);
     }
-    if (toReview.length) wrap.append(todayReview(toReview));   // decisions first: proposals wait for a person, the tiles only navigate
-    if (go.childElementCount) wrap.append(go);
+    if (go.childElementCount) wrap.append(go);   // the tiles first (Ollie, 2026-10-14), then the brief they open, then proposals to review
+    if (prepWho && hasTasks && prepOthers().length) wrap.append(prepPanel());
+    if (toReview.length) wrap.append(todayReview(toReview));
     renderTodayWidgets(wrap);
     const addGroups = list => list.forEach(([[ic, title], items]) => {
       if (!items.length) return; const sec = ui.section({ title, count: items.length, icon: ic }); sec.classList.add('tsec');
