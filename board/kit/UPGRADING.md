@@ -42,6 +42,9 @@ Similar cards: add first, then ask. No data migration.
 - Pending Inbox items also check each other: a new-task item close to another pending one shows "Possible duplicate".
   Today rows show a short summary, and "2 from this person this day" when one person sent separate emails on one day.
   The `keeptrack-email` skill now groups a person's new emails of one day into one proposal.
+- Inbox cards say what Accept does; the button reads Create task, Add log entry, Add person or Apply edit.
+- Today's Tasks due shows Overdue, Today, Later this week and Next week (closed by default), as Schedule rows, and
+  links to the full Schedule.
 - Check: `keeptrack.py kit-check` says v52 and `keeptrack.py doctor` reports no new problems.
 
 ### v51 (schema 4)

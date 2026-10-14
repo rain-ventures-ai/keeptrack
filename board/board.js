@@ -2262,6 +2262,22 @@ if (typeof window !== 'undefined') (() => {
     }, `Prioritise: ${titleOf(id)}`, [id], null, { recheck: true });
   }
 
+  // One schedule row and one day block, shared by the Schedule view and the Tasks due part of Today.
+  function schedItem(t, showDue) {
+    const row = paint(el('div', 'sitem' + (isDoneTask(t) ? ' done' : '')), t), circ = doneCircle(t, ' sm');
+    const title = el('div', 'stitle'); { const d = changedDot(t); if (d) title.append(d); } title.append(document.createTextNode(t.title));
+    const sub = [t.client, ...t.labels].filter(Boolean).join(' · '); if (sub) title.append(el('span', 'ssub', sub));
+    const avs = el('div', 'lavs'); t.assignees.forEach(a => avs.append(avatar(a)));
+    const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && extra.append(x));
+    row.append(circ, el('div', 'stime', colName(t.column)), title, extra, avs); row.onclick = () => openCard(t.id); return row;
+  }
+  function schedDay(prefix, key, label, list, cls) {
+    const d = new Date(key + 'T00:00:00'), sec = el('section', 'sday' + (cls || ''));
+    const dl = el('div', 'sdate');
+    if (label) dl.append(el('span', 'sdn lbl', label)); else dl.append(el('span', 'sdn', String(d.getDate())), el('span', 'sdl', d.toLocaleDateString('en-GB', { month: 'short', weekday: 'short' }).replace(' ', ', ')));
+    const items = el('div', 'sitems'); capList(prefix + (key || label), list, t => schedItem(t, !key), items); if (!list.length) items.append(emptyNote('Nothing due', 'calendar-days'));
+    sec.append(dl, items); return sec;
+  }
   function renderSched() {
     const board = $('board'), hideDone = $('fHideDone').checked, today = todayIso(), dc = doneColId();
     const tasks = state.tasks.filter(t => filtered(t) && !(hideDone && t.column === dc)), order = new Map(state.columns.map((c, i) => [c.id, i]));
@@ -2272,21 +2288,7 @@ if (typeof window !== 'undefined') (() => {
     const todayBtn = navBtn('Today', 'Go to today', () => { const x = wrap.querySelector('.sday.today'); if (x) x.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
     bar.append(todayBtn, el('h2', 'caltitle', 'Schedule'), el('span', 'spacer')); wrap.append(bar);
 
-    const item = (t, showDue) => {
-      const row = paint(el('div', 'sitem' + (isDoneTask(t) ? ' done' : '')), t), circ = doneCircle(t, ' sm');
-      const title = el('div', 'stitle'); { const d = changedDot(t); if (d) title.append(d); } title.append(document.createTextNode(t.title));
-      const sub = [t.client, ...t.labels].filter(Boolean).join(' · '); if (sub) title.append(el('span', 'ssub', sub));
-      const avs = el('div', 'lavs'); t.assignees.forEach(a => avs.append(avatar(a)));
-      const extra = el('div', 'sx'); [showDue && duePill(t), prioPill(t), chipWaiting(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && extra.append(x));
-      row.append(circ, el('div', 'stime', colName(t.column)), title, extra, avs); row.onclick = () => openCard(t.id); return row;
-    };
-    const day = (key, label, list, cls) => {
-      const d = new Date(key + 'T00:00:00'), sec = el('section', 'sday' + (cls || ''));
-      const dl = el('div', 'sdate');
-      if (label) dl.append(el('span', 'sdn lbl', label)); else dl.append(el('span', 'sdn', String(d.getDate())), el('span', 'sdl', d.toLocaleDateString('en-GB', { month: 'short', weekday: 'short' }).replace(' ', ', ')));
-      const items = el('div', 'sitems'); capList('s:' + (key || label), list, t => item(t, !key), items); if (!list.length) items.append(emptyNote('Nothing due', 'calendar-days'));
-      sec.append(dl, items); return sec;
-    };
+    const item = schedItem, day = (key, label, list, cls) => schedDay('s:', key, label, list, cls);
     if (overdue.length) wrap.append(day('', 'Overdue', overdue, ' overdue'));
     const groups = new Map(); upcoming.forEach(t => { if (!groups.has(t.due)) groups.set(t.due, []); groups.get(t.due).push(t); }); if (!groups.has(today)) groups.set(today, []);
     let lastMonth = '';
@@ -5589,7 +5591,10 @@ if (typeof window !== 'undefined') (() => {
       [['circle-help', 'People with no next step'], open.filter(p => !p.next_due)],
       [['moon', 'People gone quiet (no contact for 30 days)'], open.filter(p => p.next_due && p.next_due > week && (daysSince(lastTouch(p)) ?? 999) >= 30)]
     ] : [];
-    const dueTasks = hasTasks ? state.tasks.filter(x => x.due && x.due <= t && x.column !== doneColId() && filtered(x)) : [];
+    const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return isoDay(d); };
+    const weekEnd = addDays(t, 6 - (new Date(t + 'T00:00:00').getDay() + 6) % 7), nextEnd = addDays(weekEnd, 7);   // weeks run Monday to Sunday
+    const openDated = hasTasks ? state.tasks.filter(x => x.due && x.due <= nextEnd && x.column !== doneColId() && filtered(x)).sort((a, b) => a.due.localeCompare(b.due)) : [];
+    const dueTasks = openDated.filter(x => x.due <= t);
     const wrap = el('div', 'today'), head = el('div', 'todayhead');
     const peopleDue = groups.slice(0, 2).reduce((n, x) => n + x[1].length, 0), due = [];
     if (peopleDue) due.push(`${peopleDue} ${peopleDue === 1 ? 'person' : 'people'} to contact`); if (dueTasks.length) due.push(`${dueTasks.length} ${dueTasks.length === 1 ? 'task' : 'tasks'}`);
@@ -5615,10 +5620,24 @@ if (typeof window !== 'undefined') (() => {
       items.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)) || a.name.localeCompare(b.name)); capList('t:' + title, items, personRow, sec.body); wrap.append(sec);
     });
     addGroups(groups.slice(0, 2));
-    if (dueTasks.length) { const sec = ui.section({ title: 'Tasks due', count: dueTasks.length, icon: 'square-check' }); sec.classList.add('tsec'); dueTasks.sort((a, b) => a.due.localeCompare(b.due)); capList('t:due', dueTasks, taskTodayRow, sec.body); wrap.append(sec); }
+    if (openDated.length) wrap.append(todayTasks(openDated, t, weekEnd));
     addGroups(groups.slice(2));
     if (hasCrm && !state.contacts.length) wrap.append(ui.empty({ text: 'No people yet. Add the first person you want to keep track of.', icon: 'users' }));
     if (hasCrm) wrap.append(addPersonBox()); board.append(wrap);
+  }
+
+  // Tasks due on Today, grouped as on the Schedule: overdue, today, the rest of this week, and next week (closed by default).
+  function todayTasks(list, t, weekEnd) {
+    const sec = ui.section({ title: 'Tasks due', count: list.length, icon: 'square-check' }); sec.classList.add('tsec', 'tdue');
+    const box = el('div', 'sched'), byDay = items => { const m = new Map(); items.forEach(x => { if (!m.has(x.due)) m.set(x.due, []); m.get(x.due).push(x); }); return m; };
+    const overdue = list.filter(x => x.due < t), week = list.filter(x => x.due > t && x.due <= weekEnd), next = list.filter(x => x.due > weekEnd);
+    if (overdue.length) box.append(schedDay('t:', '', 'Overdue', overdue, ' overdue'));
+    box.append(schedDay('t:', t, '', list.filter(x => x.due === t), ' today'));
+    if (week.length) { box.append(el('div', 'smonth', `Later this week (${week.length})`)); byDay(week).forEach((items, k) => box.append(schedDay('t:', k, '', items))); }
+    if (next.length) { const d = el('details', 'calundated'); d.open = LS.get('kb_today_next', '') === '1'; d.addEventListener('toggle', () => LS.set('kb_today_next', d.open ? '1' : ''));
+      d.append(el('summary', null, `Next week (${next.length})`)); byDay(next).forEach((items, k) => d.append(schedDay('t:', k, '', items))); box.append(d); }
+    const more = ui.button({ label: 'Show full schedule', icon: 'calendar-days', variant: 'ghost', size: 'sm', onClick: () => setView('sched') }); more.classList.add('tdue__more');
+    sec.body.append(box, more); return sec;
   }
 
   let peopleQ = '', peopleStage = '';

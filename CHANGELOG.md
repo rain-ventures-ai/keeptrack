@@ -21,7 +21,9 @@ shows the mark on the card and Merge, Link and Not related in the drawer. A pend
 cards again when shown, so a card added after the item was proposed shows as a possible duplicate. Shared scoring with a
 Python/JS parity test. Pending Inbox items also check each other (similar new-task items show as possible
 duplicates). Today Inbox rows show a short summary and "N from this person this day" for separate emails from one
-person on one day; the email skill groups a person's emails of the day into one touch. No schema migration.
+person on one day; the email skill groups a person's emails of the day into one touch. Inbox cards say what Accept
+does (create a task, add a CRM log entry, edit) and name the button after it. Today's Tasks due uses the Schedule
+rows, grouped Overdue, Today, Later this week and Next week (closed), with "Show full schedule". No schema migration.
 
 ## Kit v51 — 2026-10-13
 
