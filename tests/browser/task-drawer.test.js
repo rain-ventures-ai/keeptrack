@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
 });
 
 const text = x => JSON.stringify(x, null, 2) + '\n';
-const root = { version: 4, layout: 'split', settings: { title: 'Drawer test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }, { github: 'sam', name: 'Sam' }], agents: [], clients: ['Acme'], labels: [{ name: 'pale', color: '#dce1e7' }, { name: 'dark', color: '#334155' }], client_info: {}, next_num: 3, archive: { files: {} } };
+const root = { version: 4, layout: 'split', settings: { title: 'Drawer test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }, { github: 'sam', name: 'Sam' }], agents: [], clients: ['Acme', 'Bluebell Events', 'Northwind Traders'], labels: [{ name: 'pale', color: '#dce1e7' }, { name: 'dark', color: '#334155' }], client_info: {}, next_num: 3, archive: { files: {} } };
 const CLEARED = [{ what: 'wait on a live claim', by: 'codex@sam', session: '7c4a8d09ca37', at: '2026-10-06T10:00:00.000Z' }];   // kit v43 evidence the page must keep
 const card = (id, num, title, extra) => ({ id, num, title, column: 'todo', client: '', priority: 'medium', due: '', labels: [], assignees: [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: '2026-10-01T08:00:00.000Z', updated: '2026-10-01T08:00:00.000Z', rank: 'a' + num, ...extra });
 
@@ -193,6 +193,17 @@ async function assertFits(page, where) {
     await page.locator('#cWorkPick').click(); const workSheet = page.locator('dialog.dworksheet[open]'); await workSheet.waitFor();
     assert.deepEqual(await workSheet.locator('.dworkcol h3').allTextContents(), ['Client', 'Project']);
     assert.equal(await workSheet.locator('.dworkcol').first().locator('.dworkchoice', { hasText: 'Acme' }).count(), 1);
+    // search narrows both lists: word starts, small typos and "contains"; the current choice stays in view
+    const clientList = () => workSheet.locator('.dworkcol').first().locator('.dworkchoice:not(.dworkchoice--add) strong').allTextContents();
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'cWorkFind', 'the search box has focus on a desktop');
+    await page.locator('#cWorkFind').fill('zzqx'); assert.deepEqual(await clientList(), ['Acme'], 'no match keeps only the current client');
+    assert.equal(await workSheet.locator('.dworkempty').count(), 1, 'an empty project list says so');
+    assert.equal(await workSheet.locator('.dworkchoice', { hasText: 'No client' }).count(), 0, 'a search hides the "No" choices');
+    await page.locator('#cWorkFind').fill('north'); assert.deepEqual(await clientList(), ['Acme', 'Northwind Traders']);
+    await shot(page, 'phone-client-project-search');
+    await page.waitForFunction(() => window.MiniSearch); await page.locator('#cWorkFind').fill('bluebel evnts'); assert.deepEqual(await clientList(), ['Acme', 'Bluebell Events'], 'small typos still match');
+    await page.locator('#cWorkFind').fill('wind'); assert.deepEqual(await clientList(), ['Acme', 'Northwind Traders'], 'a part of a word matches');
+    await page.locator('#cWorkFind').fill(''); assert.deepEqual(await clientList(), ['No client', 'Acme', 'Bluebell Events', 'Northwind Traders']);
     await workSheet.getByRole('button', { name: 'Add a new client', exact: true }).click(); const prompt = page.locator('dialog.ui-sheet--alert[open]'); await prompt.waitFor();
     await prompt.locator('input').fill('Beta Ltd'); await prompt.locator('button', { hasText: 'Add client' }).click(); await prompt.waitFor({ state: 'detached' });
     assert.equal(api.card().client, 'Acme', 'the picker is a draft until Apply');

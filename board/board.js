@@ -2793,25 +2793,47 @@ if (typeof window !== 'undefined') (() => {
     const clientCol = el('section', 'dworkcol'), projectCol = el('section', 'dworkcol');
     clientCol.append(el('h3', null, 'Client'), clients); projectCol.append(el('h3', null, 'Project'), projects);
     const cols = el('div', 'dworkcols'); cols.append(clientCol, projectCol);
-    const body = el('div', 'dworkpicker'); body.append(intro, cols);
+    // Search narrows both lists. It uses MiniSearch, the board search library (word starts and small typos), plus a plain
+    // "contains" match, so "onic" still finds THE ICONIC. Until the library loads, only the "contains" match runs.
+    const find = el('input', 'ui-input dworkfind'); find.type = 'search'; find.id = 'cWorkFind'; find.autocomplete = 'off';
+    find.placeholder = 'Search clients and projects'; find.setAttribute('aria-label', 'Search clients and projects');
+    let q = '', MS = window.MiniSearch || null;
+    if (!MS) loadMs().then(lib => { MS = lib; if (q && taskWorkSheet) render(); }, () => {});
+    const matching = (items, text) => {   // the items that match q, best first
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean); if (!words.length) return items;
+      const found = new Set();
+      if (MS) { const ix = new MS({ fields: ['text'], searchOptions: { prefix: true, fuzzy: 0.2, combineWith: 'AND' } });
+        ix.addAll(items.map((x, i) => ({ id: i, text: text(x) }))); ix.search(q).forEach(h => found.add(items[h.id])); }
+      items.forEach(x => { if (words.every(w => text(x).toLowerCase().includes(w))) found.add(x); });
+      return [...found];
+    };
+    const body = el('div', 'dworkpicker'); body.append(intro, find, cols);
     const choice = (label, meta, selected, click) => {
       const b = el('button', 'dworkchoice' + (selected ? ' selected' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(selected)); b.onclick = click;
       b.append(el('strong', null, label)); if (meta) b.append(el('span', null, meta)); return b;
     };
     const render = () => {
       clients.textContent = ''; projects.textContent = '';
-      clients.append(choice('No client', '', !client, () => { client = ''; const p = projectById(project) || (newProject && newProject.id === project ? newProject : null); if (p && p.client) project = ''; render(); }));
-      [...new Set([...state.clients, newClient].filter(Boolean))].sort((a, b) => a.localeCompare(b)).forEach(name => clients.append(choice(name, '', client === name, () => { client = name; const p = projectById(project) || (newProject && newProject.id === project ? newProject : null); if (p && p.client && p.client !== client) project = ''; render(); })));
+      const allProjects = sortedProjects(); if (newProject) allProjects.push(newProject);
+      const projectNames = name => allProjects.filter(p => p.client === name).map(p => p.name).join(' ');
+      // with a search, a client also matches by its project names, and projects come from every client
+      let clientNames = matching([...new Set([...state.clients, newClient].filter(Boolean))].sort((a, b) => a.localeCompare(b)), n => n + ' ' + projectNames(n));
+      if (q && client && !clientNames.includes(client)) clientNames.unshift(client);   // the current choice stays in view
+      if (!q) clients.append(choice('No client', '', !client, () => { client = ''; const p = projectById(project) || (newProject && newProject.id === project ? newProject : null); if (p && p.client) project = ''; render(); }));
+      if (q && !clientNames.length) clients.append(el('p', 'dworkempty', 'No client matches.'));
+      clientNames.forEach(name => clients.append(choice(name, '', client === name, () => { client = name; const p = projectById(project) || (newProject && newProject.id === project ? newProject : null); if (p && p.client && p.client !== client) project = ''; render(); })));
       const addClient = choice('Add a new client', '', false, async () => {
-        let name = ((await ui.promptText({ title: 'New client', label: 'Client name', confirmLabel: 'Add client' })) || '').replace(/\s+/g, ' ').trim();
+        let name = ((await ui.promptText({ title: 'New client', label: 'Client name', value: clientNames.length ? '' : q, confirmLabel: 'Add client' })) || '').replace(/\s+/g, ' ').trim();
         if (!name || editing !== id || !taskWorkSheet) return; const known = state.clients.find(c => c.toLowerCase() === name.toLowerCase()); if (known) name = known;
         newClient = name; client = name; project = ''; render();
       }); addClient.classList.add('dworkchoice--add'); addClient.prepend(ui.icon('plus')); clients.append(addClient);
-      projects.append(choice('No project', '', !project, () => { project = ''; render(); }));
-      const available = sortedProjects().filter(p => !client || p.client === client); if (newProject && (!client || newProject.client === client)) available.push(newProject);
+      if (!q) projects.append(choice('No project', '', !project, () => { project = ''; render(); }));
+      const available = q ? matching(allProjects, p => p.name + ' ' + (p.client || '')) : allProjects.filter(p => !client || p.client === client);
+      const current = q && allProjects.find(p => p.id === project); if (current && !available.includes(current)) available.unshift(current);
+      if (q && !available.length) projects.append(el('p', 'dworkempty', 'No project matches.'));
       available.forEach(p => projects.append(choice(p.name, [p.client, p.status && p.status !== 'active' ? p.status : ''].filter(Boolean).join(' · '), project === p.id, () => { project = p.id; if (p.client) client = p.client; render(); })));
       const addProject = choice('Add a new project', '', false, async () => {
-        const name = ((await ui.promptText({ title: 'New project', label: 'Project name', body: client ? `The project belongs to ${client}.` : 'You can add a client first, or create a project without one.', confirmLabel: 'Add project' })) || '').replace(/\s+/g, ' ').trim();
+        const name = ((await ui.promptText({ title: 'New project', label: 'Project name', value: available.length ? '' : q, body: client ? `The project belongs to ${client}.` : 'You can add a client first, or create a project without one.', confirmLabel: 'Add project' })) || '').replace(/\s+/g, ' ').trim();
         if (!name || editing !== id || !taskWorkSheet) return;
         newProject = { id: boardId('pr_'), client, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() }; project = newProject.id; render();
       }); addProject.classList.add('dworkchoice--add'); addProject.prepend(ui.icon('plus')); projects.append(addProject);
@@ -2831,7 +2853,9 @@ if (typeof window !== 'undefined') (() => {
       }, `Client and project: ${titleOf(id)}`);
       if (ok && taskWorkSheet) taskWorkSheet.close();
     };
-    render(); taskWorkSheet.open();
+    find.oninput = () => { q = find.value.trim(); render(); };
+    find.onkeydown = e => { if (e.key === 'Enter') e.preventDefault(); };
+    render(); taskWorkSheet.open(); if (matchMedia('(pointer: fine)').matches) find.focus();   // no phone keyboard until asked
   }
   const syncDue = (v, t) => paintDate('cDue', v, { done: !!t && isDoneTask(t) });   // overdue is red, today amber; a done task is never late
   $('cDue').onchange = e => { const v = e.target.value; syncDue(v, taskNow()); edit(editing, t => { t.due = v; }, `Due: ${titleOf(editing)}`); };
