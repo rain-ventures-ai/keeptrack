@@ -48,6 +48,18 @@ Agents and scripts use `wait ID --on "Acme finance" [--who p_id|login] [--nudge 
 `unwait ID --note "why"`. `today` lists waits due for a chase under **CHASE NOW**, `list --waiting` (or
 `--waiting-on me`) lists waiting tasks, and `people` shows how many tasks wait on each person.
 
+## Runs after another task
+A task can run after other tasks: #63 after #62, say. Set it with `task-set '#63' --after '#62'` (repeat
+`--after` for more; `--not-after '#62'` removes one, `--no-after` clears them), or `add "Title" --after '#62'`. Each id
+must be a task on the board; a task can't run after itself, and a loop is refused. The card shows an **after #62** chip
+for each task not done yet (amber when that task is missing or cancelled), and the task's details list every link and
+its state. `show` prints them, and `list` adds `[after #62]`.
+
+The links are a hint and a gate, never a trigger. Nothing moves a task into **To do** because the tasks before it are
+done: you do that, and moving a chain into To do is approving it. Relay (if you use it) starts a task only once every
+task it runs after is done, and tells you when a Backlog task is ready to approve or a chain has stopped. A task that is
+no longer on the board counts as done only if the archive holds it as Done; otherwise it shows as missing.
+
 ## Labels
 
 Type a label on a task to create it. To rename, recolour or delete labels, or add one with a colour, open **Settings → Board → Labels**. Renaming or deleting a label updates every task that uses it, and **Undo** reverts the whole change. The agent tool does the same with `label-set` and `label-rm`.

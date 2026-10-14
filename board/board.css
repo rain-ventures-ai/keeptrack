@@ -823,6 +823,16 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .dwait > .ui-pill { max-width: 100%; min-width: 0; }
 .dwait .ui-pill__main, .dwait .ui-pill__text { min-width: 0; }
 .dwait .ui-pill__text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Runs after (card dependencies): a quiet chip per link not done yet, amber when it is missing or cancelled */
+.chip.afterchip { display: inline-flex; align-items: center; gap: 3px; }
+.chip.afterchip.late { color: var(--warn); background: var(--warn-soft); font-weight: 600; }
+.chip.afterchip.ok { color: var(--muted); }
+.dafter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-top: var(--sp-3); min-width: 0; }
+.dafter[hidden] { display: none; }
+.dafter__label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--fs-sm); }
+.dafter > .ui-pill { max-width: 100%; min-width: 0; }
+.dafter .ui-pill__main, .dafter .ui-pill__text { min-width: 0; }
+.dafter .ui-pill__text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dworkpick { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); width: 100%; min-height: 46px; padding: var(--sp-2) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel); color: var(--text); text-align: left; cursor: pointer; }
 .dworkpick:hover { border-color: var(--border-strong); background: var(--card-hover); }
 .dworkpick__text { display: grid; gap: 2px; min-width: 0; }
