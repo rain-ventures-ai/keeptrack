@@ -27,6 +27,13 @@ Views and utility screens can be bookmarked: the address keeps the selected view
 Search and Copy offer **Copy link to this screen**; settings sections also offer their own links. Shared screen links
 include the board, branch and file path, never your GitHub token. They do not grant repository access.
 
+## Write a good card
+A card is a note to someone who was not there. A good card has a title that says the outcome in plain words, details
+that say what, why and what "done" means, steps you can tick, and a **link** for every pull request, document, file or
+web page it talks about. Writing "see #481" in the text is not enough: add the page to the card's links so people can
+click it and search finds it; a linked pull request also shows in the Pull requests panel. [Write a good card](../../board/kit/CARDS.md) has the
+five tests, a bad card and the same card written well. Agents follow the same guide.
+
 ## Tasks for a person
 Open a person and type in **☑ Tasks**. The task is linked to that person and their company, and it shows on **Today** when it is due.
 

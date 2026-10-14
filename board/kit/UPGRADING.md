@@ -25,6 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v55 (schema 4)
+What a good card is. No data migration.
+- Run `kit-update` only. It adds `board/CARDS.md`.
+- New `board/CARDS.md`: the five tests of a good card (a plain-words title, what, why and "done", steps a person can
+  tick, every source in the card's links, nothing secret), a bad card and the same card written well, and how to link
+  PRs, issues, documents, folders and web pages.
+- The board, board-admin, keeptrack, keeptrack-notes and onboard-keeptrack skills, the routine prompt, the AGENTS.md
+  template and the README agent protocol now point at it. Every PR, document or page a card mentions goes in its links,
+  not only in its text.
+- Check: `kit-check` says v55, and `board/CARDS.md` exists.
+
 ### v54 (schema 4)
 Moved work is never lost. No data migration.
 - Run `kit-update` only.

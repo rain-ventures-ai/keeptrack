@@ -10,6 +10,14 @@ First ask: "Do you want to stop using <tool>?"
 - Keep: title, the client (from the board, list or label name), due date, checklist items (as `todos`), and a link back to the old card.
 - Leave out: comments history, attachments (link the card instead), done items, and items with no title.
 
+## Make each imported card readable
+Old tools are full of cards like "Fix bug" or "Acme stuff". Before you put a task in the staging file, check it against
+`CARDS.md` (next to `keeptrack.py`; `board/CARDS.md` in a board repo):
+- Rewrite a title that a newcomer cannot understand. Keep the old title in the details ("Was: ...").
+- Put each PR, issue, document, file or page that the old card names or attaches in its `links`, with a title, plus the
+  link back to the old card.
+- If you cannot tell what a card is about, do not guess: list it in `plan.md` under "Ask the owner".
+
 ## Map the columns
 | Old tool | Keeptrack column |
 |---|---|

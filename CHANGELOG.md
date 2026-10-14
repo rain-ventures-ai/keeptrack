@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v55 — 2026-10-14
+
+What a good card is. New `board/CARDS.md` (shipped to every board): the five tests of a good card, a bad card
+and the same card written well, and how to put every PR, issue, document, folder and web page a card mentions in its
+links section. The board, board-admin, keeptrack, keeptrack-notes and onboard-keeptrack skills, the routine prompt,
+the AGENTS.md template, the README agent protocol and `docs/help/tasks.md` point at it. No schema migration.
+
+The entries below were merged before v55 and were listed under Unreleased; v55 is the first kit version that
+names them.
+
 Web board: an **@Mentions** view, next to Kanban, List, Calendar, Schedule and Activity. It lists every comment that
 mentions you (`@` + your GitHub username in Settings), newest first, with the card, its description and the comment.
 Your own comments are left out, the filters apply, and "New" marks comments since you last opened the card. A row

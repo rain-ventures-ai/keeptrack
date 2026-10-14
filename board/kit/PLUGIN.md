@@ -52,6 +52,7 @@ Then install **keeptrack** from the plugin browser (`/plugins`). The marketplace
 ```
 .agents/
   keeptrack.py                 <- board/kit/keeptrack.py
+  CARDS.md                     <- board/kit/CARDS.md
   skills/
     keeptrack/
       SKILL.md                 <- board/kit/skills/keeptrack/SKILL.md
