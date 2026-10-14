@@ -258,7 +258,8 @@ if (typeof window !== 'undefined') (() => {
   // from this list. A menu item clicks the header button with the same id, so each action is wired in one place.
   const HEAD_ACTIONS = [
     { id: 'btnUndo', icon: 'undo-2', menu: 'Undo last change', title: 'Nothing to undo' },
-    { id: 'btnInbox', icon: 'inbox', menu: 'Review Inbox', title: 'Review Inbox' },   // shown only when the board turns the Inbox on
+    { id: 'btnInbox', icon: 'inbox', menu: 'Review Inbox', title: 'Review Inbox' },
+    { id: 'btnPrs', icon: 'git-pull-request', short: 'PRs', menu: 'Pull requests', title: 'Pull requests linked on cards' },   // shown only when a card links a pull request   // shown only when the board turns the Inbox on
     { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
     { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
     { id: 'btnInstall', icon: 'download', short: 'Install', menu: 'Install this board', title: 'Install this board' },
@@ -577,7 +578,7 @@ if (typeof window !== 'undefined') (() => {
       else if (ro === 'demo') { ro = LS.get(roKey()) ? 'token' : ''; applyRo(); }
       if (isSplit(raw)) { const got = await splitSnapshot(true); if (stale()) return false; splitMeta = got.meta; raw = got.data; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); }
       else splitMeta = null;
-      newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; setKitRo(raw); const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkPublic(); lastSyncOk = true; initSeen();
+      newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; setKitRo(raw); const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkRelayKit(); checkPublic(); lastSyncOk = true; initSeen();
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
     } catch (e) { console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
@@ -627,6 +628,133 @@ if (typeof window !== 'undefined') (() => {
     };
     bar({ text: intro + 'You are the upgrade owner.', action: ui.button({ label: 'Make the upgrade card', variant: 'primary', size: 'sm', onClick: make }) });
   }
+  // ---- relay kit: is this repo's relay/ older than the published relay kit? (only boards that have relay/KIT_VERSION) ----
+  // Same shape as the board-kit bar above: one bar for everyone, the button only for the upgrade owner, one open card at a time.
+  // The published version is read from settings.relay_kit_source ("owner/repo", default below) with the board login.
+  const RELAY_KIT_SOURCE = 'rain-ventures-ai/keeptrack-relay', RELAY_CARD_PREFIX = 'Update the relay kit to ';
+  let relayKit = null, relayChecked = '';   // { have, want, source } once both versions were read
+  const relayVer = s => { const m = /^\s*(\d+)\.(\d+)\.(\d+)\s*$/.exec(String(s || '')); return m ? [+m[1], +m[2], +m[3]] : null; };
+  const relayOlder = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+  const relaySource = () => { const s = String((state.settings || {}).relay_kit_source || '').trim(); return REPO_RE.test(s) ? s : RELAY_KIT_SOURCE; };
+  async function checkRelayKit() {
+    const c = cfg(), source = relaySource(), key = `${c.repo}@${c.branch}<${source}`; if (!$('relayBar') || !c.token || ro === 'demo' || relayChecked === key) return; relayChecked = key; relayKit = null;
+    const read = async (repo, ref) => { const r = await fetch(`${c.api}/repos/${repo}/contents/relay/KIT_VERSION?ref=${encodeURIComponent(ref)}`, { cache: 'no-store', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github.raw+json' } }); return r.ok ? await r.text() : null; };
+    try {
+      const have = relayVer(await read(c.repo, c.branch)); if (!have) return;   // no relay/ here (404), or no readable version: show nothing
+      const want = relayVer(await read(source, 'main')); if (!want) return;
+      relayKit = { have: have.join('.'), want: want.join('.'), older: relayOlder(have, want), source }; renderRelayBar();
+    } catch { /* offline: say nothing */ }
+  }
+  function renderRelayBar() {
+    if (!$('relayBar')) return;
+    if (!relayKit || !relayKit.older) { showBar('relayBar', null); return; }
+    const { have, want, source } = relayKit, owner = kitOwner(), title = RELAY_CARD_PREFIX + want, card = state.tasks.find(t => t.title.startsWith(RELAY_CARD_PREFIX) && t.column !== doneColId());
+    const intro = `The relay kit is out of date (this repo ${have}, latest ${want}). `, bar = o => showBar('relayBar', Object.assign({ tone: 'info', icon: 'puzzle' }, o));
+    if (card) { bar({ text: intro + `Update card #${card.num} is with @${owner}.`, action: { label: `Open #${card.num}`, onClick: () => openCard(card.id, 'comments') } }); return; }
+    if (!owner || (me() || '').toLowerCase() !== owner.toLowerCase()) { bar({ text: intro + `The upgrade owner is @${owner || '?'}.` }); return; }
+    const make = async () => {
+      const id = uid();
+      await mutate(n => { if (n.tasks.some(t => t.title.startsWith(RELAY_CARD_PREFIX) && t.column !== doneColId())) return;
+        n.tasks.push({ id, title, column: 'todo', client: '', priority: 'medium', due: '', labels: n.labels.some(l => l.name === 'relay') ? ['relay'] : [], assignees: [owner],
+          details: `This repo's relay kit is ${have}; the published kit (${source}) is ${want}.\n\nWork on a branch. Run \`python3 relay/scripts/relay.py kit-update\`. It copies the kit's core files in and lists what it left to you: prompts and anything this repo changed. Read that list and the code changes, then check the board still works. The pull request is yours to merge.`,
+          links: [{ title: 'Relay kit', url: `https://github.com/${source}` }], contacts: [], todos: ['kit-update on a branch (python3 relay/scripts/relay.py kit-update)', 'Read the listed prompt and code changes', 'Checks pass', 'Open and link the PR'].map(text => ({ id: todoId(), text, done: false })),
+          comments: [], history: [], claim: null, created: nowIso(), updated: nowIso(), createdBy: me(), updatedBy: me() }); }, title);
+      renderRelayBar(); const t = state.tasks.find(x => x.id === id); if (t) openCard(id, 'comments');
+    };
+    bar({ text: intro + 'You are the upgrade owner.', action: ui.button({ label: 'Make the relay update card', variant: 'primary', size: 'sm', onClick: make }) });
+  }
+
+  // ---- pull requests panel: PRs stay links on their cards; this reads their live state when the panel opens ----------------
+  // Reads only: one batched GraphQL query per 20 PRs with the board login, cached for two minutes. A PR it cannot read says unknown.
+  const PR_URL_RE = /^https:\/\/github\.com\/((?!\.+\/)[A-Za-z0-9_.-]+)\/((?!\.+\/)[A-Za-z0-9_.-]+)\/pull\/([0-9]+)$/;   // as relay.py PR_URL_RE
+  const PR_TTL = 120000, PR_BATCH = 20, prCache = new Map();   // url -> { at, info } (info null = unknown)
+  const prField = 'state isDraft merged title updatedAt mergeable author { login } reviewDecision reviewRequests(first: 30) { nodes { requestedReviewer { ... on User { login } } } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }';
+  function boardPrs() {   // [{ url, owner, repo, n, cards: [task] }] for every PR url linked on a card
+    const by = new Map();
+    state.tasks.forEach(t => (t.links || []).forEach(l => { const u = String((l && l.url) || ''), m = PR_URL_RE.exec(u); if (!m) return;
+      const k = u.toLowerCase(); let e = by.get(k); if (!e) by.set(k, e = { url: u, owner: m[1], repo: m[2], n: +m[3], cards: [] }); if (!e.cards.includes(t)) e.cards.push(t); }));
+    return [...by.values()];
+  }
+  async function readPrs(list, force) {   // fills prCache; returns an error text or ''
+    const c = cfg(), need = list.filter(p => force || !(prCache.get(p.url.toLowerCase()) || { at: 0 }).at || Date.now() - prCache.get(p.url.toLowerCase()).at > PR_TTL);
+    if (!need.length) return '';
+    if (!c.token || ro === 'demo') { need.forEach(p => prCache.set(p.url.toLowerCase(), { at: Date.now(), info: null })); return ro === 'demo' ? 'The demo board does not read GitHub.' : 'Sign in with a board login to read pull requests.'; }
+    let problem = '';
+    for (let i = 0; i < need.length; i += PR_BATCH) {
+      const part = need.slice(i, i + PR_BATCH), q = 'query {' + part.map((p, j) => `p${j}: repository(owner: ${JSON.stringify(p.owner)}, name: ${JSON.stringify(p.repo)}) { pullRequest(number: ${p.n}) { ${prField} } }`).join(' ') + '}';
+      let data = null;
+      try {
+        const r = await fetch(`${c.api}/graphql`, { method: 'POST', cache: 'no-store', headers: { Authorization: `Bearer ${c.token}`, 'Content-Type': 'application/json', Accept: 'application/vnd.github+json' }, body: JSON.stringify({ query: q }) });
+        if (!r.ok) problem = `GitHub said ${r.status} when reading pull requests.`; else { const j = await r.json(); data = j && j.data || null; if (!data && !problem) problem = 'GitHub did not return pull request data.'; }
+      } catch { problem = 'Could not reach GitHub.'; }
+      part.forEach((p, j) => { const x = data && data['p' + j] && data['p' + j].pullRequest; prCache.set(p.url.toLowerCase(), { at: Date.now(), info: x || null }); });
+    }
+    return problem;
+  }
+  const prState = i => !i ? 'unknown' : i.merged ? 'merged' : i.state === 'CLOSED' ? 'closed' : i.isDraft ? 'draft' : 'open';
+  const prCi = i => { const s = i && i.commits && i.commits.nodes && i.commits.nodes[0] && i.commits.nodes[0].commit.statusCheckRollup; const v = s && s.state; return v === 'SUCCESS' ? 'passing' : v === 'FAILURE' || v === 'ERROR' ? 'failing' : v === 'PENDING' || v === 'EXPECTED' ? 'running' : 'none'; };
+  const prReview = i => ({ APPROVED: 'approved', CHANGES_REQUESTED: 'changes requested', REVIEW_REQUIRED: 'review needed' })[i && i.reviewDecision] || 'none';
+  const prAsks = (i, who) => !!who && ((i && i.reviewRequests && i.reviewRequests.nodes) || []).some(n => n && n.requestedReviewer && String(n.requestedReviewer.login || '').toLowerCase() === who.toLowerCase());
+  // A PR made by an agent for this owner: a linked card's claim names the owner, or a board agent / bot made it for a card assigned to the owner.
+  function prByAgentFor(i, cards, who) {
+    const w = String(who || '').toLowerCase(), by = String((i && i.author && i.author.login) || '').toLowerCase(); if (!w) return false;
+    if (cards.some(t => t.claim && String(t.claim.on_behalf_of || '').toLowerCase() === w)) return true;
+    const agent = by.endsWith('[bot]') || (state.agents || []).some(a => String(a).toLowerCase() === by);
+    return agent && cards.some(t => (t.assignees || []).some(a => String(a).toLowerCase() === w));
+  }
+  // The rule of relay supervise check-pr: a merged PR on a card that is not Done means the card can be finished. Never moves the card.
+  const prUnfinished = (p, st) => st === 'merged' ? p.cards.filter(t => t.column !== doneColId()) : [];
+  function prRows(list) {   // -> { waiting, open, finish, unknown } rows, each newest first
+    const who = me(), rows = { waiting: [], open: [], finish: [], unknown: [] };
+    list.forEach(p => { const e = prCache.get(p.url.toLowerCase()), i = e && e.info, st = prState(i), row = { p, i, st, ci: prCi(i), review: prReview(i), at: i && Date.parse(i.updatedAt) || Math.max(0, ...p.cards.map(t => Date.parse(t.updated) || 0)), why: '' };
+      if (st === 'unknown') rows.unknown.push(row);
+      else if (st === 'merged') { if (prUnfinished(p, st).length) rows.finish.push(row); }
+      else if (st === 'open' || st === 'draft') {
+        const ready = st === 'open' && i.mergeable !== 'CONFLICTING' && row.ci !== 'failing' && row.ci !== 'running' && (row.review === 'approved' || row.review === 'none');
+        if (st === 'open' && prAsks(i, who)) { row.why = 'Asks you for a review'; rows.waiting.push(row); }
+        else if (ready && prByAgentFor(i, p.cards, who)) { row.why = 'Ready to merge'; rows.waiting.push(row); }
+        else rows.open.push(row);
+      } });
+    Object.values(rows).forEach(r => r.sort((a, b) => b.at - a.at));
+    return rows;
+  }
+  function prRow(r) {
+    const { p, i, st } = r, row = el('div', 'prrow'), top = el('div', 'prtop');
+    const a = el('a', 'prtitle', i && i.title ? i.title : `${p.owner}/${p.repo}#${p.n}`); a.href = p.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    top.append(a, el('span', 'prref muted', `${p.owner}/${p.repo}#${p.n}`)); row.append(top);
+    const tags = el('div', 'prtags'), add = (text, tone) => tags.append(ui.pill({ text, tone, size: 'sm' }));
+    if (r.why) add(r.why, 'accent');
+    add(st === 'unknown' ? 'Unknown' : st === 'draft' ? 'Draft' : st === 'open' ? 'Open' : st === 'merged' ? 'Merged' : 'Closed', st === 'merged' ? 'ok' : st === 'open' ? 'info' : 'neutral');
+    if (st === 'open' || st === 'draft') {
+      if (r.ci !== 'none') add('Checks ' + r.ci, r.ci === 'passing' ? 'ok' : r.ci === 'failing' ? 'danger' : 'warn');
+      if (r.review !== 'none') add(r.review[0].toUpperCase() + r.review.slice(1), r.review === 'approved' ? 'ok' : r.review === 'changes requested' ? 'danger' : 'warn');
+      if (i && i.mergeable === 'CONFLICTING') add('Has conflicts', 'danger');
+    }
+    const unfinished = prUnfinished(p, st); if (unfinished.length) add('Can be finished', 'ok');
+    row.append(tags);
+    if (st === 'unknown') row.append(el('p', 'prnote muted', 'Could not read this pull request. It may be private, moved or out of reach of your login.'));
+    const cards = el('div', 'prcards'); p.cards.forEach(t => { const b = el('button', 'prcard small'); b.type = 'button'; b.textContent = `#${t.num} ${t.title}` + (unfinished.includes(t) ? ' (not Done yet)' : ''); b.onclick = () => { $('dlgPrs').close(); openCard(t.id); }; cards.append(b); });
+    row.append(cards); return row;
+  }
+  let prsRun = 0;
+  async function renderPrs(force) {
+    const body = $('prsBody'), status = $('prsStatus'), run = ++prsRun, list = boardPrs(); body.textContent = '';
+    if (!list.length) { body.append(ui.empty({ text: 'No card links to a pull request yet.', icon: 'git-pull-request' })); status.textContent = ''; return; }
+    status.textContent = 'Reading from GitHub...'; $('prsRefresh').disabled = true; const problem = await readPrs(list, !!force); if (run !== prsRun) return;
+    $('prsRefresh').disabled = false; const rows = prRows(list); body.textContent = '';
+    const group = (title, key, hint) => { if (!rows[key].length) return; const s = el('section', 'prgroup'), h = el('h4', null, `${title} (${rows[key].length})`); s.append(h); if (hint) s.append(el('p', 'muted prhint', hint)); rows[key].forEach(r => s.append(prRow(r))); body.append(s); };
+    group('Waiting on you', 'waiting'); group('Open', 'open'); group('Merged, card not Done', 'finish', 'These cards can be finished. Move them to Done yourself, or ask your agent to.'); group('Unknown', 'unknown');
+    if (!body.children.length) body.append(ui.empty({ text: 'Nothing open. Merged pull requests on Done cards are not listed.', icon: 'git-pull-request' }));
+    const stamp = Math.max(...list.map(p => (prCache.get(p.url.toLowerCase()) || { at: 0 }).at)); status.textContent = (problem ? problem + ' ' : '') + 'Read at ' + new Date(stamp).toLocaleTimeString();
+  }
+  function syncPrsButton() {
+    const on = boardPrs().length > 0; const b = $('btnPrs'); if (b) b.hidden = !on;
+    document.querySelectorAll('[data-head-action="btnPrs"]').forEach(x => { x.hidden = !on; });
+  }
+  $('btnPrs').onclick = () => { closePops(); if (!$('dlgPrs').open) $('dlgPrs').showModal(); renderPrs(false); };
+  $('prsClose').onclick = () => $('dlgPrs').close();
+  $('prsRefresh').onclick = () => renderPrs(true);
+
   // The strips under the header (#updateBar, #kitBar, #memberBar, #roBar, #sizeBar) each hold one ui.banner. opts null hides the strip;
   // opts.onDismiss adds the banner's dismiss button, which hides the strip too.
   function showBar(id, opts) {
@@ -1450,7 +1578,7 @@ if (typeof window !== 'undefined') (() => {
     writeFilterRoute();
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
-    applyModes(); syncInboxButton(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
+    applyModes(); syncInboxButton(); syncPrsButton(); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
     if (view !== 'board') {
       const listPos = listPosition();
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;

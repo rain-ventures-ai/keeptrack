@@ -67,6 +67,7 @@
 <nav id="subnav" class="subnav" aria-label="Views in this section" hidden></nav>
 <div id="updateBar" class="kbbar" hidden><span>A new version of the board is available.</span><button id="updNow" type="button">Update now</button><button id="updLater" type="button">Later</button></div>
 <div id="kitBar" class="kbbar" hidden></div>
+<div id="relayBar" class="kbbar" hidden></div>
 <div id="memberBar" class="kbbar" hidden></div>
 <div id="roBar" class="kbbar" hidden></div>
 <div id="sizeBar" class="kbbar" hidden></div>
@@ -109,6 +110,12 @@
   <div class="qbar"><i data-i="search"></i><input id="qQ" type="search" enterkeyhint="search" placeholder="Search people, tasks, help and settings" autocomplete="off" aria-label="Search people, tasks, notes, messages, help and settings"><button id="qClose" type="button" class="qcancel">Cancel</button></div>
   <div class="qopts"><label class="qchip"><input type="checkbox" id="qArch"> Include archive</label><span id="qInfo" class="muted" role="status"></span></div>
   <div id="qRes" class="qres" role="list"></div>
+</dialog>
+<dialog id="dlgPrs" class="settings prsdialog" aria-labelledby="prsTitle">
+  <div class="sethead"><h3 id="prsTitle">Pull requests</h3><button id="prsClose" class="ico" aria-label="Close pull requests"><i data-i="x"></i></button></div>
+  <p class="muted prsintro">Pull requests linked on cards, read live from GitHub with your board login. Nothing here changes a card.</p>
+  <div class="prsbar"><span id="prsStatus" class="muted" role="status"></span><button id="prsRefresh" type="button" class="small"><i data-i="refresh-cw"></i> Refresh</button></div>
+  <div id="prsBody" class="prsbody"></div>
 </dialog>
 <dialog id="dlgCopy" class="settings copydialog" aria-labelledby="copyTitle">
   <div class="sethead"><h3 id="copyTitle">Copy board</h3><button id="copyClose" class="ico" aria-label="Close copy options"><i data-i="x"></i></button></div>
