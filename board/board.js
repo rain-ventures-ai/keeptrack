@@ -5441,13 +5441,13 @@ if (typeof window !== 'undefined') (() => {
   function prepBrief(who) {
     const meL = (cfg().me || '').toLowerCase(), whoL = String(who || '').toLowerCase(), both = [meL, whoL].filter(Boolean), today = todayIso();
     const weekAgo = Date.now() - 7 * 864e5, done = doneColId(), used = new Set();
-    const person = l => state.people.find(p => p.github.toLowerCase() === l) || { github: l, name: l };
+    const person = l => state.people.find(p => String(p.github || '').toLowerCase() === l) || { github: l, name: l };
     const owner = by => String(by || '').toLowerCase().split('@').pop();   // "claude@JezHub" counts as JezHub
     const has = (t, l) => t.assignees.some(a => a.toLowerCase() === l);
     // "Discuss X with Ollie": a talk verb, then "with" and a word that starts like either person's name or login (Ollie ~ Oliver)
     // and it belongs to the call only when the person it names is one of you and the card is the other one's (or nobody's)
     const stems = l => [l, String(person(l).name || '').toLowerCase()].filter(s => s.length >= 2).map(s => s.slice(0, 2));
-    const talk = t => { const m = /\b(discuss|sync|talk|catch[- ]?up|agree|decide|ask|check|review)\b.*\bwith\s+@?([a-z][\w-]+)/i.exec(t.title); if (!m) return false;
+    const talk = t => { const m = /\b(discuss|sync|talk|catch[- ]?up|agree|decide|ask|check|review)\b.*?\bwith\s+@?([a-z][\w-]+)/i.exec(t.title); if (!m) return false;
       const named = m[2].toLowerCase().slice(0, 2), mine = !t.assignees.length;
       return both.some(l => stems(l).includes(named) && (mine || both.some(o => o !== l && has(t, o)))); };
     const mentions = (text, l) => new RegExp('(?<![\\w@#&/])@' + l.replace(/[^\w-]/g, '') + '(?![\\w-])', 'i').test(String(text || ''));
@@ -5459,7 +5459,8 @@ if (typeof window !== 'undefined') (() => {
     add('discuss', 'To discuss', 'message-square', pick(open.filter(talk), t => t.assignees.map(a => '@' + a).join(', ')));
     add('waiting', 'Waiting on one of you', 'alarm-clock', pick(open.filter(t => { const w = waitingOf(t); return w && both.includes(String(w.who || '').toLowerCase()); }), t => 'Waiting on ' + (waitingOf(t).on || '@' + waitingOf(t).who)));
     add('stuck', 'Overdue or stuck', 'triangle-alert', pick(open.filter(t => ours(t) && needsAttention(t)), t => t.due && t.due < today ? 'Due ' + t.due : 'Needs attention'));
-    add('mentions', 'Asked of each other this week', 'bell', pick(open.filter(t => t.comments.some(c => Date.parse(c.at) >= weekAgo && both.some(l => l !== owner(c.by) && mentions(c.text, l)) && both.includes(owner(c.by)))), t => { const c = t.comments.slice().reverse().find(c => both.includes(owner(c.by))); return c ? (c.by || '') + ': ' + String(c.text || '').replace(/\s+/g, ' ').slice(0, 120) : ''; }));
+    const asks = c => Date.parse(c.at) >= weekAgo && both.includes(owner(c.by)) && both.some(l => l !== owner(c.by) && mentions(c.text, l));
+    add('mentions', 'Asked of each other this week', 'bell', pick(open.filter(t => t.comments.some(asks)), t => { const c = t.comments.slice().reverse().find(asks); return c ? (c.by || '') + ': ' + String(c.text || '').replace(/\s+/g, ' ').slice(0, 120) : ''; }));
     add('shared', 'Shared cards', 'users', pick(open.filter(t => both.every(l => has(t, l)) && t.column !== 'backlog'), t => colName(t.column)));
     add('done', 'Done in the last 7 days', 'circle-check', pick(state.tasks.filter(t => { const c = completionOf(t); return c && Date.parse(c.at) >= weekAgo && (ours(t) || both.includes(owner(c.person || c.owner))); }), t => 'by ' + completionOf(t).label));
     const inbox = inboxOn() ? inboxPending() : [];
