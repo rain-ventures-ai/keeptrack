@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 56;
+  const PAGE_KIT = 57;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1530,11 +1530,13 @@ if (typeof window !== 'undefined') (() => {
   function markSeen(id) { const t = state.tasks.find(x => x.id === id), m = loadSeen(); if (!t || !m) return; const s = stampsOf(t), o = m[id]; if (o && o.c === s.c && o.h === s.h) return; m[id] = s; saveSeen(); }
   function markAllSeen() { const m = loadSeen() || (seenMap = {}); state.tasks.forEach(t => { m[t.id] = stampsOf(t); }); saveSeen(); }
   const mentionsMe = text => { const me = (cfg().me || '').replace(/[^\w-]/g, ''); return !!me && new RegExp('(?<![\\w@#&/])@' + me + '(?![\\w-])', 'i').test(String(text || '')); };
+  // Your own agents (by "<agent>@<you>") act for you: their history entries are your work, not news, and their comments are
+  // news only when they @mention you (a question or a hand-back). Otherwise one busy agent marks every card it touches as new.
   function freshInfo(t) {
     const me = (cfg().me || '').toLowerCase(), m = loadSeen(); if (!me || !m) return { unread: 0, mention: false, changed: false };
-    const s = m[t.id] || { c: '', h: '' }, other = x => String(x.by || '').toLowerCase() !== me;
-    const fresh = t.comments.filter(x => x.at > s.c && other(x));
-    return { unread: fresh.length, mention: fresh.some(x => mentionsMe(x.text)), changed: t.history.some(x => x.at > s.h && other(x)) };
+    const s = m[t.id] || { c: '', h: '' }, by = x => String(x.by || '').toLowerCase(), mine = x => by(x) === me || by(x).endsWith('@' + me);
+    const fresh = t.comments.filter(x => x.at > s.c && by(x) !== me && (!mine(x) || mentionsMe(x.text)));
+    return { unread: fresh.length, mention: fresh.some(x => mentionsMe(x.text)), changed: t.history.some(x => x.at > s.h && !mine(x)) };
   }
   const isFresh = t => { const f = freshInfo(t); return f.unread > 0 || f.changed; };
   const newBadge = n => el('span', 'newb', `${n} new`);
@@ -1839,7 +1841,7 @@ if (typeof window !== 'undefined') (() => {
     ab.title = (on ? 'ON: showing only cards that need attention. Click to switch off.\n' : 'OFF: showing all cards. Click to show only cards that are overdue or have a stale, stuck or blocked agent.\n') + attnTasks.slice(0, 4).map(t => '• ' + t.title).join('\n') + (attnTasks.length > 4 ? `\n…and ${attnTasks.length - 4} more` : '');
     const fresh = state.tasks.filter(isFresh).length, bell = $('btnUnread'), bd = $('unreadBadge');
     bd.textContent = fresh > 99 ? '99+' : String(fresh); bd.hidden = !fresh; bell.classList.toggle('on', freshOnly);
-    bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes${freshOnly ? ' (showing only these; click to show all)' : ' (click to show only these)'}` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
+    bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes from others${freshOnly ? ' (showing only these; click to show all)' : ' (click to show only these)'}` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
     document.title = (fresh ? `(${fresh}) ` : '') + (state.settings.title || 'Keeptrack');
     const nf = ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fPrio', 'fProject'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fWaiting').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
     fb.textContent = String(nf); fb.hidden = !nf; $('btnFilter').title = nf ? `Filters (${nf} on)` : 'Filters'; renderTopbar();
