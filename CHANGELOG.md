@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: an **@Mentions** view, next to Kanban, List, Calendar, Schedule and Activity. It lists every comment that
+mentions you (`@` + your GitHub username in Settings), newest first, with the card, its description and the comment.
+Your own comments are left out, the filters apply, and "New" marks comments since you last opened the card. A row
+opens the card and scrolls to that comment, highlighted for a moment. Today shows an **@Mentions** tile when you have
+any. Mentions stay out of the Review Inbox, which is for proposed changes only. No schema migration.
+
 Web board: **Prep for call** on Today. Select a teammate and the board shows a brief for the call from board data
 only: goals, "discuss with" cards, waits, overdue or stuck work, comments where you asked each other something this
 week, shared cards, work done in the last 7 days and the Review Inbox count. **Copy brief** and **Copy for AI** copy

@@ -183,7 +183,7 @@ if (typeof window !== 'undefined') (() => {
   const boardContext = () => localBoardJson('context');
   function saveBoardContext(patch) { if (SANDBOX || !cfg().repo) return; saveLocalBoardJson('context', { ...boardContext(), ...patch, at: nowIso() }); }
   // ---- move settings between browsers/devices: one pasteable code or a setup link (token included) --------------
-  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity'] } };
+  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'list', 'cal', 'sched', 'activity', 'mentions'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
   const XFER_SECRETS = ['token', 'claude_token', 'cron_key'];   // left out of a code unless the person ticks "Include tokens and keys"
@@ -1641,7 +1641,7 @@ if (typeof window !== 'undefined') (() => {
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox })[view](); board.scrollTop = st; renderLegend(); renderStats();
+      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox })[view](); board.scrollTop = st; renderLegend(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
@@ -1884,6 +1884,7 @@ if (typeof window !== 'undefined') (() => {
         const tm = el('time', null, ago2(cm.at)); tm.title = cm.at; row.append(tm); box.append(row); return;
       }
       const row = el('div', 'cmcard' + (mentionsMe(cm.text) ? ' mine' : '')), head = el('div', 'cmhead');
+      row.dataset.cid = cm.id || cm.at;
       head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at; if (safeUrl(cm.session_url)) { const a = elI('a', 'cmsess', 'bot', 'Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
       const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
@@ -1960,14 +1961,15 @@ if (typeof window !== 'undefined') (() => {
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
   // Each board remembers its last view in this browser. sessionStorage still wins while Back/Forward is active in one tab.
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
-  let view = SS.get('kb_view') || boardContext().view || 'today'; if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(view)) view = 'today';
+  let view = SS.get('kb_view') || boardContext().view || 'today'; if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(view)) view = 'today';
   // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
   // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
   const VIEW_GROUPS = [
     { grp: 'today', label: 'Today', views: [{ value: 'today', icon: 'alarm-clock', label: 'Today', title: 'Today: people to contact and tasks due' }] },
     { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people by stage' }] },
     { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'list', icon: 'list', label: 'List', title: 'List' },
-      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' }] }
+      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' },
+      { value: 'mentions', icon: 'at-sign', label: '@Mentions', title: '@Mentions: comments that mention you' }] }
   ];
   const tagViews = (tl, views) => { tl.querySelectorAll('.ui-tab').forEach((b, i) => { b.dataset.view = b.dataset.value; if (views[i].primary) b.classList.add('viewprimary'); }); return tl; };
   const viewTabs = {};   // group -> its ui.tabs in #viewSw
@@ -2018,7 +2020,7 @@ if (typeof window !== 'undefined') (() => {
       tasks && { title: 'Kanban: your tasks', text: 'Each card is a task. It moves through the columns from To do to Done: drag it, or change its status inside the card. This card opens the board.', view: 'today', at: ['.tgo[data-go="board"]'] },
       crm && { title: 'People: your CRM', text: 'Everyone you work with, each with a next step and a date. Log messages and calls in a person\'s card. Pipeline shows people by stage.', view: 'today', at: ['.tgo[data-go="people"]'] },
       dock ? { title: 'The bar at the bottom', text: 'It goes everywhere: Today, Tasks and People. In Tasks and People, the strip at the top switches between views such as Kanban, List, Calendar or Pipeline.', at: ['#dock'] }
-        : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
+        : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, List, Calendar, Schedule, Activity and @Mentions here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
       { title: 'Find anything', text: 'Search people, tasks, notes and messages. On a computer, press / from anywhere.', at: [dock ? '#dock [data-head-action="btnSearch"]' : '#btnSearch'] },
       { title: 'Filters', text: 'Show one client, one person, or only what needs attention. The number shows how many filters are on.', at: ['#btnFilter'] },
       { title: 'Undo', text: dock ? 'After a change, tap Undo in the message. You can also use Menu \u2192 Undo last change.' : 'After every change, a message with Undo appears for a few seconds. The Undo button and Ctrl+Z (\u2318Z on a Mac) work too.', at: [dock ? '#dockMenu' : '#btnUndo'] },
@@ -2417,6 +2419,51 @@ if (typeof window !== 'undefined') (() => {
     board.append(wrap);
   }
 
+  // ---- @Mentions: every comment that mentions you (@your-login), newest first, with its card and description ----------
+  // Your own comments are left out. "New" means posted since you last opened that card. A row opens the card at that comment.
+  function mentionData() {
+    const me = (cfg().me || '').toLowerCase(), seen = loadSeen() || {}, hideDone = $('fHideDone').checked, rows = [];
+    if (!me) return rows;
+    state.tasks.filter(t => filtered(t) && !(hideDone && t.column === doneColId())).forEach(t => {
+      const s = seen[t.id] || { c: '' };
+      t.comments.forEach(c => { if (c.type !== 'activity' && String(c.by || '').toLowerCase() !== me && mentionsMe(c.text)) rows.push({ t, c, fresh: !!loadSeen() && c.at > s.c }); });
+    });
+    return rows.sort((a, b) => (a.c.at < b.c.at ? 1 : a.c.at > b.c.at ? -1 : 0));
+  }
+  const MENTIONS_MAX = 200;
+  const snippet = (text, n) => { const x = String(text || '').replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1).trimEnd() + '…' : x; };
+  function renderMentions() {
+    const board = $('board'), wrap = el('div', 'act mentions'), rows = mentionData(), fresh = rows.filter(r => r.fresh).length;
+    const bar = el('div', 'calbar actbar'); bar.append(el('span', 'spacer'), ui.button({ label: 'Copy as Markdown', icon: 'clipboard-copy', variant: 'primary', size: 'sm', onClick: copyMarkdown }));
+    wrap.append(bar);
+    if (!cfg().me) { wrap.append(ui.empty({ text: 'Set your GitHub username in Settings to see the comments that mention you.', icon: 'at-sign' })); board.append(wrap); return; }
+    const sum = el('div', 'actsum'); sum.append(el('b', null, '@' + cfg().me), document.createTextNode(` · ${rows.length} ${rows.length === 1 ? 'mention' : 'mentions'}` + (fresh ? ` · ${fresh} new` : '')));
+    wrap.append(sum);
+    if (!rows.length) { wrap.append(ui.empty({ text: 'No comments mention you' + (filterDesc() ? ' with these filters.' : ' yet.'), icon: 'at-sign' })); board.append(wrap); return; }
+    const list = el('div', 'mnlist');
+    rows.slice(0, MENTIONS_MAX).forEach(({ t, c, fresh }) => {
+      const r = el('button', 'mnrow' + (fresh ? ' fresh' : '')); r.type = 'button'; r.dataset.task = t.id; r.dataset.cid = c.id || c.at;
+      const head = el('span', 'mnhead'); head.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title)); if (fresh) head.append(el('span', 'newb', 'New'));
+      head.append(el('span', 'ssub', cardSub(t)));
+      r.append(head);
+      if ((t.details || '').trim()) r.append(el('span', 'mndesc', snippet(t.details, 160)));
+      const cm = el('span', 'mncm'), who = el('span', 'mnwho'), tm = el('time', null, ago2(c.at)); tm.title = c.at;
+      who.append(avatar(String(c.by || '?').replace(/@.*/, '')), el('b', null, c.by || '?'), tm);
+      cm.append(who, el('span', 'mnbody', snippet(c.text, 400))); r.append(cm);   // plain text: a link inside the row's button would be a button in a button
+      r.onclick = () => openCard(t.id, { comment: c.id || c.at });
+      list.append(r);
+    });
+    wrap.append(list);
+    if (rows.length > MENTIONS_MAX) wrap.append(el('p', 'muted', `Showing the newest ${MENTIONS_MAX} of ${rows.length}. Use the filters to narrow the list.`));
+    board.append(wrap);
+  }
+  function mentionsMarkdown() {
+    const rows = mentionData(), f = filterDesc(), L = [`# @Mentions: @${cfg().me || '?'}`, '', `_${cfg().repo}${f ? ' · filters: ' + f : ''} · copied ${fmtStamp(new Date().toISOString())}_`, ''];
+    if (!rows.length) { L.push('No comments mention you.'); return L.join('\n'); }
+    rows.forEach(({ t, c, fresh }) => L.push(`- **#${t.num} ${mdLine(t.title)}**${fresh ? ' (new)' : ''} · ${fmtStamp(c.at)} · ${c.by || '?'}: ${mdIndent(c.text)}`));
+    return L.join('\n');
+  }
+
   // ---- copy as Markdown: everything the current view shows (filters applied), with every detail of each card ----------
   function filterDesc() {
     const out = [], fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fp = $('fPrio').value;
@@ -2479,6 +2526,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function copyMarkdown() {
     if (view === 'activity') { copyText(activityMarkdown(), 'Activity copied as Markdown'); return; }
+    if (view === 'mentions') { copyText(mentionsMarkdown(), 'Mentions copied as Markdown'); return; }
     const b = boardMarkdown(); copyText(b.text, `${b.n} card${b.n === 1 ? '' : 's'} copied as Markdown`);
   }
 
@@ -3266,7 +3314,7 @@ if (typeof window !== 'undefined') (() => {
       inboxF = { status: ['pending', 'accepted', 'answered', 'ignored', 'all'].includes(q.get('inbox_status')) ? q.get('inbox_status') : 'pending',
         kind: Object.hasOwn(KIND_LABEL, q.get('inbox_kind')) ? q.get('inbox_kind') : '', source: Object.hasOwn(SRC_LABEL, q.get('inbox_source')) ? q.get('inbox_source') : '',
         reviewer: /^[a-z\d-]{1,39}$/i.test(q.get('inbox_reviewer') || '') ? q.get('inbox_reviewer') : '' };
-      const v = q.get('board_view'); if (['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(v)) view = v;
+      const v = q.get('board_view'); if (['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(v)) view = v;
     }
     filterRouteReady = true;
   }
@@ -3307,7 +3355,7 @@ if (typeof window !== 'undefined') (() => {
     if (!DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
     const safe = /^\d{1,5}$/.test(h) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
-      (q.has('view') && ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(q.get('view')) && [...q.keys()].length === 1) ||
+      (q.has('view') && ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(q.get('view')) && [...q.keys()].length === 1) ||
       (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
     u.hash = safe ? hash : '#view=' + view; return u.href;
   }
@@ -3317,7 +3365,7 @@ if (typeof window !== 'undefined') (() => {
     if (/^\d{1,5}$/.test(h)) { openFromHash(); return; }
     routeApplying = true;
     try {
-      if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'inbox'].includes(v) ? v : 'today', true); }
+      if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(v) ? v : 'today', true); }
       else if (q.has('settings')) { const name = q.get('settings'), valid = Object.hasOwn(SET_LINKS, name) || SET_TABS.some(t => t[0] === name) ? name : 'prefs', alreadyOpen = $('dlgSettings').open;
         if (!alreadyOpen) $('btnSettings').click();
         // Restoring the same URL after a delayed load must not reset an open
@@ -3401,6 +3449,11 @@ if (typeof window !== 'undefined') (() => {
     markSeen(id); render();
     $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
+    if (focus && focus.comment) setTimeout(() => {   // from @Mentions: show that one comment, briefly highlighted
+      const row = [...$('cmStream').querySelectorAll('.cmcard')].find(r => r.dataset.cid === focus.comment);
+      if (!row) { $('cmSec').scrollIntoView({ block: 'start' }); return; }
+      row.scrollIntoView({ block: 'center' }); row.classList.remove('cmflash'); void row.offsetWidth; row.classList.add('cmflash');
+    }, 60);
   }
   $('cClose').onclick = () => { $('dlgCard').close(); }; // the normal close/Back path clears the URL after its history step, not before
   $('dlgCard').addEventListener('click', e => {
@@ -4600,7 +4653,7 @@ if (typeof window !== 'undefined') (() => {
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
-  const CRM_VIEWS = ['people', 'pipeline'], TASK_VIEWS = ['board', 'list', 'cal', 'sched', 'activity'];
+  const CRM_VIEWS = ['people', 'pipeline'], TASK_VIEWS = ['board', 'list', 'cal', 'sched', 'activity', 'mentions'];
   function syncModeSettings() {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
@@ -5732,6 +5785,7 @@ if (typeof window !== 'undefined') (() => {
     const go = el('div', 'todaygo'), goCard = (ic, title, sub, v) => { const b = el('button', 'tgo'); b.type = 'button'; b.append(svgIcon(ic), el('span', 'tgt', title), el('span', 'tgs', sub), svgIcon('chevron-right')); b.dataset.go = v; b.onclick = () => setView(v); return b; };
     if (hasTasks) { const live = state.tasks.filter(x => x.column !== doneColId()), doing = live.filter(x => x.column === 'in-progress').length;
       go.append(goCard('square-kanban', 'Tasks · Kanban', `${live.length} open` + (doing ? ` · ${doing} in progress` : ''), 'board')); }
+    if (hasTasks && cfg().me) { const ms = mentionData(), nw = ms.filter(r => r.fresh).length; if (ms.length) go.append(goCard('at-sign', '@Mentions', nw ? `${nw} new` : `${ms.length} ${ms.length === 1 ? 'mention' : 'mentions'}`, 'mentions')); }
     if (inboxOn()) go.append(goCard('inbox', 'Review Inbox', toReview.length ? `${toReview.length} to review` : 'Nothing to review', 'inbox'));
     if (hasTasks && prepOthers().length) { const tile = goCard('phone', 'Prep for call', prepWho ? 'Brief for @' + prepWho : 'A brief for a call with a teammate', 'today'); tile.onclick = () => { prepWho = prepWho ? null : (LS.get(prepKey(), '') || prepOthers()[0].github); render(); }; tile.setAttribute('aria-expanded', String(!!prepWho)); go.append(tile); }
     if (hasCrm) go.append(goCard('user', 'People · CRM', peopleDue ? `${peopleDue} to contact today` : `${state.contacts.length} ${state.contacts.length === 1 ? 'person' : 'people'}`, 'people'));

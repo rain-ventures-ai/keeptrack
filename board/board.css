@@ -234,7 +234,7 @@ button.cmchip.has { color: var(--accent); background: var(--accent-soft); font-w
 #viewSw .ui-tab.viewprimary { font-weight: 600; }
 #viewSw .ui-tab.viewprimary .ui-tab__label { display: inline; }
 body:not([data-view="board"]) #tabs { display: none !important; }
-#board.v-list, #board.v-cal, #board.v-sched, #board.v-activity { display: block; overflow-y: auto; padding: var(--sp-6) 18px 60px; }
+#board.v-list, #board.v-cal, #board.v-sched, #board.v-activity, #board.v-mentions { display: block; overflow-y: auto; padding: var(--sp-6) 18px 60px; }
 
 /* ---- list view ----------------------------------------------------------- */
 .lsec { max-width: 900px; margin: 0 auto 18px; }
@@ -272,7 +272,7 @@ body:not([data-view="board"]) #tabs { display: none !important; }
 .calundated { margin-top: 18px; } .calundated summary { cursor: pointer; font-weight: 600; color: var(--muted); padding: var(--sp-2) 0; }
 @media (max-width: 760px) {
   #viewSw .ui-tab .ui-i { font-size: var(--fs-lg); }
-  #board.v-list, #board.v-cal, #board.v-sched, #board.v-activity { padding: var(--sp-3) var(--sp-5) 90px; }
+  #board.v-list, #board.v-cal, #board.v-sched, #board.v-activity, #board.v-mentions { padding: var(--sp-3) var(--sp-5) 90px; }
   .circ { width: 26px; height: 26px; } .lt { font-size: 15px; }
   .calcell { min-height: 54px; padding: 3px; align-items: center; } .pills { display: none; } .dots { display: flex; justify-content: center; }
   .calwd { font-size: 10px; } .caltitle { font-size: var(--fs-lg); }
@@ -894,6 +894,17 @@ header .boardwrap { order: 0; }
 .actlog { list-style: none; margin: 0 0 0 46px; padding: 0; font-size: var(--fs-base); } .actlog li { padding: 2px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .actlog time { color: var(--muted); font-variant-numeric: tabular-nums; } .actlog b.agent { color: var(--accent); } .actlog li.dn { font-weight: 600; }
 @media (max-width: 760px) { .actlog { margin-left: var(--sp-3); } .actcard { flex-wrap: wrap; } .actcard .ssub { margin-left: 0; width: 100%; text-align: left; } }
+.mnlist { display: flex; flex-direction: column; gap: var(--sp-2); }
+.mnrow { display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-2); width: 100%; text-align: left; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--card); color: var(--text); padding: var(--sp-3); min-height: 0; }
+.mnrow:hover { border-color: var(--accent); } .mnrow.fresh { border-left: 3px solid var(--accent); }
+.mnhead { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; } .mnhead .ssub { color: var(--muted); font-size: var(--fs-sm); margin-left: auto; }
+.mndesc { color: var(--muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.mncm { display: flex; flex-direction: column; gap: var(--sp-1); border-left: 2px solid var(--border); padding-left: var(--sp-3); }
+.mnwho { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); } .mnwho time { color: var(--muted); }
+.mnbody { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmcard.cmflash { animation: cmflash 2.4s ease-out; }
+@keyframes cmflash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .cmcard.cmflash { animation: none; outline: 3px solid var(--accent); } }
 @media (max-width: 420px) { header { column-gap: var(--sp-1); } #viewSw .ui-tab { min-width: 29px !important; padding: var(--sp-2) 2px; } }   /* five views still fit on one row */
 
 /* settings → checks */
