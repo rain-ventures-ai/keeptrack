@@ -25,6 +25,25 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v53 (schema 4)
+Moved work is never lost. No data migration.
+- Run `kit-update` only.
+- New `todo-move ID N [--title T] [--details D]`: one open to-do becomes a new follow-up card (Backlog, or To do on a
+  board without Backlog; the same client, project, labels, priority and assignees). Both cards are linked
+  ("Follow-up #N", "Split from #M") and related (new relation kind `follow-up`, with `from` = the original card's id),
+  the to-do is reworded "Moved to #N (t_id): ..." and ticked, and both cards get a comment.
+- `relate A B --kind follow-up` marks B as A's follow-up; `related ID` shows "Follow-up #N" and "Split from #M".
+- `done` checks every to-do that starts "Moved to #N": it adds a missing link (both ways) and refuses when #N is not on
+  the board.
+- Web board: "Follow-up #N" / "From #M" chips on cards with a follow-up link, Follow-up and Split from rows in the
+  drawer's Related cards (Unlink only), and a "Move to a new card" button on each open to-do in the drawer.
+- Older pages and older `keeptrack.py` keep the field when they save; an older `doctor` reports a `follow-up` relation as
+  `RELATED` (a warning) until the board is on v53.
+- Rules: the board skill, AGENTS template and routine prompt say a step that must wait goes to `todo-move`, never a hand
+  reword or tick.
+- Check: `keeptrack.py kit-check` says v53 and `keeptrack.py doctor` reports no new problems. For an earlier hand move
+  (a "Moved to #N" to-do), `keeptrack.py relate '#M' '#N' --kind follow-up` adds the relation.
+
 ### v52 (schema 4)
 Similar cards: add first, then ask. No data migration.
 - Run `kit-update` only.

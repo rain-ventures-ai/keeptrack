@@ -44,10 +44,18 @@ If `show` lists to-dos, work through them in order and tick each one as soon as 
 python3 board/keeptrack.py todo-done <id> <N>      # N is the number shown by `show`
 python3 board/keeptrack.py todo-add <id> "<new step>"
 python3 board/keeptrack.py todo-edit <id> <N> "<corrected text>"   # reword in place; keeps its place and done state
+python3 board/keeptrack.py todo-move <id> <N> --details "<what it waits on>"   # move a step that must wait to a new follow-up card
 python3 board/keeptrack.py todo-undo <id> <N>      # reopen
 python3 board/keeptrack.py todo-rm <id> <N>
 python3 board/keeptrack.py history <id>            # automatic log of claims, progress notes, ticks and moves
 ```
+
+Moved work is never lost (kit v53). When the rest of the card is done but one step must wait (for a person, an event or
+later work), move it with `todo-move`: one save adds a follow-up card (Backlog, the same client, project, labels,
+priority and assignees, the step as its checklist), links both cards ("Follow-up #N" and "Split from #M", with a board
+relation), rewords the step to "Moved to #N (t_id): ..." and ticks it, and comments on both cards. Never reword a step to
+"Moved to" by hand and never tick work that is not done. Name the follow-up card in your `done` note. `done` refuses a
+card whose "Moved to #N" card is not on the board, and adds a missing link.
 
 ## 3c. Comments
 `show` prints the latest comments; read them first, since people leave instructions and answers there.
@@ -143,7 +151,7 @@ A routine run starts with a `routine-fire-payload` naming a task number (`#N`) a
 6. Finish: `comment` the outcome, `assign '#N' <user>`, `done '#N' --note "<result>"`. `done` is refused while checklist items are open: tick them, or `done '#N' --cancel --note "<why>"` when they are being dropped.
 
 ### Command cheat sheet
-`list` (`--label X` for one label, `--waiting`, `--waiting-on me`), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `wait`, `unwait`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members are listed by `keeptrack.py members`; CRM people are separate records.
+`list` (`--label X` for one label, `--waiting`, `--waiting-on me`), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `wait`, `unwait`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm|todo-move`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members are listed by `keeptrack.py members`; CRM people are separate records.
 
 ## Archive (old items)
 Old done tasks, Lost people and long histories move to `board/archive/<year>.json` with `python3 board/keeptrack.py archive` (`--dry-run` first). Search them with `archived -q "<words>"`, and bring one back with `unarchive '#N'`. The board file keeps an index in `archive.files`; do not edit archive files by hand.

@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 52;
+  const PAGE_KIT = 53;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1251,17 +1251,30 @@ if (typeof window !== 'undefined') (() => {
   const stamp = t => { t.updated = nowIso(); if (me()) t.updatedBy = me(); };
   // related cards (kit v52): one item per other card on BOTH cards, keyed by its id, so saves merge like keeptrack.py set_relation
   const relationOf = (t, id) => (Array.isArray(t.related) ? t.related : []).find(r => r && r.id === id);
-  function setRelation(n, aId, bId, kind, status, score, into) {
+  // kind follow-up (kit v53): b is the follow-up of a; "from" (a's id) on both cards gives the direction
+  function setRelation(n, aId, bId, kind, status, score, into, src) {
     const a = n.tasks.find(x => x.id === aId), b = n.tasks.find(x => x.id === bId); if (!a || !b || a === b) return false;
     [[a, b], [b, a]].forEach(([x, y]) => {
       if (!Array.isArray(x.related)) x.related = [];
       let r = relationOf(x, y.id); if (!r) { r = { id: y.id }; x.related.push(r); }
       Object.assign(r, { kind, status, by: me() || 'someone', at: nowIso() }); if (score != null) r.score = Math.round(score * 100) / 100; if (into) r.into = into;
+      if (kind === 'follow-up') r.from = src || r.from || aId; else delete r.from;
       stamp(x);
     });
     return true;
   }
   // after a card is added: mark close open cards as possibly related (never stops the add); returns the matches
+  // the web board's link to one card (#N route), as keeptrack.py card_url: the same link on every follow-up pair
+  const cardUrl = num => { const u = new URL(location.pathname, location.href); if (cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k])); u.hash = '#' + num; return u.toString(); };
+  const MOVED_TODO = /^Moved to #(\d{1,6})\b/;
+  // the same as keeptrack.py link_follow_up: a follow-up relation and a link on each card to the other
+  function linkFollowUp(n, t, o) {
+    setRelation(n, t.id, o.id, 'follow-up', 'confirmed', null, null, t.id);
+    [[t, o, `Follow-up #${o.num}`], [o, t, `Split from #${t.num}`]].forEach(([x, y, title]) => {
+      const url = cardUrl(y.num); if (!Array.isArray(x.links)) x.links = [];
+      if (!x.links.some(l => l && (l.url === url || l.title === title))) x.links.push({ title, url });
+    });
+  }
   function markSimilar(n, t) {
     const hits = similarMatches(n, t.title, t.client || '', t.project || '', t.id, doneColId()).slice(0, SIMILAR_MAX);
     hits.forEach(h => setRelation(n, t.id, h.id, h.kind, 'possible', h.score)); return hits;
@@ -1837,6 +1850,34 @@ if (typeof window !== 'undefined') (() => {
   function removeTodo(tid, did) {
     return mutate(n => { const t = n.tasks.find(x => x.id === tid); if (!t) return; t.todos = t.todos.filter(x => x.id !== did); stamp(t); }, `Remove to-do: ${titleOf(tid)}`, [tid]);
   }
+  // kit v53, as keeptrack.py todo-move: one open to-do becomes a new Backlog card (same client, project, labels, priority,
+  // assignees), linked both ways as a follow-up; the to-do is reworded "Moved to #N (t_id): ..." and ticked; both cards get a comment
+  async function askMoveTodo(tid, did) {
+    const t = state.tasks.find(x => x.id === tid), d = t && t.todos.find(x => x.id === did); if (!d) return;
+    const title = await ui.promptText({ title: 'Move to a new card', label: 'New card title', value: d.text, confirmLabel: 'Move',
+      body: `The new card goes to Backlog with this card's client, project, labels and priority. Both cards are linked, and the to-do here is ticked as "Moved to #N".` });
+    if (title == null || !title.trim()) return;
+    return moveTodo(tid, did, title.trim());
+  }
+  function moveTodo(tid, did, title) {
+    let made = null;
+    return mutate(n => {
+      made = null; const t = n.tasks.find(x => x.id === tid), d = t && t.todos.find(x => x.id === did);
+      if (!d || d.done || MOVED_TODO.test(String(d.text || ''))) return;
+      const cols = (n.columns || []).map(c => c.id), col = cols.includes('backlog') ? 'backlog' : cols.includes('todo') ? 'todo' : cols[0];
+      const o = { id: uid(), title, column: col, client: t.client || '', project: t.project || '', priority: ['high', 'medium', 'low'].includes(t.priority) ? t.priority : 'medium', due: '',
+        labels: [...(t.labels || [])], assignees: [...(t.assignees || [])], details: `Split from #${t.num} (${t.id}) ${t.title}.`, links: [], contacts: [],
+        todos: [{ id: todoId(), text: d.text, done: false }], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+      if (me()) { o.createdBy = me(); o.updatedBy = me(); }
+      n.tasks.push(o); assignNums(n); linkFollowUp(n, t, o);
+      const who = me() || 'someone', at = nowIso(), text = d.text;
+      d.text = `Moved to #${o.num} (${o.id}): ${text}`; d.done = true; d.doneBy = who; d.doneAt = at;
+      t.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `To-do moved to follow-up card #${o.num} (${o.id}): ${cardUrl(o.num)}` });
+      o.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `Split from #${t.num} (${t.id}): ${cardUrl(t.num)}` });
+      stamp(t); made = o.id;
+    }, `Move to-do to a new card: ${titleOf(tid)}`, [tid], null, { recheckArchive: true })   // adds and numbers a card: a lost race runs again on the newer board
+      .then(ok => { const o = made && state.tasks.find(x => x.id === made); if (ok && o) { toast(`Moved to #${o.num}. Both cards are linked.`); if (editing === tid) { renderDlgTodos(true); const t = taskNow(); if (t) renderRelated(t); } } return ok; });
+  }
   function todoList(t) {   // a card's expanded checklist (the drawer has its own, renderDlgTodos)
     const box = el('div', 'todos');
     t.todos.forEach(d => {
@@ -1857,7 +1898,9 @@ if (typeof window !== 'undefined') (() => {
       const row = el('label', 'todo dtodo' + (d.done ? ' done' : '')), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!d.done;
       cb.onchange = async () => { await toggleTodo(t.id, d.id, cb.checked); renderDlgTodos(); };
       const x = ui.iconButton({ icon: 'x', label: `Remove “${d.text}”`, size: 'sm', onClick: async e => { e.preventDefault(); if (!(await askRemoval(`the checklist item “${d.text}”`))) return; await removeTodo(t.id, d.id); renderDlgTodos(); } });
-      row.append(cb, el('span', null, d.text), x); box.append(row);
+      const mv = !d.done && !MOVED_TODO.test(String(d.text || '')) && !ro && ui.iconButton({ icon: 'arrow-up-right', label: `Move “${d.text}” to a new card`, size: 'sm', onClick: e => { e.preventDefault(); askMoveTodo(t.id, d.id); } });
+      if (mv) mv.dataset.act = 'move-todo';
+      row.append(cb, el('span', null, d.text), ...(mv ? [mv] : []), x); box.append(row);
     });
     $('cTodoCount').textContent = t.todos.length ? `${t.todos.filter(d => d.done).length}/${t.todos.length}` : '';
   }
@@ -2116,6 +2159,15 @@ if (typeof window !== 'undefined') (() => {
   function chipRelated(t) {
     const r = possibleRelation(t); if (!r) return null; const o = state.tasks.find(x => x.id === r.id);
     const c = elI('span', 'chip relchip', 'copy', `#${o.num}?`); c.title = `Possible ${r.kind || 'duplicate'} of #${o.num}: open the card to merge, link or dismiss`; return c;
+  }
+  // kit v53: a confirmed follow-up link on the card face: "Follow-up #N" (its work moved on to #N) or "From #M" (split from #M)
+  function chipFollowUp(t) {
+    const rs = liveRelations(t).filter(r => r.kind === 'follow-up' && r.status === 'confirmed'); if (!rs.length) return null;
+    const num = r => (state.tasks.find(x => x.id === r.id) || {}).num, fwd = rs.filter(r => r.from === t.id), back = rs.filter(r => r.from !== t.id);
+    const text = fwd.length ? `Follow-up #${num(fwd[0])}${fwd.length > 1 ? ' +' + (fwd.length - 1) : ''}` : `From #${num(back[0])}`;
+    const c = elI('span', 'chip fupchip', fwd.length ? 'arrow-right' : 'arrow-up-right', text);
+    c.title = [fwd.length ? 'Follow-up card' + (fwd.length > 1 ? 's ' : ' ') + fwd.map(r => '#' + num(r)).join(', ') : '', back.length ? 'Split from ' + back.map(r => '#' + num(r)).join(', ') : ''].filter(Boolean).join('. ') + ': open the card for the link';
+    return c;
   }
   function chipWaiting(t) {
     const w = waitingOf(t); if (!w) return null;
@@ -2616,7 +2668,7 @@ if (typeof window !== 'undefined') (() => {
       if (context.childNodes.length) c.append(context);
     }
     const foot = el('div', 'foot'), other = t.links.filter(l => !ghLink(l.url)).length;
-    [chipMention(t), chipWaiting(t), chipRelated(t), ...chipsAfter(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
+    [chipMention(t), chipWaiting(t), chipRelated(t), chipFollowUp(t), ...chipsAfter(t), chipTodo(t, true), chipComments(t, true), t.due && duePill(t), ...chipsGh(t),
       other && elI('span', 'chip', 'link', String(other)), t.contacts.length && elI('span', 'chip', 'user', String(t.contacts.length)), chipCompleted(t), chipOutcome(t)].forEach(x => x && foot.append(x));
     foot.append(el('span', 'spacer'));
     t.assignees.forEach(a => foot.append(avatar(a)));
@@ -2956,6 +3008,13 @@ if (typeof window !== 'undefined') (() => {
       const o = state.tasks.find(x => x.id === r.id), row = el('div', 'drel'), head = el('div', 'drel__head');
       const open = el('button', 'drel__title linkish', `#${o.num} ${o.title}`); open.type = 'button'; open.onclick = () => openCard(o.id);
       const word = r.kind === 'duplicate' ? 'duplicate' : r.kind === 'addition' ? 'addition' : 'related';
+      if (r.kind === 'follow-up') {   // kit v53: a moved to-do's follow-up card, or the card it was split from
+        const fwd = r.from === t.id;
+        head.append(ui.pill({ text: fwd ? 'Follow-up' : 'Split from', icon: fwd ? 'arrow-right' : 'arrow-up-right', size: 'sm', tone: 'accent' }), open);
+        row.append(head); row.dataset.kind = 'follow-up';
+        if (!ro) { const acts = el('div', 'drel__acts'), x = ui.button({ label: 'Unlink', variant: 'ghost', size: 'sm', onClick: () => answerRelation(t.id, o.id, r.kind, 'not-related') }); x.dataset.act = 'dismiss'; acts.append(x); row.append(acts); }
+        box.append(row); return;
+      }
       head.append(ui.pill({ text: r.status === 'possible' ? 'Possible ' + word : r.status === 'merged' ? 'Merged, not archived yet' : 'Linked: ' + word, icon: r.kind === 'duplicate' ? 'copy' : 'link', size: 'sm', tone: r.status === 'possible' ? 'warn' : 'neutral' }), open);
       row.append(head);
       if (!ro && r.status === 'merged') {

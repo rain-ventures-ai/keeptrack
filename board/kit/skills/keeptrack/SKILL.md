@@ -105,6 +105,7 @@ $B claim '#12' --note "starting: <one-line plan>"
 $B heartbeat '#12' --note "<current step>"       # at each milestone
 $B todo-done '#12' <N>                           # tick each checklist item when it is done
 $B todo-edit '#12' <N> "<text>"                  # reword an item in place (keeps its place)
+$B todo-move '#12' <N> --details "<what it waits on>"   # a step that must wait: a new follow-up card, linked both ways
 $B comment '#12' "<question or update>"          # questions also need: heartbeat --status blocked
 $B done '#12' --note "<result, link>"            # or: release '#12' --column todo
 $B wait '#12' --on "<who: what>" --who <login-or-p_id>   # parked on a person or event; then comment @owner, assign, stop
@@ -120,6 +121,8 @@ $B relate '#31' '#12' --kind addition          # on the person's word: keep both
 $B unrelate '#31' '#12'                        # not related: the check never asks about this pair again
 ```
 Put a piece of work on the board once: add a card **or** propose it in the Review Inbox, never both.
+
+Moved work is never lost (kit v53): a step that must wait while the rest of the card is done goes to a follow-up card with `todo-move` (linked both ways, the step reworded "Moved to #N" and ticked). Never reword or tick it by hand. `relate '#12' '#31' --kind follow-up` links an existing card as #12's follow-up. `done` refuses a card whose "Moved to #N" card is missing.
 
 Never pass `--session` with an id you did not generate for this run, and never `--force` a claim, `done`, `release` or `heartbeat` unless the person says so; if one is refused, stop and tell them.
 Only work on tasks assigned to the user you act for.

@@ -29,6 +29,17 @@ Web board: the card's **Client and project** picker has a search box. It narrows
 (MiniSearch: word starts and small typos) plus a plain "contains" match. A client also matches by its project names,
 and with a search the project list covers every client. No schema migration.
 
+## Kit v53 — 2026-10-14
+
+Moved work is never lost. `todo-move ID N [--title] [--details]` moves an open to-do to a new follow-up card in one
+save: the card goes to Backlog with the same client, project, labels, priority and assignees, the to-do as its
+checklist; both cards get a link to the other ("Follow-up #N", "Split from #M") and a new relation kind `follow-up`
+(its `from` names the original card); the to-do is reworded "Moved to #N (t_id): ..." and ticked; both cards get a
+comment. `relate A B --kind follow-up` links an existing card as A's follow-up, and `related` shows "Follow-up #N" /
+"Split from #M". `done` checks every "Moved to #N" to-do: a missing link is added, a #N that is not on the board
+refuses. The web board shows "Follow-up #N" / "From #M" chips on the card, Follow-up and Split from rows in Related
+cards, and a "Move to a new card" action on each open to-do in the drawer. No schema migration.
+
 ## Kit v52 — 2026-10-14
 
 Similar cards: adding a card never stops, and close cards are marked as possible duplicates or additions on both
