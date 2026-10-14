@@ -18,7 +18,7 @@ const server = http.createServer((req, res) => {
 });
 
 const text = x => JSON.stringify(x, null, 2) + '\n';
-const root = { version: 4, layout: 'split', settings: { title: 'Bell test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }, { github: 'sam', name: 'Sam' }], agents: [], clients: ['Acme'], labels: [{ name: 'urgent', color: '#dce1e7' }], client_info: {}, next_num: 4, archive: { files: {} } };
+const root = { version: 4, layout: 'split', settings: { title: 'Bell test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }, { github: 'sam', name: 'Sam' }], agents: [], clients: ['Acme'], labels: [{ name: 'urgent', color: '#dce1e7' }], client_info: {}, archive: { files: {} } };
 const card = (id, num, title, extra) => ({ id, num, title, column: 'todo', client: '', priority: 'medium', due: '', labels: [], assignees: [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: '2026-10-01T08:00:00.000Z', updated: '2026-10-01T08:00:00.000Z', rank: 'a' + num, ...extra });
 
 // A small GitHub: contents API for reads and single-file writes, git data API for multi-file commits (same shape as split-storage.test.js).
@@ -34,13 +34,12 @@ class Github {
       card('t_f', 6, 'I changed it', { history: [h(T, 'alex', 'edited')], comments: [c('c_f', T, 'alex', 'note')] }),
       card('t_g', 7, 'Look-alike agent', { history: [h(T, 'claude@alexander', 'claimed')] })];
     this.files = { 'tasks.json': text({ ...root, next_num: 8 }) }; cards.forEach(x => { this.files[`cards/${x.id}.json`] = text(x); });
-    this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0;
+    this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null;
   }
   sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
   async route(route) {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
     const json = (body, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
-    if (method !== 'GET') this.writes++;
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
     if (p.startsWith('/user/repos')) return json([]);
     if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
@@ -60,7 +59,6 @@ class Github {
     if (p === '/git/refs/heads/main' && method === 'PATCH') { for (const e of this.pending || []) { const rel = e.path.replace(/^board\//, ''); if (e.sha === null) delete this.files[rel]; else this.files[rel] = this.blobs[e.sha]; } this.head = req.postDataJSON().sha; return json({ object: { sha: this.head } }); }
     return json({ message: 'not mocked: ' + method + ' ' + p }, 404);
   }
-  card(id = 't_one') { return this.files[`cards/${id}.json`] ? JSON.parse(this.files[`cards/${id}.json`]) : null; }
 }
 
 (async () => {

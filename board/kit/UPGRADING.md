@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v57 (schema 4)
+The bell counts news from others. No data migration.
+- Run `kit-update` only. Check: `kit-check` says v57.
+- Web board: history entries by you or your own agents (`<agent>@<you>`) no longer mark a card as new. A comment from
+  one of your agents counts only when it @mentions you. Other people and their agents still count.
+
 ### v56 (schema 4)
 Card numbers are links. No data migration.
 - Run `kit-update` only.

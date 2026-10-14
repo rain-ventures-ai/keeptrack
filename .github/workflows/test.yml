@@ -84,3 +84,6 @@ jobs:
       - name: PRs panel and relay-kit bar
         working-directory: tests/browser
         run: node prs-panel.test.js
+      - name: Unread bell (own agents are not news)
+        working-directory: tests/browser
+        run: node unread-bell.test.js
