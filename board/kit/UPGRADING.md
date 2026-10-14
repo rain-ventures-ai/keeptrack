@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v58 (schema 4)
+The bell opens a "New for you" list. No data migration.
+- Run `kit-update` only. Check: `kit-check` says v58.
+- Web board: the bell opens a list of the cards with news for you (comments and changes from others). "Filter the
+  board" in its footer does what the bell did before.
+
 ### v57 (schema 4)
 The bell counts news from others. No data migration.
 - Run `kit-update` only. Check: `kit-check` says v57.
