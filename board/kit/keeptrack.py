@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 59  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 60  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1792,7 +1792,7 @@ RESEARCH_SKIP_LABELS = ("researched", "researching", "no-research", "needs-human
 
 
 def backlog_research(data):
-    """settings.backlog_research (kit v59), read safely: {"enabled": bool, "per_run": 1-10}. Off when it is missing or
+    """settings.backlog_research (kit v60), read safely: {"enabled": bool, "per_run": 1-10}. Off when it is missing or
     malformed: only an explicit `"enabled": true` turns it on."""
     v = (data.get("settings") or {}).get("backlog_research")
     v = v if isinstance(v, dict) else {}
@@ -4218,7 +4218,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint", "research-lock"],
+    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -6583,6 +6583,45 @@ def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
     return added, lines
 
 
+def cmd_research_suggest(a):
+    """Backlog research on a card with no project: put the card in the Review Inbox for a person. With --project, a
+    task.update proposal that sets the client and project (the base is read from the card, so Accept checks that
+    nobody placed it meanwhile); with --ask, a question "Which client and project?". Never sets them itself."""
+    reason = (a.reason or "").strip()
+    if not reason:
+        sys.exit("--reason is required: one line on why (what the research found)")
+    def fn(data):
+        _MUT["recheck"] = True
+        t = find(data, a.id)
+        if t.get("project"):
+            sys.exit(f"refused: #{t.get('num')} already has a project; nothing to suggest")
+        num = t.get("num")
+        src = {"kind": "other", "id": f"backlog-research:{t['id']}", "revision": "1", "title": "Backlog research",
+               "date": board_today(data).isoformat()}
+        if a.ask:
+            prop = {"kind": "ask.question", "title": f"Which client and project does #{num} belong to?",
+                    "source": src, "action_key": f"research-ask:{t['id']}", "work_key": f"research-place:{t['id']}",
+                    "reason": reason[:300],
+                    "change": {"question": f"Backlog research could not place #{num} ({str(t.get('title') or '')[:120]}). "
+                                           "Which client and project is it for?", "task": t["id"]}}
+        else:
+            pr = find_project(data, a.project)
+            client = (a.client or pr.get("client") or "").strip()
+            if pr.get("client") and client != pr.get("client"):
+                sys.exit(f"refused: project {pr['name']} belongs to client {pr.get('client')}, not {client}")
+            change = {"project": pr["id"]}
+            if client and client != (t.get("client") or ""):
+                change["client"] = client
+            prop = {"kind": "task.update", "title": f"Put #{num} in {client + ' / ' if client else ''}{pr['name']}",
+                    "source": src, "action_key": f"research-place:{t['id']}:{pr['id']}", "work_key": f"research-place:{t['id']}",
+                    "reason": reason[:300],
+                    "target": {"type": "task", "id": t["id"], "base": {k: t.get(k) for k in change}},
+                    "change": change}
+        _, lines = _prepare_proposals(data, [prop])
+        for line_ in lines: print(line_)
+    mutate(fn, f"Backlog research suggestion: {a.id}")
+
+
 def cmd_proposal_add(a):
     values = _read_proposal_payload(a.path)
     if a.dry_run:
@@ -7697,6 +7736,12 @@ def main():
     position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
     s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
+    s = sub.add_parser("research-suggest", help="backlog auto-research: put a card with no project in the Review Inbox (suggest a project, or ask)")
+    s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--project", help="the project to suggest (id or name); its client comes with it")
+    g.add_argument("--ask", action="store_true", help="no good guess: ask which client and project")
+    s.add_argument("--client", help="the client, when the project has none"); s.add_argument("--reason", required=True)
+    s.set_defaults(f=cmd_research_suggest)
     s = sub.add_parser("research-lock", help="backlog auto-research: label a bare Backlog card researching, only if it may be researched now (refused otherwise)")
     s.add_argument("id"); s.set_defaults(f=cmd_research_lock)
     s = sub.add_parser("card-link", help="cards as Markdown links to the web board ([#12](url) title): write card numbers this way")

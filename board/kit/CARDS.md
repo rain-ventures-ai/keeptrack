@@ -147,6 +147,9 @@ researched, so two dispatchers never take the same card. Then an agent researche
 - **May** add details with `task-set '#N' --add-details "<text>"` (below what is there, never instead of it), add links
   with `link`, add to-dos with `todo-add`, and post one comment: what it found, what it could not find, and the
   questions only a person can answer (with `@<owner>`).
+- **Must**, when the card has no project, put it in the Review Inbox for a person: `research-suggest '#N' --project
+  "<project>" --reason "<why>"` when the research points to one (Accept sets the client and project), else
+  `research-suggest '#N' --ask --reason "<why>"` (a question: which client and project?). It never sets them itself.
 - **Must** finish with the `researched` label (`task-set '#N' --label researched --unlabel researching`), also when it
   found nothing useful, so the card is not picked again.
 - **Never** moves, approves, claims, assigns, archives or deletes the card, and never changes its title, priority, due

@@ -369,7 +369,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.deepEqual([got.entry.email_sync, got.entry.claude_steps, got.entry.claude_ok], ['1', '3', '1'], 'and stay in kb_boards after the load-time stash');
       assert.deepEqual(other.errors, []); await other.close();
     }
-    // 15. Backlog auto-research (kit v59): off by default; the switch and "Cards each run" save settings.backlog_research.
+    // 15. Backlog auto-research (kit v60): off by default; the switch and "Cards each run" save settings.backlog_research.
     {
       const page = await open(browser);
       await page.evaluate(() => window.kbSettings.open('board')); await settle(page);

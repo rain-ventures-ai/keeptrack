@@ -1,4 +1,4 @@
-"""Kit v59: backlog auto-research. The setting (settings.backlog_research), the bare-card rule, list --bare and
+"""Kit v60: backlog auto-research. The setting (settings.backlog_research), the bare-card rule, list --bare and
 task-set --add-details. Run: python3 -m unittest tests.test_backlog_research"""
 import contextlib, importlib.util, io, json, os, tempfile, unittest
 
@@ -147,6 +147,68 @@ class BacklogResearch(unittest.TestCase):
         self.assertEqual(self.read()["tasks"][0]["labels"].count("researching"), 1)
         with self.assertRaises(SystemExit):
             lock("#2")   # not bare
+
+
+class ResearchSuggest(unittest.TestCase):
+    """research-suggest puts a card with no project in the Review Inbox (split boards only)."""
+    def setUp(self):
+        import shutil
+        self.dir = tempfile.TemporaryDirectory()
+        shutil.copytree(os.path.join(HERE, "fixtures", "v4"), os.path.join(self.dir.name, "board"))
+        self.file = os.path.join(self.dir.name, "board", "tasks.json")
+        self.old = kt.FILE
+        kt.FILE = self.file
+        self.env = {k: os.environ.get(k) for k in ("BOARD_USER", "BOARD_AGENT")}
+        os.environ.update(BOARD_USER="osouthgate", BOARD_AGENT="claude")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            kt.cmd_project_add(Args(name="Website refresh", client="Acme", north_star=None, status=None, link=None, people=None))
+
+    def tearDown(self):
+        kt.FILE = self.old
+        for k, v in self.env.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        self.dir.cleanup()
+
+    def suggest(self, **kw):
+        a = Args(id="t_second", project=None, ask=False, client=None, reason="research found the Acme site")
+        a.__dict__.update(kw)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            kt.cmd_research_suggest(a)
+        return buf.getvalue()
+
+    def pending(self):
+        data, _ = kt.load()
+        return [p for p in data.get("proposals", []) if p.get("status") == "pending"]
+
+    def test_suggest_a_project_then_accept_places_the_card(self):
+        self.assertIn("added", self.suggest(project="Website"))
+        p = self.pending()[0]
+        self.assertEqual(p["kind"], "task.update"); self.assertEqual(p["change"]["client"], "Acme")
+        self.assertTrue(p["change"]["project"].startswith("pr_"))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            kt.cmd_proposal_accept(Args(id=p["id"], edit=None, json=False))
+        data, _ = kt.load()
+        card = kt.find(data, "t_second")
+        self.assertEqual((card["client"], card["project"]), ("Acme", p["change"]["project"]))
+        with self.assertRaises(SystemExit) as e:
+            self.suggest(project="Website")
+        self.assertIn("already has a project", str(e.exception))
+
+    def test_ask_when_there_is_no_good_guess(self):
+        self.suggest(ask=True)
+        p = self.pending()[0]
+        self.assertEqual(p["kind"], "ask.question"); self.assertEqual(p["change"]["task"], "t_second")
+
+    def test_a_project_of_another_client_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.suggest(project="Website", client="Other")
+        self.assertIn("belongs to client Acme", str(e.exception))
+        self.assertEqual(self.pending(), [])
 
 
 if __name__ == "__main__":
