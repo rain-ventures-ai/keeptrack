@@ -362,13 +362,34 @@ class HostedCLITest(unittest.TestCase):
         out = self.run_cli('list', '--unclaimed').stdout
         self.assertNotIn('Synthetic contract sample', out)
 
+    def test_load_save_seam_uses_captured_revision(self):
+        self.claim()
+        script = ("import runpy,sys; k=runpy.run_path(sys.argv[1]); "
+                  "data,state=k['load'](); data['tasks'][0]['title']='Saved through seam'; "
+                  "print(k['save_changes'](data,state))")
+        result = subprocess.run([sys.executable, '-c', script, str(KIT)], cwd=self.cwd, env=self.env,
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('True', result.stdout)
+        self.assertEqual(self.server.files['cards/t_sample.json']['title'], 'Saved through seam')
+        self.server.conflict = True
+        result = subprocess.run([sys.executable, '-c', script.replace('Saved through seam', 'Stale seam write'), str(KIT)],
+                                cwd=self.cwd, env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('False', result.stdout)
+        self.assertEqual(self.server.files['cards/t_sample.json']['title'], 'Saved through seam')
+        self.assertEqual(self.server.schemas_errors, [])
+        self.assertFalse((self.root/'gh-called').exists())
+
     def test_unsupported_command_fails_before_http(self):
         p = self.run_cli('proposals', code=1)
         self.assertIn('capability_unavailable', p.stderr); self.assertEqual(self.server.calls, [])
 
     def test_credential_is_never_forwarded_to_github(self):
-        self.env['BOARD_API'] = 'https://api.github.com'
-        p = self.run_cli('list', code=1); self.assertIn('never a GitHub host', p.stderr)
+        for api in ('https://api.github.com', 'https://gist.github.com', 'https://rain-ventures-ai.github.io'):
+            self.env['BOARD_API'] = api
+            p = self.run_cli('list', code=1); self.assertIn('never a GitHub host', p.stderr)
+            self.assertEqual(self.server.calls, [])
         self.env['BOARD_API'] = self.server.api; self.server.redirect = True
         self.run_cli('list', code=1)
         self.assertEqual(len(self.server.calls), 1)

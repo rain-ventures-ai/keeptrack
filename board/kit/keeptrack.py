@@ -982,7 +982,7 @@ class HostedStorageAdapter:
         u = urllib.parse.urlsplit(self.api)
         host = (u.hostname or "").lower().rstrip(".")
         if (u.scheme not in ("http", "https") or not host or u.username or u.password or u.query or u.fragment
-                or any(host == d or host.endswith("." + d) for d in ("github.com", "githubusercontent.com", "githubassets.com"))
+                or any(host == d or host.endswith("." + d) for d in ("github.com", "githubusercontent.com", "githubassets.com", "github.io"))
                 or (u.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))):
             sys.exit("invalid_credential: BOARD_API must be an HTTPS API or loopback HTTP URL, never a GitHub host")
         self.board = os.environ.get("BOARD_ID", "")
@@ -1129,6 +1129,61 @@ class HostedStorageAdapter:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(temp)
 
+    def model_changes(self, data, files):
+        desired = {"tasks.json": {k: v for k, v in data.items() if k not in ("tasks", "contacts", "projects", "proposals")}}
+        for coll, prefix in (("tasks", "cards"), ("contacts", "people"), ("projects", "projects"), ("proposals", "proposals")):
+            desired.update({prefix + "/" + x["id"] + ".json": copy.deepcopy(x) for x in data.get(coll, [])})
+        missing = set(files) - set(desired)
+        if missing:
+            sys.exit("capability_unavailable: use hosted lifecycle commands to remove entities")
+        ops, fences = [], {}
+        session = os.environ.get("BOARD_SESSION", "")
+        for path, body in desired.items():
+            original = files.get(path)
+            if original is None:
+                sys.exit("capability_unavailable: use a hosted create command")
+            if original.get("omitted"):
+                raise HostedError(412, {"code": "revision_conflict", "message": "hydrate the captured revision through load() before saving"})
+            old = original["body"]
+            # Legacy callbacks stamp local audit fields; hosted writes keep originals and let the server stamp.
+            for field in ("history", "comments", "createdBy", "updatedBy", "created", "updated", "claim"):
+                if field in old:
+                    body[field] = copy.deepcopy(old[field])
+                else:
+                    body.pop(field, None)
+            old_todos = {t.get("id"): t for t in old.get("todos", [])}
+            for todo in body.get("todos", []):
+                for field in ("doneBy", "doneAt"):
+                    if field in old_todos.get(todo.get("id"), {}):
+                        todo[field] = old_todos[todo["id"]][field]
+                    else:
+                        todo.pop(field, None)
+            if body != old:
+                ops.append({"kind": "put", "path": path, "baseRev": original["rev"], "body": body})
+                if path.startswith("cards/"):
+                    holder = self.holder(body["id"], session, bool(self.identity["agent_id"]))
+                    if holder:
+                        fences[body["id"]] = holder
+        return ops, fences
+
+    def commit_model(self, data, state=None, message="Update board", extra=None):
+        """Compatibility save seam: preserve the caller's captured file revisions."""
+        if extra:
+            sys.exit("capability_unavailable: hosted extra-file callbacks require explicit commit operations")
+        state = state if isinstance(state, dict) else _BOARD_STATES.get(id(data))
+        if not state or state.get("mode") != "hosted":
+            sys.exit("precondition_required: hosted model saves need the state returned by load()")
+        ops, fences = self.model_changes(data, state["files"])
+        if not ops:
+            return True
+        try:
+            self.commit(ops, fences=fences)
+            return True
+        except HostedError as e:
+            if e.status == 412:
+                return False
+            raise
+
     def mutate(self, fn, message):
         """Reuse kit field validation, then CAS only user fields; never number or forge audit data."""
         lost = None
@@ -1152,35 +1207,7 @@ class HostedStorageAdapter:
                 if merged["clashes"]:
                     raise HostedError(412, {"code": "revision_conflict", "message": describe_clashes(merged["clashes"]) + "; read and redo the change"})
                 data = merged["merged"]
-            desired = {"tasks.json": {k: v for k, v in data.items() if k not in ("tasks", "contacts", "projects", "proposals")}}
-            for coll, prefix in (("tasks", "cards"), ("contacts", "people"), ("projects", "projects"), ("proposals", "proposals")):
-                desired.update({prefix + "/" + x["id"] + ".json": copy.deepcopy(x) for x in data.get(coll, [])})
-            ops, fences = [], {}
-            session = os.environ.get("BOARD_SESSION", "")
-            for path, body in desired.items():
-                original = self.files.get(path)
-                if original is None:
-                    sys.exit("capability_unavailable: use a hosted create command")
-                old = original["body"]
-                # Legacy callbacks stamp local audit fields; hosted writes keep originals and let the server stamp.
-                for field in ("history", "comments", "createdBy", "updatedBy", "created", "updated", "claim"):
-                    if field in old:
-                        body[field] = copy.deepcopy(old[field])
-                    else:
-                        body.pop(field, None)
-                old_todos = {t.get("id"): t for t in old.get("todos", [])}
-                for todo in body.get("todos", []):
-                    for field in ("doneBy", "doneAt"):
-                        if field in old_todos.get(todo.get("id"), {}):
-                            todo[field] = old_todos[todo["id"]][field]
-                        else:
-                            todo.pop(field, None)
-                if body != old:
-                    ops.append({"kind": "put", "path": path, "baseRev": original["rev"], "body": body})
-                    if path.startswith("cards/"):
-                        holder = self.holder(body["id"], session, bool(self.identity["agent_id"]))
-                        if holder:
-                            fences[body["id"]] = holder
+            ops, fences = self.model_changes(data, self.files)
             if not ops:
                 print(output, end=""); return result
             try:
@@ -1420,7 +1447,10 @@ def load_board():
 
 
 def save_changes(data, state=None, message="Update board", extra=None):
-    return storage_adapter().commit(data, state, message, extra)
+    adapter = storage_adapter()
+    if adapter.kind == "hosted":
+        return adapter.commit_model(data, state, message, extra)
+    return adapter.commit(data, state, message, extra)
 
 
 def mutate(fn, message):

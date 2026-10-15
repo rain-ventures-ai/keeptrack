@@ -3569,7 +3569,7 @@ if (typeof window !== 'undefined') (() => {
       const claim = activeClaim(t), mine = claim && claim.agent === 'claude' && claim.on_behalf_of === me, full = !claim && agentLimitFull(t.id), waits = !claim && waitingOf(t);
       items.push({ label: mine ? `Claude for @${me} · assigned` : claim ? `${agentLabel(claim)} already has this task` : full ? 'Claude · the board’s agent limit is full' : waits ? 'Claude · the task is waiting (clear it first)' : claudeReady() && me ? `Assign to Claude for @${me}` : 'Claude · finish setup first', icon: 'bot',
         disabled: !!claim || !claudeReady() || !me || !!full || !!waits, onSelect: () => assignMyClaude(t.id) });
-    } else items.push({ label: 'Set up your Claude agent…', icon: 'settings', onSelect: () => { $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); } });
+    } else if (!HOSTED) items.push({ label: 'Set up your Claude agent…', icon: 'settings', onSelect: () => { $('dlgCard').close(); $('btnSettings').click(); settingsTab('claude'); } });
     ui.menu(anchor, items, { label: `Assign task #${t.num}` });
   }
   function renderLabelChips(t) {
@@ -3690,7 +3690,7 @@ if (typeof window !== 'undefined') (() => {
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
   // deep links: the address carries the task number (#13) while a card is open, and loading a URL with #13 opens that card
-  const hashNum = () => { const m = /^#(\d{1,5})$/.exec(location.hash); return m ? Number(m[1]) : null; };
+  const hashNum = () => { const m = /^#(\d+)$/.exec(location.hash), n = m ? Number(m[1]) : NaN; return Number.isSafeInteger(n) && n > 0 ? n : null; };
   const setHash = h => { try { const u = new URL(location.href), t = state.tasks.find(t => '#' + t.num === h); u.searchParams.delete('card'); if (safeCardId(t?.id)) u.searchParams.set('card', t.id); u.hash = h; history.replaceState(history.state, '', u); } catch {} };   // keeps the Back-button entry (below)
 
   // The Back button closes what you opened. Opening a card, a person/client/project drawer, Settings, Help, Search,
@@ -3782,7 +3782,7 @@ if (typeof window !== 'undefined') (() => {
     if (filterRouteReady) filterRouteParams().forEach((v, k) => u.searchParams.append(k, v));
     if (!HOSTED && !DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
-    const safe = /^\d{1,5}$/.test(h) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
+    const safe = (/^\d+$/.test(h) && Number.isSafeInteger(Number(h)) && Number(h) > 0) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
       (q.has('view') && ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(q.get('view')) && [...q.keys()].length === 1) ||
       (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
     const t = state.tasks.find(t => String(t.num) === h); if (safeCardId(t?.id)) u.searchParams.set('card', t.id);
@@ -3791,7 +3791,7 @@ if (typeof window !== 'undefined') (() => {
   const routeHash = d => d.id === 'dlgCard' ? location.hash : '#' + (routeDialogs[d.id] || 'view=' + view) + (d.id === 'dlgSettings' ? '=' + settingsRoute : '');
   function applyRoute() {
     const h = location.hash.slice(1), q = new URLSearchParams(h);
-    if (/^\d{1,5}$/.test(h)) { openFromHash(); return; }
+    if (hashNum() !== null) { openFromHash(); return; }
     routeApplying = true;
     try {
       if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(v) ? v : 'today', true); }
@@ -3906,10 +3906,10 @@ if (typeof window !== 'undefined') (() => {
     const items = [
       { label: 'Copy link', icon: 'link', onSelect: copyTaskLink },
       { label: `Copy Markdown link [#${t.num}]`, icon: 'copy', onSelect: () => copyText(`[#${t.num}](${navigationLink('#' + t.num)})`, `Copied #${t.num} as a Markdown link`) },
-      { label: il ? `Open GitHub issue #${il.n}` : 'Create GitHub issue', icon: 'github', disabled: issueBusy || (!il && !!ro), onSelect: issueAction },
+      { label: il ? `Open GitHub issue #${il.n}` : 'Create GitHub issue', icon: 'github', disabled: HOSTED || issueBusy || (!il && !!ro), onSelect: issueAction },
       { label: 'Copy as Markdown', icon: 'clipboard-copy', onSelect: () => { const x = taskNow(); if (x) copyText(taskMarkdown(x), 'Card copied as Markdown'); } }
     ];
-    if (!ro) items.push({ separator: true }, { label: 'Archive task', icon: 'archive', onSelect: () => archiveTask() }, { label: 'Delete task', icon: 'trash-2', danger: true, onSelect: deleteTask });
+    if (!ro) items.push({ separator: true }, { label: 'Archive task', icon: 'archive', onSelect: () => archiveTask() }, { label: 'Delete task', icon: 'trash-2', danger: true, disabled: HOSTED, onSelect: deleteTask });
     ui.menu(anchor, items, { label: `Actions for task #${t.num}` });
   }
   // ---- GitHub issue from a card: creates an issue that carries the task and tells automation how to report back ----
@@ -3966,7 +3966,10 @@ if (typeof window !== 'undefined') (() => {
     if (editing !== id) return;
     if (archiveInstead) { await archiveTask(id); return; }
     if (!confirmed) return;
-    editingDesc = false; $('dlgCard').close(); mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
+    editingDesc = false;
+    const closed = new Promise(resolve => $('dlgCard').addEventListener('close', resolve, { once: true }));
+    $('dlgCard').close(); await closed; if (backPending) await backPending;
+    mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
   }
 
   // Settings → Connection → Advanced → Move settings: tokens and keys go in only when "Include tokens and keys" is ticked; each copy asks first
@@ -7150,10 +7153,9 @@ if (typeof window !== 'undefined') (() => {
     }
   }
   function hostedLogout() {
-    hostedStorage?.logout(); hostedIdentity = null; loadGen++; state = DEFAULT(); splitMeta = null; archived = null; msIndex = msFor = null;
-    undoStack.length = 0; MEM.clear(); seenMap = null; lastSyncOk = false; fromSnap = false;
-    for (const id of DRAWERS) if ($(id).open) $(id).close();
-    render(); hostedSignIn();
+    hostedStorage?.logout(); hostedIdentity = null; loadGen++; MEM.clear(); undoStack.length = 0;
+    state = DEFAULT(); splitMeta = null; archived = null; msIndex = msFor = null; lastSyncOk = false;
+    location.reload();
   }
   function hostedSignIn() {
     const board = $('board'); board.textContent = ''; board.className = 'v-welcome';
@@ -7246,6 +7248,7 @@ if (typeof window !== 'undefined') (() => {
     busy = true; loadGen++; savingStatus(); const before = clone(state); let base = baseState || before, mine = clone(before);
     try {
       if (hostedPolling) await hostedPolling;
+      if (backPending) await backPending;
       fn(mine);
       for (let i = 0; i < 4; i++) {
         await hostedStorage.snapshot(); await hostedStorage.hydrate(); const pre = hostedModel();
@@ -7279,7 +7282,7 @@ if (typeof window !== 'undefined') (() => {
     // GitHub-only integrations have no network or launch actions in hosted phase 0.
     for (const id of ['bEditFold', 'agRoutineSetup', 'agPick', 'agClaude', 'sForget', 'sWidgets', 'sBoardAppearance', 'secBoards', 'secHealth', 'secMove', 'secAdv']) if ($(id)) { $(id).hidden = true; $(id).querySelectorAll('input,button,select').forEach(x => x.disabled = true); }
     $('btnSettings').addEventListener('click', () => { for (const id of ['tabConn', 'tabAgents']) if ($(id)) $(id).querySelectorAll('input,button,select,textarea').forEach(x => x.disabled = true); });
-    const signOut = ui.button({ label: 'Sign out', onClick: () => whenSaved(hostedLogout) }); signOut.id = 'hostedSignOut'; $('btnSettings').parentElement.append(signOut);
+    const signOut = ui.button({ label: 'Sign out', onClick: () => whenSaved(hostedLogout) }); signOut.id = 'hostedSignOut'; document.querySelector('header .hfilters').append(signOut);
     hostedSignIn();
     let polling = false;
     setInterval(async () => {
