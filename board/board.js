@@ -6665,8 +6665,12 @@ if (typeof window !== 'undefined') (() => {
   const quickBusy = new Set(); let quickUndo = null;   // quickUndo: { toast, task } while the last quick archive's Undo toast shows (Ctrl+Z uses it too)
   async function quickArchive(id) {
     const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked() || quickBusy.has(id)) return;   // a second click while the first runs does nothing
-    quickBusy.add(id); try { await archiveNow({ taskId: id, onlyDone: true }); } finally { quickBusy.delete(id); }
-    if (state.tasks.some(x => x.id === id)) return;   // not archived: archiveNow said why
+    // The card leaves the board at once (a pending view change, like a queued save) while the archive commit runs;
+    // if the archive does not happen, it comes back and the toast says so.
+    const hide = { fn: v => { v.tasks = v.tasks.filter(x => x.id !== id); } }; pendingView.push(hide); render();
+    const said = lastToast;
+    quickBusy.add(id); try { await archiveNow({ taskId: id, onlyDone: true }); } finally { quickBusy.delete(id); const i = pendingView.indexOf(hide); if (i >= 0) pendingView.splice(i, 1); render(); }
+    if (state.tasks.some(x => x.id === id)) { if (lastToast === said) toast(`Could not archive #${t.num}. It is back on the board.`, true); return; }   // not archived: archiveNow's own toast says why, when it gave one
     hideUndo(); if (lastToast) lastToast.dismiss(); undoAt = Date.now();
     const tt = undoToast = ui.toast(`Archived #${t.num} ${t.title}`, { action: { label: 'Undo', onClick: () => { if (undoToast === tt) undoToast = null; quickUndo = null; undoQuickArchive(t); } }, timeout: 8000 });
     quickUndo = { toast: tt, task: t };
