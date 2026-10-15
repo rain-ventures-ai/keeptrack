@@ -81,6 +81,77 @@ class Automation(unittest.TestCase):
     def force_due(self):
         self.write(self.root/'automation/.local/tick-state.json',{})
 
+    def test_check_snapshot_preserves_concurrent_tick_cursor(self):
+        self.ready(); self.call('disable')
+        other = self.root/'automations/other-pack'
+        shutil.copytree(self.pack, other)
+        manifest = dict(self.manifest, slug='other-pack')
+        self.write(other/'manifest.json', manifest)
+        self.call('install', slug='other-pack')
+        self.call('setup', slug='other-pack', runtime='local')
+        self.call('enable', slug='other-pack')
+        local = self.root/'automation/.local/tick-state.json'
+        binding = 'auto-other-pack-owner'
+        self.write(local, {binding: dict(time=0, scan_cursor='old-page')})
+        original = kt._auto_json
+        interleaved = False
+        def interleave(path, default=None):
+            nonlocal interleaved
+            snapshot = original(path, default)
+            if str(path) == str(local) and not interleaved:
+                interleaved = True
+                self.tick()
+            return snapshot
+        with patch.object(kt, '_auto_json', side_effect=interleave), patch.object(
+                kt, '_auto_check', return_value=dict(self.result, more=True, cursor='new-page')):
+            self.call('check')
+        self.assertEqual(self.read(local)[binding]['scan_cursor'], 'new-page')
+
+    def test_helper_import_keeps_digest_across_ticks_and_setup(self):
+        scripts = self.pack/'scripts'; scripts.mkdir()
+        (scripts/'helper.py').write_text('VALUE = 1\n')
+        code = 'from scripts import helper\n'
+        (self.pack/'check.py').write_text(code + 'print(' + repr(json.dumps(self.result)) + ')\n')
+        self.manifest['needs'] = [dict(id='files.read', why='Read files', routes=[
+            dict(runtime='local', how='Python probe', probe=['python3', str(self.pack/'check.py')])])]
+        self.write(self.pack/'manifest.json', self.manifest)
+        digest = kt._auto_pack(str(self.pack))[1]
+        self.ready()
+        for _ in range(2):
+            self.force_due(); self.assertEqual(self.tick(), (None, None))
+            self.assertEqual(kt._auto_pack(str(self.pack))[1], digest)
+        self.assertFalse(list(self.pack.rglob('__pycache__')))
+        cache = scripts/'__pycache__'; cache.mkdir()
+        (cache/'crafted.pyc').write_bytes(b'code')
+        self.assertNotEqual(kt._auto_pack(str(self.pack))[1], digest)
+
+    def test_uninstall_missing_pack(self):
+        self._uninstall_damaged_pack('missing')
+
+    def test_uninstall_invalid_pack(self):
+        self._uninstall_damaged_pack('invalid')
+
+    def _uninstall_damaged_pack(self, damage):
+        self.items(); self.ready(); self.tick()
+        if damage == 'missing': shutil.rmtree(self.pack)
+        else: (self.pack/'manifest.json').write_text('{')
+        self.write(self.sp, dict(keys={'item1': 'r1'}))
+        self.assertIn('current run', self.refuse('uninstall', forget=True))
+        self.assertTrue(self.sp.exists())
+        self.finish('failed')
+        outside = self.root/'outside.json'; outside.write_text('preserve')
+        self.sp.unlink(); self.sp.symlink_to(outside)
+        self.assertIn('symlinks', self.refuse('uninstall', forget=True))
+        self.assertEqual(outside.read_text(), 'preserve')
+        self.assertEqual(self.read(self.rp)['status'], 'active')
+        self.sp.unlink(); self.write(self.sp, dict(keys={}))
+        self.call('uninstall')
+        self.assertTrue(self.sp.exists())
+        r = self.read(self.rp); r['status'] = 'active'; self.write(self.rp, r)
+        self.call('uninstall', forget=True)
+        self.assertFalse(self.sp.exists())
+        self.assertEqual(self.read(self.rp)['status'], 'retired')
+
     def test_duplicate_keys_rejected_before_reservation(self):
         self.result.update(items=[dict(key='same', rev=rev, ref='id', title='Review') for rev in ('v1', 'v2')], more=True, cursor='next')
         self.script(self.result); self.ready(); before = self.rp.read_bytes()
@@ -383,7 +454,7 @@ s=os.environ["KEEPTRACK_STATE"]; c=os.environ["KEEPTRACK_CONFIG"]
 print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME"]),"mode":stat.S_IMODE(os.stat(s).st_mode),"config":json.load(open(c))}))'''
         with patch.dict(os.environ,{'BOARD_TOKEN':'secret','GH_TOKEN':'secret','OPENAI_API_KEY':'secret','BOARD_USER':'secret'}):
             code,raw,_=kt._auto_process(['python3','-c',script],kt._auto_env('example-pack',{'n':1},{'keys':{}}),5)
-        value=json.loads(raw); allowed={'PATH','LANG','LC_ALL','TZ','HOME','KEEPTRACK_AUTOMATION','KEEPTRACK_STATE','KEEPTRACK_CONFIG','LC_CTYPE'}
+        value=json.loads(raw); allowed={'PATH','LANG','LC_ALL','TZ','HOME','KEEPTRACK_AUTOMATION','KEEPTRACK_STATE','KEEPTRACK_CONFIG','LC_CTYPE','PYTHONDONTWRITEBYTECODE'}
         self.assertLessEqual(set(value['env']),allowed); self.assertTrue(value['empty']); self.assertEqual(value['mode'],0o400)
         self.assertEqual(value['config'],{'n':1}); self.assertFalse(Path(value['env']['KEEPTRACK_STATE']).exists())
         _,raw,_=kt._auto_process(['python3','-c','import os; print(os.environ["HOME"])'],kt._auto_env('x',{},{}),5,True)

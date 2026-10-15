@@ -8035,7 +8035,7 @@ def _auto_process(argv, env, timeout, network=False):
 
 def _auto_env(slug, config, state):
     return dict({k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ},
-                TZ="UTC", KEEPTRACK_AUTOMATION=slug, KEEPTRACK_STATE=state, KEEPTRACK_CONFIG=config)
+                TZ="UTC", PYTHONDONTWRITEBYTECODE="1", KEEPTRACK_AUTOMATION=slug, KEEPTRACK_STATE=state, KEEPTRACK_CONFIG=config)
 
 
 def _auto_result(value):
@@ -8071,7 +8071,7 @@ def _auto_check(path, manifest, register, scan_cursor=None):
         env = _auto_env(manifest["slug"], a["config"], state)
         env["KEEPTRACK_DEADLINE_SECONDS"] = str(max(timeout - 10, timeout * 0.5))
         if scan_cursor is not None: env["KEEPTRACK_SCAN_CURSOR"] = _auto_token(scan_cursor)
-        code, raw, _ = _auto_process(["python3", os.path.join(path, "check.py")], env, timeout, bool(c.get("network") and a.get("network_granted")))
+        code, raw, _ = _auto_process(["python3", "-B", os.path.join(path, "check.py")], env, timeout, bool(c.get("network") and a.get("network_granted")))
         if code not in (0, 2): raise ValueError("check-error")
         try: value = json.loads(raw)
         except (UnicodeError, ValueError): raise ValueError("invalid-output")
@@ -8081,6 +8081,27 @@ def _auto_check(path, manifest, register, scan_cursor=None):
         result = {"schema": "keeptrack-check/1", "items": [{"key": "scheduled", "rev": str(int(time.time()) // _AUTO_INTERVALS[a["every"]]), "ref": "scheduled", "title": "Scheduled review"}], "more": False, "cursor": None, "note": None}
     result["items"] = [i for i in result["items"] if state["keys"].get(i["key"]) != i["rev"]]
     return result
+
+
+@contextlib.contextmanager
+def _auto_state():
+    """Lock order: tick -> register -> seen -> state (always innermost).
+
+    Never run checks or acquire another lock while holding the state lock.
+    Reload inside each transaction; callers may change only their binding.
+    """
+    path = _auto_local()
+    lock_path = path + ".lock"
+    if os.path.islink(lock_path): sys.exit("automation paths must not contain symlinks")
+    with _auto_lock(lock_path):
+        state = _auto_json(path, {})
+        yield state
+        _auto_write(path, state)
+
+
+def _auto_save_check(binding, result=None, error=None):
+    with _auto_state() as state:
+        return _auto_record_check(state, binding, result, error)
 
 
 def _auto_record_check(state, binding, result=None, error=None):
@@ -8105,14 +8126,13 @@ def _auto_payload(path, m, r, result, run_id):
 
 
 def _auto_tick(a, packs, owner):
-    state_path = _auto_local(); state = {}; payloads = []; problems = []; reservations = []
+    state_path = _auto_local(); payloads = []; problems = []; reservations = []
     # Validate parent directories before opening the shared, non-JSON tick lock.
     lock_path = os.path.join(os.path.dirname(_automation_path("automation/tick.json")), ".tick.lock")
     if os.path.islink(lock_path): sys.exit("automation paths must not contain symlinks")
     try:
         with _auto_lock(lock_path, True) as acquired:
             if not acquired: print("automation tick busy", file=sys.stderr); return
-            state = _auto_json(state_path, {})
             register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
             for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
                 if not name.endswith(".json"): continue
@@ -8127,14 +8147,13 @@ def _auto_tick(a, packs, owner):
                         if not _auto_ready(r, digest): raise ValueError("changed")
                         if r.get("current_run"):
                             problems.append({"slug": slug, "code": "busy"}); continue
-                        previous = state.get(binding, {})
+                        previous = _auto_json(state_path, {}).get(binding, {})
                         if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
                             if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
                             continue
                         result = _auto_check(path, m, r, previous.get("scan_cursor"))
                         # A changed file during the subprocess must never yield a reservation.
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
-                        _auto_record_check(state, binding, result=result)
                         if result["items"]:
                             run_id = "tick-" + uuid.uuid4().hex
                             r["last_started_at"] = now()
@@ -8144,12 +8163,11 @@ def _auto_tick(a, packs, owner):
                             _auto_write(rp, r)
                             reservations.append((rp, run_id))
                             payloads.append(_auto_payload(path, m, r, result, run_id))
+                        _auto_save_check(binding, result=result)
                     except (ValueError, OSError, SystemExit) as error:
                         if reserved: raise
-                        code = _auto_record_check(state, binding, error=error)
+                        code = _auto_save_check(binding, error=error)
                         problems.append({"slug": slug, "code": code})
-            os.makedirs(os.path.dirname(state_path), exist_ok=True)
-            _auto_write(state_path, state)
         if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}), flush=True)
         elif problems:
             print(json.dumps(problems), file=sys.stderr); return 3
@@ -8174,13 +8192,20 @@ def cmd_automation(a):
         _auto_pack(a.path); print("valid"); return
     owner = (getattr(a, "owner", None) or default_user()).strip().lower()
     slug = getattr(a, "slug", None)
-    if action == "disable":
+    if action in ("disable", "uninstall"):
         binding, rp = _auto_binding(slug, owner)
         with _auto_lock(rp + ".lock"):
             r = _auto_json(rp)
             if not r: sys.exit("automation is not installed")
-            r["status"] = "paused"; _auto_write(rp, r)
-        print(slug + ": paused"); return
+            if r.get("owner", "").lower() != owner: sys.exit("automation owner mismatch")
+            if action == "uninstall":
+                if r.get("status") == "retired": sys.exit("automation is not installed")
+                if r.get("current_run"): sys.exit("automation has a current run")
+                if a.forget:
+                    with contextlib.suppress(FileNotFoundError): os.remove(_auto_seen(binding))
+            r["status"] = "retired" if action == "uninstall" else "paused"
+            _auto_write(rp, r)
+        print(slug + ": " + r["status"]); return
     packs = _auto_packs()
     if action == "tick": return _auto_tick(a, packs, owner)
     local = _auto_json(_auto_local(), {}) if action in ("list", "check") else {}
@@ -8268,11 +8293,6 @@ def cmd_automation(a):
             if action == "enable":
                 if not _auto_ready(r, digest): sys.exit("setup is not ready for current pack digest; reinstall and setup")
                 r["status"] = "active"
-            elif action == "uninstall":
-                if r.get("current_run"): sys.exit("automation has a current run")
-                r["status"] = "retired"
-                if a.forget:
-                    with contextlib.suppress(FileNotFoundError): os.remove(_auto_seen(binding))
             elif action == "setup":
                 if digest != install["digest"]: sys.exit("pack changed; uninstall and reinstall before setup")
                 setup = install["setup"]
@@ -8290,7 +8310,7 @@ def cmd_automation(a):
                         probe = route.get("probe")
                         if probe:
                             try:
-                                code, _, _ = _auto_process(probe, _auto_env(slug, install["config"], {}), 10, install["network_granted"])
+                                code, _, _ = _auto_process(([probe[0], "-B"] + probe[1:]) if re.fullmatch(r"python(?:3(?:\.\d+)?)?", os.path.basename(probe[0])) else probe, _auto_env(slug, install["config"], {}), 10, install["network_granted"])
                             except (OSError, ValueError): code = 1
                             if code: notes.append("probe-failed")
                         elif need["id"] not in ("board.read", "files.read"): notes.append("probe-missing")
@@ -8308,11 +8328,11 @@ def cmd_automation(a):
                 try: result = _auto_check(path, m, r, local.get(binding, {}).get("scan_cursor"))
                 except (ValueError, OSError) as error:
                     if action == "check":
-                        _auto_record_check(local, binding, error=error); _auto_write(_auto_local(), local)
+                        _auto_save_check(binding, error=error)
                     sys.exit(str(error))
                 if _auto_pack(path)[1] != digest: sys.exit("pack changed during check")
                 if action == "check":
-                    _auto_record_check(local, binding, result=result); _auto_write(_auto_local(), local)
+                    _auto_save_check(binding, result=result)
                     print(json.dumps(result))
                 else:
                     print(json.dumps(_auto_payload(path, m, r, result, "dry-run")))
@@ -8347,9 +8367,8 @@ def cmd_automation(a):
                     while len(seen["keys"]) > 10000: del seen["keys"][next(iter(seen["keys"]))]
                     seen["updated_at"] = now(); _auto_write(seen_path, seen)
                 if "cursor" in done:
-                    local = _auto_json(_auto_local(), {})
-                    local.get(binding, {}).pop("scan_cursor", None)
-                    _auto_write(_auto_local(), local)
+                    with _auto_state() as local:
+                        local.get(binding, {}).pop("scan_cursor", None)
                 print("marked " + str(len(completed))); return
         _auto_write(rp, r)
         print(slug + ": " + r["status"])
