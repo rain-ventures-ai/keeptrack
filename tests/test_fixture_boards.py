@@ -147,6 +147,16 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, code, out.getvalue())
         self.assertEqual(expect, board_counts(kt.load_board()))
 
+    def test_v68_links_preserve_frozen_board_on_upgrade(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit68", "fixture.json"))
+        board_dir, expect = self.use_fixture("v4_kit68", meta)
+        before = kt.load_board()
+        with contextlib.redirect_stdout(io.StringIO()): kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        after = kt.load_board()
+        self.assertEqual(before, after)
+        self.assertEqual(expect, board_counts(after))
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_v48_upgrade_preserves_routine_checkpoint_outside_board(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit48", "fixture.json"))
         board_dir, expect = self.use_fixture("v4_kit48", meta)
