@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v70 (schema 4)
+Automation manifests may carry an optional `flow` that the web board draws on its new Automations page. The three
+built-in packs get plain-words summaries and a flow (pack version 1.1.0). No migration.
+- Run `kit-update` only. Check: `automation validate board/automations/email-to-tasks` says valid.
+- The built-in pack files changed, so their digests changed. An install of a built-in pack made on v69 is refused
+  until it is reinstalled: `automation uninstall <slug>`, `automation install <slug> ...`, `automation setup <slug>`,
+  then `enable`. Seen state is kept. Check with `automation list --installed`.
+
 ### v69 (schema 4)
 Proposal-only automation packs and the automation command family. No migration. Nothing is installed or enabled
 by upgrading; no routines, triggers or schedules change. Run kit-update only, then automation list to inspect the

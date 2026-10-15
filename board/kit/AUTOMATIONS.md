@@ -42,7 +42,10 @@ unverified. Never put tokens, account addresses or source text into a pack, chec
 ## Contracts and trust
 
 Manifest schema is `keeptrack-automation/1`: fixed needs board.read, files.read, gmail.read, drive.read,
-github.read, calendar.read; writes is ["proposals"]. Every fixed interval coalesces missed UTC slots.
+github.read, calendar.read; writes is ["proposals"]. Optional `flow` (kit v70) lists 2–8 steps
+`{kind, title, text}` that the web board draws as a node diagram: kind is trigger, read, check, agent, output or step;
+title up to 40 characters, text up to 160. It is shown as plain text, never followed as instructions. Without it the
+board draws the steps from the manifest (schedule, needs, check, agent, Review Inbox). Every fixed interval coalesces missed UTC slots.
 Check stdout is one `keeptrack-check/1` object with items (key, rev, title, ref), more, cursor, note and optional `start_cursor`.
 `start_cursor` is null or an opaque token validated exactly like `cursor` (1–256 characters,
 `[A-Za-z0-9_./+=:-]`, no `://`). It describes the frozen window/page at the start of the check;
@@ -74,8 +77,8 @@ This JSON format is not compatible with back-office agent-packs' YAML format.
 | proposals | Review Inbox; human acceptance remains separate |
 
 Retiring a built-in is an explicit release step: disable affected installs first. kit-update never removes registers
-or seen logs. The web board shows packs and installs read-only in Settings → Agents → Automations (deep link
-`#settings=automations`), with the command for each next step to copy; it never installs or enables. Relay scheduler
+or seen logs. The web board's Automations page (header button, deep link `#view=automations`) shows each pack as a card with its
+flow diagram, status and the command for each next step to copy; it never installs or enables. Relay scheduler
 hook-up, usage and direct writes are outside v1.
 
 Tick supplies each item’s `action_key`: `auto:<slug>:` + sha256 of compact JSON `[key, rev]` (list order preserved). Copy it unchanged for proposals and retries. Mixed ticks exit 0 with work; report every payload `problems` entry. Invalid/missing packs remain visible in list. Undelivered reservations finish failed with code `undelivered`; owners can finish failed even after pack loss.

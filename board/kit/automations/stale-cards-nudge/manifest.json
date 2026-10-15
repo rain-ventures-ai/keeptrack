@@ -2,8 +2,8 @@
   "schema": "keeptrack-automation/1",
   "slug": "stale-cards-nudge",
   "name": "Stale cards nudge",
-  "summary": "Propose work for review from board.read",
-  "version": "1.0.0",
+  "summary": "Find cards nobody has touched for a while and propose a friendly nudge comment for each one.",
+  "version": "1.1.0",
   "needs": [
     {
       "id": "board.read",
@@ -39,6 +39,33 @@
     "edit-contacts"
   ],
   "every": "1d",
+  "flow": [
+    {
+      "kind": "trigger",
+      "title": "Once a day",
+      "text": "Runs on the shared automation schedule."
+    },
+    {
+      "kind": "read",
+      "title": "Read the board",
+      "text": "Looks at open cards and their last activity."
+    },
+    {
+      "kind": "check",
+      "title": "Find stale cards",
+      "text": "A small script lists cards the board marks for attention. No AI is used."
+    },
+    {
+      "kind": "agent",
+      "title": "Write a nudge",
+      "text": "An agent drafts a short, polite nudge for each card, once per card per week."
+    },
+    {
+      "kind": "output",
+      "title": "Review Inbox",
+      "text": "Each nudge waits there as a proposal. Nothing is posted until you accept it."
+    }
+  ],
   "check": {
     "file": "check.py",
     "network": false,

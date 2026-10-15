@@ -14,6 +14,7 @@ Use [references/manifest_template.json](references/manifest_template.json),
 [references/check_template.py](references/check_template.py) and
 [references/test_template.py](references/test_template.py) as starting points. Read the guide's contracts first.
 Create manifest.json, SKILL.md, SETUP.md, stdlib check.py and tests/test_check.py with a temp folder or fake CLI fixture.
+Give the manifest a plain-words `summary` and a `flow` (trigger, read, check, agent, output) that the web board draws.
 Add scripts/ helpers only when needed. SETUP.md needs per-runtime read-only access steps and fixes.
 
 Never store secrets, tokens, account addresses or source text in the pack or protocol output.
