@@ -18,6 +18,8 @@ retitles a card, and never replaces text a person wrote.
 - A **bare** card has no to-dos, no links and details shorter than 120 characters (`board/CARDS.md`, tests 2-4).
   `keeptrack.py list --bare` lists them. Cards labelled `researched`, `researching`, `no-research`, `needs-human` or
   `held` are never picked; put `no-research` on a card to keep agents off it.
+- `keeptrack.py research-lock '#N'` adds the label `researching` (the research run's lock; a claim would move the card)
+  only when the setting is on and the card may still be researched. Of two dispatchers, only one gets the lock.
 - `keeptrack.py task-set '#N' --add-details "<text>"` adds text below the current details (a blank line between) and
   never replaces them.
 - No schema migration. Older kits and pages ignore the setting.

@@ -126,6 +126,28 @@ class BacklogResearch(unittest.TestCase):
             self.task_set(details="x", add_details="y")
         self.assertIn("not both", str(e.exception))
 
+    def test_research_candidate_assignee_rule(self):
+        data = {"settings": {}}
+        self.assertTrue(kt.research_candidate(data, card(1, assignees=[]), "osouthgate"))
+        self.assertTrue(kt.research_candidate(data, card(1, assignees=["OSouthgate"]), "osouthgate"))
+        self.assertFalse(kt.research_candidate(data, card(1, assignees=["JezHub"]), "osouthgate"))
+        self.assertTrue(kt.research_candidate(data, card(1, assignees=["JezHub"])))   # no user: no assignee rule
+
+    def test_research_lock_is_exclusive_and_needs_the_setting(self):
+        lock = lambda ref="#1": self.out(kt.cmd_research_lock, Args(id=ref))
+        with self.assertRaises(SystemExit) as e:
+            lock()
+        self.assertIn("off", str(e.exception))
+        self.settings_set(backlog_research="on")
+        self.assertIn("locked", lock())
+        self.assertIn("researching", self.read()["tasks"][0]["labels"])
+        with self.assertRaises(SystemExit) as e:
+            lock()   # a second dispatcher: refused, nothing written
+        self.assertIn("refused", str(e.exception))
+        self.assertEqual(self.read()["tasks"][0]["labels"].count("researching"), 1)
+        with self.assertRaises(SystemExit):
+            lock("#2")   # not bare
+
 
 if __name__ == "__main__":
     unittest.main()

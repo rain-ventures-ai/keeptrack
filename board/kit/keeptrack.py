@@ -1808,12 +1808,33 @@ def bare_card(t):
     return not t.get("todos") and not t.get("links") and len(details) < BARE_DETAILS_CHARS
 
 
-def research_candidate(data, t):
+def research_candidate(data, t, user=None):
     """A Backlog card backlog auto-research may pick: bare, no running claim, no open wait, none of
-    RESEARCH_SKIP_LABELS. The setting itself is checked by the caller."""
+    RESEARCH_SKIP_LABELS, and (with user) assigned to that user or to nobody. The setting is checked by the caller."""
     labels = {str(x).lower() for x in t.get("labels") or []}
+    who = [str(x).lower() for x in t.get("assignees") or []]
     return (t.get("column") == "backlog" and bare_card(t) and not labels & set(RESEARCH_SKIP_LABELS)
+            and (not user or not who or user.lower() in who)
             and claim_state(data, t.get("claim")) not in ("running", "blocked", "stuck") and not open_waiting(t))
+
+
+def cmd_research_lock(a):
+    """Take the backlog-research lock on one card: add the label `researching` only when the setting is on and the
+    card is still a research candidate (which includes: not already `researching`). A lost race re-runs this on the
+    newer board, so of two dispatchers only one gets the lock; the other is refused and writes nothing."""
+    def fn(data):
+        _MUT["recheck"] = True
+        t = find(data, a.id)
+        if not backlog_research(data)["enabled"]:
+            sys.exit("refused: backlog research is off (settings.backlog_research)")
+        if not research_candidate(data, t, default_user()):
+            sys.exit(f"refused: #{t.get('num')} is not a card backlog research may take now (not in Backlog, not bare, "
+                     "assigned to someone else, claimed, waiting, or labelled " + ", ".join(RESEARCH_SKIP_LABELS) + ")")
+        ensure_labels(data, ["researching"])
+        t["labels"] = list(t.get("labels") or []) + ["researching"]
+        t["updated"] = now(); hist(t, "backlog research: locked (researching)")
+        print(f"#{t.get('num')} locked for backlog research (label researching)")
+    mutate(fn, f"Backlog research lock: {a.id}")
 
 
 def chase_date(data, w):
@@ -4197,7 +4218,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint"],
+    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint", "research-lock"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -7676,6 +7697,8 @@ def main():
     position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
     s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
+    s = sub.add_parser("research-lock", help="backlog auto-research: label a bare Backlog card researching, only if it may be researched now (refused otherwise)")
+    s.add_argument("id"); s.set_defaults(f=cmd_research_lock)
     s = sub.add_parser("card-link", help="cards as Markdown links to the web board ([#12](url) title): write card numbers this way")
     s.add_argument("ids", nargs="+", metavar="id"); s.set_defaults(f=cmd_card_link)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)

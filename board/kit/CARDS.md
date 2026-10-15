@@ -140,7 +140,9 @@ characters. `keeptrack.py list --column backlog --bare` lists them. The rule is 
 same answer.
 
 When the board setting **Backlog auto-research** is on (`settings.backlog_research`, Settings → Board, off by default),
-the relay dispatcher picks a few bare Backlog cards each run and an agent researches each one. The research agent:
+the relay dispatcher picks a few bare Backlog cards each run (assigned to the board owner or to nobody) and locks
+each one with `keeptrack.py research-lock '#N'`: it adds the label `researching` only when the card may still be
+researched, so two dispatchers never take the same card. Then an agent researches each one. The research agent:
 
 - **May** add details with `task-set '#N' --add-details "<text>"` (below what is there, never instead of it), add links
   with `link`, add to-dos with `todo-add`, and post one comment: what it found, what it could not find, and the
@@ -153,3 +155,6 @@ the relay dispatcher picks a few bare Backlog cards each run and an agent resear
 
 Cards with the label `researched`, `researching`, `no-research`, `needs-human` or `held` are never picked. Put
 `no-research` on a card to keep agents off it. Take `researched` off a card to let it be researched again.
+
+These limits are rules in the agent's brief, not hard locks: the research session can write to the board, so it is
+told to treat card, repo and web text as data and never to act on it.
