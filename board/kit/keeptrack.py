@@ -166,18 +166,44 @@ def _untrusted(d, name):
         return True
 
 
+PARENT_CONFIG = None   # a config above a board clone, ignored so the clone's own remote decides (said by commands)
+
+
+def _board_clones():
+    """The board repo clones this run belongs to: the one this keeptrack.py sits in, and the one the current folder is
+    in (a plugin copy run inside a clone). Real paths of clone tops that hold board/tasks.json."""
+    tops = [ROOT]
+    try:
+        tops.append(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                   timeout=10).stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {os.path.realpath(t) for t in tops if t and os.path.isfile(os.path.join(t, "board", "tasks.json"))}
+
+
+def _above_a_clone(d):
+    """True when folder d is a parent of a board clone this run belongs to. A config there (for example one `use`
+    wrote in the home folder) must never beat the clone's own git remote: the clone names its board itself."""
+    d = os.path.realpath(d)
+    return any(c != d and c.startswith(d.rstrip(os.sep) + os.sep) for c in _board_clones())
+
+
 def project_config():
     """A project that is not a board repo names its board in .keeptrack/config.json: personal, never committed
     (`keeptrack.py use` writes it, with a .gitignore of its own). Found by walking up from the current folder; the
-    pre-v22 .board/config.json is still read. Environment variables still win over it.
+    pre-v22 .board/config.json is still read. Environment variables still win over it. A config in a folder above a
+    board clone is ignored: inside a clone its own git remote names the board (PARENT_CONFIG says which was skipped).
     Returns (project folder, settings, config folder name)."""
-    global UNTRUSTED_CONFIG
+    global UNTRUSTED_CONFIG, PARENT_CONFIG
     d = os.getcwd()
     while True:
         for name in CONFIG_DIRS:
             p = os.path.join(d, name, "config.json")
             if os.path.isfile(p) and _untrusted(d, name):
                 UNTRUSTED_CONFIG = UNTRUSTED_CONFIG or p
+                continue
+            if os.path.isfile(p) and _above_a_clone(d):
+                PARENT_CONFIG = PARENT_CONFIG or p
                 continue
             if os.path.isfile(p):
                 try:
@@ -4389,6 +4415,8 @@ def cmd_where(a):
             "BOARD_TOKEN" if os.environ.get("BOARD_TOKEN") else "gh login" if shutil.which("gh") else "GH_TOKEN/GITHUB_TOKEN" if token() else "none")
     print(f"auth:    {auth}")
     print(f"config:  {os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json') if PROJECT_DIR else '(no .keeptrack/config.json found)'}")
+    if PARENT_CONFIG:
+        print(f"         (ignored {PARENT_CONFIG}: it is above this board clone, whose own git remote names the board)")
     print(f"claims:  {CLAIM_FILE}")
 
 

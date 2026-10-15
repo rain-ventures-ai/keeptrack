@@ -107,6 +107,39 @@ class ConfigAndClaimFiles(unittest.TestCase):
         os.chdir(self.tmp.name)
         self.assertEqual("o/mine", kt.project_config()[1].get("repo"))
 
+    def board_clone(self, path, remote):
+        git_repo(path)
+        subprocess.run(["git", "-C", path, "remote", "add", "origin", f"https://github.com/{remote}.git"], check=True)
+        os.makedirs(os.path.join(path, "board")); write(os.path.join(path, "board", "tasks.json"), {"tasks": []})
+        return path
+
+    def test_a_config_above_a_board_clone_never_beats_its_remote(self):
+        """A trusted home-folder config (`use` in ~) must not send a board clone's commands to another board."""
+        home = self.tmp.name
+        config(os.path.join(home, ".board"), {"repo": "o/private"})
+        clone = self.board_clone(os.path.join(home, "dev", "consulting"), "o/consulting")
+        os.chdir(os.path.join(clone, "board"))
+        kt.PARENT_CONFIG = None
+        self.assertEqual((None, {}), kt.project_config()[:2])
+        self.assertEqual(os.path.join(home, ".board", "config.json"), kt.PARENT_CONFIG)
+        r = subprocess.run(["python3", os.path.join(KIT, "keeptrack.py"), "where"], cwd=clone, capture_output=True, text=True,
+                           env={**os.environ, "BOARD_REPO": ""})
+        self.assertNotIn("o/private", r.stdout.split("config:")[0])
+
+    def test_a_config_inside_a_board_clone_still_applies(self):
+        clone = self.board_clone(os.path.join(self.tmp.name, "b"), "o/board")
+        config(os.path.join(clone, ".keeptrack"), {"repo": "o/board", "project": "loam"})
+        os.chdir(clone)
+        self.assertEqual("loam", kt.project_config()[1].get("project"))
+
+    def test_a_home_config_still_serves_folders_outside_any_board_clone(self):
+        home = self.tmp.name
+        config(os.path.join(home, ".keeptrack"), {"repo": "o/mine"})
+        self.board_clone(os.path.join(home, "board"), "o/board")
+        code = git_repo(os.path.join(home, "code"))
+        os.chdir(code)
+        self.assertEqual("o/mine", kt.project_config()[1].get("repo"))
+
     def test_a_config_use_did_not_write_is_ignored_even_outside_git(self):
         """An unpacked download that ships .keeptrack/config.json can't choose the board."""
         folder = os.path.join(self.tmp.name, "download")

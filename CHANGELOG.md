@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+CLI: a board repo clone always uses its own git remote. A `.keeptrack` or `.board` config in a folder above the clone
+(for example one `use` wrote in the home folder) is now ignored there, and `where` names the file it skipped. Before,
+such a config set `BOARD_REPO` and sent the clone's commands to another board. START.md no longer suggests running
+`use` in the home folder. No schema change.
+
 Web board: split boards fetch uncached files in GraphQL batches, so a new browser needs fewer GitHub calls.
 Files GitHub cannot return this way fall back to the existing REST read. No schema change.
 
