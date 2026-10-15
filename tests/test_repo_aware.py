@@ -113,6 +113,14 @@ class ConfigAndClaimFiles(unittest.TestCase):
         os.makedirs(os.path.join(path, "board")); write(os.path.join(path, "board", "tasks.json"), {"tasks": []})
         return path
 
+    def where(self, cwd, script=None):
+        env = dict(os.environ)
+        for k in ("BOARD_REPO", "BOARD_TOKEN", "BOARD_USER", "BOARD_PROJECT", "BOARD_BRANCH", "BOARD_PATH"):
+            env.pop(k, None)
+        r = subprocess.run(["python3", script or os.path.join(KIT, "keeptrack.py"), "where"], cwd=cwd, env=env,
+                           capture_output=True, text=True)
+        return next((l for l in r.stdout.splitlines() if l.startswith("board:")), r.stdout + r.stderr)
+
     def test_a_config_above_a_board_clone_never_beats_its_remote(self):
         """A trusted home-folder config (`use` in ~) must not send a board clone's commands to another board."""
         home = self.tmp.name
@@ -122,9 +130,28 @@ class ConfigAndClaimFiles(unittest.TestCase):
         kt.PARENT_CONFIG = None
         self.assertEqual((None, {}), kt.project_config()[:2])
         self.assertEqual(os.path.join(home, ".board", "config.json"), kt.PARENT_CONFIG)
-        r = subprocess.run(["python3", os.path.join(KIT, "keeptrack.py"), "where"], cwd=clone, capture_output=True, text=True,
-                           env={**os.environ, "BOARD_REPO": ""})
-        self.assertNotIn("o/private", r.stdout.split("config:")[0])
+        self.assertIn("o/consulting", self.where(clone))                         # the plugin copy, run in the clone
+        self.assertNotIn("o/private", self.where(clone))
+
+    def test_a_clones_script_run_from_another_project_keeps_that_projects_config(self):
+        """The clone's own keeptrack.py run from a code repo (START.md, cloud): that repo's config still decides."""
+        home = self.tmp.name
+        config(os.path.join(home, ".keeptrack"), {"repo": "o/private"})
+        clone = self.board_clone(os.path.join(home, "dev", "b"), "o/board")
+        code = git_repo(os.path.join(home, "code"))
+        script = os.path.join(clone, "board", "keeptrack.py")
+        with open(os.path.join(KIT, "keeptrack.py")) as src, open(script, "w") as dst:
+            dst.write(src.read())
+        os.chdir(code)
+        self.assertEqual("o/private", kt.project_config()[1].get("repo"))
+        self.assertIn("o/private", self.where(code, script))
+
+    def test_a_parent_config_naming_the_clones_own_board_still_applies(self):
+        home = self.tmp.name
+        config(os.path.join(home, ".keeptrack"), {"repo": "o/Board", "user": "alex"})
+        clone = self.board_clone(os.path.join(home, "board"), "o/board")
+        os.chdir(clone)
+        self.assertEqual("alex", kt.project_config()[1].get("user"))
 
     def test_a_config_inside_a_board_clone_still_applies(self):
         clone = self.board_clone(os.path.join(self.tmp.name, "b"), "o/board")

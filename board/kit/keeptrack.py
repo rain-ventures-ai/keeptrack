@@ -169,23 +169,44 @@ def _untrusted(d, name):
 PARENT_CONFIG = None   # a config above a board clone, ignored so the clone's own remote decides (said by commands)
 
 
+_CLONES = {}   # {current folder: its clones}, asked once a run per folder
+
+
 def _board_clones():
-    """The board repo clones this run belongs to: the one this keeptrack.py sits in, and the one the current folder is
-    in (a plugin copy run inside a clone). Real paths of clone tops that hold board/tasks.json."""
-    tops = [ROOT]
-    try:
-        tops.append(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                                   timeout=10).stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return {os.path.realpath(t) for t in tops if t and os.path.isfile(os.path.join(t, "board", "tasks.json"))}
+    """The board repo clones the current folder is in: the one this keeptrack.py sits in and the one git names for the
+    current folder (a plugin copy run inside a clone), each kept only when the current folder is inside it.
+    {real path of the clone top: its origin's owner/name}."""
+    cwd = os.path.realpath(os.getcwd())
+    if cwd not in _CLONES:
+        tops = [ROOT]
+        try:
+            tops.append(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                       timeout=10).stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+        found = _CLONES[cwd] = {}
+        for t in tops:
+            c = os.path.realpath(t) if t else ""
+            if c and os.path.isfile(os.path.join(c, "board", "tasks.json")) and (cwd == c or cwd.startswith(c.rstrip(os.sep) + os.sep)):
+                try:
+                    out = subprocess.run(["git", "-C", c, "remote", "get-url", "origin"], capture_output=True, text=True,
+                                         timeout=10).stdout.strip()
+                except (OSError, subprocess.SubprocessError):
+                    out = ""
+                m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", out)
+                found[c] = m.group(1).lower() if m else ""
+    return _CLONES[cwd]
 
 
-def _above_a_clone(d):
-    """True when folder d is a parent of a board clone this run belongs to. A config there (for example one `use`
-    wrote in the home folder) must never beat the clone's own git remote: the clone names its board itself."""
+def _above_a_clone(d, conf):
+    """True when folder d is a parent of a board clone the current folder is in, and the config there names another
+    board than that clone's own remote. Such a config (for example one `use` wrote in the home folder) must never beat
+    the clone's remote: inside a clone, the clone names its board. A config naming the same board still applies (its
+    user, token_env, project)."""
     d = os.path.realpath(d)
-    return any(c != d and c.startswith(d.rstrip(os.sep) + os.sep) for c in _board_clones())
+    repo = str(conf.get("repo") or "").lower()
+    return any(c != d and c.startswith(d.rstrip(os.sep) + os.sep) and repo and r and repo != r
+               for c, r in _board_clones().items())
 
 
 def project_config():
@@ -202,14 +223,16 @@ def project_config():
             if os.path.isfile(p) and _untrusted(d, name):
                 UNTRUSTED_CONFIG = UNTRUSTED_CONFIG or p
                 continue
-            if os.path.isfile(p) and _above_a_clone(d):
-                PARENT_CONFIG = PARENT_CONFIG or p
-                continue
             if os.path.isfile(p):
                 try:
-                    return d, json.load(open(p)), name
+                    with open(p) as f:
+                        conf = json.load(f)
                 except (OSError, ValueError) as e:
                     sys.exit(f"cannot read {p}: {e}")
+                if isinstance(conf, dict) and _above_a_clone(d, conf):
+                    PARENT_CONFIG = PARENT_CONFIG or p
+                    continue
+                return d, conf, name
         if os.path.dirname(d) == d:
             return None, {}, CONFIG_DIRS[0]
         d = os.path.dirname(d)
