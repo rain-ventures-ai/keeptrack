@@ -383,9 +383,12 @@ if (typeof window !== 'undefined') (() => {
     });
   }
   const MD_EMPH = /(\*\*(?=\S)[^\n]+?\*\*(?!\*)|__(?=\S)[^\n]+?__(?![\w_])|~~(?=\S)[^~\n]+?~~|(?<![\w*])\*(?=[^\s*])[^*\n]*?[^\s*]?\*(?![\w*])|(?<![\w_])_(?=[^\s_])[^_\n]*?_(?![\w_]))/g;
-  function mdEmph(parent, text) {
+  const MD_LINKISH = /\[[^\]\n]{1,200}\]\(https?:\/\/[^\s<>"()]+\)|https?:\/\/[^\s<>"')]+/g;
+  function mdEmph(parent, text) {   // emphasis never starts or ends inside a link or a URL (__init__.py in a path stays)
+    const guard = []; MD_LINKISH.lastIndex = 0; for (let m; (m = MD_LINKISH.exec(text));) guard.push([m.index, m.index + m[0].length]);
+    const cuts = (a, b) => guard.some(([x, y]) => (a > x && a < y) || (b > x && b < y) || (a >= x && b <= y));
     let last = 0; MD_EMPH.lastIndex = 0; const parts = [];
-    for (let m; (m = MD_EMPH.exec(text));) { parts.push([m.index, m[0]]); }
+    for (let m; (m = MD_EMPH.exec(text));) { if (cuts(m.index, m.index + m[0].length)) { MD_EMPH.lastIndex = m.index + 1; continue; } parts.push([m.index, m[0]]); }
     parts.forEach(([at, tok]) => {
       if (at > last) linkify(parent, text.slice(last, at));
       const two = /^(\*\*|__|~~)/.test(tok), inner = tok.slice(two ? 2 : 1, two ? -2 : -1);
@@ -394,33 +397,34 @@ if (typeof window !== 'undefined') (() => {
     if (last < text.length) linkify(parent, text.slice(last));
   }
   const mdCells = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
-  function mdRender(parent, text) {
+  function mdRender(parent, text, depth = 0) {
     const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n'); let para = null, lists = [], i = 0;
     const endPara = () => { para = null; }, endLists = () => { lists = []; };
     const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
     while (i < lines.length) {
       const line = lines[i];
-      if (/^\s*```/.test(line)) {   // fenced code: kept exactly, to the closing fence (or the end)
+      if (/^\s*```[^`]*$/.test(line)) {   // fenced code: kept exactly, to the closing fence (or the end)
         endPara(); endLists(); const body = []; i++;
         while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) body.push(lines[i++]);
         i++; const pre = el('pre', 'mdpre'); pre.append(el('code', null, body.join('\n'))); parent.append(pre); continue;
       }
       if (!line.trim()) { endPara(); if (!(lists.length && LIST.test(lines[i + 1] || ''))) endLists(); i++; continue; }
       let m;
-      if ((m = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line))) {
-        endPara(); endLists(); const h = el('h' + Math.min(6, m[1].length + 2), 'mdh mdh' + m[1].length); mdInline(h, m[2]); parent.append(h); i++; continue;
+      if ((m = /^\s{0,3}(#{1,6})[ \t]+(\S.*)$/.exec(line))) {   // a closing run of # needs a space before it ("C#" stays)
+        let ht = m[2].trimEnd(); const k = ht.length - ht.replace(/#+$/, '').length; if (k && k < ht.length && /[ \t]/.test(ht[ht.length - k - 1])) ht = ht.slice(0, -k).trimEnd();
+        endPara(); endLists(); const h = el('h' + Math.min(6, m[1].length + 2), 'mdh mdh' + m[1].length); mdInline(h, ht); parent.append(h); i++; continue;
       }
       if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { endPara(); endLists(); parent.append(el('hr', 'mdhr')); i++; continue; }
-      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
+      if (/^\s*\|.*\|\s*$/.test(line) && /^(?=.*\|)\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
         endPara(); endLists(); const wrap = el('div', 'mdtable'), tb = el('table'), head = el('tr');
         mdCells(line).forEach(c => { const th = el('th'); mdInline(th, c); head.append(th); });
         const thead = el('thead'); thead.append(head); tb.append(thead); const tbody = el('tbody'); i += 2;
         while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { const tr = el('tr'); mdCells(lines[i]).forEach(c => { const td = el('td'); mdInline(td, c); tr.append(td); }); tbody.append(tr); i++; }
         tb.append(tbody); wrap.append(tb); parent.append(wrap); continue;
       }
-      if ((m = /^\s*>\s?(.*)$/.exec(line))) {
+      if (depth < 8 && (m = /^\s*>\s?(.*)$/.exec(line))) {
         endPara(); endLists(); const q = []; while (i < lines.length && (m = /^\s*>\s?(.*)$/.exec(lines[i]))) { q.push(m[1]); i++; }
-        const bq = el('blockquote', 'mdquote'); mdRender(bq, q.join('\n')); parent.append(bq); continue;
+        const bq = el('blockquote', 'mdquote'); mdRender(bq, q.join('\n'), depth + 1); parent.append(bq); continue;
       }
       if ((m = LIST.exec(line))) {
         endPara(); const indent = m[1].replace(/\t/g, '    ').length, ordered = /\d/.test(m[2]);
@@ -2304,7 +2308,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
-  const firstLine = t => mdPlain((t.details || '').split('\n').find(x => x.trim() && !/^\s*(```|\|?\s*:?-{2,}[-|: ]*$|([-*_])(\s*\3){2,}\s*$)/.test(x)) || '').trim();
+  const firstLine = t => mdPlain((t.details || '').split('\n').find(x => x.trim() && !/^\s*(```|\|?\s*:?-{2,}[-|: ]*$|([-*_])(\s*\2){2,}\s*$)/.test(x)) || '').trim();
   // The chips a task shows in every view (kanban card, list row, schedule row). always: also show an empty checklist/comments chip (cards).
   function chipTodo(t, always) {
     const tc = todoCount(t); if (!tc.all && !always) return null;

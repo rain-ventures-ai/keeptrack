@@ -121,6 +121,21 @@ async function open(browser, base, { view = 'mentions', me = 'alex', viewport = 
     await page.locator('#descPreview').click();
     assert.ok(await page.locator('#cDetails').isHidden()); assert.equal(await page.locator('#descPrev strong').textContent(), 'plan'); assert.equal(await page.locator('#descPrev li').textContent(), 'step one');
     await shot(page, 'md-preview');
+    // review findings: no text lost, no freeze, no stack overflow
+    const prev = async text => { await page.locator('#descWrite').click(); await page.locator('#cDetails').fill(text); await page.locator('#descPreview').click(); return page.locator('#descPrev'); };
+    assert.equal(await (await prev('## Use C#')).locator('h4').textContent(), 'Use C#');
+    assert.equal(await (await prev('## Done ##')).locator('h4').textContent(), 'Done');
+    let pv = await prev('intro\n```npm install``` then run\nafter');
+    assert.equal(await pv.locator('pre').count(), 0); assert.ok((await pv.textContent()).includes('then run')); assert.equal(await pv.locator('code').textContent(), 'npm install');
+    pv = await prev('See https://github.com/o/r/blob/main/__init__.py and **bold [x](https://a.test/_b_/c)**');
+    assert.deepEqual(await pv.locator('a').evaluateAll(a => a.map(x => x.href)), ['https://github.com/o/r/blob/main/__init__.py', 'https://a.test/_b_/c']);
+    assert.equal(await pv.locator('strong a').count(), 1, 'bold round a link still works');
+    pv = await prev('>'.repeat(3000) + ' deep'); assert.ok((await pv.textContent()).includes('deep'), 'deep quotes render, no stack overflow');
+    let t0 = Date.now(); pv = await prev('# a' + ' '.repeat(8000) + 'b'); assert.ok(Date.now() - t0 < 3000, 'long heading renders fast'); assert.ok((await pv.textContent()).endsWith('b'));
+    t0 = Date.now(); pv = await prev('# ' + ' '.repeat(8000) + '#'); assert.ok(Date.now() - t0 < 3000);
+    pv = await prev('| a |\n---'); assert.equal(await pv.locator('table').count(), 0, 'a rule after one cell is not a table');
+    await page.locator('#cDetails').isHidden();
+    await page.locator('#descWrite').click(); await page.locator('#cDetails').fill('**plan**\n- step one');
     await page.locator('#descWrite').click(); assert.ok(await page.locator('#cDetails').isVisible());
     await page.locator('#cDescSave').click();
     await page.waitForFunction(() => document.querySelector('#cDescView strong') && document.querySelector('#cDescView strong').textContent === 'plan');

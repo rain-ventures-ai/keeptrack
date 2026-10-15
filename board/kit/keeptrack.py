@@ -2863,7 +2863,7 @@ def read_stdin_args(a):
     if len(keys) > 1:
         sys.exit("only one of the text, --details and --add-details can be '-' (stdin)")
     if keys:
-        value = sys.stdin.read().strip("\n")
+        value = sys.stdin.buffer.read().decode("utf-8", "replace").strip("\n")
         if not value.strip():
             sys.exit(f"{keys[0].replace('_', '-')}: '-' reads stdin, and stdin was empty")
         setattr(a, keys[0], value)
