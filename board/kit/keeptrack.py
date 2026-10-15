@@ -7804,7 +7804,7 @@ def _routine_report(a, path):
             install = data["automation"]
             if a.status != "failed":
                 packs = _auto_packs()
-                if install["slug"] not in packs or _auto_pack(packs[install["slug"]][1])[1] != current.get("digest"):
+                if install["digest"] != current.get("digest") or install["slug"] not in packs or _auto_pack(packs[install["slug"]][1])[1] != current.get("digest"):
                     sys.exit("pack digest changed since reservation")
             current = {k: v for k, v in current.items() if k != "batch"}
         report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts)
@@ -8062,9 +8062,20 @@ def _auto_ready(register, digest):
     return a.get("digest") == digest == setup.get("digest") and setup.get("status") == "ready"
 
 
+def _auto_seen_state(register):
+    binding = register["id"]
+    state = _auto_json(_auto_seen(binding), {"schema": "keeptrack-seen/1", "binding": binding, "keys": {}, "cursor": None})
+    state = dict(state)
+    if (state.get("binding", binding) != binding or
+            state.get("identity", {}).get("owner", register["owner"].lower()) != register["owner"].lower()):
+        state = dict(schema="keeptrack-seen/1", binding=binding, keys={}, cursor=None)
+    if state.get("identity") != _auto_identity(register): state["cursor"] = None
+    return state
+
+
 def _auto_check(path, manifest, register, scan_cursor=None):
     a = register["automation"]; binding = register["id"]
-    state = _auto_json(_auto_seen(binding), {"schema": "keeptrack-seen/1", "binding": binding, "keys": {}, "cursor": None})
+    state = _auto_seen_state(register)
     c = manifest.get("check")
     if c:
         if c.get("network") and not a.get("network_granted"): raise ValueError("network-not-granted")
@@ -8100,8 +8111,24 @@ def _auto_state(*, write=True):
         if write: _auto_write(path, state)
 
 
-def _auto_save_check(binding, result=None, error=None):
+def _auto_identity(register):
+    install = register.get("automation", {})
+    return dict(digest=install.get("digest"), install_id=install.get("install_id"),
+                owner=register.get("owner", "").lower())
+
+
+def _auto_local_entry(state, register):
+    entry = state.get(register.get("id"), {})
+    identity = _auto_identity(register)
+    if not identity["install_id"] or any(entry.get(k) != v for k, v in identity.items()):
+        return {}
+    return entry
+
+
+def _auto_save_check(binding, result=None, error=None, register=None):
     with _auto_state() as state:
+        if register is not None:
+            state[binding] = dict(_auto_local_entry(state, register), **_auto_identity(register))
         return _auto_record_check(state, binding, result, error)
 
 
@@ -8152,7 +8179,7 @@ def _auto_tick(a, packs, owner):
                         if r.get("current_run"):
                             problems.append({"slug": slug, "code": "busy"}); continue
                         with _auto_state(write=False) as local:
-                            previous = local.get(binding, {}).copy()
+                            previous = _auto_local_entry(local, r).copy()
                         if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
                             if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
                             continue
@@ -8168,10 +8195,10 @@ def _auto_tick(a, packs, owner):
                             _auto_write(rp, r)
                             reservations.append((rp, run_id))
                             payloads.append(_auto_payload(path, m, r, result, run_id))
-                        _auto_save_check(binding, result=result)
+                        _auto_save_check(binding, result=result, register=r)
                     except (ValueError, OSError, SystemExit) as error:
                         if reserved: raise
-                        code = _auto_save_check(binding, error=error)
+                        code = _auto_save_check(binding, error=error, register=r)
                         problems.append({"slug": slug, "code": code})
         if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}), flush=True)
         elif problems:
@@ -8206,6 +8233,8 @@ def cmd_automation(a):
             if action == "uninstall":
                 if r.get("status") == "retired": sys.exit("automation is not installed")
                 if r.get("current_run"): sys.exit("automation has a current run")
+                with _auto_state() as local:
+                    local.pop(binding, None)
                 if a.forget:
                     with contextlib.suppress(FileNotFoundError): os.remove(_auto_seen(binding))
             r["status"] = "retired" if action == "uninstall" else "paused"
@@ -8228,11 +8257,15 @@ def cmd_automation(a):
                 if path is None: problem = "missing-pack"
                 else: m, digest = _auto_pack(path)
             except (ValueError, OSError, SystemExit): problem = "invalid-pack"
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", slug):
+                out.append(dict(slug=slug, source=source, problem="invalid-pack", status="not-installed",
+                                setup=None, last_check=None, last_run=None, runs_agent_every_time=True))
+                continue
             binding, rp = _auto_binding(slug, owner)
             with _auto_lock(rp + ".lock"):
                 r = _auto_json(rp, {})
                 with _auto_state(write=False) as local:
-                    last_check = local.get(binding)
+                    last_check = _auto_local_entry(local, r) or None
             if a.installed and (not r or r.get("status") == "retired"): continue
             out.append(dict(slug=slug, source=source, problem=problem, status=r.get("status", "not-installed"), setup=(r.get("automation", {}).get("setup", {}).get("status") if not r or r.get("automation", {}).get("digest") == digest else "changed"), last_check=last_check, last_run=r.get("last_run"), runs_agent_every_time="check" not in m))
         if a.json: print(json.dumps(out))
@@ -8291,7 +8324,7 @@ def cmd_automation(a):
             r = dict(version=1, id=binding, owner=owner, board_repo=REPO, branch=BRANCH, board_path=PATH,
                      status="unverified", connections=[{"need": n["id"]} for n in m["needs"]], current_run=None,
                      automation=dict(schema="keeptrack-automation-install/1", slug=slug, source=source,
-                                     pack_path=os.path.relpath(path, ROOT), pack_version=m["version"], digest=digest,
+                                     pack_path=os.path.relpath(path, ROOT), pack_version=m["version"], digest=digest, install_id=uuid.uuid4().hex,
                                      writes="proposals", every=a.every or m["every"], config=config, network_granted=network,
                                      setup=dict(status="blocked", digest=digest, runtime=None, checked_at=now(), notes=[])))
         else:
@@ -8337,15 +8370,15 @@ def cmd_automation(a):
                 if action == "check":
                     # Read only after taking this binding's register lock.
                     with _auto_state(write=False) as local:
-                        scan_cursor = local.get(binding, {}).get("scan_cursor")
+                        scan_cursor = _auto_local_entry(local, r).get("scan_cursor")
                 try: result = _auto_check(path, m, r, scan_cursor)
                 except (ValueError, OSError) as error:
                     if action == "check":
-                        _auto_save_check(binding, error=error)
+                        _auto_save_check(binding, error=error, register=r)
                     sys.exit(str(error))
                 if _auto_pack(path)[1] != digest: sys.exit("pack changed during check")
                 if action == "check":
-                    _auto_save_check(binding, result=result)
+                    _auto_save_check(binding, result=result, register=r)
                     print(json.dumps(result))
                 else:
                     print(json.dumps(_auto_payload(path, m, r, result, "dry-run")))
@@ -8371,7 +8404,8 @@ def cmd_automation(a):
                 except ValueError as error: sys.exit(str(error))
                 seen_path = _auto_seen(binding)
                 with _auto_lock(seen_path + ".lock"):
-                    seen = _auto_json(seen_path, {"schema": "keeptrack-seen/1", "binding": binding, "keys": {}, "cursor": None})
+                    seen = _auto_seen_state(r)
+                    seen["identity"] = _auto_identity(r)
                     for k, rev in completed: seen["keys"][k] = rev
                     if "cursor" in done:
                         all_done = all(seen["keys"].get(k) == rev for k, rev in expected)
@@ -8381,9 +8415,14 @@ def cmd_automation(a):
                     seen["updated_at"] = now(); _auto_write(seen_path, seen)
                 if "cursor" in done:
                     with _auto_state() as local:
-                        local.get(binding, {}).pop("scan_cursor", None)
+                        entry = dict(_auto_local_entry(local, r))
+                        entry.pop("scan_cursor", None)
+                        local[binding] = entry
                 print("marked " + str(len(completed))); return
         _auto_write(rp, r)
+        if action == "install":
+            with _auto_state(write=os.path.isfile(_auto_local())) as local:
+                local.pop(binding, None)
         print(slug + ": " + r["status"])
 
 

@@ -43,6 +43,10 @@ class Automation(unittest.TestCase):
         self.tmp.cleanup()
 
     def write(self, path, value):
+        if path.name == 'tick-state.json':
+            for binding, entry in value.items():
+                rp = self.root/'automation/routines'/ (binding + '.json')
+                if rp.exists(): entry.update(kt._auto_identity(self.read(rp)))
         path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value))
 
     def read(self,path): return json.loads(path.read_text())
@@ -82,6 +86,92 @@ class Automation(unittest.TestCase):
 
     def force_due(self):
         self.write(self.root/'automation/.local/tick-state.json',{})
+
+    def test_reinstall_discards_incompatible_local_and_seen_cursor(self):
+        self.ready()
+        with patch.object(kt, '_auto_check', return_value=dict(self.result, cursor='v1-page-token')):
+            self.call('check')
+        local = self.root/'automation/.local/tick-state.json'
+        stale = self.read(local)
+        old_id = self.read(self.rp)['automation'].get('install_id')
+        self.call('uninstall', forget=True)
+        self.assertNotIn('auto-example-pack-owner', self.read(local))
+        self.manifest['version'] = '2.0.0'; self.write(self.pack/'manifest.json', self.manifest)
+        (self.pack/'check.py').write_text("import os, json\nassert 'KEEPTRACK_SCAN_CURSOR' not in os.environ\nprint(" + repr(json.dumps(self.result)) + ")\n")
+        self.call('install'); self.call('setup', runtime='local')
+        self.assertNotEqual(old_id, self.read(self.rp)['automation']['install_id'])
+        self.assertNotIn('auto-example-pack-owner', self.read(local))
+        # Even copied-back state must be rejected, without trusting cleanup.
+        local.write_text(json.dumps(stale))
+        self.call('check')
+        self.assertNotIn('scan_cursor', self.read(local)['auto-example-pack-owner'])
+
+    def test_local_identity_rejects_digest_generation_and_owner_changes(self):
+        self.ready()
+        local = self.root/'automation/.local/tick-state.json'
+        for field in ('digest', 'install_id', 'owner'):
+            with self.subTest(field=field):
+                with patch.object(kt, '_auto_check', return_value=dict(self.result, cursor='old')):
+                    self.call('check')
+                stale = self.read(local); stale['auto-example-pack-owner'][field] = 'previous'
+                local.write_text(json.dumps(stale))
+                self.call('setup', runtime='local')
+                rows = json.loads(self.call('list')[0]); self.assertIsNone(rows[0]['last_check'])
+                with patch.object(kt, '_auto_check', return_value=self.result) as check:
+                    self.call('check')
+                self.assertIsNone(check.call_args.args[3])
+
+    def test_seen_cursor_reinstall_preserves_keys_but_discards_continuation(self):
+        self.ready(); old = self.read(self.rp)
+        self.write(self.sp, dict(keys={'done': 'v1'}, cursor='old', identity=kt._auto_identity(old)))
+        self.call('uninstall'); self.call('install'); self.call('setup', runtime='local')
+        with patch.object(kt, '_auto_process', return_value=(0, json.dumps(self.result).encode(), b'')) as process:
+            self.call('check')
+        state = process.call_args.args[1]['KEEPTRACK_STATE']
+        self.assertIsNone(state['cursor']); self.assertEqual(state['keys'], {'done': 'v1'})
+
+    def test_setup_reapproval_changed_digest_discards_local_continuation(self):
+        self.ready()
+        with patch.object(kt, '_auto_check', return_value=dict(self.result, cursor='old')):
+            self.call('check')
+        self.manifest['version'] = '2.0.0'; self.write(self.pack/'manifest.json', self.manifest)
+        # Simulate an externally recorded approval; setup alone refuses changed installs.
+        self.assertIn('pack changed', self.refuse('setup', runtime='local'))
+        register = self.read(self.rp)
+        register['automation']['digest'] = kt._auto_pack(str(self.pack))[1]
+        self.write(self.rp, register); self.call('setup', runtime='local')
+        with patch.object(kt, '_auto_check', return_value=self.result) as check:
+            self.call('check')
+        self.assertIsNone(check.call_args.args[3])
+
+    def test_routine_finish_refuses_changed_install_approval(self):
+        self.items(); self.ready(); self.tick()
+        register = self.read(self.rp); register['automation']['digest'] = 'different-approval'
+        self.write(self.rp, register)
+        with self.assertRaisesRegex(SystemExit, 'digest changed'):
+            self.finish()
+        self.assertIsNotNone(self.read(self.rp)['current_run'])
+
+    def test_seen_state_from_other_owner_is_not_passed_to_check(self):
+        self.ready()
+        self.write(self.sp, dict(binding='auto-example-pack-other', keys={'done': 'v1'}, cursor='old',
+                                 identity=dict(owner='other')))
+        with patch.object(kt, '_auto_process', return_value=(0, json.dumps(self.result).encode(), b'')) as process:
+            self.call('check')
+        state = process.call_args.args[1]['KEEPTRACK_STATE']
+        self.assertEqual(state['keys'], {}); self.assertIsNone(state['cursor'])
+
+    def test_list_invalid_directory_slugs_plain_and_json(self):
+        self.ready()
+        for name in ('bad pack', 'bad.pack'): (self.root/'automations'/name).mkdir()
+        for as_json in (False, True):
+            out, code = self.call('list', json=as_json)
+            rows = json.loads(out) if as_json else [json.loads(line) for line in out.splitlines()]
+            rows = {row['slug']: row for row in rows}
+            self.assertEqual(rows['example-pack']['status'], 'active')
+            for name in ('bad pack', 'bad.pack'):
+                self.assertEqual(rows[name]['problem'], 'invalid-pack')
+                self.assertIsNone(rows[name]['last_check'])
 
     def test_check_snapshot_preserves_concurrent_tick_cursor(self):
         self.ready(); self.call('disable')
@@ -805,7 +895,7 @@ print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME
         self.assertEqual(payload['problems'],[dict(slug='z-blocked',code='changed')])
         local = self.read(local_path)
         self.assertEqual(local['auto-example-pack-owner']['scan_cursor'], 'mixed-start')
-        self.assertEqual(local['auto-z-blocked-owner']['scan_cursor'], 'blocked-start')
+        self.assertNotIn('scan_cursor', local['auto-z-blocked-owner'])
 
     def test_inv14_own_builtin_slug_collision(self):
         dest=self.root/'board/automations/example-pack'; shutil.copytree(self.pack,dest)

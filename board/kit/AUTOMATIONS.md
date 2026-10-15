@@ -99,3 +99,33 @@ lives in ignored `automation/.local/tick-state.json`; only `mark` writes the see
 
 The email check always includes `start_cursor` on a successful scan, freezing both time bounds and the starting
 page, even when that page is the first page. A retry therefore replays the same window after the lookback expires.
+
+## Lifecycle state audit
+
+R = read, W = write, — = unused. Pack reads include validation and digest calculation.
+
+| Command | Register | Seen log | Local tick-state | Pack files |
+|---|---|---|---|---|
+| install | R/W (fresh install id) | — | clear binding | R |
+| setup | R/W | — | — | R (probes) |
+| enable / disable | R/W | — | — | R / — |
+| check | R | R | R/W | R (check) |
+| tick | R/W (reservation) | R | R/W | R (check) |
+| dry-run | R | R | — | R (check/prompt) |
+| mark | R | R/W | R/W (clear continuation) | R |
+| routine finish | R/W | — | — | R (unless failed) |
+| fork | — | — | — | R/W (new slug) |
+| test | — | — (empty supplied state) | — | R (tests) |
+| uninstall | R/W (retire) | delete with --forget | clear binding | — |
+| kit-update | — | — | — | built-ins only; own packs protected |
+
+Local results, throttle times and continuation are accepted only for the matching owner,
+install id and approved digest; legacy or mismatched entries are ignored on every read.
+Install and uninstall clear local state under register-then-state locks. Setup cannot approve
+a changed pack: uninstall/reinstall is required; a changed approval digest invalidates local state.
+Seen keys deliberately survive reinstall unless --forget is used, preserving proposal deduplication;
+seen cursors require the same install identity, and another binding/owner's seen state is ignored.
+Dry-run uses no local continuation. Reservations belong to the current register and unique run id;
+mark and successful finish check reservation/current/installed digests. Failed finish only records failure.
+Fork/test receive no installed state. Kit updates protect registers, seen logs, local state and own packs;
+changed built-in digests require reinstall and setup before execution.
