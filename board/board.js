@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 67;
+  const PAGE_KIT = 68;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -359,7 +359,7 @@ if (typeof window !== 'undefined') (() => {
       if (tok[0] === '@') { const g = tok.slice(1).toLowerCase(), known = state && ((state.people || []).some(p => String(p.github).toLowerCase() === g) || (state.agents || []).some(a => String(a).toLowerCase() === g));
         if (known) { node = el('span', 'mention' + (g === (cfg().me || '').toLowerCase() ? ' me' : ''), tok); } }
       else { const t = state && state.tasks.find(x => x.num === Number(tok.slice(1)));
-        if (t) { node = el('a', 'mref', tok); node.href = cardUrl(t.num); node.title = t.title; node.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } }
+        if (t) { node = el('a', 'mref', tok); node.href = cardUrl(t.num, t.id); node.title = t.title; node.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } }
       if (!node) continue;
       if (m.index > last) parent.append(document.createTextNode(text.slice(last, m.index)));
       parent.append(node); last = m.index + tok.length;
@@ -663,6 +663,7 @@ if (typeof window !== 'undefined') (() => {
 
   let lastProblem = '';   // shown in Settings → Connection → Health
   // ---- instant start: show the copy this browser loaded last time, then replace it with the live file ---------
+  const safeCardId = id => typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id);
   const snapKey = c => 'kb_snap:' + c.repo + ':' + c.branch + ':' + c.path;
   function metaSave(c) { const m = splitMeta; if (!m || m.key !== `${c.repo}:${c.branch}:${c.path}`) return idb.del(snapKey(c).replace('kb_snap:', 'kb_meta:'));
     return idb.set(snapKey(c).replace('kb_snap:', 'kb_meta:'), { ...m, files: [...m.files].map(([path, x]) => ({ path, sha: x.sha, size: x.size })) }); }
@@ -677,6 +678,20 @@ if (typeof window !== 'undefined') (() => {
         const files = new Map(m.files.map((x, i) => [x.path, { sha: x.sha, size: x.size, text: texts[i], obj: JSON.parse(texts[i]) }]));
         if (files.has('tasks.json')) splitMeta = { ...m, files }; } } } catch {}
   }
+  async function cardFirst() {
+    const c = cfg(), id = new URLSearchParams(location.search).get('card'), num = hashNum(), gen = loadGen;
+    if (DEMO || SETUP || !c.token || !c.repo || !safeCardId(id) || num === null || state.tasks.some(t => t.id === id)) return;
+    try { const dir = c.path.slice(0, c.path.lastIndexOf('/') + 1);
+      const [rr, cr] = await Promise.all([gh('GET'), gh('GET', null, false, { path: dir + 'cards/' + id + '.json' })]);
+      if (!rr.ok || !cr.ok) return;
+      const first = rr.clone();
+      const [{ raw: root }, { raw: card }] = await Promise.all([fileJson(rr), fileJson(cr)]);
+      if (!isSplit(root) || card.id !== id || card.num !== num || lastSyncOk || loadGen !== gen) return;
+      // This is a drawer preview, never a snapshot or a sync baseline.
+      state = normalise({ ...root, tasks: [card], contacts: [], projects: [] }); splitMeta = null; fromSnap = true;
+      setStatus('Showing the card, syncing…'); contextRestored = true; openFromHash(); return first;
+    } catch {}   // old or missing links take the ordinary load path
+  }
   const snapClear = async () => { archMem = {}; splitMeta = null; for (const k of await idb.keys()) if (/^kb_(snap|meta|arch|blob):/.test(k)) idb.del(k); };
   function demoShift(raw) {   // demo files carry demo_base (the day they were written): move every date so that "today" is always today
     const base = raw && raw.demo_base; if (!base || !/^\d{4}-\d{2}-\d{2}$/.test(base)) return raw;
@@ -689,7 +704,7 @@ if (typeof window !== 'undefined') (() => {
     } catch (e) { console.error(e); setStatus('Could not load the demo board', 'err'); return false; }
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
-  async function load(quiet) {
+  async function load(quiet, first) {
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
     if (DEMO) return quiet ? true : loadDemo();
     if (SETUP) { if ($('board').className !== 'v-welcome') { setStatus('Set up a new board'); renderWelcome(); } return false; }   // ?setup: the wizard, even when this browser has a board
@@ -715,7 +730,7 @@ if (typeof window !== 'undefined') (() => {
         const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); setKitRo(got.data); state = normalise(got.data);
         if (prev) alertChanges(prev, state); if (fromSnap) { checkKit(); checkRelayKit(); checkPublic(); } lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
       }
-      const res = await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
+      const res = first || await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
       if (res.status === 304) { const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
       if (res.status === 404) { await diagnose404(); return false; }
@@ -1378,14 +1393,14 @@ if (typeof window !== 'undefined') (() => {
   }
   // after a card is added: mark close open cards as possibly related (never stops the add); returns the matches
   // the web board's link to one card (#N route), as keeptrack.py card_url: the same link on every follow-up pair
-  const cardUrl = num => { const u = new URL(location.pathname, location.href); if (cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k])); u.hash = '#' + num; return u.toString(); };
+  const cardUrl = (num, id = state.tasks.find(t => t.num === num)?.id) => { const u = new URL(location.pathname, location.href); if (cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k])); if (safeCardId(id)) u.searchParams.set('card', id); u.hash = '#' + num; return u.toString(); };
   const MOVED_TODO = /^Moved to #(\d{1,6}) \((t_[a-z0-9]+)\)/;
   const isFollowUp = r => !!r && r.kind === 'related' && typeof r.from === 'string' && !!r.from;
   // the same as keeptrack.py link_follow_up: a follow-up relation and a link on each card to the other
   function linkFollowUp(n, t, o) {
     setRelation(n, t.id, o.id, 'related', 'confirmed', null, null, t.id);
     [[t, o, `Follow-up #${o.num}`], [o, t, `Split from #${t.num}`]].forEach(([x, y, title]) => {
-      const url = cardUrl(y.num); if (!Array.isArray(x.links)) x.links = [];
+      const url = cardUrl(y.num, y.id); if (!Array.isArray(x.links)) x.links = [];
       if (!x.links.some(l => l && (l.url === url || l.title === title))) x.links.push({ title, url });
     });
   }
@@ -1621,8 +1636,8 @@ if (typeof window !== 'undefined') (() => {
   const maxAt = arr => arr.reduce((m, x) => (x.at > m ? x.at : m), '');
   const stampsOf = t => ({ c: maxAt(t.comments), h: maxAt(t.history) });
   function initSeen() { if (loadSeen()) return; seenMap = {}; state.tasks.forEach(t => { seenMap[t.id] = stampsOf(t); }); saveSeen(); }   // only after a successful load
-  function markSeen(id) { const t = state.tasks.find(x => x.id === id), m = loadSeen(); if (!t || !m) return; const s = stampsOf(t), o = m[id]; if (o && o.c === s.c && o.h === s.h) return; m[id] = s; saveSeen(); }
-  function markAllSeen() { const m = loadSeen() || (seenMap = {}); state.tasks.forEach(t => { m[t.id] = stampsOf(t); }); saveSeen(); }
+  function markSeen(id) { if (fromSnap) return; const t = state.tasks.find(x => x.id === id), m = loadSeen(); if (!t || !m) return; const s = stampsOf(t), o = m[id]; if (o && o.c === s.c && o.h === s.h) return; m[id] = s; saveSeen(); }
+  function markAllSeen() { if (fromSnap) return; const m = loadSeen() || (seenMap = {}); state.tasks.forEach(t => { m[t.id] = stampsOf(t); }); saveSeen(); }
   const mentionsMe = text => { const me = (cfg().me || '').replace(/[^\w-]/g, ''); return !!me && new RegExp('(?<![\\w@#&/])@' + me + '(?![\\w-])', 'i').test(String(text || '')); };
   // Your own agents (by "<agent>@<you>") act for you: their history entries are your work, not news, and their comments are
   // news only when they @mention you (a question or a hand-back). Otherwise one busy agent marks every card it touches as new.
@@ -2044,8 +2059,8 @@ if (typeof window !== 'undefined') (() => {
       n.tasks.push(o); assignNums(n); linkFollowUp(n, t, o);
       const who = me() || 'someone', at = nowIso(), text = d.text;
       d.text = `Moved to #${o.num} (${o.id}): ${text}`; d.done = true; d.doneBy = who; d.doneAt = at;
-      t.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `To-do moved to follow-up card #${o.num} (${o.id}): ${cardUrl(o.num)}` });
-      o.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `Split from #${t.num} (${t.id}): ${cardUrl(t.num)}` });
+      t.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `To-do moved to follow-up card #${o.num} (${o.id}): ${cardUrl(o.num, o.id)}` });
+      o.comments.push({ id: 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at, by: who, text: `Split from #${t.num} (${t.id}): ${cardUrl(t.num, t.id)}` });
       stamp(t); made = o.id;
     }, `Move to-do to a new card: ${titleOf(tid)}`, [tid], null, { recheckArchive: true })   // adds and numbers a card: a lost race runs again on the newer board
       .then(ok => { const o = made && state.tasks.find(x => x.id === made); if (ok && o) { toast(`Moved to #${o.num}. Both cards are linked.`); if (editing === tid) { renderDlgTodos(true); const t = taskNow(); if (t) renderRelated(t); } } return ok; });
@@ -3638,7 +3653,7 @@ if (typeof window !== 'undefined') (() => {
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
   // deep links: the address carries the task number (#13) while a card is open, and loading a URL with #13 opens that card
   const hashNum = () => { const m = /^#(\d{1,5})$/.exec(location.hash); return m ? Number(m[1]) : null; };
-  const setHash = h => { try { history.replaceState(history.state, '', location.pathname + location.search + h); } catch {} };   // keeps the Back-button entry (below)
+  const setHash = h => { try { const u = new URL(location.href), t = state.tasks.find(t => '#' + t.num === h); u.searchParams.delete('card'); if (safeCardId(t?.id)) u.searchParams.set('card', t.id); u.hash = h; history.replaceState(history.state, '', u); } catch {} };   // keeps the Back-button entry (below)
 
   // The Back button closes what you opened. Opening a card, a person/client/project drawer, Settings, Help, Search,
   // Archive or Add a person adds one history entry, so Back closes it and returns to the board instead of leaving the
@@ -3718,7 +3733,7 @@ if (typeof window !== 'undefined') (() => {
       const filtersChanged = oldFilters.toString() !== newFilters.toString();
       const hadSnapshot = u.searchParams.get('filters') === '1';
       const clean = new URL(location.pathname, location.href);
-      ['repo', 'branch', 'path', 'demo'].forEach(k => { if (u.searchParams.has(k)) clean.searchParams.set(k, u.searchParams.get(k)); });
+      ['repo', 'branch', 'path', 'demo', 'card'].forEach(k => { if (u.searchParams.has(k)) clean.searchParams.set(k, u.searchParams.get(k)); });
       q.forEach((v, k) => clean.searchParams.append(k, v)); clean.hash = u.hash;
       if (clean.href !== u.href) history[changed && filtersChanged && hadSnapshot ? 'pushState' : 'replaceState'](history.state, '', clean);
     } catch {}
@@ -3732,6 +3747,7 @@ if (typeof window !== 'undefined') (() => {
     const safe = /^\d{1,5}$/.test(h) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
       (q.has('view') && ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(q.get('view')) && [...q.keys()].length === 1) ||
       (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
+    const t = state.tasks.find(t => String(t.num) === h); if (safeCardId(t?.id)) u.searchParams.set('card', t.id);
     u.hash = safe ? hash : '#view=' + view; return u.href;
   }
   const routeHash = d => d.id === 'dlgCard' ? location.hash : '#' + (routeDialogs[d.id] || 'view=' + view) + (d.id === 'dlgSettings' ? '=' + settingsRoute : '');
@@ -3793,7 +3809,7 @@ if (typeof window !== 'undefined') (() => {
     render(); applyRoute();
   });
   // the address bar names the board too: a page opened without ?repo= (a bookmark, a home-screen icon) gets it, keeping the #N
-  try { if (!DEMO && !SETUP && LS.get('kb_repo') && !new URLSearchParams(location.search).get('repo')) history.replaceState(history.state, '', boardUrl() + location.hash); } catch {}
+  try { if (!DEMO && !SETUP && LS.get('kb_repo') && !new URLSearchParams(location.search).get('repo')) history.replaceState(history.state, '', boardUrl() + (new URLSearchParams(location.search).has('card') ? '&card=' + encodeURIComponent(new URLSearchParams(location.search).get('card')) : '') + location.hash); } catch {}
   try { if (!(history.state || {}).kbView) history.replaceState({ ...(history.state || {}), kbView: view }, ''); } catch {}   // the first entry knows its view
   BACK_DIALOGS.forEach(id => { const d = $(id); if (!d) return;
     new MutationObserver(() => { if (d.open) backOpened(d); }).observe(d, { attributes: true, attributeFilter: ['open'] });
@@ -7046,5 +7062,5 @@ if (typeof window !== 'undefined') (() => {
     ['focus', 'pointerdown', 'contextmenu'].forEach(event => a.addEventListener(event, () => { a.href = navigationLink('#settings=' + encodeURIComponent(name)); }));
     a.addEventListener('click', e => { e.preventDefault(); settingsTab(name); }); sec.append(a);
   });
-  (async () => { await restoreUndo(); await snapLoad(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
+  (async () => { await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
 })();
