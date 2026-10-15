@@ -4443,7 +4443,7 @@ if (typeof window !== 'undefined') (() => {
       if (!current()) return;
       box.textContent = '';
       if (!packs.length) { box.append(el('p', 'hint', 'No automation packs in this repo yet. Upgrade the board kit to get the built-in ones, or make your own below.')); return; }
-      const me = (c.me || '').replace(/^@/, '').toLowerCase(), seen = {};
+      const login = (c.me || '').replace(/^@/, '').toLowerCase(), me = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) ? login : '', seen = {};   // only a valid login goes into a copied command
       packs.forEach(p => { seen[p.slug] = (seen[p.slug] || 0) + 1; });
       packs.forEach(p => box.append(autoCard(p, installs.filter(r => r.automation.slug === p.slug && r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase())), me, seen[p.slug] > 1, c)));
       uiBtns(box);
