@@ -64,6 +64,7 @@ python3 board/keeptrack.py comments <id>             # full stream
 python3 board/keeptrack.py comment <id> "question, update or hand-off"
 ```
 Post a short comment when you finish (what you did, with links) and whenever you need a human.
+**A comment that needs a person always recommends** (`board/CARDS.md`, "Comments that need a person"): say what waits and why, give 2-4 options each with a score out of 10 and a reason, your recommendation and why, and the next step. A bare question ("What do you decide?") is not enough. Write details and longer comments in Markdown; `-` reads the text from stdin (`comment <id> - <<'TEXT'`).
 
 ## 4. Blocked or stuck
 ```bash
@@ -76,7 +77,9 @@ When the work is parked on someone (a decision, an approval, a reply) or on an e
 instead of guessing: `wait`, a comment with `@<owner>` and the question, `assign` it to them, then stop.
 ```bash
 python3 board/keeptrack.py wait <id> --on "Oliver: approve the quote" --who <login-or-p_id> [--nudge +3] [--note "<asked how>"]
-python3 board/keeptrack.py comment <id> "@<owner> <the question>"
+python3 board/keeptrack.py comment <id> - <<'TEXT'   # @<owner>, what waits and why, options with n/10, recommendation, next step
+@<owner> ...
+TEXT
 python3 board/keeptrack.py assign <id> <owner> --note "waiting on your decision"
 ```
 `wait` blocks your own claim in the same save. A waiting card can't be claimed (`--force` does not change that), and

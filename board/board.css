@@ -1415,3 +1415,29 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .drel__title { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .drel__title:hover, .drel__title:focus-visible { text-decoration: underline; }
 .drel__acts { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Markdown in descriptions and comments (kit v62): rendered blocks, the Raw/Formatted switch and the editor's Write/Preview bar */
+.descview.md, .cmbody.md, .cmcard .cmbody.md { white-space: normal; }
+.md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+.md .mdp { margin: 0 0 var(--sp-3); }
+.md .mdh { margin: var(--sp-4) 0 var(--sp-2); line-height: 1.3; font-weight: 650; }
+.md .mdh1 { font-size: 1.2em; } .md .mdh2 { font-size: 1.1em; } .md .mdh3, .md .mdh4, .md .mdh5, .md .mdh6 { font-size: 1em; }
+.md .mdlist { margin: 0 0 var(--sp-3); padding-left: 1.4em; } .md .mdlist .mdlist { margin: var(--sp-1) 0 0; }
+.md .mdlist li { margin: 2px 0; } .md li.mdtask { list-style: none; margin-left: -1.3em; } .md li.mdtask input { margin: 0 .35em 0 0; vertical-align: -1px; }
+.md .mdquote { margin: 0 0 var(--sp-3); padding: 0 0 0 var(--sp-4); border-left: 3px solid var(--border); color: var(--muted); }
+.md code { font-family: var(--font-mono); font-size: .9em; padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.md .mdpre { margin: 0 0 var(--sp-3); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-sm); overflow-x: auto; background: color-mix(in srgb, var(--text) 6%, transparent); white-space: pre; }
+.md .mdpre code { padding: 0; background: none; }
+.md .mdhr { border: 0; border-top: 1px solid var(--border); margin: var(--sp-4) 0; }
+.md .mdtable { overflow-x: auto; margin: 0 0 var(--sp-3); } .md table { border-collapse: collapse; font-size: .95em; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; } .md th { font-weight: 650; background: color-mix(in srgb, var(--text) 4%, transparent); }
+.descacts { display: inline-flex; gap: var(--sp-1); align-items: center; }
+.mdbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; justify-content: space-between; margin-bottom: var(--sp-2); }
+.mdtabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r-sm); background: var(--panel); }
+.mdtab { border: 0; background: none; padding: 4px 10px; border-radius: 5px; font-size: var(--fs-base); color: var(--muted); cursor: pointer; min-height: 30px; }
+.mdtab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mdtools { display: inline-flex; flex-wrap: wrap; gap: 2px; }
+.mdtool { border: 1px solid transparent; background: none; min-width: 30px; min-height: 30px; padding: 2px 7px; border-radius: 5px; font-size: var(--fs-base); color: var(--text); cursor: pointer; font-weight: 600; }
+.mdtool:hover, .mdtab:hover { background: color-mix(in srgb, var(--text) 7%, transparent); } .mdtool:focus-visible, .mdtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mdprev { min-height: 110px; }
+.cmlinkadd { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: 0 var(--sp-3) var(--sp-3); } .cmlinkbtn { max-width: 100%; color: var(--muted); }

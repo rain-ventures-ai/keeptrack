@@ -463,8 +463,10 @@
     <div id="cDescParts">
       <div id="cDescView" class="descview" tabindex="0" title="Double-click to edit"></div>
       <div id="descEdit" hidden>
-        <textarea id="cDetails" class="ddesc" placeholder="Add a more detailed description. URLs become clickable." aria-label="Description"></textarea>
-        <div class="cbtns"><button id="cDescSave" type="button" class="primary">Save</button><button id="cDescCancel" type="button">Cancel</button><span class="hint">Ctrl/Cmd+Enter saves</span></div>
+        <div id="descTools" class="mdbar"></div>
+        <textarea id="cDetails" class="ddesc" placeholder="Add a more detailed description. Markdown works: ## heading, - list, **bold**, [label](https://…). URLs become clickable." aria-label="Description"></textarea>
+        <div id="descPrev" class="descview md mdprev" hidden></div>
+        <div class="cbtns"><button id="cDescSave" type="button" class="primary">Save</button><button id="cDescCancel" type="button">Cancel</button><span class="hint">Markdown · Ctrl/Cmd+Enter saves</span></div>
       </div>
     </div>
     <div id="cmParts">
