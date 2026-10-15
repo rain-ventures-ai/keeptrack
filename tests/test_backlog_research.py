@@ -185,7 +185,7 @@ class ResearchSuggest(unittest.TestCase):
         return [p for p in data.get("proposals", []) if p.get("status") == "pending"]
 
     def test_suggest_a_project_then_accept_places_the_card(self):
-        self.assertIn("added", self.suggest(project="Website"))
+        self.assertIn("added", self.suggest(project="Website refresh"))
         p = self.pending()[0]
         self.assertEqual(p["kind"], "task.update"); self.assertEqual(p["change"]["client"], "Acme")
         self.assertTrue(p["change"]["project"].startswith("pr_"))
@@ -196,8 +196,31 @@ class ResearchSuggest(unittest.TestCase):
         card = kt.find(data, "t_second")
         self.assertEqual((card["client"], card["project"]), ("Acme", p["change"]["project"]))
         with self.assertRaises(SystemExit) as e:
-            self.suggest(project="Website")
+            self.suggest(project="Website refresh")
         self.assertIn("already has a project", str(e.exception))
+
+    def test_only_an_exact_open_project_one_item_per_card_and_no_client_swap(self):
+        with self.assertRaises(SystemExit) as e:
+            self.suggest(project="Website")   # part of a name is not enough
+        self.assertIn("exact id or name", str(e.exception))
+        self.suggest(ask=True)
+        with self.assertRaises(SystemExit) as e:
+            self.suggest(project="Website refresh")   # one Inbox item per card at a time
+        self.assertIn("already waits", str(e.exception))
+        self.assertEqual(len(self.pending()), 1)
+        data, _ = kt.load()
+        card = kt.find(data, "t_second")
+        self.assertEqual(card["project"], "")   # normalised, as the web board reads it
+
+    def test_a_card_with_another_client_is_not_moved(self):
+        with open(os.path.join(self.dir.name, "board", "cards", "t_second.json")) as f:
+            c = json.load(f)
+        c["client"] = "Other"
+        with open(os.path.join(self.dir.name, "board", "cards", "t_second.json"), "w") as f:
+            json.dump(c, f)
+        with self.assertRaises(SystemExit) as e:
+            self.suggest(project="Website refresh")
+        self.assertIn("has client Other", str(e.exception))
 
     def test_ask_when_there_is_no_good_guess(self):
         self.suggest(ask=True)
@@ -206,7 +229,7 @@ class ResearchSuggest(unittest.TestCase):
 
     def test_a_project_of_another_client_is_refused(self):
         with self.assertRaises(SystemExit) as e:
-            self.suggest(project="Website", client="Other")
+            self.suggest(project="Website refresh", client="Other")
         self.assertIn("belongs to client Acme", str(e.exception))
         self.assertEqual(self.pending(), [])
 

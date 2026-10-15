@@ -21,7 +21,7 @@ retitles a card, and never replaces text a person wrote.
 - `keeptrack.py research-lock '#N'` adds the label `researching` (the research run's lock; a claim would move the card)
   only when the setting is on and the card may still be researched. Of two dispatchers, only one gets the lock.
 - `keeptrack.py research-suggest '#N' (--project P [--client C] | --ask) --reason R`: a researched card with no project
-  goes to the Review Inbox. With `--project`, a suggestion that sets the client and project when a person accepts it;
+  goes to the Review Inbox (one item per card at a time). With `--project` (an exact open project), a suggestion that sets the client and project when a person accepts it (never a different client than the card has);
   with `--ask`, a question "Which client and project?". It never sets them itself. Needs split storage (the Inbox).
 - `keeptrack.py task-set '#N' --add-details "<text>"` adds text below the current details (a blank line between) and
   never replaces them.

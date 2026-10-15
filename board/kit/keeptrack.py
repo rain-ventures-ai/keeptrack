@@ -6587,7 +6587,7 @@ def cmd_research_suggest(a):
     """Backlog research on a card with no project: put the card in the Review Inbox for a person. With --project, a
     task.update proposal that sets the client and project (the base is read from the card, so Accept checks that
     nobody placed it meanwhile); with --ask, a question "Which client and project?". Never sets them itself."""
-    reason = (a.reason or "").strip()
+    reason = re.sub(r"\s+", " ", a.reason or "").strip()
     if not reason:
         sys.exit("--reason is required: one line on why (what the research found)")
     def fn(data):
@@ -6595,6 +6595,13 @@ def cmd_research_suggest(a):
         t = find(data, a.id)
         if t.get("project"):
             sys.exit(f"refused: #{t.get('num')} already has a project; nothing to suggest")
+        open_items = [p for p in data.get("proposals", []) if p.get("status") == "pending"
+                      and p.get("work_key") == f"research-place:{t['id']}"]
+        if open_items:
+            sys.exit(f"refused: #{t.get('num')} already waits in the Review Inbox ({open_items[0].get('id')})")
+        for k in ("client", "project"):   # as the web board normalises a card, so the Inbox's base check agrees on both sides
+            if t.get(k) is None:
+                t[k] = ""
         num = t.get("num")
         src = {"kind": "other", "id": f"backlog-research:{t['id']}", "revision": "1", "title": "Backlog research",
                "date": board_today(data).isoformat()}
@@ -6602,13 +6609,21 @@ def cmd_research_suggest(a):
             prop = {"kind": "ask.question", "title": f"Which client and project does #{num} belong to?",
                     "source": src, "action_key": f"research-ask:{t['id']}", "work_key": f"research-place:{t['id']}",
                     "reason": reason[:300],
-                    "change": {"question": f"Backlog research could not place #{num} ({str(t.get('title') or '')[:120]}). "
-                                           "Which client and project is it for?", "task": t["id"]}}
+                    "change": {"question": f"Backlog research could not place #{num}. Which client and project is it for? "
+                                           "Set them on the card; an answer here does not change the card.", "task": t["id"]}}
         else:
-            pr = find_project(data, a.project)
+            ref = a.project.strip().lower()
+            hits = [p for p in data.get("projects") or [] if p.get("status", "active") != "done"
+                    and (p.get("id") == a.project.strip() or str(p.get("name") or "").strip().lower() == ref)]
+            if len(hits) != 1:
+                sys.exit(f"refused: '{a.project}' must be the exact id or name of one open project "
+                         + (f"({len(hits)} match)" if hits else "(none matches)") + "; use --ask when unsure")
+            pr = hits[0]
             client = (a.client or pr.get("client") or "").strip()
             if pr.get("client") and client != pr.get("client"):
                 sys.exit(f"refused: project {pr['name']} belongs to client {pr.get('client')}, not {client}")
+            if t.get("client") and client and client != t.get("client"):
+                sys.exit(f"refused: #{num} has client {t.get('client')}, not {client}; use --ask")
             change = {"project": pr["id"]}
             if client and client != (t.get("client") or ""):
                 change["client"] = client
