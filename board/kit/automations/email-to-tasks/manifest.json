@@ -1,0 +1,54 @@
+{
+  "schema": "keeptrack-automation/1",
+  "slug": "email-to-tasks",
+  "name": "Email to tasks",
+  "summary": "Propose work for review from gmail.read",
+  "version": "1.0.0",
+  "needs": [
+    {
+      "id": "gmail.read",
+      "why": "Read the automation source",
+      "routes": [
+        {
+          "runtime": "local",
+          "how": "Install gog and sign in to the intended Gmail account",
+          "probe": [
+            "python3",
+            "-c",
+            "import subprocess,json,sys; p=subprocess.run([\"gog\",\"auth\",\"list\",\"--json\"],capture_output=True); d=json.loads(p.stdout) if p.returncode==0 else {}; sys.exit(not (d.get(\"accounts\") if isinstance(d,dict) else d))"
+          ]
+        },
+        {
+          "runtime": "claude",
+          "how": "Confirm read-only access to gmail.read"
+        },
+        {
+          "runtime": "chatgpt",
+          "how": "Confirm read-only access to gmail.read"
+        },
+        {
+          "runtime": "grok",
+          "how": "Confirm read-only access to gmail.read"
+        }
+      ]
+    }
+  ],
+  "writes": [
+    "proposals"
+  ],
+  "never": [
+    "send-email",
+    "delete",
+    "spend",
+    "external-post",
+    "edit-contacts"
+  ],
+  "every": "1d",
+  "check": {
+    "file": "check.py",
+    "network": true,
+    "tools": [
+      "gog"
+    ]
+  }
+}

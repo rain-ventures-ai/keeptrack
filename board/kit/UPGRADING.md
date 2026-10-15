@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v69 (schema 4)
+Proposal-only automation packs and the automation command family. No migration. Nothing is installed or enabled
+by upgrading; no routines, triggers or schedules change. Run kit-update only, then automation list to inspect the
+three built-in packs. Follow [AUTOMATIONS.md](AUTOMATIONS.md) to install, setup and explicitly enable a pack.
+Root automations/ and automation/ are protected from writes and removals. If retiring a built-in pack, disable
+its installs first; never delete its register or seen state as part of a kit release.
+
 ### v68 (schema 4)
 Card links include the stable card id as well as the number. No data migration.
 - Run `kit-update` only; older links and pages still work.
