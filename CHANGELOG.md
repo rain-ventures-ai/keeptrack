@@ -16,6 +16,8 @@ Readable cards: Markdown in descriptions and comments, and comments that recomme
   **Raw** next to **Edit** shows the saved text (one choice per browser, `kb_md_raw`, for descriptions and comments).
   The description editor has **Write** and **Preview** tabs and a small toolbar (bold, italic, heading, lists, tick
   box, quote, code, link; Ctrl/Cmd+B and +I). Card faces and lists show the words without the marks.
+  Under a comment, **Add to card links** puts each page the comment links to into the card's links with one tap
+  (pages the card already links and this board's own cards are skipped). Links to other pages open in a new tab.
 - **keeptrack.py:** `-` as `comment`'s text, `add --details`, `task-set --details` or `task-set --add-details` reads
   the text from stdin, so an agent can write multi-line Markdown with no shell quoting.
 - **CARDS.md:** new sections "Format the text (Markdown)" and "Comments that need a person: always recommend": what

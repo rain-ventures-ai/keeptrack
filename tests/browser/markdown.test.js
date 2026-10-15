@@ -30,7 +30,7 @@ class Github {
     const c = (id, at, by, text) => ({ id, at, by, text });
     const _filler = Array.from({ length: 12 }, (_, i) => c('c_f' + i, `2026-10-0${1 + (i % 5)}T09:${String(10 + i).padStart(2, '0')}:00.000Z`, 'sam', 'Progress note ' + (i + 1) + '. '.repeat(1) + 'Some longer text so the stream needs to scroll. '.repeat(4)));
     this.files = { 'tasks.json': text({ ...root, next_num: 3 }),
-      'cards/t_one.json': text(card('t_one', 1, 'Write the case study', { details: "## Why\nThe notifier is **live**; the phone app is *not* set up yet. See #2 and [the brief](https://example.test/brief).\n\n- [x] Code merged\n- [ ] Subscribe on the phone\n  - nested step with `ntfy.sh`\n1. first\n2. second\n\n| Option | Score | Why |\n| --- | --- | --- |\n| Keep public ntfy.sh | 8/10 | works now |\n| Self-host | 5/10 | more set-up |\n\n> a quote\n---\n```\n<b>code stays</b>\n```\n<img src=x onerror=\"window.__xss=1\"> and [bad](javascript:alert(1)) stay text. snake_case_name stays.", comments: [c('c_a', '2026-10-02T10:00:00.000Z', 'sam', '**Options**\n1. Keep it: 8/10\n2. Drop it: 3/10\n\n**Recommendation:** 1, because it works.')] })),
+      'cards/t_one.json': text(card('t_one', 1, 'Write the case study', { details: "## Why\nThe notifier is **live**; the phone app is *not* set up yet. See #2 and [the brief](https://example.test/brief).\n\n- [x] Code merged\n- [ ] Subscribe on the phone\n  - nested step with `ntfy.sh`\n1. first\n2. second\n\n| Option | Score | Why |\n| --- | --- | --- |\n| Keep public ntfy.sh | 8/10 | works now |\n| Self-host | 5/10 | more set-up |\n\n> a quote\n---\n```\n<b>code stays</b>\n```\n<img src=x onerror=\"window.__xss=1\"> and [bad](javascript:alert(1)) stay text. snake_case_name stays.", comments: [c('c_a', '2026-10-02T10:00:00.000Z', 'sam', '**Options**\n1. Keep it: 8/10\n2. Drop it: 3/10\n\n**Recommendation:** 1, because it works. Full review: [the review](https://example.test/review.md).')] })),
       'cards/t_two.json': text(card('t_two', 2, 'Book the workshop room')) };
     this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0;
   }
@@ -94,6 +94,14 @@ async function open(browser, base, { view = 'mentions', me = 'alex', viewport = 
     assert.equal(await v.locator('a.mref').textContent(), '#2'); assert.equal(await v.locator('a[target=_blank]').textContent(), 'the brief');
     const cm = page.locator('#cmStream .cmcard[data-cid="c_a"] .cmbody');
     assert.equal(await cm.locator('ol li').count(), 2, 'comments render Markdown too'); assert.equal(await cm.locator('strong').first().textContent(), 'Options');
+    // a page the comment links to: opens in a new tab, and one tap adds it to the card's links
+    const rv = cm.locator('a', { hasText: 'the review' }); assert.equal(await rv.getAttribute('target'), '_blank');
+    const addBtn = page.locator('#cmStream .cmcard[data-cid="c_a"] .cmlinkbtn'); assert.equal(await addBtn.count(), 1);
+    assert.match(await addBtn.textContent(), /Add to card links: the review/);
+    await addBtn.click();
+    await page.waitForFunction(() => [...document.querySelectorAll('#cLinkList a')].some(a => a.href === 'https://example.test/review.md'));
+    await page.waitForFunction(() => !document.querySelector('#cmStream .cmcard[data-cid="c_a"] .cmlinkbtn'));
+    assert.equal(await page.locator('#cDescView .cmlinkbtn').count(), 0);
     await shot(page, 'md-formatted');
     // Raw: the saved text, for descriptions and comments, remembered in this browser
     await page.locator('#cRawBtn').click();

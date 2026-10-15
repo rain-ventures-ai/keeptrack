@@ -2076,7 +2076,7 @@ if (typeof window !== 'undefined') (() => {
   let commentsFor = null, cmSig = '', todoSig = '';
   function renderComments() {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
-    const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length; if (sig === cmSig) return; cmSig = sig;
+    const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' '); if (sig === cmSig) return; cmSig = sig;
     $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
     t.comments.slice().reverse().forEach(cm => {      // newest first, like Trello: the composer is always at the top
       if (cm.type === 'activity') {   // a one-line event (for example "Claude started a session"), not a message
@@ -2090,7 +2090,22 @@ if (typeof window !== 'undefined') (() => {
       head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at; if (safeUrl(cm.session_url)) { const a = elI('a', 'cmsess', 'bot', 'Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
       const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); box.append(row);
+      const add = commentLinkAdds(t, body); if (add) row.append(add);
     });
+  }
+  // A page a comment links to (a PR, a document, a file) can go into the card's links with one tap (kit v62), so it is
+  // not lost in the stream. Links that open another page only: card links of this board and links the card has are skipped.
+  function commentLinkAdds(t, body) {
+    if (ro) return null; const have = new Set((t.links || []).map(l => l.url)), seen = new Set(), row = el('div', 'cmlinkadd');
+    body.querySelectorAll('a[target="_blank"]').forEach(a => {
+      const url = safeUrl(a.getAttribute('href')); if (!url || have.has(url) || have.has(a.getAttribute('href')) || seen.has(url)) return; seen.add(url);
+      const label = a.textContent.trim(), title = label && label !== a.getAttribute('href') ? label : url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const b = ui.button({ label: 'Add to card links: ' + (title.length > 48 ? title.slice(0, 47) + '…' : title), icon: 'plus', variant: 'ghost', size: 'sm' });
+      b.title = 'Add ' + url + ' to this card\'s Links section'; b.classList.add('cmlinkbtn');
+      b.onclick = () => { const id = t.id; edit(id, x => { x.links = x.links || []; if (!x.links.some(y => y.url === url)) x.links.push({ title, url }); }, `Links: ${titleOf(id)}`); b.disabled = true; };
+      row.append(b);
+    });
+    return row.childElementCount ? row : null;
   }
   function cmKey(c) { return c.id || (c.at || '') + '|' + (c.by || ''); }   // a comment's key in the drawer and in @Mentions (older comments may have no id)
   const openComments = id => openCard(id, 'comments');

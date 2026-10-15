@@ -1440,3 +1440,4 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .mdtool { border: 1px solid transparent; background: none; min-width: 30px; min-height: 30px; padding: 2px 7px; border-radius: 5px; font-size: var(--fs-base); color: var(--text); cursor: pointer; font-weight: 600; }
 .mdtool:hover, .mdtab:hover { background: color-mix(in srgb, var(--text) 7%, transparent); } .mdtool:focus-visible, .mdtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mdprev { min-height: 110px; }
+.cmlinkadd { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: 0 var(--sp-3) var(--sp-3); } .cmlinkbtn { max-width: 100%; color: var(--muted); }

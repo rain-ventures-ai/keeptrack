@@ -32,6 +32,12 @@ Agents: write every description, and every comment longer than two sentences, in
 results, findings, done notes and hand-offs, not only questions. Start with a one-line result, then short sections or
 a list. A wall of text is hard to read, most of all on a phone.
 
+**Every file, PR, document or page a comment names is a link** with a readable label: `[the full review](https://...)`,
+not "see plans/review.md in the project files". A path that only one computer or one tool can open is not a link: put
+the file in a repo or a shared drive first and link that. Add the same link to the card's **links** section in the same
+run (test 4). In the web board a person can also add a comment's link with one tap (**Add to card links** under the
+comment). Links to other pages open in a new tab.
+
 Use only this small set. The board shows nothing else as formatting:
 
 | Write | For |
