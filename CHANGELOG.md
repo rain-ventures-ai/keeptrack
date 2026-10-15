@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v66 — 2026-10-15
+
+Web board: **one Activity timeline in the card drawer** (Ollie, 15 Oct: "combine comments and history, GitHub combines
+and it's easier to track changes"). The Comments and History sections are now one **Activity** section, like the
+conversation on a GitHub pull request: newest first under the comment box, comments as full cards, and the card's
+history entries (moves, claims, progress notes, ticks, waits, edits) as compact rows with an icon on a timeline line
+between them. A run of more than five changes in a row shows the newest four and **Show N more changes**. The
+**History** button in the section header hides or shows the history rows (one choice per browser, `kb_cm_hist`);
+comments always show. The section count is still the number of comments.
+**New while open** (Ollie, 15 Oct: "make it clear an update has happened"): the open drawer already re-read the board
+every 10 seconds, but silently. Now a comment or change by someone else that arrives while the card is open gets a
+**New** mark (comment cards also get an accent border), and while the Activity section is out of view a bar at the top
+of the drawer says "N new updates on this card" with **Show**, which scrolls to the first new item. Your own changes
+are never marked. Opening the card again clears the marks. People drawers in the CRM keep their own
+History section. Also fixed: a project change made in the browser logged the old project name in the history. No
+schema change.
+
 ## Kit v65 — 2026-10-15
 
 Web board: **Archive from the Done lane** (Ollie, 15 Oct). Done cards, and Done rows in List, have an **Archive** button

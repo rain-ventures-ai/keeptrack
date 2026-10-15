@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 65;
+  const PAGE_KIT = 66;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1136,7 +1136,7 @@ if (typeof window !== 'undefined') (() => {
       if ((p.due || '') !== (t.due || '')) add('due: ' + (t.due || 'cleared'));
       if (p.priority !== t.priority) add('priority: ' + t.priority);
       if ((p.client || '') !== (t.client || '')) add('client: ' + (t.client || 'none'));
-      if ((p.project || '') !== (t.project || '')) add('project: ' + (p.project || 'none'));
+      if ((p.project || '') !== (t.project || '')) add('project: ' + (t.project || 'none'));
       if ((p.details || '') !== (t.details || '')) add('edited the description');
       (Array.isArray(t.related) ? t.related : []).forEach(r => { const o = relationOf(p, r && r.id); if (r && r.id && (!o || o.status !== r.status)) add(`${r.status} ${r.kind || 'related'}: ${r.id}`); });
       JSON.stringify(p.labels) !== JSON.stringify(t.labels) && add('labels: ' + (t.labels.join(', ') || 'none'));
@@ -2076,28 +2076,80 @@ if (typeof window !== 'undefined') (() => {
     history.slice().reverse().forEach(h => { const li = el('li'); const tm = el('time', null, ago2(h.at)); tm.title = h.at; li.append(tm, el('b', null, ' ' + (h.by || '?') + ' '), document.createTextNode(h.text)); ol.append(li); });
     if (!history.length) ol.append(el('li', null, 'No history yet.'));
   }
-  const renderDlgHistory = t => renderHistory($('cHist'), $('cHistCount'), t.history);
 
   // ---- comments: an append-only stream per card, shown in its own dialog -------------------------
   let commentsFor = null, cmSig = '', todoSig = '';
+  // The drawer's Activity section is one timeline, newest first, like a GitHub pull request (kit v66): comments are full
+  // cards and the card's history entries are compact rows between them. A run of more than HIST_RUN changes folds behind
+  // "Show N more changes". History can be hidden per browser (kb_cm_hist = '0'); comments always show.
+  const HIST_RUN = 4, histOpen = new Set(), cmHist = () => LS.get('kb_cm_hist', '') !== '0';
+  // New since the card was opened (kit v66): the open drawer re-reads the board every 10 seconds. A comment or change by
+  // someone else that arrives meanwhile gets a "New" mark in the timeline, and a "New activity" bar shows at the top of
+  // the drawer while the Activity section is out of view. Opening the card again clears the marks.
+  let cmSeenFor = null, cmSeen = new Set(), cmFresh = new Set();
+  const cmItemKey = x => x.c ? 'c:' + cmKey(x.c) : 'h:' + (x.h.at || '') + '|' + (x.h.by || '') + '|' + (x.h.text || '');
+  function noteFresh(t) {   // returns how many items arrived in this render
+    const all = [...(t.history || []).map(h => ({ h })), ...t.comments.map(c => ({ c }))], me = cfg().me;
+    if (cmSeenFor !== t.id) { cmSeenFor = t.id; cmSeen = new Set(all.map(cmItemKey)); cmFresh = new Set(); $('cmNewBar').hidden = true; return 0; }
+    let n = 0;
+    all.forEach(x => { const k = cmItemKey(x); if (cmSeen.has(k)) return; cmSeen.add(k); if (me && (x.c || x.h).by === me) return; cmFresh.add(k); n++; });
+    return n;
+  }
+  function showNewBar(n) {   // only while the Activity section is not on screen: otherwise the New marks are enough
+    const body = $('cBody'), sec = $('cmSec'), bar = $('cmNewBar'); if (!body || !sec || !bar) return;
+    const b = body.getBoundingClientRect(), r = sec.getBoundingClientRect(); if (r.top < b.bottom && r.bottom > b.top + 40) return;
+    const had = bar.hidden ? 0 : +bar.dataset.n || 0, total = had + n; bar.dataset.n = total;
+    bar.querySelector('span').textContent = `${total} new update${total === 1 ? '' : 's'} on this card`; bar.hidden = false;
+  }
+  const histIcon = x => /^moved|→/.test(x) ? 'arrow-right' : /^✓|\bdone\b|^review/i.test(x) ? 'circle-check' : /blocked|stuck|failed/i.test(x) ? 'triangle-alert'
+    : /wait/i.test(x) ? 'alarm-clock' : /claim|progress|heartbeat|session/i.test(x) ? 'bot' : /to-do/i.test(x) ? 'square-check' : /link/i.test(x) ? 'link'
+    : /^due/.test(x) ? 'calendar' : /^priority|priority order/.test(x) ? 'flag' : /^labels/.test(x) ? 'tag' : /^(client|project)/.test(x) ? 'building-2'
+    : /assignee|contact/i.test(x) ? 'user' : /renamed|edited|description/i.test(x) ? 'pencil' : /^created/.test(x) ? 'plus' : 'history';
+  const newPill = () => { const p = el('span', 'cmnewpill', 'New'); p.title = 'Arrived while this card was open'; return p; };
+  function histRow(h, isNew) {
+    const text = String(h.text || ''), row = el('div', 'cmhist' + (/blocked|stuck|failed/i.test(text) ? ' bad' : '') + (isNew ? ' cmnew' : ''));
+    const tm = el('time', null, ago2(h.at)); tm.title = h.at || '';
+    const txt = el('span', 'cmhtext'); txt.append(el('b', null, (h.by || '?') + ' '), document.createTextNode(text));
+    row.append(elI('span', 'cmhicon', histIcon(text)), txt, ...(isNew ? [newPill()] : []), tm); return row;
+  }
+  function histRun(run, fresh) {   // consecutive history entries (newest first) as one block on the timeline line
+    const box = el('div', 'cmhrun'), key = cmItemKey(run[run.length - 1]), open = histOpen.has(key) || run.length <= HIST_RUN + 1;
+    (open ? run : run.slice(0, HIST_RUN)).forEach(x => box.append(histRow(x.h, fresh(x))));
+    if (!open) { const n = run.length - HIST_RUN, b = ui.button({ label: `Show ${n} more change${n === 1 ? '' : 's'}`, variant: 'ghost', size: 'sm' }); b.classList.add('cmhmore'); roKeep(b);
+      b.onclick = () => { histOpen.add(key); cmSig = ''; renderComments(); }; box.append(b); }
+    return box;
+  }
+  function syncHistBtn() { const b = $('cmHistBtn'); if (!b) return; const on = cmHist(); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.title = on ? 'Hide the history entries between the comments' : 'Show the card history between the comments'; b.classList.toggle('on', on); }
   function renderComments() {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
-    const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' '); if (sig === cmSig) return; cmSig = sig;
+    const hist = cmHist() ? (t.history || []) : [], hl = hist[hist.length - 1];
+    const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : ''); if (sig === cmSig) return; cmSig = sig;
     $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
-    t.comments.slice().reverse().forEach(cm => {      // newest first, like Trello: the composer is always at the top
+    const arrived = noteFresh(t), fresh = x => cmFresh.has(cmItemKey(x));
+    // one list, oldest first (a stable sort keeps the saved order on equal times), then shown newest first: the composer stays at the top
+    const timed = (xs, k) => { let last = 0; return xs.map(x => { const v = Date.parse(x.at); last = Number.isFinite(v) ? v : last; return { [k]: x, at: last }; }); };   // no time: keeps its place after the entry before it
+    const items = [...timed(hist, 'h'), ...timed(t.comments, 'c')].sort((a, b) => a.at - b.at).reverse();
+    let run = [];
+    const flush = () => { if (run.length) box.append(histRun(run, fresh)); run = []; };
+    items.forEach(it => {
+      if (it.h) { run.push(it); return; }
+      flush(); const cm = it.c;
       if (cm.type === 'activity') {   // a one-line event (for example "Claude started a session"), not a message
-        const row = el('div', 'cmact' + (/failed/i.test(cm.text) ? ' bad' : '')), url = safeUrl(cm.session_url);
+        const row = el('div', 'cmact' + (/failed/i.test(cm.text) ? ' bad' : '') + (fresh(it) ? ' cmnew' : '')), url = safeUrl(cm.session_url);
         row.append(elI('span', 'cmacti', /failed/i.test(cm.text) ? 'triangle-alert' : 'bot'), el('span', null, String(cm.text || '').replace(/[:.]?\s*(Session:\s*)?https?:\/\/\S+$/, '')));
         if (url) { const a = el('a', null, 'Open session ↗'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; row.append(a); }
         const tm = el('time', null, ago2(cm.at)); tm.title = cm.at; row.append(tm); box.append(row); return;
       }
-      const row = el('div', 'cmcard' + (mentionsMe(cm.text) ? ' mine' : '')), head = el('div', 'cmhead');
+      const row = el('div', 'cmcard' + (mentionsMe(cm.text) ? ' mine' : '') + (fresh(it) ? ' cmnew' : '')), head = el('div', 'cmhead');
       row.dataset.cid = cmKey(cm);
-      head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
+      head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), ...(fresh(it) ? [newPill()] : []), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at; if (safeUrl(cm.session_url)) { const a = elI('a', 'cmsess', 'bot', 'Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
       const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); box.append(row);
       const add = commentLinkAdds(t, body); if (add) row.append(add);
     });
+    flush();
+    if (!items.length) box.append(el('p', 'hint cmempty', cmHist() ? 'No comments or changes yet.' : 'No comments yet.'));
+    if (arrived) showNewBar(arrived);
   }
   // A page a comment links to (a PR, a document, a file) can go into the card's links with one tap (kit v62), so it is
   // not lost in the stream. Links that open another page only: card links of this board and links the card has are skipped.
@@ -3096,7 +3148,7 @@ if (typeof window !== 'undefined') (() => {
     [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
     const after = el('div', 'dafter'); after.id = 'cAfter'; after.hidden = true;   // "Runs after": only on a card with after links
     $('cProps').append(props, after);
-    // sections: Description, Checklist, Links, Contacts, Comments, History
+    // sections: Description, Related cards, Checklist, Links, Contacts, Activity (comments and history in one timeline)
     const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
     const rawBtn = ui.button({ label: 'Raw', variant: 'ghost', size: 'sm', title: 'Show the saved text with no formatting (also for comments)' }); rawBtn.id = 'cRawBtn';
     const descActs = el('span', 'descacts'); descActs.append(rawBtn, descBtn);
@@ -3108,7 +3160,7 @@ if (typeof window !== 'undefined') (() => {
     const contacts = el('div', 'dlist'); contacts.id = 'cContactList';
     const contactAdd = drawerAddRow('cContactNew', { placeholder: 'Find a CRM contact, or Name | role | email | phone', ghostLabel: 'Add contact', label: 'Find a CRM contact or add a new task contact', onAdd: addContactLine });
     attachContactSuggest(contactAdd);
-    const hist = el('ol', 'hist'); hist.id = 'cHist';
+    const histBtn = ui.button({ label: 'History', icon: 'history', variant: 'ghost', size: 'sm' }); histBtn.id = 'cmHistBtn'; roKeep(histBtn);
     const rel = el('div', 'dlist'); rel.id = 'cRelList';
     const secs = [
       drawerSection('cDescSec', { title: 'Description', action: descActs, body: $('cDescParts') }),
@@ -3116,12 +3168,10 @@ if (typeof window !== 'undefined') (() => {
       drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
       drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint] }),
       drawerSection('cContactSec', { title: 'Contacts', count: '', body: [contacts, contactAdd] }),
-      drawerSection('cmSec', { title: 'Comments', count: '', body: $('cmParts') }),
-      drawerSection('cHistWrap', { title: 'History', count: '', collapsible: true, open: false, body: hist })
+      drawerSection('cmSec', { title: 'Activity', count: '', action: histBtn, body: $('cmParts') })
     ];
-    [['cTodoSec', 'todos', 'cTodoCount'], ['cLinkSec', 'links', 'cLinkCount'], ['cContactSec', 'contacts', 'cContactCount'], ['cmSec', '', 'cmCount'], ['cHistWrap', '', 'cHistCount']].forEach(([sid, k, cid]) => {
+    [['cTodoSec', 'todos', 'cTodoCount'], ['cLinkSec', 'links', 'cLinkCount'], ['cContactSec', 'contacts', 'cContactCount'], ['cmSec', '', 'cmCount']].forEach(([sid, k, cid]) => {
       const s = secs.find(x => x.id === sid); if (k) { s.dataset.sec = k; s.classList.add('optsec'); } s.querySelector('.ui-count').id = cid; });
-    roKeep(secs.find(x => x.id === 'cHistWrap').querySelector('.ui-section__toggle'));
     $('cSecs').append(...secs);
   }
   buildDrawer();
@@ -3149,6 +3199,10 @@ if (typeof window !== 'undefined') (() => {
   // small toolbar that puts Markdown marks round the selection (the text stays plain Markdown, so agents and keeptrack.py read it).
   function syncRawBtn() { const b = $('cRawBtn'), raw = mdRaw(); b.querySelector('.ui-btn__label').textContent = raw ? 'Formatted' : 'Raw';
     b.title = raw ? 'Show descriptions and comments with their Markdown formatting' : 'Show the saved text with no formatting (also for comments)'; b.setAttribute('aria-pressed', String(raw)); }
+  $('cmNewBar').querySelector('button').onclick = () => { $('cmNewBar').hidden = true; const f = $('cmStream').querySelector('.cmnew'); (f || $('cmSec')).scrollIntoView({ block: f ? 'center' : 'start', behavior: 'smooth' }); };
+  $('cBody').addEventListener('scroll', () => { const bar = $('cmNewBar'); if (bar.hidden) return; const b = $('cBody').getBoundingClientRect(), r = $('cmSec').getBoundingClientRect(); if (r.top < b.bottom - 60 && r.bottom > b.top) bar.hidden = true; }, { passive: true });
+  $('cmHistBtn').onclick = () => { LS.set('kb_cm_hist', cmHist() ? '0' : ''); syncHistBtn(); cmSig = ''; renderComments(); };
+  syncHistBtn();
   $('cRawBtn').onclick = () => { LS.set('kb_md_raw', mdRaw() ? '' : '1'); syncRawBtn(); const t = taskNow(); if (t) { if (!editingDesc) renderDescView(t); cmSig = ''; renderComments(); } };
   syncRawBtn();
   function mdWrap(before, after = before, ph = 'text') {
@@ -3570,7 +3624,7 @@ if (typeof window !== 'undefined') (() => {
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderWaiting(t); renderAfter(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); renderDlgHistory(t); syncSections(t); syncAgentBtn(t);
+    renderWaiting(t); renderAfter(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); syncSections(t); syncAgentBtn(t);
   }
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
@@ -3754,11 +3808,11 @@ if (typeof window !== 'undefined') (() => {
   let backdropClicks = 0;
   function openCard(id, focus) {
     backdropClicks = 0;
-    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; todoSig = ''; editingDesc = false; activeDraft = { title: false, details: false };
+    const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; cmSeenFor = null; todoSig = ''; editingDesc = false; activeDraft = { title: false, details: false };
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
-    fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; $('cHistWrap').toggle(false);
+    fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me;
     markSeen(id); render();
     $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
