@@ -147,6 +147,21 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, code, out.getvalue())
         self.assertEqual(expect, board_counts(kt.load_board()))
 
+    def test_v70_flows_preserve_board_and_own_packs(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit70", "fixture.json"))
+        board_dir, expect = self.use_fixture("v4_kit70", meta)
+        before = kt.load_board()
+        own = os.path.join(self.temp.name, "automations/own-pack/manifest.json")
+        os.makedirs(os.path.dirname(own), exist_ok=True)
+        with open(own, "wb") as f: f.write(b'{"owned": true}')
+        with contextlib.redirect_stdout(io.StringIO()): kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(expect, board_counts(kt.load_board()))
+        self.assertEqual(0, kt.doctor_board(False)[2])
+        with open(own, "rb") as f: self.assertEqual(b'{"owned": true}', f.read())
+        with open(os.path.join(self.temp.name, "board/automations/email-to-tasks/manifest.json")) as f:
+            self.assertIn("flow", json.load(f))
+
     def test_v69_automations_preserve_board_and_owned_runtime_files(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit69", "fixture.json"))
         board_dir, expect = self.use_fixture("v4_kit69", meta)

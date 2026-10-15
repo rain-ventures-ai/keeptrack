@@ -2,8 +2,8 @@
   "schema": "keeptrack-automation/1",
   "slug": "email-to-tasks",
   "name": "Email to tasks",
-  "summary": "Propose work for review from gmail.read",
-  "version": "1.0.0",
+  "summary": "Read new email from people on your board and propose follow-up tasks.",
+  "version": "1.1.0",
   "needs": [
     {
       "id": "gmail.read",
@@ -44,6 +44,33 @@
     "edit-contacts"
   ],
   "every": "1d",
+  "flow": [
+    {
+      "kind": "trigger",
+      "title": "Once a day",
+      "text": "Runs on the shared automation schedule."
+    },
+    {
+      "kind": "read",
+      "title": "Read Gmail",
+      "text": "Read only, through your gog login. Only exact addresses of board contacts."
+    },
+    {
+      "kind": "check",
+      "title": "Find new messages",
+      "text": "A small script lists new message IDs as hashes. No AI is used and no email text is stored."
+    },
+    {
+      "kind": "agent",
+      "title": "Find follow-ups",
+      "text": "An agent reads each matching message and spots clear next steps."
+    },
+    {
+      "kind": "output",
+      "title": "Review Inbox",
+      "text": "Tasks and contact notes wait there as proposals. It never sends or changes email."
+    }
+  ],
   "check": {
     "file": "check.py",
     "network": true,

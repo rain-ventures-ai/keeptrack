@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 69  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 70  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -8397,6 +8397,7 @@ def _routine_report(a, path):
 _AUTO_INTERVALS = {"15m": 900, "30m": 1800, "1h": 3600, "6h": 21600, "1d": 86400}
 _AUTO_NEEDS = {"board.read", "files.read", "gmail.read", "drive.read", "github.read", "calendar.read"}
 _AUTO_NEVER = {"send-email", "delete", "spend", "external-post", "edit-contacts"}
+_AUTO_FLOW = {"trigger", "read", "check", "agent", "output", "step"}   # node kinds for the web board's flow diagram
 _AUTO_RUNTIMES = {"claude", "chatgpt", "grok", "local"}
 
 
@@ -8439,7 +8440,7 @@ def _auto_pack(path):
         for name in dirs + files: require(not os.path.islink(os.path.join(root, name)), "pack must not contain symlinks")
     try: m = _auto_json(os.path.join(path, "manifest.json"))
     except (OSError, ValueError): m = None
-    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix".split(),
+    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix flow".split(),
             "schema slug name summary version needs writes never every".split(), "manifest")
     require(m.get("schema") == "keeptrack-automation/1", "unsupported manifest schema")
     slug = m.get("slug")
@@ -8484,6 +8485,14 @@ def _auto_pack(path):
         require(type(v.get("required")) is bool and text(v.get("help"), 200), "invalid config required/help")
         if "default" in v:
             require(_auto_config_type(v["default"], v.get("type")), "invalid config default")
+    if "flow" in m:   # optional: the steps the web board draws as a diagram (2-8 nodes); text only, never instructions
+        flow = m["flow"]
+        require(isinstance(flow, list) and 2 <= len(flow) <= 8, "flow must list 2-8 steps")
+        for step in flow if isinstance(flow, list) else []:
+            step = obj(step, ("kind", "title", "text"), ("kind", "title"), "flow step")
+            require(isinstance(step.get("kind"), str) and step["kind"] in _AUTO_FLOW, "unknown flow step kind")
+            require(text(step.get("title"), 40), "invalid flow step title")
+            if "text" in step: require(text(step["text"], 160), "invalid flow step text")
     if "action_key_prefix" in m:
         try: _auto_token(m["action_key_prefix"])
         except ValueError: errors.append("invalid action_key_prefix")

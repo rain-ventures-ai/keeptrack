@@ -1461,3 +1461,68 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .mdtool:hover, .mdtab:hover { background: color-mix(in srgb, var(--text) 7%, transparent); } .mdtool:focus-visible, .mdtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mdprev { min-height: 110px; }
 .cmlinkadd { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: 0 var(--sp-3) var(--sp-3); } .cmlinkbtn { max-width: 100%; color: var(--muted); }
+
+/* ---- Automations page (kit v70, #view=automations): one card per pack, with an n8n-style node diagram ---------------- */
+#board.v-automations { display: block; overflow-y: auto; padding: var(--sp-6) 18px 60px; }
+.autos { max-width: 1080px; margin: 0 auto; }
+.autos__head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3) var(--sp-5); margin-top: var(--sp-4); }
+.autos__head h2 { margin: 0; font-size: var(--fs-2xl); letter-spacing: -.01em; }
+.autos__count { color: var(--muted); font-size: var(--fs-md); }
+.autos__tools { margin-left: auto; display: flex; gap: var(--sp-3); flex-wrap: wrap; }
+.autos__hint { color: var(--muted); max-width: 72ch; margin: var(--sp-3) 0 var(--sp-6); line-height: 1.5; }
+.autos__note { margin: 0 0 var(--sp-6); padding: var(--sp-4) var(--sp-5); border-radius: var(--r-md); background: var(--accent-soft); color: var(--text); font-size: var(--fs-md); }
+.autos__grid { display: grid; gap: var(--sp-7); }
+.autocard { container-type: inline-size; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow); padding: var(--sp-7); transition: box-shadow .15s; }
+.autocard:hover { box-shadow: var(--shadow-hover); }
+.autocard__head { display: flex; align-items: center; gap: var(--sp-5); }
+.autocard__icon { flex: 0 0 auto; display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-lg); background: var(--accent-soft); color: var(--accent); }
+.autocard__icon svg { width: 22px; height: 22px; }
+.autocard__name { flex: 1; min-width: 0; }
+.autocard__name h3 { margin: 0; font-size: var(--fs-lg); overflow-wrap: anywhere; }
+.autocard__scope { display: block; color: var(--muted); font-size: var(--fs-sm); margin-top: 2px; overflow-wrap: anywhere; }
+.autocard__state { flex: 0 0 auto; }
+.autocard__summary { margin: var(--sp-5) 0 0; font-size: var(--fs-md); line-height: 1.5; overflow-wrap: anywhere; }
+.autocard__facts { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-5); }
+.autocard__fact { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 3px var(--sp-3); border-radius: var(--r-pill); background: var(--panel); color: var(--muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.autocard__fact svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.autocard__never { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-4) 0 0; color: var(--ok); font-size: var(--fs-sm); }
+.autocard__never svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.autocard__status { margin-top: var(--sp-5); padding: var(--sp-4) var(--sp-5); border-radius: var(--r-md); background: var(--panel); }
+.autocard__status p { margin: 0; } .autocard__status p + p { margin-top: var(--sp-1); }
+.autocard__run { font-weight: 600; overflow-wrap: anywhere; }
+.autocard__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-top: var(--sp-6); padding-top: var(--sp-5); border-top: 1px solid var(--border); }
+.autocard__actions button { min-height: 36px; }
+.autocard__link { margin-left: auto; color: var(--accent); font-size: var(--fs-sm); }
+.autocard > .hint { overflow-wrap: anywhere; }
+
+/* The flow diagram: vertical on narrow cards, a row of connected nodes on wide ones. Each kind has its own colour. */
+.aflow { list-style: none; margin: var(--sp-6) 0 0; padding: var(--sp-6) var(--sp-5); border-radius: var(--r-lg); border: 1px dashed var(--border);
+  background-color: var(--bg); background-image: radial-gradient(color-mix(in srgb, var(--muted) 30%, transparent) 1px, transparent 1px); background-size: 16px 16px; }
+.aflow__node { --k: var(--muted); position: relative; display: flex; gap: var(--sp-5); align-items: flex-start; padding-bottom: var(--sp-6); min-width: 0; }
+.aflow__node:last-child { padding-bottom: 0; }
+.aflow__node[data-kind="trigger"] { --k: var(--warn); } .aflow__node[data-kind="read"] { --k: var(--accent); }
+.aflow__node[data-kind="check"] { --k: var(--muted); } .aflow__node[data-kind="agent"] { --k: #8b5cf6; } .aflow__node[data-kind="output"] { --k: var(--ok); }
+.aflow__node:not(:last-child)::after { content: ''; position: absolute; left: 21px; top: 46px; bottom: 2px; width: 2px; background: color-mix(in srgb, var(--k) 45%, var(--border)); }
+.aflow__icon { position: relative; z-index: 1; flex: 0 0 auto; display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-lg);
+  background: var(--card); color: var(--k); border: 2px solid var(--k); box-shadow: var(--shadow); }
+.aflow__node[data-kind="trigger"] .aflow__icon { border-radius: 22px var(--r-lg) var(--r-lg) 22px; }   /* n8n draws a trigger with a round left side */
+.aflow__icon svg { width: 20px; height: 20px; }
+.aflow__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 2px; }
+.aflow__kind { color: var(--k); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.aflow__title { font-size: var(--fs-md); overflow-wrap: anywhere; }
+.aflow__text { color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; overflow-wrap: anywhere; }
+@container (min-width: 620px) {
+  .aflow { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); column-gap: 28px; padding: var(--sp-7) var(--sp-5); }
+  .aflow__node { flex-direction: column; align-items: center; text-align: center; padding-bottom: 0; }
+  .aflow__node:not(:last-child)::after { left: calc(50% + 26px); right: auto; top: 21px; bottom: auto; width: calc(100% + 28px - 52px); height: 2px; }
+  .aflow__node:not(:first-child)::before { content: ''; position: absolute; top: 17px; left: calc(50% - 31px); border: 5px solid transparent; border-left: 7px solid color-mix(in srgb, var(--k) 70%, var(--border)); }
+  .aflow__body { align-items: center; }
+}
+@media (max-width: 760px) {
+  #board.v-automations { padding: var(--sp-3) var(--sp-5) 90px; }
+  .autocard { padding: var(--sp-6); }
+  .autos__tools { margin-left: 0; }
+  .autocard__head { flex-wrap: wrap; }
+  .autocard__link { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .autocard { transition: none; } }
