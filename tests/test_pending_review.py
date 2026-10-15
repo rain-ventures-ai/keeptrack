@@ -50,7 +50,7 @@ class PendingReview(unittest.TestCase):
         d = self.read(); t = self.task(1)
         self.assertEqual([c["id"] for c in d["columns"]], ["todo", "in-progress", "pending-review", "done"])
         self.assertEqual(t["column"], "pending-review"); self.assertIsNone(t["claim"]); self.assertNotIn("outcome", t)
-        self.assertEqual(t["last_run"]["outcome"], "review")
+        self.assertNotIn("outcome", t["last_run"])
         self.assertTrue(t["comments"][-1]["text"].startswith("**Pending review**: @JezHub decides."))
         self.assertIn("- A (8/10)", t["comments"][-1]["text"])
         # a second review keeps one column; a later claim takes the card back to In progress
@@ -66,6 +66,27 @@ class PendingReview(unittest.TestCase):
         r = self.run_kt("review", "#2", "--note", "x")
         self.assertNotEqual(r.returncode, 0); self.assertIn("another session", r.stderr)
         self.assertEqual(self.task(2)["column"], "in-progress")
+
+    def test_review_ends_a_wait_and_reuses_a_named_column(self):
+        d = self.read(); d["columns"].insert(2, {"id": "decide", "name": "pending review"})
+        with open(self.file, "w") as f: json.dump(d, f)
+        self.run_kt("claim", "#2", "--note", "go")
+        self.assertEqual(self.run_kt("wait", "#2", "--on", "Jez: pick", "--who", "JezHub").returncode, 0)
+        r = self.run_kt("review", "#2", "--note", "x")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        t = self.task(2)
+        self.assertEqual(t["column"], "decide"); self.assertFalse(t.get("waiting"))
+        self.assertEqual(len(self.read()["columns"]), 4)
+
+    def test_review_reopens_only_your_own_done_card(self):
+        d = self.read(); d["tasks"][1].update(column="done", outcome="completed", assignees=["osouthgate"])
+        with open(self.file, "w") as f: json.dump(d, f)
+        r = self.run_kt("review", "#2", "--note", "x")
+        self.assertNotEqual(r.returncode, 0); self.assertIn("not to you", r.stderr)
+        self.env["BOARD_USER"] = "osouthgate"
+        self.assertEqual(self.run_kt("review", "#2", "--note", "decision open").returncode, 0)
+        t = self.task(2)
+        self.assertEqual(t["column"], "pending-review"); self.assertNotIn("outcome", t)
 
     def test_review_takes_a_login(self):
         self.assertIn("GitHub login", self.run_kt("review", "#2", "--who", "not a login", "--note", "x").stderr)

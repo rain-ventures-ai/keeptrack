@@ -114,6 +114,7 @@ $B todo-edit '#12' <N> "<text>"                  # reword an item in place (keep
 $B todo-move '#12' <N> --details "<what it waits on>"   # a step that must wait: a new follow-up card, linked both ways
 $B comment '#12' "<question or update>"          # questions also need: heartbeat --status blocked
 $B done '#12' --note "<result, link>"            # or: release '#12' --column todo
+$B review '#12' --who <login> --note -          # work done, a person decides (research, review, options): Pending review, not Done
 $B wait '#12' --on "<who: what>" --who <login-or-p_id>   # parked on a person or event; then comment @owner, assign, stop
 $B add "Title" --assign <user> --client "<company>" --due YYYY-MM-DD --details "<text>"
 ```

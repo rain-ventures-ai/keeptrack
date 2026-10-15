@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 **Pending review** column: finished work that waits on a person's decision is no longer closed (Ollie, 15 Oct: a
 research card went to Done with nothing decided).
 - **keeptrack.py:** new `review ID --note "..." [--who LOGIN]`. Like `done` it needs a note, refuses open to-dos and
-  ends the claim with a run record; unlike `done` the card stays open in the **Pending review** column
+  ends the claim (and any wait) with a run record; unlike `done` the card stays open in the **Pending review** column
   (`pending-review`, after In progress; added the first time, so no migration) and the note is posted as a comment that
   @mentions who decides (default: the first assignee). `--note -` reads stdin. New boards get the column.
 - **Web board:** the Today pulse shows a "to decide" count (cards in Pending review) when the board has the column.

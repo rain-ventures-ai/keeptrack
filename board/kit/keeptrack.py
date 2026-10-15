@@ -2570,10 +2570,14 @@ REVIEW_COL, REVIEW_NAME = "pending-review", "Pending review"   # kit v64: the id
 
 def ensure_review_column(data):
     """The Pending review column (kit v64): work is done, a person's decision is left. Added after In progress (else just
-    before the done column) the first time a card goes there, so boards need no migration. Returns True when added."""
+    before the done column) the first time a card goes there, so boards need no migration. Returns the column id: a
+    column a person already named "Pending review" is used as it is, never a second one with the same name."""
     cols = data.setdefault("columns", [])
     if any(c.get("id") == REVIEW_COL for c in cols if isinstance(c, dict)):
-        return False
+        return REVIEW_COL
+    named = next((c.get("id") for c in cols if isinstance(c, dict) and str(c.get("name") or "").strip().lower() == REVIEW_NAME.lower()), None)
+    if named:
+        return named
     ids = [c.get("id") for c in cols]
     if "in-progress" in ids:
         at = ids.index("in-progress") + 1
@@ -2581,7 +2585,7 @@ def ensure_review_column(data):
         at = len(cols) - 1 if cols and ids[-1] == done_col(data) else len(cols)
     cols.insert(at, {"id": REVIEW_COL, "name": REVIEW_NAME})
     print(f"added column {REVIEW_COL} ({REVIEW_NAME})")
-    return True
+    return REVIEW_COL
 
 
 def cmd_review(a):
@@ -2592,6 +2596,11 @@ def cmd_review(a):
     def fn(data):
         t = find(data, a.id)
         claim_owner_check(data, t, a, "review")
+        me = (default_user() or "").lower()
+        if t.get("column") == done_col(data) and not getattr(a, "force", False) and t.get("assignees") \
+                and me not in [str(x).lower() for x in t["assignees"]]:
+            sys.exit(f"refused: {t['id']} is Done and assigned to {', '.join(t['assignees'])}, not to you; a person moves "
+                     "it back (or tell an agent to use --force)")
         note = (a.note or "").strip()
         if not note:
             sys.exit("refused: review needs --note with the result and the decision it waits on (options and your "
@@ -2608,14 +2617,16 @@ def cmd_review(a):
         who = (a.who or "").strip().lstrip("@") or next(iter(t.get("assignees") or []), "") or default_user()
         if who and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", who):
             sys.exit("--who takes a GitHub login")
+        if who and who.lower() not in [str(p.get("github") or "").lower() for p in data.get("people") or [] if isinstance(p, dict)]:
+            print(f"warning: @{who} is not a board member, so the board may not show them this card", file=sys.stderr)
+        close_waiting(t, a, "review", data)   # the decision replaces the wait, as done ends it: never a card waiting on two people
         c = t.get("claim")
-        if c:   # the same run record as done; the card itself has no outcome until it closes
+        if c:   # the same run record as done, without an outcome: the card has none until it closes
             t["last_run"] = {"agent": c.get("agent", ""), "on_behalf_of": c.get("on_behalf_of", ""), "session_id": c.get("session_id", ""),
                              "session_url": c.get("session_url", ""), "started_at": c.get("claimed_at", ""), "finished_at": now(),
-                             "note": " ".join(note.split())[:300], "outcome": "review"}
+                             "note": " ".join(note.split())[:300]}
             t["claim"] = None
-        ensure_review_column(data)
-        move_task_to_column(data, t, REVIEW_COL, a)
+        move_task_to_column(data, t, ensure_review_column(data), a)
         link = (c or {}).get("session_url", "")
         hist(t, f"pending review" + (f" for @{who}" if who else "") + ": " + " ".join(note.split())[:300] + (f" (session {link})" if link else ""))
         t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t),
