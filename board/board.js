@@ -4474,7 +4474,15 @@ if (typeof window !== 'undefined') (() => {
   const own = (map, key) => typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined;   // repo data names keys: never reach the prototype
   const autoStr = (v, max = 200) => typeof v === 'string' ? v.slice(0, max) : '';
   const autoCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
-  const autoKey = c => DEMO ? 'demo' : [c.repo, c.branch, c.path].join('\n');
+  const autoKey = c => DEMO ? 'demo' : [c.repo, c.branch, c.path, c.token || ''].join('\n');   // the token too: a forgotten or changed token never shows, or fills in, another one's results
+  const autoObj = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  function autoInstall(r) {   // a register entry as plain strings: repo data can hold any JSON, and the page must never throw on it
+    const o = autoObj(r), a = autoObj(o.automation), setup = autoObj(a.setup), last = o.last_run && typeof o.last_run === 'object' ? autoObj(o.last_run) : null, cur = autoObj(o.current_run);
+    return { owner: autoStr(o.owner, 40), status: autoStr(o.status, 20), board_repo: autoStr(o.board_repo), branch: autoStr(o.branch), board_path: autoStr(o.board_path),
+      last_successful_run_at: autoStr(o.last_successful_run_at, 40), last_run: last && { status: autoStr(last.status, 20), summary: autoStr(last.summary) },
+      current_run: o.current_run ? { started_at: autoStr(cur.started_at, 40) } : null,
+      automation: { slug: autoStr(a.slug, 63), every: autoStr(a.every, 10), setup: { notes: Array.isArray(setup.notes) ? setup.notes.slice(0, 10).map(x => autoStr(x, 40)) : [] } } };
+  }
   let autoCache = null, autoGen = 0;
   async function autoKitPacks() {   // the packs this page's own kit ships (board/kit/manifest.json): the demo, and boards without packs yet
     const r = await fetch('kit/manifest.json', { cache: 'no-store' }); if (!r.ok) return [];
@@ -4493,7 +4501,7 @@ if (typeof window !== 'undefined') (() => {
       catch { return { source, folder, slug: x.name, m: null }; }
     }));
     const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readJson('automation/routines/' + x.name).catch(() => null))))
-      .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object' && AUTO_SLUG.test(String(r.automation.slug || '')));
+      .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object').map(autoInstall).filter(r => AUTO_SLUG.test(r.automation.slug));
     if (!packs.length && !installs.length) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: 'upgrade' };
     return { packs, installs };
   }
@@ -4507,12 +4515,12 @@ if (typeof window !== 'undefined') (() => {
     const every = own(AUTO_EVERY, (mine && mine.automation.every) || m.every), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object') : [];
     let steps = Array.isArray(m.flow) && m.flow.length >= 2 ? m.flow.slice(0, 8).filter(s => s && typeof s === 'object' && own(AUTO_KIND, s.kind)).map(s => ({ kind: s.kind, title: autoStr(s.title, 40), text: autoStr(s.text, 160) })).filter(s => s.title) : [];
     if (steps.length < 2) steps = [{ kind: 'trigger', title: autoCap(every || 'on its schedule'), text: 'Runs on the shared automation schedule.' },
-      ...needs.map(n => ({ kind: 'read', title: 'Read ' + ((own(AUTO_NEEDS, n.id) || [autoStr(n.id, 30)])[0]), text: autoStr(n.why, 160) })),
+      ...needs.slice(0, 4).map(n => ({ kind: 'read', title: 'Read ' + ((own(AUTO_NEEDS, n.id) || [autoStr(n.id, 30)])[0]), text: autoStr(n.why, 160) })),
       m.check ? { kind: 'check', title: 'Find what is new', text: 'A small script lists new items. No AI is used.' } : { kind: 'check', title: 'No cheap check', text: 'The agent runs every time it is due.' },
       { kind: 'agent', title: 'Do the work', text: autoStr(m.summary, 160) },
       { kind: 'output', title: 'Review Inbox', text: 'Results wait there as proposals until you accept them.' }];
     if (every) steps = steps.map(s => s.kind === 'trigger' ? { ...s, title: autoCap(every) } : s);   // the install's own interval wins
-    return steps;
+    return steps.slice(0, 8);   // the same cap as a manifest's own flow, however many needs a pack lists
   }
   function autoDiagram(steps) {
     const ol = el('ol', 'aflow'); ol.setAttribute('aria-label', 'What it does, step by step');
@@ -4541,9 +4549,10 @@ if (typeof window !== 'undefined') (() => {
     const login = (c.me || '').replace(/^@/, '').toLowerCase(), me = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) ? login : '', seen = {};   // only a valid login goes into a copied command
     data.packs.forEach(p => { seen[p.slug] = (seen[p.slug] || 0) + 1; });
     const here = data.installs.filter(r => r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!r.branch || r.branch === c.branch) && (!r.board_path || r.board_path === c.path));
-    const cards = data.packs.map(p => autoCard(p, here.filter(r => r.automation.slug === p.slug), me, seen[p.slug] > 1, c));
+    const safeCard = (p, ...rest) => { try { return autoCard(p, ...rest); } catch { const x = el('article', 'autocard'); x.dataset.slug = p.slug; x.append(el('h3', null, p.slug), el('p', 'hint', 'This automation could not be shown: its pack or install file has unexpected values. Run the validate command in a clone.')); return x; } };   // one bad file never blanks the page
+    const cards = data.packs.map(p => safeCard(p, here.filter(r => r.automation.slug === p.slug), me, seen[p.slug] > 1, c));
     const orphans = here.filter(r => !data.packs.some(p => p.slug === r.automation.slug));   // installed, but its pack is gone: still show it, so it can be turned off
-    [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => cards.push(autoCard({ source: 'missing', folder: '', slug, m: null }, orphans.filter(r => r.automation.slug === slug), me, false, c)));
+    [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => cards.push(safeCard({ source: 'missing', folder: '', slug, m: null }, orphans.filter(r => r.automation.slug === slug), me, false, c)));
     const on = here.filter(r => r.status === 'active' && String(r.owner || '').toLowerCase() === me).length;
     head.querySelector('h2').after(el('span', 'autos__count', `${data.packs.length} available · ${on} on for you`));
     if (!cards.length) wrap.append(ui.empty({ text: 'No automations yet. Upgrade the board kit, or make your own.', icon: 'bot' }));
@@ -4551,7 +4560,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function autoCard(p, installs, me, clash, c) {
     const m = p.m || {}, item = el('article', 'autocard'), head = el('div', 'autocard__head'); item.dataset.slug = p.slug;
-    const network = !!(m.check && m.check.network), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object') : [];
+    const network = !!(m.check && m.check.network), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object').slice(0, 8) : [];
     const mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
     const states = { unverified: ['Needs setup', 'warn'], paused: ['Ready, off', 'neutral'], active: ['On', 'ok'] };
     const [label, tone] = p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : p.preview ? [DEMO ? 'Example' : 'Not in this board', 'neutral'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];

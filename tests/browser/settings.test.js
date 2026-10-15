@@ -405,10 +405,10 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
         '/contents/board/automations/email-to-tasks/manifest.json': man('email-to-tasks', 'Email to tasks', { every: '6h', needs: [{ id: 'gmail.read', routes: [] }], check: { file: 'check.py', network: true, tools: ['gog'] } }),
         '/contents/board/automations/notes-folder-to-tasks/manifest.json': man('notes-folder-to-tasks', '<img src=x onerror=alert(1)>', { config: { notes_dir: { type: 'path', required: true } } }),
         '/contents/board/automations/broken/manifest.json': 404,
-        '/contents/automations/my-pack/manifest.json': man('my-pack', 'My pack', { check: undefined }),
+        '/contents/automations/my-pack/manifest.json': man('my-pack', 'My pack', { check: undefined, needs: Array.from({ length: 500 }, (_, i) => ({ id: 'x' + i, routes: [] })) }),
       };
       page.api.routines = [];
-      const regs = { 'auto-stale-cards-nudge-alex.json': reg('stale-cards-nudge', 'alex', 'active', { last_run: { status: 'success', summary: 'Two nudges proposed' }, last_successful_run_at: '2026-10-15T09:00:00Z' }),
+      const regs = { 'auto-stale-cards-nudge-alex.json': reg('stale-cards-nudge', 'alex', 'active', { last_run: { status: 'success', summary: 'Two nudges proposed' }, last_successful_run_at: { toString: null } }),
         'auto-email-to-tasks-alex.json': reg('email-to-tasks', 'alex', 'unverified'), 'auto-my-pack-sam.json': reg('my-pack', 'sam', 'paused'), 'auto-my-pack-alex.json': reg('my-pack', 'alex', 'retired'),
         'auto-notes-folder-to-tasks-alex.json': reg('notes-folder-to-tasks', 'alex', 'active', { branch: 'other' }), 'auto-broken-alex.json': reg('broken', 'alex', '__proto__', { last_run: { status: 'constructor' } }),
         'auto-gone-pack-alex.json': reg('gone-pack', 'alex', 'active') };
@@ -426,9 +426,10 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       const nodes = async i => cards.nth(i).locator('.aflow__node').evaluateAll(xs => xs.map(x => x.dataset.kind + ':' + x.querySelector('.aflow__title').textContent));
       assert.deepEqual(await nodes(0), ['trigger:Once a day', 'read:<b>Read</b> the board', 'output:Review Inbox'], 'the manifest flow is drawn; an unknown kind is dropped; the install interval names the trigger');
       assert.deepEqual(await nodes(1), ['trigger:Once a day', 'read:Read Gmail (read only)', 'check:Find what is new', 'agent:Do the work', 'output:Review Inbox'], 'with no flow, the steps come from the schedule, needs and check');
-      assert.equal((await nodes(4))[2], 'check:No cheap check');
+      assert.equal((await nodes(4)).length, 8, 'a pack with 500 needs still draws at most 8 steps'); assert.equal((await nodes(4))[5], 'check:No cheap check');
+      assert.equal(await cards.nth(4).locator('.autocard__fact').count(), 10, 'and at most 8 "Reads" chips, plus its schedule and "AI runs every time"');
       const copy = async (i, label) => { await cards.nth(i).locator('button', { hasText: label }).click(); return page.evaluate(() => window.__copied); };
-      assert.match(await txt(0), /On/); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/); assert.equal(await cards.nth(0).locator('.autocard__never').textContent(), 'Never: delete anything', 'an unknown never value is not shown');
+      assert.match(await txt(0), /On/); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/); assert.match(await txt(0), /Last success: never/, 'an odd date value does not break the card'); assert.equal(await cards.nth(0).locator('.autocard__never').textContent(), 'Never: delete anything', 'an unknown never value is not shown');
       assert.doesNotMatch(await txt(0), /Hidden/);
       assert.match(await txt(1), /Needs setup/); assert.match(await txt(1), /Reads Gmail \(read only\)/); assert.match(await txt(1), /Uses the network/); assert.match(await txt(1), /local check of its access failed/);
       assert.match(await txt(2), /Not installed/, 'an install for another branch does not count here'); assert.match(await txt(3), /Pack has a problem/); assert.match(await txt(3), /status unknown/, 'odd status values do not break the page');
