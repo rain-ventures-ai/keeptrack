@@ -1095,6 +1095,23 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 .cmact { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-1) var(--sp-5); font-size: var(--fs-base); color: var(--muted); }
 .cmact .cmacti { width: 20px; display: inline-flex; justify-content: center; } .cmact a { color: var(--accent); font-weight: 600; } .cmact time { margin-left: auto; }
 .cmact.bad { color: var(--danger); }
+/* the card's history between comments (kit v66): compact rows on a timeline line, like a GitHub pull request */
+.cmhrun { display: flex; flex-direction: column; gap: var(--sp-1); margin-left: 13px; padding: var(--sp-1) 0 var(--sp-1) var(--sp-5); border-left: 2px solid var(--border); }
+.cmhist { position: relative; display: flex; align-items: baseline; min-height: 22px; padding-top: 2px; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--muted); line-height: 1.4; }
+.cmhist .cmhicon { position: absolute; left: calc(-1 * var(--sp-5) - 12px); top: 1px; border: 2px solid var(--card); box-sizing: border-box; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--panel); color: var(--muted); }
+.cmhist .cmhicon svg { width: 12px; height: 12px; }
+.cmhist .cmhtext { flex: 1; min-width: 0; overflow-wrap: anywhere; } .cmhist .cmhtext b { color: var(--text); font-weight: 600; }
+.cmhist time { flex: 0 0 auto; margin-left: auto; font-size: var(--fs-xs, var(--fs-sm)); }
+.cmhist.bad, .cmhist.bad .cmhicon { color: var(--danger); }
+.cmhrun .cmhmore { align-self: flex-start; margin-left: calc(-1 * var(--sp-2)); }
+#cmHistBtn:not(.on) { opacity: .6; }
+/* new since the card was opened (kit v66) */
+.cmnewpill { display: inline-flex; align-items: center; padding: 0 var(--sp-2); border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 600; line-height: 16px; flex: 0 0 auto; }
+.cmcard.cmnew { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.cmhist.cmnew .cmhtext b, .cmhist.cmnew .cmhtext { color: var(--text); } .cmhist.cmnew .cmhicon { background: var(--accent-soft); color: var(--accent); }
+.cmact.cmnew { color: var(--text); }
+.cmnewbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: var(--sp-4); margin: 0 0 var(--sp-4); padding: var(--sp-3) var(--sp-5); border-radius: var(--r-lg); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-base); font-weight: 600; box-shadow: 0 2px 8px rgb(0 0 0 / .12); }
+.cmnewbar[hidden] { display: none; } .cmnewbar span { flex: 1; } .cmnewbar button { min-height: 28px; padding: 0 var(--sp-5); }
 .cmhead .cmsess { margin-left: auto; font-size: var(--fs-sm); color: var(--accent); text-decoration: none; font-weight: 600; }
 
 /* ---- colour themes: 3 colours (paper, ink, hero) or 5 (+ surface, line) ------------------------------------------------

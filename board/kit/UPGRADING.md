@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v66 (schema 4)
+Web board only: the card drawer shows comments and history as one **Activity** timeline, and marks updates that arrive
+while the card is open as **New**. No data migration.
+- Run `kit-update` only. Check: `kit-check` says v66; open a card: there is no History section, and history rows show
+  between the comments in Activity.
+
 ### v64 (schema 4)
 The **Pending review** column for finished work that waits on a person's decision. No data migration.
 - Run `kit-update` only. Check: `kit-check` says v64; `keeptrack.py help agent-work` lists `review`.
