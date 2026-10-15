@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Web board: split boards fetch uncached files in GraphQL batches, so a new browser needs fewer GitHub calls.
 Files GitHub cannot return this way fall back to the existing REST read. No schema change.
 
+Web board: live board data and sync status now appear before optional widgets finish loading. Widgets redraw the board
+only when their layout changes; stale widget responses are discarded. Demo loading is unchanged. No schema change.
+
 Web board: the **Archive** button on Done cards now takes the card off the board at once, instead of after GitHub
 has the commit (about 2 to 3 seconds on a split board). If the archive does not happen, the card comes back and the
 toast says why. Undo still shows once the archive has landed. No schema change.

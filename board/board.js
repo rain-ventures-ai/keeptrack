@@ -547,10 +547,11 @@ if (typeof window !== 'undefined') (() => {
     }
     return out;
   }
-  async function loadWidgets(c) {
+  async function loadWidgets(c, stale = () => false) {   // optional layouts must not overwrite a newer load
+    if (stale()) return false;
     if (!c.repo || !widgetsEnabled(c)) { const changed = widgets.length > 0 || !!widgetMeta.problem; widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; return changed; }
     const key = boardStoreId(c), same = widgetMeta.key === key, path = widgetPath(c);
-    const current = () => boardStoreId() === key && widgetsEnabled(c);
+    const current = () => !stale() && boardStoreId() === key && widgetsEnabled(c);
     const url = `${c.api}/repos/${c.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(c.branch)}`;
     try {
       const r = await fetch(url, { cache: 'no-store', signal: ghSignal('GET'), headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(same && widgetMeta.etag ? { 'If-None-Match': widgetMeta.etag } : {}) } });
@@ -737,8 +738,9 @@ if (typeof window !== 'undefined') (() => {
       if (r && r.ok) { const { d: data, raw: raw0 } = await fileJson(r); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = r.headers.get('ETag'); let raw = raw0;
         if (isSplit(raw)) { ro = 'public'; applyRo(); setStatus('This board needs a token to read', 'err'); const b = $('board'); b.textContent = ''; b.append(el('div', 'empty', 'This board needs a token to read')); return false; }
         const isDemo = fileDemo = !!raw.demo_base; raw = demoShift(raw);
-        newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo(); await loadWidgets(c); if (stale()) return false;
-        setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true; }
+        newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo(); if (isDemo) { await loadWidgets(c, stale); if (stale()) return false; }
+        setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
+        if (!isDemo) { const changed = await loadWidgets(c, stale); if (stale()) return false; if (changed) render(); } return true; }
       if (ro === 'public') { ro = ''; applyRo(); }
     }
     if (!c.token) { widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; setStatus('Not connected', 'err'); if ($('board').className !== 'v-welcome') render(); if (c.repo) noTokenBox(); else if ($('board').className !== 'v-welcome') renderWelcome(); return false; }
@@ -748,13 +750,14 @@ if (typeof window !== 'undefined') (() => {
       if (splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`) {
         const got = await splitSnapshot(false, false); if (stale()) return false;
         if (!got.unchanged && !isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
-        if (got.unchanged) { const cached = fromSnap; boardSize = [...got.meta.files.values()].reduce((n, x) => n + (x.size || 0), 0); sizeBar(); splitMeta = got.meta; lastSyncOk = true; fromSnap = false; setKitRo(state); initSeen(); metaSave(c); if (cached) { checkKit(); checkRelayKit(); checkPublic(); render(); setTimeout(restoreBoardContext, 30); } const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
+        if (got.unchanged) { const cached = fromSnap; boardSize = [...got.meta.files.values()].reduce((n, x) => n + (x.size || 0), 0); sizeBar(); splitMeta = got.meta; lastSyncOk = true; fromSnap = false; setKitRo(state); initSeen(); metaSave(c); setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (cached) { checkKit(); checkRelayKit(); checkPublic(); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30); } const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
         const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); setKitRo(got.data); state = normalise(got.data);
-        if (prev) alertChanges(prev, state); if (fromSnap) { checkKit(); checkRelayKit(); checkPublic(); } lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
+        if (prev) alertChanges(prev, state); if (fromSnap) { checkKit(); checkRelayKit(); checkPublic(); } lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
+        const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true;
       }
       const res = first || await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
-      if (res.status === 304) { const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
+      if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
       if (res.status === 404) { await diagnose404(); return false; }
       if (res.status === 401 || res.status === 403) { lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
       if (!res.ok) { lastProblem = `Loading the board: GitHub error ${res.status}`; setStatus(`GitHub error ${res.status}`, 'err'); return false; }
@@ -765,8 +768,10 @@ if (typeof window !== 'undefined') (() => {
       if (isSplit(raw)) { const got = await splitSnapshot(true); if (stale()) return false; splitMeta = got.meta; raw = got.data; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); }
       else splitMeta = null;
       newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; setKitRo(raw); const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkRelayKit(); checkPublic(); lastSyncOk = true; initSeen();
-      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
-    } catch (e) { console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
+      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); if (fileDemo) { await loadWidgets(c, stale); if (stale()) return false; }   // demo files keep their loading order
+      setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
+      if (!fileDemo) { const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); } return true;
+    } catch (e) { if (stale()) return false; console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
