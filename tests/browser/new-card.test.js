@@ -37,6 +37,7 @@ class Github {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
     const json = (body, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
     if (method !== 'GET') this.writes++;
+    if (method !== 'GET' && this.failWrites) return json({ message: 'Server error' }, 500);
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
     if (p.startsWith('/user/repos')) return json([]);
     if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
@@ -117,6 +118,14 @@ async function waitFor(fn, what) { for (let i = 0; i < 100; i++) { const v = fn(
     await shot(page, 'new-card-drawer');
     await closeDrawer(page);
     assert.equal(cards(api).filter(x => x.title === 'Refresh the homepage').length, 1, 'one card, never two');
+
+    // a failed save puts the title back in the lane's box
+    api.failWrites = true;
+    await quick.fill('Order the banners'); await quick.press('Shift+Enter');
+    for (let i = 0; i < 100 && (await quick.inputValue()) !== 'Order the banners'; i++) await page.waitForTimeout(100);
+    assert.equal(await quick.inputValue(), 'Order the banners', 'the title is back in the box');
+    assert.equal(await page.locator('#dlgCard[open]').count(), 0); api.failWrites = false;
+    await quick.fill(''); page.errors = page.errors.filter(e => !/500|Server error/i.test(e));
     assert.deepEqual(page.errors, []);
 
     // 6. phones: the floating ＋ asks for a title, then opens the card for the column on show

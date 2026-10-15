@@ -2860,17 +2860,28 @@ if (typeof window !== 'undefined') (() => {
   // ---- new card (kit v61): the card drawer is the one card form. The card is saved with its title, then opens in the
   // drawer for details, client, project, priority, due, labels, checklist and links (board/CARDS.md). With no title typed
   // yet, a short prompt asks for one first. Opened by the lane's pencil, Shift+Enter, an empty Add, the lane's ＋ and the phone ＋.
+  // A failed save puts the title back in the lane's box.
   let newCardBusy = false;
-  async function openNewCard(col, seed, due) {
-    if (newCardBusy) return null; newCardBusy = true;   // one new card at a time: a repeated click never adds two
-    try {
-      const tidy = v => (v || '').replace(/\s+/g, ' ').trim();
-      const title = tidy(seed) || tidy(await ui.promptText({ title: 'New card', label: 'Title', placeholder: 'Start with a verb: what changes when this is done?', confirmLabel: 'Create and open' }));
+  async function openNewCard(col, seed) {
+    if (ro) { roToast(); return null; }
+    const tidy = v => (v || '').replace(/\s+/g, ' ').trim();
+    let title = tidy(seed);
+    if (!title) {
+      if (newCardBusy) return null; newCardBusy = true;   // one title prompt at a time
+      try { title = tidy(await ui.promptText({ title: 'New card', label: 'Title', placeholder: 'Start with a verb: what changes when this is done?', confirmLabel: 'Create and open' })); }
+      finally { newCardBusy = false; }
       if (!title) return null;
-      const id = await addTask(title, col, due);
-      if (id && state.tasks.some(t => t.id === id)) openCard(id);
-      return id;
-    } finally { newCardBusy = false; }
+    }
+    const id = await addTask(title, col);
+    if (!id) {   // not saved: put the title back in the lane's box (rebuilt by render) so nothing typed is lost
+      const box = document.querySelector(`#board .col[data-col="${CSS.escape(col)}"] .add input`);
+      if (box && !box.value) box.value = title;
+      return null;
+    }
+    const t = state.tasks.find(x => x.id === id); if (!t) return id;
+    // the save can take a few seconds: open the card only if the person has not opened something else meanwhile
+    if (document.querySelector('dialog[open]')) toast(`Added #${t.num}`); else openCard(id);
+    return id;
   }
 
   // ---- edit dialog ----------------------------------------------------------
