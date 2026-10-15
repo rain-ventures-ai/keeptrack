@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 59  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 60  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1784,6 +1784,59 @@ def waiting_days(data):
     return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 365 else WAITING_DAYS
 
 
+RESEARCH_PER_RUN = 2       # settings.backlog_research.per_run default: bare Backlog cards one dispatcher run researches
+BARE_DETAILS_CHARS = 120   # details shorter than this (spaces folded) count as empty for bare_card
+# A card with one of these labels is never picked for backlog research: done or running already, the owner said no,
+# or it waits on a person.
+RESEARCH_SKIP_LABELS = ("researched", "researching", "no-research", "needs-human", "held")
+
+
+def backlog_research(data):
+    """settings.backlog_research (kit v60), read safely: {"enabled": bool, "per_run": 1-10}. Off when it is missing or
+    malformed: only an explicit `"enabled": true` turns it on."""
+    v = (data.get("settings") or {}).get("backlog_research")
+    v = v if isinstance(v, dict) else {}
+    n = v.get("per_run")
+    return {"enabled": v.get("enabled") is True,
+            "per_run": n if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= 10 else RESEARCH_PER_RUN}
+
+
+def bare_card(t):
+    """True for a card too thin to start (board/CARDS.md tests 2-4): no to-dos, no links, and details shorter than
+    BARE_DETAILS_CHARS characters. A fixed rule, not a judgement, so people and agents get the same answer."""
+    details = re.sub(r"\s+", " ", str(t.get("details") or "")).strip()
+    return not t.get("todos") and not t.get("links") and len(details) < BARE_DETAILS_CHARS
+
+
+def research_candidate(data, t, user=None):
+    """A Backlog card backlog auto-research may pick: bare, no running claim, no open wait, none of
+    RESEARCH_SKIP_LABELS, and (with user) assigned to that user or to nobody. The setting is checked by the caller."""
+    labels = {str(x).lower() for x in t.get("labels") or []}
+    who = [str(x).lower() for x in t.get("assignees") or []]
+    return (t.get("column") == "backlog" and bare_card(t) and not labels & set(RESEARCH_SKIP_LABELS)
+            and (not user or not who or user.lower() in who)
+            and claim_state(data, t.get("claim")) not in ("running", "blocked", "stuck") and not open_waiting(t))
+
+
+def cmd_research_lock(a):
+    """Take the backlog-research lock on one card: add the label `researching` only when the setting is on and the
+    card is still a research candidate (which includes: not already `researching`). A lost race re-runs this on the
+    newer board, so of two dispatchers only one gets the lock; the other is refused and writes nothing."""
+    def fn(data):
+        _MUT["recheck"] = True
+        t = find(data, a.id)
+        if not backlog_research(data)["enabled"]:
+            sys.exit("refused: backlog research is off (settings.backlog_research)")
+        if not research_candidate(data, t, default_user()):
+            sys.exit(f"refused: #{t.get('num')} is not a card backlog research may take now (not in Backlog, not bare, "
+                     "assigned to someone else, claimed, waiting, or labelled " + ", ".join(RESEARCH_SKIP_LABELS) + ")")
+        ensure_labels(data, ["researching"])
+        t["labels"] = list(t.get("labels") or []) + ["researching"]
+        t["updated"] = now(); hist(t, "backlog research: locked (researching)")
+        print(f"#{t.get('num')} locked for backlog research (label researching)")
+    mutate(fn, f"Backlog research lock: {a.id}")
+
+
 def chase_date(data, w):
     """The day to chase a wait: its nudge date, else `since` plus settings.waiting_days; '' when there is none (the board
     set waiting_days to 0, or the wait has no valid since)."""
@@ -2107,6 +2160,7 @@ def cmd_list(a):
                 continue
         if getattr(a, "client", None) and t.get("client") != a.client: continue
         if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
+        if getattr(a, "bare", False) and not bare_card(t): continue
         cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
@@ -4164,7 +4218,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint"],
+    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -4969,8 +5023,13 @@ def cmd_task_set(a):
                 sys.exit("a task needs a title")
             if a.title != t.get("title"):
                 t["title"] = a.title; changed.append(f"title: {a.title}")
+        if getattr(a, "details", None) is not None and getattr(a, "add_details", None) is not None:
+            sys.exit("use --details or --add-details, not both")
         if getattr(a, "details", None) is not None and a.details != t.get("details", ""):
             t["details"] = a.details; changed.append("details updated" if a.details else "details cleared")
+        if (getattr(a, "add_details", None) or "").strip():   # adds below what is there; never replaces a person's text
+            cur = str(t.get("details") or "").rstrip()
+            t["details"] = (cur + "\n\n" if cur else "") + a.add_details.strip(); changed.append("details added")
         if getattr(a, "priority", None) and a.priority != t.get("priority"):
             t["priority"] = a.priority; changed.append(f"priority: {a.priority}")
         if getattr(a, "due", None) is not None:
@@ -5676,6 +5735,8 @@ def cmd_settings(a):
     # From kit v44 the Review Inbox is always on for split boards; the line keeps its v42 shape for older skill copies.
     print("review_inbox.enabled: " + ("true" if review_storage_ok(data) else "false (needs split storage: keeptrack.py migrate --to 4)"))
     print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
+    br = backlog_research(data)
+    print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
     print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
@@ -5718,13 +5779,25 @@ def cmd_settings_set(a):
                              "python3 board/keeptrack.py kit-update")
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "max_agent_claims",
-                                                                  "rename_stage", "stages")):
+                                                                  "rename_stage", "stages", "backlog_research", "research_per_run")):
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
             elif not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
                 sys.exit(f"min kit must be between the stored value ({cur or 'none'}) and this kit's version ({KIT_VERSION})")
             st["min_kit"] = a.min_kit; print(f"min_kit: {a.min_kit}")
+        if getattr(a, "backlog_research", None) is not None or getattr(a, "research_per_run", None) is not None:
+            br = dict(st.get("backlog_research")) if isinstance(st.get("backlog_research"), dict) else {}
+            if getattr(a, "backlog_research", None) is not None:
+                br["enabled"] = a.backlog_research == "on"
+            if getattr(a, "research_per_run", None) is not None:
+                if not 1 <= a.research_per_run <= 10:
+                    sys.exit("research per run must be between 1 and 10")
+                br["per_run"] = a.research_per_run
+            br.setdefault("enabled", False)
+            st["backlog_research"] = br
+            now_br = backlog_research(data)
+            print("backlog_research: " + (f"on, {now_br['per_run']} card(s) per dispatcher run" if now_br["enabled"] else "off"))
         if getattr(a, "max_agent_claims", None) is not None:
             if not 0 <= a.max_agent_claims <= 100:
                 sys.exit("max agent claims must be between 0 (no limit) and 100")
@@ -6508,6 +6581,60 @@ def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
         every.append(proposal); existing_ids.add(proposal["id"]); action[proposal["action_key"]] = proposal; added.append(proposal)
         lines.append(("would add " if dry_run else "added ") + proposal["id"] + " pending")
     return added, lines
+
+
+def cmd_research_suggest(a):
+    """Backlog research on a card with no project: put the card in the Review Inbox for a person. With --project, a
+    task.update proposal that sets the client and project (the base is read from the card, so Accept checks that
+    nobody placed it meanwhile); with --ask, a question "Which client and project?". Never sets them itself."""
+    reason = re.sub(r"\s+", " ", a.reason or "").strip()
+    if not reason:
+        sys.exit("--reason is required: one line on why (what the research found)")
+    def fn(data):
+        _MUT["recheck"] = True
+        t = find(data, a.id)
+        if t.get("project"):
+            sys.exit(f"refused: #{t.get('num')} already has a project; nothing to suggest")
+        open_items = [p for p in data.get("proposals", []) if p.get("status") == "pending"
+                      and p.get("work_key") == f"research-place:{t['id']}"]
+        if open_items:
+            sys.exit(f"refused: #{t.get('num')} already waits in the Review Inbox ({open_items[0].get('id')})")
+        for k in ("client", "project"):   # as the web board normalises a card, so the Inbox's base check agrees on both sides
+            if t.get(k) is None:
+                t[k] = ""
+        num = t.get("num")
+        src = {"kind": "other", "id": f"backlog-research:{t['id']}", "revision": "1", "title": "Backlog research",
+               "date": board_today(data).isoformat()}
+        if a.ask:
+            prop = {"kind": "ask.question", "title": f"Which client and project does #{num} belong to?",
+                    "source": src, "action_key": f"research-ask:{t['id']}", "work_key": f"research-place:{t['id']}",
+                    "reason": reason[:300],
+                    "change": {"question": f"Backlog research could not place #{num}. Which client and project is it for? "
+                                           "Set them on the card; an answer here does not change the card.", "task": t["id"]}}
+        else:
+            ref = a.project.strip().lower()
+            hits = [p for p in data.get("projects") or [] if p.get("status", "active") != "done"
+                    and (p.get("id") == a.project.strip() or str(p.get("name") or "").strip().lower() == ref)]
+            if len(hits) != 1:
+                sys.exit(f"refused: '{a.project}' must be the exact id or name of one open project "
+                         + (f"({len(hits)} match)" if hits else "(none matches)") + "; use --ask when unsure")
+            pr = hits[0]
+            client = (a.client or pr.get("client") or "").strip()
+            if pr.get("client") and client != pr.get("client"):
+                sys.exit(f"refused: project {pr['name']} belongs to client {pr.get('client')}, not {client}")
+            if t.get("client") and client and client != t.get("client"):
+                sys.exit(f"refused: #{num} has client {t.get('client')}, not {client}; use --ask")
+            change = {"project": pr["id"]}
+            if client and client != (t.get("client") or ""):
+                change["client"] = client
+            prop = {"kind": "task.update", "title": f"Put #{num} in {client + ' / ' if client else ''}{pr['name']}",
+                    "source": src, "action_key": f"research-place:{t['id']}:{pr['id']}", "work_key": f"research-place:{t['id']}",
+                    "reason": reason[:300],
+                    "target": {"type": "task", "id": t["id"], "base": {k: t.get(k) for k in change}},
+                    "change": change}
+        _, lines = _prepare_proposals(data, [prop])
+        for line_ in lines: print(line_)
+    mutate(fn, f"Backlog research suggestion: {a.id}")
 
 
 def cmd_proposal_add(a):
@@ -7615,6 +7742,7 @@ def main():
     s.add_argument("--all", action="store_true", help="ignore this repo's default project")
     s.add_argument("--sort", choices=["score", "priority"], help="score descending (unscored last), or board-wide priority order; reading never changes ranks")
     s.add_argument("--links", action="store_true", help="end each line with the card's web board link")
+    s.add_argument("--bare", action="store_true", help="only bare cards: no to-dos, no links, details under 120 characters (board/CARDS.md)")
     s.set_defaults(f=cmd_list)
     s = sub.add_parser("priority-move", help="change board-wide priority order without changing Kanban status or rank")
     s.add_argument("id")
@@ -7623,6 +7751,14 @@ def main():
     position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
     s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
+    s = sub.add_parser("research-suggest", help="backlog auto-research: put a card with no project in the Review Inbox (suggest a project, or ask)")
+    s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--project", help="the project to suggest (id or name); its client comes with it")
+    g.add_argument("--ask", action="store_true", help="no good guess: ask which client and project")
+    s.add_argument("--client", help="the client, when the project has none"); s.add_argument("--reason", required=True)
+    s.set_defaults(f=cmd_research_suggest)
+    s = sub.add_parser("research-lock", help="backlog auto-research: label a bare Backlog card researching, only if it may be researched now (refused otherwise)")
+    s.add_argument("id"); s.set_defaults(f=cmd_research_lock)
     s = sub.add_parser("card-link", help="cards as Markdown links to the web board ([#12](url) title): write card numbers this way")
     s.add_argument("ids", nargs="+", metavar="id"); s.set_defaults(f=cmd_card_link)
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)
@@ -7750,7 +7886,9 @@ def main():
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
     s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project, contact or after")
-    s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details"); s.add_argument("--priority", choices=["high", "medium", "low"])
+    s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details")
+    s.add_argument("--add-details", dest="add_details", help="add text below the current details (a blank line between); never replaces them")
+    s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
     s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
@@ -7795,6 +7933,9 @@ def main():
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
     s.add_argument("--rename-stage", dest="rename_stage", action="append", help="OLD=NEW (repeatable); moves people in OLD")
+    s.add_argument("--backlog-research", dest="backlog_research", choices=["on", "off"],
+                   help="backlog auto-research: the relay dispatcher adds details to bare Backlog cards (default off)")
+    s.add_argument("--research-per-run", dest="research_per_run", type=int, help="bare Backlog cards one dispatcher run researches (1-10, default 2)")
     s.add_argument("--waiting-days", dest="waiting_days", type=int,
                    help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
     s.add_argument("--min-kit", dest="min_kit", type=int,

@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v60 (schema 4)
+Backlog auto-research setting (off by default). No data migration.
+- Run `kit-update` only. Check: `kit-check` says v60; `keeptrack.py settings` shows `backlog_research: off`.
+- To use it: `keeptrack.py settings-set --backlog-research on` (or Settings → Board in the web board), and relay 0.9.16
+  or later in the board repo (`relay.py kit-update`). The dispatcher does nothing with it before then.
+
 ### v58 (schema 4)
 The bell opens a "New for you" list. No data migration.
 - Run `kit-update` only. Check: `kit-check` says v58.

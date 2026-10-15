@@ -101,6 +101,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // optional "archive": { "done_days": 90, "lost_days": 180, "keep_history": 20 } = archive rules
                                                  // optional "kit_owner": "github-user" = whose Claude upgrades the board kit (default: first person)
                                                  // v43 optional "waiting_days": 7 = chase a wait with no nudge date this many days after it began (0 = off)
+                                                 // v60 optional "backlog_research": { "enabled": true, "per_run": 2 } = the relay dispatcher researches bare Backlog cards (off unless enabled is true)
                                                  // v43 optional "min_kit": 43 = the oldest kit that understands every field on the cards (set by the first `wait`; only rises)
   "columns": [{ "id": "todo", "name": "To do" }, ...],
   "people":  [{ "github": "osouthgate", "name": "Oliver" }, { "github": "JezHub", "name": "Jez" }],

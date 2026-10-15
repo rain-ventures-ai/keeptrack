@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 59;
+  const PAGE_KIT = 60;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -4420,6 +4420,7 @@ if (typeof window !== 'undefined') (() => {
   const fillConn = () => { const c = cfg(); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); };
   $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); fillConn(); setPanel('prefs'); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
+  if ($('sResearch') && $('sResearchN')) $('sResearch').onchange = $('sResearchN').onchange = saveResearchSettings;
   $('btnInbox').onclick = () => setView('inbox');
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
@@ -4892,6 +4893,26 @@ if (typeof window !== 'undefined') (() => {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
+    syncResearchSettings(locked);
+  }
+  // Backlog auto-research (kit v60): settings.backlog_research = { enabled, per_run }. Only `enabled: true` is on (as in
+  // keeptrack.py backlog_research); the relay dispatcher reads it, the page only stores it. Guarded: an older cached
+  // index.html has no such section.
+  const researchSetting = () => { const v = state.settings.backlog_research, o = v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    return { enabled: o.enabled === true, per_run: Number.isInteger(o.per_run) && o.per_run >= 1 && o.per_run <= 10 ? o.per_run : 2 }; };
+  function syncResearchSettings(locked) {
+    const on = $('sResearch'), n = $('sResearchN'); if (!on || !n) return;
+    const r = researchSetting(); on.checked = r.enabled; n.value = r.per_run; on.disabled = n.disabled = !!locked;
+  }
+  async function saveResearchSettings() {
+    const on = $('sResearch'), n = $('sResearchN'); if (!on || !n) return;
+    const per = Math.round(Number(n.value));
+    if (!Number.isInteger(per) || per < 1 || per > 10) { toast('Cards each run must be a whole number from 1 to 10.', true); syncModeSettings(); return; }
+    const enabled = on.checked; on.disabled = n.disabled = true;
+    await mutate(d => { const cur = d.settings && d.settings.backlog_research && typeof d.settings.backlog_research === 'object' ? d.settings.backlog_research : {};
+      d.settings = Object.assign({}, d.settings, { backlog_research: Object.assign({}, cur, { enabled, per_run: per }) }); },
+      'Backlog auto-research: ' + (enabled ? `on, ${per} per run` : 'off'));
+    syncModeSettings();
   }
   // ---- Review Inbox (kit v42): proposals from agents and routines wait in <board>/proposals/<id>.json --------------
   // They are never part of state (tasks, contacts), so counts, views, search, Today, widgets and agents never see them.

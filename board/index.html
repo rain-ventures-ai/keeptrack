@@ -202,6 +202,12 @@
         <div data-row="People &amp; pipeline (CRM)" data-for="sModeCrm"><label class="schk"><input id="sModeCrm" type="checkbox"> On</label></div>
       </div>
     </div>
+    <div data-sec id="secResearch" data-icon="search" data-title="Backlog auto-research" data-scope="board" data-learn="where-agents-run.md" data-purpose="When this is on, the relay dispatcher picks bare Backlog cards (no to-dos, no links, almost no details) and an agent adds details, links and to-dos, then labels the card “researched”. It never moves or approves a card. Off by default.">
+      <div data-props>
+        <div data-row="Research bare Backlog cards" data-for="sResearch"><label class="schk"><input id="sResearch" type="checkbox"> On</label></div>
+        <div data-row="Cards each run" data-for="sResearchN"><input id="sResearchN" type="number" min="1" max="10" step="1" inputmode="numeric" style="width:5em"></div>
+      </div>
+    </div>
     <div data-sec id="memSec" data-icon="users" data-title="Members" data-scope="board" data-learn="tasks.md" data-purpose="The people work can be assigned to. Their work email and time zone tell Claude, Codex and email sync who is who, and what “tomorrow” means for them.">
       <div id="memBox"></div>
     </div>
