@@ -4,7 +4,7 @@
 Run it from the root of a board repo (the folder with board/keeptrack.py):
 
   python3 board/upgrade.py [--from KIT_DIR] [--relay-from RELAY_KIT_DIR] [--branch NAME] [--push]
-                           [--trailer "Key: value" ...] [--keep-worktree]
+                           [--trailer "Key: value" ...] [--owner-files]
   python3 board/upgrade.py --after-merge [--keep-worktree]
 
 Why: every board repo did the same upgrade by hand (backup branch, kit-update, put back the repo's own lines, checks,
@@ -12,7 +12,8 @@ commit, PR, verify after the merge), and agents slipped. This script does those 
 only the steps this repo has set up (relay only when relay/ exists; the keep-list only when board/upgrade-keep.txt exists).
 
 It works in a new git worktree on a new branch from origin/<base>, so the main checkout never changes. It never edits
-board data, never runs a migration and never merges: a person reviews and merges the pull request.
+board data, never runs a migration and never merges: a person reviews and merges the pull request. Relay owner-only
+files (code, prompts, the merge gate) are copied only with --owner-files, the owner's yes for this upgrade.
 
 board/upgrade-keep.txt (optional, owned by the repo, not a kit file): lines that kit-update must not overwrite.
 One rule per line, `<path> :: <python regex>`; `#` starts a comment line. Before kit-update the lines of <path> that
@@ -40,6 +41,8 @@ STATE_NAME = "kit-upgrade.json"
 NEVER = ("board/tasks.json", "board/cards", "board/people", "board/projects", "board/proposals", "board/archive")
 # Commands an upgrade note may name that only read or that this script already ran: never listed under "Do by hand".
 READ_ONLY = {"kit-update", "kit-check", "doctor", "verify", "help", "card-link", "list", "show", "settings", "kit-owner"}
+RELAY_INTO = (0, 9, 24)   # the first relay kit with kit-update --into, --owner-files and the owner-file lines parsed below
+MERGE_GATE = ("relay/scripts/relay.py", ".claude/skills/relay-merge/")   # the code that decides what may merge
 ENV = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0")
 
 
@@ -82,16 +85,17 @@ def vtuple(v):
         return (0,)
 
 
-def read(path):
+def read(path, newline=None):
+    """newline="" keeps CRLF as it is: the keep-list puts lines back byte for byte."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", newline=newline) as f:
             return f.read()
     except OSError:
         return None
 
 
-def write(path, text):
-    with open(path, "w", encoding="utf-8") as f:
+def write(path, text, newline=None):
+    with open(path, "w", encoding="utf-8", newline=newline) as f:
         f.write(text)
 
 
@@ -111,7 +115,12 @@ def state_path(root):
 
 
 def base_branch(root):
-    """origin's default branch, else master, else main (older boards use master)."""
+    """origin's default branch as origin says it now, else the clone's origin/HEAD (set at clone time, can be old),
+    else master, else main (older boards use master)."""
+    rc, out = git("ls-remote", "--symref", "origin", "HEAD", cwd=root)
+    m = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", out, re.M) if rc == 0 else None
+    if m:
+        return m.group(1)
     rc, out = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=root)
     if rc == 0 and out.startswith("origin/"):
         return out[len("origin/"):]
@@ -188,7 +197,7 @@ def keep_rules(wt):
 def keep_save(wt, rules):
     saved = []
     for rel, rx in rules:
-        text = read(os.path.join(wt, rel))
+        text = read(os.path.join(wt, rel), newline="")
         saved.append([l for l in (text or "").splitlines(keepends=True) if rx.search(l)] if text is not None else None)
     return saved
 
@@ -198,7 +207,7 @@ def keep_apply(wt, rules, saved):
     kept = []
     for (rel, rx), old in zip(rules, saved):
         path = os.path.join(wt, rel)
-        text = read(path)
+        text = read(path, newline="")
         if old is None:
             if text is not None:
                 print(f"keep-list: {rel} is new in this upgrade; nothing to keep")
@@ -213,7 +222,7 @@ def keep_apply(wt, rules, saved):
         for i, line in zip(hits, old):
             end = lines[i][len(lines[i].rstrip("\r\n")):]
             lines[i] = line.rstrip("\r\n") + end
-        write(path, "".join(lines))
+        write(path, "".join(lines), newline="")
         kept += [f"{rel}: {l.strip()}" for l in old]
     return kept
 
@@ -229,14 +238,22 @@ def upgrade_notes(wt, have, want):
     hand = []
     for p in keep:
         for span in re.findall(r"`([^`\n]+)`", p):
-            words = re.sub(r"^(python3\s+)?(board/)?keeptrack\.py\s+", "", span).split()
-            named = span != " ".join(words) or (words and words[0] in ("migrate", "settings-set", "column-add", "relate"))
+            prefix = re.match(r"(python3\s+)?(board/)?keeptrack\.py\s+", span)
+            words = span[prefix.end() if prefix else 0:].split()
+            named = bool(prefix) or (words and words[0] in ("migrate", "settings-set", "column-add", "relate"))
             if named and words and words[0] not in READ_ONLY and span not in hand:
                 hand.append(span)
     return "\n\n".join(keep), hand
 
 
-def agents_template(src, wt):
+def kit_commit(want):
+    """The keeptrack commit of kit v<want>: its tag when there is one, else main now. "" when git cannot tell."""
+    rc, out = run(["git", "ls-remote", KIT_GIT, f"refs/tags/v{want}", f"refs/tags/kit-v{want}", "refs/heads/main"], timeout=60)
+    refs = dict(reversed(l.split("\t", 1)) for l in out.splitlines() if "\t" in l) if rc == 0 else {}
+    return next((refs[r] for r in (f"refs/tags/v{want}", f"refs/tags/kit-v{want}", "refs/heads/main") if r in refs), "")
+
+
+def agents_template(src, wt, want):
     """The kit's templates/AGENTS.md: from --from, else fetched through the new keeptrack.py's own kit_fetch (the
     same source, BOARD_KIT_URL and git fallback as kit-update), else the raw file. None when nothing answers."""
     if src:
@@ -251,7 +268,7 @@ def agents_template(src, wt):
     except (OSError, subprocess.SubprocessError):
         pass
     try:
-        url = f"{KIT_RAW}/main/board/kit/templates/AGENTS.md"
+        url = f"{KIT_RAW}/{kit_commit(want) or 'main'}/board/kit/templates/AGENTS.md"
         with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "board-upgrade"}), timeout=30) as r:
             return r.read().decode()
     except (OSError, ValueError, UnicodeError):
@@ -265,6 +282,33 @@ def agents_missing(template, wt):
     have = {norm(l.strip()) for l in (read(os.path.join(wt, "AGENTS.md")) or "").splitlines()}
     return [l.rstrip() for l in template.splitlines()
             if l.startswith("python3 board/keeptrack.py") and norm(l.strip()) not in have]
+
+
+def relay_lines(out):
+    """Sort relay.py kit-update's file lines: (written, owner files copied, files to do by hand as "path (why)").
+    Written lines are `  <path>` with an optional `   (...)`; the others name the path after their last ': '."""
+    written, copied, hand = [], [], []
+    for l in out.splitlines():
+        m = re.match(r"^  (\S+)(?:   \((.*)\))?$", l)
+        if m and not m.group(1).endswith(":"):
+            written.append(m.group(1))
+            if (m.group(2) or "").startswith("owner file"):
+                copied.append(m.group(1))
+        elif l.startswith("  changed in this repo, not copied: "):
+            hand.append(l.split(": ", 1)[1].split(" (", 1)[0] + " (changed in this repo: merge the kit's version by hand)")
+        elif l.startswith("  NEW owner file, not copied"):
+            hand.append(l.rsplit(": ", 1)[1].strip() + " (NEW owner file: read it, copy by hand)")
+        elif l.startswith(("  owner only, not written", "  not written: ")):
+            hand.append(l.rsplit(": ", 1)[1].strip() + " (owner only: read it, copy by hand)")
+    return written, copied, hand
+
+
+def kit_changed(out):
+    """The paths keeptrack.py kit-update says it wrote or removed ("changed: a, b; removed: c")."""
+    m = re.search(r"changed: (.*?)(?:; removed: (.*))?$", out, re.M)
+    if not m:
+        return []
+    return [x.strip() for g in m.groups() if g and g.strip() != "nothing" for x in g.split(",") if x.strip()]
 
 
 # ---- the upgrade ----------------------------------------------------------------------------------------------------
@@ -361,7 +405,8 @@ def backup_branch(root, have, head, push):
 def work(a, wt, src, st, rkit, do_board, do_relay):
     """Steps 6 to 12 in the worktree. Returns the PR text."""
     have, want = st["board"]
-    done, checks, notes = [], [], []
+    done, checks, notes, copied = [], [], [], []
+    expected = {"board/KIT_VERSION", "relay/KIT_VERSION"}
     rules = keep_rules(wt)
     saved = keep_save(wt, rules)
     if do_board:
@@ -369,6 +414,7 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
         cmd = [sys.executable, "board/keeptrack.py", "kit-update"] + (["--from", src] if src else [])
         out = must(cmd, cwd=wt, what="keeptrack.py kit-update", timeout=600)
         print(out)
+        expected.update(kit_changed(out))
         got = (read(os.path.join(wt, "board", "KIT_VERSION")) or "").strip()
         if got != str(want):
             raise Stop(f"kit-update wrote board/KIT_VERSION {got or '?'}, not v{want}: the published kit moved. Run again")
@@ -378,24 +424,29 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
         rhave, rwant = st["relay"]
         say("Relay kit-update")
         kit_py = os.path.join(rkit, "relay", "scripts", "relay.py")
-        if "--into" in (read(kit_py) or ""):
-            cmd, where = [sys.executable, kit_py, "kit-update", "--into", wt, "--owner-files"], rkit
+        if vtuple(rwant) >= RELAY_INTO:
+            cmd = [sys.executable, kit_py, "kit-update", "--into", wt] + (["--owner-files"] if a.owner_files else [])
+            where = rkit
         else:
-            print("this relay kit's relay.py has no --into: using the repo's own relay.py kit-update --from")
+            print(f"relay kit {rwant} is older than {'.'.join(map(str, RELAY_INTO))} (no --into): using the repo's own "
+                  "relay.py kit-update --from" + (", which cannot copy owner-only files (--owner-files ignored)" if a.owner_files else ""))
             cmd, where = [sys.executable, "relay/scripts/relay.py", "kit-update", "--from", rkit], wt
         rc, out = run(cmd, cwd=where, timeout=900)
         print(out)
         if rc:
             raise Stop(f"relay kit-update failed (exit {rc})")
-        owner = [l.split(": ")[-1].strip() for l in out.splitlines() if "owner only" in l]
+        written, copied, owner = relay_lines(out)
+        expected.update(written)
         rgot = (read(os.path.join(wt, "relay", "KIT_VERSION")) or "").strip() or rhave
         done.append(f"relay kit-update: {rhave} -> {rgot}")
+        if owner:
+            notes.append("relay owner-only files to read and copy by hand" + ("" if a.owner_files else
+                         " (or run again with --owner-files, the owner's yes, to copy those this repo never changed)")
+                         + ":" + "".join(f"\n  - `{o.split(' (', 1)[0]}` ({o.split(' (', 1)[1]}" for o in owner))
         if vtuple(rgot) < vtuple(rwant):
-            notes.append(f"relay/KIT_VERSION stays {rgot}: read and copy the owner-only files by hand, then run relay.py "
-                         "kit-update again: " + (", ".join(owner) or "see the kit-update output"))
-        elif owner:
-            notes.append("relay owner-only files to read and copy by hand: " + ", ".join(owner))
+            notes.append(f"relay/KIT_VERSION stays {rgot}: after the files above, run relay.py kit-update again")
     kept = keep_apply(wt, rules, saved)
+    expected.update(rel for rel, _ in rules)
     if rules:
         say("Keep-list")
         print("\n".join(f"kept {k}" for k in kept) or "nothing to keep")
@@ -409,7 +460,7 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
         notes += [f"from UPGRADING.md: `{h}`" for h in hand]
 
     say("AGENTS.md")
-    tpl = agents_template(src, wt)
+    tpl = agents_template(src, wt, want)
     if tpl is None:
         print("the kit's templates/AGENTS.md could not be read: compare AGENTS.md with it by hand")
         notes.append("compare AGENTS.md with the kit's templates/AGENTS.md (it could not be read)")
@@ -425,7 +476,7 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
             print("AGENTS.md has every keeptrack.py line of the template")
 
     board = [sys.executable, "board/keeptrack.py", "--file", os.path.join(wt, "board", "tasks.json")]
-    if rkit:
+    if do_relay:
         say("Relay checks")
         rpy = [sys.executable, "relay/scripts/relay.py"]
         for name, cmd, ok, t in [("relay.py kit-check", rpy + ["kit-check", "--from", rkit], (0, 3), 300),
@@ -462,7 +513,20 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
     msg += [f"- checks: {', '.join(checks)}", f"- backup: {st['backup']}"]
     if a.trailer:
         msg += [""] + a.trailer
-    must(["git", "add", "-A"], cwd=wt)
+    out = subprocess.run(["git", "status", "--porcelain", "-z", "--untracked-files=all"], cwd=wt, capture_output=True,
+                         text=True, env=ENV).stdout   # not run(): its strip() would eat the first entry's status column
+    entries, paths = out.split("\0"), []
+    while entries:
+        e = entries.pop(0)
+        if len(e) > 3:
+            paths.append(e[3:])
+            if e[0] in "RC" and entries:   # a rename: the old name follows
+                paths.append(entries.pop(0))
+    extra = sorted(p for p in paths if not any(p == e or p.startswith(e.rstrip("/") + "/") for e in expected))
+    if extra:
+        raise Stop("these paths changed, but no upgrade step names them (nothing is committed):\n"
+                   + "\n".join(f"  {p}" for p in extra) + "\nRemove them, or commit them in the worktree yourself")
+    must(["git", "add", "-A", "--", *sorted(set(paths))], cwd=wt)
     must(["git", "commit", "-q", "-m", "\n".join(msg)], cwd=wt, what="git commit")
     sha = must(["git", "rev-parse", "HEAD"], cwd=wt)
     print(f"committed {sha[:12]} on {st['branch']}: {title}")
@@ -472,6 +536,9 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
     pr += [f"- {d}" for d in done] + ([f"- Kept this repo's lines: " + "; ".join(f"`{k}`" for k in kept)] if kept else [])
     pr += ["", "## How", "- `python3 board/upgrade.py` in a worktree from `origin/" + st["base"] + "`.",
            "- Checks: " + "; ".join(checks) + "."]
+    if copied:
+        pr += ["", "## Owner-only relay files copied (read these before merging)"]
+        pr += [f"- `{c}`" + (" (the merge gate)" if c == MERGE_GATE[0] or c.startswith(MERGE_GATE[1]) else "") for c in copied]
     if notes:
         pr += ["", "## Do by hand"] + [f"- {n}" for n in notes]
     pr += ["", "## After the merge", "- `python3 board/upgrade.py --after-merge` (runs `keeptrack.py verify --against "
@@ -495,6 +562,8 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
             print("no gh here: open the PR with this text")
     else:
         print(f"not pushed (no --push): git -C {wt} push -u origin {st['branch']}, then open the PR with this text")
+        print(f"\n!!! THE BACKUP {st['backup']} IS IN THIS CLONE ONLY, NOT ON ORIGIN. Push it (git push origin "
+              f"{st['backup']}) before the merge, and run --after-merge from this clone.")
     return f"\n--- PR ({pr_file}) ---\n{title}\n\n{body}"
 
 
@@ -505,18 +574,24 @@ def after_merge(a):
         raise Stop(f"no open upgrade here ({spath} is missing)")
     st = json.loads(read(spath) or "{}")
     base, wt = st["base"], st["worktree"]
+    if st.get("stage") != "committed" or not st.get("commit"):
+        raise Stop(f"the upgrade in {wt} stopped before its commit: finish it there (or start again), then merge")
     must(["git", "fetch", "-q", "origin", base], cwd=root, what=f"git fetch origin {base}")
-    if not os.path.isdir(wt):
+    if os.path.isdir(wt):
+        rc, dirty = git("status", "--porcelain", cwd=wt)
+        if rc or dirty.strip():
+            raise Stop(f"the worktree {wt} has uncommitted changes: commit and push them, or remove them\n{dirty}")
+    else:
         git("worktree", "prune", cwd=root)
-        must(["git", "worktree", "add", "-q", "--detach", wt, f"origin/{base}"], cwd=root, what="git worktree add")
-    must(["git", "checkout", "-q", "--detach", f"origin/{base}"], cwd=wt, what=f"check out origin/{base}")
-    got = (read(os.path.join(wt, "board", "KIT_VERSION")) or "").strip()
-    if got != str(st["board"][1]):
-        raise Stop(f"origin/{base} has board kit v{got or '?'}, not v{st['board'][1]}: the upgrade PR is not merged yet")
-    if st.get("relay"):
-        rgot = (read(os.path.join(wt, "relay", "KIT_VERSION")) or "").strip()
-        if vtuple(rgot) < vtuple(st["relay"][1]):
-            print(f"note: origin/{base} has relay {rgot}, the kit is {st['relay'][1]} (owner-only files may still wait)")
+        must(["git", "worktree", "add", "-q", "--detach", wt, st["commit"]], cwd=root, what="git worktree add")
+    # The branch tip, when the agent added commits after the script's own (the "Do by hand" items).
+    rc, tip = git("rev-parse", "HEAD", cwd=wt)
+    tip = tip if rc == 0 and git("merge-base", "--is-ancestor", st["commit"], tip, cwd=root)[0] == 0 else st["commit"]
+    if git("merge-base", "--is-ancestor", tip, f"origin/{base}", cwd=root)[0] != 0:
+        raise Stop(f"the upgrade commit {tip[:12]} is not on origin/{base}: the upgrade PR is not merged yet "
+                   "(a squash merge also shows here; then run keeptrack.py verify --against the backup by hand)")
+    # Verify the board as it was in the upgrade commit: edits people made on the board after it are not failures.
+    must(["git", "checkout", "-q", "--detach", tip], cwd=wt, what=f"check out {tip[:12]}")
     say(f"verify --against {st['backup']}")
     rc, out = run([sys.executable, "board/keeptrack.py", "--file", os.path.join(wt, "board", "tasks.json"),
                    "verify", "--against", st["backup"]], cwd=wt, timeout=600)
@@ -543,6 +618,8 @@ def main(argv=None):
     p.add_argument("--branch", help="the upgrade branch (default kit-upgrade/v<N>[-relay-<V>])")
     p.add_argument("--push", action="store_true", help="push the backup and the branch, and open a draft PR with gh")
     p.add_argument("--trailer", action="append", default=[], help="a 'Key: value' line for the commit and the PR (repeatable)")
+    p.add_argument("--owner-files", action="store_true",
+                   help="the owner's yes for this upgrade: copy relay owner-only files this repo never changed")
     p.add_argument("--keep-worktree", action="store_true", help="--after-merge: keep the worktree")
     p.add_argument("--after-merge", action="store_true", help="after the PR is merged: verify against the backup and clean up")
     a = p.parse_args(argv)

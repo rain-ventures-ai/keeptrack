@@ -17,11 +17,12 @@ puts back the repo's own lines from the new optional, repo-owned **`board/upgrad
 stops when the number of matching lines changes), prints the `UPGRADING.md` sections for each new version and the
 commands in them to do by hand (it never runs a migration), and lists the `keeptrack.py` lines of the kit's
 `templates/AGENTS.md` that the repo's `AGENTS.md` lacks (report only). When the repo has `relay/`, it also upgrades the
-relay kit (`relay.py kit-update --into <worktree> --owner-files`, or the older `--from` way) and runs relay's
-`kit-check`, `check` and `selftest`. Then the board checks (`py_compile`, `kit-check`, `doctor`, `list`), a commit
+relay kit (`relay.py kit-update --into <worktree>`, or the older `--from` way before relay 0.9.24) and runs relay's
+`kit-check`, `check` and `selftest`. Owner-only relay files are listed for the owner; only `--owner-files` (the owner's
+yes) copies those the repo never changed, and the PR names each one. It commits only the paths an upgrade step wrote. Then the board checks (`py_compile`, `kit-check`, `doctor`, `list`), a commit
 ("Board kit vA -> vB", with `--trailer` lines), and with `--push` the push and a draft PR through `gh` (else it prints
-the PR text). It never merges. After the merge, `python3 board/upgrade.py --after-merge` runs `verify --against` the
-backup and removes the worktree. The board-upgrade skill now uses it first and keeps the hand steps as the fallback.
+the PR text). It never merges. After the merge, `python3 board/upgrade.py --after-merge` checks the upgrade commit is
+on the base branch, runs `verify --against` the backup on the board as it was in that commit, and removes the worktree. The board-upgrade skill now uses it first and keeps the hand steps as the fallback.
 No schema change.
 
 ## Kit v66 — 2026-10-15

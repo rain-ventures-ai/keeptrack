@@ -18,6 +18,8 @@ Use this when `board/upgrade.py` exists (kit v67 and later). For the first upgra
    It makes the backup branch `backup/kit<old>-<date>`, makes a new worktree on `kit-upgrade/v<N>` (the main checkout
    does not change), runs `kit-update`, puts back the lines in `board/upgrade-keep.txt`, upgrades the relay kit when
    `relay/` exists, runs the checks, commits, pushes and opens a draft PR. It never merges and never migrates.
+   Add `--owner-files` only when the owner said yes in this conversation or on the card: it copies relay owner-only
+   files (code, prompts, the merge gate) that this repo never changed. Without it they are listed under "Do by hand".
 4. Read its whole output. Say the backup name on the card. Do every item under **Do by hand** in the worktree it names
    (agent steps from `board/UPGRADING.md`, template lines missing from `AGENTS.md`, relay owner-only files), commit
    there and push. Leave `migrate` for after the merge (step 7).

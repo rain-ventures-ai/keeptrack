@@ -19,17 +19,28 @@ OLD_KIT_REF = "d2481d6"   # the kit v65 merge
 TODAY = datetime.date.today().isoformat()
 ALARM = "name: alarm\nenv:\n  OWNER: osouthgate,JezHub\n"
 RELAY_STUB = r'''import os, shutil, sys
-# a fake relay.py for tests: logs each call; @INTO@
+# a fake relay.py for tests (relay 0.9.24 output lines): logs each call
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 a = sys.argv[1:]
 open(os.environ["RELAY_STUB_LOG"], "a").write(" ".join(a) + "\n")
 ver = lambda d: tuple(int(x) for x in open(os.path.join(d, "relay", "KIT_VERSION")).read().split("."))
 if a[0] == "kit-update":
-    flag = "--in" + "to"
-    src, dst = (ROOT, a[a.index(flag) + 1]) if flag in a else (a[a.index("--from") + 1], ROOT)
+    src, dst = (ROOT, a[a.index("--into") + 1]) if "--into" in a else (a[a.index("--from") + 1], ROOT)
     shutil.copy(os.path.join(src, "relay", "KIT_VERSION"), os.path.join(dst, "relay", "KIT_VERSION"))
-    print("kit-update: 1 file(s) changed:\n  relay/KIT_VERSION")
-    print("  owner only, not written (code; read it, copy by hand): relay/prompts/worker.md")
+    os.makedirs(os.path.join(dst, "relay", "docs"), exist_ok=True)
+    open(os.path.join(dst, "relay", "docs", "new.md"), "w").write("new doc\n")
+    if os.environ.get("RELAY_STUB_STRAY"):
+        open(os.path.join(dst, "relay", "stray.txt"), "w").write("not from the kit\n")
+    if "--owner-files" in a:
+        shutil.copy(os.path.join(src, "relay", "scripts", "relay.py"), os.path.join(dst, "relay", "scripts", "relay.py"))
+        print("kit-update: 2 file(s) changed:\n  relay/docs/new.md   (NEW file: read it)")
+        print("  relay/scripts/relay.py   (owner file, not changed in this repo since 0.9.23: copied; read the diff)")
+    else:
+        print("kit-update: 1 file(s) changed:\n  relay/docs/new.md   (NEW file: read it)")
+        print("  owner only, not written (code, a prompt; read it, copy by hand): relay/scripts/relay.py")
+    print("  changed in this repo, not copied: relay/prompts/worker.md (+1 -0 lines against the kit at 0.9.23; merge by hand)")
+    print("      +a line")
+    print("  NEW owner file, not copied: read it and copy by hand: relay/prompts/new.md")
 elif a[0] == "kit-check":
     sys.exit(0 if ver(ROOT) >= ver(a[a.index("--from") + 1]) else 3)
 else:
@@ -134,13 +145,12 @@ class UpgradeScript(unittest.TestCase):
         path = os.path.join(self.repo, ".git", "kit-upgrade.json")
         return json.loads(slurp(path)) if os.path.exists(path) else None
 
-    def add_relay(self, have="0.9.1", want="0.9.2", into=True):
+    def add_relay(self, have="0.9.23", want="0.9.24"):
         self.write("relay/KIT_VERSION", have + "\n")
-        self.write("relay/scripts/relay.py", RELAY_STUB.replace("@INTO@", "old"))
+        self.write("relay/scripts/relay.py", RELAY_STUB)
         self.commit("relay")
         kit = os.path.join(self.tmp, "relaykit")
-        for rel, text in (("relay/KIT_VERSION", want + "\n"),
-                          ("relay/scripts/relay.py", RELAY_STUB.replace("@INTO@", "supports --into" if into else "old"))):
+        for rel, text in (("relay/KIT_VERSION", want + "\n"), ("relay/scripts/relay.py", RELAY_STUB + "# kit copy\n")):
             os.makedirs(os.path.dirname(os.path.join(kit, rel)), exist_ok=True)
             with open(os.path.join(kit, rel), "w") as f:
                 f.write(text)
@@ -272,32 +282,59 @@ class UpgradeScript(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         name = f"backup/kit{self.have}-{TODAY}"
         self.assertIn("made here only", out)
+        self.assertIn("IN THIS CLONE ONLY", out)
         self.assertFalse(self.on_origin(name))
         self.assertTrue(sh("git", "-C", self.repo, "rev-parse", "--verify", "-q", name))
         self.assertFalse(self.on_origin(self.state()["branch"]))
         self.assertFalse(os.path.exists(self.gh_log))
 
-    def test_relay_with_into(self):
+    def relay_log(self):
+        return slurp(self.env["RELAY_STUB_LOG"]).splitlines()
+
+    def test_relay_with_into_lists_owner_files_without_copying(self):
         kit = self.add_relay()
         rc, out = self.upgrade("--relay-from", kit)
         self.assertEqual(rc, 0, out)
-        log = slurp(self.env["RELAY_STUB_LOG"]).splitlines()
-        self.assertTrue(log[0].startswith("kit-update --into ") and log[0].endswith("--owner-files"), log)
+        log = self.relay_log()
+        self.assertTrue(log[0].startswith("kit-update --into "), log)
+        self.assertNotIn("--owner-files", log[0])
         self.assertEqual([l.split()[0] for l in log[1:]], ["kit-check", "check", "selftest"])
         st = self.state()
-        self.assertEqual(st["branch"], f"kit-upgrade/v{self.kit_version()}-relay-0.9.2")
+        self.assertEqual(st["branch"], f"kit-upgrade/v{self.kit_version()}-relay-0.9.24")
         msg = sh("git", "-C", st["worktree"], "log", "-1", "--format=%s")
-        self.assertEqual(msg, f"Board kit v{self.have} -> v{self.kit_version()}, relay 0.9.1 -> 0.9.2")
-        self.assertIn("relay/prompts/worker.md", slurp(st["pr_file"]))
+        self.assertEqual(msg, f"Board kit v{self.have} -> v{self.kit_version()}, relay 0.9.23 -> 0.9.24")
+        pr = slurp(st["pr_file"])
+        self.assertNotIn("Owner-only relay files copied", pr)
+        hand = pr.split("## Do by hand")[1]
+        for path in ("relay/scripts/relay.py", "relay/prompts/worker.md", "relay/prompts/new.md"):
+            self.assertIn(path, hand)
+        self.assertIn("--owner-files", hand)
+        self.assertEqual(sh("git", "-C", st["worktree"], "show", "HEAD:relay/scripts/relay.py") + "\n", RELAY_STUB)
+        sh("git", "-C", st["worktree"], "cat-file", "-e", "HEAD:relay/docs/new.md")   # a written kit file is committed
 
-    def test_relay_fallback_without_into(self):
-        kit = self.add_relay(into=False)
+    def test_relay_owner_files_are_copied_and_named_in_the_pr(self):
+        kit = self.add_relay()
+        rc, out = self.upgrade("--relay-from", kit, "--owner-files")
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(self.relay_log()[0].endswith("--owner-files"))
+        st = self.state()
+        pr = slurp(st["pr_file"])
+        copied = pr.split("## Owner-only relay files copied (read these before merging)")[1].split("##")[0]
+        self.assertIn("`relay/scripts/relay.py` (the merge gate)", copied)
+        self.assertNotIn("relay/docs/new.md", copied)
+        hand = pr.split("## Do by hand")[1]
+        self.assertIn("relay/prompts/new.md` (NEW owner file", hand)
+        self.assertIn("relay/prompts/worker.md` (changed in this repo", hand)
+        self.assertNotIn("relay/scripts/relay.py", hand)
+        self.assertIn("# kit copy", sh("git", "-C", st["worktree"], "show", "HEAD:relay/scripts/relay.py"))
+
+    def test_relay_fallback_for_an_older_relay_kit(self):
+        kit = self.add_relay("0.9.19", "0.9.20")
         rc, out = self.upgrade("--relay-from", kit)
         self.assertEqual(rc, 0, out)
-        self.assertIn("has no --into", out)
-        log = slurp(self.env["RELAY_STUB_LOG"]).splitlines()
-        self.assertTrue(log[0].startswith("kit-update --from "), log)
-        self.assertEqual(slurp(os.path.join(self.state()["worktree"], "relay", "KIT_VERSION")).strip(), "0.9.2")
+        self.assertIn("older than 0.9.24", out)
+        self.assertTrue(self.relay_log()[0].startswith("kit-update --from "))
+        self.assertEqual(slurp(os.path.join(self.state()["worktree"], "relay", "KIT_VERSION")).strip(), "0.9.20")
 
     def test_relay_only(self):
         self.write("board/KIT_VERSION", f"{self.kit_version()}\n")
@@ -305,8 +342,97 @@ class UpgradeScript(unittest.TestCase):
         kit = self.add_relay()
         rc, out = self.upgrade("--relay-from", kit)
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.state()["branch"], "kit-upgrade/relay-0.9.2")
-        self.assertIn("Relay kit 0.9.1 -> 0.9.2", out)
+        self.assertEqual(self.state()["branch"], "kit-upgrade/relay-0.9.24")
+        self.assertIn("Relay kit 0.9.23 -> 0.9.24", out)
+
+    def test_current_relay_is_not_checked(self):
+        kit = self.add_relay("0.9.24", "0.9.24")
+        rc, out = self.upgrade("--relay-from", kit)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(self.env["RELAY_STUB_LOG"]))
+        self.assertNotIn("Relay checks", out)
+
+    def test_an_unexpected_path_stops_before_the_commit(self):
+        kit = self.add_relay()
+        self.env["RELAY_STUB_STRAY"] = "1"
+        rc, out = self.upgrade("--relay-from", kit)
+        self.assertEqual(rc, 1)
+        self.assertIn("no upgrade step names them", out)
+        self.assertIn("  relay/stray.txt", out)
+        st = self.state()
+        self.assertEqual(sh("git", "-C", st["worktree"], "rev-parse", "HEAD"), sh("git", "-C", self.repo, "rev-parse", "main"))
+
+    def test_base_branch_is_what_origin_says_now(self):
+        sh("git", "-C", self.repo, "push", "-q", "origin", "main:refs/heads/trunk")
+        sh("git", "-C", self.origin, "symbolic-ref", "HEAD", "refs/heads/trunk")
+        rc, out = self.upgrade()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.state()["base"], "trunk")
+
+    def test_keep_list_keeps_crlf(self):
+        self.write("board/upgrade-keep.txt", "notes.txt :: ^owner\n")
+        with open(os.path.join(self.repo, "notes.txt"), "wb") as f:
+            f.write(b"owner: me\r\nother\r\n")
+        self.commit("crlf notes")
+        rc, out = self.upgrade()
+        self.assertEqual(rc, 0, out)
+        with open(os.path.join(self.state()["worktree"], "notes.txt"), "rb") as f:
+            self.assertEqual(f.read(), b"owner: me\r\nother\r\n")
+
+    def test_after_merge_verifies_the_upgrade_commit_not_later_edits(self):
+        rc, out = self.upgrade("--push")
+        self.assertEqual(rc, 0, out)
+        st = self.state()
+        rc, out = self.after_merge()
+        self.assertEqual(rc, 1)
+        self.assertIn("not merged yet", out)
+        # merge, then a person adds a card on the default branch: verify still passes
+        sh("git", "-C", self.repo, "fetch", "-q", "origin")
+        sh("git", "-C", self.repo, "merge", "-q", "--ff-only", f"origin/{st['branch']}")
+        sh(sys.executable, "board/keeptrack.py", "--file", "board/tasks.json", "add", "Later card", "--no-check", cwd=self.repo)
+        self.commit("a later card")
+        rc, out = self.after_merge()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("OK: the board has the same data", out)
+        self.assertIsNone(self.state())
+
+    def test_after_merge_refuses_a_dirty_worktree(self):
+        rc, out = self.upgrade("--push")
+        self.assertEqual(rc, 0, out)
+        st = self.state()
+        sh("git", "-C", self.origin, "update-ref", "refs/heads/main", f"refs/heads/{st['branch']}")
+        with open(os.path.join(st["worktree"], "AGENTS.md"), "a") as f:
+            f.write("half done\n")
+        rc, out = self.after_merge()
+        self.assertEqual(rc, 1)
+        self.assertIn("uncommitted changes", out)
+        self.assertIsNotNone(self.state())
+
+    def test_after_merge_refuses_an_upgrade_that_stopped(self):
+        self.write(".github/workflows/visibility-alarm.yml", ALARM + "  OWNER: second\n")
+        self.commit("two owner lines")
+        self.assertEqual(self.upgrade()[0], 1)
+        rc, out = self.after_merge()
+        self.assertEqual(rc, 1)
+        self.assertIn("stopped before its commit", out)
+
+
+class Notes(unittest.TestCase):
+    def test_do_by_hand_names_only_commands_that_change_things(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("upgrade", UPGRADE)
+        up = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(up)
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, "board"))
+        with open(os.path.join(d, "board", "UPGRADING.md"), "w") as f:
+            f.write("## Versions\n### v9 (schema 4)\n- `kit-update  --from x` and `keeptrack.py kit-check`, "
+                    "then `python3 board/keeptrack.py migrate --to 4` and `settings-set --x 1`.\n"
+                    "### v8 (schema 4)\n- `keeptrack.py column-add Old`\n## Other\n`keeptrack.py relate a b`\n")
+        text, hand = up.upgrade_notes(d, 8, 9)
+        self.assertEqual(hand, ["python3 board/keeptrack.py migrate --to 4", "settings-set --x 1"])
+        self.assertNotIn("Other", text)
 
 
 class Manifest(unittest.TestCase):

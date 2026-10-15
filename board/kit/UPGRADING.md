@@ -34,8 +34,12 @@ New kit file `board/upgrade.py`: one command for the whole upgrade. No data migr
   `kit-update`, puts back this repo's own lines, prints the notes below for each new version and the commands to do by
   hand, lists the `keeptrack.py` lines of the kit's `templates/AGENTS.md` that `AGENTS.md` lacks, upgrades the relay kit
   when `relay/` exists, runs the checks, commits, and with `--push` pushes and opens a draft PR. It never merges, never
-  migrates and never edits board data. After the merge, `python3 board/upgrade.py --after-merge` runs `verify --against`
-  the backup and removes the worktree.
+  migrates and never edits board data. It commits only the paths an upgrade step wrote, and stops on any other change.
+  After the merge, `python3 board/upgrade.py --after-merge` checks that the upgrade commit is on the default branch,
+  runs `verify --against` the backup on the board as it was in that commit, and removes the worktree.
+- Relay (relay 0.9.24 or later): owner-only relay files (code, prompts, the merge gate) are listed under "Do by hand".
+  Only with `--owner-files`, the owner's yes for this upgrade, does it copy the ones this repo never changed; the PR then
+  lists them under "Owner-only relay files copied (read these before merging)".
 - New optional file `board/upgrade-keep.txt` (this repo's own file, not a kit file): lines that `kit-update` must not
   overwrite. One rule per line, `<path> :: <python regex>`; `#` starts a comment. Example:
   `.github/workflows/visibility-alarm.yml :: ^\s*OWNER:`. If the number of matching lines changes, the upgrade stops.
