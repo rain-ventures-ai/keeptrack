@@ -129,7 +129,9 @@ if (typeof window !== 'undefined') (() => {
   if (window.kbMarkup !== KB_MARKUP) { kbStalePage(); return; }   // nothing below runs against markup it was not written for
   // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
   // tokens or routines. Only the look (theme, style) is shared.
-  const SANDBOX = new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style|custom)$/, MEM = new Map();
+  const HOSTED = new URLSearchParams(location.search).get('backend') === 'hosted';
+  let hostedStorage = null, hostedIdentity = null, hostedPolling = null;
+  const SANDBOX = HOSTED || new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style|custom)$/, MEM = new Map();
   const LS = SANDBOX ? {
     get(k, d = '') { if (SHARED.test(k)) { try { return localStorage.getItem(k) ?? d; } catch { return d; } } return MEM.has(k) ? MEM.get(k) : d; },
     set(k, v) { if (SHARED.test(k)) { try { localStorage.setItem(k, v); } catch {} } else MEM.set(k, String(v)); },
@@ -146,7 +148,7 @@ if (typeof window !== 'undefined') (() => {
   const tabKey = k => !!TAB && (k === 'kb_repo' || BOARD_KEYS.includes(k.slice(3)));
   const rawRepo = () => { try { return localStorage.getItem('kb_repo') || ''; } catch { return ''; } };
   const tabShared = k => k === 'kb_repo' || rawRepo() === (TAB.get('kb_repo') || '');
-  const cfg = () => ({
+  const cfg = () => HOSTED ? { repo: hostedStorage ? 'hosted/' + hostedStorage.board : '', branch: '', path: 'tasks.json', token: '', api: '', me: hostedIdentity?.boards.find(b => b.id === hostedStorage?.board)?.handle || '' } : ({
     repo: LS.get('kb_repo', ''), branch: LS.get('kb_branch', 'master'), path: LS.get('kb_path', 'board/tasks.json'),
     token: LS.get('kb_token'), me: LS.get('kb_me', ''), api: LS.get('kb_api', 'https://api.github.com') // api override is for local testing only
   });
@@ -159,7 +161,7 @@ if (typeof window !== 'undefined') (() => {
     stashBoard(); const e = Object.assign({}, boardsMap()[repo] || {}, over); LS.set('kb_repo', repo);
     BOARD_KEYS.forEach(k => { if (e[k]) LS.set('kb_' + k, e[k]); else LS.del('kb_' + k); }); stashBoard(); if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg()); }
   const qv = v => encodeURIComponent(v).replace(/%2F/gi, '/');   // keep owner/name and board/tasks.json readable
-  const boardUrl = () => `${location.pathname}?repo=${qv(LS.get('kb_repo'))}&branch=${qv(LS.get('kb_branch', 'master'))}&path=${qv(LS.get('kb_path', 'board/tasks.json'))}`;
+  const boardUrl = () => HOSTED ? location.pathname + location.search : `${location.pathname}?repo=${qv(LS.get('kb_repo'))}&branch=${qv(LS.get('kb_branch', 'master'))}&path=${qv(LS.get('kb_path', 'board/tasks.json'))}`;
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
     // another tab may have switched this browser to repo: its live keys (kb_repo, its token ...) go too, not only kb_boards
     if (rawRepo() === repo) try { ['kb_repo', ...BOARD_KEYS.map(k => 'kb_' + k)].forEach(k => localStorage.removeItem(k)); } catch {}
@@ -456,6 +458,7 @@ if (typeof window !== 'undefined') (() => {
   // Task numbers (#12): stable, human-friendly, never reused. Every writer (this page and keeptrack.py) runs the same deterministic rule:
   // unnumbered tasks get the next numbers in creation order, so concurrent writers converge instead of colliding.
   function assignNums(d) {
+    if (HOSTED) return d;
     let mx = 0; d.tasks.forEach(t => { if (Number.isInteger(t.num) && t.num > mx) mx = t.num; });
     let next = Math.max(Number.isInteger(d.next_num) ? d.next_num : 1, mx + 1);
     d.tasks.map((t, i) => [t, i]).filter(([t]) => !Number.isInteger(t.num)).sort((a, b) => String(a[0].created || '').localeCompare(String(b[0].created || '')) || a[1] - b[1])
@@ -500,18 +503,40 @@ if (typeof window !== 'undefined') (() => {
     return AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined;
   }
   const isTimeout = e => !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
-  async function gh(method, body, cond, opt = {}) {   // opt: path (another file in the repo), accept, etag (for a conditional GET of that file)
+  async function githubContents(method, body, cond, opt = {}) {
+    if (HOSTED) throw new Error('capability_unavailable: GitHub Contents is disabled in hosted mode');   // opt: path (another file in the repo), accept, etag (for a conditional GET of that file)
     const c = cfg(), path = opt.path || c.path, tag = opt.path ? opt.etag : etag;
     const url = `${c.api}/repos/${c.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}` + (method === 'GET' ? `?ref=${encodeURIComponent(c.branch)}` : '');
     return fetch(url, { method, cache: 'no-store', signal: ghSignal(method), body: body ? JSON.stringify(body) : undefined,
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cond && tag ? { 'If-None-Match': tag } : {}) } });
   }
-  async function ghApi(method, endpoint, body, opt = {}, over) {
+  async function githubApi(method, endpoint, body, opt = {}, over) {
+    if (HOSTED) throw new Error('capability_unavailable: GitHub API is disabled in hosted mode');
     const c = over || cfg();
     return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', signal: ghSignal(method), body: body == null ? undefined : JSON.stringify(body),
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
         ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
   }
+
+  // StorageAdapter: retain GitHub callbacks and revision semantics at the boundary.
+  class GitHubAdapter {
+    kind = 'github';
+    capabilities = { casWrites: true, atomicMultiFile: true, changeFeed: false };
+    contents(...args) { return githubContents(...args); }
+    api(...args) { return githubApi(...args); }
+    snapshot(force = false, model = true) { return githubSnapshot(force, model); }
+    async read(path) { const r = await this.contents('GET', null, false, { path: remotePath(path) }); return fileJson(r, remotePath(path)); }
+    commit(next, message, revision, extra, tree) { return githubSave(next, message, revision, extra, tree); }
+    command() { throw new Error('capability_unavailable: GitHub uses existing lifecycle callbacks'); }
+    changes() { throw new Error('capability_unavailable: GitHub uses conditional snapshots'); }
+    whoami() { const c = cfg(); return fetch(`${c.api}/user`, { headers: { Authorization: `Bearer ${c.token}` }, cache: 'no-store' }); }
+  }
+  const githubStorage = new GitHubAdapter();
+  const storage = () => HOSTED ? hostedStorage : githubStorage;
+  async function gh(...args) { return storage().contents(...args); }
+  async function ghApi(...args) { return storage().api(...args); }
+  async function splitSnapshot(...args) { return storage().snapshot(...args); }
+  async function save(...args) { return HOSTED ? hostedSave(...args) : storage().commit(...args); }
 
   // ---- board-owned widgets -------------------------------------------------
   // A board may opt into the renderers Keeptrack ships by adding board/widgets.json beside tasks.json. The file is
@@ -548,6 +573,7 @@ if (typeof window !== 'undefined') (() => {
     return out;
   }
   async function loadWidgets(c) {
+    if (HOSTED) return;
     if (!c.repo || !widgetsEnabled(c)) { const changed = widgets.length > 0 || !!widgetMeta.problem; widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; return changed; }
     const key = boardStoreId(c), same = widgetMeta.key === key, path = widgetPath(c);
     const current = () => boardStoreId() === key && widgetsEnabled(c);
@@ -627,7 +653,7 @@ if (typeof window !== 'undefined') (() => {
     [...files.entries()].sort().forEach(([p, x]) => { if (/^cards\/[^/]+\.json$/.test(p)) tasks.push(clone(x.obj)); else if (/^people\/[^/]+\.json$/.test(p)) contacts.push(clone(x.obj)); else if (/^projects\/[^/]+\.json$/.test(p)) projects.push(clone(x.obj)); });
     raw.tasks = tasks; raw.contacts = contacts; raw.projects = projects; return raw;
   }
-  async function splitSnapshot(force = false, model = true) {
+  async function githubSnapshot(force = false, model = true) {
     const c = cfg(), ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
     const rr = await ghApi('GET', `/git/ref/heads/${ref}`, null, !force && sameBoard && splitMeta.headEtag ? { etag: splitMeta.headEtag } : {});
     if (rr.status === 304 && sameBoard) return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta };
@@ -667,8 +693,9 @@ if (typeof window !== 'undefined') (() => {
   const snapKey = c => 'kb_snap:' + c.repo + ':' + c.branch + ':' + c.path;
   function metaSave(c) { const m = splitMeta; if (!m || m.key !== `${c.repo}:${c.branch}:${c.path}`) return idb.del(snapKey(c).replace('kb_snap:', 'kb_meta:'));
     return idb.set(snapKey(c).replace('kb_snap:', 'kb_meta:'), { ...m, files: [...m.files].map(([path, x]) => ({ path, sha: x.sha, size: x.size })) }); }
-  function snapSave(c, raw) { idb.set(snapKey(c), raw); metaSave(c); }
+  function snapSave(c, raw) { if (HOSTED) return; idb.set(snapKey(c), raw); metaSave(c); }
   async function snapLoad() {
+    if (HOSTED) return;
     try { Object.keys(localStorage).filter(k => k.startsWith('kb_snap:')).forEach(k => localStorage.removeItem(k)); } catch {}   // older pages kept the copy in localStorage
     const c = cfg(); if (DEMO || !c.token || !c.repo || !window.indexedDB) return;
     try { const raw = await Promise.race([idb.get(snapKey(c)), new Promise(r => setTimeout(r, 400))]); if (!raw || lastSyncOk) return;
@@ -679,6 +706,7 @@ if (typeof window !== 'undefined') (() => {
         if (files.has('tasks.json')) splitMeta = { ...m, files }; } } } catch {}
   }
   async function cardFirst() {
+    if (HOSTED) return;
     const c = cfg(), id = new URLSearchParams(location.search).get('card'), num = hashNum(), gen = loadGen;
     if (DEMO || SETUP || !c.token || !c.repo || !safeCardId(id) || num === null || state.tasks.some(t => t.id === id)) return;
     try { const dir = c.path.slice(0, c.path.lastIndexOf('/') + 1);
@@ -705,6 +733,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   async function load(quiet, first) {
+    if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
     if (DEMO) return quiet ? true : loadDemo();
     if (SETUP) { if ($('board').className !== 'v-welcome') { setStatus('Set up a new board'); renderWelcome(); } return false; }   // ?setup: the wizard, even when this browser has a board
@@ -750,6 +779,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
   let publicChecked = '';
   async function checkPublic() {
+    if (HOSTED) return;
     const c = cfg(); if (publicChecked === c.repo) return; publicChecked = c.repo;
     try { const r = await fetch(`${c.api}/repos/${c.repo}`, { cache: 'no-store', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json' } });
       if (!r.ok) return; const repo = await r.json(); if (repo.private !== false) return;
@@ -761,6 +791,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- board kit: is this repo's copy of the shared tools older than the kit published with this page? ----
   let kitChecked = '';
   async function checkKit() {
+    if (HOSTED) return;
     const c = cfg(), key = c.repo + '@' + c.branch, bar = $('kitBar'); if (!bar) return;
     if (newerSchema) { showBar('kitBar', { tone: 'warn', text: `This board was saved by newer board tools (schema v${newerSchema}). It is read-only here until this page updates.` }); bar.dataset.schema = '1'; return; }
     if (bar.dataset.schema) { delete bar.dataset.schema; bar.hidden = true; kitChecked = ''; }
@@ -801,6 +832,7 @@ if (typeof window !== 'undefined') (() => {
   const relayOlder = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
   const relaySource = () => { const s = String((state.settings || {}).relay_kit_source || '').trim(); return REPO_RE.test(s) ? s : RELAY_KIT_SOURCE; };
   async function checkRelayKit() {
+    if (HOSTED) return;
     const c = cfg(), source = relaySource(), key = `${c.repo}@${c.branch}<${source}`; if (!$('relayBar') || !c.token || ro === 'demo' || relayChecked === key) return; relayChecked = key; relayKit = null;
     const read = async (repo, ref) => { const r = await fetch(`${c.api}/repos/${repo}/contents/relay/KIT_VERSION?ref=${encodeURIComponent(ref)}`, { cache: 'no-store', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github.raw+json' } }); return r.ok ? await r.text() : null; };
     try {
@@ -902,6 +934,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let prsRun = 0;
   async function renderPrs(force) {
+    if (HOSTED) return;
     const body = $('prsBody'), status = $('prsStatus'), run = ++prsRun, list = boardPrs(); body.textContent = '';
     if (!list.length) { body.append(ui.empty({ text: 'No card links to a pull request yet.', icon: 'git-pull-request' })); status.textContent = ''; return; }
     status.textContent = 'Reading from GitHub...'; $('prsRefresh').disabled = true; const problem = await readPrs(list, !!force); if (run !== prsRun) return;
@@ -912,7 +945,7 @@ if (typeof window !== 'undefined') (() => {
     const stamp = Math.max(...list.map(p => (prCache.get(p.url.toLowerCase()) || { at: 0 }).at)); status.textContent = (problem ? problem + ' ' : '') + 'Read at ' + new Date(stamp).toLocaleTimeString();
   }
   function syncPrsButton() {
-    const on = boardPrs().length > 0; const b = $('btnPrs'); if (b) b.hidden = !on;
+    const on = !HOSTED && boardPrs().length > 0; const b = $('btnPrs'); if (b) b.hidden = !on;
     document.querySelectorAll('[data-head-action="btnPrs"]').forEach(x => { x.hidden = !on; });
   }
   $('btnPrs').onclick = () => { closePops(); if (!$('dlgPrs').open) $('dlgPrs').showModal(); renderPrs(false); };
@@ -1014,7 +1047,7 @@ if (typeof window !== 'undefined') (() => {
     splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
   }
 
-  async function save(next, message, expectedSha = sha, extra = {}, tree = false) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
+  async function githubSave(next, message, expectedSha = sha, extra = {}, tree = false) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
     if (fromSnap) { setStatus('Syncing… try again in a moment'); return 'error:syncing'; }
     if (ro) { roToast(); return 'error:readonly'; }
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return 'error:schema'; }
@@ -1100,6 +1133,7 @@ if (typeof window !== 'undefined') (() => {
   }
   // Both sides can hand the same #number to different new cards; the card that was already there keeps it.
   function fixNums(d, theirs) {
+    if (HOSTED) return;
     const had = new Set((theirs.tasks || []).map(t => t.id)), count = new Map();
     d.tasks.forEach(t => { if (Number.isInteger(t.num)) count.set(t.num, (count.get(t.num) || 0) + 1); });
     d.tasks.forEach(t => { if (Number.isInteger(t.num) && count.get(t.num) > 1 && !had.has(t.id)) delete t.num; });
@@ -1303,6 +1337,7 @@ if (typeof window !== 'undefined') (() => {
   }
   window.addEventListener('beforeunload', e => { if (saving || busy) { e.preventDefault(); e.returnValue = ''; } });
   async function mutateNow(fn, message, targetIds = [], baseState = null, options = {}) {
+    if (HOSTED) return hostedMutate(fn, message, targetIds, baseState, options);
     if (ro) { roToast(); return false; }
     if (busy) { setStatus('Busy, try again', 'err'); return false; }
     if (fromSnap) { setStatus('Syncing… try again in a moment'); return false; }
@@ -1420,6 +1455,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- claims -----------------------------------------------------------
   function claimState(c, board = state) {
     if (!c) return null;
+    if (HOSTED) return !c.live || Date.parse(c.expires_at) <= Date.now() ? 'stale' : c.status;
     if (c.status === 'done' || c.status === 'stuck' || c.status === 'blocked') return c.status;
     const mins = (Date.now() - Date.parse(c.heartbeat_at || c.claimed_at)) / 60000;
     return mins > (c.attended ? 12 * 60 : ((board.settings || {}).stale_after_minutes || 30)) ? 'stale' : 'running';
@@ -1818,7 +1854,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderNow() { renderBusy = {}; try { renderPass(); } finally { renderBusy = null; } }
   function renderPass() {
-    if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO) return;
+    if ($('board').className === 'v-welcome' && (SETUP || !cfg().token) && !DEMO && !HOSTED) return;
     const scroll = boardScrollPosition();
     document.body.classList.remove('setup');   // the setup wizard stays as it is until a board is connected
     fillClientSelect([...new Set([...state.clients, ...state.tasks.map(t => t.client)].filter(Boolean))].map(c => [c, c]));
@@ -2203,6 +2239,7 @@ if (typeof window !== 'undefined') (() => {
     return true;
   }
   async function assignMyClaude(id) {
+    if (HOSTED) { toast('capability_unavailable: use the hosted CLI to claim work', true); return; }
     const t = state.tasks.find(x => x.id === id), who = cfg().me; if (!t) return;
     if (!myAgents().includes('claude')) { toast('Turn on Claude in Settings → Agents & integrations first.', true); return; }
     if (!claudeReady()) { toast('Finish your Claude routine setup in Settings → Agents & integrations first.', true); return; }
@@ -3633,6 +3670,7 @@ if (typeof window !== 'undefined') (() => {
     const acts = el('div', 'dclaim__acts');
     const stuck = ui.button({ label: 'Mark stuck', size: 'sm', onClick: () => edit(editing, x => { if (x.claim) { x.claim.status = 'stuck'; x.claim.note = (x.claim.note ? x.claim.note + ' | ' : '') + `marked stuck by ${me() || 'human'}`; } }, `Mark stuck: ${titleOf(editing)}`) }); stuck.id = 'cStuck';
     const rel = ui.button({ label: 'Release claim', size: 'sm', onClick: async () => { const id = editing, was = JSON.stringify(t.claim || null); if (!(await ui.confirm({ title: 'Release the agent claim?', body: 'The agent session may still be running.', confirmLabel: 'Release claim', danger: true })) || editing !== id) return; const now = state.tasks.find(x => x.id === id); if (!now || JSON.stringify(now.claim || null) !== was) { toast('The claim changed while you were deciding. Nothing was released.', true); return; } edit(id, x => { if (JSON.stringify(x.claim || null) === was) x.claim = null; }, `Release claim: ${titleOf(id)}`); } }); rel.id = 'cRelease';
+    if (HOSTED) { stuck.disabled = true; rel.disabled = true; }
     acts.append(stuck, rel); wrap.className = 'dclaim ' + st;
     wrap.append(ui.banner({ tone, icon: 'bot', text: [txt, acts] }));
   }
@@ -3740,9 +3778,9 @@ if (typeof window !== 'undefined') (() => {
   }
   function navigationLink(hash = location.hash || '#view=' + view) {
     const u = new URL(location.pathname, location.href), source = new URLSearchParams(location.search);
-    ['repo', 'branch', 'path', 'demo'].forEach(k => { if (source.has(k)) u.searchParams.set(k, source.get(k)); });
+    ['repo', 'branch', 'path', 'demo', ...(HOSTED ? ['backend', 'api', 'board', 'auth'] : [])].forEach(k => { if (source.has(k)) u.searchParams.set(k, source.get(k)); });
     if (filterRouteReady) filterRouteParams().forEach((v, k) => u.searchParams.append(k, v));
-    if (!DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
+    if (!HOSTED && !DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
     const safe = /^\d{1,5}$/.test(h) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
       (q.has('view') && ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(q.get('view')) && [...q.keys()].length === 1) ||
@@ -3982,7 +4020,7 @@ if (typeof window !== 'undefined') (() => {
   const claudeReady = () => { const c = claudeCfg(); return FIRE_RE.test(c.url) && !!c.token && !!c.cron; };
   // which agents this person uses (Settings → Agents & integrations); before they choose, Claude counts as on if its routine is set up
   const KNOWN_AGENTS = ['claude', 'codex'];
-  const myAgents = () => { const v = LS.get('kb_agents', null); return v === null ? (claudeReady() ? ['claude'] : []) : v.split(',').filter(a => KNOWN_AGENTS.includes(a)); };
+  const myAgents = () => { if (HOSTED) return []; const v = LS.get('kb_agents', null); return v === null ? (claudeReady() ? ['claude'] : []) : v.split(',').filter(a => KNOWN_AGENTS.includes(a)); };
   const cronFetch = (method, path, body) => fetch(CRON + path, { method, headers: { Authorization: 'Bearer ' + claudeCfg().cron, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const pad = n => String(n).padStart(2, '0');
   const utcStamp = d => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00`;
@@ -4055,7 +4093,8 @@ if (typeof window !== 'undefined') (() => {
     try { const d = await cronFetch('DELETE', `/jobs/${jobId}`); rlog(num, 'Job deleted', d.ok ? `job ${jobId} removed from cron-job.org` : `could not delete job ${jobId} (HTTP ${d.status}); use "Remove Keeptrack jobs"`, d.ok); } catch { rlog(num, 'Job deleted', `could not reach cron-job.org to delete job ${jobId}`, false); }   // never leave the routine token parked there
     if (!session) toast('Send to Claude failed: ' + (err || 'no response'), true); else { toast('Claude is working on it'); if (!claudeWorks()) markWorks(); }
   }
-  async function sweepClaudeJobs() {   // best-effort: remove finished/abandoned relay jobs (and the token they hold)
+  async function sweepClaudeJobs() {
+    if (HOSTED) return;   // best-effort: remove finished/abandoned relay jobs (and the token they hold)
     if (!claudeReady()) return;
     try { const r = await cronFetch('GET', '/jobs'); if (!r.ok) return; const now = Date.now() / 1000;
       for (const j of (await r.json()).jobs || []) { const m = /^kbclaude:(?:([a-z0-9]+):)?(\d+):/.exec(j.title || ''); if (m && (!m[1] || m[1] === INST) && now - Number(m[2]) > 600) await cronFetch('DELETE', `/jobs/${j.jobId}`); } } catch {}
@@ -4330,6 +4369,7 @@ if (typeof window !== 'undefined') (() => {
   const ghGet = (path, accept, c = cfg()) => fetch(c.api + path, { cache: 'no-store', headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
   let routineLoad = 0;
   async function renderRoutineRegister() {
+    if (HOSTED) { $('routineRegister').textContent = 'capability_unavailable: repository routines are disabled in hosted phase 0'; return; }
     const c = cfg(), generation = ++routineLoad, box = $('routineRegister');
     box.textContent = 'Loading routine reports…';
     if (DEMO || !c.repo) { box.textContent = 'Connect a board to see its routine reports.'; return; }
@@ -4565,7 +4605,7 @@ if (typeof window !== 'undefined') (() => {
   window.kbSettings = Object.freeze({ open: name => { if (!$('dlgSettings').open) $('btnSettings').click(); settingsTab(name); } });   // the same deep links, for the console and the browser tests
   let autoChecked = '';
   function autoCheck() {   // Connection opened while the board is not connected: run the checks once per board, so the reason shows without a click
-    const c = cfg(); if (DEMO || !c.repo || !c.token || lastSyncOk || ro === 'demo' || autoChecked === c.repo) return;
+    const c = cfg(); if (HOSTED || DEMO || !c.repo || !c.token || lastSyncOk || ro === 'demo' || autoChecked === c.repo) return;
     autoChecked = c.repo; runChecks();
   }
   $('pubOk').onclick = () => $('dlgPublic').close();
@@ -5077,7 +5117,7 @@ if (typeof window !== 'undefined') (() => {
   // parent = head, force:false). Same contract as keeptrack.py proposal-accept / -merge / -ignore / -reopen / -undo.
   // Kit v44: always on for a split board (settings.review_inbox is no longer read). ask.* items are questions: a person
   // answers (keeptrack.py proposal-answer), the agent that asked acts on the answer once (proposal-done).
-  const inboxOn = () => isSplit(state);
+  const inboxOn = () => !HOSTED && isSplit(state);
   const isAsk = p => /^ask\./.test((p && p.kind) || '');
   const proposalPath = id => `proposals/${id}.json`;
   const isProposalPath = p => /^proposals\/[^/]+\.json$/.test(p);
@@ -6662,7 +6702,8 @@ if (typeof window !== 'undefined') (() => {
   }
   let archMem = {};   // year -> { data, sha, etag } for this page; IndexedDB keeps it between visits
   const archKey = y => `kb_arch:${cfg().repo}:${cfg().branch}:${archPath(y)}`;
-  async function readArchive(y) {   // a conditional GET: an unchanged file is a free 304 and comes from the cache
+  async function readArchive(y) {
+    if (HOSTED) { try { const file = await hostedStorage.read(`archive/${y}.json`); return { data: file.body, sha: file.rev }; } catch (e) { if (e.status === 404) return { data: null, sha: null }; throw e; } }   // a conditional GET: an unchanged file is a free 304 and comes from the cache
     const key = archKey(y), have = archMem[key] || await idb.get(key);
     const res = await gh('GET', null, !!(have && have.etag), { path: archPath(y), etag: have && have.etag });
     if (res.status === 304 && have) return (archMem[key] = have);
@@ -6768,6 +6809,19 @@ if (typeof window !== 'undefined') (() => {
     if (!state.tasks.some(x => x.id === id)) $('dlgCard').close();
   }
   async function archiveNow(explicitRules) {
+    if (HOSTED) {
+      if (busy || saving || ro) return;
+      if (explicitRules?.taskId) {
+        const t = state.tasks.find(x => x.id === explicitRules.taskId); if (t) await hostedArchive(t, nowIso().slice(0, 4)); return;
+      }
+      const plan = archivePlan(clone(state), archRules());
+      if (Object.values(plan).some(part => Object.keys(part.history).length)) { toast('capability_unavailable: hosted phase 0 moves whole entities; history-only trimming is unavailable', true); return; }
+      if (!(await ask('Archive old items?', 'Move the eligible cards and people to the archive?', 'Archive'))) return;
+      for (const [year, part] of Object.entries(plan)) for (const entity of [...part.tasks, ...part.contacts]) {
+        if (!(await hostedArchive(entity, year))) return;
+      }
+      return;
+    }
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }
     const rules = explicitRules && explicitRules.taskId ? explicitRules : archRules(); let n = rules.taskId ? { tasks: 1, contacts: 0, history: 0 } : archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
     const what = rules.taskId ? '1 task; nothing deleted, search Include archive to restore' : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
@@ -6807,7 +6861,8 @@ if (typeof window !== 'undefined') (() => {
     if (!ok) { toast('The archive files were written, but the board was not saved. Nothing was removed from the board; run Archive again.', true); return; }
     toast(`Archived ${what}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : ''));
   }
-  async function restoreArchived(kind, item, y, open = true) {   // open: show the restored card or person afterwards
+  async function restoreArchived(kind, item, y, open = true) {
+    if (HOSTED) { const ok = await hostedArchive(item, y, true); if (ok && open && kind === 'task') openCard(item.id); return; }   // open: show the restored card or person afterwards
     if (writeBlocked()) return;
     if (isSplit(state)) {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
@@ -7001,6 +7056,7 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- read-only mode: a banner, no add boxes, locked drawer fields; every write path also stops in mutate() and save() ----
   const RO_TEXT = {
+    hosted: ['Read-only: this hosted board grants viewing access.', 'Sign out', () => hostedLogout()],
     demo: ['Demo board: read-only, with invented data. Nothing you do here is saved.', 'Create my own board', () => { location.href = location.pathname + '?setup'; }],
     public: ['Read-only: this is a public board and this browser has no token for it.', 'Add a token', () => { $('btnSettings').click(); settingsTab('conn'); }],
     token: ['Read-only: your token can read this board but cannot change it. Give the token "Contents: Read and write" to edit.', 'Change the token', () => { $('btnSettings').click(); settingsTab('conn'); }],
@@ -7062,5 +7118,182 @@ if (typeof window !== 'undefined') (() => {
     ['focus', 'pointerdown', 'contextmenu'].forEach(event => a.addEventListener(event, () => { a.href = navigationLink('#settings=' + encodeURIComponent(name)); }));
     a.addEventListener('click', e => { e.preventDefault(); settingsTab(name); }); sec.append(a);
   });
+  // Hosted state is memory-only and belongs to this API, verified user and board.
+  function hostedModel() {
+    const raw = hostedStorage.model(), claims = new Map(hostedStorage.claims.filter(c => c.live).map(c => [c.card_id, c]));
+    for (const t of raw.tasks) {
+      const live = claims.get(t.id);
+      t.claim = live ? { ...live, agent: live.actor.agent_id || live.actor.user_id, on_behalf_of: live.on_behalf_of || live.actor.user_id,
+        claimed_at: new Date(Date.parse(live.expires_at) - 30 * 60000).toISOString(), heartbeat_at: new Date(Date.parse(live.expires_at) - 30 * 60000).toISOString() } : null;
+    }
+    return normalise(raw);
+  }
+  async function hostedLoad(quiet) {
+    if (!hostedStorage?.signedIn) { if (!quiet) hostedSignIn(); return false; }
+    const gen = ++loadGen;
+    try {
+      if (hostedPolling) await hostedPolling;
+      for (let i = 0; i < 3; i++) {
+        try { await hostedStorage.snapshot(); await hostedStorage.hydrate(); break; }
+        catch (e) { if (e.status !== 412 || i === 2) throw e; }
+      }
+      if (gen !== loadGen || busy) return false;
+      state = hostedModel(); lastSyncOk = true; fromSnap = false; ro = hostedStorage.identity.boards.find(b => b.id === hostedStorage.board)?.role === 'viewer' ? 'hosted' : '';
+      applyRo(); render(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); if (location.hash) applyRoute(); return true;
+    } catch (e) { hostedFailure(e); return false; }
+  }
+  function hostedFailure(e) {
+    setStatus(e.message || 'Hosted request failed', 'err'); toast(e.message || 'Hosted request failed', true);
+    if (e.status === 401 || e.status === 403 || e.status === 404) {
+      // Revocation drops all private in-memory data, including drafts and undo copies.
+      hostedLogout();
+    }
+  }
+  function hostedLogout() {
+    hostedStorage?.logout(); hostedIdentity = null; loadGen++; state = DEFAULT(); splitMeta = null; archived = null; msIndex = msFor = null;
+    undoStack.length = 0; MEM.clear(); seenMap = null; lastSyncOk = false; fromSnap = false;
+    for (const id of DRAWERS) if ($(id).open) $(id).close();
+    render(); hostedSignIn();
+  }
+  function hostedSignIn() {
+    const board = $('board'); board.textContent = ''; board.className = 'v-welcome';
+    const box = el('form', 'welcome'), title = el('h2', null, 'Sign in to a hosted board');
+    box.append(title, el('p', null, 'Local phase 0. Reloading this page signs you out.'));
+    const q = new URLSearchParams(location.search), fields = {};
+    const field = (id, label, value, type = 'text') => { const lab = el('label', null, label), input = el('input'); input.id = id; input.type = type; input.value = value; input.required = true; input.autocomplete = 'off'; lab.htmlFor = id; box.append(lab, input); fields[id] = input; };
+    field('hostedApi', 'Board API URL', q.get('api') || 'http://localhost:3000');
+    field('hostedBoard', 'Board ID', q.get('board') || '');
+    field('hostedAuth', 'Local Supabase URL', q.get('auth') || 'http://localhost:54321');
+    field('hostedKey', 'Local Supabase publishable key', '');
+    field('hostedEmail', 'Email', '', 'email'); field('hostedPassword', 'Password', '', 'password');
+    fields.hostedPassword.autocomplete = 'new-password';
+    const sign = ui.button({ label: 'Sign in', variant: 'primary' }); sign.id = 'hostedSignIn'; sign.type = 'submit'; box.append(sign);
+    const status = el('p'); status.id = 'hostedSignInStatus'; status.setAttribute('role', 'status'); box.append(status);
+    box.onsubmit = async e => {
+      e.preventDefault(); sign.disabled = true; const password = fields.hostedPassword.value; fields.hostedPassword.value = '';
+      try {
+        hostedStorage?.logout();
+        hostedStorage = new window.KeeptrackHosted.HostedAdapter({ api: fields.hostedApi.value, board: fields.hostedBoard.value });
+        hostedIdentity = await hostedStorage.signIn({ auth: fields.hostedAuth.value, key: fields.hostedKey.value, email: fields.hostedEmail.value, password });
+        fields.hostedEmail.value = ''; fields.hostedKey.value = '';
+        // Links contain endpoint/board identity only, never a credential.
+        const url = new URL(location.href); for (const name of ['api', 'board', 'auth']) url.searchParams.set(name, fields['hosted' + name[0].toUpperCase() + name.slice(1)].value);
+        history.replaceState(null, '', url); await hostedLoad(false);
+      } catch (err) { hostedStorage?.logout(); hostedIdentity = null; status.textContent = err.message; }
+      finally { sign.disabled = false; }
+    };
+    board.append(box); setStatus('Sign in to a hosted board');
+  }
+  async function hostedSave(next, message) {
+    const previous = hostedModel();
+    if (!sameJson(previous.proposals, next.proposals)) throw new Error('capability_unavailable: Review Inbox decisions are phase 1b');
+    const ops = [], commands = [], ignored = new Set(['num', 'next_num', 'claim', 'history', 'comments', 'created', 'updated', 'createdBy', 'updatedBy']);
+    for (const [coll, prefix] of [['tasks', 'cards'], ['contacts', 'people'], ['projects', 'projects']]) {
+      const old = new Map(previous[coll].map(x => [x.id, x]));
+      for (const item of next[coll] || []) {
+        const before = old.get(item.id), path = `${prefix}/${item.id}.json`, entry = hostedStorage.files.get(path);
+        if (!before) {
+          const body = Object.fromEntries(Object.entries(item).filter(([k]) => !ignored.has(k)));
+          if (coll === 'tasks') { body.column = 'backlog'; ops.push({ kind: 'create-card', card: body }); }
+          else ops.push({ kind: 'put', path, baseRev: null, body });
+          continue;
+        }
+        if (!sameJson(item.claim, before.claim)) throw new Error('capability_unavailable: use the CLI holder session to manage a claim');
+        const body = clone(entry.body); let fields = 0;
+        for (const k of new Set([...Object.keys(before), ...Object.keys(item)])) {
+          if (ignored.has(k) || sameJson(before[k], item[k])) continue;
+          if (k === 'column' && coll === 'tasks') { commands.push({ kind: item.column === 'todo' ? 'approve' : 'move', card_id: item.id, baseRev: entry.rev, ...(item.column === 'todo' ? {} : { column: item.column }) }); continue; }
+          if (item[k] === undefined) delete body[k]; else body[k] = clone(item[k]); fields++;
+        }
+        if (coll === 'tasks' && !sameJson(before.comments, item.comments)) {
+          const added = item.comments.filter(c => !before.comments.some(x => x.id === c.id));
+          if (item.comments.length !== before.comments.length + added.length || before.comments.some(c => !item.comments.some(x => sameJson(x, c)))) throw new Error('capability_unavailable: hosted comments are append-only');
+          for (const comment of added) commands.push({ kind: 'comment', card_id: item.id, baseRev: entry.rev, text: comment.text });
+        }
+        // Server stamps actors/times for checklist completion; keep historical nested attribution unchanged.
+        if (body.todos) for (const todo of body.todos) {
+          const original = entry.body.todos?.find(x => x.id === todo.id);
+          for (const k of ['doneBy', 'doneAt']) { if (original && k in original) todo[k] = clone(original[k]); else delete todo[k]; }
+        }
+        if (fields && !sameJson(body, entry.body)) {
+          // Moving a card also changes its local rank. The command assigns its destination position.
+          if (commands.some(c => c.card_id === item.id && ['move', 'approve'].includes(c.kind))) {
+            const withoutRank = x => Object.fromEntries(Object.entries(x).filter(([k]) => k !== 'rank'));
+            if (!sameJson(withoutRank(body), withoutRank(entry.body))) throw new Error('capability_unavailable: save fields before moving this card');
+          } else ops.push({ kind: 'put', path, baseRev: entry.rev, body });
+        }
+        old.delete(item.id);
+      }
+      if (old.size) throw new Error('capability_unavailable: archive hosted cards instead of deleting them');
+    }
+    const root = hostedStorage.files.get('tasks.json'), body = clone(root.body);
+    for (const k of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+      if (['tasks', 'contacts', 'projects', 'proposals', ...ignored].includes(k) || sameJson(previous[k], next[k])) continue;
+      if (next[k] === undefined) delete body[k]; else body[k] = clone(next[k]);
+    }
+    if (!sameJson(root.body, body)) ops.push({ kind: 'put', path: 'tasks.json', baseRev: root.rev, body });
+    if (commands.length > 1 || commands.length && ops.length) throw new Error('capability_unavailable: this change needs separate hosted actions');
+    try {
+      if (commands.length) await hostedStorage.command(commands[0], crypto.randomUUID());
+      else if (ops.length) await hostedStorage.commit(ops, crypto.randomUUID());
+      await hostedStorage.snapshot(); await hostedStorage.hydrate(); state = hostedModel(); return 'ok';
+    } catch (e) { if (e.status === 412) return 'conflict'; throw e; }
+  }
+  async function hostedMutate(fn, message, targetIds, baseState, options = {}) {
+    if (!hostedStorage?.signedIn || ro) { roToast(); return false; }
+    if (busy) return false;
+    if (options.extra) { toast('capability_unavailable: Review Inbox decisions are phase 1b', true); return false; }
+    busy = true; loadGen++; savingStatus(); const before = clone(state); let base = baseState || before, mine = clone(before);
+    try {
+      if (hostedPolling) await hostedPolling;
+      fn(mine);
+      for (let i = 0; i < 4; i++) {
+        await hostedStorage.snapshot(); await hostedStorage.hydrate(); const pre = hostedModel();
+        if (options.recheck) { base = pre; mine = clone(pre); fn(mine); }
+        const mg = merge3(base, mine, pre); let latest = clone(mg.merged);
+        if (deletedUnderMe(base, pre, targetIds || []).length) throw new Error('That card was deleted; reload before editing');
+        if (mg.clashes.length) {
+          const pick = await askConflict(mg.clashes, { base, mine, pre });
+          if (pick === 'discard') { state = pre; render(); return false; }
+          mg.clashes.forEach((c, n) => { if (pick[n].side === 'mine') setAt(latest, c.path, c.mine === undefined ? undefined : clone(c.mine)); else if (pick[n].side === 'edit') setAt(latest, c.path, pick[n].value); });
+        }
+        base = pre; mine = clone(latest);
+        if (await hostedSave(latest, message) === 'ok') { render(); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); return true; }
+      }
+      throw new Error('revision_conflict: board stayed busy; read and retry');
+    } catch (e) { state = before; render(); hostedFailure(e); return false; }
+    finally { busy = false; syncUndo(); }
+  }
+  async function hostedArchive(entity, year, restoring = false) {
+    try {
+      await hostedStorage.snapshot();
+      const prefix = entity.num ? 'cards' : 'people', file = await hostedStorage.read(`${prefix}/${entity.id}.json`);
+      let envelope = null;
+      try { envelope = await hostedStorage.read(`archive/${year}.json`); } catch (e) { if (e.status !== 404) throw e; }
+      await hostedStorage.command({ kind: restoring ? 'unarchive' : 'archive', entity_id: entity.id, baseRev: file.rev,
+        rootRev: hostedStorage.files.get('tasks.json').rev, archiveRev: envelope?.rev || null, year }, crypto.randomUUID());
+      archived = null; await hostedLoad(false); return true;
+    } catch (e) { if (e.status === 412) await hostedLoad(false); hostedFailure(e); return false; }
+  }
+  function startHosted() {
+    // GitHub-only integrations have no network or launch actions in hosted phase 0.
+    for (const id of ['bEditFold', 'agRoutineSetup', 'agPick', 'agClaude', 'sForget', 'sWidgets', 'sBoardAppearance', 'secBoards', 'secHealth', 'secMove', 'secAdv']) if ($(id)) { $(id).hidden = true; $(id).querySelectorAll('input,button,select').forEach(x => x.disabled = true); }
+    $('btnSettings').addEventListener('click', () => { for (const id of ['tabConn', 'tabAgents']) if ($(id)) $(id).querySelectorAll('input,button,select,textarea').forEach(x => x.disabled = true); });
+    const signOut = ui.button({ label: 'Sign out', onClick: () => whenSaved(hostedLogout) }); signOut.id = 'hostedSignOut'; $('btnSettings').parentElement.append(signOut);
+    hostedSignIn();
+    let polling = false;
+    setInterval(async () => {
+      if (polling || busy || saving || document.hidden || !hostedStorage?.signedIn) return;
+      polling = true;
+      const gen = loadGen;
+      hostedPolling = (async () => {
+        try { if (await hostedStorage.poll()) { await hostedStorage.hydrate(); if (!busy && !saving && gen === loadGen) { state = hostedModel(); render(); } } }
+        catch (e) { hostedFailure(e); } finally { polling = false; }
+      })();
+      await hostedPolling; hostedPolling = null;
+    }, 2500);
+  }
+
+  if (HOSTED) { startHosted(); return; }
   (async () => { await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
 })();

@@ -5,14 +5,25 @@
 <!-- Content-Security-Policy: only what this page loads. Scripts: this origin, the bootstrap below (by hash; tests/test_web_page.py checks it)
      and the blob: copies it runs. connect-src: the GitHub API, cron-job.org (the Claude relay), Open-Meteo (weather widget); api.test and
      cron.test are reserved test names (RFC 2606) that never resolve, used by the browser tests' kb_api / kb_cron_api. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-f+XvldMIXluE/x0IbqTLkMGFyigtBauOzGKMSn9nH6M='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<!-- Policy template: activated by the asset-free selector immediately below. -->
+<template id="boardPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-TExx35BlO2ny+hLHAZtMeSr9I37PEjcgRRyhQlf4w+4=' 'sha256-f+XvldMIXluE/x0IbqTLkMGFyigtBauOzGKMSn9nH6M='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></template>
+<script>
+// Select the policy before loading any assets. Hosted phase 0 has no GitHub network access.
+(function () {
+  var policy = document.getElementById('boardPolicy').content.querySelector('meta').cloneNode(true);
+  if (new URLSearchParams(location.search).get('backend') === 'hosted') {
+    policy.content = policy.content.replace(/connect-src [^;]+/, "connect-src 'self' http://localhost:3000 http://127.0.0.1:3000 http://localhost:54321 http://127.0.0.1:54321");
+  }
+  document.head.appendChild(policy);
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#243447">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Keeptrack">
 <title>Keeptrack</title>
-<link rel="preconnect" href="https://api.github.com" crossorigin>
+<script src="storage-hosted.js"></script>
 <script src="pwa.js"></script>
 <script src="theme.js"></script>
 <script src="designmd.js" defer></script>
@@ -240,6 +251,7 @@
       </div>
       <details class="sfold" id="bEditFold"><summary id="bEditBtn">Change connection</summary>
         <div id="bEdit">
+          <p><a href="?backend=hosted">Sign in to a local hosted board</a></p>
           <div data-props>
             <div data-row="Repository" data-for="sRepo"><input id="sRepo" placeholder="owner/repo" autocomplete="off"></div>
             <div data-row="Branch" data-for="sBranch"><input id="sBranch" placeholder="main" autocomplete="off"></div>
