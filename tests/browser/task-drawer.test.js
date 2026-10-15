@@ -120,8 +120,8 @@ async function assertFits(page, where) {
     assert.equal(propRows[2].top, propRows[3].top, 'Due date and Waiting for share a row');
     assert(propRows[4].width > propRows[0].width * 1.8, 'People and the remaining long fields use the full drawer width');
     assert.equal(await page.locator('#cRelSec').isVisible(), false, 'Related cards is hidden while the card has none');
-    assert.deepEqual(await page.locator('#cSecs .ui-section__text:visible').allTextContents(), ['Description', 'Checklist', 'Links', 'Contacts', 'Comments', 'History']);
-    assert.equal(await page.locator('#cHist').isVisible(), false, 'History starts closed');
+    assert.deepEqual(await page.locator('#cSecs .ui-section__text:visible').allTextContents(), ['Description', 'Checklist', 'Links', 'Contacts', 'Activity']);
+    assert.equal(await page.locator('#cHist').count(), 0, 'no separate History section: history is in the Activity timeline');
     await assertFits(page, 'opened'); await shot(page, 'phone-writable-top');
 
 
@@ -286,7 +286,33 @@ async function assertFits(page, where) {
     await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
     await page.locator('#cmText').fill('Looks good'); w = saved(); await page.locator('#cmPost').click(); await w; assert.equal(api.card().comments.at(-1).text, 'Looks good');
     assert.equal(await page.locator('#cmCount').textContent(), '1');
-    await page.locator('#cHistWrap .ui-section__toggle').click(); assert.equal(await page.locator('#cHist').isVisible(), true);
+    // Activity: one timeline, newest first; history rows sit between the comments, like a GitHub pull request (kit v66)
+    const tl = () => page.locator('#cmStream').evaluate(b => [...b.querySelectorAll(':scope > .cmcard, :scope > .cmhrun .cmhist')].map(x => x.classList.contains('cmcard') ? 'C:' + x.querySelector('.cmbody').textContent.trim() : 'H:' + x.querySelector('.cmhtext').textContent.trim()));
+    let rows = await tl(); assert.equal(rows[0], 'C:Looks good', 'the newest comment is at the top');
+    assert.equal(rows.filter(r => r.startsWith('H:')).length, 4, 'a long run of changes shows the newest four: ' + rows.join(' | '));
+    assert.match(await page.locator('#cmStream .cmhmore').innerText(), /^Show \d+ more changes?$/);
+    await page.locator('#cmStream .cmhmore').click(); rows = await tl();
+    assert(rows.some(r => r.startsWith('H:') && /priority: low/.test(r)), 'Show more opens the whole run: ' + rows.join(' | '));
+    assert.equal(await page.locator('#cmStream .cmhmore').count(), 0);
+    assert.equal(await page.locator('#cmHistBtn').getAttribute('aria-pressed'), 'true');
+    await page.locator('#cmHistBtn').click(); rows = await tl();
+    assert.deepEqual(rows, ['C:Looks good'], 'History off shows only the comments');
+    assert.equal(await page.evaluate(() => localStorage.getItem('kb_cm_hist')), '0', 'the choice is kept per browser');
+    await page.locator('#cmHistBtn').click(); assert((await tl()).length > 1, 'History on again');
+    // someone else comments while the card is open: the drawer's 10-second re-read shows it with a New mark, and a bar
+    // at the top says so while Activity is out of view (kit v66). The page's own changes are never marked New.
+    assert.equal(await page.locator('#cmStream .cmnew').count(), 0, 'my own comment and changes are not New');
+    await page.locator('#cBody').evaluate(b => { b.scrollTop = 0; });
+    { const c = api.card(), at = new Date().toISOString(); c.comments.push({ id: 'c_sam', at, by: 'sam', text: 'Sent the invoice' }); c.history.push({ at, by: 'sam', text: 'moved Done → To do' });
+      api.files['cards/t_one.json'] = text(c); api.head = 'head-' + ++api.n; }
+    await page.waitForSelector('#cmStream .cmcard.cmnew[data-cid="c_sam"]', { timeout: 20000 });
+    assert.equal(await page.locator('#cmStream .cmhist.cmnew').count(), 1, 'the new history row is marked too');
+    assert.equal(await page.locator('#cmStream .cmcard[data-cid="c_sam"] .cmnewpill').innerText(), 'New');
+    assert.equal(await page.locator('#cmNewBar').isVisible(), true, 'the New activity bar shows while Activity is out of view');
+    assert.equal(await page.locator('#cmNewBar span').innerText(), '2 new updates on this card');
+    await shot(page, 'phone-new-activity-bar');
+    await page.locator('#cmNewBar button').click(); assert.equal(await page.locator('#cmNewBar').isVisible(), false);
+    await page.waitForTimeout(400); await shot(page, 'phone-new-activity-marks');
     await page.locator('#cBody').evaluate(b => { b.scrollTop = b.scrollHeight; });
     await assertFits(page, 'after edits'); await shot(page, 'phone-writable-bottom');
     await page.locator('#cBody').evaluate(b => { b.scrollTop = 0; }); await shot(page, 'phone-writable-top-filled');
