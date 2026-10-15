@@ -107,6 +107,24 @@ class ConfigAndClaimFiles(unittest.TestCase):
         os.chdir(self.tmp.name)
         self.assertEqual("o/mine", kt.project_config()[1].get("repo"))
 
+    def test_a_board_clone_never_takes_a_config_from_above_it(self):
+        """A home-folder config (from `use`) must not beat a board clone's own git remote: commands run in the
+        consulting clone wrote to another board when ~/.board/config.json named it (card #152)."""
+        home = self.tmp.name
+        config(os.path.join(home, ".keeptrack"), {"repo": "o/home-board"})
+        clone = git_repo(os.path.join(home, "dev", "team-board"))
+        os.makedirs(os.path.join(clone, "board", "cards"))
+        write(os.path.join(clone, "board", "tasks.json"), {"version": 4})
+        for where in (clone, os.path.join(clone, "board", "cards")):
+            os.chdir(where)
+            self.assertEqual((None, {}), kt.project_config()[:2], where)
+        code = git_repo(os.path.join(home, "dev", "loam-web"))   # not a board repo: the home config still applies
+        os.chdir(code)
+        self.assertEqual("o/home-board", kt.project_config()[1].get("repo"))
+        config(os.path.join(clone, ".keeptrack"), {"repo": "o/team-board", "project": "loam"})   # `use` in the clone itself
+        os.chdir(clone)
+        self.assertEqual("o/team-board", kt.project_config()[1].get("repo"))
+
     def test_a_config_use_did_not_write_is_ignored_even_outside_git(self):
         """An unpacked download that ships .keeptrack/config.json can't choose the board."""
         folder = os.path.join(self.tmp.name, "download")

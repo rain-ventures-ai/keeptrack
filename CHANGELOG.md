@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+`keeptrack.py`: inside a board repo clone, a `.keeptrack/` or `.board/` config in a folder above the clone (the home
+folder, say) is no longer read. The clone always uses its own git remote, so a command run in one board's clone can't
+write to another board. A config inside the clone, and configs in code repos, work as before. No schema change.
+
 Web board: split boards fetch uncached files in GraphQL batches, so a new browser needs fewer GitHub calls.
 Files GitHub cannot return this way fall back to the existing REST read. No schema change.
 

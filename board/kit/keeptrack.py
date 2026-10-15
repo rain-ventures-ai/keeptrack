@@ -166,13 +166,26 @@ def _untrusted(d, name):
         return True
 
 
+def _board_clone_top(d):
+    """The top folder of the board repo clone that d is in (a git repo with board/tasks.json), else None."""
+    try:
+        top = subprocess.run(["git", "-C", d, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return os.path.realpath(top) if top and os.path.isfile(os.path.join(top, "board", "tasks.json")) else None
+
+
 def project_config():
     """A project that is not a board repo names its board in .keeptrack/config.json: personal, never committed
     (`keeptrack.py use` writes it, with a .gitignore of its own). Found by walking up from the current folder; the
     pre-v22 .board/config.json is still read. Environment variables still win over it.
+    Inside a board repo clone the walk stops at the clone's top folder: a config above it (one in the home folder,
+    say) never beats the clone's own git remote, so a command run in one board's clone can't write to another board.
     Returns (project folder, settings, config folder name)."""
     global UNTRUSTED_CONFIG
     d = os.getcwd()
+    stop = _board_clone_top(d)
     while True:
         for name in CONFIG_DIRS:
             p = os.path.join(d, name, "config.json")
@@ -184,7 +197,7 @@ def project_config():
                     return d, json.load(open(p)), name
                 except (OSError, ValueError) as e:
                     sys.exit(f"cannot read {p}: {e}")
-        if os.path.dirname(d) == d:
+        if os.path.dirname(d) == d or (stop and os.path.realpath(d) == stop):
             return None, {}, CONFIG_DIRS[0]
         d = os.path.dirname(d)
 

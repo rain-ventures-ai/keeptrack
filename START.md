@@ -157,7 +157,7 @@ If `$B` is the plugin copy in another local project, connect that project once:
 $B use <owner/repo> --user <github-username>
 $B where
 ```
-`use` writes `.keeptrack/config.json` (git ignores it, and it holds no token; the older `.board/config.json` still works). Add `--project <name>` in a code repo to make that board project its default. `keeptrack.py` looks for that file in the current folder and each folder above it. So **to use the board in every project**, run `use` in the person's home folder (outside any git repo). To use another board in one project, run `use` inside that project. `where` shows which board is in use.
+`use` writes `.keeptrack/config.json` (git ignores it, and it holds no token; the older `.board/config.json` still works). Add `--project <name>` in a code repo to make that board project its default. `keeptrack.py` looks for that file in the current folder and each folder above it. So **to use the board in every project**, run `use` in the person's home folder (outside any git repo). A board repo's own clone never takes a config from a folder above it: it always uses its own git remote, so a home-folder config can't send one board's commands to another. To use another board in one project, run `use` inside that project. `where` shows which board is in use.
 
 `AGENTS.md` is not part of the data format and the web board does not need it. A board repo that agents work inside
 should have it: `keeptrack.py init` creates `AGENTS.md` plus `CLAUDE.md`, and they tell repo-local agents to use the CLI
