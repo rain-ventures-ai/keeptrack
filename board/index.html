@@ -307,10 +307,8 @@
       <div id="routineRegister" role="status">Open Agents to load routine reports.</div>
       <button id="routineRefresh" type="button">Refresh routine reports</button>
     </div>
-    <div data-sec id="agAutomations" data-icon="bot" data-title="Automations" data-scope="board" data-purpose="Ready-made jobs, such as email or meeting notes to tasks, that one scheduled run checks for you. Each one only proposes changes to your Review Inbox. This screen only reads: you install and turn them on with a command or your assistant, because the owner approves each pack's code.">
-      <div id="autoList" role="status">Open Agents to load automations.</div>
-      <div class="sbtns"><button id="autoRefresh" type="button" class="small"><i data-i="refresh-cw"></i> Refresh</button><button id="autoCreate" type="button" class="small"><i data-i="plus"></i> Make your own (copy prompt)</button></div>
-      <details class="sfold"><summary>How automations run</summary><p class="hint">One cheap command, <code>automation tick</code>, checks every automation that is on. Only when it finds new work does an agent run, and the agent can only add proposals for you to accept. Packs live in <code>board/automations/</code> (built-in) and <code>automations/</code> (your own).</p><a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/AUTOMATIONS.md" target="_blank" rel="noopener noreferrer">Automations guide</a></details>
+    <div data-sec id="agAutomations" data-icon="zap" data-title="Automations" data-scope="board" data-purpose="Ready-made jobs, such as email or meeting notes to tasks, that one scheduled run does for you. Each one only suggests changes for your Review Inbox.">
+      <button id="autoOpen" type="button"><i data-i="zap"></i> Open the Automations page</button>
     </div>
     <div data-sec id="agRoutineSetup" data-icon="calendar" data-title="Set up any routine for this board" data-scope="browser" data-learn="schedules.md" data-purpose="Choose the work and your goals, then copy a setup prompt into your assistant. Nothing is scheduled or changed by this form.">
       <label for="routineWorkflow">What should it do?</label>

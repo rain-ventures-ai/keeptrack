@@ -39,6 +39,33 @@
     "edit-contacts"
   ],
   "every": "1d",
+  "flow": [
+    {
+      "kind": "trigger",
+      "title": "Once a day",
+      "text": "Runs on the shared automation schedule."
+    },
+    {
+      "kind": "read",
+      "title": "Read the source",
+      "text": "Say what it reads and that it is read only."
+    },
+    {
+      "kind": "check",
+      "title": "Find what is new",
+      "text": "A small script, no AI."
+    },
+    {
+      "kind": "agent",
+      "title": "Do the work",
+      "text": "What the agent does with each new item."
+    },
+    {
+      "kind": "output",
+      "title": "Review Inbox",
+      "text": "Results wait there as proposals."
+    }
+  ],
   "check": {
     "file": "check.py",
     "network": false,

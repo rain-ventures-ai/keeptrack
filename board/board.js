@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 69;
+  const PAGE_KIT = 70;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -298,6 +298,7 @@ if (typeof window !== 'undefined') (() => {
   const HEAD_ACTIONS = [
     { id: 'btnUndo', icon: 'undo-2', menu: 'Undo last change', title: 'Nothing to undo' },
     { id: 'btnInbox', icon: 'inbox', menu: 'Review Inbox', title: 'Review Inbox' },
+    { id: 'btnAutos', icon: 'zap', short: 'Automations', menu: 'Automations', title: 'Automations: jobs that suggest work for you' },
     { id: 'btnPrs', icon: 'git-pull-request', short: 'PRs', menu: 'Pull requests', title: 'Pull requests linked on cards' },   // shown only when a card links a pull request   // shown only when the board turns the Inbox on
     { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
     { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
@@ -1858,13 +1859,13 @@ if (typeof window !== 'undefined') (() => {
     writeFilterRoute();
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
-    applyModes(); syncInboxButton(); syncPrsButton(); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
+    applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
     if (view !== 'board') {
       const listPos = listPosition();
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox })[view](); board.scrollTop = st; renderLegend(); renderStats();
+      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
@@ -2286,7 +2287,8 @@ if (typeof window !== 'undefined') (() => {
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
   // Each board remembers its last view in this browser. sessionStorage still wins while Back/Forward is active in one tab.
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
-  let view = SS.get('kb_view') || boardContext().view || 'today'; if (!['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(view)) view = 'today';
+  const ALL_VIEWS = ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
+  let view = SS.get('kb_view') || boardContext().view || 'today'; if (!ALL_VIEWS.includes(view)) view = 'today';
   // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
   // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
   const VIEW_GROUPS = [
@@ -2303,7 +2305,7 @@ if (typeof window !== 'undefined') (() => {
     tl.classList.add('viewgroup'); tl.dataset.grp = g.grp; viewTabs[g.grp] = tl; $('viewSw').append(tl);
   });
   function applyModes() {   // Today combines every enabled section; settings.modes controls People and task-specific views
-    const m = modes(), ok = v => v === 'today' || (v === 'inbox' ? inboxOn() || !lastSyncOk : CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks'));
+    const m = modes(), ok = v => v === 'today' || v === 'automations' || (v === 'inbox' ? inboxOn() || !lastSyncOk : CRM_VIEWS.includes(v) ? m.includes('crm') : m.includes('tasks'));
     VIEW_GROUPS.forEach(g => { viewTabs[g.grp].hidden = g.grp !== 'today' && !m.includes(g.grp); });
     if (!ok(view)) view = 'today';
   }
@@ -2321,9 +2323,9 @@ if (typeof window !== 'undefined') (() => {
   const dockLast = { today: 'today', tasks: 'board', crm: 'people' };
   const grpOf = v => (VIEW_GROUPS.find(g => g.views.some(x => x.value === v)) || VIEW_GROUPS[0]).grp;
   function syncDock() {
-    const cur = grpOf(view); if (view !== 'inbox') dockLast[cur] = view;
+    const cur = grpOf(view); if (!PAGE_VIEWS.includes(view)) dockLast[cur] = view;
     document.querySelectorAll('#dock .dtab[data-grp]').forEach(t => {
-      const g = viewTabs[t.dataset.grp], on = view !== 'inbox' && t.dataset.grp === cur;
+      const g = viewTabs[t.dataset.grp], on = !PAGE_VIEWS.includes(view) && t.dataset.grp === cur;
       t.hidden = !g || g.hidden; t.classList.toggle('on', on); if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
     });
     const sub = $('subnav'), views = VIEW_GROUPS.find(g => g.grp === cur).views;
@@ -3731,7 +3733,7 @@ if (typeof window !== 'undefined') (() => {
       inboxF = { status: ['pending', 'accepted', 'answered', 'ignored', 'all'].includes(q.get('inbox_status')) ? q.get('inbox_status') : 'pending',
         kind: Object.hasOwn(KIND_LABEL, q.get('inbox_kind')) ? q.get('inbox_kind') : '', source: Object.hasOwn(SRC_LABEL, q.get('inbox_source')) ? q.get('inbox_source') : '',
         reviewer: /^[a-z\d-]{1,39}$/i.test(q.get('inbox_reviewer') || '') ? q.get('inbox_reviewer') : '' };
-      const v = q.get('board_view'); if (['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(v)) view = v;
+      const v = q.get('board_view'); if (ALL_VIEWS.includes(v)) view = v;
     }
     filterRouteReady = true;
   }
@@ -3772,7 +3774,7 @@ if (typeof window !== 'undefined') (() => {
     if (!DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
     const safe = /^\d{1,5}$/.test(h) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
-      (q.has('view') && ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(q.get('view')) && [...q.keys()].length === 1) ||
+      (q.has('view') && ALL_VIEWS.includes(q.get('view')) && [...q.keys()].length === 1) ||
       (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
     const t = state.tasks.find(t => String(t.num) === h); if (safeCardId(t?.id)) u.searchParams.set('card', t.id);
     u.hash = safe ? hash : '#view=' + view; return u.href;
@@ -3783,7 +3785,7 @@ if (typeof window !== 'undefined') (() => {
     if (/^\d{1,5}$/.test(h)) { openFromHash(); return; }
     routeApplying = true;
     try {
-      if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox'].includes(v) ? v : 'today', true); }
+      if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(ALL_VIEWS.includes(v) ? v : 'today', true); }
       else if (q.has('settings')) { const name = q.get('settings'), valid = Object.hasOwn(SET_LINKS, name) || SET_TABS.some(t => t[0] === name) ? name : 'prefs', alreadyOpen = $('dlgSettings').open;
         if (!alreadyOpen) $('btnSettings').click();
         // Restoring the same URL after a delayed load must not reset an open
@@ -4378,7 +4380,7 @@ if (typeof window !== 'undefined') (() => {
       const autos = reports.filter(r => r && typeof r === 'object' && r.automation && typeof r.automation === 'object').length;
       const scoped = reports.filter(r => matches(r) && !(r.automation && typeof r.automation === 'object')); box.textContent = scoped.length ? '' : 'No routines registered for this board context yet.';
       if (scoped.length < reports.length - autos) box.append(el('p', 'hint', 'Registrations for other board contexts are not shown.'));
-      if (autos) box.append(el('p', 'hint', 'Automations are listed in their own section below.'));
+      if (autos) box.append(el('p', 'hint', 'Automations have their own page: open it with the Automations button.'));
       const friendlyTime = value => { const d = new Date(value); return value && Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Not reported'; };
       scoped.forEach(report => {
         const item = el('section', 'routine-card'), last = report.last_run, head = el('div', 'routine-card__head');
@@ -4416,100 +4418,158 @@ if (typeof window !== 'undefined') (() => {
     } catch (err) { if (current()) box.textContent = err.message || 'Routine reports could not be loaded.'; }
   }
   $('routineRefresh').onclick = renderRoutineRegister;
-  // ---- Settings → Agents → Automations: read-only list of the automation packs in this repo (built-in board/automations/ and
-  // own automations/) and their installs in automation/routines/auto-<slug>-<owner>.json. The browser never installs or turns
-  // an automation on: the owner approves the pack's digest from a clone, so each step here is a command to copy (AUTOMATIONS.md).
-  const AUTO_NEEDS = { 'board.read': 'this board', 'files.read': 'a folder on your computer', 'gmail.read': 'Gmail (read only)', 'drive.read': 'Google Drive (read only)', 'github.read': 'GitHub (read only)', 'calendar.read': 'your calendar (read only)' };
+  // ---- Automations page (#view=automations, header button): each automation pack in this repo (built-in board/automations/
+  // and own automations/) is a card with a node diagram of what it does, its install status from
+  // automation/routines/auto-<slug>-<owner>.json and the command for each next step. The browser never installs or turns an
+  // automation on: the owner approves the pack's digest from a clone, so every step is a command to copy (AUTOMATIONS.md).
+  // Pack text is repo data: it is only ever shown as text, and every map lookup keyed by it uses own().
+  const AUTO_NEEDS = { 'board.read': ['this board', 'square-kanban'], 'files.read': ['a folder on your computer', 'folder'], 'gmail.read': ['Gmail (read only)', 'mail'], 'drive.read': ['Google Drive (read only)', 'folders'], 'github.read': ['GitHub (read only)', 'github'], 'calendar.read': ['your calendar (read only)', 'calendar'] };
   const AUTO_EVERY = { '15m': 'every 15 minutes', '30m': 'every 30 minutes', '1h': 'every hour', '6h': 'every 6 hours', '1d': 'once a day' };
+  const AUTO_KIND = { trigger: ['zap', 'Trigger'], read: ['eye', 'Reads'], check: ['filter', 'Check, no AI'], agent: ['sparkles', 'AI agent'], output: ['inbox', 'Result'], step: ['workflow', 'Step'] };
+  const AUTO_NEVER = { 'send-email': 'send email', delete: 'delete anything', spend: 'spend money', 'external-post': 'post outside', 'edit-contacts': 'change contacts' };
   const AUTO_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
   const own = (map, key) => typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined;   // repo data names keys: never reach the prototype
-  let autoLoad = 0;
-  async function renderAutomations() {
-    const c = cfg(), generation = ++autoLoad, box = $('autoList');
-    box.textContent = 'Loading automations…';
-    if (DEMO || !c.repo) { box.textContent = 'Connect a board to see its automations.'; return; }
-    const current = () => generation === autoLoad && cfg().repo === c.repo && cfg().branch === c.branch;
+  const autoStr = (v, max = 200) => typeof v === 'string' ? v.slice(0, max) : '';
+  const autoCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+  const autoKey = c => DEMO ? 'demo' : [c.repo, c.branch, c.path].join('\n');
+  let autoCache = null, autoGen = 0;
+  async function autoKitPacks() {   // the packs this page's own kit ships (board/kit/manifest.json): the demo, and boards without packs yet
+    const r = await fetch('kit/manifest.json', { cache: 'no-store' }); if (!r.ok) return [];
+    const files = Object.keys((await r.json()).files || {}), slugs = [...new Set(files.map(f => (/^board\/automations\/([a-z0-9-]+)\/manifest\.json$/.exec(f) || [])[1]).filter(s => s && AUTO_SLUG.test(s)))];
+    return Promise.all(slugs.map(async slug => { try { const m = await (await fetch(`kit/automations/${slug}/manifest.json`, { cache: 'no-store' })).json(); return { source: 'kit', folder: 'board/automations/' + slug, slug, m: m && typeof m === 'object' && !Array.isArray(m) ? m : null, preview: true }; } catch { return null; } })).then(x => x.filter(Boolean));
+  }
+  async function fetchAutomations(c) {
+    if (DEMO || !c.repo) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: DEMO ? 'demo' : 'connect' };
     const ref = `?ref=${encodeURIComponent(c.branch)}`, enc = p => p.split('/').map(encodeURIComponent).join('/');
     const readJson = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (!r.ok) throw new Error(String(r.status)); return JSON.parse(b64d((await r.json()).content)); };
-    const listDir = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (r.status === 404) return []; if (!r.ok) throw new Error('Cannot read the automation packs. Check repository access.'); const d = await r.json(); return Array.isArray(d) ? d : []; };
-    try {
-      const [kit, own, regs] = await Promise.all([listDir('board/automations'), listDir('automations'), listDir('automation/routines')]);
-      const packs = await Promise.all([...kit.map(x => ['kit', x]), ...own.map(x => ['own', x])].filter(([, x]) => x.type === 'dir' && AUTO_SLUG.test(x.name)).map(async ([source, x]) => {
-        const folder = (source === 'kit' ? 'board/automations/' : 'automations/') + x.name;
-        try { const m = await readJson(folder + '/manifest.json'); return { source, folder, slug: x.name, m: m && typeof m === 'object' && !Array.isArray(m) ? m : null }; }
-        catch { return { source, folder, slug: x.name, m: null }; }
-      }));
-      const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readJson('automation/routines/' + x.name).catch(() => null))))
-        .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object' && AUTO_SLUG.test(String(r.automation.slug || '')));
-      if (!current()) return;
-      box.textContent = '';
-      if (!packs.length) { box.append(el('p', 'hint', 'No automation packs in this repo yet. Upgrade the board kit to get the built-in ones, or make your own below.')); return; }
-      const login = (c.me || '').replace(/^@/, '').toLowerCase(), me = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) ? login : '', seen = {};   // only a valid login goes into a copied command
-      packs.forEach(p => { seen[p.slug] = (seen[p.slug] || 0) + 1; });
-      const here = installs.filter(r => r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!r.branch || r.branch === c.branch) && (!r.board_path || r.board_path === c.path));
-      packs.forEach(p => box.append(autoCard(p, here.filter(r => r.automation.slug === p.slug), me, seen[p.slug] > 1, c)));
-      const orphans = here.filter(r => !packs.some(p => p.slug === r.automation.slug));   // installed, but its pack is gone: still show it, so it can be turned off
-      [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => box.append(autoCard({ source: 'missing', folder: '', slug, m: null }, orphans.filter(r => r.automation.slug === slug), me, false, c)));
-      uiBtns(box);
-    } catch (err) { if (current()) box.textContent = err.message || 'Automations could not be loaded.'; }
+    const listDir = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (r.status === 404) return []; if (!r.ok) throw new Error('Cannot read the automation packs. Check repository access in Settings → Connection.'); const d = await r.json(); return Array.isArray(d) ? d : []; };
+    const [kit, mine, regs] = await Promise.all([listDir('board/automations'), listDir('automations'), listDir('automation/routines')]);
+    const packs = await Promise.all([...kit.map(x => ['kit', x]), ...mine.map(x => ['own', x])].filter(([, x]) => x.type === 'dir' && AUTO_SLUG.test(x.name)).map(async ([source, x]) => {
+      const folder = (source === 'kit' ? 'board/automations/' : 'automations/') + x.name;
+      try { const m = await readJson(folder + '/manifest.json'); return { source, folder, slug: x.name, m: m && typeof m === 'object' && !Array.isArray(m) ? m : null }; }
+      catch { return { source, folder, slug: x.name, m: null }; }
+    }));
+    const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readJson('automation/routines/' + x.name).catch(() => null))))
+      .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object' && AUTO_SLUG.test(String(r.automation.slug || '')));
+    if (!packs.length && !installs.length) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: 'upgrade' };
+    return { packs, installs };
+  }
+  async function loadAutomations() {
+    const c = cfg(), key = autoKey(c), gen = ++autoGen;
+    let data; try { data = await fetchAutomations(c); } catch (err) { data = { error: err.message || 'Automations could not be loaded.' }; }
+    if (gen !== autoGen || autoKey(cfg()) !== key) return;   // a newer load, or another board, wins
+    autoCache = { key, ...data }; if (view === 'automations') render();
+  }
+  function autoFlow(m, mine) {   // the manifest's own flow, or one drawn from its schedule, needs and check
+    const every = own(AUTO_EVERY, (mine && mine.automation.every) || m.every), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object') : [];
+    let steps = Array.isArray(m.flow) && m.flow.length >= 2 ? m.flow.slice(0, 8).filter(s => s && typeof s === 'object' && own(AUTO_KIND, s.kind)).map(s => ({ kind: s.kind, title: autoStr(s.title, 40), text: autoStr(s.text, 160) })).filter(s => s.title) : [];
+    if (steps.length < 2) steps = [{ kind: 'trigger', title: autoCap(every || 'on its schedule'), text: 'Runs on the shared automation schedule.' },
+      ...needs.map(n => ({ kind: 'read', title: 'Read ' + ((own(AUTO_NEEDS, n.id) || [autoStr(n.id, 30)])[0]), text: autoStr(n.why, 160) })),
+      m.check ? { kind: 'check', title: 'Find what is new', text: 'A small script lists new items. No AI is used.' } : { kind: 'check', title: 'No cheap check', text: 'The agent runs every time it is due.' },
+      { kind: 'agent', title: 'Do the work', text: autoStr(m.summary, 160) },
+      { kind: 'output', title: 'Review Inbox', text: 'Results wait there as proposals until you accept them.' }];
+    if (every) steps = steps.map(s => s.kind === 'trigger' ? { ...s, title: autoCap(every) } : s);   // the install's own interval wins
+    return steps;
+  }
+  function autoDiagram(steps) {
+    const ol = el('ol', 'aflow'); ol.setAttribute('aria-label', 'What it does, step by step');
+    steps.forEach((s, i) => {
+      const [icon, kind] = own(AUTO_KIND, s.kind), li = el('li', 'aflow__node'); li.dataset.kind = s.kind;
+      const ic = el('span', 'aflow__icon'); ic.append(svgIcon(icon)); ic.setAttribute('aria-hidden', 'true');
+      const body = el('span', 'aflow__body'); body.append(el('span', 'aflow__kind', `${i + 1} · ${kind}`), el('b', 'aflow__title', s.title));
+      if (s.text) body.append(el('span', 'aflow__text', s.text));
+      li.append(ic, body); ol.append(li);
+    });
+    return ol;
+  }
+  function renderAutomationsPage() {
+    const c = cfg(), board = $('board'), wrap = el('section', 'autos'); wrap.setAttribute('aria-label', 'Automations'); board.append(wrap);
+    wrap.append(ui.button({ label: 'Back to Today', icon: 'arrow-left', variant: 'ghost', size: 'sm', onClick: () => setView('today') }));
+    const head = el('div', 'autos__head'), tools = el('div', 'autos__tools');
+    tools.append(ui.button({ label: 'Refresh', icon: 'refresh-cw', variant: 'ghost', size: 'sm', onClick: () => { autoCache = null; render(); } }),
+      ui.button({ label: 'Make your own', icon: 'plus', variant: 'secondary', size: 'sm', onClick: () => copyText(`Help me make my own Keeptrack automation for my board ${cfg().repo || '(ask me)'}. Use the keeptrack-automation-create skill. Ask me what it should do, from which source and how often, then build, validate, test and dry-run the pack, with a plain-words summary and a flow for the diagram. Install it switched off and do not enable it until I say so.`, 'Prompt copied. Paste it into your board-aware assistant.') }));
+    head.append(el('h2', null, 'Automations'), tools); wrap.append(head);
+    wrap.append(el('p', 'autos__hint muted', 'Jobs that one scheduled run does for you, such as turning email or meeting notes into tasks. A cheap check runs first, an AI agent starts only when there is something new, and it can only suggest changes for your Review Inbox.'));
+    const data = autoCache && autoCache.key === autoKey(c) ? autoCache : null;
+    if (!data) { wrap.append(ui.empty({ text: 'Loading automations…', icon: 'bot' })); loadAutomations(); return; }
+    if (data.error) { wrap.append(ui.empty({ text: data.error, icon: 'triangle-alert' })); return; }
+    const notes = { demo: 'Examples from the board kit. Connect your own board to install them.', connect: 'Examples from the board kit. Connect a board to see its automations.', upgrade: 'This board has no automation packs yet. Upgrade its board kit (v69 or later) to get these.' };
+    if (data.preview) wrap.append(el('p', 'autos__note', notes[data.preview]));
+    const login = (c.me || '').replace(/^@/, '').toLowerCase(), me = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) ? login : '', seen = {};   // only a valid login goes into a copied command
+    data.packs.forEach(p => { seen[p.slug] = (seen[p.slug] || 0) + 1; });
+    const here = data.installs.filter(r => r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!r.branch || r.branch === c.branch) && (!r.board_path || r.board_path === c.path));
+    const cards = data.packs.map(p => autoCard(p, here.filter(r => r.automation.slug === p.slug), me, seen[p.slug] > 1, c));
+    const orphans = here.filter(r => !data.packs.some(p => p.slug === r.automation.slug));   // installed, but its pack is gone: still show it, so it can be turned off
+    [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => cards.push(autoCard({ source: 'missing', folder: '', slug, m: null }, orphans.filter(r => r.automation.slug === slug), me, false, c)));
+    const on = here.filter(r => r.status === 'active' && String(r.owner || '').toLowerCase() === me).length;
+    head.querySelector('h2').after(el('span', 'autos__count', `${data.packs.length} available · ${on} on for you`));
+    if (!cards.length) wrap.append(ui.empty({ text: 'No automations yet. Upgrade the board kit, or make your own.', icon: 'bot' }));
+    const grid = el('div', 'autos__grid'); grid.append(...cards); wrap.append(grid);
   }
   function autoCard(p, installs, me, clash, c) {
-    const m = p.m || {}, item = el('section', 'routine-card auto-card'), head = el('div', 'routine-card__head');
-    const str = (v, max = 200) => typeof v === 'string' ? v.slice(0, max) : '';
+    const m = p.m || {}, item = el('article', 'autocard'), head = el('div', 'autocard__head'); item.dataset.slug = p.slug;
     const network = !!(m.check && m.check.network), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object') : [];
     const mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
     const states = { unverified: ['Needs setup', 'warn'], paused: ['Ready, off', 'neutral'], active: ['On', 'ok'] };
-    const [label, tone] = p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
-    head.append(el('h4', null, str(m.name, 80) || p.slug), el('span', `ui-pill ui-pill--${tone}`, label)); item.append(head);
-    item.append(el('p', 'routine-card__scope', `${p.source === 'kit' ? 'Built-in' : p.source === 'own' ? 'Your own pack' : 'Installed, but its pack is gone'} · ${p.slug}`));
-    if (p.source === 'missing') item.append(el('p', 'hint', 'This install has no pack in the repo any more. Turn it off or uninstall it.'));
-    else if (!p.m) { item.append(el('p', 'hint', 'Its manifest.json could not be read. Run the validate command below in a clone to see why.')); }
+    const [label, tone] = p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : p.preview ? [DEMO ? 'Example' : 'Not in this board', 'neutral'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
+    const tile = el('span', 'autocard__icon'); tile.append(svgIcon(((needs.map(n => own(AUTO_NEEDS, n.id)).find(x => x && x[1] !== 'square-kanban')) || ['', 'bot'])[1])); tile.setAttribute('aria-hidden', 'true');
+    const name = el('div', 'autocard__name'); name.append(el('h3', null, autoStr(m.name, 80) || p.slug), el('span', 'autocard__scope', `${p.source === 'kit' ? 'Built-in' : p.source === 'own' ? 'Your own' : 'Installed, but its pack is gone'} · ${p.slug}`));
+    head.append(tile, name, el('span', `ui-pill ui-pill--${tone} autocard__state`, label)); item.append(head);
+    if (p.source === 'missing') item.append(el('p', 'hint', 'This install has no pack in the repo any more. Uninstall it.'));
+    else if (!p.m) item.append(el('p', 'hint', 'Its manifest.json could not be read. Run the validate command below in a clone to see why.'));
     else {
-      if (str(m.summary)) item.append(el('p', null, str(m.summary)));
-      const uses = needs.map(n => own(AUTO_NEEDS, n.id) || str(n.id, 40)).filter(Boolean);
-      item.append(el('p', 'hint', `Reads ${uses.length ? uses.join(', ') : 'nothing outside the board'} · checks ${own(AUTO_EVERY, (mine && mine.automation.every) || m.every) || 'on its schedule'}${network ? ' · uses the network' : ''} · writes proposals to your Review Inbox only`));
-      if (!m.check) item.append(el('p', 'hint', 'It has no cheap check, so an agent runs each time it is due.'));
+      if (autoStr(m.summary)) item.append(el('p', 'autocard__summary', autoStr(m.summary)));
+      item.append(autoDiagram(autoFlow(m, mine)));
+      const facts = el('div', 'autocard__facts'), fact = (icon, text) => { const f = el('span', 'autocard__fact'); f.append(svgIcon(icon), text); facts.append(f); };
+      fact('alarm-clock', autoCap(own(AUTO_EVERY, (mine && mine.automation.every) || m.every) || 'on its schedule'));
+      needs.forEach(n => { const x = own(AUTO_NEEDS, n.id); fact(x ? x[1] : 'eye', 'Reads ' + (x ? x[0] : autoStr(n.id, 30))); });
+      if (network) fact('globe', 'Uses the network');
+      if (!m.check) fact('triangle-alert', 'AI runs every time');
+      item.append(facts);
+      const never = (Array.isArray(m.never) ? m.never : []).map(x => own(AUTO_NEVER, x)).filter(Boolean);
+      if (never.length) { const n = el('p', 'autocard__never'); n.append(svgIcon('shield-check'), 'Never: ' + never.join(' · ')); item.append(n); }
     }
     if (clash) item.append(el('p', 'hint', 'A built-in pack and your own pack share this name. Rename your own pack: automation commands refuse to run until you do.'));
     const others = installs.filter(r => r !== mine);
-    if (others.length) item.append(el('p', 'hint', 'Also installed by ' + others.map(r => '@' + String(r.owner || '?').replace(/^@/, '')).join(', ') + '.'));
+    if (others.length) item.append(el('p', 'hint', 'Also on for ' + others.map(r => '@' + String(r.owner || '?').replace(/^@/, '')).join(', ') + '.'));
     if (mine) {
-      const last = mine.last_run, runs = { success: 'Succeeded', partial: 'Partly done', failed: 'Failed', blocked: 'Blocked' };
+      const last = mine.last_run, runs = { success: 'Succeeded', partial: 'Partly done', failed: 'Failed', blocked: 'Blocked' }, st = el('div', 'autocard__status');
       const when = v => { const d = new Date(v); return v && Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'never'; };
-      item.append(el('p', 'routine-card__result', last && typeof last === 'object' ? `Last run: ${own(runs, last.status) || 'status unknown'}${last.summary ? ' — ' + str(last.summary) : ''}` : 'No run reported yet.'));
-      item.append(el('p', 'hint', `Last success: ${when(mine.last_successful_run_at)} (your local time)`));
-      if (mine.current_run) item.append(el('p', 'hint', `A run started ${when(mine.current_run.started_at)} and has not finished. If no agent is working on it, it has stopped; check the runner.`));
+      st.append(el('p', 'autocard__run', last && typeof last === 'object' ? `Last run: ${own(runs, last.status) || 'status unknown'}${last.summary ? ' — ' + autoStr(last.summary) : ''}` : 'No run reported yet.'));
+      st.append(el('p', 'hint', `Last success: ${when(mine.last_successful_run_at)} (your local time)`));
+      if (mine.current_run) st.append(el('p', 'hint', `A run started ${when(mine.current_run.started_at)} and has not finished. If no agent is working on it, it has stopped; check the runner.`));
       const setup = mine.automation.setup;
       if (mine.status === 'unverified' && setup && Array.isArray(setup.notes) && setup.notes.length) {
         const why = { 'probe-failed': 'the local check of its access failed', 'probe-missing': 'there is no local check for its access', 'route-missing': 'this runtime cannot reach what it needs', 'confirmation-needed': 'an agent must confirm its access' };
-        item.append(el('p', 'hint', 'Setup is blocked: ' + [...new Set(setup.notes.map(n => own(why, n) || 'see the setup steps'))].join('; ') + '.'));
+        st.append(el('p', 'hint', 'Setup is blocked: ' + [...new Set(setup.notes.map(n => own(why, n) || 'see the setup steps'))].join('; ') + '.'));
       }
+      item.append(st);
     }
     const cmd = 'python3 board/keeptrack.py automation ', who = me ? ' --owner ' + me : '', steps = [];
-    if (p.source === 'missing') { if (mine && mine.status !== 'retired') steps.push(['Uninstall it', cmd + 'uninstall ' + p.slug + who]); }
+    if (p.preview) { if (!DEMO) steps.push(['Copy the upgrade command', 'python3 board/upgrade.py']); }
+    else if (p.source === 'missing') { if (mine) steps.push(['Uninstall it', cmd + 'uninstall ' + p.slug + who]); }
     else if (!p.m) steps.push(['Check the pack', cmd + 'validate ' + p.folder]);
     else if (!mine) {
       const cfgs = m.config && typeof m.config === 'object' ? Object.entries(m.config).filter(([k, v]) => v && v.required && !('default' in v) && /^[a-z0-9_]+$/.test(k)) : [];
-      if (!network && !cfgs.length) steps.push(['Try it first (changes nothing)', cmd + 'dry-run ' + p.slug + who]);
       steps.push(['Install it (it stays off)', cmd + 'install ' + p.slug + who + (network ? ' --allow-network' : '') + cfgs.map(([k]) => ` --set '${k}=REPLACE-WITH-${k}'`).join('')]);
+      if (!network && !cfgs.length) steps.push(['Try it first', cmd + 'dry-run ' + p.slug + who]);
       steps.push(['Then check its access', cmd + 'setup ' + p.slug + who + ' --runtime local']);
     } else if (mine.status === 'unverified') steps.push(['Check its access', cmd + 'setup ' + p.slug + who + ' --runtime local']);
-    else if (mine.status === 'paused') { steps.push(['Turn it on', cmd + 'enable ' + p.slug + who]); steps.push(['Try it first (changes nothing)', cmd + 'dry-run ' + p.slug + who]); }
+    else if (mine.status === 'paused') { steps.push(['Turn it on', cmd + 'enable ' + p.slug + who]); steps.push(['Try it first', cmd + 'dry-run ' + p.slug + who]); }
     else if (mine.status === 'active') steps.push(['Turn it off', cmd + 'disable ' + p.slug + who]);
-    const row = el('div', 'sbtns');
-    steps.forEach(([text, line]) => { const b = elI('button', 'small', 'clipboard-copy', text); b.type = 'button'; b.title = line;
+    const row = el('div', 'autocard__actions');
+    steps.forEach(([text, line], i) => { const b = elI('button', 'small' + (i ? '' : ' primary'), 'clipboard-copy', text); b.type = 'button'; b.title = line;
       b.onclick = () => copyText(line, /REPLACE-WITH-/.test(line) ? 'Command copied. Replace each REPLACE-WITH- value, then run it in a clone of this board repo.' : 'Command copied. Run it in a clone of this board repo.'); row.append(b); });
-    if (p.m) { const ask = elI('button', 'small', 'bot', 'Copy prompt for my assistant'); ask.type = 'button';
+    if (p.m && !p.preview) { const ask = elI('button', 'small', 'bot', 'Ask my assistant'); ask.type = 'button'; ask.title = 'Copy a prompt for your board-aware assistant';
       ask.onclick = () => copyText([`Help me ${mine ? (mine.status === 'active' ? 'check' : 'finish setting up') : 'install and set up'} the "${p.slug}" Keeptrack automation on my board ${c.repo}${me ? ' for @' + me : ''}.`,
         `Read ${p.folder}/SETUP.md and board/AUTOMATIONS.md in the board repo first, and use python3 board/keeptrack.py automation commands only.`,
         'Run a dry run before turning it on. It must stay proposals-only. Never put tokens, account addresses or source text in the repo, and ask me before you enable it.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
       row.append(ask); }
-    item.append(row);
-    if (p.m) { const a = el('a', null, 'Setup steps (SETUP.md) ↗'); a.href = `https://github.com/${c.repo.split('/').map(encodeURIComponent).join('/')}/blob/${encodeURIComponent(c.branch)}/${p.folder}/SETUP.md`; a.target = '_blank'; a.rel = 'noopener noreferrer'; item.append(a); }
+    if (p.m && !p.preview) { const a = el('a', 'autocard__link', 'Setup steps ↗'); a.href = `https://github.com/${c.repo.split('/').map(encodeURIComponent).join('/')}/blob/${encodeURIComponent(c.branch)}/${p.folder}/SETUP.md`; a.target = '_blank'; a.rel = 'noopener noreferrer'; row.append(a); }
+    if (row.children.length) { item.append(row); uiBtns(row); }
     return item;
   }
-  $('autoRefresh').onclick = renderAutomations;
-  $('autoCreate').onclick = () => copyText(`Help me make my own Keeptrack automation for my board ${cfg().repo || '(ask me)'}. Use the keeptrack-automation-create skill. Ask me what it should do, from which source and how often, then build, validate, test and dry-run the pack. Install it switched off and do not enable it until I say so.`, 'Prompt copied. Paste it into your board-aware assistant.');
+  $('autoOpen').onclick = () => { $('dlgSettings').close(); setView('automations'); };
   async function tokenRepos(c = cfg()) { try { const r = await ghGet('/user/repos?per_page=100&sort=updated', null, c); return r.ok ? (await r.json()).map(x => x.full_name) : []; } catch { return []; } }
   async function nearRepos(repo, c = cfg()) {   // repos this token can see, closest names first (same owner, then shared words)
     if (!c.token) return []; const all = await tokenRepos(c), [o, n] = String(repo).toLowerCase().split('/'), words = String(n || '').split(/[-_.]/).filter(Boolean);
@@ -4672,7 +4732,7 @@ if (typeof window !== 'undefined') (() => {
     if (tab === 'conn') { renderBoards(); showEdit(!!cfg().repo && !cfg().token && !DEMO && !SETUP); autoCheck(); }   // ?setup: never open the old board's form
     if (tab === 'agents') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key');
       const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); $('sUseEmail').checked = !!LS.get('kb_email_sync'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
-      renderRoutineRegister(); renderAutomations(); $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
+      renderRoutineRegister(); $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
   }
   function settingsTab(name, over) {   // a deep link: an old tab name, a tab, or a section (see SET_LINKS)
     const [tab, sec] = SET_LINKS[name] || [SET_TABS.some(t => t[0] === name) ? name : 'prefs'];
@@ -4702,6 +4762,7 @@ if (typeof window !== 'undefined') (() => {
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   if ($('sResearch') && $('sResearchN')) $('sResearch').onchange = $('sResearchN').onchange = saveResearchSettings;
   $('btnInbox').onclick = () => setView('inbox');
+  $('btnAutos').onclick = () => setView('automations');
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
     if (/^[\w.-]+$/.test(owner)) q.set('target_name', owner);
