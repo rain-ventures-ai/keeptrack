@@ -621,6 +621,25 @@ if (typeof window !== 'undefined') (() => {
       const d = await r.json(); text = d.encoding === 'base64' ? b64d(d.content || '') : d.content || ''; idb.set(blobKey(item.sha), text); }
     return text;
   }
+  let graphqlBlobsDenied = false;   // a token without GraphQL access should not retry on every poll
+  async function graphqlBlobTexts(items, texts) {
+    const c = cfg(), [owner, name] = c.repo.split('/'), batches = [];
+    const valid = items.filter(x => /^[0-9a-f]{40}$/.test(x.sha));
+    for (let i = 0; i < valid.length; i += 40) batches.push(valid.slice(i, i + 40));
+    await mapLimit(batches, 4, async batch => {
+      if (graphqlBlobsDenied) return;
+      const query = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${batch.map((x, i) => `b${i}:object(oid:"${x.sha}"){... on Blob{text isBinary isTruncated}}`).join(' ')}}}`;
+      try {
+        const r = await fetch(`${c.api}/graphql`, { method: 'POST', cache: 'no-store', signal: ghSignal('POST'), body: JSON.stringify({ query, variables: { owner, name } }),
+          headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' } });
+        if (r.status === 401 || r.status === 403) graphqlBlobsDenied = true;
+        if (!r.ok) return;
+        const d = await r.json(); if (d.errors) return;
+        batch.forEach((x, i) => { const b = d.data?.repository?.[`b${i}`];
+          if (b && !b.isBinary && !b.isTruncated && typeof b.text === 'string') { texts.set(x, b.text); idb.set(blobKey(x.sha), b.text); } });
+      } catch {}   // REST still reads the blobs this batch could not supply
+    });
+  }
   function modelFromSplit(files) {
     const root = files.get('tasks.json'); if (!root) throw new Error(`cannot read ${cfg().path}`);
     const raw = clone(root.obj), tasks = [], contacts = [], projects = []; if (!isSplit(raw)) return raw;   // tasks.json is no longer split: it holds the whole board
@@ -644,7 +663,10 @@ if (typeof window !== 'undefined') (() => {
     const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
     const old = sameBoard ? splitMeta.files : new Map(), files = new Map(), changed = listed.filter(x => !old.has(x.path) || old.get(x.path).sha !== x.sha);
     old.forEach((v, k) => { const item = byPath.get(k); if (item && item.sha === v.sha) files.set(k, v); });
-    await mapLimit(changed, 8, async item => { const text = await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
+    const texts = new Map(), missing = [];
+    await mapLimit(changed, 8, async item => { const text = await idb.get(blobKey(item.sha)); if (typeof text === 'string') texts.set(item, text); else missing.push(item); });
+    if (missing.length > 8 && !graphqlBlobsDenied) await graphqlBlobTexts(missing, texts);
+    await mapLimit(changed, 8, async item => { const text = texts.has(item) ? texts.get(item) : await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
     const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true };
     return { unchanged: false, data: modelFromSplit(files), meta };
