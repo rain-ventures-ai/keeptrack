@@ -12,7 +12,7 @@ toast says why. Undo still shows once the archive has landed. No schema change.
 
 Web board: **card links open at once** in a browser that has used the board before. The drawer opens from this
 browser's saved copy and refreshes in place when the live sync lands; edits wait until then ("Syncing…"). Split boards
-also remember their last sync (head, tree SHAs, ETag, file list), so an unchanged board now costs one free conditional
+also remember their last sync (head, ETag, file list), so an unchanged board now costs one free conditional
 call instead of five serial calls. Measured on a 192-card board at 250 ms per call: card link 1.86 s → 0.17 s, live sync
 1.41 s → 0.40 s. Opening a card also shows the drawer before redrawing the board behind it. No schema change.
 
