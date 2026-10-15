@@ -396,6 +396,24 @@ class UpgradeScript(unittest.TestCase):
         self.assertIn("OK: the board has the same data", out)
         self.assertIsNone(self.state())
 
+    def test_after_merge_accepts_a_squash_merge(self):
+        rc, out = self.upgrade("--push")
+        self.assertEqual(rc, 0, out)
+        st = self.state()
+        rc, out = self.after_merge()
+        self.assertEqual(rc, 1)
+        self.assertIn("not merged yet", out)
+        self.assertIn("rm " + os.path.join(self.repo, ".git", "kit-upgrade.json"), out)
+        sh("git", "-C", self.repo, "fetch", "-q", "origin")
+        sh("git", "-C", self.repo, "merge", "-q", "--squash", f"origin/{st['branch']}")
+        self.commit("Board kit upgrade (squashed)")
+        self.assertNotEqual(sh("git", "-C", self.repo, "rev-parse", "main"), st["commit"])
+        rc, out = self.after_merge()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("left the board data as it was in the backup", out)
+        self.assertIn("OK: the board has the same data", out)
+        self.assertIsNone(self.state())
+
     def test_after_merge_refuses_a_dirty_worktree(self):
         rc, out = self.upgrade("--push")
         self.assertEqual(rc, 0, out)
@@ -418,6 +436,20 @@ class UpgradeScript(unittest.TestCase):
 
 
 class Notes(unittest.TestCase):
+    def test_relay_lines_keep_paths_with_spaces(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("upgrade", UPGRADE)
+        up = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(up)
+        written, copied, hand = up.relay_lines(
+            "kit-update: 2 file(s) changed:\n  relay/docs/my file.md   (NEW file: read it)\n"
+            "  relay/a b.py   (owner file, not changed in this repo since 0.9.23: copied; read the diff)\n  relay/plain.md\n"
+            "  NEW owner file, not copied: read it and copy by hand: relay/n w.md\n"
+            "  not in the kit (kept; remove it by hand if it is gone for good): relay/old.md\n")
+        self.assertEqual(written, ["relay/docs/my file.md", "relay/a b.py", "relay/plain.md"])
+        self.assertEqual(copied, ["relay/a b.py"])
+        self.assertEqual(hand, ["relay/n w.md (NEW owner file: read it, copy by hand)"])
+
     def test_do_by_hand_names_only_commands_that_change_things(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("upgrade", UPGRADE)

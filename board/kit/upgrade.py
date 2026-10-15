@@ -289,8 +289,9 @@ def relay_lines(out):
     Written lines are `  <path>` with an optional `   (...)`; the others name the path after their last ': '."""
     written, copied, hand = [], [], []
     for l in out.splitlines():
-        m = re.match(r"^  (\S+)(?:   \((.*)\))?$", l)
-        if m and not m.group(1).endswith(":"):
+        m = re.match(r"^  (\S(?:(?!   \().)*?)(?:   \((.*)\))?$", l)   # a path may hold spaces; "   (" ends it
+        if m and not m.group(1).endswith(":") and not re.match(r"(changed in this repo|NEW owner file|owner only|not "
+                                                                   r"written|not in the kit|--owner-files|      )", m.group(1)):
             written.append(m.group(1))
             if (m.group(2) or "").startswith("owner file"):
                 copied.append(m.group(1))
@@ -567,6 +568,14 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
     return f"\n--- PR ({pr_file}) ---\n{title}\n\n{body}"
 
 
+def landed(root, commit, tip, base):
+    """A squash or rebase merge makes new commits: then the upgrade is merged when every path it changed is
+    byte-identical on origin/<base>."""
+    rc, names = git("diff", "--name-only", f"{commit}^", tip, cwd=root)
+    paths = [n for n in names.splitlines() if n]
+    return rc == 0 and bool(paths) and git("diff", "--quiet", tip, f"origin/{base}", "--", *paths, cwd=root)[0] == 0
+
+
 def after_merge(a):
     root = repo_root()
     spath = state_path(root)
@@ -587,12 +596,15 @@ def after_merge(a):
     # The branch tip, when the agent added commits after the script's own (the "Do by hand" items).
     rc, tip = git("rev-parse", "HEAD", cwd=wt)
     tip = tip if rc == 0 and git("merge-base", "--is-ancestor", st["commit"], tip, cwd=root)[0] == 0 else st["commit"]
-    if git("merge-base", "--is-ancestor", tip, f"origin/{base}", cwd=root)[0] != 0:
-        raise Stop(f"the upgrade commit {tip[:12]} is not on origin/{base}: the upgrade PR is not merged yet "
-                   "(a squash merge also shows here; then run keeptrack.py verify --against the backup by hand)")
+    if git("merge-base", "--is-ancestor", tip, f"origin/{base}", cwd=root)[0] != 0 and not landed(root, st["commit"], tip, base):
+        raise Stop(f"the upgrade commit {tip[:12]} is not on origin/{base}, and origin/{base} does not have its files "
+                   f"(a squash or rebase merge would): the upgrade PR is not merged yet. If you dropped this upgrade, "
+                   f"remove its state: rm {spath}")
     # Verify the board as it was in the upgrade commit: edits people made on the board after it are not failures.
     must(["git", "checkout", "-q", "--detach", tip], cwd=wt, what=f"check out {tip[:12]}")
     say(f"verify --against {st['backup']}")
+    print(f"This checks that the upgrade commit {tip[:12]} left the board data as it was in the backup. "
+          "Board edits made after the upgrade are not checked.")
     rc, out = run([sys.executable, "board/keeptrack.py", "--file", os.path.join(wt, "board", "tasks.json"),
                    "verify", "--against", st["backup"]], cwd=wt, timeout=600)
     print(out)
