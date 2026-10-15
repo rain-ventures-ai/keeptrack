@@ -32,7 +32,7 @@ The **Pending review** column for finished work that waits on a person's decisio
   `keeptrack.py column-add "Pending review" --after in-progress` (or Settings → Board → Columns). Older pages and
   older keeptrack.py show it as an ordinary column.
 - If this repo has its own `AGENTS.md`, add the `review` line from the kit's `templates/AGENTS.md`.
-- Relay 0.9.20 or later uses it (`finish_card` with `review: true`).
+- Relay 0.9.21 or later uses it (`finish_card` with `review: true`).
 
 ### v62 (schema 4)
 Markdown in card details and comments, and comments that recommend. No data migration.
