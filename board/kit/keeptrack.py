@@ -275,7 +275,7 @@ def _default_branch():
 
 BRANCH = _default_branch()
 PATH = os.environ.get("BOARD_PATH", "board/tasks.json")
-BACKEND = os.environ.get("BOARD_BACKEND", "github").lower()
+BACKEND = (os.environ.get("BOARD_BACKEND") or "github").strip().lower()  # empty means github; main() refuses any other value
 FILE = None  # set by --file
 WRITE = os.environ.get("BOARD_WRITE", "auto").lower()  # auto | api | git (auto switches to git when the sandbox blocks API writes)
 
@@ -457,9 +457,9 @@ def _rate_wait(code, headers, text, attempt):
 
 
 def gh(*args, body=None):
+    """gh-api-style call: gh("repos/x/contents/y?ref=b") or gh("-X", "PUT", "repos/x/contents/y", "--input", "-", body=...)."""
     if BACKEND == "hosted" and not FILE:
         sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
-    """gh-api-style call: gh("repos/x/contents/y?ref=b") or gh("-X", "PUT", "repos/x/contents/y", "--input", "-", body=...)."""
     if use_http():
         method, path, rest = "GET", None, list(args)
         if rest[:1] == ["-X"]:
@@ -2913,6 +2913,8 @@ def with_record(run):
 
 
 def cmd_claim(a):
+    if getattr(a, "on_behalf_of", None):
+        sys.exit("--on-behalf-of works only with BOARD_BACKEND=hosted (a hosted dispatcher); on a GitHub board, claim as BOARD_USER")
     _PENDING_CLAIM.clear()
     with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
 
@@ -9118,7 +9120,7 @@ def main():
     s.add_argument("id"); s.set_defaults(f=cmd_research_lock)
     s = sub.add_parser("card-link", help="cards as Markdown links to the web board ([#12](url) title): write card numbers this way")
     s.add_argument("ids", nargs="+", metavar="id"); s.set_defaults(f=cmd_card_link)
-    s = sub.add_parser("approve", help="hosted: approve an assigned card (scope checked by server)")
+    s = sub.add_parser("approve", help="hosted boards only (BOARD_BACKEND=hosted): approve an assigned card (on a GitHub board, move it to To do)")
     s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
@@ -9353,6 +9355,8 @@ def main():
         print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
               "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",
               file=sys.stderr)
+    if BACKEND not in ("github", "hosted"):
+        sys.exit(f"unknown BOARD_BACKEND {BACKEND!r}: use github (the default) or hosted, or unset it")
     if not FILE and BACKEND != "github":
         return hosted_dispatch(a) or 0
     return a.f(a) or 0

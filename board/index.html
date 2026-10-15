@@ -23,6 +23,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Keeptrack">
 <title>Keeptrack</title>
+<link rel="preconnect" href="https://api.github.com" crossorigin>
 <script src="storage-hosted.js"></script>
 <script src="pwa.js"></script>
 <script src="theme.js"></script>
@@ -251,7 +252,7 @@
       </div>
       <details class="sfold" id="bEditFold"><summary id="bEditBtn">Change connection</summary>
         <div id="bEdit">
-          <p><a href="?backend=hosted">Sign in to a local hosted board</a></p>
+          <p id="hostedDevLink" hidden><a href="?backend=hosted">Sign in to a local hosted board</a></p>
           <div data-props>
             <div data-row="Repository" data-for="sRepo"><input id="sRepo" placeholder="owner/repo" autocomplete="off"></div>
             <div data-row="Branch" data-for="sBranch"><input id="sBranch" placeholder="main" autocomplete="off"></div>

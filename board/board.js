@@ -4865,6 +4865,7 @@ if (typeof window !== 'undefined') (() => {
   // Settings → Connection: this board (status, the connection form, Test connection), Health, your boards and "Add a board",
   // and Advanced (version, move settings, forget the token, remove a board). The form is a fold: open when a token is missing.
   const showEdit = on => { $('bEditFold').open = !!on; };
+  if ($('hostedDevLink')) $('hostedDevLink').hidden = !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);   // the local hosted board is a developer tool: only offered on a local page
   function renderThis() {
     const c = cfg(), has = !!c.repo, setup = !has && !DEMO, st = $('bState'), p = $('panelConn'); $('bThisBadge').textContent = ''; if (has) $('bThisBadge').append(badge(c.repo));
     $('bThisRepo').textContent = has ? c.repo : 'No board connected'; $('bThisSub').textContent = has ? `${c.branch} · ${c.path}` : '';

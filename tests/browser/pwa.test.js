@@ -67,6 +67,7 @@ async function appDetails(page) {
 
     await context.setOffline(true); await page.reload({ waitUntil: 'domcontentloaded' });
     assert.equal(await page.title(), 'Keeptrack'); assert.equal(await page.locator('body').count(), 1);
+    await page.waitForFunction(() => window.kbBoardMarkup && window.KeeptrackHosted && document.querySelector('#board').children.length > 0, null, { timeout: 15000 });   // every shell script ran offline, and the board drew
     await context.setOffline(false); await context.close();
     console.log('pwa: all checks passed');
   } finally { await browser.close(); server.close(); }

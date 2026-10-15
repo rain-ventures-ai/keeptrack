@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline
+again; "Sign in to a local hosted board" shows only on a local page; the `api.github.com` preconnect is back. CLI:
+`claim --on-behalf-of` on a GitHub board now fails clearly instead of being ignored; `approve` help says hosted boards
+only; an empty `BOARD_BACKEND` means github and a mistyped one is refused by name. No schema change.
+
 Kit v70: an Automations page in the web board (header button, `#view=automations`). Each automation is a card with a
 node diagram of what it does (schedule, what it reads, the no-AI check, the agent, the Review Inbox), its status and
 the command for each next step. Manifests may carry an optional `flow` for that diagram; the built-in packs have one.

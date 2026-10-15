@@ -1,7 +1,7 @@
 // Keeptrack's app shell, per-board install manifests and phone notifications.
-const SHELL_CACHE = 'keeptrack-shell-v1';
+const SHELL_CACHE = 'keeptrack-shell-v2';
 const CACHE_PREFIX = 'keeptrack-shell-';
-const SHELL = ['index.html', 'board.css', 'ui.css', 'theme.js', 'designmd.js', 'pwa.js', 'icons.js', 'ui.js', 'board.js', 'vendor/minisearch-7.2.0.min.js', 'manifest.webmanifest', 'pwa/icon-180.png', 'pwa/icon-192.png', 'pwa/icon-512.png'];
+const SHELL = ['index.html', 'board.css', 'ui.css', 'storage-hosted.js', 'theme.js', 'designmd.js', 'pwa.js', 'icons.js', 'ui.js', 'board.js', 'vendor/minisearch-7.2.0.min.js', 'manifest.webmanifest', 'pwa/icon-180.png', 'pwa/icon-192.png', 'pwa/icon-512.png'];
 const SCOPE = new URL(self.registration.scope);
 const shellUrls = new Set(SHELL.map(path => new URL(path, SCOPE).pathname));
 
