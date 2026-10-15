@@ -95,6 +95,17 @@ python3 board/keeptrack.py release <id> --column todo
 ```
 `done` is refused while checklist items are open: tick them, or use `done <id> --cancel --note "<why>"` when they are being dropped.
 
+**Done or Pending review?** When the work is finished but its result needs a person's decision (research or a review
+that ends in options, a recommendation to accept, "should we do step 2?"), do not close the card. Use
+```bash
+python3 board/keeptrack.py review <id> --who <user> --note - <<'TEXT'
+<result, link, and the decision: 2-4 options with a score out of 10, your recommendation and why>
+TEXT
+```
+It ends your claim like `done`, moves the card to the **Pending review** column (it adds the column the first time) and
+posts the note as a comment that @mentions who decides. `done` is only for work where nobody owes a next step. `wait`
+is different: use it while the work itself cannot go on.
+
 ## Adding tasks
 ```bash
 python3 board/keeptrack.py add "Title" --assign <user> --label <label> --due YYYY-MM-DD --client "Acme" --details "<text and URLs>" --todo "step 1" --todo "step 2"

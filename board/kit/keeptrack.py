@@ -13,6 +13,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py heartbeat ID [--note ...] [--status running|blocked|stuck]      # from the session that holds the claim
   keeptrack.py release ID [--column todo]                                      # anyone may release a stale, stuck or blocked claim
   keeptrack.py done ID --note "result"  |  done ID --cancel --note "why"       # done refuses open to-dos; --cancel drops them
+  keeptrack.py review ID --note "result + decision" [--who LOGIN]   # work done, a person decides: Pending review, not Done
   keeptrack.py add "Title" [--assign osouthgate] [--label x] [--due 2026-10-20] [--client "Acme"] [--details ...] [--todo "step 1" --todo "step 2"]
   keeptrack.py todo-add ID "text"      # add a checklist item
   keeptrack.py todo-done ID N          # tick item N (1-based, as shown by `show`); todo-undo / todo-rm work the same way
@@ -204,7 +205,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 63  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 64  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2564,6 +2565,78 @@ def cmd_done(a):
     mutate(fn, f"Agent done: {a.id}")
 
 
+REVIEW_COL, REVIEW_NAME = "pending-review", "Pending review"   # kit v64: the id column-add "Pending review" gives too
+
+
+def ensure_review_column(data):
+    """The Pending review column (kit v64): work is done, a person's decision is left. Added after In progress (else just
+    before the done column) the first time a card goes there, so boards need no migration. Returns the column id: a
+    column a person already named "Pending review" is used as it is, never a second one with the same name."""
+    cols = data.setdefault("columns", [])
+    if any(c.get("id") == REVIEW_COL for c in cols if isinstance(c, dict)):
+        return REVIEW_COL
+    named = next((c.get("id") for c in cols if isinstance(c, dict) and str(c.get("name") or "").strip().lower() == REVIEW_NAME.lower()), None)
+    if named:
+        return named
+    ids = [c.get("id") for c in cols]
+    if "in-progress" in ids:
+        at = ids.index("in-progress") + 1
+    else:
+        at = len(cols) - 1 if cols and ids[-1] == done_col(data) else len(cols)
+    cols.insert(at, {"id": REVIEW_COL, "name": REVIEW_NAME})
+    print(f"added column {REVIEW_COL} ({REVIEW_NAME})")
+    return REVIEW_COL
+
+
+def cmd_review(a):
+    """The work is done, but a person must decide what comes next (kit v64): research or a review whose result asks for a
+    decision, a choice between options. Like done it ends the claim with a run record and refuses open to-dos; unlike
+    done the card stays open, in Pending review, and the note goes on the card as a comment that @mentions who decides.
+    The person then moves it to Done, or back to To do (or claims it) for more work."""
+    def fn(data):
+        t = find(data, a.id)
+        claim_owner_check(data, t, a, "review")
+        me = (default_user() or "").lower()
+        if t.get("column") == done_col(data) and not getattr(a, "force", False) and t.get("assignees") \
+                and me not in [str(x).lower() for x in t["assignees"]]:
+            sys.exit(f"refused: {t['id']} is Done and assigned to {', '.join(t['assignees'])}, not to you; a person moves "
+                     "it back (or tell an agent to use --force)")
+        note = (a.note or "").strip()
+        if not note:
+            sys.exit("refused: review needs --note with the result and the decision it waits on (options and your "
+                     "recommendation); '-' reads it from stdin")
+        open_todos = [d for d in t.get("todos") or [] if not d.get("done")]
+        if open_todos:
+            first = ", ".join(str(d.get("text", "")) for d in open_todos[:3]) + (", ..." if len(open_todos) > 3 else "")
+            sys.exit(f"refused: {t['id']} has {len(open_todos)} open to-dos ({first}); tick the ones that are done, and "
+                     "move the rest to a follow-up card (todo-move) or remove them, before it goes to Pending review")
+        linked = check_moved_todos(data, t)
+        if linked:
+            _MUT["rerun"] = True
+            print("linked follow-up card" + ("s " if len(linked) > 1 else " ") + ", ".join(f"#{n}" for n in linked))
+        who = (a.who or "").strip().lstrip("@") or next(iter(t.get("assignees") or []), "") or default_user()
+        if who and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", who):
+            sys.exit("--who takes a GitHub login")
+        if who and who.lower() not in [str(p.get("github") or "").lower() for p in data.get("people") or [] if isinstance(p, dict)]:
+            print(f"warning: @{who} is not a board member, so the board may not show them this card", file=sys.stderr)
+        close_waiting(t, a, "review", data)   # the decision replaces the wait, as done ends it: never a card waiting on two people
+        c = t.get("claim")
+        if c:   # the same run record as done, without an outcome: the card has none until it closes
+            t["last_run"] = {"agent": c.get("agent", ""), "on_behalf_of": c.get("on_behalf_of", ""), "session_id": c.get("session_id", ""),
+                             "session_url": c.get("session_url", ""), "started_at": c.get("claimed_at", ""), "finished_at": now(),
+                             "note": " ".join(note.split())[:300]}
+            t["claim"] = None
+        move_task_to_column(data, t, ensure_review_column(data), a)
+        link = (c or {}).get("session_url", "")
+        hist(t, f"pending review" + (f" for @{who}" if who else "") + ": " + " ".join(note.split())[:300] + (f" (session {link})" if link else ""))
+        t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t),
+                                             "text": f"**Pending review**" + (f": @{who} decides." if who else ".") + "\n\n" + note})
+        t["updated"] = now(); tid = t["id"]
+        _MUT["after"].append(lambda d: drop_claim_file(tid))
+        print(f"pending review {t['id']}: {t['title']}" + (f" (@{who} decides)" if who else ""))
+    mutate(fn, f"Agent review: {a.id}")
+
+
 def cmd_wait(a):
     """Park a card on a person or an event (kit v43). It stays in its column; `due` is untouched. A running claim is
     blocked in the same save when this is its own session or a person; an agent from another session leaves it alone."""
@@ -2857,9 +2930,9 @@ def cmd_todo_move(a):
 def read_stdin_args(a):
     """`-` as a comment's text, --details or --add-details reads the text from stdin (kit v62), so an agent can write
     multi-line Markdown (a heading, a list of options, a table) without shell quoting: `comment '#N' - <<'EOF'`."""
-    if a.f not in (cmd_comment, cmd_add, cmd_task_set):
+    if a.f not in (cmd_comment, cmd_add, cmd_task_set, cmd_review):
         return
-    keys = [k for k in ("text", "details", "add_details") if getattr(a, k, None) == "-"]
+    keys = [k for k in ("text", "details", "add_details", "note") if getattr(a, k, None) == "-"]
     if len(keys) > 1:
         sys.exit("only one of the text, --details and --add-details can be '-' (stdin)")
     if keys:
@@ -4130,7 +4203,8 @@ def cmd_init(a):
         # Existing v3 boards migrate explicitly with a backup; brand-new boards need no legacy layout.
         data = {"version": 4, "layout": "split", "settings": {"stale_after_minutes": 30, "kit_owner": people[0]["github"]},
                 "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"},
-                            {"id": "in-progress", "name": "In progress"}, {"id": "done", "name": "Done"}],
+                            {"id": "in-progress", "name": "In progress"}, {"id": "pending-review", "name": "Pending review"},
+                            {"id": "done", "name": "Done"}],
                 "people": people, "agents": ["claude", "codex"], "clients": a.client or ["General"],
                 "labels": [{"name": "follow-up", "color": "#b38600"}, {"name": "decision", "color": "#e56910"},
                            {"name": "admin", "color": "#6b778c"}, {"name": "board", "color": "#5e4db2"}],
@@ -4233,7 +4307,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "auto-heartbeat", "routine", "checkpoint", "research-lock", "research-suggest"],
+    "agent-work": ["claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -7787,6 +7861,10 @@ def main():
     s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--note", help="the result: what was delivered, where it is (required)"); s.add_argument("--session")
     s.add_argument("--cancel", action="store_true", help="close the card without finishing it (needs --note; open to-dos are dropped)")
     s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_done)
+    s = sub.add_parser("review", help="work done, a person decides: end the claim, move the card to Pending review and comment the note (@who)")
+    s.add_argument("id"); s.add_argument("--note", help="the result and the decision it waits on, with options and a recommendation ('-' = stdin)")
+    s.add_argument("--who", help="the GitHub login who decides (default: the first assignee, else you)"); s.add_argument("--session")
+    s.add_argument("--force", action="store_true", help="act on a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_review)
     s = sub.add_parser("auto-heartbeat"); s.set_defaults(f=cmd_auto_heartbeat)
     s = sub.add_parser("wait", help="park a card on a person or an event: --on text [--who p_id|login] [--nudge +3|date] [--note ..]")
     s.add_argument("id"); s.add_argument("--on", required=True, help="what or whom the card waits for (always shown)")

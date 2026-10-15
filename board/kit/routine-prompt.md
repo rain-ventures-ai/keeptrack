@@ -35,4 +35,6 @@ How to work:
 - When finished: comment with the outcome, `assign` the task back to the requester, and run
   `keeptrack.py done '#N' --note "<result>"`. `done` refuses open checklist items: tick them with `todo-done`; a step that must wait goes to a linked follow-up
   card with `todo-move '#N' <item>` (never reworded or ticked by hand); if they are being dropped,
-  `done '#N' --cancel --note "<why>"`.
+  `done '#N' --cancel --note "<why>"`. When the result needs the requester's decision (research or a review that ends in
+  options), do not close it: `keeptrack.py review '#N' --who <requester> --note -` with the result, the options with
+  scores and your recommendation. The card goes to Pending review and stays open until they decide.

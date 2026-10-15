@@ -261,8 +261,23 @@ Why it is good:
 - Write details and comments in Markdown (see "Format the text"). Use `-` and stdin for multi-line text.
 - When a comment needs a person, give options with a score out of 10, your recommendation and the reason, and the
   next step (see "Comments that need a person: always recommend").
+- When your result needs a person's decision, use `review`, not `done` (see "Done, Pending review or waiting").
 - When you name a card (in a reply, comment, done note, PR, brief or hand-off), write its number as a link:
   `keeptrack.py card-link '#58'` prints `[#58](<card link>)`. A person can then tap straight to the card.
+
+## Done, Pending review or waiting
+
+- **Done:** the work is finished and nobody owes a next step.
+- **Pending review** (column `pending-review`, kit v64): the work is finished, but its result needs a person's decision
+  before anything else happens. Research and reviews usually end here: they end in options, and someone must pick one.
+  An agent runs `keeptrack.py review '#N' --who <login> --note -` with the result, a link, 2-4 options with scores and
+  its recommendation (see "Comments that need a person"). The note becomes a comment that @mentions that person. The
+  person decides in a comment, then moves the card to Done, or back to To do (or has an agent claim it) for the next
+  step. Follow-up cards for the decided steps link to it.
+- **Waiting** (`wait`): the work itself cannot go on until someone answers or something happens. The card stays in its
+  column.
+
+A card must never go to Done while a decision on its result is still open.
 
 ## Bare cards and backlog auto-research
 

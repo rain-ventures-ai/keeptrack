@@ -20,11 +20,12 @@ const server = http.createServer((req, res) => {
 const task = (id, num, title, column, created, extra = {}) => ({ id, num, title, column, client: '', priority: 'medium', due: '', labels: [], assignees: ['alex'], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created, updated: created, rank: 'a' + num, ...extra });
 const board = {
   version: 3, settings: { title: 'Widget test', stale_after_minutes: 30 },
-  columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }],
+  columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'pending-review', name: 'Pending review' }, { id: 'done', name: 'Done' }],
   people: [{ github: 'alex', name: 'Alex' }], agents: ['claude'], clients: [], labels: [], contacts: [], projects: [], client_info: {},
   tasks: [
     task('t_old', 1, 'Older backlog item', 'backlog', '2026-10-01T08:00:00Z'),
     task('t_new', 2, 'Newest to-do item', 'todo', '2026-10-12T08:00:00Z', { priority: 'high' }),
+    task('t_review', 4, 'Research done, decision open', 'pending-review', '2026-10-09T08:00:00Z'),   // kit v64: counted in the pulse
     task('t_agent', 3, 'Agent is researching', 'in-progress', '2026-10-10T08:00:00Z', { claim: { agent: 'claude', on_behalf_of: 'alex', status: 'running', claimed_at: new Date().toISOString(), heartbeat_at: new Date().toISOString() } })
   ]
 };
@@ -135,7 +136,7 @@ async function open(browser, base, api, viewport, enabled = true, options = {}) 
       const ys = await page.locator('.kwwtask').evaluateAll(xs => xs.map(x => Math.round(x.getBoundingClientRect().top))); assert.equal(new Set(ys).size, 1, 'task strip stays on one line');
       assert.match(await page.locator('.kwwweatherbody').textContent(), /14°C/); assert.match(await page.locator('.kwwweatherbody').textContent(), /35% rain/); assert.equal(api.weatherAuth, '', 'weather never receives the GitHub token');
       assert.equal(await page.evaluate(() => window.__geoRequests), 0, 'fixed-city weather never asks location on load');
-      assert.deepEqual(await page.locator('.kwwmetric strong').allTextContents(), ['1', '1', '0', '0']);
+      assert.deepEqual(await page.locator('.kwwmetric strong').allTextContents(), ['1', '1', '0', '0', '1']);
       await page.locator('.kwwtask').first().click(); await page.locator('#dlgCard[open]').waitFor(); assert.equal(await page.locator('#cTitle').inputValue(), 'Newest to-do item');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true, 'widgets do not add page-level sideways scroll');
       assert.deepEqual(page.errors, []); assert(api.calls.includes('/contents/board/widgets.json')); await page.close();

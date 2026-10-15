@@ -23,6 +23,7 @@ python3 board/keeptrack.py heartbeat <id> --status blocked --note "<why>"       
 python3 board/keeptrack.py wait <id> --on "<who: what>" --who <user>               # parked on a person or event: then comment @user, assign, stop
 # never `unwait` a wait you did not set in this session, or one on someone else: a person ends those
 python3 board/keeptrack.py done <id> --note "<result, PR or file link>"            # finished
+python3 board/keeptrack.py review <id> --who <user> --note "<result + options>"    # finished, but a person must decide: Pending review
 python3 board/keeptrack.py release <id> --column todo                              # giving up / handing back
 python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM-DD --client "<client>" --details "<text>"
 python3 board/keeptrack.py todo-done <id> <N>                                      # tick checklist item N (numbers come from `show`)
