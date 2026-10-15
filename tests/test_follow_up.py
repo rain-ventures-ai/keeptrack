@@ -47,7 +47,7 @@ class FollowUpCli(unittest.TestCase):
         for x, y in ((old, new), (new, old)):
             r = next(r for r in x["related"] if r["id"] == y["id"])
             self.assertEqual(("related", "confirmed", old["id"]), (r["kind"], r["status"], r["from"]))   # kind related + from: older kits accept it
-        self.assertIn({"title": "Follow-up #4", "url": "https://rain-ventures-ai.github.io/keeptrack/board/?repo=acme%2Fboard&branch=main&path=board%2Ftasks.json#4"}, old["links"])
+        self.assertIn({"title": "Follow-up #4", "url": f"https://rain-ventures-ai.github.io/keeptrack/board/?repo=acme%2Fboard&branch=main&path=board%2Ftasks.json&card={new['id']}#4"}, old["links"])   # kit v68: links carry the card id
         self.assertTrue(any(l["title"] == "Split from #3" and l["url"].endswith("#3") for l in new["links"]))
         self.assertIn("moved to follow-up card #4", self.kt("comments", "#3").stdout)
         self.assertIn("Split from #3", self.kt("comments", "#4").stdout)

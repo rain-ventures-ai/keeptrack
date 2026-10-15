@@ -22,6 +22,13 @@ also remember their last sync (head, ETag, file list), so an unchanged board now
 call instead of five serial calls. Measured on a 192-card board at 250 ms per call: card link 1.86 s → 0.17 s, live sync
 1.41 s → 0.40 s. Opening a card also shows the drawer before redrawing the board behind it. No schema change.
 
+## Kit v68 — 2026-10-15
+
+Card links from the web board and CLI now include `card=<id>` and keep `#N`. On a split board, a browser without
+that card cached reads the root and card in parallel and opens a read-only drawer after those two reads. The full
+sync refreshes it in place. Invalid, missing or mismatched cards fall back to the ordinary load; number-only links
+still work. Preview data is never saved as a snapshot or used as a write baseline. No schema change.
+
 ## Kit v67 — 2026-10-15
 
 New kit file **`board/upgrade.py`**: the whole board-kit upgrade in one command (Ollie, 15 Oct: agents slipped twice doing

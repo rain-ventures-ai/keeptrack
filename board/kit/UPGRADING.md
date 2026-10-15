@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v68 (schema 4)
+Card links include the stable card id as well as the number. No data migration.
+- Run `kit-update` only; older links and pages still work.
+- Check: `card-link '#1'` includes `card=<id>#1`. In a fresh browser, open it on a split board: the drawer opens
+  while the board syncs, refuses edits with “Syncing…”, then refreshes in place.
+
 ### v67 (schema 4)
 New kit file `board/upgrade.py`: one command for the whole upgrade. No data migration.
 - Run `kit-update` (or, from now on, `python3 board/upgrade.py`). Check: `kit-check` says v67, and `board/upgrade.py`
