@@ -28,8 +28,9 @@ A good card passes all five. A bad card fails one or more.
 ## Format the text (Markdown)
 
 The web board shows card details and comments as Markdown (kit v62). A reader can press **Raw** to see the saved text.
-Agents: write every description, and every comment longer than two sentences, in Markdown. A wall of text is hard to
-read, most of all on a phone.
+Agents: write every description, and every comment longer than two sentences, in Markdown. That includes review
+results, findings, done notes and hand-offs, not only questions. Start with a one-line result, then short sections or
+a list. A wall of text is hard to read, most of all on a phone.
 
 Use only this small set. The board shows nothing else as formatting:
 
