@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v61 — 2026-10-15
+
+Web board: a new card uses the card drawer, the same form as every other card. The v59 **New card** form is gone. The
+lane's pencil, Shift+Enter, Add with an empty box, the lane's ＋ and the phone ＋ now save the card with its title and
+open it in the drawer, where you add the details, client, project, priority, due date, labels, checklist and links.
+With no title typed yet, a short prompt asks for one first. Quick add (type a title, press Enter) does not change.
+No schema migration.
+
 ## Kit v60 — 2026-10-15
 
 Backlog auto-research, a board setting that is off by default. When it is on, the relay dispatcher (relay 0.9.16 or

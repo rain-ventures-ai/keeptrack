@@ -1,8 +1,7 @@
 'use strict';
-// The new-card form (kit v59) on a writable board with a faked GitHub API: quick add still saves a title-only card on
-// Enter; the lane's pencil, Shift+Enter, an empty Add, the lane's ＋ and the phone ＋ open the form; the form saves every
-// field (details, column, client, project, priority, due, assignee, labels, checklist, links) in one card; a new
-// client and a new label join the board's lists; a bad link line or an empty title stops the save with a message.
+// New cards use the card drawer (kit v61) on a writable board with a faked GitHub API: quick add still saves a
+// title-only card on Enter; Shift+Enter and the lane's pencil save the typed title and open the card in the drawer;
+// an empty Add, the pencil, the lane's ＋ and the phone ＋ ask for a title first (Cancel saves nothing).
 // Run: node new-card.test.js   (SHOTS=<folder> also saves screenshots)
 
 const assert = require('node:assert/strict');
@@ -82,71 +81,50 @@ async function waitFor(fn, what) { for (let i = 0; i < 100; i++) { const v = fn(
     assert.equal(q.column, 'todo'); assert.equal(q.details, ''); assert.deepEqual(q.assignees, ['alex'], 'quick add still assigns you');
     assert.equal(await page.locator('#dlgNewCard').count(), 0, 'Enter never opens the form');
 
-    // 2. Shift+Enter opens the form with the typed text as the title; Escape closes it and saves nothing
-    const before = Object.keys(api.files).length;
+    const closeDrawer = async pg => { await pg.locator('#cClose').click(); await pg.waitForSelector('#dlgCard:not([open])', { state: 'attached' }); };
+    const prompt = pg => pg.locator('dialog.ui-sheet--alert[open]');
+
+    // 2. Shift+Enter saves the typed title and opens the card in the card drawer (the one card form)
     await quick.fill('Draft the summary'); await quick.press('Shift+Enter');
-    await page.waitForSelector('#dlgNewCard[open]');
-    assert.equal(await page.locator('#ncTitle').inputValue(), 'Draft the summary');
-    assert.equal(await page.locator('#ncCol').inputValue(), 'todo'); assert.equal(await page.locator('#ncWho').inputValue(), 'alex');
-    await page.keyboard.press('Escape'); await page.waitForSelector('#dlgNewCard', { state: 'detached' });
-    assert.equal(Object.keys(api.files).length, before, 'cancel saves nothing');
+    await page.waitForSelector('#dlgCard[open]');
+    assert.equal(await page.locator('#cTitle').inputValue(), 'Draft the summary');
+    const s1 = await waitFor(() => cards(api).find(c => c.title === 'Draft the summary'), 'Shift+Enter card saved');
+    assert.equal(s1.column, 'todo'); assert.deepEqual(s1.assignees, ['alex']);
+    assert.equal(await quick.inputValue(), '', 'the box is cleared');
+    await closeDrawer(page);
 
-    // 3. an empty Add, the lane pencil and the lane ＋ open the form too
+    // 3. the pencil with text: same as Shift+Enter
+    await quick.fill('Call the printer'); await lane.locator('.add .addform').click();
+    await page.waitForSelector('#dlgCard[open]'); assert.equal(await page.locator('#cTitle').inputValue(), 'Call the printer');
+    await closeDrawer(page);
+
+    // 4. an empty Add, the pencil and the lane ＋ ask for a title first; Cancel saves nothing
+    const before = cards(api).length;
     for (const sel of ['.add button.primary', '.add .addform', 'h2 .hadd']) {
-      await lane.locator(sel).click(); await page.waitForSelector('#dlgNewCard[open]', { timeout: 3000 });
-      await page.locator('#dlgNewCard .ui-sheet__head button[aria-label="Close"]').click(); await page.waitForSelector('#dlgNewCard', { state: 'detached' });
+      await lane.locator(sel).click(); await prompt(page).waitFor();
+      await prompt(page).locator('button', { hasText: 'Cancel' }).click(); await page.waitForSelector('dialog.ui-sheet--alert', { state: 'detached' });
     }
+    assert.equal(cards(api).length, before, 'cancel saves nothing'); assert.equal(await page.locator('#dlgCard[open]').count(), 0);
 
-    // 4. the full form: an empty title and a bad link line stop the save with a message
-    await lane.locator('.add .addform').click(); await page.waitForSelector('#dlgNewCard[open]');
-    await page.locator('#ncSave').click(); assert.match(await page.locator('#ncErr').textContent(), /title/);
-    await page.locator('#ncTitle').fill('Send Globex the signed contract');
-    await page.locator('#ncDetails').fill('Globex signed on Friday. Done when the PDF is in their portal.');
-    await page.locator('#ncClient').fill('Acme');
-    assert.deepEqual(await page.locator('#ncProject option').allTextContents(), ['No project', 'Website'], 'the client filters the projects');
-    await page.locator('#ncClient').fill('Globex');
-    assert.deepEqual(await page.locator('#ncProject option').allTextContents(), ['No project', 'Website · Acme', 'Ops · Other'], 'an unknown client shows every project');
-    await page.locator('#ncCol').selectOption('done'); await page.locator('#ncPrio').selectOption('high');
-    await page.locator('#ncDue').fill('2026-11-02'); await page.locator('#ncWho').selectOption('sam');
-    await page.locator('#ncLabels').fill('URGENT, legal , legal');
-    await page.locator('#ncTodos').fill('Print the contract\n\nUpload the PDF\n');
-    await page.locator('#ncLinks').fill('not a link');
-    await page.locator('#ncSave').click(); assert.match(await page.locator('#ncErr').textContent(), /not a link/);
-    assert.equal(await page.locator('#dlgNewCard[open]').count(), 1, 'a bad link keeps the form open');
-    await page.locator('#ncLinks').fill('Contract (Drive) | https://drive.example/contract\nhttps://globex.example/portal');
-    await shot(page, 'new-card-form');
-    await page.locator('#ncSave').click();
-    await page.waitForSelector('#dlgNewCard', { state: 'detached' });
-    const c = await waitFor(() => cards(api).find(x => x.title === 'Send Globex the signed contract'), 'form card saved');
-    assert.equal(c.column, 'done'); assert.equal(c.client, 'Globex'); assert.equal(c.project, ''); assert.equal(c.priority, 'high');
-    assert.equal(c.due, '2026-11-02'); assert.deepEqual(c.assignees, ['sam']); assert.equal(c.details, 'Globex signed on Friday. Done when the PDF is in their portal.');
-    assert.deepEqual(c.labels, ['urgent', 'legal'], 'labels match the board spelling and repeat once');
-    assert.deepEqual(c.todos.map(t => [t.text, t.done]), [['Print the contract', false], ['Upload the PDF', false]]);
-    assert.deepEqual(c.links, [{ title: 'Contract (Drive)', url: 'https://drive.example/contract' }, { title: 'https://globex.example/portal', url: 'https://globex.example/portal' }]);
-    assert.equal(c.createdBy, 'alex');
-    const root2 = await waitFor(() => { const r = JSON.parse(api.files['tasks.json']); return r.clients.includes('Globex') && r; }, 'new client in the board list');
-    assert.deepEqual(root2.labels.map(l => l.name).sort(), ['legal', 'urgent'], 'a new label joins the board list once');
-
-    // 5. picking a project fills an empty client
-    await lane.locator('h2 .hadd').click(); await page.waitForSelector('#dlgNewCard[open]');
-    await page.locator('#ncTitle').fill('Refresh the homepage'); await page.locator('#ncProject').selectOption('pr_web');
-    assert.equal(await page.locator('#ncClient').inputValue(), 'Acme');
-    await page.locator('#ncClient').fill('Other'); assert.equal(await page.locator('#ncProject').inputValue(), '', 'another client drops a project that is not theirs');
-    await page.locator('#ncClient').fill('Globex'); await page.locator('#ncProject').selectOption('pr_web');
-    assert.equal(await page.locator('#ncClient').inputValue(), 'Acme', 'a project sets its client');
-    await page.locator('#ncLinks').fill('Notes | ~/work/acme/notes');
-    await page.locator('#ncTitle').press('Control+Enter'); await page.keyboard.press('Enter').catch(() => {});   // Ctrl+Enter bubbles to the sheet too: still one card
-    const w = await waitFor(() => cards(api).find(x => x.title === 'Refresh the homepage'), 'project card saved');
-    assert.equal(w.project, 'pr_web'); assert.equal(w.client, 'Acme'); assert.equal(w.column, 'todo');
-    assert.deepEqual(w.links, [{ title: 'Notes', url: '~/work/acme/notes' }], 'a local path is a link, as in the drawer');
-    await page.waitForTimeout(800); assert.equal(cards(api).filter(x => x.title === 'Refresh the homepage').length, 1, 'one card, never two');
+    // 5. a title typed in the prompt: the card is saved and opens in the drawer, where the other fields are edited as usual
+    await lane.locator('h2 .hadd').click(); await prompt(page).waitFor();
+    await prompt(page).locator('input').fill('Refresh the homepage'); await prompt(page).locator('input').press('Enter');
+    await page.waitForSelector('#dlgCard[open]'); assert.equal(await page.locator('#cTitle').inputValue(), 'Refresh the homepage');
+    const w = await waitFor(() => cards(api).find(x => x.title === 'Refresh the homepage'), 'prompt card saved');
+    assert.equal(w.column, 'todo');
+    await page.locator('#cPrio').selectOption('high');
+    await waitFor(() => cards(api).find(x => x.id === w.id && x.priority === 'high'), 'drawer edit saved on the new card');
+    await shot(page, 'new-card-drawer');
+    await closeDrawer(page);
+    assert.equal(cards(api).filter(x => x.title === 'Refresh the homepage').length, 1, 'one card, never two');
     assert.deepEqual(page.errors, []);
 
-    // 6. phones: the floating ＋ opens the form for the column on show
+    // 6. phones: the floating ＋ asks for a title, then opens the card for the column on show
     const phone = await open({ width: 390, height: 800 });
-    await phone.locator('#fab').click(); await phone.waitForSelector('#dlgNewCard[open]');
-    assert.equal(await phone.locator('#ncCol').inputValue(), 'todo');
-    const box = await phone.locator('#dlgNewCard').boundingBox(); assert(box.width <= 390, 'the form fits a phone');
+    await phone.locator('#fab').click(); await prompt(phone).waitFor();
+    await prompt(phone).locator('input').fill('Text the venue'); await prompt(phone).locator('button', { hasText: 'Create and open' }).click();
+    await phone.waitForSelector('#dlgCard[open]');
+    const ph = await waitFor(() => cards(api).find(x => x.title === 'Text the venue'), 'phone card saved'); assert.equal(ph.column, 'todo');
     await phone.waitForTimeout(500); await shot(phone, 'new-card-phone');
     assert.deepEqual(phone.errors, []);
     console.log('new-card: all checks passed');

@@ -770,13 +770,6 @@ body.ro .dtask > .ui-iconbtn { visibility: hidden; }
 /* the add-person form: a centred sheet (a bottom sheet on phones) with the name, then the optional details as a property list */
 .personform > form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin: 0; }
 dialog.personform { width: min(520px, calc(100vw - 32px)); max-width: calc(100vw - 32px); }
-/* the new-card form (kit v59): the add-person sheet's layout, a little wider, with full-width text boxes */
-dialog.cardform { width: min(600px, calc(100vw - 32px)); }
-.cardform .nctitle, .cardform .ncdetails, .cardform .ncnotes { display: block; width: 100%; resize: vertical; font: inherit; line-height: 1.45; }
-.cardform .nctitle { font-size: var(--fs-lg); font-weight: 600; }
-.cardform .ui-props { margin-top: var(--sp-5); }
-.cardform .ui-props .ui-select { width: 100%; }
-.cardform .ncerr { margin: var(--sp-4) 0 0; color: var(--danger); font-weight: 600; }
 .personform .ui-sheet__body .ui-field__label { display: flex; align-items: baseline; margin: var(--sp-5) 0 var(--sp-2); color: var(--text); font-size: var(--fs-base); font-weight: 600; }
 .personform .apname { width: 100%; }
 .personform .apopt { margin: var(--sp-6) 0 var(--sp-1); color: var(--muted); font-size: var(--fs-sm); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
