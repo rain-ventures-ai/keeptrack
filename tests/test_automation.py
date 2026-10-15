@@ -144,6 +144,11 @@ class Automation(unittest.TestCase):
         self.items(); self.ready(); payload,_=self.tick(); run=payload['automations'][0]['run_id']
         f=self.root/'done.json'; self.write(f,dict(done=[dict(key='item1',rev='r1')]))
         self.assertIn('run id',self.refuse('mark',run_id='wrong',input=str(f)))
+        self.write(f,dict(done=[dict(key='foreign',rev='r1')]))
+        self.refuse('mark',run_id=run,input=str(f))
+        self.write(f,dict(done=[dict(key='item1',rev='r1'),dict(key='item2',rev='r2')],cursor='wrong'))
+        self.refuse('mark',run_id=run,input=str(f))
+        self.write(f,dict(done=[dict(key='item1',rev='r1')]))
         self.call('mark',run_id=run,input=str(f)); self.assertIsNone(self.read(self.sp)['cursor'])
         self.write(f,dict(done=[dict(key='item1',rev='r1')],cursor='page2'))
         self.assertIn('partial',self.refuse('mark',run_id=run,input=str(f)))
@@ -158,6 +163,17 @@ class Automation(unittest.TestCase):
                 with self.subTest(cmd=cmd),self.assertRaises(SystemExit): kt._proposals_only(argparse.Namespace(cmd=cmd))
             for args in (dict(cmd='propose'),dict(cmd='automation',action='mark'),dict(cmd='routine',action='finish'),dict(cmd='automation',action='show'),dict(cmd='checkpoint',action='show'),dict(cmd='list')): kt._proposals_only(argparse.Namespace(**args))
             with self.assertRaises(SystemExit): kt._proposals_only(argparse.Namespace(cmd='automation',action='enable'))
+
+    def test_inv04_main_guard_subprocess(self):
+        env=dict(os.environ, KEEPTRACK_PROPOSALS_ONLY='1', BOARD_USER='owner')
+        fixture=self.root/'fixture'; shutil.copytree(KIT.parents[1]/'tests/fixtures/v4',fixture)
+        base=['python3',str(self.root/'board/keeptrack.py'),'--file',str(fixture/'tasks.json')]
+        blocked=subprocess.run(base+['add','Forbidden'],env=env,capture_output=True,text=True)
+        self.assertNotEqual(blocked.returncode,0)
+        self.assertIn('KEEPTRACK_PROPOSALS_ONLY: command refused',blocked.stderr)
+        proposals=self.root/'proposals.json'; self.write(proposals,[])
+        allowed=subprocess.run(base+['propose',str(proposals)],env=env,capture_output=True,text=True)
+        self.assertEqual(allowed.returncode,0,allowed.stderr)
 
     def test_inv05_never_is_prohibited_in_all_pack_prompts_and_loader(self):
         for path in (KIT/'automations').glob('*/manifest.json'):
@@ -175,8 +191,13 @@ class Automation(unittest.TestCase):
         self.assertEqual(before,(self.pack/'check.py').read_bytes())
 
     def test_inv07_setup_digest_blocks_enable_and_tick(self):
+        self.items()
         self.call('install'); self.assertIn('not ready',self.refuse('enable'))
         self.call('setup',runtime='local'); self.call('enable')
+        r=self.read(self.rp); r['automation']['setup']['status']='blocked'; self.write(self.rp,r)
+        with contextlib.redirect_stderr(io.StringIO()): self.assertEqual(self.tick()[1],3)
+        self.assertIsNone(self.read(self.rp)['current_run'])
+        r['automation']['setup']['status']='ready'; self.write(self.rp,r); self.force_due()
         (self.pack/'SKILL.md').write_text('Changed prompt')
         self.assertIn('not ready',self.refuse('enable'))
         with contextlib.redirect_stderr(io.StringIO()): payload,code=self.tick()
@@ -194,7 +215,7 @@ class Automation(unittest.TestCase):
     def test_inv09_crash_after_propose_retry_action_key_dedup(self):
         # Exercise the real proposal dedup path: a crash leaves seen state absent.
         self.items(); self.ready(); payload,_=self.tick(); item=payload['automations'][0]['items'][0]
-        raw=dict(kind='task.create',title='Review work',source=dict(kind='other',id='source1',revision='r1'),action_key='auto:example-pack:'+item['key']+':'+item['rev'],work_key='work1',reason='Explicit action',target=None,change=dict(title='Review work'))
+        raw=dict(kind='task.create',title='Review work',source=dict(kind='other',id='source1',revision='r1'),action_key=item['action_key'],work_key='work1',reason='Explicit action',target=None,change=dict(title='Review work'))
         board=dict(version=4,layout='split',tasks=[],contacts=[],proposals=[],settings={})
         added,_=kt._prepare_proposals(board,[raw])
         self.assertEqual(len(added),1); self.assertFalse(self.sp.exists())
@@ -215,6 +236,8 @@ class Automation(unittest.TestCase):
         (self.pack/'SKILL.md').write_text('Changed')
         f=self.root/'done.json'; self.write(f,dict(done=[]))
         self.assertIn('digest',self.refuse('mark',run_id=run,input=str(f))); self.assertFalse(self.sp.exists())
+        with self.assertRaisesRegex(SystemExit,'digest'): self.finish('success')
+        with self.assertRaisesRegex(SystemExit,'digest'): self.finish('partial')
 
     def test_inv12_env_allowlist_private_home_readonly_state(self):
         script='''import json,os,stat
@@ -235,6 +258,120 @@ print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME
         self.assertIsNone(payload); self.assertEqual(code,3)
         self.assertEqual(json.loads(self.call('list')[0])[0]['last_check']['result'],'check-error')
         with contextlib.redirect_stderr(io.StringIO()): self.assertEqual(self.tick()[1],3)
+
+    def test_alias_write_and_remove_refused_before_mutation(self):
+        protected=self.root/'automation/seen/private.json'; self.write(protected,{'safe':True})
+        (self.root/'alias').symlink_to(self.root/'automation',target_is_directory=True)
+        for operation in ('write','remove'):
+            manifest=dict(version=69,files={'board/keeptrack.py':'code'},remove=[])
+            if operation=='write': manifest['files']['alias/seen/private.json']='bad'
+            else: manifest['remove']=['alias/seen']
+            def fetch(src, source):
+                return json.dumps(manifest).encode() if src=='manifest.json' else b'KIT_VERSION = 69\n'
+            with self.subTest(operation=operation),patch.object(kt,'kit_fetch',side_effect=fetch):
+                before=(self.root/'board/keeptrack.py').read_bytes()
+                with self.assertRaisesRegex(SystemExit,'nothing changed'):
+                    kt.cmd_kit_update(argparse.Namespace(source='fixture',quiet=True,allow_downgrade=False))
+                self.assertEqual(self.read(protected),{'safe':True})
+                self.assertEqual((self.root/'board/keeptrack.py').read_bytes(),before)
+
+    def test_undelivered_reservations_released(self):
+        self.items(); self.ready()
+        original=kt._auto_write
+        for step in ('state','payload','print','reservation'):
+            def write(path,value):
+                if step=='state' and str(path).endswith('tick-state.json'): raise OSError('injected')
+                if step=='reservation' and str(path)==str(self.rp) and value.get('current_run'): raise OSError('injected')
+                original(path,value)
+            with self.subTest(step=step):
+                self.force_due()
+                with patch.object(kt,'_auto_write',side_effect=write):
+                    if step=='print':
+                        with patch('builtins.print',side_effect=BrokenPipeError),self.assertRaises(BrokenPipeError): self.tick()
+                    elif step=='payload':
+                        with patch.object(kt,'_auto_payload',side_effect=ValueError('injected')),self.assertRaises(ValueError): self.tick()
+                    elif step=='state':
+                        with self.assertRaises(OSError): self.tick()
+                    else:
+                        with self.assertRaises(OSError): self.tick()
+                r=self.read(self.rp); self.assertIsNone(r['current_run'])
+                if step!='reservation':
+                    self.assertEqual(r['last_run']['status'],'failed'); self.assertEqual(r['last_run']['summary'],'undelivered')
+                self.force_due(); payload,_=self.tick(); self.assertTrue(payload['automations']); self.assertEqual(payload['problems'],[])
+                self.finish('failed')
+
+    def test_reservation_metadata_atomic_and_all_runs_abandoned(self):
+        self.items(); self.ready()
+        other=self.root/'automations/second-pack'; shutil.copytree(self.pack,other)
+        self.write(other/'manifest.json',dict(self.manifest,slug='second-pack'))
+        self.call('install',slug='second-pack'); self.call('setup',slug='second-pack',runtime='local'); self.call('enable',slug='second-pack')
+        original=kt.atomic_write; writes=[]
+        def atomic(path,text):
+            if '/routines/' in str(path):
+                value=json.loads(text); current=value.get('current_run')
+                if current:
+                    self.assertIn('digest',current); self.assertIn('batch',current)
+                    self.assertEqual(current['batch']['cursor'],'page2')
+                    self.assertEqual(len(current['batch']['items']),2)
+                    writes.append(str(path))
+            return original(path,text)
+        with patch.object(kt,'atomic_write',side_effect=atomic),patch('builtins.print',side_effect=BrokenPipeError),self.assertRaises(BrokenPipeError):
+            self.tick()
+        self.assertEqual(len(writes),2); self.assertEqual(len(set(writes)),2)
+        for path in writes:
+            r=self.read(Path(path)); self.assertIsNone(r['current_run'])
+            self.assertEqual(r['last_run']['summary'],'undelivered')
+        self.force_due(); payload,_=self.tick()
+        self.assertEqual(len(payload['automations']),2); self.assertEqual(payload['problems'],[])
+
+    def test_action_keys_distinguish_colon_pairs(self):
+        self.items()
+        self.result['items'][0].update(key='a:b',rev='c')
+        self.result['items'][1].update(key='a',rev='b:c')
+        self.script(self.result); self.ready(); payload,_=self.tick()
+        keys=[i['action_key'] for i in payload['automations'][0]['items']]
+        self.assertNotEqual(*keys)
+        import hashlib
+        self.assertEqual(keys[0],'auto:example-pack:'+hashlib.sha256(b'["a:b","c"]').hexdigest())
+
+    def test_failed_finish_with_unusable_pack(self):
+        for damage in ('missing','invalid','collision'):
+            with self.subTest(damage=damage):
+                self.items(); self.ready(); self.tick()
+                if damage=='missing': shutil.rmtree(self.pack)
+                elif damage=='invalid': (self.pack/'manifest.json').write_text('{')
+                else: shutil.copytree(self.pack,self.root/'board/automations/example-pack')
+                with self.assertRaises((SystemExit,ValueError,OSError)): self.finish('success')
+                with self.assertRaises((SystemExit,ValueError,OSError)): self.finish('partial')
+                self.finish('failed'); self.assertIsNone(self.read(self.rp)['current_run'])
+            # Recreate fixture between independent damage cases.
+            self.tearDown(); self.setUp()
+
+    def test_list_invalid_missing_and_good_pack_plain_and_json(self):
+        self.ready()
+        good=self.root/'automations/good-pack'; shutil.copytree(self.pack,good)
+        manifest=dict(self.manifest,slug='good-pack'); self.write(good/'manifest.json',manifest)
+        for damage in ('invalid','missing'):
+            if damage=='invalid': (self.pack/'manifest.json').write_text('{')
+            else: shutil.rmtree(self.pack)
+            for json_mode in (True,False):
+                with self.subTest(damage=damage,json=json_mode):
+                    out,_=self.call('list',json=json_mode)
+                    rows=json.loads(out) if json_mode else [json.loads(line) for line in out.splitlines()]
+                    by_slug={r['slug']:r for r in rows}
+                    self.assertEqual(by_slug['example-pack']['problem'],damage+'-pack')
+                    self.assertIsNone(by_slug['good-pack']['problem'])
+
+    def test_mixed_tick_reports_every_problem_with_work(self):
+        self.assertIn('Report every entry in payload `problems`',(KIT/'automation-loader.md').read_text())
+        self.items(); self.ready()
+        bad=self.root/'automations/z-blocked'; shutil.copytree(self.pack,bad)
+        self.write(bad/'manifest.json',dict(self.manifest,slug='z-blocked'))
+        self.call('install',slug='z-blocked'); self.call('setup',slug='z-blocked',runtime='local'); self.call('enable',slug='z-blocked')
+        (bad/'SKILL.md').write_text('Changed')
+        payload,code=self.tick()
+        self.assertIn(code,(None,0)); self.assertTrue(payload['automations'])
+        self.assertEqual(payload['problems'],[dict(slug='z-blocked',code='changed')])
 
     def test_inv14_own_builtin_slug_collision(self):
         dest=self.root/'board/automations/example-pack'; shutil.copytree(self.pack,dest)

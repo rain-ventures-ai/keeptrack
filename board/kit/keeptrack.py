@@ -3422,7 +3422,15 @@ def kit_dest(root, dest):
     path = os.path.abspath(os.path.join(root, dest))
     if os.path.commonpath([root, path]) != root or path == root:
         raise ValueError(f"unsafe path in manifest: {dest}")
-    rel = os.path.relpath(path, root).replace(os.sep, "/").lower()
+    component = root
+    for part in os.path.relpath(path, root).split(os.sep):
+        component = os.path.join(component, part)
+        if os.path.islink(component):
+            raise ValueError(f"symlink path in manifest: {dest}")
+    real_root, real_path = os.path.realpath(root), os.path.realpath(path)
+    if os.path.commonpath([real_root, real_path]) != real_root:
+        raise ValueError(f"unsafe resolved path in manifest: {dest}")
+    rel = os.path.relpath(real_path, real_root).replace(os.sep, "/").lower()
     if any(rel == n or rel.startswith(n + "/") or n.startswith(rel + "/") for n in KIT_NEVER):
         raise ValueError(f"the manifest names {dest}, which is board data: kit-update never writes or removes it")
     return path
@@ -4324,7 +4332,7 @@ HELP_TOPICS = {
                         "column-move", "column-rm", "members", "me", "member-add", "member-set", "member-rm",
                         "agents", "agent-add", "agent-rm", "settings", "settings-set"],
     "archive": ["archive", "archived", "archived-history", "unarchive"],
-    "review-inbox": ["proposal-add", "proposals", "proposal-show", "proposal-accept", "proposal-merge",
+    "review-inbox": ["propose", "proposal-add", "proposals", "proposal-show", "proposal-accept", "proposal-merge",
                      "proposal-ignore", "proposal-reopen", "proposal-undo", "proposal-answer", "proposal-result", "proposal-done"],
     "setup": ["use", "where", "here", "help", "init", "import", "kit-check", "kit-update", "kit-owner",
               "migrate", "verify", "doctor"],
@@ -4346,6 +4354,7 @@ def cmd_help(a):
 
 _SUBPARSERS = None
 COMMAND_HELP = {   # one line each, for commands whose parser has none
+    "propose": "add proposals to the Review Inbox (alias for proposal-add)",
     "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention, --waiting, --waiting-on WHO; --links)",
     "show": "one card in full: details, links, checklist, claim, latest comments",
     "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo, --after '#N')",
@@ -7793,9 +7802,10 @@ def _routine_report(a, path):
         if data.get("automation"):
             if a.summary: sys.exit("automation reports allow counts only")
             install = data["automation"]
-            packs = _auto_packs()
-            if install["slug"] not in packs or _auto_pack(packs[install["slug"]][1])[1] != current.get("digest"):
-                if a.status != "failed": sys.exit("pack digest changed since reservation")
+            if a.status != "failed":
+                packs = _auto_packs()
+                if install["slug"] not in packs or _auto_pack(packs[install["slug"]][1])[1] != current.get("digest"):
+                    sys.exit("pack digest changed since reservation")
             current = {k: v for k, v in current.items() if k != "batch"}
         report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts)
         data["last_run"] = report
@@ -8066,58 +8076,75 @@ def _auto_check(path, manifest, register):
 
 
 def _auto_payload(path, m, r, result, run_id):
+    items = [dict(i, action_key="auto:" + m["slug"] + ":" + hashlib.sha256(
+        json.dumps([i["key"], i["rev"]], separators=(",", ":")).encode()).hexdigest()) for i in result["items"]]
     return dict(slug=m["slug"], binding=r["id"], run_id=run_id, digest=r["automation"]["digest"],
-                action_key_prefix=m.get("action_key_prefix", "auto:" + m["slug"]), skill=os.path.join(path, "SKILL.md"),
-                **{k: result[k] for k in ("items", "more", "cursor")})
+                skill=os.path.join(path, "SKILL.md"), items=items, more=result["more"], cursor=result["cursor"])
 
 
 def _auto_tick(a, packs, owner):
-    state_path = _auto_local(); state = {}; payloads = []; problems = []
+    state_path = _auto_local(); state = {}; payloads = []; problems = []; reservations = []
     # Validate parent directories before opening the shared, non-JSON tick lock.
     lock_path = os.path.join(os.path.dirname(_automation_path("automation/tick.json")), ".tick.lock")
     if os.path.islink(lock_path): sys.exit("automation paths must not contain symlinks")
-    with _auto_lock(lock_path, True) as acquired:
-        if not acquired: print("automation tick busy", file=sys.stderr); return
-        state = _auto_json(state_path, {})
-        register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
-        for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
-            if not name.endswith(".json"): continue
-            rp = _automation_path("automation/routines/" + name)
+    try:
+        with _auto_lock(lock_path, True) as acquired:
+            if not acquired: print("automation tick busy", file=sys.stderr); return
+            state = _auto_json(state_path, {})
+            register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
+            for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
+                if not name.endswith(".json"): continue
+                rp = _automation_path("automation/routines/" + name)
+                with _auto_lock(rp + ".lock"):
+                    r = _auto_json(rp, {}); install = r.get("automation")
+                    if not install or r.get("owner", "").lower() != owner.lower() or r.get("status") != "active": continue
+                    slug = install["slug"]; binding = r["id"]; reserved = False
+                    try:
+                        if slug not in packs: raise ValueError("pack-missing")
+                        _, path = packs[slug]; m, digest = _auto_pack(path)
+                        if not _auto_ready(r, digest): raise ValueError("changed")
+                        if r.get("current_run"):
+                            problems.append({"slug": slug, "code": "busy"}); continue
+                        previous = state.get(binding, {})
+                        if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
+                            if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
+                            continue
+                        result = _auto_check(path, m, r)
+                        # A changed file during the subprocess must never yield a reservation.
+                        if _auto_pack(path)[1] != digest: raise ValueError("changed")
+                        state[binding] = {"time": time.time(), "result": "ok"}
+                        if result["items"]:
+                            run_id = "tick-" + uuid.uuid4().hex
+                            r["last_started_at"] = now()
+                            r["current_run"] = dict(id=run_id, started_at=r["last_started_at"], status="running", digest=digest,
+                                batch=dict(items=[{k: i[k] for k in ("key", "rev")} for i in result["items"]], cursor=result["cursor"]))
+                            reserved = True
+                            _auto_write(rp, r)
+                            reservations.append((rp, run_id))
+                            payloads.append(_auto_payload(path, m, r, result, run_id))
+                    except (ValueError, OSError, SystemExit) as error:
+                        if reserved: raise
+                        code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
+                        state[binding] = {"time": time.time(), "result": code}
+                        problems.append({"slug": slug, "code": code})
+            os.makedirs(os.path.dirname(state_path), exist_ok=True)
+            _auto_write(state_path, state)
+        if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}), flush=True)
+        elif problems:
+            print(json.dumps(problems), file=sys.stderr); return 3
+    except (Exception, SystemExit):
+        for rp, run_id in reservations:
             with _auto_lock(rp + ".lock"):
-                r = _auto_json(rp, {}); install = r.get("automation")
-                if not install or r.get("owner", "").lower() != owner.lower() or r.get("status") != "active": continue
-                slug = install["slug"]; binding = r["id"]
-                try:
-                    if slug not in packs: raise ValueError("pack-missing")
-                    _, path = packs[slug]; m, digest = _auto_pack(path)
-                    if not _auto_ready(r, digest): raise ValueError("changed")
-                    if r.get("current_run"):
-                        problems.append({"slug": slug, "code": "busy"}); continue
-                    previous = state.get(binding, {})
-                    if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
-                        if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
-                        continue
-                    result = _auto_check(path, m, r)
-                    # A changed file during the subprocess must never yield a reservation.
-                    if _auto_pack(path)[1] != digest: raise ValueError("changed")
-                    state[binding] = {"time": time.time(), "result": "ok"}
-                    if result["items"]:
-                        run_id = "tick-" + uuid.uuid4().hex
-                        args = argparse.Namespace(id=binding, action="start", run_id=run_id)
-                        with contextlib.redirect_stdout(io.StringIO()): _routine_report(args, rp)
-                        r = _auto_json(rp); r["current_run"]["digest"] = digest
-                        r["current_run"]["batch"] = dict(items=[{k: i[k] for k in ("key", "rev")} for i in result["items"]], cursor=result["cursor"])
-                        _auto_write(rp, r)
-                        payloads.append(_auto_payload(path, m, r, result, run_id))
-                except (ValueError, OSError, SystemExit) as error:
-                    code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
-                    state[binding] = {"time": time.time(), "result": code}
-                    problems.append({"slug": slug, "code": code})
-        os.makedirs(os.path.dirname(state_path), exist_ok=True)
-        _auto_write(state_path, state)
-    if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}))
-    elif problems:
-        print(json.dumps(problems), file=sys.stderr); return 3
+                r = _auto_json(rp)
+                current = r.get("current_run")
+                if current and current.get("id") == run_id:
+                    report = dict(current, finished_at=now(), status="failed", summary="undelivered", counts={})
+                    report.pop("batch", None)
+                    r["last_run"] = report
+                    r["runs"] = (r.get("runs", []) + [report])[-30:]
+                    r["current_run"] = None
+                    _auto_write(rp, r)
+        raise
 
 
 def cmd_automation(a):
@@ -8138,10 +8165,22 @@ def cmd_automation(a):
     local = _auto_json(_auto_local(), {}) if action in ("list", "check") else {}
     if action == "list":
         out = []
-        for slug, (source, path) in packs.items():
-            m, digest = _auto_pack(path); binding, rp = _auto_binding(slug, owner); r = _auto_json(rp, {})
+        listed = dict(packs)
+        register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
+        for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
+            if not name.endswith(".json"): continue
+            r = _auto_json(_automation_path("automation/routines/" + name), {})
+            if r.get("owner", "").lower() == owner.lower() and r.get("automation"):
+                listed.setdefault(r["automation"]["slug"], ("missing", None))
+        for slug, (source, path) in listed.items():
+            problem = None; m = {}; digest = None
+            try:
+                if path is None: problem = "missing-pack"
+                else: m, digest = _auto_pack(path)
+            except (ValueError, OSError, SystemExit): problem = "invalid-pack"
+            binding, rp = _auto_binding(slug, owner); r = _auto_json(rp, {})
             if a.installed and (not r or r.get("status") == "retired"): continue
-            out.append(dict(slug=slug, source=source, status=r.get("status", "not-installed"), setup=(r.get("automation", {}).get("setup", {}).get("status") if not r or r.get("automation", {}).get("digest") == digest else "changed"), last_check=local.get(binding), last_run=r.get("last_run"), runs_agent_every_time="check" not in m))
+            out.append(dict(slug=slug, source=source, problem=problem, status=r.get("status", "not-installed"), setup=(r.get("automation", {}).get("setup", {}).get("status") if not r or r.get("automation", {}).get("digest") == digest else "changed"), last_check=local.get(binding), last_run=r.get("last_run"), runs_agent_every_time="check" not in m))
         if a.json: print(json.dumps(out))
         else:
             for item in out: print(json.dumps(item))
@@ -8565,7 +8604,7 @@ def main():
                    help="the oldest board kit that may write this board; only between the stored value and this kit's version "
                         "(a stored value above the published kit, a typo, may come down to it)")
     s.set_defaults(f=cmd_settings_set)
-    s = sub.add_parser("proposal-add", help="add one proposal, or a JSON list, to the Review Inbox")
+    s = sub.add_parser("proposal-add", aliases=["propose"], help="add one proposal, or a JSON list, to the Review Inbox")
     s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")
     s.add_argument("--recipients-confirmed", action="store_true", help="every intended board reader received this specific email")
     s.set_defaults(f=cmd_proposal_add)

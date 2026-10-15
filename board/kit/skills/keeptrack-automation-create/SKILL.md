@@ -25,3 +25,5 @@ Run `automation validate automations/<slug>`, `automation test <slug>` and `auto
 (with required config supplied). Then `automation install <slug>` with chosen config and any explicit network grant.
 For network packs, dry-run requires the install-time network grant: install unverified first, then dry-run.
 Leave it unverified. Report test results and the SETUP.md steps the owner still needs to perform.
+
+Tick supplies each item’s `action_key`: `auto:<slug>:` + sha256 of compact JSON `[key, rev]` (list order preserved). Copy it unchanged for proposals and retries. Mixed ticks exit 0 with work; report every payload `problems` entry. Invalid/missing packs remain visible in list. Undelivered reservations finish failed with code `undelivered`; owners can finish failed even after pack loss.

@@ -21,6 +21,8 @@ call instead of five serial calls. Measured on a 192-card board at 250 ms per ca
 
 ## Kit v69 — 2026-10-15
 
+- Harden kit-update against symlink aliases; reserve complete automation batches atomically and release undelivered runs as failed. Hash item action keys, retain invalid/missing packs in list, and report mixed tick problems while allowing work (exit 0). Failed completion remains possible after pack loss.
+
 Board owners can install, check and explicitly enable proposal-only automations. One cheap tick reserves work only
 when a source has new items. Includes stale-card nudges, notes-folder tasks, exact-contact Gmail tasks, a setup guide
 and a create-automation skill. Checks use bounded output, private state and digest-pinned access approval.
