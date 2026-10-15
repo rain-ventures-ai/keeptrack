@@ -3422,17 +3422,15 @@ def kit_dest(root, dest):
     path = os.path.abspath(os.path.join(root, dest))
     if os.path.commonpath([root, path]) != root or path == root:
         raise ValueError(f"unsafe path in manifest: {dest}")
-    component = root
-    for part in os.path.relpath(path, root).split(os.sep):
-        component = os.path.join(component, part)
-        if os.path.islink(component):
-            raise ValueError(f"symlink path in manifest: {dest}")
+    # An in-repo symlink (e.g. .claude/skills -> ../.agents/skills) is allowed: both the written and the resolved
+    # path must stay inside the repo and outside KIT_NEVER, so an alias can never reach board data or automations.
     real_root, real_path = os.path.realpath(root), os.path.realpath(path)
-    if os.path.commonpath([real_root, real_path]) != real_root:
+    if os.path.commonpath([real_root, real_path]) != real_root or real_path == real_root:
         raise ValueError(f"unsafe resolved path in manifest: {dest}")
-    rel = os.path.relpath(real_path, real_root).replace(os.sep, "/").lower()
-    if any(rel == n or rel.startswith(n + "/") or n.startswith(rel + "/") for n in KIT_NEVER):
-        raise ValueError(f"the manifest names {dest}, which is board data: kit-update never writes or removes it")
+    for rel in (os.path.relpath(path, root), os.path.relpath(real_path, real_root)):
+        rel = rel.replace(os.sep, "/").lower()
+        if any(rel == n or rel.startswith(n + "/") or n.startswith(rel + "/") for n in KIT_NEVER):
+            raise ValueError(f"the manifest names {dest}, which is board data: kit-update never writes or removes it")
     return path
 
 
@@ -7854,7 +7852,9 @@ def _auto_pack(path):
     def argv(v): return isinstance(v, list) and bool(v) and all(text(x, 256) for x in v)
     path = os.path.abspath(path)
     cur = path
-    while cur != os.path.dirname(cur):
+    # Check symlinks from the pack up to the repo only: system folders such as /tmp or /home may be symlinks.
+    stop = os.path.abspath(ROOT) if ROOT and os.path.commonpath([os.path.abspath(ROOT), path]) == os.path.abspath(ROOT) else None
+    while cur != os.path.dirname(cur) and cur != stop:
         require(not os.path.islink(cur), "pack paths must not contain symlinks"); cur = os.path.dirname(cur)
     for root, dirs, files in os.walk(path):
         for name in dirs + files: require(not os.path.islink(os.path.join(root, name)), "pack must not contain symlinks")
@@ -8167,9 +8167,21 @@ def _auto_tick(a, packs, owner):
             register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
             for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
                 if not name.endswith(".json"): continue
+                if not re.fullmatch(r"[a-zA-Z0-9_-]+\.json", name):
+                    if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
+                    continue
                 rp = _automation_path("automation/routines/" + name)
                 with _auto_lock(rp + ".lock"):
-                    r = _auto_json(rp, {}); install = r.get("automation")
+                    # One unreadable register (a merge conflict, another routine's file) must not stop other bindings.
+                    try:
+                        r = _auto_json(rp, {})
+                        install = r.get("automation") if isinstance(r, dict) else None
+                        if install is not None and not (isinstance(install, dict) and isinstance(install.get("slug"), str)
+                                                        and isinstance(r.get("id"), str) and isinstance(r.get("owner", ""), str)):
+                            raise ValueError("register-invalid")
+                    except (ValueError, OSError, UnicodeDecodeError):
+                        if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
+                        continue
                     if not install or r.get("owner", "").lower() != owner.lower() or r.get("status") != "active": continue
                     slug = install["slug"]; binding = r["id"]; reserved = False
                     try:
@@ -8230,6 +8242,7 @@ def cmd_automation(a):
             r = _auto_json(rp)
             if not r: sys.exit("automation is not installed")
             if r.get("owner", "").lower() != owner: sys.exit("automation owner mismatch")
+            if r.get("status") == "retired": sys.exit("automation is not installed")
             if action == "uninstall":
                 if r.get("status") == "retired": sys.exit("automation is not installed")
                 if r.get("current_run"): sys.exit("automation has a current run")
@@ -8247,10 +8260,14 @@ def cmd_automation(a):
         listed = dict(packs)
         register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
         for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
-            if not name.endswith(".json"): continue
-            r = _auto_json(_automation_path("automation/routines/" + name), {})
-            if r.get("owner", "").lower() == owner.lower() and r.get("automation"):
-                listed.setdefault(r["automation"]["slug"], ("missing", None))
+            if not re.fullmatch(r"[a-zA-Z0-9_-]+\.json", name): continue
+            try:
+                r = _auto_json(_automation_path("automation/routines/" + name), {})
+                install = r.get("automation") if isinstance(r, dict) else None
+                if isinstance(install, dict) and isinstance(install.get("slug"), str) and str(r.get("owner", "")).lower() == owner.lower():
+                    listed.setdefault(install["slug"], ("missing", None))
+            except (ValueError, OSError, UnicodeDecodeError):
+                continue
         for slug, (source, path) in listed.items():
             problem = None; m = {}; digest = None
             try:

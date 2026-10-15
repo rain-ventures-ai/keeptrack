@@ -708,6 +708,32 @@ else:
         with contextlib.redirect_stdout(io.StringIO()): kt.cmd_kit_update(argparse.Namespace(source=str(KIT),quiet=True,allow_downgrade=False))
         self.assertEqual(before,(self.pack/'check.py').read_bytes())
 
+    def test_review_bad_register_does_not_stop_other_bindings(self):
+        self.items(); self.ready()
+        routines=self.root/'automation/routines'
+        (routines/'aaa-other.json').write_text('{not json')
+        (routines/'zzz-other.json').write_text('<<<<<<< HEAD\n')
+        self.write(routines/'auto-broken.json',dict(id='auto-broken',owner='owner',status='active',automation='oops'))
+        payload,code=self.tick()
+        self.assertEqual([p['slug'] for p in payload['automations']],['example-pack'])
+        self.assertIn({'slug':'auto-broken','code':'register-invalid'},payload['problems'])
+        self.assertEqual(self.read(self.rp)['current_run']['status'],'running')
+        out,_=self.call('list'); self.assertIn('example-pack',out)
+
+    def test_review_disable_refuses_retired_binding(self):
+        self.ready(); self.call('uninstall')
+        self.assertIn('not installed',self.refuse('disable'))
+        self.assertEqual(self.read(self.rp)['status'],'retired')
+
+    def test_review_kit_dest_allows_in_repo_symlink_but_not_into_protected_paths(self):
+        (self.root/'.agents/skills').mkdir(parents=True); (self.root/'.claude').mkdir()
+        os.symlink('../.agents/skills',self.root/'.claude/skills')
+        self.assertTrue(kt.kit_dest(str(self.root),'.claude/skills/board/SKILL.md').endswith('SKILL.md'))
+        os.symlink('automations',self.root/'alias')
+        with self.assertRaises(ValueError): kt.kit_dest(str(self.root),'alias/example-pack/check.py')
+        os.symlink(self.tmp.name+'/..',self.root/'out')
+        with self.assertRaises(ValueError): kt.kit_dest(str(self.root),'out/x')
+
     def test_inv07_setup_digest_blocks_enable_and_tick(self):
         self.items()
         self.call('install'); self.assertIn('not ready',self.refuse('enable'))
