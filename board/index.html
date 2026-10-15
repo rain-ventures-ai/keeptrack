@@ -6,13 +6,16 @@
      and the blob: copies it runs. connect-src: the GitHub API, cron-job.org (the Claude relay), Open-Meteo (weather widget); api.test and
      cron.test are reserved test names (RFC 2606) that never resolve, used by the browser tests' kb_api / kb_cron_api. -->
 <!-- Policy template: activated by the asset-free selector immediately below. -->
-<template id="boardPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-TExx35BlO2ny+hLHAZtMeSr9I37PEjcgRRyhQlf4w+4=' 'sha256-f+XvldMIXluE/x0IbqTLkMGFyigtBauOzGKMSn9nH6M='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></template>
+<template id="boardPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-DyKPt1nn6ahknzVaoBxZcA5eoeV8ufeda7pdkGOpYno=' 'sha256-MbWS9sr71A4z/rG+SWfYRUCYi7nPJXBzLSc2sNLpiyQ='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></template>
 <script>
 // Select the policy before loading any assets. Hosted phase 0 has no GitHub network access.
 (function () {
   var policy = document.getElementById('boardPolicy').content.querySelector('meta').cloneNode(true);
   if (new URLSearchParams(location.search).get('backend') === 'hosted') {
-    policy.content = policy.content.replace(/connect-src [^;]+/, "connect-src 'self' http://localhost:3000 http://127.0.0.1:3000 http://localhost:54321 http://127.0.0.1:54321");
+    var hosted = new URL('hosted.html', location.href);
+    hosted.search = location.search; hosted.hash = location.hash;
+    location.replace(hosted.href);
+    return;
   }
   document.head.appendChild(policy);
 })();
@@ -501,6 +504,7 @@
    A board.js for another version is not run: kbStalePage refreshes this page and reloads once, then shows a message.
    board.js has the same check for an index.html from before the handshake. Bump both numbers together. */
 (function () {
+  if (new URLSearchParams(location.search).get('backend') === 'hosted') return;
   var MARKUP = window.kbMarkup = 4;
   var done = false, reveal = function () { done = true; document.documentElement.classList.add('ready'); };
   setTimeout(function () { if (!done) reveal(); }, 6000);                                   // never leave the page blank

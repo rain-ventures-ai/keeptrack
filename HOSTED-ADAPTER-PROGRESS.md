@@ -59,3 +59,52 @@ The existing browser scripts report suite success, not individual assertion tota
 ## Contract change requests
 
 None.
+
+## X3 strict hosted CSP follow-up (2026-10-15)
+
+Complete. No board start-up, pulls, commits or pushes. Synthetic data only.
+
+- Added `board/hosted.html` with external scripts/styles and the same version-4 markup handshake. Legacy `index.html?backend=hosted` links redirect with query/hash intact.
+- The first external parser-blocking script selects one enforced strict policy before other assets. Connections are restricted to self and the validated configured loopback API origin. No GitHub/cron/weather origins, script blobs, inline style permission or eval permission.
+- Sign-in defaults to the API origin. Separate Supabase origins require an auth proxy on the page/API origin, rather than expanding `connect-src`. Out-of-policy endpoint choices fail before making a request.
+- Static inline style moved to `hosted.css`. `ui.js` and `board.js` use CSSOM for dynamic styles; no style attributes in their HTML strings were found.
+- Final verification results are recorded below.
+
+### X3 implementation evidence so far
+
+- Focused hosted browser run: 14/14 check groups pass, including normal sign-in/load/edit/archive on 127.0.0.1 and localhost, cross-origin API access, exact CSP directives, zero normal CSP events, hostile-origin blocking, redirect preservation and stale-markup refusal. Final focused log: `/tmp/hosted-csp-browser-final.log`.
+- Auth defaults to the configured API URL. An auth endpoint outside self/API fails before fetch, without generating a CSP violation.
+- Hosted filter navigation now retains backend/API/board/auth parameters, so reloads and shared links keep the selected API. The focused browser flow checks this.
+- `npm test`: both suites pass. All requested checks completed successfully; final counts are below.
+- Cloud hand-off: when `board/` is the HTTP root, load `http://127.0.0.1:4173/hosted.html?backend=hosted&api=<URL-encoded API base>&board=<UUID>` and the same path on port 4174. `backend=hosted` is optional on this page. Omit `auth` to use the API base, or set it to an auth proxy on the page/API origin. The previous separate `auth=http://127.0.0.1:54321` is intentionally outside this policy and must be proxied for real sign-in (including the P1 auto-login seam, whose validation still runs).
+- If serving the repository root instead, the path is `/board/hosted.html`. No cloud files have been edited and no real cloud gate has been run.
+
+
+### X3 final verification
+
+| Command/suite | Result | Log |
+| --- | --- | --- |
+| `python3 -m unittest discover -s tests -p 'test_*.py'` | Exit 0: 586 run, 585 passed, 1 skipped; 84.828 s | `/tmp/hosted-csp-python.log` |
+| `cd tests/browser && npm test` | Exit 0: 2/2 suites (split-storage, review-inbox) | `/tmp/hosted-csp-npm.log` |
+| `node save-queue.test.js` | Exit 0 | `/tmp/hosted-csp-save-queue.log` |
+| `node mixed-versions.test.js` | Exit 0 | `/tmp/hosted-csp-mixed-versions.log` |
+| `node feedback.test.js` | Exit 0 | `/tmp/hosted-csp-feedback.log` |
+| `node task-drawer.test.js` | Exit 0 | `/tmp/hosted-csp-task-drawer.log` |
+| `node ui-catalogue.test.js` | Exit 0 | `/tmp/hosted-csp-ui-catalogue.log` |
+| `node settings.test.js` | Exit 0 | `/tmp/hosted-csp-settings.log` |
+| `node views.test.js` | Exit 0 | `/tmp/hosted-csp-views.log` |
+| `node hosted-adapter.test.js` | Exit 0: 14/14 hosted check groups | `/tmp/hosted-csp-hosted-adapter.log` |
+| Final focused `node tests/browser/hosted-adapter.test.js` | Exit 0: 14/14, including endpoint retention/default auth | `/tmp/hosted-csp-browser-final.log` |
+
+Separate browser batch: 8/8 suites pass. Together with npm: 10/10 requested browser suites pass. Node runtime: v26.12.0. Browser scripts do not report individual assertion totals. Syntax checks on both changed product JS files and the hosted browser test, plus `git diff --check`, pass.
+
+Enforced hosted policy: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' <configured API origin>; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'`. The redundant API source is omitted when it equals the page origin. There are no hashes, blob sources or unsafe sources in this policy. The sole policy is installed by the first external parser-blocking script, before other assets/application code. GitHub retains its existing bootstrap and policy (with refreshed inline hashes for the hosted redirect guard).
+
+Cloud X3/P1/UI navigation must use the hosted entry directly on both served origins:
+
+- `http://127.0.0.1:4173/hosted.html?backend=hosted&api=<URL-encoded config.api_url>&board=<config.browser_board>`
+- `http://127.0.0.1:4174/hosted.html?backend=hosted&api=<URL-encoded config.api_url>&board=<config.browser_board>`
+
+The existing `auth=http://127.0.0.1:54321` must be removed or replaced with an auth proxy base on the page/API origin. Omitting `auth` selects the API base; that base must serve/proxy `POST /auth/v1/token?grant_type=password`. CSP cannot allow a third auth origin while meeting the requested self-plus-API-only connection rule. The cloud checkout remains read-only and unmodified. These results prove the synthetic browser/client behaviour; real cloud X3/P1/UI gates were not run here.
+
+No required local checks remain. Changes remain uncommitted, with no pushes. Service-worker files and caches were not changed for this follow-up.

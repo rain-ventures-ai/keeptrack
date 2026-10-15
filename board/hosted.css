@@ -1,0 +1,3 @@
+/* Hosted entry: all static presentation stays in external stylesheets. */
+html:not(.ready) body { visibility: hidden; }
+.hosted-research-count { width: 5em; }

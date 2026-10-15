@@ -129,7 +129,7 @@ if (typeof window !== 'undefined') (() => {
   if (window.kbMarkup !== KB_MARKUP) { kbStalePage(); return; }   // nothing below runs against markup it was not written for
   // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
   // tokens or routines. Only the look (theme, style) is shared.
-  const HOSTED = new URLSearchParams(location.search).get('backend') === 'hosted';
+  const HOSTED = document.documentElement.dataset.hosted === 'true' || new URLSearchParams(location.search).get('backend') === 'hosted';
   let hostedStorage = null, hostedIdentity = null, hostedPolling = null;
   const SANDBOX = HOSTED || new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style|custom)$/, MEM = new Map();
   const LS = SANDBOX ? {
@@ -3771,7 +3771,7 @@ if (typeof window !== 'undefined') (() => {
       const filtersChanged = oldFilters.toString() !== newFilters.toString();
       const hadSnapshot = u.searchParams.get('filters') === '1';
       const clean = new URL(location.pathname, location.href);
-      ['repo', 'branch', 'path', 'demo', 'card'].forEach(k => { if (u.searchParams.has(k)) clean.searchParams.set(k, u.searchParams.get(k)); });
+      ['repo', 'branch', 'path', 'demo', 'card', ...(HOSTED ? ['backend', 'api', 'board', 'auth'] : [])].forEach(k => { if (u.searchParams.has(k)) clean.searchParams.set(k, u.searchParams.get(k)); });
       q.forEach((v, k) => clean.searchParams.append(k, v)); clean.hash = u.hash;
       if (clean.href !== u.href) history[changed && filtersChanged && hadSnapshot ? 'pushState' : 'replaceState'](history.state, '', clean);
     } catch {}
@@ -7163,9 +7163,11 @@ if (typeof window !== 'undefined') (() => {
     box.append(title, el('p', null, 'Local phase 0. Reloading this page signs you out.'));
     const q = new URLSearchParams(location.search), fields = {};
     const field = (id, label, value, type = 'text') => { const lab = el('label', null, label), input = el('input'); input.id = id; input.type = type; input.value = value; input.required = true; input.autocomplete = 'off'; lab.htmlFor = id; box.append(lab, input); fields[id] = input; };
-    field('hostedApi', 'Board API URL', q.get('api') || 'http://localhost:3000');
+    field('hostedApi', 'Board API URL', window.KeeptrackHosted.pageAPI || q.get('api') || 'http://localhost:3000');
+    fields.hostedApi.readOnly = !!window.KeeptrackHosted.pageAPI;
     field('hostedBoard', 'Board ID', q.get('board') || '');
-    field('hostedAuth', 'Local Supabase URL', q.get('auth') || 'http://localhost:54321');
+    field('hostedAuth', 'Supabase URL (page or API origin)', q.get('auth') || fields.hostedApi.value);
+    box.append(el('p', 'hint', 'Sign-in needs /auth/v1/token on this page or the configured API origin. Use a proxy if Supabase runs on another origin.'));
     field('hostedKey', 'Local Supabase publishable key', '');
     field('hostedEmail', 'Email', '', 'email'); field('hostedPassword', 'Password', '', 'password');
     fields.hostedPassword.autocomplete = 'new-password';

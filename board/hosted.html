@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en" data-hosted="true" data-kb-markup="4">
+<head>
+<meta charset="UTF-8">
+<!-- The first external script installs this policy with only the configured API origin added.
+     No other assets or application code run before policy selection. Auth must use self or the API origin. -->
+<template id="hostedPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"></template>
+<script src="storage-hosted.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#243447">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Keeptrack">
+<title>Keeptrack</title>
+<script src="pwa.js"></script>
+<script src="theme.js"></script>
+<script src="designmd.js" defer></script>
+<link rel="stylesheet" href="board.css">
+<link rel="stylesheet" href="ui.css">
+<link rel="stylesheet" href="hosted.css">
+</head>
+<body>
+<header>
+  <div class="popwrap boardwrap">
+    <button id="boardBtn" class="logo boardbadge" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="boardPop" title="Board" aria-label="Board"><i data-i="square-kanban"></i></button>
+    <div id="boardPop" class="popover boardpop" hidden></div>
+  </div>
+  <nav id="viewSw" class="viewnav" aria-label="Views"></nav>   <!-- one ui.tabs per view group, built by board.js from VIEW_GROUPS -->
+  <div class="hfilters">
+    <div class="clientwrap">
+      <div id="clientBar" class="clientbar" role="group" aria-label="Filter by one or more clients"></div>
+      <div id="clientPop" class="popover clientpop" hidden></div>
+    </div>
+    <select id="fClient" multiple hidden aria-hidden="true"></select>
+    <div id="peopleQ" class="peopleq" role="group" aria-label="Filter by assignee"></div>
+    <button id="btnAttn" class="attnbtn" hidden title="Cards that are overdue, due for a chase, or have a stale, stuck or blocked agent: click to show only these" aria-label="Needs attention"><span class="ic"><i data-i="triangle-alert"></i></span><span id="attnN"></span><span id="attnT" class="atx"></span><span id="attnS" class="atx short"> attention</span></button>
+    <button id="btnUnread" aria-label="Unread" title="Nothing new"><span class="ic"><i data-i="bell"></i></span><span id="unreadBadge" class="badge" hidden>0</span></button>
+    <button id="btnInbox" type="button" aria-label="Review Inbox" title="Review Inbox" hidden><span class="ic"><i data-i="inbox"></i></span><span class="tx"> Inbox</span><span id="inboxBadge" class="badge" hidden>0</span></button>
+    <button id="btnSearch" aria-label="Search" title="Search everything (press /)"><span class="ic"><i data-i="search"></i></span><span class="tx"> Search</span></button>
+    <div class="popwrap">
+      <button id="btnFilter" aria-haspopup="true" aria-expanded="false" aria-controls="filterPop" aria-label="Filters" title="Filters"><span class="ic"><i data-i="sliders-horizontal"></i></span><span class="tx"> Filters</span><span id="filterBadge" class="badge" hidden>0</span></button>
+      <div id="filterPop" class="popover filterpop" hidden>
+        <label>Sort <select id="sortMenu" aria-label="Card order"><option value="smart">Smart</option><option value="manual">Manual</option><option value="due">Due date</option><option value="newest">Newest</option></select></label>
+        <label>Assignee <select id="fWho"></select></label>
+        <label>Status <select id="fStatus"><option value="">All statuses</option></select></label>
+        <label>Completed by <select id="fDoneBy"></select></label>
+        <label>Label <select id="fLabel"></select></label>
+        <label>Project <select id="fProject"><option value="">All</option></select></label>
+        <label>Priority <select id="fPrio"><option value="">All</option><option>high</option><option>medium</option><option>low</option></select></label>
+        <label class="chk"><input type="checkbox" id="fAttn"> Needs attention <span id="attnCount" class="muted"></span></label>
+        <label class="chk"><input type="checkbox" id="fWaiting"> Waiting</label>
+        <label class="chk"><input type="checkbox" id="fHideDone"> Hide done</label>
+        <div class="popfoot"><button id="fClear" type="button">Clear filters</button></div>
+      </div>
+    </div>
+    <button id="btnUndo" type="button" aria-label="Undo last board change" title="Nothing to undo" disabled><span class="ic"><i data-i="undo-2"></i></span><span class="tx"> Undo</span></button>
+    <div class="popwrap mobilemore">
+      <button id="btnMore" aria-haspopup="true" aria-expanded="false" aria-controls="morePop" aria-label="More board actions" title="More board actions"><span class="moreglyph" aria-hidden="true">•••</span></button>
+      <div id="morePop" class="popover morepop" hidden></div>   <!-- items: HEAD_ACTIONS in board.js -->
+    </div>
+  </div>
+  <div class="hutils">
+    <div class="hbreak"></div>
+    <span id="status">Not connected</span>
+    <!-- Copy, Refresh, Help and Settings: HEAD_ACTIONS in board.js -->
+  </div>
+</header>
+<nav id="subnav" class="subnav" aria-label="Views in this section" hidden></nav>
+<div id="updateBar" class="kbbar" hidden><span>A new version of the board is available.</span><button id="updNow" type="button">Update now</button><button id="updLater" type="button">Later</button></div>
+<div id="kitBar" class="kbbar" hidden></div>
+<div id="relayBar" class="kbbar" hidden></div>
+<div id="memberBar" class="kbbar" hidden></div>
+<div id="roBar" class="kbbar" hidden></div>
+<div id="sizeBar" class="kbbar" hidden></div>
+<div id="legend" class="legend" aria-label="Colour key"></div>
+<nav id="tabs" aria-label="Columns"></nav>
+<div id="board"></div>
+<div id="tour" class="tour" hidden><div id="tourRing" class="tourring"></div><div id="tourTip" class="tourtip" role="dialog" aria-modal="true" aria-labelledby="tourTitle"><h3 id="tourTitle"></h3><p id="tourText"></p><div class="tourfoot"><span id="tourStep"></span><button type="button" id="tourSkip">Skip</button><button type="button" id="tourBack">Back</button><button type="button" id="tourNext" class="primary">Next</button></div></div></div>
+<nav id="dock" class="dock" aria-label="Main">
+  <button type="button" class="dtab" data-grp="today" aria-label="Today"><i data-i="alarm-clock"></i><span class="dl">Today</span></button>
+  <button type="button" class="dtab" data-grp="tasks" aria-label="Tasks"><i data-i="square-kanban"></i><span class="dl">Tasks</span></button>
+  <button type="button" class="dtab" data-grp="crm" aria-label="People"><i data-i="user"></i><span class="dl">People</span></button>
+  <button type="button" class="dtab" data-head-action="btnSearch" aria-label="Search" title="Search everything (press /)"><i data-i="search"></i><span class="dl">Find</span></button>
+  <button type="button" class="dtab" id="dockMenu" aria-haspopup="true" aria-expanded="false" aria-controls="dockPop" aria-label="Menu"><i data-i="menu"></i><span class="dl">Menu</span></button>
+  <div id="dockPop" class="popover dockpop morepop" hidden>   <!-- items: HEAD_ACTIONS in board.js -->
+    <div id="dockStatus" class="dockstatus"></div>
+  </div>
+</nav>
+
+<dialog id="dlgConflict">
+  <h3 class="mt-0">This board changed while you were working</h3>
+  <p id="cfIntro" class="muted fs-base mt-0"></p>
+  <div id="cfBody"></div>
+  <div class="actions"><button id="cfDiscard">Discard my change</button><button id="cfApply" class="primary">Save with my choices</button></div>
+</dialog>
+
+<dialog id="dlgSend" class="settings" aria-label="Send to Claude">
+  <div class="sethead"><h3>Send to Claude?</h3></div>
+  <p>Your comment will be posted, then <b>your Claude routine</b> will be started to work on task <b id="sendNum"></b>. It will report back on this task with comments, and hand it back to you when it is done. It starts in about one to two minutes.</p>
+  <div class="actions"><button id="sendNo" type="button">Cancel</button><span class="spacer"></span><button id="sendPost" type="button">Post comment only</button><button id="sendYes" type="button" class="primary">Send to Claude</button></div>
+</dialog>
+<dialog id="dlgPublic" class="pubwarn" aria-labelledby="pubTitle">
+  <div class="pubicon" aria-hidden="true"><i data-i="triangle-alert"></i></div>
+  <h2 id="pubTitle">This board is PUBLIC</h2>
+  <p>The repository <b id="pubRepo"></b> is public. <b>Anyone on the internet can read every card</b>: titles, descriptions, comments, contacts, links and history.</p>
+  <p>Unless that is what you want, make the repository private now: GitHub → the repo → Settings → General → Danger Zone → <b>Change visibility</b> → Make private.</p>
+  <div class="actions"><a id="pubLink" class="primary btnlink" href="#" target="_blank" rel="noopener noreferrer">Open the repo settings on GitHub</a><span class="spacer"></span><button id="pubOk" type="button">I understand, show the board</button></div>
+  <p class="hint">This warning shows on every page load while the repository is public.</p>
+</dialog>
+<dialog id="dlgSearch" class="qsearch" aria-label="Search">
+  <div class="qbar"><i data-i="search"></i><input id="qQ" type="search" enterkeyhint="search" placeholder="Search people, tasks, help and settings" autocomplete="off" aria-label="Search people, tasks, notes, messages, help and settings"><button id="qClose" type="button" class="qcancel">Cancel</button></div>
+  <div class="qopts"><label class="qchip"><input type="checkbox" id="qArch"> Include archive</label><span id="qInfo" class="muted" role="status"></span></div>
+  <div id="qRes" class="qres" role="list"></div>
+</dialog>
+<dialog id="dlgPrs" class="settings prsdialog" aria-labelledby="prsTitle">
+  <div class="sethead"><h3 id="prsTitle">Pull requests</h3><button id="prsClose" class="ico" aria-label="Close pull requests"><i data-i="x"></i></button></div>
+  <p class="muted prsintro">Pull requests linked on cards, read live from GitHub with your board login. Nothing here changes a card.</p>
+  <div class="prsbar"><span id="prsStatus" class="muted" role="status"></span><button id="prsRefresh" type="button" class="small"><i data-i="refresh-cw"></i> Refresh</button></div>
+  <div id="prsBody" class="prsbody"></div>
+</dialog>
+<dialog id="dlgCopy" class="settings copydialog" aria-labelledby="copyTitle">
+  <div class="sethead"><h3 id="copyTitle">Copy board</h3><button id="copyClose" class="ico" aria-label="Close copy options"><i data-i="x"></i></button></div>
+  <p class="muted">Choose how you want to use the cards in the current view. Active filters are included.</p>
+  <div class="copychoices">
+    <button id="copyMarkdown" type="button"><i data-i="clipboard-copy"></i><span><b>Copy as Markdown</b><small>Cards, details, comments and history</small></span></button>
+    <button id="copyAgent" type="button"><i data-i="bot"></i><span><b>Copy prompt for an agent</b><small>Board context and instructions for an AI agent</small></span></button>
+  </div>
+</dialog>
+<dialog id="dlgArch" class="settings archview" aria-labelledby="aTitle">
+  <h2 id="aTitle"></h2>
+  <div id="aMeta" class="muted"></div>
+  <div id="aBody"></div>
+  <div class="cbtns"><button id="aRestore" type="button" class="primary">↩ Put back on the board</button><button id="aClose" type="button">Close</button></div>
+</dialog>
+<dialog id="dlgHelp" class="settings help" aria-labelledby="hTitle">
+  <h2 id="hTitle">Help</h2>
+  <p class="htour"><button type="button" class="primary" data-tour-start><i data-i="compass"></i> Show me around</button> A one-minute tour of Today, Kanban, People and the menus.</p>
+  <div class="hgrid">
+    <section><h3><i data-i="alarm-clock"></i> Today</h3><p>One place for people to contact and tasks that are overdue or due today. It shows whichever board sections you have enabled.</p></section>
+    <section><h3><i data-i="user"></i> People</h3><p>Everyone you keep track of. Press <b>Add…</b> for a simple form, or type <b>Name | Client | Role</b> and press Enter for a quick add.</p></section>
+    <section><h3><i data-i="trending-up"></i> Pipeline</h3><p>People by stage. Drag a card to change the stage. Logging a sent message moves a new person to the second stage.</p></section>
+    <section><h3><i data-i="mail"></i> Messages and calls</h3><p>In a person's card, write what you sent or said, pick the channel, then <b>Log</b>. Tick <b>Draft</b> to keep a message you have not sent yet. <b>Mark sent</b> when you send it.</p></section>
+    <section><h3><i data-i="folder"></i> Client files</h3><p>Keep big files in Google Drive, Dropbox or OneDrive. Add the folder links in the <b>Files</b> part of a person's card.</p></section>
+    <section><h3><i data-i="square-kanban"></i> Tasks</h3><p>Board, List, Calendar and Schedule show the same tasks. Click or tap a card to open it. A task can be linked to a person. To add one, type a title in a lane's box and press Enter, or press <b>Add</b> (or Shift+Enter, or the lane's ＋) to add it and open it at once, ready for details, client, project, priority, due date, labels, checklist and links.</p></section>
+    <section class="hagent"><h3><i data-i="bot"></i> Set up an AI assistant</h3><p><b>Claude Code in this board repo:</b> the repo already contains Keeptrack's skills and tool, so no plugin is needed. <b>On a phone or at claude.ai:</b> use the <b>Code</b> tab of the Claude app (or claude.ai/code) in a session on this board repo; ordinary chat cannot update the board. <b>Claude or Codex in another project, Cowork, or Cursor:</b> install the Keeptrack plugin so the same skills and tool are available there.</p><p class="hagentlinks"><button id="hAgentSetup" type="button" class="small"><i data-i="settings"></i> Open Settings → Agents &amp; integrations</button><a data-doc="where-agents-run.md">Which setup should I use?</a><a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/PLUGIN.md" target="_blank" rel="noopener noreferrer">Plugin guide</a><a href="https://github.com/rain-ventures-ai/keeptrack/tree/main/board/kit/skills" target="_blank" rel="noopener noreferrer">Keeptrack skills</a></p><p><b>Copy for AI</b> still works with any ordinary chat. Assistants draft messages; they never send them.</p></section>
+    <section><h3><i data-i="search"></i> Search and archive</h3><p>Press <b>/</b> or click <i data-i="search"></i> to search everything. Old done tasks and Lost people can be moved to the archive (Settings → Board → Archive). Search finds them, and you can put them back.</p></section>
+    <section><h3><i data-i="undo-2"></i> Recovery and Undo</h3><p>This browser remembers the last screen and open task for each board. Unfinished title and description edits are kept here too; if GitHub changed the same text, Keeptrack asks which version to use when you save. Tap <b>Undo</b> after a change, or use <b>Menu → Undo last change</b> on a phone. The five latest Undo actions survive a reload. Keeptrack asks before deleting important items.</p></section>
+    <section><h3><i data-i="lock"></i> Read-only</h3><p>The demo board, a public board with no token, and a token without write access are read-only. A banner at the top tells you why.</p></section>
+  </div>
+  <p class="hlinks"><a class="mainRepoLink" href="https://github.com/rain-ventures-ai/keeptrack" target="_blank" rel="noopener noreferrer"><i data-i="github"></i> Keeptrack repository</a> · Full help: <a data-doc="README.md">all topics</a> · <a data-doc="getting-started.md">getting started</a> · <a data-doc="people-and-follow-ups.md">people</a> · <a data-doc="widgets.md">board widgets</a> · <a data-doc="ai-assistants.md">AI assistants</a> · <a data-doc="privacy-and-security.md">privacy</a> · <a data-doc="faq.md">problems</a> · demo boards: <a href="?demo=crm">people</a>, <a href="?demo=board">tasks</a></p>
+  <div class="cbtns"><button id="hSetupPrompt" type="button"><i data-i="bot"></i> Copy Claude setup prompt</button><span class="spacer"></span><button id="hClose" type="button" class="primary">Close</button></div>
+</dialog>
+<dialog id="dlgSettings" class="settings">
+  <div class="sethead"><h3>Settings</h3><button id="sClose" class="ico" aria-label="Close settings"><i data-i="x"></i></button></div>
+  <div id="setTabs"></div>   <!-- ui.tabs, built by board.js: tabPrefs, tabBoard, tabConn, tabAgents -->
+  <!-- Every block marked data-sec becomes one ui.section (board.js buildSettings): [icon] title + status chip ([data-chip]),
+       a muted purpose line with a scope tag (data-scope: browser = "This browser", board = "Shared board") and "Learn more"
+       (data-learn: a page in docs/help). data-props holds ui.props rows (data-row = label, data-for = the control it labels).
+       data-fold makes the section collapsible (closed). data-prompt mounts the one "Copy setup prompt" helper. -->
+
+  <div id="panelPrefs" role="tabpanel" aria-labelledby="tabPrefs">
+    <div data-sec id="secLook" data-icon="palette" data-title="Appearance" data-scope="browser" data-learn="getting-started.md" data-purpose="How the board looks on this device. Changes apply straight away.">
+      <div data-props>
+        <div data-row="Theme" data-for="sTheme"><select id="sTheme"><option value="auto">Auto (follows your device)</option><optgroup label="Classic"><option value="light">Light</option><option value="dark">Dark</option><option value="midnight">Midnight</option><option value="sand">Sand</option></optgroup><optgroup label="3 colours: paper, ink, accent"><option value="paper">Paper</option><option value="mono">Mono</option><option value="iris">Iris</option><option value="forest">Forest</option><option value="ember">Ember (dark)</option><option value="ink">Ink (dark)</option></optgroup><optgroup label="5 colours: + cards, borders"><option value="studio">Studio</option><option value="newsprint">Newsprint</option><option value="blueprint">Blueprint</option><option value="graphite">Graphite (dark)</option></optgroup><option value="custom" id="sThemeCustom" hidden>Your DESIGN.md</option></select></div>
+        <div data-row="Card style" data-for="sStyle"><select id="sStyle"><option value="classic">Classic</option><option value="colorful">Colourful (client and urgency colours)</option></select></div>
+        <div data-row="Layout" data-for="sLayout"><select id="sLayout"><option value="dock">Dock: menu bar at the bottom</option><option value="classic">Classic: everything in the top bar</option></select></div>
+      </div>
+      <details class="sfold" id="themeFold"><summary>Use your own colours (DESIGN.md)</summary>
+        <p class="hint">Import a <a href="https://github.com/google-labs-code/design.md" target="_blank" rel="noopener noreferrer">DESIGN.md</a> file. Keeptrack reads its colours only.</p>
+        <div class="sbtns"><button id="sThemeImport" type="button"><i data-i="upload"></i> Import DESIGN.md</button><button id="sThemeExport" type="button"><i data-i="clipboard-copy"></i> Copy theme as DESIGN.md</button></div>
+        <input id="sThemeFile" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden><div id="sThemeMsg" class="hint" role="status"></div>
+      </details>
+    </div>
+    <div data-sec id="secWidgets" data-icon="layout-grid" data-title="Board customisations" data-scope="browser" data-learn="widgets.md" data-purpose="Choose this board’s appearance and extra Today widgets. Preferences are remembered in this browser for each board.">
+      <div data-props><div data-row="Use a separate appearance for this board" data-for="sBoardAppearance"><input id="sBoardAppearance" type="checkbox"></div></div>
+      <p class="hint">When enabled, theme, card style and imported colours apply only to this board in this browser. Turn off to return to your browser’s usual appearance; your board preference is kept.</p>
+      <div data-props><div data-row="Enable board widgets" data-for="sWidgets"><input id="sWidgets" type="checkbox"></div></div>
+      <p class="hint">Off by default. Turn on to use the widgets configured in this board’s widgets.json. Turning off hides them and stops their requests; it does not delete the configuration. Supported widgets can adjust their own layout, but cannot run custom scripts. Weather widgets contact Open-Meteo using their configured location.</p>
+    </div>
+    <div data-sec id="secAlerts" data-icon="bell" data-title="Notifications" data-scope="browser" data-learn="faq.md" data-purpose="Desktop alerts when someone else changes the board, while it is open in a tab.">
+      <span id="alChip" data-chip></span>
+      <div data-props>
+        <div data-row="Alerts" data-for="alOn"><label class="schk"><input type="checkbox" id="alOn"> On</label></div>
+        <div data-row="Alert me about" data-for="alPreset" id="alPresetRow"><select id="alPreset"><option value="tagged">Only when I am tagged or assigned</option><option value="me">Me: tags, my cards and my agents</option><option value="all">Everything</option><option value="custom">Custom: the kinds I choose</option><option value="off">Nothing</option></select></div>
+        <div data-row="Permission"><div id="alPerm"></div></div>
+      </div>
+      <details class="sfold" id="alFold"><summary>Choose each kind of alert</summary>
+        <div id="alKinds" class="alkinds"></div>
+        <p class="hint">“My cards” are cards assigned to you. Your agents write as <code>claude@you</code> or <code>codex@you</code>. The page checks about every 30 seconds.</p>
+      </details>
+      <div class="sbtns"><button id="alTest" type="button"><i data-i="bell"></i> Send a test alert</button></div>
+    </div>
+    <div data-sec id="secUnread" data-icon="eye" data-title="Unread" data-scope="browser" data-purpose="A dot marks cards that changed since you last opened them.">
+      <div class="sbtns"><button id="sMarkAll" type="button">Mark all cards as read</button></div>
+    </div>
+  </div>
+
+  <div id="panelBoard" role="tabpanel" aria-labelledby="tabBoard" hidden>
+    <div id="sBoardRo" class="setstate"></div>
+    <div data-sec id="secModes" data-icon="square-kanban" data-title="Sections" data-scope="board" data-learn="tasks.md" data-purpose="Turn off a part you do not use. Nothing is deleted, and Today combines the parts that are on.">
+      <div data-props>
+        <div data-row="Tasks" data-for="sModeTasks"><label class="schk"><input id="sModeTasks" type="checkbox"> On</label></div>
+        <div data-row="People &amp; pipeline (CRM)" data-for="sModeCrm"><label class="schk"><input id="sModeCrm" type="checkbox"> On</label></div>
+      </div>
+    </div>
+    <div data-sec id="secResearch" data-icon="search" data-title="Backlog auto-research" data-scope="board" data-learn="where-agents-run.md" data-purpose="When this is on, the relay dispatcher picks bare Backlog cards (no to-dos, no links, almost no details) and an agent adds details, links and to-dos, then labels the card “researched”. It never moves or approves a card. Off by default.">
+      <div data-props>
+        <div data-row="Research bare Backlog cards" data-for="sResearch"><label class="schk"><input id="sResearch" type="checkbox"> On</label></div>
+        <div data-row="Cards each run" data-for="sResearchN"><input id="sResearchN" type="number" min="1" max="10" step="1" inputmode="numeric" class="hosted-research-count"></div>
+      </div>
+    </div>
+    <div data-sec id="memSec" data-icon="users" data-title="Members" data-scope="board" data-learn="tasks.md" data-purpose="The people work can be assigned to. Their work email and time zone tell Claude, Codex and email sync who is who, and what “tomorrow” means for them.">
+      <div id="memBox"></div>
+    </div>
+    <div data-sec id="colSet" data-icon="columns-3" data-title="Columns" data-scope="board" data-learn="tasks.md" data-purpose="Rename, reorder, add or remove Kanban columns. Each change saves at once and can be undone.">
+      <div id="colList" class="collist"></div>
+      <div class="coladd"><input id="colNew" aria-label="New column name" placeholder="New column name" maxlength="40"><button id="colAdd" type="button" class="primary"><i data-i="plus"></i> Add column</button></div>
+      <p class="hint">To do, In progress and Done stay, because agents use them. A new column goes before Done.</p>
+    </div>
+    <div data-sec id="labelSec" data-icon="tag" data-title="Labels" data-scope="board" data-learn="tasks.md" data-purpose="Rename, recolour or delete a label. Every task that uses it changes too.">
+      <div id="labelBox" class="lbled"></div>
+    </div>
+    <div data-sec id="secArchive" data-icon="archive" data-title="Archive" data-scope="board" data-learn="search-and-archive.md" data-purpose="Move old finished work out of the board file to keep it fast. Search still finds it.">
+      <div id="archBox"></div>
+    </div>
+    <div data-sec id="secBoardFile" data-fold data-icon="file-text" data-title="Advanced: board file" data-scope="board" data-purpose="Where the shared board data is stored. Change it under Connection.">
+      <div id="bInfo"></div>
+    </div>
+  </div>
+
+  <div id="panelConn" role="tabpanel" aria-labelledby="tabConn" hidden>
+    <div id="bState" class="setstate"></div>
+    <div data-sec id="bThis" data-icon="link" data-title="This board" data-scope="browser" data-learn="getting-started.md" data-purpose="The GitHub repository this board lives in, and the token this browser uses for it.">
+      <span id="bThisChip" data-chip></span>
+      <div id="bThisInfo">
+        <div data-props>
+          <div data-row="Repository"><span id="bThisBadge"></span><b id="bThisRepo"></b></div>
+          <div data-row="Branch and file"><span id="bThisSub"></span></div>
+          <div data-row="You" id="bThisMeRow"><span id="bThisMe"></span></div>
+        </div>
+      </div>
+      <details class="sfold" id="bEditFold"><summary id="bEditBtn">Change connection</summary>
+        <div id="bEdit">
+          <p><a href="?backend=hosted">Sign in to a local hosted board</a></p>
+          <div data-props>
+            <div data-row="Repository" data-for="sRepo"><input id="sRepo" placeholder="owner/repo" autocomplete="off"></div>
+            <div data-row="Branch" data-for="sBranch"><input id="sBranch" placeholder="main" autocomplete="off"></div>
+            <div data-row="File path" data-for="sPath"><input id="sPath" placeholder="board/tasks.json" autocomplete="off"></div>
+            <div data-row="Your GitHub username" data-for="sMe"><input id="sMe" placeholder="your-username" autocomplete="off"></div>
+            <div data-row="GitHub token" data-for="sToken"><div class="stoken">
+              <input id="sToken" name="keeptrack-github-token" type="password" autocomplete="new-password" placeholder="github_pat_...">
+              <div class="stoken__state"><span id="sTokenState" role="status">No token saved</span>
+                <span id="sTokenBtns" class="fldbtns" hidden><button type="button" class="small" data-copy="sToken"><i data-i="clipboard-copy"></i> Copy</button><button type="button" class="small" data-show="sToken" aria-pressed="false"><i data-i="eye"></i> Show</button></span></div>
+            </div></div>
+          </div>
+          <div id="sTokenReuse" class="hint tokenreuse" role="status"></div>
+          <p class="hint">One token per board, kept in this browser and sent only to api.github.com. <a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Make a token with the right permissions →</a></p>
+          <details class="sfold"><summary>Token help</summary>
+            <p class="hint">The link fills in the <b>Resource owner</b> and the <b>Contents</b> and <b>Issues</b> permissions. You still choose <b>Only select repositories</b> and pick this board repo.</p>
+            <p class="hint">One token can serve every board it can access. Boards owned by different GitHub organisations may need different tokens.</p>
+            <p class="hint">Dots in the box but “not saved” in the status? Your password manager filled it. Select <b>Save &amp; connect</b> to keep that value.</p>
+          </details>
+          <div class="sbtns"><button id="sTest" type="button"><i data-i="stethoscope"></i> Test these values</button><span class="spacer"></span><button id="sCancel" type="button">Cancel</button><button id="sSave" type="button" class="primary">Save &amp; connect</button></div>
+        </div>
+      </details>
+    </div>
+    <div data-sec id="secHealth" data-icon="stethoscope" data-title="Health" data-scope="browser" data-learn="faq.md" data-purpose="Tests each step from your token to the board file, and says what to fix.">
+      <span id="ckChip" data-chip></span>
+      <div class="sbtns"><button id="ckRun" type="button" class="primary"><i data-i="stethoscope"></i> Run checks</button><button id="ckCopy" type="button" hidden><i data-i="clipboard-copy"></i> Copy report</button></div>
+      <ol id="ckList" class="cklist"></ol>
+      <p class="hint">The report never contains your token. Paste it to Claude or a teammate if you need help.</p>
+    </div>
+    <div data-sec id="secBoards" data-icon="folders" data-title="Your boards" data-scope="browser" data-learn="getting-started.md" data-purpose="Boards saved in this browser. Each keeps its own token.">
+      <div id="bList" class="blist"></div>
+      <div class="sbtns"><button id="bAdd" type="button"><i data-i="plus"></i> Add a board</button></div>
+      <section id="bWiz" class="bwiz" hidden></section>
+      <details class="sfold" id="bNewFold"><summary>Set up a new board with Claude</summary>
+        <p class="hint">You make the repo and the token; Claude adds the board files and checks them, following <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/NEW-BOARD.md" target="_blank" rel="noopener noreferrer">NEW-BOARD.md</a>.</p>
+        <div data-prompt="board" data-id="bNewPrompt"></div>
+      </details>
+    </div>
+    <div data-sec id="secAdv" data-fold data-icon="sliders-horizontal" data-title="Advanced" data-scope="browser" data-learn="privacy-and-security.md" data-purpose="App updates, moving your settings to another device, and removing tokens or boards.">
+      <div data-props>
+        <div data-row="App version"><code id="sVer">…</code><button id="sUpdate" type="button" class="small"><i data-i="refresh-cw"></i> Update to latest version</button></div>
+      </div>
+      <p class="hint">The board checks for a new version about every 10 minutes. Update forces a full refresh that skips every cache.</p>
+      <div id="sDanger" class="sdanger">
+        <div data-banner="danger">These copy or remove secrets. Each one asks first. Use them only on your own devices.</div>
+        <div data-props>
+          <div data-row="Move settings to another device" id="secMove"><div class="srowstack">
+            <p class="hint">Copies every board and setting saved in this browser, <b>unencrypted</b>. Tokens and keys are left out unless you tick the box; with them, treat it like a password and delete the message you send it in.</p>
+            <label class="schk"><input type="checkbox" id="xSecrets"> Include tokens and keys</label>
+            <div class="sbtns"><button id="xCode" type="button" class="small"><i data-i="clipboard-copy"></i> Copy settings code</button><button id="xLink" type="button" class="small"><i data-i="link"></i> Copy setup link</button></div>
+            <textarea id="xPaste" rows="2" placeholder="Paste a settings code or setup link here" aria-label="Settings code to import"></textarea>
+            <div class="sbtns"><button id="xImport" type="button" class="small"><i data-i="download"></i> Import settings</button></div>
+          </div></div>
+          <div data-row="Forget token" id="sForgetRow"><div class="srowstack">
+            <p class="hint">Removes this board's token, and the copy of the board kept for a fast start, from this browser.</p>
+            <div class="sbtns"><button id="sForget" type="button" class="small danger">Forget token</button></div>
+          </div></div>
+          <div data-row="Remove a board"><div id="bRemoveList" class="blist srowstack"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="panelAgents" role="tabpanel" aria-labelledby="tabAgents" hidden>
+    <div data-sec id="agRegister" data-icon="activity" data-title="Routines on this board" data-scope="board" data-learn="schedules.md" data-purpose="Reports saved in this board repo, not a live scheduler check. A registered routine may still need setup. Its scheduler controls whether it runs; browser switches below only record your preferences.">
+      <div id="routineRegister" role="status">Open Agents to load routine reports.</div>
+      <button id="routineRefresh" type="button">Refresh routine reports</button>
+    </div>
+    <div data-sec id="agRoutineSetup" data-icon="calendar" data-title="Set up any routine for this board" data-scope="browser" data-learn="schedules.md" data-purpose="Choose the work and your goals, then copy a setup prompt into your assistant. Nothing is scheduled or changed by this form.">
+      <label for="routineWorkflow">What should it do?</label>
+      <select id="routineWorkflow"><option value="notes">Post-meeting notes and actions</option><option value="email">Contact email history</option><option value="cleanup">Safe board cleanup proposals</option><option value="tasks">Task agent requests</option><option value="custom">Custom goals or briefing</option></select>
+      <label for="routineGoals">Your goals and instructions</label>
+      <textarea id="routineGoals" rows="3" placeholder="For example: What could generate revenue soon? Show evidence, blockers and proposed next steps."></textarea>
+      <label for="routineSchedule">When and in which time zone?</label>
+      <input id="routineSchedule" placeholder="For example: Mon, Wed, Fri at 10:30, Europe/London">
+      <p class="hint">An assistant will help verify your sources, permissions and existing schedules before setting anything up. You choose the actual scheduler: Claude, Codex or another supported runner. A local runner needs its computer available.</p>
+      <button id="routineSetupCopy" type="button">Copy routine setup prompt</button>
+      <p class="hint">Paste into your board-aware assistant. Approve scope and schedule before provisioning. Cleanup and briefings propose changes first; they do not delete, archive or change tasks without approval.</p>
+      <details class="sfold"><summary>How routines stay visible and avoid overlap</summary><p class="hint">Each routine has a board, owner, workflow and approved sources. Reuse an existing matching schedule instead of creating a duplicate. Shared boards keep owner-specific checkpoints and deduplicate imported source events; a register alone is not a cross-user lock.</p><p class="hint">The worker reports its start, completion, summary and counts into <code>automation/routines/&lt;id&gt;.json</code> using Keeptrack's routine commands. Keep secrets and private email content out of reports.</p><a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/ROUTINES.md" target="_blank" rel="noopener noreferrer">Routine registration and reporting contract</a></details>
+    </div>
+    <div data-sec id="agPick" data-icon="compass" data-title="What do you want to set up?" data-scope="browser" data-learn="where-agents-run.md" data-purpose="Agents read and update the board for you. They draft messages and never send them.">
+      <div id="agChooser" class="agpicks"></div>
+    </div>
+
+    <div data-sec id="agClaude" data-icon="bot" data-title="@claude in task comments" data-scope="browser" data-learn="ai-assistants.md" data-purpose="Type @claude in a task comment, and your own Claude routine starts work on that task.">
+      <span id="agClaudeChip" data-chip></span>
+      <div data-props>
+        <div data-row="Use @claude" data-for="sUseClaude"><label class="schk"><input type="checkbox" id="sUseClaude"> On</label></div>
+      </div>
+      <p class="hint">You need a Claude plan with routines, a GitHub token for the routine and a free cron-job.org account. About ten minutes.</p>
+      <div id="boxClaude" hidden>
+        <ol class="cwsteps" id="cwSteps">
+          <li class="cw" data-step="1"><button type="button" class="cwh"><span class="cwn">1</span><b>Make your routine</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>A routine is Claude working in the cloud for you. It uses your own Claude plan.</p>
+              <a class="wbig" href="https://claude.ai/code/routines" target="_blank" rel="noopener noreferrer">Open Claude routines →</a>
+              <p>Click <b>New routine</b> and fill in:</p>
+              <div class="cprows">
+                <div class="cprow"><span>Name</span><code id="cwName"></code><button type="button" class="small" data-cw-copy="cwName"><i data-i="clipboard-copy"></i> Copy</button></div>
+                <div class="cprow"><span>Instructions</span><code id="cwLoader" class="clip"></code><button type="button" class="small" data-cw-copy="cwLoader"><i data-i="clipboard-copy"></i> Copy</button></div>
+                <div class="cprow"><span>Repository</span><code id="cwRepo"></code><button type="button" class="small" data-cw-copy="cwRepo"><i data-i="clipboard-copy"></i> Copy</button></div>
+              </div>
+              <ul class="wmini">
+                <li><b>Environment:</b> add a new one with the same name. Keep network access at <b>Trusted</b>.</li>
+                <li><b>Connectors:</b> remove all of them.</li>
+                <li><b>Model:</b> Sonnet is enough.</li>
+              </ul>
+              <div class="cwfoot"><button type="button" class="primary" data-cw-done="1">Done, next step</button></div>
+            </div></li>
+          <li class="cw" data-step="2"><button type="button" class="cwh"><span class="cwn">2</span><b>Let the routine change the board</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>The routine needs its own GitHub token for this board.</p>
+              <a class="wbig" id="cwTokLink" target="_blank" rel="noopener noreferrer">Open GitHub: make a token →</a>
+              <ol class="wmini">
+                <li><b>Repository access:</b> select <b>Only select repositories</b>, then <b id="cwRepo2"></b>.</li>
+                <li>Check that <b>Contents</b> is <b>Read and write</b> (the link sets it). Click <b>Generate token</b> and copy it.</li>
+                <li>In your routine, open the environment. Add an environment variable with this name, then paste the token as its value:</li>
+              </ol>
+              <div class="cprows"><div class="cprow"><span>Name</span><code id="cwVar">BOARD_TOKEN</code><button type="button" class="small" data-cw-copy="cwVar"><i data-i="clipboard-copy"></i> Copy</button></div></div>
+              <p class="hint">This token stays in your routine. This page never sees it.</p>
+              <div class="cwfoot"><button type="button" class="primary" data-cw-done="2">Done, next step</button></div>
+            </div></li>
+          <li class="cw" data-step="3"><button type="button" class="cwh"><span class="cwn">3</span><b>Add a start button to the routine</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>An API trigger lets something outside Claude start your routine with a web address and a token.</p>
+              <ol class="wmini">
+                <li>In your routine, click <b>Edit</b>, then <b>Add another trigger</b>, then <b>API</b>. Save.</li>
+                <li>Copy the trigger's <b>URL</b> and paste it below.</li>
+                <li>Click <b>Generate token</b>. Copy it at once, because it shows only one time. Paste it below.</li>
+              </ol>
+              <label for="sClaudeUrl">Trigger URL</label><input id="sClaudeUrl" placeholder="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire" autocomplete="off">
+              <label for="sClaudeTok">Trigger token</label><input id="sClaudeTok" type="password" autocomplete="off" placeholder="sk-ant-oat01-…"><div class="fldbtns"><button type="button" class="small" data-copy="sClaudeTok"><i data-i="clipboard-copy"></i> Copy</button><button type="button" class="small" data-show="sClaudeTok" aria-pressed="false"><i data-i="eye"></i> Show</button></div>
+              <div id="cwTrigCk" class="wchecks"></div>
+            </div></li>
+          <li class="cw" data-step="4"><button type="button" class="cwh"><span class="cwn">4</span><b>Connect cron-job.org</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>A web page cannot start a routine by itself. A free cron-job.org account does it for the page, in about one minute.</p>
+              <a class="wbig" href="https://console.cron-job.org/settings" target="_blank" rel="noopener noreferrer">Open cron-job.org →</a>
+              <ol class="wmini"><li>Sign up (free) or sign in.</li><li>Go to <b>Settings → API</b>, enable it and click <b>Create API key</b>.</li><li>Copy the key and paste it below.</li></ol>
+              <label for="sCronKey">cron-job.org API key</label><input id="sCronKey" type="password" autocomplete="off" placeholder="API key"><div class="fldbtns"><button type="button" class="small" data-copy="sCronKey"><i data-i="clipboard-copy"></i> Copy</button><button type="button" class="small" data-show="sCronKey" aria-pressed="false"><i data-i="eye"></i> Show</button></div>
+              <div id="cwCronCk" class="wchecks"></div>
+              <details class="hint"><summary>What does cron-job.org see?</summary>Your routine's trigger token and the task number, never the task's text. The page deletes the job as soon as it has run.</details>
+            </div></li>
+          <li class="cw" data-step="5"><button type="button" class="cwh"><span class="cwn">5</span><b>Test it</b><span class="cwst"></span></button>
+            <div class="cwb">
+              <p>The page makes a small test task and asks Claude to say hello on it. This takes about two minutes.</p>
+              <div class="cwfoot left"><button type="button" class="primary" id="cwTest">Send a test to Claude</button></div>
+              <div id="cwTestCk" class="wchecks"></div>
+            </div></li>
+        </ol>
+        <details class="sfold" id="cwDebug"><summary>Test and fix problems</summary>
+          <p class="hint">Test cron-job.org on its own: it opens this page one time and does not start Claude. Takes about two minutes.</p>
+          <div class="sbtns"><button type="button" class="small" id="cwCronTest">Test cron-job.org</button><button type="button" class="small" id="cwJobs">Show jobs on cron-job.org</button></div>
+          <div id="cwDbgCk" class="wchecks"></div>
+          <h5 class="cwlogh">What happened to each send <span class="muted">(this browser)</span></h5>
+          <div id="cwLog" class="wchecks cwlog"></div>
+          <div class="sbtns"><button type="button" class="small" id="cwReport"><i data-i="clipboard-copy"></i> Copy debug report</button><button type="button" class="small" id="cwLogClear">Clear the list</button></div>
+          <p class="hint">The report has no tokens or keys. Paste it to Claude or to a teammate to get help.</p>
+        </details>
+        <details class="sfold"><summary>Let Claude guide you instead</summary>
+          <p class="hint">Claude explains each step, or does the clicking in your browser. It never handles your secrets: you paste those yourself. Full guide: <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/ROUTINE-SETUP.md" target="_blank" rel="noopener noreferrer">ROUTINE-SETUP.md</a>.</p>
+          <div data-prompt="routine" data-id="sClaudePrompt"></div>
+        </details>
+      </div>
+    </div>
+
+    <div data-sec id="agLocal" data-icon="laptop" data-title="Claude or Codex in your chat app" data-scope="browser" data-learn="where-agents-run.md" data-purpose="Claude, Codex or Cursor read and update the board while you chat with them.">
+      <span id="agLocalChip" data-chip></span>
+      <div data-prompt="start" data-id="agSetupPrompt"></div>
+      <details class="sfold" id="agHand"><summary>Set it up by hand</summary>
+        <div class="agtools" id="agTools"></div>
+        <div id="agToolBody"></div>
+      </details>
+      <div data-props>
+        <div data-row="Hand tasks to @codex" data-for="sUseCodex"><label class="schk"><input type="checkbox" id="sUseCodex"> On</label></div>
+      </div>
+      <p id="boxCodex" class="hint" hidden>When a card's newest request is for <b>@codex</b>, the card's top button becomes <b>Copy for Codex</b>. Paste that into Codex; it claims the card and reports back.</p>
+    </div>
+
+    <div data-sec id="agEmail" data-icon="mail" data-title="Email contact sync" data-scope="browser" data-learn="people-and-follow-ups.md" data-purpose="A scheduled routine checks Gmail or Outlook against your people and records who you were in touch with.">
+      <span id="agEmailChip" data-chip></span>
+      <div data-props>
+        <div data-row="Remember my email setup" data-for="sUseEmail"><label class="schk"><input type="checkbox" id="sUseEmail"> I set this up elsewhere</label></div>
+      </div>
+      <p class="hint">This browser marker does not create, enable or pause a schedule. Check the routine's saved report above and manage the actual job in its scheduler.</p>
+      <div data-prompt="email" data-id="agEmailPrompt"></div>
+      <details class="sfold"><summary>What it reads and stores</summary>
+        <p class="hint">It matches exact addresses on your people and records short contact facts. It never stores full email text or attachments, and never sends, drafts, deletes or marks mail as read.</p>
+        <p class="hint">It keeps a last-run checkpoint in the board repo, separate from the @claude routine. <a href="https://github.com/rain-ventures-ai/keeptrack/blob/main/board/kit/skills/keeptrack-email/references/routines.md" target="_blank" rel="noopener noreferrer">Open the guide →</a></p>
+      </details>
+    </div>
+  </div>
+</dialog>
+
+<!-- The add-person form, the person, client and project drawers are built by board.js with ui.js (buildPersonDrawer, buildClientDrawer, buildProjectDrawer, buildAddPersonForm), on the same
+     pattern as the task drawer: a header (identity, undo, copy, the more-actions menu, close), one property list, then sections. -->
+<dialog id="dlgAddPerson" class="ui-sheet ui-sheet--center personform" aria-labelledby="apTitle"><form id="apForm"></form></dialog>
+
+<dialog id="dlgContact" class="drawer uidrawer crmdrawer" aria-label="Person details">
+  <div class="dhead" id="pHead"></div>
+  <div class="dbody" id="pBody"></div>
+</dialog>
+
+<dialog id="dlgClient" class="drawer uidrawer crmdrawer" aria-label="Client details">
+  <div class="dhead" id="clHead"></div>
+  <div class="dbody" id="clBody"></div>
+</dialog>
+
+<dialog id="dlgProject" class="drawer uidrawer crmdrawer" aria-label="Project details">
+  <div class="dhead" id="prHead"></div>
+  <div class="dbody" id="prBody"></div>
+</dialog>
+
+<dialog id="dlgCard" class="drawer uidrawer taskdrawer" aria-label="Task details">
+  <!-- The header buttons, the property list and the section frames are built by board.js with ui.js (buildDrawer); the static parts below are moved into them. -->
+  <div class="dhead" id="cHead"><span id="dSaved" class="dsaved" role="status"></span></div>
+  <div class="dbody" id="cBody">
+    <div id="cmNewBar" class="cmnewbar" role="status" hidden><span>New updates on this card</span><button type="button" class="primary">Show</button></div>
+    <textarea id="cTitle" class="dtitle" rows="1" aria-label="Title" placeholder="Task title"></textarea>
+    <div id="cClaimWrap" class="dclaim" hidden></div>
+    <div id="cLastRun" class="lastrun" hidden></div>
+    <div id="cProps"></div>
+    <div id="cDescParts">
+      <div id="cDescView" class="descview" tabindex="0" title="Double-click to edit"></div>
+      <div id="descEdit" hidden>
+        <div id="descTools" class="mdbar"></div>
+        <textarea id="cDetails" class="ddesc" placeholder="Add a more detailed description. Markdown works: ## heading, - list, **bold**, [label](https://…). URLs become clickable." aria-label="Description"></textarea>
+        <div id="descPrev" class="descview md mdprev" hidden></div>
+        <div class="cbtns"><button id="cDescSave" type="button" class="primary">Save</button><button id="cDescCancel" type="button">Cancel</button><span class="hint">Markdown · Ctrl/Cmd+Enter saves</span></div>
+      </div>
+    </div>
+    <div id="cmParts">
+      <div class="composer"><textarea id="cmText" rows="1" placeholder="Write a comment…" aria-label="Write a comment"></textarea>
+        <div class="cbtns" id="cmActions" hidden><button id="cmPost" type="button" class="primary">Comment</button><span class="hint">Ctrl/Cmd+Enter posts</span></div></div>
+      <div class="hint" id="cmHint" hidden>Set your GitHub username in Settings so comments show your name.</div>
+      <div id="cmStream" class="cmlist" aria-live="polite"></div>
+    </div>
+    <div id="cSecs"></div>
+    <div class="dfoot2"><span id="dCreated" class="dcreated"></span></div>
+  </div>
+</dialog>
+
+<!-- Plain external scripts preserve source ordering; board.js checks data-kb-markup before wiring the UI. -->
+<script src="icons.js"></script>
+<script src="ui.js"></script>
+<script src="board.js"></script>
+</body>
+</html>

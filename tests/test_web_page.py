@@ -53,6 +53,26 @@ class ContentSecurityPolicy(unittest.TestCase):
         self.assertIn("blob:", pol["script-src"], "the bootstrap runs board.js from blob: URLs")
         self.assertNotIn("sc.textContent", read("index.html"), "no inline script text: the policy would block it")
 
+    def test_hosted_entry_uses_only_external_assets_and_strict_policy(self):
+        html = read("hosted.html")
+        pol = self.check_page("hosted.html")
+        self.assertEqual(pol["script-src"], ["'self'"])
+        self.assertEqual(pol["style-src"], ["'self'"])
+        self.assertEqual(pol["connect-src"], ["'self'"])
+        for d in ("frame-src", "form-action"):
+            self.assertEqual(pol[d], ["'none'"])
+        self.assertFalse(inline_hashes(html))
+        self.assertNotRegex(html, r'<style\b|\sstyle=|\son[a-z]+=')
+        scripts = re.findall(r'<script src="([^"]+)"', html)
+        self.assertEqual(scripts[0], "storage-hosted.js")
+        self.assertEqual(scripts[-3:], ["icons.js", "ui.js", "board.js"])
+        self.assertIn('href="hosted.css"', html)
+        markup = re.search(r'data-kb-markup="(\d+)"', html).group(1)
+        self.assertEqual(markup, re.search(r'const KB_MARKUP = (\d+)', read("board.js")).group(1))
+        # Both entry points carry the same UI ids/structure; a changed index must update hosted too.
+        self.assertEqual(re.findall(r'\bid="([^"]+)"', html.split('<body>')[1]),
+                         re.findall(r'\bid="([^"]+)"', read("index.html").split('<body>')[1].split('<script>')[0]))
+
     def test_ui_catalogue_has_a_policy_too(self):
         pol = self.check_page("ui.html")
         self.assertEqual(pol["connect-src"], ["'self'"])
