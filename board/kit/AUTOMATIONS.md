@@ -74,3 +74,13 @@ Retiring a built-in is an explicit release step: disable affected installs first
 or seen logs. The web Automations screen, Relay scheduler hook-up, usage and direct writes are outside v1.
 
 Tick supplies each item’s `action_key`: `auto:<slug>:` + sha256 of compact JSON `[key, rev]` (list order preserved). Copy it unchanged for proposals and retries. Mixed ticks exit 0 with work; report every payload `problems` entry. Invalid/missing packs remain visible in list. Undelivered reservations finish failed with code `undelivered`; owners can finish failed even after pack loss.
+
+Checks must reject duplicate item keys (including different revisions); tick reports `duplicate-key` before reserving.
+Checks receive `KEEPTRACK_DEADLINE_SECONDS`, a work budget below the manifest timeout. Bound source calls by the
+remaining budget and cap pages per invocation. Return accumulated items, `more: true` and an opaque continuation
+cursor when stopping early. Prefer `KEEPTRACK_SCAN_CURSOR` over the seen-log cursor when supplied.
+On an empty result with `more: true`, tick saves the cursor as the binding's `scan_cursor` in ignored
+`automation/.local/tick-state.json` and passes it to the next due check. This causes no tracked writes or reservation.
+A result with items never advances this local continuation. Only a successful `mark` carrying the batch cursor
+advances the seen cursor and clears local continuation; partial marks retain it. A result with `more: false`
+also clears local continuation. The seen log remains exclusively written by `mark`.

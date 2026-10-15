@@ -1,4 +1,4 @@
-import json, os, sys, hashlib
+import json, os, sys, hashlib, time
 from pathlib import Path
 
 def emit(items=None, more=False, cursor=None, note=None):
@@ -12,6 +12,17 @@ def config():
 
 def hashed(value):
     return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+
+# For paginated sources, prefer this local empty-scan continuation to seen["cursor"].
+# It is untracked; only mark may advance the seen log. A completed mark or more:false clears it.
+def scan_cursor(seen):
+    return os.environ.get("KEEPTRACK_SCAN_CURSOR") or seen.get("cursor")
+
+# Paginated checks must cap pages, bound each call by remaining time, and return
+# accumulated items with more:true + cursor on early stop (including zero items).
+# Item keys must be unique across all revisions; duplicates fail before reservation.
+def work_deadline():
+    return time.monotonic() + float(os.environ.get("KEEPTRACK_DEADLINE_SECONDS", "50"))
 
 def main():
     folder = Path(config()["notes_dir"])

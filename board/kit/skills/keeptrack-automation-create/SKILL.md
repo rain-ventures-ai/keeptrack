@@ -27,3 +27,13 @@ For network packs, dry-run requires the install-time network grant: install unve
 Leave it unverified. Report test results and the SETUP.md steps the owner still needs to perform.
 
 Tick supplies each item’s `action_key`: `auto:<slug>:` + sha256 of compact JSON `[key, rev]` (list order preserved). Copy it unchanged for proposals and retries. Mixed ticks exit 0 with work; report every payload `problems` entry. Invalid/missing packs remain visible in list. Undelivered reservations finish failed with code `undelivered`; owners can finish failed even after pack loss.
+
+## Check contract
+
+Emit unique item keys, even across revisions: duplicate keys fail with `duplicate-key` before reservation.
+Bound total work by `KEEPTRACK_DEADLINE_SECONDS` (below the manifest timeout), bound each source call by the
+remaining budget, and cap pages per run. On early stop return accumulated items with `more: true` and an opaque
+cursor. Prefer `KEEPTRACK_SCAN_CURSOR` to the seen-log cursor. Tick retains empty-result continuation only in
+ignored `automation/.local/tick-state.json` as `scan_cursor`, with no reservation or tracked write. Batches with
+items advance only through `mark`; a mark carrying the completed batch cursor clears local continuation, as does
+`more: false`. Partial marks retain continuation. Never write the seen log from a check.

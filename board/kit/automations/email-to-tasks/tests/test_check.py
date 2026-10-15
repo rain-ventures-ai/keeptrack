@@ -41,3 +41,36 @@ else: print(json.dumps({"messages": [{"id": "matched", "from": "Name <known@exam
     def test_missing_gog_blocked(self):
         with patch.object(self.mod.shutil, "which", return_value=None): code, value = self.run_check()
         self.assertEqual(code, 2); self.assertEqual(value["note"], "setup-missing:gog")
+
+    def test_page_cap_and_scan_cursor_precedence(self):
+        import base64
+        from types import SimpleNamespace
+        board = self.root/'board'; board.mkdir()
+        (board/'tasks.json').write_text('{"contacts": []}')
+        def cursor(page):
+            return base64.urlsafe_b64encode(json.dumps(dict(after=1, until=2, page=page)).encode()).decode()
+        self.state.write_text(json.dumps(dict(keys={}, cursor=cursor('seen'))))
+        calls = []
+        def fake_run(argv, **kw):
+            if argv[1] == 'auth': return SimpleNamespace(returncode=0, stdout=b'{"accounts":["local"]}')
+            calls.append(argv[argv.index('--page')+1])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(messages=[], nextPageToken=str(len(calls)) if len(calls) < 6 else None)).encode())
+        with patch.dict(os.environ, KEEPTRACK_SCAN_CURSOR=cursor('scan')), patch.object(self.mod.shutil, 'which', return_value='gog'), patch.object(self.mod.subprocess, 'run', side_effect=fake_run):
+            code, value = self.run_check()
+        self.assertEqual(code, 0); self.assertEqual(len(calls), 5)
+        self.assertEqual(calls[0], 'scan'); self.assertTrue(value['more'])
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(value['cursor']))['page'], '5')
+
+    def test_source_timeout_returns_empty_continuation(self):
+        import subprocess
+        from types import SimpleNamespace
+        board = self.root/'board'; board.mkdir()
+        (board/'tasks.json').write_text('{"contacts": []}')
+        def fake_run(argv, **kw):
+            if argv[1] == 'auth': return SimpleNamespace(returncode=0, stdout=b'{"accounts":["local"]}')
+            self.assertLessEqual(kw['timeout'], 0.5)
+            raise subprocess.TimeoutExpired(argv, kw['timeout'])
+        with patch.dict(os.environ, KEEPTRACK_DEADLINE_SECONDS='0.5'), patch.object(self.mod.shutil, 'which', return_value='gog'), patch.object(self.mod.subprocess, 'run', side_effect=fake_run):
+            code, value = self.run_check()
+        self.assertEqual(code, 0); self.assertTrue(value['more']); self.assertEqual(value['items'], [])
+        self.assertIsNotNone(value['cursor'])

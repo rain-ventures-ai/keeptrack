@@ -81,6 +81,69 @@ class Automation(unittest.TestCase):
     def force_due(self):
         self.write(self.root/'automation/.local/tick-state.json',{})
 
+    def test_duplicate_keys_rejected_before_reservation(self):
+        self.result.update(items=[dict(key='same', rev=rev, ref='id', title='Review') for rev in ('v1', 'v2')], more=True, cursor='next')
+        self.script(self.result); self.ready(); before = self.rp.read_bytes()
+        with contextlib.redirect_stderr(io.StringIO()): payload, code = self.tick()
+        self.assertIsNone(payload); self.assertEqual(code, 3)
+        self.assertEqual(self.read(self.root/'automation/.local/tick-state.json')[self.read(self.rp)['id']]['result'], 'duplicate-key')
+        self.assertEqual(before, self.rp.read_bytes()); self.assertFalse(self.sp.exists())
+
+    def test_email_slow_empty_pages_continue_locally_until_match(self):
+        shutil.copytree(KIT/'automations', self.root/'board/automations')
+        self.write(self.root/'board/tasks.json', dict(contacts=[dict(email='match@example.invalid')]))
+        manifest = self.root/'board/automations/email-to-tasks/manifest.json'
+        value = self.read(manifest); value['check']['timeout_seconds'] = 1; self.write(manifest, value)
+        bin_dir = self.root/'bin'; bin_dir.mkdir(); gog = bin_dir/'gog'
+        gog.write_text("""#!/usr/bin/env python3
+import json, sys, time
+if sys.argv[1] == 'auth': print(json.dumps({'accounts':['local']}))
+else:
+    page = int(sys.argv[sys.argv.index('--page')+1]) if '--page' in sys.argv else 0
+    time.sleep(0.18)
+    print(json.dumps({'messages': [{'id':'match', 'from':'match@example.invalid'}] if page == 9 else [], 'nextPageToken': str(page+1) if page < 9 else None}))
+"""); gog.chmod(0o700)
+        local_path = self.root/'automation/.local/tick-state.json'
+        binding = 'auto-email-to-tasks-owner'
+        with patch.dict(os.environ, PATH=str(bin_dir)+os.pathsep+os.environ['PATH']):
+            self.call('install', slug='email-to-tasks', allow_network=True)
+            self.call('setup', slug='email-to-tasks', runtime='local'); self.call('enable', slug='email-to-tasks')
+            rp = self.root/('automation/routines/'+binding+'.json')
+            before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file() and 'automation/.local' not in str(p) and not str(p).endswith('.lock')}
+            cursors = []
+            for attempt in range(10):
+                payload, code = self.tick(); self.assertIsNone(code)
+                if payload: break
+                self.assertEqual(before, {p: p.read_bytes() for p in before})
+                self.assertFalse((self.root/('automation/seen/'+binding+'.json')).exists())
+                local = self.read(local_path); cursors.append(local[binding]['scan_cursor'])
+                local[binding]['time'] = 0; self.write(local_path, local)
+            else: self.fail('matching message never reached')
+            self.assertGreater(len(cursors), 1); self.assertEqual(len(set(cursors)), len(cursors))
+            batch = payload['automations'][0]; self.assertEqual(len(batch['items']), 1)
+            done = self.root/'done.json'; item = batch['items'][0]
+            self.write(done, dict(done=[dict(key=item['key'], rev=item['rev'])], cursor=batch['cursor']))
+            self.call('mark', slug='email-to-tasks', run_id=batch['run_id'], input=str(done))
+            self.assertNotIn('scan_cursor', self.read(local_path)[binding])
+
+    def test_scan_cursor_retained_with_items_and_cleared_on_mark_or_exhaustion(self):
+        self.items(); self.ready()
+        local_path = self.root/'automation/.local/tick-state.json'; binding = self.read(self.rp)['id']
+        self.write(local_path, {binding: dict(time=0, result='ok', scan_cursor='scan')})
+        payload, _ = self.tick(); self.assertEqual(self.read(local_path)[binding]['scan_cursor'], 'scan')
+        done = self.root/'done.json'; self.write(done, dict(done=[dict(key='item1',rev='r1')]))
+        self.call('mark', run_id=payload['automations'][0]['run_id'], input=str(done))
+        self.assertEqual(self.read(local_path)[binding]['scan_cursor'], 'scan')
+        self.write(done, dict(done=[dict(key='item2',rev='r2')], cursor='page2'))
+        self.call('mark', run_id=payload['automations'][0]['run_id'], input=str(done))
+        self.assertNotIn('scan_cursor', self.read(local_path)[binding])
+        self.finish()
+        self.write(local_path, {binding: dict(time=0, result='ok', scan_cursor='scan')})
+        # Refiltered items are empty; an exhausted check clears local continuation.
+        with patch.object(kt, '_auto_check', return_value=dict(items=[], more=False, cursor=None)):
+            self.tick()
+        self.assertNotIn('scan_cursor', self.read(local_path)[binding])
+
     def test_commands_validate_list_show_install_setup_enable_disable_uninstall(self):
         self.assertIn('valid',self.call('validate',path=str(self.pack))[0])
         self.assertEqual(json.loads(self.call('list')[0])[0]['source'],'own')

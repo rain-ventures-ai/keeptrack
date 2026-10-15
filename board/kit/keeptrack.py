@@ -8044,9 +8044,12 @@ def _auto_result(value):
     if value["cursor"] is not None: _auto_token(value["cursor"])
     if value["more"] and value["cursor"] is None: raise ValueError("missing-cursor")
     if value["note"] is not None and (not isinstance(value["note"], str) or not re.fullmatch(r"(?:setup-missing:[a-z0-9-]{1,40}|auth-expired|source-missing|source-error|check-error|ready)", value["note"])): raise ValueError("invalid-note")
+    keys = set()
     for item in value["items"]:
         if not isinstance(item, dict) or set(item) != {"key", "rev", "title", "ref"}: raise ValueError("invalid-item")
         for key in ("key", "rev", "ref"): _auto_token(item[key])
+        if item["key"] in keys: raise ValueError("duplicate-key")
+        keys.add(item["key"])
         title = item["title"]
         if not isinstance(title, str) or len(title) > 120 or "\n" in title or "\r" in title: raise ValueError("invalid-title")
         item["title"] = "".join(c for c in title if c.isprintable())
@@ -8058,16 +8061,21 @@ def _auto_ready(register, digest):
     return a.get("digest") == digest == setup.get("digest") and setup.get("status") == "ready"
 
 
-def _auto_check(path, manifest, register):
+def _auto_check(path, manifest, register, scan_cursor=None):
     a = register["automation"]; binding = register["id"]
     state = _auto_json(_auto_seen(binding), {"schema": "keeptrack-seen/1", "binding": binding, "keys": {}, "cursor": None})
     c = manifest.get("check")
     if c:
         if c.get("network") and not a.get("network_granted"): raise ValueError("network-not-granted")
-        code, raw, _ = _auto_process(["python3", os.path.join(path, "check.py")], _auto_env(manifest["slug"], a["config"], state), c.get("timeout_seconds", 60), bool(c.get("network") and a.get("network_granted")))
+        timeout = c.get("timeout_seconds", 60)
+        env = _auto_env(manifest["slug"], a["config"], state)
+        env["KEEPTRACK_DEADLINE_SECONDS"] = str(max(timeout - 10, timeout * 0.5))
+        if scan_cursor is not None: env["KEEPTRACK_SCAN_CURSOR"] = _auto_token(scan_cursor)
+        code, raw, _ = _auto_process(["python3", os.path.join(path, "check.py")], env, timeout, bool(c.get("network") and a.get("network_granted")))
         if code not in (0, 2): raise ValueError("check-error")
-        try: result = _auto_result(json.loads(raw))
+        try: value = json.loads(raw)
         except (UnicodeError, ValueError): raise ValueError("invalid-output")
+        result = _auto_result(value)
         if code == 2: raise ValueError(result["note"] or "check-error")
     else:
         result = {"schema": "keeptrack-check/1", "items": [{"key": "scheduled", "rev": str(int(time.time()) // _AUTO_INTERVALS[a["every"]]), "ref": "scheduled", "title": "Scheduled review"}], "more": False, "cursor": None, "note": None}
@@ -8109,10 +8117,13 @@ def _auto_tick(a, packs, owner):
                         if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
                             if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
                             continue
-                        result = _auto_check(path, m, r)
+                        result = _auto_check(path, m, r, previous.get("scan_cursor"))
                         # A changed file during the subprocess must never yield a reservation.
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
                         state[binding] = {"time": time.time(), "result": "ok"}
+                        if result["more"]:
+                            if not result["items"]: state[binding]["scan_cursor"] = result["cursor"]
+                            elif previous.get("scan_cursor") is not None: state[binding]["scan_cursor"] = previous["scan_cursor"]
                         if result["items"]:
                             run_id = "tick-" + uuid.uuid4().hex
                             r["last_started_at"] = now()
@@ -8325,6 +8336,10 @@ def cmd_automation(a):
                         seen["cursor"] = done["cursor"]
                     while len(seen["keys"]) > 10000: del seen["keys"][next(iter(seen["keys"]))]
                     seen["updated_at"] = now(); _auto_write(seen_path, seen)
+                if "cursor" in done:
+                    local = _auto_json(_auto_local(), {})
+                    local.get(binding, {}).pop("scan_cursor", None)
+                    _auto_write(_auto_local(), local)
                 print("marked " + str(len(completed))); return
         _auto_write(rp, r)
         print(slug + ": " + r["status"])

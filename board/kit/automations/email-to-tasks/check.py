@@ -16,10 +16,12 @@ def hashed(value):
 import subprocess, shutil, base64, time
 
 def main():
+    deadline = time.monotonic() + float(os.environ.get("KEEPTRACK_DEADLINE_SECONDS", "50"))
+    max_pages = 5
     if not shutil.which("gog"):
         emit(note="setup-missing:gog"); return 2
     try:
-        auth = subprocess.run(["gog", "auth", "list", "--json"], capture_output=True, timeout=10)
+        auth = subprocess.run(["gog", "auth", "list", "--json"], capture_output=True, timeout=max(0.001, min(10, deadline - time.monotonic())))
         accounts = json.loads(auth.stdout) if auth.returncode == 0 else {}
         if auth.returncode or not (accounts.get("accounts") if isinstance(accounts, dict) else accounts):
             emit(note="auth-expired"); return 2
@@ -36,17 +38,26 @@ def main():
                 for value in values:
                     if isinstance(value, dict): value = value.get("value", "")
                     if isinstance(value, str) and "@" in value: addresses.add(value.strip().casefold())
-        seen = state(); cursor = seen.get("cursor")
+        seen = state(); cursor = os.environ.get("KEEPTRACK_SCAN_CURSOR") or seen.get("cursor")
         progress = json.loads(base64.urlsafe_b64decode(cursor)) if cursor else {"after": int(time.time()) - 7*86400, "page": None, "until": int(time.time())}
         if not progress["page"]: progress["until"] = int(time.time())
         import email.utils
         items = []
         visited = set()
+        exhausted = False
+        interrupted = False
+        pages = 0
         while True:
+            if pages >= max_pages or time.monotonic() >= deadline: break
             query = "in:anywhere after:" + str(progress["after"]) + " before:" + str(progress["until"])
             argv = ["gog", "gmail", "messages", "search", query, "--json", "--max", "50"]
             if progress["page"]: argv += ["--page", progress["page"]]
-            result = subprocess.run(argv, capture_output=True, timeout=40)
+            try:
+                result = subprocess.run(argv, capture_output=True, timeout=max(0.001, min(40, deadline - time.monotonic())))
+            except subprocess.TimeoutExpired:
+                interrupted = True
+                break
+            pages += 1
             if result.returncode:
                 emit(note="auth-expired"); return 2
             data = json.loads(result.stdout)
@@ -61,12 +72,15 @@ def main():
             page = data.get("nextPageToken") if isinstance(data, dict) else None
             progress["page"] = page
             # Empty pages must not hide later contact mail; no agent is started for them.
+            if not page: exhausted = True
             if items or not page: break
             if page in visited: raise ValueError("repeated page")
             visited.add(page)
-        if not page: progress = dict(after=progress["until"]-1, until=int(time.time()), page=None)
+        page = progress["page"]
+        stopped_early = not exhausted and not items and (interrupted or pages >= max_pages or time.monotonic() >= deadline)
+        if not page and not stopped_early: progress = dict(after=progress["until"]-1, until=int(time.time()), page=None)
         next_cursor = base64.urlsafe_b64encode(json.dumps(progress, separators=(",", ":")).encode()).decode()
-        emit(items, bool(page), next_cursor)
+        emit(items, bool(page) or stopped_early, next_cursor)
         return 0
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
         emit(note="source-error"); return 2
