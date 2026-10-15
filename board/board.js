@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 58;
+  const PAGE_KIT = 59;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1753,11 +1753,14 @@ if (typeof window !== 'undefined') (() => {
       cards.addEventListener('dragleave', () => c.classList.remove('over'));
       cards.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); dropOn(e, col.id, null); });
       capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(emptyNote('Nothing here. Drop a card or add one below.', 'square-kanban')); c.append(cards);
-      const add = el('div', 'add'), inp = el('input'), btn = el('button', 'primary', 'Add'); inp.placeholder = 'Add a task…';
+      const add = el('div', 'add'), inp = el('input'), btn = el('button', 'primary', 'Add'); inp.placeholder = 'Add a task…'; inp.setAttribute('aria-label', 'Quick add a task to ' + col.name);
       const draft = drafts.get(col.id); if (draft) { inp.value = draft.value; if (draft.focus) refocus = [inp, draft]; }
-      const go = () => { const v = inp.value.trim(); if (!v) return; inp.value = ''; addTask(v, col.id); };
-      btn.onclick = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
-      add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = () => { inp.scrollIntoView({ block: 'nearest' }); inp.focus(); }; board.append(c);
+      // Enter (or Add with text) is quick add: a title-only card. The card button, Shift+Enter or an empty Add opens the full new-card form.
+      const form = elI('button', 'addform', 'pencil'); form.type = 'button'; form.title = 'Write a full card (Shift+Enter)'; form.setAttribute('aria-label', 'Write a full card in ' + col.name);
+      const full2 = () => { const v = inp.value.trim(); inp.value = ''; openNewCard(col.id, v); };
+      const go = () => { const v = inp.value.trim(); if (!v) { full2(); return; } inp.value = ''; addTask(v, col.id); };
+      btn.onclick = go; form.onclick = full2; inp.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; if (e.shiftKey) { e.preventDefault(); full2(); } else go(); });
+      add.append(inp, form, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = full2; board.append(c);
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
     renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
@@ -2194,9 +2197,9 @@ if (typeof window !== 'undefined') (() => {
   const duePill = (t, o) => ui.due(t.due, { done: isDoneTask(t), size: 'sm', ...o });
   const personDue = p => ui.due(p.next_due, { size: 'sm', empty: p.next ? 'No date' : '' }) || '';
 
-  // floating ＋ (phones, board and list views): jump to the add box for the column you are looking at
+  // floating ＋ (phones, board and list views): open the new-card form
   const fab = el('button', 'fab', '＋'); fab.type = 'button'; fab.id = 'fab'; fab.title = 'Add a task'; fab.setAttribute('aria-label', 'Add a task'); document.body.append(fab);
-  fab.onclick = () => { const c = activeCol(); const inp = document.querySelector(view === 'board' ? `.col[data-col="${c}"] .add input` : `.ladd[data-col="${c}"] input`) || document.querySelector('.add input, .ladd input'); if (inp) { inp.scrollIntoView({ block: 'center' }); inp.focus(); } };
+  fab.onclick = () => { const c = activeCol() || (state.columns[0] || {}).id; if (c) openNewCard(c); };   // phones: the full new-card form for the column you are looking at
   function addRow(col, due) {
     const cn = (state.columns.find(c => c.id === col) || {}).name || '', add = el('div', 'ladd'), inp = el('input'); add.dataset.col = col; inp.placeholder = due ? '＋ Add task for this day' : '＋ Add task to ' + cn; inp.setAttribute('aria-label', 'Add task');
     inp.addEventListener('keydown', e => { if (e.key !== 'Enter') return; const v = inp.value.trim(); if (!v) return; inp.value = ''; addTask(v, col, due); });
@@ -2838,16 +2841,105 @@ if (typeof window !== 'undefined') (() => {
   const titleOf = id => (state.tasks.find(x => x.id === id) || {}).title || id;
   const moveTo = (id, col) => mutate(n => place(n, id, col, null), `Move "${titleOf(id)}" to ${col}`, [id]);
   function dropOn(e, col, beforeId) { const id = e.dataTransfer.getData('text/plain'); if (!id || id === beforeId) return; mutate(n => place(n, id, col, beforeId), `Move "${titleOf(id)}" to ${col}`, [id]); if (isSplit(state) && ['due', 'newest'].includes(sortMode())) toast('Use Manual or Smart to change card order.'); }
-  function addTask(title, col, due) {
-    const clients = clientValues(), fc = clients.length === 1 ? clients[0] : '', w = $('fWho').value;
-    const mine = me() && state.people.some(p => p.github.toLowerCase() === me().toLowerCase()) ? [state.people.find(p => p.github.toLowerCase() === me().toLowerCase()).github] : [];
-    const as = w && w[0] !== '_' ? [w] : (w === '__none' ? [] : mine);
-    const t = { id: uid(), title, column: col, client: fc || '', priority: 'medium', due: due || '', labels: [], assignees: as, details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+  // Who and which client a new card gets: the one client the filter shows, and the person the "Who" filter picks (else you).
+  function newTaskDefaults() {
+    const clients = clientValues(), w = $('fWho').value, mp = me() && state.people.find(p => p.github.toLowerCase() === me().toLowerCase());
+    return { client: clients.length === 1 ? clients[0] : '', assignees: w && w[0] !== '_' ? [w] : (w === '__none' || !mp ? [] : [mp.github]) };
+  }
+  // extra: more fields from the new-card form. A client or label the board does not have yet joins the board's lists.
+  // Resolves to the new card's id, or null when the save did not happen.
+  function addTask(title, col, due, extra) {
+    const d = newTaskDefaults();
+    const t = { id: uid(), title, column: col, client: d.client, priority: 'medium', due: due || '', labels: [], assignees: d.assignees, details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso(), ...(extra || {}) };
     if (me()) { t.createdBy = me(); t.updatedBy = me(); }
     let hits = [];
     // recheckArchive: the marks change other cards, so a lost race runs the add again on the newer board (never a clash over a card you did not touch)
-    mutate(n => { const c = clone(t); n.tasks.push(c); hits = markSimilar(n, c); }, `Add task: ${title}`, [], null, { recheckArchive: true })
-      .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: open the card to merge, link or dismiss.`); });
+    return mutate(n => {
+      const c = clone(t);
+      // matched without regard to case against the newest board, so a label or client added meanwhile is reused, not doubled
+      if (c.client) { const k = n.clients.find(x => x.toLowerCase() === c.client.toLowerCase()); if (k) c.client = k; else n.clients.push(c.client); }
+      c.labels = [...new Set(c.labels.map(l => { const k = n.labels.find(x => x.name.toLowerCase() === l.toLowerCase()); if (!k) n.labels.push({ name: l, color: '#6b778c' }); return k ? k.name : l; }))];
+      n.tasks.push(c); hits = markSimilar(n, c);
+    }, `Add task: ${title}`, [], null, { recheckArchive: true })
+      .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: open the card to merge, link or dismiss.`); return ok ? t.id : null; });
+  }
+
+  // ---- the new-card form (kit v59): a centred sheet with every field a good card needs (board/CARDS.md). Quick add stays:
+  // Enter in a lane's box adds a title-only card. The form opens from the lane's card button, an empty Add, Shift+Enter,
+  // the lane's ＋ and the phone ＋. Nothing is saved until "Add card".
+  let newCardSheet = null;
+  function openNewCard(col, seed, due) {
+    if (newCardSheet) newCardSheet.close();
+    const d = newTaskDefaults(), lab = (text, forId) => { const l = el('label', 'ui-field__label', text); l.htmlFor = forId; return l; };
+    const title = el('textarea', 'ui-input nctitle'); title.id = 'ncTitle'; title.rows = 2; title.required = true; title.setAttribute('aria-required', 'true'); title.placeholder = 'Start with a verb: what changes when this is done?'; title.value = seed || '';
+    const titleLab = lab('Title', 'ncTitle'); titleLab.append(el('span', 'required', 'Required'));
+    const details = el('textarea', 'ui-input ncdetails'); details.id = 'ncDetails'; details.rows = 5; details.placeholder = 'What is the current state, why does it matter, and what does "done" mean?';
+    const colSel = ui.select({ label: 'Column', value: col, options: state.columns.map(c => ({ value: c.id, label: c.name })) }); colSel.control.id = 'ncCol';
+    const client = dfield('ncClient', 'Client', { list: 'ncClients', placeholder: 'No client' }); client.value = d.client;
+    const clientList = el('datalist'); clientList.id = 'ncClients'; state.clients.forEach(c => { const o = el('option'); o.value = c; clientList.append(o); });
+    const projSel = ui.select({ label: 'Project', options: [] }); projSel.control.id = 'ncProject';
+    const fillProjects = () => {   // the client's projects when the client is a known one, else every project
+      const keep = projSel.value, co = client.value.trim().toLowerCase(), all = sortedProjects().filter(p => p.status !== 'done');
+      const mine = co && all.some(p => (p.client || '').toLowerCase() === co), list = mine ? all.filter(p => (p.client || '').toLowerCase() === co) : all;
+      projSel.control.textContent = ''; [{ id: '', name: 'No project' }, ...list].forEach(p => { const o = el('option', null, p.name + (p.id && p.client && !mine ? ' · ' + p.client : '')); o.value = p.id; projSel.control.append(o); });
+      projSel.value = list.some(p => p.id === keep) ? keep : '';
+    };
+    // like the drawer's Client and project picker: a project sets its client, and another client drops a project that is not theirs
+    const projectFits = () => { const p = projectById(projSel.value); return !p || !p.client || p.client.toLowerCase() === client.value.trim().toLowerCase(); };
+    fillProjects(); client.addEventListener('input', () => { fillProjects(); if (!projectFits()) projSel.value = ''; });
+    projSel.control.addEventListener('change', () => { const p = projectById(projSel.value); if (p && p.client) { client.value = p.client; fillProjects(); projSel.value = p.id; } });
+    const prio = ui.select({ label: 'Priority', value: 'medium', options: [{ value: 'high', label: 'High' }, { value: 'medium', label: 'Medium' }, { value: 'low', label: 'Low' }] }); prio.control.id = 'ncPrio';
+    const dueIn = dfield('ncDue', 'Due date', { type: 'date' }); dueIn.value = due || '';
+    const who = ui.select({ label: 'Assignee', value: d.assignees[0] || '', options: [{ value: '', label: 'Nobody' }, ...state.people.map(p => ({ value: p.github, label: p.name || p.github }))] }); who.control.id = 'ncWho';
+    const labels = dfield('ncLabels', 'Labels', { placeholder: state.labels.length ? state.labels.slice(0, 3).map(l => l.name).join(', ') : 'Comma between labels' });
+    const todos = el('textarea', 'ui-input ncnotes'); todos.id = 'ncTodos'; todos.rows = 3; todos.placeholder = 'One step per line';
+    const links = el('textarea', 'ui-input ncnotes'); links.id = 'ncLinks'; links.rows = 3; links.placeholder = 'One per line: Title | https://…';
+    const err = el('p', 'ncerr'); err.id = 'ncErr'; err.setAttribute('role', 'alert'); err.hidden = true;
+    const body = [
+      el('p', 'ui-sheet__text', 'A good card lets someone who was not there start the work without asking. Only the title is required.'),
+      titleLab, title, lab('Details', 'ncDetails'), details,
+      ui.props([
+        { label: 'Column', icon: 'square-kanban', value: colSel },
+        { label: 'Client', icon: 'building-2', value: [client, clientList] },
+        { label: 'Project', icon: 'folder', value: projSel },
+        { label: 'Priority', icon: 'flag', value: prio },
+        { label: 'Due', icon: 'calendar', value: dueIn },
+        { label: 'Assignee', icon: 'user', value: who },
+        { label: 'Labels', icon: 'tag', value: labels }
+      ]),
+      lab('Checklist', 'ncTodos'), todos, lab('Links', 'ncLinks'), links, err
+    ];
+    const cancel = ui.button({ label: 'Cancel', onClick: () => newCardSheet && newCardSheet.close() });
+    const save = ui.button({ label: 'Add card', variant: 'primary' }); save.id = 'ncSave';
+    const sheet = newCardSheet = ui.sheet({ title: 'New card', body, footer: [cancel, save], side: 'center', removeOnClose: true, onClose: () => { if (newCardSheet === sheet) newCardSheet = null; } });
+    sheet.el.classList.add('personform', 'cardform'); sheet.el.id = 'dlgNewCard';
+    const submit = async () => {
+      if (save.disabled) return;   // one save at a time: a repeated Enter or Ctrl+Enter never adds the card twice
+      const t = title.value.replace(/\s+/g, ' ').trim();
+      if (!t) { err.textContent = 'Type a title for the card.'; err.hidden = false; title.focus(); return; }
+      const linkLines = links.value.split('\n').map(l => l.trim()).filter(Boolean), badLinks = linkLines.filter(l => !parseLine(l));   // the drawer's rule: a web link or a local path
+      if (badLinks.length) { err.textContent = `This line is not a link: “${badLinks[0]}”. Use Title | https://… or a local path.`; err.hidden = false; links.focus(); return; }
+      if (!projectFits()) projSel.value = '';
+      const typed = client.value.replace(/\s+/g, ' ').trim(), known = state.clients.find(c => c.toLowerCase() === typed.toLowerCase());
+      const extra = {
+        details: details.value.trim(), client: known || typed, project: projSel.value, priority: prio.value,
+        assignees: who.value ? [who.value] : [],
+        labels: [...new Set(labels.value.split(',').map(x => x.replace(/\s+/g, ' ').trim().slice(0, 40)).filter(Boolean).map(x => (state.labels.find(l => l.name.toLowerCase() === x.toLowerCase()) || { name: x }).name))],
+        todos: todos.value.split('\n').map(x => x.trim()).filter(Boolean).map(text => ({ id: todoId(), text, done: false })),
+        links: linkLines.map(parseLine).filter((l, i, a) => a.findIndex(x => x.url === l.url) === i)
+      };
+      save.disabled = true; err.hidden = true;
+      const id = await addTask(t, colSel.value, dueIn.value, extra);
+      save.disabled = false;
+      if (!id) { err.textContent = 'The card was not saved. Your text is still here: try again.'; err.hidden = false; return; }
+      const made = state.tasks.find(x => x.id === id); sheet.close(); toast(made ? `Added #${made.num}` : 'Added the card');
+    };
+    save.onclick = submit;
+    const composing = e => e.isComposing || e.keyCode === 229;   // Enter that picks an IME word is not a submit
+    title.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !composing(e)) { e.preventDefault(); submit(); } });
+    sheet.el.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !composing(e)) { e.preventDefault(); submit(); } });
+    sheet.open(); setTimeout(() => { title.focus(); title.setSelectionRange(title.value.length, title.value.length); }, 0);
+    return sheet;
   }
 
   // ---- edit dialog ----------------------------------------------------------
