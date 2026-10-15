@@ -289,6 +289,82 @@ else:
         kt._auto_record_check(state, 'binding', dict(items=[], more=False, cursor=None))
         self.assertNotIn('scan_cursor', state['binding'])
 
+    def test_start_cursor_validation(self):
+        for value in (None, 'opaque:start'):
+            self.assertEqual(kt._auto_result(dict(self.result, start_cursor=value))['start_cursor'], value)
+        for value in (123, {}, '', 'private text', 'x'*4097):
+            with self.subTest(value=str(value)[:30]), self.assertRaises(ValueError):
+                kt._auto_result(dict(self.result, start_cursor=value))
+        with self.assertRaises(ValueError):
+            kt._auto_result(dict(self.result, unexpected='field'))
+
+    def test_initial_item_start_cursor_shared_by_check_and_tick(self):
+        self.items(); self.result['start_cursor'] = 'frozen-start'; self.script(self.result); self.ready()
+        local_path = self.root/'automation/.local/tick-state.json'; binding = self.read(self.rp)['id']
+        for action in ('check', 'tick'):
+            with self.subTest(action=action):
+                self.write(local_path, {})
+                self.call(action)
+                self.assertEqual(self.read(local_path)[binding]['scan_cursor'], 'frozen-start')
+                if action == 'tick': self.finish('failed')
+        state = {binding: dict(scan_cursor='existing')}
+        kt._auto_record_check(state, binding, self.result)
+        self.assertEqual(state[binding]['scan_cursor'], 'existing')
+        kt._auto_record_check(state, binding, error=ValueError('source-error'))
+        self.assertEqual(state[binding]['scan_cursor'], 'existing')
+        kt._auto_record_check(state, binding, dict(self.result, start_cursor=None))
+        self.assertEqual(state[binding]['scan_cursor'], 'existing')
+
+    def test_completed_null_cursor_mark_clears_start_and_dry_run_keeps_state(self):
+        self.items(); self.result.update(start_cursor='frozen', cursor=None, more=False)
+        self.script(self.result); self.ready()
+        local_path = self.root/'automation/.local/tick-state.json'
+        self.call('dry-run'); self.assertFalse(local_path.exists())
+        payload, _ = self.tick(); binding = self.read(self.rp)['id']
+        before = local_path.read_bytes()
+        self.call('dry-run'); self.assertEqual(local_path.read_bytes(), before)
+        done = self.root/'done.json'
+        self.write(done, dict(done=[dict(key=i['key'], rev=i['rev']) for i in self.result['items']], cursor=None))
+        self.call('mark', run_id=payload['automations'][0]['run_id'], input=str(done))
+        self.assertNotIn('scan_cursor', self.read(local_path)[binding])
+        self.assertIsNone(self.read(self.sp)['cursor'])
+
+    def test_email_initial_failed_batch_replays_frozen_window_after_lookback(self):
+        from types import SimpleNamespace
+        spec = importlib.util.spec_from_file_location('email_retry_check', KIT/'automations/email-to-tasks/check.py')
+        check = importlib.util.module_from_spec(spec); spec.loader.exec_module(check)
+        self.ready()
+        self.write(self.root/'board/tasks.json', dict(contacts=[dict(email='match@example.invalid')]))
+        start = 100*86400; arrival = start - 6*86400; queries = []
+        real_run = subprocess.run
+        def source(argv, **kwargs):
+            if argv[0] != 'gog': return real_run(argv, **kwargs)
+            if argv[1] == 'auth': return SimpleNamespace(returncode=0, stdout='{"accounts":["local"]}')
+            query = argv[4]; queries.append(query)
+            after = int(query.split('after:')[1].split()[0]); until = int(query.split('before:')[1])
+            messages = [dict(id='old-mail', **{'from': 'match@example.invalid'})] if after < arrival < until else []
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(messages=messages)))
+        def process(argv, env, timeout, network):
+            snapshot = self.root/'snapshot.json'; self.write(snapshot, env['KEEPTRACK_STATE'])
+            out = io.StringIO()
+            with patch.dict(os.environ, KEEPTRACK_STATE=str(snapshot), KEEPTRACK_SCAN_CURSOR=env.get('KEEPTRACK_SCAN_CURSOR', '')), contextlib.redirect_stdout(out):
+                code = check.main()
+            return code, out.getvalue().encode(), b''
+        local_path = self.root/'automation/.local/tick-state.json'; binding = self.read(self.rp)['id']
+        with patch.object(check.shutil, 'which', return_value='gog'), patch.object(check.subprocess, 'run', side_effect=source), patch.object(kt, '_auto_process', side_effect=process), contextlib.chdir(self.root):
+            self.assertFalse(self.sp.exists()); self.assertFalse(local_path.exists())
+            with patch.object(check.time, 'time', return_value=start):
+                first, _ = self.tick()
+                self.finish('failed')
+            local = self.read(local_path); local[binding]['time'] = 0; self.write(local_path, local)
+            with patch.object(check.time, 'time', return_value=start + 3*86400):
+                retry, _ = self.tick()
+            self.assertEqual(len(first['automations'][0]['items']), 1)
+            self.assertIsNotNone(retry, 'unmarked email must remain eligible after the lookback expires')
+            self.assertEqual(retry['automations'][0]['items'], first['automations'][0]['items'])
+            self.assertEqual(queries[0], queries[1])
+            self.assertFalse(self.sp.exists())
+
     def test_email_empty_exhaustion_watermark_finds_mail_after_ten_days(self):
         import base64
         from types import SimpleNamespace
@@ -717,7 +793,9 @@ print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME
 
     def test_mixed_tick_reports_every_problem_with_work(self):
         self.assertIn('Report every entry in payload `problems`',(KIT/'automation-loader.md').read_text())
-        self.items(); self.ready()
+        self.items(); self.result['start_cursor'] = 'mixed-start'; self.script(self.result); self.ready()
+        local_path = self.root/'automation/.local/tick-state.json'
+        self.write(local_path, {'auto-z-blocked-owner': dict(time=0, scan_cursor='blocked-start')})
         bad=self.root/'automations/z-blocked'; shutil.copytree(self.pack,bad)
         self.write(bad/'manifest.json',dict(self.manifest,slug='z-blocked'))
         self.call('install',slug='z-blocked'); self.call('setup',slug='z-blocked',runtime='local'); self.call('enable',slug='z-blocked')
@@ -725,6 +803,9 @@ print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME
         payload,code=self.tick()
         self.assertIn(code,(None,0)); self.assertTrue(payload['automations'])
         self.assertEqual(payload['problems'],[dict(slug='z-blocked',code='changed')])
+        local = self.read(local_path)
+        self.assertEqual(local['auto-example-pack-owner']['scan_cursor'], 'mixed-start')
+        self.assertEqual(local['auto-z-blocked-owner']['scan_cursor'], 'blocked-start')
 
     def test_inv14_own_builtin_slug_collision(self):
         dest=self.root/'board/automations/example-pack'; shutil.copytree(self.pack,dest)

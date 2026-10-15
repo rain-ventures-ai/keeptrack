@@ -33,9 +33,12 @@ Tick supplies each item’s `action_key`: `auto:<slug>:` + sha256 of compact JSO
 Emit unique item keys, even across revisions: duplicate keys fail with `duplicate-key` before reservation.
 Bound total work by `KEEPTRACK_DEADLINE_SECONDS` (below the manifest timeout), bound each source call by the
 remaining budget, and cap pages per run. On early stop return accumulated items with `more: true` and an opaque
-cursor. Prefer `KEEPTRACK_SCAN_CURSOR` to the seen-log cursor. On a successful check,
+cursor. Optional `start_cursor` describes the frozen starting window/page, distinct from the completion
+cursor; validate it like `cursor` (null or 1–256 opaque characters `[A-Za-z0-9_./+=:-]`, no `://`).
+Moving-window checks must emit a replayable start cursor. Prefer `KEEPTRACK_SCAN_CURSOR` to the seen-log cursor. On a successful check,
 an empty result's cursor is kept locally as the next starting point, whether `more` is true or false.
-Tick retains it only in
+Tick and standalone check retain it only in
 ignored `automation/.local/tick-state.json` as `scan_cursor`, with no reservation or tracked write. Batches with
-items advance only through `mark`; a mark carrying the completed batch cursor clears local continuation, as does
+items preserve an existing local cursor; if none exists, save non-null `start_cursor` before delivery.
+Completion advances only through `mark`; a mark carrying the completed batch cursor clears local continuation, as does
 an empty result with `more: false` and no cursor. Partial marks retain continuation. Never write the seen log from a check.

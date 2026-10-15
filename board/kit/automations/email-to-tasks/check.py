@@ -1,8 +1,8 @@
 import json, os, sys, hashlib
 from pathlib import Path
 
-def emit(items=None, more=False, cursor=None, note=None):
-    print(json.dumps(dict(schema="keeptrack-check/1", items=items or [], more=more, cursor=cursor, note=note)))
+def emit(items=None, more=False, cursor=None, note=None, start_cursor=None):
+    print(json.dumps(dict(schema="keeptrack-check/1", items=items or [], more=more, cursor=cursor, note=note, start_cursor=start_cursor)))
 
 def state():
     return json.loads(Path(os.environ["KEEPTRACK_STATE"]).read_text())
@@ -40,7 +40,9 @@ def main():
                     if isinstance(value, str) and "@" in value: addresses.add(value.strip().casefold())
         seen = state(); cursor = os.environ.get("KEEPTRACK_SCAN_CURSOR") or seen.get("cursor")
         progress = json.loads(base64.urlsafe_b64decode(cursor)) if cursor else {"after": int(time.time()) - 7*86400, "page": None, "until": int(time.time())}
-        if not progress["page"]: progress["until"] = int(time.time())
+        frozen = progress.pop("frozen", False)
+        if not progress["page"] and not frozen: progress["until"] = int(time.time())
+        start_cursor = base64.urlsafe_b64encode(json.dumps(dict(progress, frozen=True), separators=(",", ":")).encode()).decode()
         import email.utils
         items = []
         visited = set()
@@ -80,7 +82,7 @@ def main():
         stopped_early = not exhausted and not items and (interrupted or pages >= max_pages or time.monotonic() >= deadline)
         if not page and not stopped_early: progress = dict(after=progress["until"]-1, until=int(time.time()), page=None)
         next_cursor = base64.urlsafe_b64encode(json.dumps(progress, separators=(",", ":")).encode()).decode()
-        emit(items, bool(page) or stopped_early, next_cursor)
+        emit(items, bool(page) or stopped_early, next_cursor, start_cursor=start_cursor)
         return 0
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
         emit(note="source-error"); return 2

@@ -43,7 +43,10 @@ unverified. Never put tokens, account addresses or source text into a pack, chec
 
 Manifest schema is `keeptrack-automation/1`: fixed needs board.read, files.read, gmail.read, drive.read,
 github.read, calendar.read; writes is ["proposals"]. Every fixed interval coalesces missed UTC slots.
-Check stdout is one `keeptrack-check/1` object with items (key, rev, title, ref), more, cursor and note.
+Check stdout is one `keeptrack-check/1` object with items (key, rev, title, ref), more, cursor, note and optional `start_cursor`.
+`start_cursor` is null or an opaque token validated exactly like `cursor` (1–256 characters,
+`[A-Za-z0-9_./+=:-]`, no `://`). It describes the frozen window/page at the start of the check;
+`cursor` describes progress after the batch. Moving-window checks must emit a replayable start cursor.
 At most 50 items, opaque ID/hash tokens up to 256 characters, one-line titles up to 120 characters,
 256 KB stdout, 8 KB stderr and a 1–120 second timeout. Notes are fixed codes, never source text.
 Exit 2 means blocked. Seen keys are capped at 10,000; action_key deduplication is authoritative.
@@ -79,9 +82,20 @@ Checks must reject duplicate item keys (including different revisions); tick rep
 Checks receive `KEEPTRACK_DEADLINE_SECONDS`, a work budget below the manifest timeout. Bound source calls by the
 remaining budget and cap pages per invocation. Return accumulated items, `more: true` and an opaque continuation
 cursor when stopping early. Prefer `KEEPTRACK_SCAN_CURSOR` over the seen-log cursor when supplied.
-On a successful check, an empty result's cursor is kept locally as the next starting point,
-whether `more` is true or false. Tick saves it as the binding's `scan_cursor` in ignored
-`automation/.local/tick-state.json` and passes it to the next due check. This causes no tracked writes or reservation.
-A result with items never advances this local continuation. Only a successful `mark` carrying the batch cursor
-advances the seen cursor and clears local continuation; partial marks retain it. An empty result with `more: false`
-and no cursor clears local continuation. The seen log remains exclusively written by `mark`.
+Tick and standalone `check` share the following rules, applied before delivering output. Local continuation
+lives in ignored `automation/.local/tick-state.json`; only `mark` writes the seen log.
+
+| Event | Local `scan_cursor` | Seen cursor / reservation |
+|---|---|---|
+| Successful empty check, either value of `more`, non-null cursor | Save returned cursor | Unchanged; no reservation |
+| Successful empty check, no cursor (`more: false`) | Clear | Unchanged; no reservation |
+| Items, existing local cursor | Preserve existing cursor | Unchanged; tick reserves batch |
+| Items, no local cursor | Save non-null `start_cursor` if supplied; otherwise remain unset | Unchanged; tick reserves batch |
+| Check error | Preserve | Unchanged; no new reservation |
+| Partial mark, or failed/partial finish without completed mark | Preserve | Mark records only completed items; finish does not advance cursor |
+| Full-batch mark carrying matching cursor (including null) | Clear | Advance seen cursor after all reserved items are marked |
+| Standalone check | Same empty/items/error rules as tick | Never reserves; dry-run does not save continuation |
+| Mixed tick (work and errors in different bindings) | Apply each binding's rule independently | Deliver work and report errors together |
+
+The email check always includes `start_cursor` on a successful scan, freezing both time bounds and the starting
+page, even when that page is the first page. A retry therefore replays the same window after the lookback expires.

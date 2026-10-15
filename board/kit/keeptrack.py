@@ -8039,9 +8039,10 @@ def _auto_env(slug, config, state):
 
 
 def _auto_result(value):
-    if not isinstance(value, dict) or set(value) != {"schema", "items", "more", "cursor", "note"} or value["schema"] != "keeptrack-check/1": raise ValueError("invalid-output")
+    if not isinstance(value, dict) or (set(value) - {"start_cursor"}) != {"schema", "items", "more", "cursor", "note"} or value["schema"] != "keeptrack-check/1": raise ValueError("invalid-output")
     if type(value["more"]) is not bool or not isinstance(value["items"], list) or len(value["items"]) > 50: raise ValueError("invalid-output")
-    if value["cursor"] is not None: _auto_token(value["cursor"])
+    for field in ("cursor", "start_cursor"):
+        if value.get(field) is not None: _auto_token(value[field])
     if value["more"] and value["cursor"] is None: raise ValueError("missing-cursor")
     if value["note"] is not None and (not isinstance(value["note"], str) or not re.fullmatch(r"(?:setup-missing:[a-z0-9-]{1,40}|auth-expired|source-missing|source-error|check-error|ready)", value["note"])): raise ValueError("invalid-note")
     keys = set()
@@ -8109,8 +8110,11 @@ def _auto_record_check(state, binding, result=None, error=None):
     entry = dict(state.get(binding, {}), time=time.time(), result="ok")
     if error is not None:
         entry["result"] = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
-    elif not result["items"]:
-        # Item batches retain their starting point until completed mark.
+    elif result["items"]:
+        # Save the frozen batch start before delivery, never its completion cursor.
+        if entry.get("scan_cursor") is None and result.get("start_cursor") is not None:
+            entry["scan_cursor"] = result["start_cursor"]
+    else:
         if result["cursor"] is not None: entry["scan_cursor"] = result["cursor"]
         else: entry.pop("scan_cursor", None)
     state[binding] = entry
