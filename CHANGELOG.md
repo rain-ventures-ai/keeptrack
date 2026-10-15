@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v65 — 2026-10-15
+
+Web board: **Archive from the Done lane** (Ollie, 15 Oct). Done cards, and Done rows in List, have an **Archive** button
+next to Edit and Copy for agent. On desktop it shows when you point at the card (or tab to it); on phones and other
+touch screens it always shows. One click archives the card with no dialog; the toast has **Undo**, which puts the card
+back on the board. Not shown on read-only boards or while an agent holds the card. Nothing is deleted: Search with
+Include archive still finds and restores the card later. No bulk "archive all done" button: Settings → Board → Archive
+already archives Done cards older than the board's limit. No schema change.
+
 ## Kit v64 — 2026-10-15
 
 **Pending review** column: finished work that waits on a person's decision is no longer closed (Ollie, 15 Oct: a

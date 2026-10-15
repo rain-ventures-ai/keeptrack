@@ -797,6 +797,9 @@ dialog input, dialog select, dialog textarea { max-width: 100%; box-sizing: bord
 /* ---- task numbers, @mentions, suggestions ------------------------------------------------ */
 .numchip { border: 0; background: var(--panel); color: var(--muted); font: 600 var(--fs-xs)/1 var(--font-mono); padding: var(--sp-1) 7px; border-radius: var(--r-sm); cursor: pointer; min-height: 0; flex: 0 0 auto; } .numchip:hover { color: var(--accent); background: var(--accent-soft); }
 .card .top .numchip { margin-right: var(--sp-2); }
+/* Done cards: Archive shows on hover or keyboard focus; touch screens (no hover) always show it */
+.card .quickarch, .trow .quickarch { opacity: 0; } .card:hover .quickarch, .card:focus-within .quickarch, .trow:hover .quickarch, .trow:focus-within .quickarch { opacity: .7; } .quickarch:hover, .quickarch:focus-visible { opacity: 1 !important; }
+@media (hover: none) { .card .quickarch, .trow .quickarch { opacity: .7; } }
 .numtag { color: var(--muted); font: 600 var(--fs-xs) var(--font-mono); margin-right: 7px; }
 .mention { color: var(--accent); background: var(--accent-soft); border-radius: var(--r-sm); padding: 0 var(--sp-1); font-weight: 600; } .mention.me { background: var(--accent); color: var(--on-accent); }
 a.mref { color: var(--accent); font-weight: 600; text-decoration: none; background: var(--accent-soft); border-radius: var(--r-sm); padding: 0 var(--sp-1); font-family: var(--font-mono); font-size: .92em; } a.mref:hover { text-decoration: underline; }
