@@ -205,7 +205,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 67  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 68  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2165,7 +2165,7 @@ def cmd_list(a):
         cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
-        url = f"  {card_url(t.get('num'))}" if getattr(a, "links", False) and card_url(t.get("num")) else ""
+        url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
         print(line(data, t, today=today) + cleared + scoring + url)
 
 
@@ -2183,8 +2183,8 @@ def cmd_show(a):
         if t.get(k) and t[k].get("session_id"):
             t[k] = dict(t[k]); t[k]["session_id"] = redact_session(t[k]["session_id"])
     print(json.dumps(t, indent=2, ensure_ascii=False))
-    if card_url(t.get("num")):   # kit v56: the link to write whenever this card is named
-        print(f"\nlink: {card_md(t.get('num'))}")
+    if card_url(t.get("num"), t.get("id")):   # kit v56: the link to write whenever this card is named
+        print(f"\nlink: {card_md(t.get('num'), t.get('id'))}")
     if t.get("outcome") == "cancelled" and t.get("column") == "done":
         why = next((h["text"][len("cancelled: "):] for h in reversed(hs) if str(h.get("text", "")).startswith("cancelled: ")), "")
         if why.endswith(")") and " (session " in why:
@@ -2451,24 +2451,25 @@ def cmd_release(a):
     mutate(fn, f"Agent release: {a.id}")
 
 
-def card_url(num):
+def card_url(num, ident=None):
     """The web board's link that opens card #num (the board's own #N route); '' without a board repo (--file)."""
     if not REPO:
         return ""
-    return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(
-        {"repo": REPO, "branch": BRANCH, "path": PATH}) + f"#{num}"
+    query = {"repo": REPO, "branch": BRANCH, "path": PATH}
+    if isinstance(ident, str) and SAFE_ID.fullmatch(ident): query["card"] = ident
+    return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(query) + f"#{num}"
 
 
-def card_md(num):
+def card_md(num, ident=None):
     """Card #num as a Markdown link to the web board ([#12](url)), the way agents write card numbers in replies,
     comments, PRs and briefs (kit v56); plain #num without a board repo (--file)."""
-    url = card_url(num)
+    url = card_url(num, ident)
     return f"[#{num}]({url})" if url else f"#{num}"
 
 
-def link_note(num):
+def link_note(num, ident=None):
     """'  [#12](url)' after an output line, or '' without a board repo, so --file output stays as it was."""
-    return f"  {card_md(num)}" if card_url(num) else ""
+    return f"  {card_md(num, ident)}" if card_url(num, ident) else ""
 
 
 def cmd_card_link(a):
@@ -2476,14 +2477,14 @@ def cmd_card_link(a):
     data, _ = load()
     for ref in a.ids:
         t = find(data, ref)
-        print(f"{card_md(t.get('num'))} {t.get('title', '')}")
+        print(f"{card_md(t.get('num'), t.get('id'))} {t.get('title', '')}")
 
 
 def link_follow_up(t, o):
     """Card o is the follow-up of card t: a follow-up relation and a link on each card to the other. Idempotent."""
     set_relation(t, o, "related", "confirmed", src=t["id"])
     for x, y, title in ((t, o, f"Follow-up #{o.get('num')}"), (o, t, f"Split from #{t.get('num')}")):
-        url = card_url(y.get("num"))
+        url = card_url(y.get("num"), y.get("id"))
         links = x.setdefault("links", [])
         if url and not any(l.get("url") == url or l.get("title") == title for l in links if isinstance(l, dict)):
             links.append({"title": title, "url": url})
@@ -2493,7 +2494,7 @@ def has_follow_up(t, o):
     r = relation(t, o["id"])
     if is_follow_up(r) and r.get("status") == "confirmed":
         return True
-    n, url = o.get("num"), card_url(o.get("num"))
+    n, url = o.get("num"), card_url(o.get("num"), o.get("id"))
     return any(str(l.get("title") or "") == f"Follow-up #{n}" or (url and l.get("url") == url)
                for l in t.get("links") or [] if isinstance(l, dict))
 
@@ -2917,13 +2918,13 @@ def cmd_todo_move(a):
         d["text"] = f"Moved to #{new} ({o['id']}): {text}"
         d["done"] = True; d["doneBy"] = who_am_i(t); d["doneAt"] = now()
         hist(t, f"moved to-do to #{new} ({o['id']}): {text}")
-        url_new, url_old = card_url(new), card_url(num)
+        url_new, url_old = card_url(new, o["id"]), card_url(num, t["id"])
         for x, msg in ((t, f"To-do {n} moved to follow-up card #{new} ({o['id']})" + (f": {url_new}" if url_new else "")),
                        (o, f"Split from #{num} ({t['id']}), its to-do {n}" + (f": {url_old}" if url_old else ""))):
             x.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": msg})
         t["updated"] = now(); oid = o["id"]
         _MUT["after"].append(lambda dd: print(f"added #{num_of(dd, oid)} ({oid}): follow-up of #{num}; to-do {n} moved and ticked, "
-                                              "both cards linked and commented" + link_note(num_of(dd, oid))))
+                                              "both cards linked and commented" + link_note(num_of(dd, oid), oid)))
     mutate(fn, f"Move to-do: {a.id} {a.n}")
 
 
@@ -3050,7 +3051,7 @@ def cmd_add(a):
         hist(t, "created")
         data["tasks"].append(t); assign_nums(data); tid = t["id"]
         marks = [] if getattr(a, "no_check", False) else mark_similar(data, t)   # never stops the add
-        _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})" + link_note(num_of(d, tid))))   # the saved #number: a lost race renumbers ours
+        _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})" + link_note(num_of(d, tid), tid)))   # the saved #number: a lost race renumbers ours
         _MUT["after"].append(lambda d: print_marks(marks))
     mutate(fn, f"Add task: {a.title}")
 
