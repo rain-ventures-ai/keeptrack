@@ -166,12 +166,56 @@ def _untrusted(d, name):
         return True
 
 
+PARENT_CONFIG = None   # a config above a board clone, ignored so the clone's own remote decides (said by commands)
+
+
+_CLONES = {}   # {current folder: its clones}, asked once a run per folder
+
+
+def _board_clones():
+    """The board repo clones the current folder is in: the one this keeptrack.py sits in and the one git names for the
+    current folder (a plugin copy run inside a clone), each kept only when the current folder is inside it.
+    {real path of the clone top: its origin's owner/name}."""
+    cwd = os.path.realpath(os.getcwd())
+    if cwd not in _CLONES:
+        tops = [ROOT]
+        try:
+            tops.append(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                       timeout=10).stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+        found = _CLONES[cwd] = {}
+        for t in tops:
+            c = os.path.realpath(t) if t else ""
+            if c and os.path.isfile(os.path.join(c, "board", "tasks.json")) and (cwd == c or cwd.startswith(c.rstrip(os.sep) + os.sep)):
+                try:
+                    out = subprocess.run(["git", "-C", c, "remote", "get-url", "origin"], capture_output=True, text=True,
+                                         timeout=10).stdout.strip()
+                except (OSError, subprocess.SubprocessError):
+                    out = ""
+                m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", out)
+                found[c] = m.group(1).lower() if m else ""
+    return _CLONES[cwd]
+
+
+def _above_a_clone(d, conf):
+    """True when folder d is a parent of a board clone the current folder is in, and the config there names another
+    board than that clone's own remote. Such a config (for example one `use` wrote in the home folder) must never beat
+    the clone's remote: inside a clone, the clone names its board. A config naming the same board still applies (its
+    user, token_env, project)."""
+    d = os.path.realpath(d)
+    repo = str(conf.get("repo") or "").lower()
+    return any(c != d and c.startswith(d.rstrip(os.sep) + os.sep) and repo and r and repo != r
+               for c, r in _board_clones().items())
+
+
 def project_config():
     """A project that is not a board repo names its board in .keeptrack/config.json: personal, never committed
     (`keeptrack.py use` writes it, with a .gitignore of its own). Found by walking up from the current folder; the
-    pre-v22 .board/config.json is still read. Environment variables still win over it.
+    pre-v22 .board/config.json is still read. Environment variables still win over it. A config in a folder above a
+    board clone is ignored: inside a clone its own git remote names the board (PARENT_CONFIG says which was skipped).
     Returns (project folder, settings, config folder name)."""
-    global UNTRUSTED_CONFIG
+    global UNTRUSTED_CONFIG, PARENT_CONFIG
     d = os.getcwd()
     while True:
         for name in CONFIG_DIRS:
@@ -181,9 +225,14 @@ def project_config():
                 continue
             if os.path.isfile(p):
                 try:
-                    return d, json.load(open(p)), name
+                    with open(p) as f:
+                        conf = json.load(f)
                 except (OSError, ValueError) as e:
                     sys.exit(f"cannot read {p}: {e}")
+                if isinstance(conf, dict) and _above_a_clone(d, conf):
+                    PARENT_CONFIG = PARENT_CONFIG or p
+                    continue
+                return d, conf, name
         if os.path.dirname(d) == d:
             return None, {}, CONFIG_DIRS[0]
         d = os.path.dirname(d)
@@ -226,6 +275,7 @@ def _default_branch():
 
 BRANCH = _default_branch()
 PATH = os.environ.get("BOARD_PATH", "board/tasks.json")
+BACKEND = os.environ.get("BOARD_BACKEND", "github").lower()
 FILE = None  # set by --file
 WRITE = os.environ.get("BOARD_WRITE", "auto").lower()  # auto | api | git (auto switches to git when the sandbox blocks API writes)
 
@@ -362,6 +412,8 @@ def use_http():
 
 
 def http(method, path, body=None, accept="application/vnd.github+json"):
+    if BACKEND == "hosted" and not FILE:
+        sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
     t = token()
     if not t:
         sys.exit("no GitHub auth: install and log in to `gh`, or set BOARD_TOKEN (fine-grained token, Contents read/write on the repo)")
@@ -405,6 +457,8 @@ def _rate_wait(code, headers, text, attempt):
 
 
 def gh(*args, body=None):
+    if BACKEND == "hosted" and not FILE:
+        sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
     """gh-api-style call: gh("repos/x/contents/y?ref=b") or gh("-X", "PUT", "repos/x/contents/y", "--input", "-", body=...)."""
     if use_http():
         method, path, rest = "GET", None, list(args)
@@ -909,7 +963,7 @@ def _decode_json(rel, entry):
     return obj
 
 
-def load_board():
+def _github_load_board():
     """Load either layout into the v3-shaped in-memory model used by commands."""
     if not REPO and not FILE:
         sys.exit("cannot tell which board to use: run keeptrack.py from a clone of the board repo, run `keeptrack.py use owner/name` "
@@ -953,6 +1007,503 @@ def load_board():
              "root": root, "data_id": id(data)}
     _BOARD_STATES[id(data)] = state
     return data
+
+
+class HostedError(Exception):
+    def __init__(self, status, error):
+        self.status = status
+        self.error = error
+        super().__init__(f"{error.get('code', 'http_error')}: {error.get('message', 'hosted request failed')}")
+
+
+class _HostedNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # Never forward a board credential to a redirect target.
+
+
+class HostedStorageAdapter:
+    """Frozen phase-0 HTTP storage. Credentials and claim proofs never enter files/exports."""
+    kind = "hosted"
+    capabilities = {"casWrites": True, "atomicMultiFile": True, "changeFeed": True}
+
+    def __init__(self):
+        self.api = os.environ.get("BOARD_API", "").rstrip("/")
+        u = urllib.parse.urlsplit(self.api)
+        host = (u.hostname or "").lower().rstrip(".")
+        if (u.scheme not in ("http", "https") or not host or u.username or u.password or u.query or u.fragment
+                or any(host == d or host.endswith("." + d) for d in ("github.com", "githubusercontent.com", "githubassets.com", "github.io"))
+                or (u.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))):
+            sys.exit("invalid_credential: BOARD_API must be an HTTPS API or loopback HTTP URL, never a GitHub host")
+        self.board = os.environ.get("BOARD_ID", "")
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", self.board):
+            sys.exit("invalid_schema: BOARD_ID must be a board UUID")
+        try:
+            with open(os.environ["BOARD_TOKEN_FILE"], encoding="utf-8") as f:
+                self._token = f.read().strip()
+        except (KeyError, OSError):
+            sys.exit("invalid_credential: BOARD_TOKEN_FILE must name a readable token file")
+        if not self._token or any(c.isspace() for c in self._token):
+            sys.exit("invalid_credential: token file must contain one credential")
+        self.opener = urllib.request.build_opener(_HostedNoRedirect())
+        self.identity = None
+        self.files = {}
+        self.cursor = None
+        self.claims = []
+
+    def request(self, method, route, body=None, key=None):
+        headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json", "Cache-Control": "no-store"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if method != "GET":
+            headers["Idempotency-Key"] = key or str(uuid.uuid4())
+        request = urllib.request.Request(self.api + route, method=method, headers=headers,
+                                        data=json.dumps(body, allow_nan=False).encode() if body is not None else None)
+        for attempt in range(3):
+            try:
+                with self.opener.open(request, timeout=30) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                try:
+                    error = json.loads(e.read()).get("error", {})
+                except (ValueError, AttributeError):
+                    error = {"code": "http_error", "message": f"HTTP {e.code}"}
+                if e.code == 503 and error.get("retryable") and attempt < 2:
+                    time.sleep(0.1 * (attempt + 1)); continue
+                raise HostedError(e.code, error) from None
+            except (urllib.error.URLError, OSError):
+                if attempt < 2:
+                    time.sleep(0.1 * (attempt + 1)); continue
+                raise HostedError(0, {"code": "network_error", "message": "hosted API did not answer; retry the same operation key"}) from None
+
+    def route(self, suffix):
+        return "/v1/boards/" + self.board + suffix
+
+    def whoami(self):
+        if self.identity is None:
+            self.identity = self.request("GET", "/v1/me")
+            if not any(b["id"] == self.board for b in self.identity["boards"]):
+                raise HostedError(404, {"code": "not_found", "message": "board is not accessible"})
+        return self.identity
+
+    def snapshot(self):
+        self.whoami()
+        snap = self.request("GET", self.route("/snapshot"))
+        if snap["board_id"] != self.board:
+            raise HostedError(400, {"code": "invalid_schema", "message": "snapshot board mismatch"})
+        files = {"tasks.json": copy.deepcopy(snap["root"])}
+        prefixes = {"card": "cards", "person": "people", "project": "projects", "proposal": "proposals"}
+        for e in snap["entities"]:
+            files[prefixes[e["kind"]] + "/" + e["body"]["id"] + ".json"] = copy.deepcopy(e)
+        self.files, self.cursor, self.claims = files, snap["cursor"], snap["claims"]
+        data = copy.deepcopy(files["tasks.json"]["body"])
+        for key, prefix in (("tasks", "cards/"), ("contacts", "people/"), ("projects", "projects/"), ("proposals", "proposals/")):
+            data[key] = [copy.deepcopy(v["body"]) for p, v in sorted(files.items()) if p.startswith(prefix)]
+        live = {c["card_id"]: c for c in self.claims if c["live"]}
+        for card in data["tasks"]:
+            claim = live.get(card["id"])
+            card["claim"] = ({**claim, "agent": claim["actor"]["agent_id"] or claim["actor"]["user_id"],
+                              "claimed_at": claim["expires_at"], "heartbeat_at": claim["expires_at"]} if claim else None)
+        sort_tasks(data)
+        _BOARD_STATES[id(data)] = {"mode": "hosted", "files": self.files, "layout": "split"}
+        return data
+
+    def read(self, path, rev=None):
+        result = self.request("GET", self.route("/files/" + urllib.parse.quote(path, safe="")))
+        if rev is not None and result["rev"] != rev:
+            raise HostedError(412, {"code": "revision_conflict", "message": "file changed during hydration; reload"})
+        return result
+
+    def hydrate(self, data):
+        for path, entry in list(self.files.items()):
+            if entry.get("omitted"):
+                full = self.read(path, entry["rev"])
+                self.files[path] = full
+                collection = {"cards": "tasks", "people": "contacts", "projects": "projects", "proposals": "proposals"}[path.split("/")[0]]
+                item = next(x for x in data[collection] if x["id"] == full["body"]["id"])
+                claim = item.get("claim")
+                item.clear(); item.update(copy.deepcopy(full["body"]))
+                if collection == "tasks":
+                    item["claim"] = claim
+        return data
+
+    def changes(self, cursor):
+        return self.request("GET", self.route("/changes?after=" + urllib.parse.quote(cursor, safe="") + "&limit=100"))
+
+    def command(self, command, key=None):
+        return self.request("POST", self.route("/commands"), command, key)
+
+    def commit(self, changes, key=None, fences=None):
+        body = {"ops": changes}
+        if fences:
+            body["fences"] = fences
+        return self.request("POST", self.route("/commits"), body, key)
+
+    def proof_path(self, card_id, session):
+        identity = self.whoami()
+        scope = [self.api, self.board, identity["user_id"], identity["agent_id"], session, card_id]
+        name = hashlib.sha256(json.dumps(scope).encode()).hexdigest() + ".json"
+        directory = os.path.abspath(os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "keeptrack", "hosted-claims"))
+        # Proofs may not live in a board/disposable working checkout.
+        for checkout in (ROOT, PROJECT_DIR, os.getcwd()):
+            if checkout and os.path.commonpath((os.path.realpath(checkout), os.path.realpath(directory))) == os.path.realpath(checkout):
+                sys.exit("invalid_fence: claim proof directory must be outside the board checkout")
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        os.chmod(directory, 0o700)
+        return os.path.join(directory, name)
+
+    def holder(self, card_id, session, required=False):
+        path = self.proof_path(card_id, session)
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd) as f:
+                if stat.S_IMODE(os.fstat(f.fileno()).st_mode) != 0o600:
+                    sys.exit("invalid_fence: claim proof file must have mode 0600")
+                record = json.load(f)
+            if record.get("fence"):
+                return {k: record[k] for k in ("session_id", "fence", "proof")}
+        except FileNotFoundError:
+            pass
+        if required:
+            sys.exit("invalid_fence: this session has no stored holder proof")
+        return None
+
+    def store_proof(self, card_id, session, record):
+        path = self.proof_path(card_id, session)
+        fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".proof-")
+        try:
+            with os.fdopen(fd, "w") as f:
+                os.fchmod(f.fileno(), 0o600); json.dump(record, f)
+            os.replace(temp, path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temp)
+
+    def model_changes(self, data, files):
+        desired = {"tasks.json": {k: v for k, v in data.items() if k not in ("tasks", "contacts", "projects", "proposals")}}
+        for coll, prefix in (("tasks", "cards"), ("contacts", "people"), ("projects", "projects"), ("proposals", "proposals")):
+            desired.update({prefix + "/" + x["id"] + ".json": copy.deepcopy(x) for x in data.get(coll, [])})
+        missing = set(files) - set(desired)
+        if missing:
+            sys.exit("capability_unavailable: use hosted lifecycle commands to remove entities")
+        ops, fences = [], {}
+        session = os.environ.get("BOARD_SESSION", "")
+        for path, body in desired.items():
+            original = files.get(path)
+            if original is None:
+                sys.exit("capability_unavailable: use a hosted create command")
+            if original.get("omitted"):
+                raise HostedError(412, {"code": "revision_conflict", "message": "hydrate the captured revision through load() before saving"})
+            old = original["body"]
+            # Legacy callbacks stamp local audit fields; hosted writes keep originals and let the server stamp.
+            for field in ("history", "comments", "createdBy", "updatedBy", "created", "updated", "claim"):
+                if field in old:
+                    body[field] = copy.deepcopy(old[field])
+                else:
+                    body.pop(field, None)
+            old_todos = {t.get("id"): t for t in old.get("todos", [])}
+            for todo in body.get("todos", []):
+                for field in ("doneBy", "doneAt"):
+                    if field in old_todos.get(todo.get("id"), {}):
+                        todo[field] = old_todos[todo["id"]][field]
+                    else:
+                        todo.pop(field, None)
+            if body != old:
+                ops.append({"kind": "put", "path": path, "baseRev": original["rev"], "body": body})
+                if path.startswith("cards/"):
+                    holder = self.holder(body["id"], session, bool(self.identity["agent_id"]))
+                    if holder:
+                        fences[body["id"]] = holder
+        return ops, fences
+
+    def commit_model(self, data, state=None, message="Update board", extra=None):
+        """Compatibility save seam: preserve the caller's captured file revisions."""
+        if extra:
+            sys.exit("capability_unavailable: hosted extra-file callbacks require explicit commit operations")
+        state = state if isinstance(state, dict) else _BOARD_STATES.get(id(data))
+        if not state or state.get("mode") != "hosted":
+            sys.exit("precondition_required: hosted model saves need the state returned by load()")
+        ops, fences = self.model_changes(data, state["files"])
+        if not ops:
+            return True
+        try:
+            self.commit(ops, fences=fences)
+            return True
+        except HostedError as e:
+            if e.status == 412:
+                return False
+            raise
+
+    def mutate(self, fn, message):
+        """Reuse kit field validation, then CAS only user fields; never number or forge audit data."""
+        lost = None
+        for attempt in range(4):
+            try:
+                data = self.hydrate(self.snapshot())
+            except HostedError as e:
+                if e.status == 412 and attempt < 3:
+                    continue
+                raise
+            base = copy.deepcopy(data)
+            out = io.StringIO()
+            if lost is None:
+                with contextlib.redirect_stdout(out):
+                    result = fn(data)
+                wanted = copy.deepcopy(data)
+                output = out.getvalue()
+                lost = (base, wanted)
+            else:
+                merged = merge3(lost[0], lost[1], base)
+                if merged["clashes"]:
+                    raise HostedError(412, {"code": "revision_conflict", "message": describe_clashes(merged["clashes"]) + "; read and redo the change"})
+                data = merged["merged"]
+            ops, fences = self.model_changes(data, self.files)
+            if not ops:
+                print(output, end=""); return result
+            try:
+                self.commit(ops, fences=fences)
+                print(output, end=""); return result
+            except HostedError as e:
+                if e.status != 412 or attempt == 3:
+                    raise
+        raise HostedError(412, {"code": "revision_conflict", "message": "board busy; read and retry"})
+
+
+_HOSTED_STORAGE = None
+
+
+def hosted_dispatch(a):
+    """Route only phase-0 CLI commands. There is deliberately no GitHub fallback."""
+    allowed = {"list", "show", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
+               "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "archive", "unarchive", "review", "task-set", "approve"}
+    if a.cmd not in allowed:
+        sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
+    adapter = storage_adapter()
+    try:
+        adapter.whoami()
+        if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list"):
+            return a.f(a)
+        data = adapter.snapshot()
+        session = getattr(a, "session", None) or os.environ.get("BOARD_SESSION", "")
+        if a.cmd == "add":
+            if a.column and a.column != "backlog":
+                sys.exit("ineligible: hosted cards are created in Backlog; approve separately")
+            card = {"id": "t_" + secrets.token_hex(8), "title": a.title, "assignees": a.assign or [], "column": "backlog"}
+            if not a.title.strip():
+                sys.exit("invalid_schema: a task needs a title")
+            for k in ("details", "client", "priority"):
+                if getattr(a, k, None) is not None:
+                    card[k] = getattr(a, k)
+            if a.due is not None:
+                card["due"] = check_date(a.due, data) or ""
+            if a.project:
+                card["project"] = find_project(data, a.project)["id"]
+            if a.label:
+                card["labels"] = a.label
+            if a.after:
+                card["after"] = resolve_after(data, card, a.after)
+            if a.todo:
+                card["todos"] = [{"id": "d_" + secrets.token_hex(6), "text": text, "done": False} for text in a.todo]
+            response = adapter.command({"kind": "create-card", "card": card})
+            print(f"#{response['result']['num']} added ({response['result']['card_id']})")
+            return 0
+        if a.cmd == "unarchive":
+            found = None
+            for year in archive_years(data):
+                archive = adapter.read("archive/" + year + ".json")
+                for item in archive["body"].get("tasks", []) + archive["body"].get("contacts", []):
+                    if a.ref in (item["id"], "#" + str(item.get("num")), str(item.get("num"))):
+                        if found:
+                            sys.exit("invalid_schema: ambiguous archived reference")
+                        found = (item, year, archive)
+            if not found:
+                sys.exit("not_found: archived entity not found")
+            card, year, archive = found
+            prefix = "cards/" if "num" in card else "people/"
+            # File GET supplies the archived entity revision needed by unarchive.
+            entry = adapter.read(prefix + card["id"] + ".json")
+        else:
+            if a.cmd == "archive" and not a.ref:
+                data = adapter.hydrate(data)
+                rules = archive_rules(data)
+                for field in ("done_days", "lost_days", "keep_history"):
+                    if getattr(a, field) is not None:
+                        rules[field] = getattr(a, field)
+                plan = archive_plan(copy.deepcopy(data), rules)
+                if a.dry_run:
+                    print(json.dumps(plan, ensure_ascii=False)); return 0
+                if any(part.get("history") or part.get("proposals") for part in plan.values()):
+                    sys.exit("capability_unavailable: hosted phase 0 archives whole cards/people; history-only trimming and proposals are unavailable")
+                count = 0
+                for year, part in plan.items():
+                    for entity in part["tasks"] + part["contacts"]:
+                        adapter.snapshot()
+                        prefix = "cards/" if "num" in entity else "people/"
+                        entry = adapter.files[prefix + entity["id"] + ".json"]
+                        try:
+                            envelope = adapter.read("archive/" + year + ".json")
+                        except HostedError as e:
+                            if e.status != 404:
+                                raise
+                            envelope = {"rev": None}
+                        command = {"kind": "archive", "entity_id": entity["id"], "baseRev": entry["rev"],
+                                   "rootRev": adapter.files["tasks.json"]["rev"], "archiveRev": envelope["rev"], "year": year}
+                        holder = adapter.holder(entity["id"], session, bool(adapter.identity["agent_id"]))
+                        if holder:
+                            command["holder"] = holder
+                        adapter.command(command); count += 1
+                        with contextlib.suppress(FileNotFoundError):
+                            os.unlink(adapter.proof_path(entity["id"], session))
+                print(f"Archived {count} entities; nothing deleted")
+                return 0
+            card = find(data, getattr(a, "id", None) or a.ref)
+            entry = adapter.files["cards/" + card["id"] + ".json"]
+        if a.cmd == "show":
+            full = adapter.read("cards/" + card["id"] + ".json", entry["rev"])
+            for n, item in enumerate(data["tasks"]):
+                if item["id"] == card["id"]:
+                    data["tasks"][n] = {**full["body"], "claim": card.get("claim")}
+            # Reuse the exact kit rendering without a second projected load.
+            original_snapshot = adapter.snapshot
+            adapter.snapshot = lambda: data
+            try:
+                return a.f(a)
+            finally:
+                adapter.snapshot = original_snapshot
+        cmd = {"kind": a.cmd, "card_id": card["id"], "baseRev": entry["rev"]}
+        if a.cmd == "comment":
+            cmd["text"] = a.text
+        elif a.cmd == "claim":
+            if not session:
+                sys.exit("invalid_fence: claim needs --session or BOARD_SESSION")
+            if attended(a) and adapter.identity["agent_id"]:
+                sys.exit("attended_forbidden: agents cannot request attended claims")
+            holder = adapter.holder(card["id"], session)
+            if not holder:
+                try:
+                    with open(adapter.proof_path(card["id"], session)) as f:
+                        holder = json.load(f)
+                except FileNotFoundError:
+                    pass
+            proof = holder["proof"] if holder else secrets.token_hex(32)
+            pending = {"session_id": session, "proof": proof}
+            # Persist before sending, so a lost successful response never loses the holder proof.
+            adapter.store_proof(card["id"], session, pending)
+            cmd.update(session_id=session, attended=attended(a), proof_digest=hashlib.sha256(bytes.fromhex(proof)).hexdigest())
+            if getattr(a, "on_behalf_of", None):
+                cmd["on_behalf_of"] = a.on_behalf_of
+            if a.force:
+                cmd["takeover"] = True
+        elif a.cmd in ("heartbeat", "release"):
+            cmd.update(adapter.holder(card["id"], session, True))
+            if a.cmd == "heartbeat":
+                cmd["status"] = a.status or "running"
+                if a.note:
+                    cmd["note"] = a.note
+            elif a.column:
+                cmd["column"] = a.column
+        elif a.cmd in ("done", "review", "move", "archive", "unarchive"):
+            holder = adapter.holder(card["id"], session, bool(adapter.identity["agent_id"]) and a.cmd != "unarchive")
+            if holder:
+                cmd["holder"] = holder
+            if a.cmd in ("done", "review"):
+                if not (a.note or "").strip():
+                    sys.exit("invalid_schema: --note is required")
+                cmd["note"] = a.note
+                if a.cmd == "done" and a.cancel:
+                    cmd["cancel"] = True
+            if a.cmd == "move":
+                if a.before or a.after or a.top or a.priority:
+                    sys.exit("capability_unavailable: hosted move supports column transitions only")
+                cmd["column"] = a.column or a.column_pos or card["column"]
+                if cmd["column"] not in [c["id"] for c in data["columns"]]:
+                    sys.exit("invalid_schema: unknown column")
+            if a.cmd in ("archive", "unarchive"):
+                if a.cmd == "archive":
+                    year = str(board_today(data).year)
+                    try:
+                        archive = adapter.read("archive/" + year + ".json")
+                    except HostedError as e:
+                        if e.status != 404:
+                            raise
+                        archive = {"rev": None}
+                    if a.dry_run:
+                        print(f"Would archive #{card['num']} to {year}"); return 0
+                cmd.pop("card_id")
+                cmd.update(entity_id=card["id"], year=year, rootRev=adapter.files["tasks.json"]["rev"], archiveRev=archive["rev"])
+        response = adapter.command(cmd)
+        if a.cmd == "claim":
+            adapter.store_proof(card["id"], session, {"session_id": session, "proof": proof, "fence": response["result"]["fence"]})
+        if a.cmd in ("release", "done", "review", "archive"):
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(adapter.proof_path(card["id"], session))
+        print(f"#{card.get('num', '?')} {a.cmd}: {json.dumps(response.get('result', {}), ensure_ascii=False)}")
+        return 0
+    except HostedError as e:
+        if e.status == 412:
+            # Observe current state but never silently repeat a lifecycle decision on a changed card.
+            adapter.snapshot()
+            print(str(e) + "; board reloaded; read it and retry", file=sys.stderr)
+            return 3
+        print(str(e), file=sys.stderr)
+        return 1
+
+
+class GitHubStorageAdapter:
+    """Existing GitHub and --file callbacks; keep their retry/merge behaviour."""
+    kind = "github"
+    capabilities = {"casWrites": True, "atomicMultiFile": True, "changeFeed": False}
+
+    def snapshot(self):
+        return _github_load_board()
+
+    def read(self, year, base):
+        return read_archive(year, base)
+
+    def commit(self, data, state=None, message="Update board", extra=None):
+        return _github_save_changes(data, state, message, extra)
+
+    def mutate(self, fn, message):
+        return _github_mutate(fn, message)
+
+    def command(self, command, key):
+        sys.exit("capability_unavailable: GitHub lifecycle uses command callbacks")
+
+    def changes(self, cursor):
+        sys.exit("capability_unavailable: GitHub uses snapshots")
+
+    def whoami(self):
+        return default_user()
+
+
+_GITHUB_STORAGE = GitHubStorageAdapter()
+
+
+def storage_adapter():
+    if FILE or BACKEND == "github":
+        return _GITHUB_STORAGE
+    if BACKEND == "hosted":
+        global _HOSTED_STORAGE
+        if _HOSTED_STORAGE is None:
+            _HOSTED_STORAGE = HostedStorageAdapter()
+        return _HOSTED_STORAGE
+    sys.exit(f"capability_unavailable: unknown BOARD_BACKEND {BACKEND}")
+
+
+def load_board():
+    adapter = storage_adapter()
+    data = adapter.snapshot()
+    return adapter.hydrate(data) if adapter.kind == "hosted" else data
+
+
+def save_changes(data, state=None, message="Update board", extra=None):
+    adapter = storage_adapter()
+    if adapter.kind == "hosted":
+        return adapter.commit_model(data, state, message, extra)
+    return adapter.commit(data, state, message, extra)
+
+
+def mutate(fn, message):
+    return storage_adapter().mutate(fn, message)
 
 
 def load():
@@ -1082,7 +1633,7 @@ def _api_save_changes(changes, deletes, state, message):
     _api_error(rc, out, err)
 
 
-def save_changes(data, state=None, message="Update board", extra=None):
+def _github_save_changes(data, state=None, message="Update board", extra=None):
     """Write only changed item files, and remove files for deleted items."""
     state = state if isinstance(state, dict) else _BOARD_STATES.get(id(data))
     if not state:
@@ -1261,7 +1812,7 @@ def num_of(data, tid):
     return next((x.get("num", "?") for x in data.get("tasks", []) if x.get("id") == tid), "?")
 
 
-def mutate(fn, message):
+def _github_mutate(fn, message):
     """Apply fn(data) to the latest file; retry on SHA conflict. fn may raise SystemExit to abort."""
     with local_lock():   # --file mode: the whole read-modify-write is one critical section
         owner = not _REC.get("on")   # the local claim record is read once for this command, across its retries (a caller that
@@ -1395,6 +1946,9 @@ def migrate_data(data, target=AUTO_MIGRATE_TO):
 
 
 def who_am_i(t=None):
+    if BACKEND == "hosted" and not FILE:
+        identity = storage_adapter().whoami()
+        return identity["agent_id"] or identity["user_id"]
     c = (t or {}).get("claim") or {}
     user = os.environ.get("BOARD_USER", "")
     agent = os.environ.get("BOARD_AGENT", "") or c.get("agent", "")
@@ -1434,6 +1988,10 @@ def attended(a):
 
 
 def claim_state(data, c):
+    if BACKEND == "hosted" and not FILE:
+        if not c:
+            return None
+        return c["status"] if c.get("live") and parse(c["expires_at"]) > dt.datetime.now(dt.timezone.utc) else "stale"
     if not c:
         return None
     if c.get("status") in ("done", "stuck", "blocked"):
@@ -1449,6 +2007,10 @@ def git_branch():
 
 
 def default_user():
+    if BACKEND == "hosted" and not FILE:
+        adapter = storage_adapter()
+        identity = adapter.whoami()
+        return next(b["handle"] for b in identity["boards"] if b["id"] == adapter.board)
     if os.environ.get("BOARD_USER"):
         return os.environ["BOARD_USER"]
     rc, out, _ = gh("user", "--jq", ".login")
@@ -2458,6 +3020,11 @@ def cmd_release(a):
 
 def card_url(num, ident=None):
     """The web board's link that opens card #num (the board's own #N route); '' without a board repo (--file)."""
+    if BACKEND == "hosted" and not FILE:
+        query = {"backend": "hosted", "api": os.environ.get("BOARD_API", ""), "board": os.environ.get("BOARD_ID", "")}
+        if ident:
+            query["card"] = ident
+        return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(query) + f"#{num}"
     if not REPO:
         return ""
     query = {"repo": REPO, "branch": BRANCH, "path": PATH}
@@ -4319,7 +4886,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
+    "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -4389,6 +4956,8 @@ def cmd_where(a):
             "BOARD_TOKEN" if os.environ.get("BOARD_TOKEN") else "gh login" if shutil.which("gh") else "GH_TOKEN/GITHUB_TOKEN" if token() else "none")
     print(f"auth:    {auth}")
     print(f"config:  {os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json') if PROJECT_DIR else '(no .keeptrack/config.json found)'}")
+    if PARENT_CONFIG:
+        print(f"         (ignored {PARENT_CONFIG}: it is above this board clone, whose own git remote names the board)")
     print(f"claims:  {CLAIM_FILE}")
 
 
@@ -4480,7 +5049,7 @@ def board_timezone(data):
     people = [m for m in ((data or {}).get("people") or []) if isinstance(m, dict)]
     if not any(valid_timezone(m.get("timezone")) for m in people):
         return None
-    me = (os.environ.get("BOARD_USER") or "").lower()
+    me = (default_user() if BACKEND == "hosted" and not FILE else (os.environ.get("BOARD_USER") or "")).lower()
     owner = str(((data or {}).get("settings") or {}).get("kit_owner") or "").lower()
     pick = [next((m for m in people if me and str(m.get("github") or "").lower() == me), None),
             next((m for m in people if owner and str(m.get("github") or "").lower() == owner), None),
@@ -7383,6 +7952,14 @@ def archive_index(data, year, cur):
 
 def read_archive(year, base):
     """(data or None, sha) of one archive file, from the same place as the board file."""
+    if BACKEND == "hosted" and not FILE:
+        try:
+            file = storage_adapter().read(f"archive/{check_year(year)}.json")
+            return file["body"], file["rev"]
+        except HostedError as e:
+            if e.status == 404:
+                return None, None
+            raise
     pth = archive_path(year)
     rel = f"archive/{check_year(year)}.json"
     if isinstance(base, dict) and rel in base.get("files", {}):
@@ -8541,7 +9118,9 @@ def main():
     s.add_argument("id"); s.set_defaults(f=cmd_research_lock)
     s = sub.add_parser("card-link", help="cards as Markdown links to the web board ([#12](url) title): write card numbers this way")
     s.add_argument("ids", nargs="+", metavar="id"); s.set_defaults(f=cmd_card_link)
-    s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.set_defaults(f=cmd_claim)
+    s = sub.add_parser("approve", help="hosted: approve an assigned card (scope checked by server)")
+    s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
+    s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
     s.add_argument("--project"); s.add_argument("--all", action="store_true", help="ignore this repo's default project"); s.set_defaults(f=cmd_next)
     s = sub.add_parser("heartbeat"); s.add_argument("id"); s.add_argument("--note")
@@ -8774,6 +9353,8 @@ def main():
         print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
               "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",
               file=sys.stderr)
+    if not FILE and BACKEND != "github":
+        return hosted_dispatch(a) or 0
     return a.f(a) or 0
 
 
