@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: the **Archive** button on Done cards now takes the card off the board at once, instead of after GitHub
+has the commit (about 2 to 3 seconds on a split board). If the archive does not happen, the card comes back and the
+toast says why. Undo still shows once the archive has landed. No schema change.
+
 Card links open from the saved local copy while syncing, with writes held until it is current. Split boards remember their last sync to avoid fetching unchanged files on return visits and polls.
 
 ## Kit v67 — 2026-10-15
