@@ -1759,7 +1759,7 @@ if (typeof window !== 'undefined') (() => {
       const form = elI('button', 'addform', 'pencil'); form.type = 'button'; form.title = 'Write a full card (Shift+Enter)'; form.setAttribute('aria-label', 'Write a full card in ' + col.name);
       const full2 = () => { const v = inp.value.trim(); inp.value = ''; openNewCard(col.id, v); };
       const go = () => { const v = inp.value.trim(); if (!v) { full2(); return; } inp.value = ''; addTask(v, col.id); };
-      btn.onclick = go; form.onclick = full2; inp.addEventListener('keydown', e => { if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); full2(); } else if (e.key === 'Enter') go(); });
+      btn.onclick = go; form.onclick = full2; inp.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; if (e.shiftKey) { e.preventDefault(); full2(); } else go(); });
       add.append(inp, form, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = full2; board.append(c);
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
@@ -2856,8 +2856,9 @@ if (typeof window !== 'undefined') (() => {
     // recheckArchive: the marks change other cards, so a lost race runs the add again on the newer board (never a clash over a card you did not touch)
     return mutate(n => {
       const c = clone(t);
-      if (c.client && !n.clients.some(x => x.toLowerCase() === c.client.toLowerCase())) n.clients.push(c.client);
-      c.labels.forEach(l => { if (!n.labels.some(x => x.name === l)) n.labels.push({ name: l, color: '#6b778c' }); });
+      // matched without regard to case against the newest board, so a label or client added meanwhile is reused, not doubled
+      if (c.client) { const k = n.clients.find(x => x.toLowerCase() === c.client.toLowerCase()); if (k) c.client = k; else n.clients.push(c.client); }
+      c.labels = [...new Set(c.labels.map(l => { const k = n.labels.find(x => x.name.toLowerCase() === l.toLowerCase()); if (!k) n.labels.push({ name: l, color: '#6b778c' }); return k ? k.name : l; }))];
       n.tasks.push(c); hits = markSimilar(n, c);
     }, `Add task: ${title}`, [], null, { recheckArchive: true })
       .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: open the card to merge, link or dismiss.`); return ok ? t.id : null; });
@@ -2883,8 +2884,10 @@ if (typeof window !== 'undefined') (() => {
       projSel.control.textContent = ''; [{ id: '', name: 'No project' }, ...list].forEach(p => { const o = el('option', null, p.name + (p.id && p.client && !mine ? ' · ' + p.client : '')); o.value = p.id; projSel.control.append(o); });
       projSel.value = list.some(p => p.id === keep) ? keep : '';
     };
-    fillProjects(); client.addEventListener('input', fillProjects);
-    projSel.control.addEventListener('change', () => { const p = projectById(projSel.value); if (p && p.client && !client.value.trim()) client.value = p.client; });
+    // like the drawer's Client and project picker: a project sets its client, and another client drops a project that is not theirs
+    const projectFits = () => { const p = projectById(projSel.value); return !p || !p.client || p.client.toLowerCase() === client.value.trim().toLowerCase(); };
+    fillProjects(); client.addEventListener('input', () => { fillProjects(); if (!projectFits()) projSel.value = ''; });
+    projSel.control.addEventListener('change', () => { const p = projectById(projSel.value); if (p && p.client) { client.value = p.client; fillProjects(); projSel.value = p.id; } });
     const prio = ui.select({ label: 'Priority', value: 'medium', options: [{ value: 'high', label: 'High' }, { value: 'medium', label: 'Medium' }, { value: 'low', label: 'Low' }] }); prio.control.id = 'ncPrio';
     const dueIn = dfield('ncDue', 'Due date', { type: 'date' }); dueIn.value = due || '';
     const who = ui.select({ label: 'Assignee', value: d.assignees[0] || '', options: [{ value: '', label: 'Nobody' }, ...state.people.map(p => ({ value: p.github, label: p.name || p.github }))] }); who.control.id = 'ncWho';
@@ -2911,17 +2914,19 @@ if (typeof window !== 'undefined') (() => {
     const sheet = newCardSheet = ui.sheet({ title: 'New card', body, footer: [cancel, save], side: 'center', removeOnClose: true, onClose: () => { if (newCardSheet === sheet) newCardSheet = null; } });
     sheet.el.classList.add('personform', 'cardform'); sheet.el.id = 'dlgNewCard';
     const submit = async () => {
+      if (save.disabled) return;   // one save at a time: a repeated Enter or Ctrl+Enter never adds the card twice
       const t = title.value.replace(/\s+/g, ' ').trim();
       if (!t) { err.textContent = 'Type a title for the card.'; err.hidden = false; title.focus(); return; }
-      const badLinks = links.value.split('\n').map(l => l.trim()).filter(Boolean).filter(l => !parseLinks(l).length);
-      if (badLinks.length) { err.textContent = `This line is not a link: “${badLinks[0]}”. Use Title | https://…`; err.hidden = false; links.focus(); return; }
+      const linkLines = links.value.split('\n').map(l => l.trim()).filter(Boolean), badLinks = linkLines.filter(l => !parseLine(l));   // the drawer's rule: a web link or a local path
+      if (badLinks.length) { err.textContent = `This line is not a link: “${badLinks[0]}”. Use Title | https://… or a local path.`; err.hidden = false; links.focus(); return; }
+      if (!projectFits()) projSel.value = '';
       const typed = client.value.replace(/\s+/g, ' ').trim(), known = state.clients.find(c => c.toLowerCase() === typed.toLowerCase());
       const extra = {
         details: details.value.trim(), client: known || typed, project: projSel.value, priority: prio.value,
         assignees: who.value ? [who.value] : [],
         labels: [...new Set(labels.value.split(',').map(x => x.replace(/\s+/g, ' ').trim().slice(0, 40)).filter(Boolean).map(x => (state.labels.find(l => l.name.toLowerCase() === x.toLowerCase()) || { name: x }).name))],
         todos: todos.value.split('\n').map(x => x.trim()).filter(Boolean).map(text => ({ id: todoId(), text, done: false })),
-        links: parseLinks(links.value)
+        links: linkLines.map(parseLine).filter((l, i, a) => a.findIndex(x => x.url === l.url) === i)
       };
       save.disabled = true; err.hidden = true;
       const id = await addTask(t, colSel.value, dueIn.value, extra);
@@ -2930,8 +2935,9 @@ if (typeof window !== 'undefined') (() => {
       const made = state.tasks.find(x => x.id === id); sheet.close(); toast(made ? `Added #${made.num}` : 'Added the card');
     };
     save.onclick = submit;
-    title.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
-    sheet.el.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } });
+    const composing = e => e.isComposing || e.keyCode === 229;   // Enter that picks an IME word is not a submit
+    title.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !composing(e)) { e.preventDefault(); submit(); } });
+    sheet.el.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !composing(e)) { e.preventDefault(); submit(); } });
     sheet.open(); setTimeout(() => { title.focus(); title.setSelectionRange(title.value.length, title.value.length); }, 0);
     return sheet;
   }

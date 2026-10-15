@@ -131,9 +131,15 @@ async function waitFor(fn, what) { for (let i = 0; i < 100; i++) { const v = fn(
     await lane.locator('h2 .hadd').click(); await page.waitForSelector('#dlgNewCard[open]');
     await page.locator('#ncTitle').fill('Refresh the homepage'); await page.locator('#ncProject').selectOption('pr_web');
     assert.equal(await page.locator('#ncClient').inputValue(), 'Acme');
-    await page.locator('#ncTitle').press('Enter');   // Enter in the title adds the card
+    await page.locator('#ncClient').fill('Other'); assert.equal(await page.locator('#ncProject').inputValue(), '', 'another client drops a project that is not theirs');
+    await page.locator('#ncClient').fill('Globex'); await page.locator('#ncProject').selectOption('pr_web');
+    assert.equal(await page.locator('#ncClient').inputValue(), 'Acme', 'a project sets its client');
+    await page.locator('#ncLinks').fill('Notes | ~/work/acme/notes');
+    await page.locator('#ncTitle').press('Control+Enter'); await page.keyboard.press('Enter').catch(() => {});   // Ctrl+Enter bubbles to the sheet too: still one card
     const w = await waitFor(() => cards(api).find(x => x.title === 'Refresh the homepage'), 'project card saved');
     assert.equal(w.project, 'pr_web'); assert.equal(w.client, 'Acme'); assert.equal(w.column, 'todo');
+    assert.deepEqual(w.links, [{ title: 'Notes', url: '~/work/acme/notes' }], 'a local path is a link, as in the drawer');
+    await page.waitForTimeout(800); assert.equal(cards(api).filter(x => x.title === 'Refresh the homepage').length, 1, 'one card, never two');
     assert.deepEqual(page.errors, []);
 
     // 6. phones: the floating ＋ opens the form for the column on show
