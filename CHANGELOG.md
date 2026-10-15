@@ -19,6 +19,14 @@ also remember their last sync (head, ETag, file list), so an unchanged board now
 call instead of five serial calls. Measured on a 192-card board at 250 ms per call: card link 1.86 s → 0.17 s, live sync
 1.41 s → 0.40 s. Opening a card also shows the drawer before redrawing the board behind it. No schema change.
 
+## Kit v69 — 2026-10-15
+
+Board owners can install, check and explicitly enable proposal-only automations. One cheap tick reserves work only
+when a source has new items. Includes stale-card nudges, notes-folder tasks, exact-contact Gmail tasks, a setup guide
+and a create-automation skill. Checks use bounded output, private state and digest-pinned access approval.
+Nothing is installed, enabled or scheduled by upgrading. Own packs and runtime state are protected from kit updates.
+No schema change to board data. Adds separate automation-install and generic seen-log records under automation/.
+
 ## Kit v68 — 2026-10-15
 
 Card links from the web board and CLI now include `card=<id>` and keep `#N`. On a split board, a browser without

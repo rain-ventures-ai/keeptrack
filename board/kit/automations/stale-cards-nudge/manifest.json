@@ -1,0 +1,47 @@
+{
+  "schema": "keeptrack-automation/1",
+  "slug": "stale-cards-nudge",
+  "name": "Stale cards nudge",
+  "summary": "Propose work for review from board.read",
+  "version": "1.0.0",
+  "needs": [
+    {
+      "id": "board.read",
+      "why": "Read the automation source",
+      "routes": [
+        {
+          "runtime": "local",
+          "how": "Read the local board and source files"
+        },
+        {
+          "runtime": "claude",
+          "how": "Confirm read-only access to board.read"
+        },
+        {
+          "runtime": "chatgpt",
+          "how": "Confirm read-only access to board.read"
+        },
+        {
+          "runtime": "grok",
+          "how": "Confirm read-only access to board.read"
+        }
+      ]
+    }
+  ],
+  "writes": [
+    "proposals"
+  ],
+  "never": [
+    "send-email",
+    "delete",
+    "spend",
+    "external-post",
+    "edit-contacts"
+  ],
+  "every": "1d",
+  "check": {
+    "file": "check.py",
+    "network": false,
+    "tools": []
+  }
+}

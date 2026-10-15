@@ -1,5 +1,5 @@
 {
-  "version": 68,
+  "version": 69,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -41,7 +41,32 @@
     ".claude/skills/onboard-keeptrack/references/sources/old-crm.md": "skills/onboard-keeptrack/references/sources/old-crm.md",
     ".claude/skills/onboard-keeptrack/references/sources/other-task-tools.md": "skills/onboard-keeptrack/references/sources/other-task-tools.md",
     ".claude/skills/onboard-keeptrack/references/sources/spreadsheet.md": "skills/onboard-keeptrack/references/sources/spreadsheet.md",
-    ".claude/skills/onboard-keeptrack/references/sources/trello.md": "skills/onboard-keeptrack/references/sources/trello.md"
+    ".claude/skills/onboard-keeptrack/references/sources/trello.md": "skills/onboard-keeptrack/references/sources/trello.md",
+    "board/AUTOMATIONS.md": "AUTOMATIONS.md",
+    "board/automation-loader.md": "automation-loader.md",
+    "board/automations/email-to-tasks/SETUP.md": "automations/email-to-tasks/SETUP.md",
+    "board/automations/email-to-tasks/SKILL.md": "automations/email-to-tasks/SKILL.md",
+    "board/automations/email-to-tasks/check.py": "automations/email-to-tasks/check.py",
+    "board/automations/email-to-tasks/manifest.json": "automations/email-to-tasks/manifest.json",
+    "board/automations/email-to-tasks/tests/test_check.py": "automations/email-to-tasks/tests/test_check.py",
+    "board/automations/notes-folder-to-tasks/SETUP.md": "automations/notes-folder-to-tasks/SETUP.md",
+    "board/automations/notes-folder-to-tasks/SKILL.md": "automations/notes-folder-to-tasks/SKILL.md",
+    "board/automations/notes-folder-to-tasks/check.py": "automations/notes-folder-to-tasks/check.py",
+    "board/automations/notes-folder-to-tasks/manifest.json": "automations/notes-folder-to-tasks/manifest.json",
+    "board/automations/notes-folder-to-tasks/tests/test_check.py": "automations/notes-folder-to-tasks/tests/test_check.py",
+    "board/automations/stale-cards-nudge/SETUP.md": "automations/stale-cards-nudge/SETUP.md",
+    "board/automations/stale-cards-nudge/SKILL.md": "automations/stale-cards-nudge/SKILL.md",
+    "board/automations/stale-cards-nudge/check.py": "automations/stale-cards-nudge/check.py",
+    "board/automations/stale-cards-nudge/manifest.json": "automations/stale-cards-nudge/manifest.json",
+    "board/automations/stale-cards-nudge/tests/test_check.py": "automations/stale-cards-nudge/tests/test_check.py",
+    ".claude/skills/keeptrack-automation-create/SKILL.md": "skills/keeptrack-automation-create/SKILL.md",
+    ".claude/skills/keeptrack-automation-create/references/check_template.py": "skills/keeptrack-automation-create/references/check_template.py",
+    ".claude/skills/keeptrack-automation-create/references/manifest_template.json": "skills/keeptrack-automation-create/references/manifest_template.json",
+    ".claude/skills/keeptrack-automation-create/references/test_template.py": "skills/keeptrack-automation-create/references/test_template.py",
+    "board/keeptrack-email/SKILL.md": "skills/keeptrack-email/SKILL.md",
+    "board/keeptrack-email/references/routines.md": "skills/keeptrack-email/references/routines.md",
+    "board/keeptrack-notes/SKILL.md": "skills/keeptrack-notes/SKILL.md",
+    "board/keeptrack-notes/references/routines.md": "skills/keeptrack-notes/references/routines.md"
   },
   "optional": {
     "visibility-alarm": {

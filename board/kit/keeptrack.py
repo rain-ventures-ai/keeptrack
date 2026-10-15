@@ -205,12 +205,12 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 68  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 69  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
 # Board data: kit-update never writes or removes these, whatever a manifest says.
-KIT_NEVER = ("board/tasks.json", "board/cards", "board/people", "board/projects", "board/proposals", "board/archive")
+KIT_NEVER = ("automations", "automation", "board/tasks.json", "board/cards", "board/people", "board/projects", "board/proposals", "board/archive")
 
 
 def _default_branch():
@@ -2142,6 +2142,7 @@ def cmd_list(a):
         wait_on = default_user().lower()
         if not wait_on:
             sys.exit("--waiting-on me needs to know who you are: set BOARD_USER (or log in with gh)")
+    json_items = []
     for t in ordered:
         if query and query not in json.dumps(searchable(t), ensure_ascii=False).casefold(): continue   # never a substring oracle for a session id
         if a.column and t["column"] != a.column: continue
@@ -2162,11 +2163,15 @@ def cmd_list(a):
         if getattr(a, "client", None) and t.get("client") != a.client: continue
         if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
         if getattr(a, "bare", False) and not bare_card(t): continue
+        if getattr(a, "json", False):
+            json_items.append(t); continue
         cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
         print(line(data, t, today=today) + cleared + scoring + url)
+
+    if getattr(a, "json", False): print(json.dumps(json_items))
 
 
 def cmd_show(a):
@@ -4308,7 +4313,7 @@ def _here(a):
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
-    "agent-work": ["claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "research-lock", "research-suggest"],
+    "agent-work": ["claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
@@ -7580,7 +7585,7 @@ def _cmd_unarchive(a):
 
 def _automation_path(relative):
     """Only real, repo-owned automation files; never follow a symlink (including locks)."""
-    if not ROOT or not isinstance(relative, str) or not re.fullmatch(r"automation/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+\.json", relative):
+    if not ROOT or not isinstance(relative, str) or not re.fullmatch(r"automation/(?:(?:[a-zA-Z0-9_-]+|\.local)/)*[a-zA-Z0-9_-]+\.json", relative):
         sys.exit("checkpoint path must be a JSON file under automation/")
     path = os.path.join(ROOT, relative)
     cur = ROOT
@@ -7646,7 +7651,7 @@ def _checkpoint_payload(payload):
 
 def cmd_checkpoint(a):
     """Update an owner-bound register's durable state, without touching board data or publishing git."""
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", a.id): sys.exit("invalid routine id")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,95}", a.id): sys.exit("invalid routine id")
     register_path = _automation_path("automation/routines/" + a.id + ".json")
     if not os.path.isfile(register_path): sys.exit("routine register is missing")
     # Same lock as routine start/finish: a worker cannot checkpoint after another process finishes its run.
@@ -7737,7 +7742,7 @@ def cmd_routine(a):
     """Repo-owned routine inventory and bounded run reports; scheduler credentials stay outside git."""
     if not ROOT:
         sys.exit("routine commands need a board repo clone")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", a.id):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,95}", a.id):
         sys.exit("routine id must use lowercase letters, digits, hyphens or underscores")
     path = _automation_path("automation/routines/" + a.id + ".json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -7785,6 +7790,13 @@ def _routine_report(a, path):
             if not sep or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) or not re.fullmatch(r"[0-9]+", number):
                 sys.exit("counts must be name=nonnegative_integer")
             counts[key] = int(number)
+        if data.get("automation"):
+            if a.summary: sys.exit("automation reports allow counts only")
+            install = data["automation"]
+            packs = _auto_packs()
+            if install["slug"] not in packs or _auto_pack(packs[install["slug"]][1])[1] != current.get("digest"):
+                if a.status != "failed": sys.exit("pack digest changed since reservation")
+            current = {k: v for k, v in current.items() if k != "batch"}
         report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts)
         data["last_run"] = report
         data["runs"] = (data.get("runs", []) + [report])[-30:]
@@ -7792,6 +7804,521 @@ def _routine_report(a, path):
         if a.status == "success": data["last_successful_run_at"] = report["finished_at"]
     atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     print(f"{a.id}: {a.action}; commit {os.path.relpath(path, ROOT)} to publish the report")
+
+
+# Automations keep checks cheap and reserve agent work in the routine register.
+_AUTO_INTERVALS = {"15m": 900, "30m": 1800, "1h": 3600, "6h": 21600, "1d": 86400}
+_AUTO_NEEDS = {"board.read", "files.read", "gmail.read", "drive.read", "github.read", "calendar.read"}
+_AUTO_NEVER = {"send-email", "delete", "spend", "external-post", "edit-contacts"}
+_AUTO_RUNTIMES = {"claude", "chatgpt", "grok", "local"}
+
+
+def _auto_json(path, default=None):
+    if not os.path.isfile(path): return copy.deepcopy(default)
+    with open(path, encoding="utf-8") as f: return json.load(f)
+
+
+def _auto_write(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    atomic_write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+
+def _auto_token(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_./+=:-]{1,256}", value) or "://" in value:
+        raise ValueError("expected an opaque token")
+    return value
+
+
+def _auto_pack(path):
+    """Strict, recursive validation before any pack code or prompt is used."""
+    errors = []
+    def require(ok, message):
+        if not ok: errors.append(message)
+    def obj(value, allowed, required, label):
+        if not isinstance(value, dict):
+            errors.append(label + ": expected object"); return {}
+        require(not set(value) - set(allowed), label + ": unknown keys")
+        require(set(required) <= set(value), label + ": missing fields")
+        return value
+    def text(v, limit): return isinstance(v, str) and 0 < len(v) <= limit and not any(ord(c) < 32 for c in v)
+    def argv(v): return isinstance(v, list) and bool(v) and all(text(x, 256) for x in v)
+    path = os.path.abspath(path)
+    cur = path
+    while cur != os.path.dirname(cur):
+        require(not os.path.islink(cur), "pack paths must not contain symlinks"); cur = os.path.dirname(cur)
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files: require(not os.path.islink(os.path.join(root, name)), "pack must not contain symlinks")
+    try: m = _auto_json(os.path.join(path, "manifest.json"))
+    except (OSError, ValueError): m = None
+    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix".split(),
+            "schema slug name summary version needs writes never every".split(), "manifest")
+    require(m.get("schema") == "keeptrack-automation/1", "unsupported manifest schema")
+    slug = m.get("slug")
+    require(isinstance(slug, str) and bool(re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", slug)) and slug == os.path.basename(path), "slug must match folder and slug pattern")
+    for key, limit in (("name", 60), ("summary", 200)):
+        require(text(m.get(key), limit), key + ": invalid text/length")
+    require(isinstance(m.get("version"), str) and bool(re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", m["version"])), "invalid pack version")
+    require(m.get("writes") == ["proposals"], "writes must be [proposals]")
+    require(isinstance(m.get("every"), str) and m["every"] in _AUTO_INTERVALS, "invalid interval")
+    require(isinstance(m.get("never"), list) and all(isinstance(x, str) and x in _AUTO_NEVER for x in m.get("never", [])), "unknown never action")
+    needs = m.get("needs")
+    require(isinstance(needs, list), "needs must be a list")
+    ids = []
+    for n in needs if isinstance(needs, list) else []:
+        n = obj(n, ("id", "why", "routes"), ("id", "why", "routes"), "need")
+        require(isinstance(n.get("id"), str) and n["id"] in _AUTO_NEEDS, "unknown capability")
+        ids.append(n.get("id")); require(text(n.get("why"), 200), "invalid need why")
+        routes = n.get("routes"); require(isinstance(routes, list) and bool(routes), "routes must be a nonempty list")
+        runtimes = []
+        for r in routes if isinstance(routes, list) else []:
+            r = obj(r, ("runtime", "how", "probe"), ("runtime", "how"), "route")
+            require(isinstance(r.get("runtime"), str) and r["runtime"] in _AUTO_RUNTIMES, "invalid runtime")
+            runtimes.append(r.get("runtime")); require(text(r.get("how"), 120), "invalid route how")
+            if "probe" in r: require(r.get("runtime") == "local" and argv(r["probe"]), "probe must be local argv")
+        require(len(set(str(x) for x in runtimes)) == len(runtimes), "duplicate runtime")
+    require(len(set(str(x) for x in ids)) == len(ids), "duplicate need")
+    for file in ("SKILL.md", "SETUP.md"): require(os.path.isfile(os.path.join(path, file)), "missing " + file)
+    if "check" in m:
+        c = obj(m["check"], ("file", "timeout_seconds", "network", "tools"), ("file",), "check")
+        require(c.get("file") == "check.py" and os.path.isfile(os.path.join(path, "check.py")), "check.file must be existing check.py")
+        require(type(c.get("timeout_seconds", 60)) is int and 1 <= c.get("timeout_seconds", 60) <= 120, "invalid check timeout")
+        require(type(c.get("network", False)) is bool, "network must be bool")
+        tools = c.get("tools", [])
+        require(isinstance(tools, list) and all(isinstance(x, str) and re.fullmatch(r"[A-Za-z0-9_-]+", x) for x in tools), "invalid tools")
+        require(not c.get("network") or bool(tools), "network requires tools")
+    config = m.get("config", {})
+    require(isinstance(config, dict), "config must be object")
+    for k, v in config.items() if isinstance(config, dict) else []:
+        require(bool(re.fullmatch(r"[a-z][a-z0-9_]{0,63}", k)), "invalid config name")
+        v = obj(v, ("type", "required", "default", "help"), ("type", "required", "help"), "config")
+        require(v.get("type") in ("string", "path", "int", "bool"), "invalid config type")
+        require(type(v.get("required")) is bool and text(v.get("help"), 200), "invalid config required/help")
+        if "default" in v:
+            require(_auto_config_type(v["default"], v.get("type")), "invalid config default")
+    if "action_key_prefix" in m:
+        try: _auto_token(m["action_key_prefix"])
+        except ValueError: errors.append("invalid action_key_prefix")
+    if errors: sys.exit("\n".join(dict.fromkeys(errors)))
+    digest = hashlib.sha256()
+    entries = []
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if root != path or d != "tests"]
+        for name in files:
+            entries.append(os.path.relpath(os.path.join(root, name), path).replace(os.sep, "/"))
+    for rel in sorted(entries):
+        with open(os.path.join(path, rel), "rb") as f: raw = f.read()
+        digest.update(rel.encode() + b"\0" + str(len(raw)).encode() + b"\0" + raw)
+    return m, digest.hexdigest()
+
+
+def _auto_config_type(v, kind):
+    return ((kind in ("string", "path") and isinstance(v, str) and "\0" not in v)
+            or (kind == "int" and type(v) is int) or (kind == "bool" and type(v) is bool))
+
+
+def _auto_packs():
+    if not ROOT: sys.exit("automation commands need a board repo clone")
+    result = {}
+    for source, folder in (("kit", "board/automations"), ("own", "automations")):
+        base = os.path.join(ROOT, folder)
+        if os.path.islink(base): sys.exit("pack paths must not contain symlinks")
+        if not os.path.isdir(base): continue
+        for slug in sorted(os.listdir(base)):
+            if slug in result: sys.exit("own pack collides with built-in slug: " + slug)
+            path = os.path.join(base, slug)
+            if os.path.isdir(path): result[slug] = (source, path)
+    return result
+
+
+@contextlib.contextmanager
+def _auto_lock(path, nonblocking=False):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a+b") as lock:
+        try:
+            if fcntl: fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0))
+            elif msvcrt:
+                lock.seek(0); msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK, 1)
+            else: sys.exit("automation requires file locking")
+        except (BlockingIOError, OSError):
+            if not nonblocking: raise
+            yield False; return
+        try: yield True
+        finally:
+            if fcntl: fcntl.flock(lock, fcntl.LOCK_UN)
+            elif msvcrt: lock.seek(0); msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _auto_binding(slug, owner):
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", owner): sys.exit("invalid automation owner")
+    binding = "auto-" + slug + "-" + owner.lower()
+    return binding, _automation_path("automation/routines/" + binding + ".json")
+
+
+def _auto_local():
+    # Local scheduler state and locks must never be staged by the loader.
+    if ROOT:
+        result = subprocess.run(["git", "-C", ROOT, "rev-parse", "--git-path", "info/exclude"], capture_output=True, text=True)
+        if result.returncode == 0:
+            exclude = result.stdout.strip()
+            if not os.path.isabs(exclude): exclude = os.path.join(ROOT, exclude)
+            if not os.path.islink(exclude):
+                os.makedirs(os.path.dirname(exclude), exist_ok=True)
+                previous = open(exclude).read() if os.path.exists(exclude) else ""
+                lines = ["/automation/.local/", "/automation/.tick.lock", "/automation/**/*.json.lock"]
+                missing = [line for line in lines if line not in previous.splitlines()]
+                if missing:
+                    with open(exclude, "a") as f: f.write("\n" + "\n".join(missing) + "\n")
+    return _automation_path("automation/.local/tick-state.json")
+
+
+def _auto_seen(binding):
+    return _automation_path("automation/seen/" + binding + ".json")
+
+
+def _auto_isolation():
+    if not sys.platform.startswith("linux") or not shutil.which("unshare"): return False
+    try: return subprocess.run(["unshare", "-rn", "true"], env={"PATH": os.defpath}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3).returncode == 0
+    except (OSError, subprocess.TimeoutExpired): return False
+
+
+def _auto_process(argv, env, timeout, network=False):
+    """Bound both pipes while reading, kill the process group on timeout/overflow."""
+    import threading
+    import signal
+    with tempfile.TemporaryDirectory(prefix="keeptrack-check-") as temp:
+        # Files used by a check are private and disappear on every return path.
+        home = os.path.join(temp, "home"); os.mkdir(home, 0o700)
+        env = dict(env, HOME=os.environ.get("HOME", home) if network else home)
+        for key in ("KEEPTRACK_STATE", "KEEPTRACK_CONFIG"):
+            value = env.pop(key, {})
+            path = os.path.join(temp, key + ".json")
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as f: json.dump(value, f)
+            os.chmod(path, 0o400); env[key] = path
+        if not network and _auto_isolation(): argv = ["unshare", "-rn"] + argv
+        p = subprocess.Popen(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=(os.name == "posix"))
+        buffers = [bytearray(), bytearray()]; overflow = threading.Event()
+        def kill():
+            with contextlib.suppress(ProcessLookupError, OSError):
+                if os.name == "posix": os.killpg(p.pid, signal.SIGKILL)
+                else: p.kill()
+        def drain(pipe, index, limit):
+            while True:
+                chunk = pipe.read(4096)
+                if not chunk: break
+                if len(buffers[index]) + len(chunk) > limit:
+                    overflow.set(); kill(); break
+                buffers[index].extend(chunk)
+            pipe.close()
+        threads = [threading.Thread(target=drain, args=(pipe, i, limit), daemon=True)
+                   for i, (pipe, limit) in enumerate(((p.stdout, 262144), (p.stderr, 8192)))]
+        for thread in threads: thread.start()
+        try: p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill(); p.wait(); raise ValueError("timeout")
+        finally:
+            for thread in threads: thread.join(timeout=1)
+            if any(thread.is_alive() for thread in threads): kill()
+        if overflow.is_set(): raise ValueError("output-limit")
+        return p.returncode, bytes(buffers[0]), bytes(buffers[1])
+
+
+def _auto_env(slug, config, state):
+    return dict({k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ},
+                TZ="UTC", KEEPTRACK_AUTOMATION=slug, KEEPTRACK_STATE=state, KEEPTRACK_CONFIG=config)
+
+
+def _auto_result(value):
+    if not isinstance(value, dict) or set(value) != {"schema", "items", "more", "cursor", "note"} or value["schema"] != "keeptrack-check/1": raise ValueError("invalid-output")
+    if type(value["more"]) is not bool or not isinstance(value["items"], list) or len(value["items"]) > 50: raise ValueError("invalid-output")
+    if value["cursor"] is not None: _auto_token(value["cursor"])
+    if value["more"] and value["cursor"] is None: raise ValueError("missing-cursor")
+    if value["note"] is not None and (not isinstance(value["note"], str) or not re.fullmatch(r"(?:setup-missing:[a-z0-9-]{1,40}|auth-expired|source-missing|source-error|check-error|ready)", value["note"])): raise ValueError("invalid-note")
+    for item in value["items"]:
+        if not isinstance(item, dict) or set(item) != {"key", "rev", "title", "ref"}: raise ValueError("invalid-item")
+        for key in ("key", "rev", "ref"): _auto_token(item[key])
+        title = item["title"]
+        if not isinstance(title, str) or len(title) > 120 or "\n" in title or "\r" in title: raise ValueError("invalid-title")
+        item["title"] = "".join(c for c in title if c.isprintable())
+    return value
+
+
+def _auto_ready(register, digest):
+    a = register["automation"]; setup = a.get("setup", {})
+    return a.get("digest") == digest == setup.get("digest") and setup.get("status") == "ready"
+
+
+def _auto_check(path, manifest, register):
+    a = register["automation"]; binding = register["id"]
+    state = _auto_json(_auto_seen(binding), {"schema": "keeptrack-seen/1", "binding": binding, "keys": {}, "cursor": None})
+    c = manifest.get("check")
+    if c:
+        if c.get("network") and not a.get("network_granted"): raise ValueError("network-not-granted")
+        code, raw, _ = _auto_process(["python3", os.path.join(path, "check.py")], _auto_env(manifest["slug"], a["config"], state), c.get("timeout_seconds", 60), bool(c.get("network") and a.get("network_granted")))
+        if code not in (0, 2): raise ValueError("check-error")
+        try: result = _auto_result(json.loads(raw))
+        except (UnicodeError, ValueError): raise ValueError("invalid-output")
+        if code == 2: raise ValueError(result["note"] or "check-error")
+    else:
+        result = {"schema": "keeptrack-check/1", "items": [{"key": "scheduled", "rev": str(int(time.time()) // _AUTO_INTERVALS[a["every"]]), "ref": "scheduled", "title": "Scheduled review"}], "more": False, "cursor": None, "note": None}
+    result["items"] = [i for i in result["items"] if state["keys"].get(i["key"]) != i["rev"]]
+    return result
+
+
+def _auto_payload(path, m, r, result, run_id):
+    return dict(slug=m["slug"], binding=r["id"], run_id=run_id, digest=r["automation"]["digest"],
+                action_key_prefix=m.get("action_key_prefix", "auto:" + m["slug"]), skill=os.path.join(path, "SKILL.md"),
+                **{k: result[k] for k in ("items", "more", "cursor")})
+
+
+def _auto_tick(a, packs, owner):
+    state_path = _auto_local(); state = {}; payloads = []; problems = []
+    # Validate parent directories before opening the shared, non-JSON tick lock.
+    lock_path = os.path.join(os.path.dirname(_automation_path("automation/tick.json")), ".tick.lock")
+    if os.path.islink(lock_path): sys.exit("automation paths must not contain symlinks")
+    with _auto_lock(lock_path, True) as acquired:
+        if not acquired: print("automation tick busy", file=sys.stderr); return
+        state = _auto_json(state_path, {})
+        register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
+        for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
+            if not name.endswith(".json"): continue
+            rp = _automation_path("automation/routines/" + name)
+            with _auto_lock(rp + ".lock"):
+                r = _auto_json(rp, {}); install = r.get("automation")
+                if not install or r.get("owner", "").lower() != owner.lower() or r.get("status") != "active": continue
+                slug = install["slug"]; binding = r["id"]
+                try:
+                    if slug not in packs: raise ValueError("pack-missing")
+                    _, path = packs[slug]; m, digest = _auto_pack(path)
+                    if not _auto_ready(r, digest): raise ValueError("changed")
+                    if r.get("current_run"):
+                        problems.append({"slug": slug, "code": "busy"}); continue
+                    previous = state.get(binding, {})
+                    if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
+                        if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
+                        continue
+                    result = _auto_check(path, m, r)
+                    # A changed file during the subprocess must never yield a reservation.
+                    if _auto_pack(path)[1] != digest: raise ValueError("changed")
+                    state[binding] = {"time": time.time(), "result": "ok"}
+                    if result["items"]:
+                        run_id = "tick-" + uuid.uuid4().hex
+                        args = argparse.Namespace(id=binding, action="start", run_id=run_id)
+                        with contextlib.redirect_stdout(io.StringIO()): _routine_report(args, rp)
+                        r = _auto_json(rp); r["current_run"]["digest"] = digest
+                        r["current_run"]["batch"] = dict(items=[{k: i[k] for k in ("key", "rev")} for i in result["items"]], cursor=result["cursor"])
+                        _auto_write(rp, r)
+                        payloads.append(_auto_payload(path, m, r, result, run_id))
+                except (ValueError, OSError, SystemExit) as error:
+                    code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
+                    state[binding] = {"time": time.time(), "result": code}
+                    problems.append({"slug": slug, "code": code})
+        os.makedirs(os.path.dirname(state_path), exist_ok=True)
+        _auto_write(state_path, state)
+    if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}))
+    elif problems:
+        print(json.dumps(problems), file=sys.stderr); return 3
+
+
+def cmd_automation(a):
+    action = a.action
+    if action == "validate":
+        _auto_pack(a.path); print("valid"); return
+    owner = (getattr(a, "owner", None) or default_user()).strip().lower()
+    slug = getattr(a, "slug", None)
+    if action == "disable":
+        binding, rp = _auto_binding(slug, owner)
+        with _auto_lock(rp + ".lock"):
+            r = _auto_json(rp)
+            if not r: sys.exit("automation is not installed")
+            r["status"] = "paused"; _auto_write(rp, r)
+        print(slug + ": paused"); return
+    packs = _auto_packs()
+    if action == "tick": return _auto_tick(a, packs, owner)
+    local = _auto_json(_auto_local(), {}) if action in ("list", "check") else {}
+    if action == "list":
+        out = []
+        for slug, (source, path) in packs.items():
+            m, digest = _auto_pack(path); binding, rp = _auto_binding(slug, owner); r = _auto_json(rp, {})
+            if a.installed and (not r or r.get("status") == "retired"): continue
+            out.append(dict(slug=slug, source=source, status=r.get("status", "not-installed"), setup=(r.get("automation", {}).get("setup", {}).get("status") if not r or r.get("automation", {}).get("digest") == digest else "changed"), last_check=local.get(binding), last_run=r.get("last_run"), runs_agent_every_time="check" not in m))
+        if a.json: print(json.dumps(out))
+        else:
+            for item in out: print(json.dumps(item))
+        return
+    if slug not in packs: sys.exit("automation pack not found: " + slug)
+    source, path = packs[slug]; m, digest = _auto_pack(path)
+    if action == "fork":
+        if source != "kit": sys.exit("fork requires a built-in pack")
+        if a.new_slug in packs or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", a.new_slug): sys.exit("new slug must be valid and unused")
+        dest = os.path.join(ROOT, "automations", a.new_slug)
+        shutil.copytree(path, dest); m["slug"] = a.new_slug; m["name"] = a.new_slug
+        _auto_write(os.path.join(dest, "manifest.json"), m); print(dest); return
+    binding, rp = _auto_binding(slug, owner)
+    if action == "test":
+        code, raw, err = _auto_process(["python3", "-B", "-m", "unittest", "discover", "-s", os.path.join(path, "tests"), "-p", "test_*.py"], _auto_env(slug, {}, {}), 120)
+        print(raw.decode(), end=""); print(err.decode(), end="", file=sys.stderr)
+        return code
+    if action == "show":
+        print(json.dumps(dict(manifest=m, digest=digest, setup_file=os.path.join(path, "SETUP.md"), install=_auto_json(rp)), indent=2)); return
+    lock_context = contextlib.nullcontext() if action == "dry-run" else _auto_lock(rp + ".lock")
+    with lock_context:
+        r = _auto_json(rp)
+        if action == "dry-run" and not r:
+            config = {k: v["default"] for k, v in m.get("config", {}).items() if "default" in v}
+            for pair in a.set:
+                key, sep, value = pair.partition("=")
+                if not sep or key not in m.get("config", {}): sys.exit("unknown config setting")
+                if m["config"][key]["type"] in ("int", "bool"):
+                    try: value = json.loads(value)
+                    except ValueError: sys.exit("invalid config value")
+                config[key] = value
+            for key, spec in m.get("config", {}).items():
+                if spec["required"] and key not in config: sys.exit("missing required config: " + key)
+                if key in config and not _auto_config_type(config[key], spec["type"]): sys.exit("invalid config type")
+            if m.get("check", {}).get("network"): sys.exit("network dry-run requires an installed grant")
+            r = {"id": binding, "owner": owner, "status": "unverified", "automation": {"digest": digest, "config": config,
+                 "every": m["every"], "network_granted": False, "setup": {"digest": digest, "status": "ready"}}}
+        if action == "install":
+            if r and r.get("status") != "retired": sys.exit("automation already installed")
+            network = m.get("check", {}).get("network", False)
+            if bool(a.allow_network) != network: sys.exit("network check requires --allow-network; grant refused for offline checks")
+            config = {k: v["default"] for k, v in m.get("config", {}).items() if "default" in v}
+            for pair in a.set:
+                k, sep, v = pair.partition("=")
+                if not sep or k not in m.get("config", {}): sys.exit("unknown config setting")
+                kind = m["config"][k]["type"]
+                if kind in ("int", "bool"):
+                    try: v = json.loads(v)
+                    except ValueError: sys.exit("invalid config value")
+                config[k] = v
+            for k, spec in m.get("config", {}).items():
+                if spec["required"] and k not in config: sys.exit("missing required config: " + k)
+                if k in config and not _auto_config_type(config[k], spec["type"]): sys.exit("invalid config type: " + k)
+            r = dict(version=1, id=binding, owner=owner, board_repo=REPO, branch=BRANCH, board_path=PATH,
+                     status="unverified", connections=[{"need": n["id"]} for n in m["needs"]], current_run=None,
+                     automation=dict(schema="keeptrack-automation-install/1", slug=slug, source=source,
+                                     pack_path=os.path.relpath(path, ROOT), pack_version=m["version"], digest=digest,
+                                     writes="proposals", every=a.every or m["every"], config=config, network_granted=network,
+                                     setup=dict(status="blocked", digest=digest, runtime=None, checked_at=now(), notes=[])))
+        else:
+            if not r or r.get("status") == "retired": sys.exit("automation is not installed")
+            if r.get("owner") != owner: sys.exit("automation owner mismatch")
+            install = r["automation"]
+            if action == "enable":
+                if not _auto_ready(r, digest): sys.exit("setup is not ready for current pack digest; reinstall and setup")
+                r["status"] = "active"
+            elif action == "uninstall":
+                if r.get("current_run"): sys.exit("automation has a current run")
+                r["status"] = "retired"
+                if a.forget:
+                    with contextlib.suppress(FileNotFoundError): os.remove(_auto_seen(binding))
+            elif action == "setup":
+                if digest != install["digest"]: sys.exit("pack changed; uninstall and reinstall before setup")
+                setup = install["setup"]
+                runtime = a.runtime or setup.get("runtime")
+                if runtime not in _AUTO_RUNTIMES: sys.exit("setup needs --runtime")
+                confirmed = setup.get("confirmed", []) if runtime == setup.get("runtime") else []
+                if a.confirm:
+                    if runtime == "local" or a.confirm not in [n["id"] for n in m["needs"]]: sys.exit("invalid confirmation")
+                    confirmed = list(dict.fromkeys(confirmed + [a.confirm]))
+                notes = []
+                for need in m["needs"]:
+                    route = next((x for x in need["routes"] if x["runtime"] == runtime), None)
+                    if not route: notes.append("route-missing"); continue
+                    if runtime == "local":
+                        probe = route.get("probe")
+                        if probe:
+                            try:
+                                code, _, _ = _auto_process(probe, _auto_env(slug, install["config"], {}), 10, install["network_granted"])
+                            except (OSError, ValueError): code = 1
+                            if code: notes.append("probe-failed")
+                        elif need["id"] not in ("board.read", "files.read"): notes.append("probe-missing")
+                    elif need["id"] not in confirmed:
+                        print("Confirm read-only access to " + need["id"] + ": " + route["how"])
+                        notes.append("confirmation-needed")
+                ready = not notes
+                install["setup"] = dict(status="ready" if ready else "blocked", runtime=runtime, checked_at=now(), digest=digest, notes=notes, confirmed=confirmed)
+                r["status"] = "paused" if ready else "unverified"
+                print(("ready" if ready else "blocked") + "; network isolation " + ("available" if _auto_isolation() else "unavailable"))
+                print(os.path.join(path, "SETUP.md"))
+                if runtime != "local": print(open(os.path.join(path, "SETUP.md")).read())
+            elif action in ("check", "dry-run"):
+                if install["digest"] != digest: sys.exit("pack digest changed; reinstall before check")
+                try: result = _auto_check(path, m, r)
+                except (ValueError, OSError) as error:
+                    if action == "check":
+                        local[binding] = {"time": time.time(), "result": str(error) if isinstance(error, ValueError) else "check-error"}; _auto_write(_auto_local(), local)
+                    sys.exit(str(error))
+                if _auto_pack(path)[1] != digest: sys.exit("pack changed during check")
+                if action == "check":
+                    local[binding] = {"time": time.time(), "result": "ok"}; _auto_write(_auto_local(), local)
+                    print(json.dumps(result))
+                else:
+                    print(json.dumps(_auto_payload(path, m, r, result, "dry-run")))
+                    print(open(os.path.join(path, "SKILL.md")).read())
+                return
+            elif action == "mark":
+                if r.get("owner", "").lower() != default_user().strip().lower(): sys.exit("mark requires the registered owner")
+                current = r.get("current_run") or {}
+                if current.get("id") != a.run_id: sys.exit("run id does not match the running attempt")
+                if digest != install["digest"] or current.get("digest") != digest: sys.exit("pack digest changed since reservation")
+                done = _auto_json(a.input)
+                if not isinstance(done, dict) or set(done) - {"done", "cursor"} or not isinstance(done.get("done"), list): sys.exit("invalid done payload")
+                batch = current.get("batch", {})
+                expected = {(x["key"], x["rev"]) for x in batch.get("items", [])}
+                completed = set()
+                try:
+                    for item in done["done"]:
+                        if not isinstance(item, dict) or set(item) != {"key", "rev"}: raise ValueError("invalid done item")
+                        pair = (_auto_token(item["key"]), _auto_token(item["rev"]))
+                        if pair not in expected: raise ValueError("item was not reserved")
+                        completed.add(pair)
+                    if done.get("cursor") is not None: _auto_token(done["cursor"])
+                except ValueError as error: sys.exit(str(error))
+                seen_path = _auto_seen(binding)
+                with _auto_lock(seen_path + ".lock"):
+                    seen = _auto_json(seen_path, {"schema": "keeptrack-seen/1", "binding": binding, "keys": {}, "cursor": None})
+                    for k, rev in completed: seen["keys"][k] = rev
+                    if "cursor" in done:
+                        all_done = all(seen["keys"].get(k) == rev for k, rev in expected)
+                        if not all_done or done["cursor"] != batch.get("cursor"): sys.exit("partial batch must keep old cursor (omit cursor)")
+                        seen["cursor"] = done["cursor"]
+                    while len(seen["keys"]) > 10000: del seen["keys"][next(iter(seen["keys"]))]
+                    seen["updated_at"] = now(); _auto_write(seen_path, seen)
+                print("marked " + str(len(completed))); return
+        _auto_write(rp, r)
+        print(slug + ": " + r["status"])
+
+
+def _automation_parser(sub):
+    s = sub.add_parser("automation", help="install and run digest-pinned proposal automations")
+    commands = s.add_subparsers(dest="action", required=True)
+    for name in ("list", "show", "validate", "install", "setup", "enable", "disable", "check", "tick", "dry-run", "mark", "fork", "test", "uninstall"):
+        p = commands.add_parser(name); p.set_defaults(f=cmd_automation)
+        if name == "validate": p.add_argument("path"); continue
+        p.add_argument("--owner")
+        if name not in ("list", "tick"): p.add_argument("slug")
+        if name in ("list", "tick"): p.add_argument("--json", action="store_true")
+        if name == "list": p.add_argument("--installed", action="store_true")
+        if name == "install":
+            p.add_argument("--every", choices=sorted(_AUTO_INTERVALS)); p.add_argument("--set", action="append", default=[])
+            p.add_argument("--allow-network", action="store_true")
+        if name == "dry-run": p.add_argument("--set", action="append", default=[])
+        if name == "setup":
+            p.add_argument("--runtime", choices=sorted(_AUTO_RUNTIMES)); p.add_argument("--confirm")
+        if name == "mark":
+            p.add_argument("--run-id", required=True); p.add_argument("--file", dest="input", required=True)
+        if name == "fork": p.add_argument("new_slug")
+        if name == "uninstall": p.add_argument("--forget", action="store_true")
+
+
+def _proposals_only(a):
+    if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
+    # Fail closed: new commands must be deliberately classified before loader use.
+    reads = {"list", "show", "people", "person", "projects", "project", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
+    allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
+    if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
 
 
 def main():
@@ -7812,6 +8339,7 @@ def main():
     s.add_argument("--run-id", help="the active routine start's run id")
     s.add_argument("--status", choices=["running", "partial", "failed", "blocked", "success"], default="running")
     s.set_defaults(f=cmd_checkpoint)
+    _automation_parser(sub)
     global _SUBPARSERS
     _SUBPARSERS = sub
     p.epilog = "Commands by topic: keeptrack.py help [topic]"
@@ -7824,6 +8352,7 @@ def main():
 
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
     s.add_argument("--unclaimed", action="store_true")
+    s.add_argument("--json", action="store_true", help="print filtered cards as JSON")
     s.add_argument("--attention", action="store_true", help="stale, stuck or blocked claims, waits due for a chase, waits an agent cleared this week")
     s.add_argument("--waiting", action="store_true", help="only cards waiting on someone or something")
     s.add_argument("--waiting-on", dest="waiting_on", metavar="WHO", help="only cards waiting on WHO: me, a GitHub login or a p_ person id")
@@ -8077,6 +8606,7 @@ def main():
         if name not in have and name in COMMAND_HELP:
             sub._choices_actions.append(sub._ChoicesPseudoAction(name, (), COMMAND_HELP[name]))
     a = p.parse_args()
+    _proposals_only(a)
     FILE = a.file
     read_stdin_args(a)
     if UNTRUSTED_CONFIG and not getattr(a, "hook", False) and a.f is not cmd_use:
