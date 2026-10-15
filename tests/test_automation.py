@@ -10,6 +10,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from unittest.mock import patch
 
@@ -93,19 +95,98 @@ class Automation(unittest.TestCase):
         local = self.root/'automation/.local/tick-state.json'
         binding = 'auto-other-pack-owner'
         self.write(local, {binding: dict(time=0, scan_cursor='old-page')})
-        original = kt._auto_json
+        original = kt._auto_lock
         interleaved = False
-        def interleave(path, default=None):
+        @contextlib.contextmanager
+        def interleave(path, *args, **kwargs):
             nonlocal interleaved
-            snapshot = original(path, default)
-            if str(path) == str(local) and not interleaved:
+            if str(path) == str(self.rp) + '.lock' and not interleaved:
                 interleaved = True
                 self.tick()
-            return snapshot
-        with patch.object(kt, '_auto_json', side_effect=interleave), patch.object(
+            with original(path, *args, **kwargs) as acquired:
+                yield acquired
+        with patch.object(kt, '_auto_lock', side_effect=interleave), patch.object(
                 kt, '_auto_check', return_value=dict(self.result, more=True, cursor='new-page')):
             self.call('check')
         self.assertEqual(self.read(local)[binding]['scan_cursor'], 'new-page')
+
+    def test_check_waiting_for_same_binding_reads_tick_new_cursor(self):
+        self.ready()
+        local = self.root/'automation/.local/tick-state.json'
+        binding = self.read(self.rp)['id']
+        self.write(local, {binding: dict(time=0, result='ok', scan_cursor='old-page')})
+        tick_scanning = threading.Event()
+        check_waiting = threading.Event()
+        original_lock = kt._auto_lock
+        received = []
+
+        @contextlib.contextmanager
+        def observe_lock(path, *args, **kwargs):
+            if (str(path) == str(self.rp) + '.lock'
+                    and threading.current_thread() is threading.main_thread()):
+                self.assertTrue(tick_scanning.wait(5), 'tick did not start scanning')
+                check_waiting.set()
+            with original_lock(path, *args, **kwargs) as acquired:
+                yield acquired
+
+        def scan(path, manifest, register, cursor):
+            if threading.current_thread() is not threading.main_thread():
+                tick_scanning.set()
+                self.assertTrue(check_waiting.wait(5), 'check did not reach register lock')
+                return dict(self.result, more=True, cursor='new-page')
+            received.append(cursor)
+            # A stale input would rewind the saved continuation.
+            return dict(self.result, more=True,
+                        cursor='new-page' if cursor == 'new-page' else 'old-page-next')
+
+        with patch.object(kt, '_auto_lock', side_effect=observe_lock), patch.object(
+                kt, '_auto_check', side_effect=scan), ThreadPoolExecutor(max_workers=1) as pool:
+            tick = pool.submit(kt.cmd_automation, argparse.Namespace(action='tick', owner=None))
+            self.assertTrue(tick_scanning.wait(5), 'tick did not take register lock')
+            self.call('check')
+            self.assertIsNone(tick.result(timeout=5))
+        self.assertEqual(received, ['new-page'])
+        self.assertEqual(self.read(local)[binding]['scan_cursor'], 'new-page')
+
+    def test_tick_check_and_list_read_state_inside_binding_and_state_locks(self):
+        self.ready()
+        local = self.root/'automation/.local/tick-state.json'
+        binding = self.read(self.rp)['id']
+        original_lock = kt._auto_lock
+        original_json = kt._auto_json
+        held = []
+        reads = []
+
+        @contextlib.contextmanager
+        def track_lock(path, *args, **kwargs):
+            with original_lock(path, *args, **kwargs) as acquired:
+                held.append(str(path))
+                try:
+                    yield acquired
+                finally:
+                    held.pop()
+
+        def read_state(path, default=None):
+            if str(path) == str(local):
+                self.assertIn(str(self.rp) + '.lock', held)
+                self.assertEqual(held[-1], str(local) + '.lock')
+                reads.append(path)
+            return original_json(path, default)
+
+        def scan(*args):
+            self.assertIn(str(self.rp) + '.lock', held)
+            self.assertNotIn(str(local) + '.lock', held)
+            return self.result
+
+        for action in ('tick', 'check', 'list'):
+            with self.subTest(action=action):
+                self.write(local, {binding: dict(time=0, result='ok', scan_cursor='page')})
+                reads.clear()
+                with patch.object(kt, '_auto_lock', side_effect=track_lock), patch.object(
+                        kt, '_auto_json', side_effect=read_state), patch.object(
+                        kt, '_auto_check', side_effect=scan):
+                    self.call(action)
+                self.assertTrue(reads, 'command did not read tick state')
 
     def test_helper_import_keeps_digest_across_ticks_and_setup(self):
         scripts = self.pack/'scripts'; scripts.mkdir()

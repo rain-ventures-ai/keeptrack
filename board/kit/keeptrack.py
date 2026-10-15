@@ -8084,7 +8084,7 @@ def _auto_check(path, manifest, register, scan_cursor=None):
 
 
 @contextlib.contextmanager
-def _auto_state():
+def _auto_state(*, write=True):
     """Lock order: tick -> register -> seen -> state (always innermost).
 
     Never run checks or acquire another lock while holding the state lock.
@@ -8096,7 +8096,7 @@ def _auto_state():
     with _auto_lock(lock_path):
         state = _auto_json(path, {})
         yield state
-        _auto_write(path, state)
+        if write: _auto_write(path, state)
 
 
 def _auto_save_check(binding, result=None, error=None):
@@ -8126,7 +8126,7 @@ def _auto_payload(path, m, r, result, run_id):
 
 
 def _auto_tick(a, packs, owner):
-    state_path = _auto_local(); payloads = []; problems = []; reservations = []
+    _auto_local(); payloads = []; problems = []; reservations = []
     # Validate parent directories before opening the shared, non-JSON tick lock.
     lock_path = os.path.join(os.path.dirname(_automation_path("automation/tick.json")), ".tick.lock")
     if os.path.islink(lock_path): sys.exit("automation paths must not contain symlinks")
@@ -8147,7 +8147,8 @@ def _auto_tick(a, packs, owner):
                         if not _auto_ready(r, digest): raise ValueError("changed")
                         if r.get("current_run"):
                             problems.append({"slug": slug, "code": "busy"}); continue
-                        previous = _auto_json(state_path, {}).get(binding, {})
+                        with _auto_state(write=False) as local:
+                            previous = local.get(binding, {}).copy()
                         if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
                             if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
                             continue
@@ -8208,7 +8209,6 @@ def cmd_automation(a):
         print(slug + ": " + r["status"]); return
     packs = _auto_packs()
     if action == "tick": return _auto_tick(a, packs, owner)
-    local = _auto_json(_auto_local(), {}) if action in ("list", "check") else {}
     if action == "list":
         out = []
         listed = dict(packs)
@@ -8224,9 +8224,13 @@ def cmd_automation(a):
                 if path is None: problem = "missing-pack"
                 else: m, digest = _auto_pack(path)
             except (ValueError, OSError, SystemExit): problem = "invalid-pack"
-            binding, rp = _auto_binding(slug, owner); r = _auto_json(rp, {})
+            binding, rp = _auto_binding(slug, owner)
+            with _auto_lock(rp + ".lock"):
+                r = _auto_json(rp, {})
+                with _auto_state(write=False) as local:
+                    last_check = local.get(binding)
             if a.installed and (not r or r.get("status") == "retired"): continue
-            out.append(dict(slug=slug, source=source, problem=problem, status=r.get("status", "not-installed"), setup=(r.get("automation", {}).get("setup", {}).get("status") if not r or r.get("automation", {}).get("digest") == digest else "changed"), last_check=local.get(binding), last_run=r.get("last_run"), runs_agent_every_time="check" not in m))
+            out.append(dict(slug=slug, source=source, problem=problem, status=r.get("status", "not-installed"), setup=(r.get("automation", {}).get("setup", {}).get("status") if not r or r.get("automation", {}).get("digest") == digest else "changed"), last_check=last_check, last_run=r.get("last_run"), runs_agent_every_time="check" not in m))
         if a.json: print(json.dumps(out))
         else:
             for item in out: print(json.dumps(item))
@@ -8325,7 +8329,12 @@ def cmd_automation(a):
                 if runtime != "local": print(open(os.path.join(path, "SETUP.md")).read())
             elif action in ("check", "dry-run"):
                 if install["digest"] != digest: sys.exit("pack digest changed; reinstall before check")
-                try: result = _auto_check(path, m, r, local.get(binding, {}).get("scan_cursor"))
+                scan_cursor = None
+                if action == "check":
+                    # Read only after taking this binding's register lock.
+                    with _auto_state(write=False) as local:
+                        scan_cursor = local.get(binding, {}).get("scan_cursor")
+                try: result = _auto_check(path, m, r, scan_cursor)
                 except (ValueError, OSError) as error:
                     if action == "check":
                         _auto_save_check(binding, error=error)
