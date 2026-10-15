@@ -1,7 +1,7 @@
 'use strict';
 // New cards use the card drawer (kit v61) on a writable board with a faked GitHub API: quick add still saves a
-// title-only card on Enter; Shift+Enter and the lane's pencil save the typed title and open the card in the drawer;
-// an empty Add, the pencil, the lane's ＋ and the phone ＋ ask for a title first (Cancel saves nothing).
+// title-only card on Enter; Shift+Enter and Add save the typed title and open the card in the drawer (kit v63: no
+// pencil button); an empty Add, the lane's ＋ and the phone ＋ ask for a title first (Cancel saves nothing).
 // Run: node new-card.test.js   (SHOTS=<folder> also saves screenshots)
 
 const assert = require('node:assert/strict');
@@ -94,14 +94,15 @@ async function waitFor(fn, what) { for (let i = 0; i < 100; i++) { const v = fn(
     assert.equal(await quick.inputValue(), '', 'the box is cleared');
     await closeDrawer(page);
 
-    // 3. the pencil with text: same as Shift+Enter
-    await quick.fill('Call the printer'); await lane.locator('.add .addform').click();
+    // 3. Add with text: same as Shift+Enter (the pencil button is gone)
+    assert.equal(await lane.locator('.add button').count(), 1, 'the add bar has one button');
+    await quick.fill('Call the printer'); await lane.locator('.add button.primary').click();
     await page.waitForSelector('#dlgCard[open]'); assert.equal(await page.locator('#cTitle').inputValue(), 'Call the printer');
     await closeDrawer(page);
 
-    // 4. an empty Add, the pencil and the lane ＋ ask for a title first; Cancel saves nothing
+    // 4. an empty Add and the lane ＋ ask for a title first; Cancel saves nothing
     const before = cards(api).length;
-    for (const sel of ['.add button.primary', '.add .addform', 'h2 .hadd']) {
+    for (const sel of ['.add button.primary', 'h2 .hadd']) {
       await lane.locator(sel).click(); await prompt(page).waitFor();
       await prompt(page).locator('button', { hasText: 'Cancel' }).click(); await page.waitForSelector('dialog.ui-sheet--alert', { state: 'detached' });
     }
