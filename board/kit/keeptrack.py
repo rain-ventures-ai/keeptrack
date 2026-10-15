@@ -8084,10 +8084,11 @@ def _auto_check(path, manifest, register, scan_cursor=None):
 
 
 def _auto_payload(path, m, r, result, run_id):
-    items = [dict(i, action_key="auto:" + m["slug"] + ":" + hashlib.sha256(
+    prefix = m.get("action_key_prefix", "auto:" + m["slug"])
+    items = [dict(i, action_key=prefix + ":" + hashlib.sha256(
         json.dumps([i["key"], i["rev"]], separators=(",", ":")).encode()).hexdigest()) for i in result["items"]]
     return dict(slug=m["slug"], binding=r["id"], run_id=run_id, digest=r["automation"]["digest"],
-                skill=os.path.join(path, "SKILL.md"), items=items, more=result["more"], cursor=result["cursor"])
+                action_key_prefix=prefix, skill=os.path.join(path, "SKILL.md"), items=items, more=result["more"], cursor=result["cursor"])
 
 
 def _auto_tick(a, packs, owner):
@@ -8120,10 +8121,11 @@ def _auto_tick(a, packs, owner):
                         result = _auto_check(path, m, r, previous.get("scan_cursor"))
                         # A changed file during the subprocess must never yield a reservation.
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
-                        state[binding] = {"time": time.time(), "result": "ok"}
-                        if result["more"]:
-                            if not result["items"]: state[binding]["scan_cursor"] = result["cursor"]
-                            elif previous.get("scan_cursor") is not None: state[binding]["scan_cursor"] = previous["scan_cursor"]
+                        state[binding] = dict(previous, time=time.time(), result="ok")
+                        # Item batches retain their starting point until completed mark.
+                        if not result["items"]:
+                            if result["more"]: state[binding]["scan_cursor"] = result["cursor"]
+                            else: state[binding].pop("scan_cursor", None)
                         if result["items"]:
                             run_id = "tick-" + uuid.uuid4().hex
                             r["last_started_at"] = now()
@@ -8136,7 +8138,7 @@ def _auto_tick(a, packs, owner):
                     except (ValueError, OSError, SystemExit) as error:
                         if reserved: raise
                         code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
-                        state[binding] = {"time": time.time(), "result": code}
+                        state[binding] = dict(state.get(binding, {}), time=time.time(), result=code)
                         problems.append({"slug": slug, "code": code})
             os.makedirs(os.path.dirname(state_path), exist_ok=True)
             _auto_write(state_path, state)

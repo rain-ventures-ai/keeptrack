@@ -144,6 +144,51 @@ else:
             self.tick()
         self.assertNotIn('scan_cursor', self.read(local_path)[binding])
 
+    def test_final_page_partial_finish_retries_scan_cursor(self):
+        self.items(); self.result['more'] = False; self.script(self.result); self.ready()
+        local_path = self.root/'automation/.local/tick-state.json'; binding = self.read(self.rp)['id']
+        self.write(local_path, {binding: dict(time=0, result='ok', scan_cursor='final-page', retained='value')})
+        payload, _ = self.tick()
+        done = self.root/'done.json'; self.write(done, dict(done=[dict(key='item1', rev='r1')]))
+        self.call('mark', run_id=payload['automations'][0]['run_id'], input=str(done))
+        self.finish('partial')
+        local = self.read(local_path); local[binding]['time'] = 0; self.write(local_path, local)
+        with patch.object(kt, '_auto_check', wraps=kt._auto_check) as check:
+            payload, _ = self.tick()
+        self.assertEqual(check.call_args.args[3], 'final-page')
+        self.assertEqual([i['key'] for i in payload['automations'][0]['items']], ['item2'])
+        self.assertEqual(self.read(local_path)[binding]['retained'], 'value')
+
+    def test_error_tick_preserves_scan_cursor_for_next_check(self):
+        self.ready()
+        local_path = self.root/'automation/.local/tick-state.json'; binding = self.read(self.rp)['id']
+        for error in ('check-error', 'auth-expired', 'check-timeout'):
+            with self.subTest(error=error):
+                self.write(local_path, {binding: dict(time=0, result='ok', scan_cursor='continuation')})
+                with patch.object(kt, '_auto_check', side_effect=ValueError(error)), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.tick(), (None, 3))
+                local = self.read(local_path); local[binding]['time'] = 0; self.write(local_path, local)
+                with patch.object(kt, '_auto_check', return_value=dict(items=[], more=True, cursor='next-page')) as check:
+                    self.tick()
+                self.assertEqual(check.call_args.args[3], 'continuation')
+                self.assertEqual(self.read(local_path)[binding]['scan_cursor'], 'next-page')
+
+    def test_custom_action_key_prefix_through_tick(self):
+        import hashlib
+        self.manifest['action_key_prefix'] = 'custom:namespace'
+        self.write(self.pack/'manifest.json', self.manifest)
+        self.items(); self.ready(); payload, _ = self.tick()
+        automation = payload['automations'][0]
+        self.assertEqual(automation['action_key_prefix'], 'custom:namespace')
+        self.assertEqual(automation['items'][0]['action_key'], 'custom:namespace:' + hashlib.sha256(b'["item1","r1"]').hexdigest())
+
+    def test_action_key_prefix_requires_opaque_token(self):
+        for prefix in ('https://example', '', 'has space', 'x'*257, 42):
+            with self.subTest(prefix=prefix):
+                self.manifest['action_key_prefix'] = prefix
+                self.write(self.pack/'manifest.json', self.manifest)
+                self.assertIn('invalid action_key_prefix', self.refuse('validate', path=str(self.pack)))
+
     def test_commands_validate_list_show_install_setup_enable_disable_uninstall(self):
         self.assertIn('valid',self.call('validate',path=str(self.pack))[0])
         self.assertEqual(json.loads(self.call('list')[0])[0]['source'],'own')
@@ -394,6 +439,7 @@ print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME
         self.script(self.result); self.ready(); payload,_=self.tick()
         keys=[i['action_key'] for i in payload['automations'][0]['items']]
         self.assertNotEqual(*keys)
+        self.assertEqual(payload['automations'][0]['action_key_prefix'], 'auto:example-pack')
         import hashlib
         self.assertEqual(keys[0],'auto:example-pack:'+hashlib.sha256(b'["a:b","c"]').hexdigest())
 
