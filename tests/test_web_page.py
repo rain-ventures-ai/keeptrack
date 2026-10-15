@@ -1,12 +1,15 @@
 """The web page's security policy and its parity with keeptrack.py (kit version, proposal field allow-lists).
 Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import base64, hashlib, importlib.util, json, os, re, unittest
+from pathlib import Path
+import runpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BOARD = os.path.join(HERE, "..", "board")
 spec = importlib.util.spec_from_file_location("keeptrack", os.path.join(BOARD, "kit", "keeptrack.py"))
 kt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kt)
+build_hosted = runpy.run_path(str(Path(BOARD).parent / "tools/build-hosted-entry.py"))["generate"]
 
 
 def read(name):
@@ -26,6 +29,30 @@ def inline_hashes(html):
 
 
 class ContentSecurityPolicy(unittest.TestCase):
+    def test_hosted_entry_is_generated_from_index(self):
+        self.assertEqual(
+            build_hosted(read("index.html")).encode("utf-8"),
+            Path(BOARD, "hosted.html").read_bytes(),
+            "hosted.html is stale: run python3 tools/build-hosted-entry.py",
+        )
+
+    def test_hosted_generator_preserves_body_and_handshake_changes(self):
+        source = read("index.html")
+        source = source.replace('<body>', '<body>\n<p id="synthetic">New shared markup</p>')
+        source = re.sub(r'var MARKUP = window.kbMarkup = \d+;',
+                        'var MARKUP = window.kbMarkup = 999;', source)
+        generated = build_hosted(source)
+        self.assertIn('<p id="synthetic">New shared markup</p>', generated)
+        self.assertIn('data-kb-markup="999"', generated)
+        self.assertFalse(inline_hashes(generated))
+
+    def test_hosted_generator_rejects_unexpected_body_scripts_or_trailing_markup(self):
+        for source in (read("index.html").replace('<body>', '<body><script src="unexpected.js"></script>'),
+                       read("index.html").replace('</body>', '<script>unexpected()</script></body>'),
+                       read("index.html").replace('</body>', '<p>Do not drop this</p></body>')):
+            with self.subTest(source=source[-100:]), self.assertRaises(ValueError):
+                build_hosted(source)
+
     def check_page(self, name):
         html = read(name)
         pol = csp(html)

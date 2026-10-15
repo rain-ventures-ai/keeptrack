@@ -453,6 +453,7 @@ dialog.settings[open] { animation: slidein .22s ease; }
 .setsec .ui-props__value > input:not([type=checkbox]), .setsec .ui-props__value > select { flex: 1 1 auto; width: 100%; min-height: 36px; }
 .schk { display: inline-flex !important; align-items: center; gap: var(--sp-3); min-height: 32px; margin: 0 !important; color: var(--text) !important; font-size: var(--fs-md) !important; font-weight: 500 !important; cursor: pointer; }
 .schk input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.setsec .ui-props__value > input.research-count { width: 5em; }
 .sbtns { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); } .sbtns .spacer { flex: 1 1 auto; }
 .ui-btn.danger { color: var(--danger); }   /* a small destructive action: red text (uiBtns in board.js) */
 .sfold { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 0 var(--sp-5); }
