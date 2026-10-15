@@ -1220,6 +1220,7 @@ if (typeof window !== 'undefined') (() => {
     }
   }
   async function undoLast(target) {   // target: the entry a toast's Undo button belongs to; Ctrl+Z and the Undo buttons pass none (the newest)
+    if (!target && quickUndo && undoToast === quickUndo.toast) { const t = quickUndo.task; hideUndo(); quickUndo = null; undoQuickArchive(t); return; }   // the newest change is a Done-lane archive: put that card back
     hideUndo();
     // A save still in flight is the newest change: let it finish and record its own entry, then take back the newest one.
     // (Reading the stack first would undo the change before it, and the pop below would then drop the wrong entry.)
@@ -6560,6 +6561,7 @@ if (typeof window !== 'undefined') (() => {
       const t = d.tasks.find(x => x.id === rules.taskId);
       if (!t) throw new Error('This task is no longer on the board. Refresh before archiving.');
       if (t.claim && t.claim.status !== 'done') throw new Error('An agent is working on this task. Finish or release its claim before archiving.');
+      if (rules.onlyDone && t.column !== (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id) throw new Error(`#${t.num} is no longer in Done, so it was not archived.`);
       const y = todayIso().slice(0, 4); d.tasks = d.tasks.filter(x => x.id !== t.id);
       return { [y]: { tasks: [t], contacts: [], history: {} } };
     }
@@ -6660,12 +6662,14 @@ if (typeof window !== 'undefined') (() => {
     const b = elI('button', 'ico quickarch', 'archive'); b.type = 'button'; b.title = `Archive #${t.num}`; b.setAttribute('aria-label', `Archive task #${t.num}`);
     b.onclick = e => { e.stopPropagation(); quickArchive(t.id); }; return b;
   }
+  const quickBusy = new Set(); let quickUndo = null;   // quickUndo: { toast, task } while the last quick archive's Undo toast shows (Ctrl+Z uses it too)
   async function quickArchive(id) {
-    const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked()) return;
-    await archiveNow({ taskId: id });
+    const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked() || quickBusy.has(id)) return;   // a second click while the first runs does nothing
+    quickBusy.add(id); try { await archiveNow({ taskId: id, onlyDone: true }); } finally { quickBusy.delete(id); }
     if (state.tasks.some(x => x.id === id)) return;   // not archived: archiveNow said why
     hideUndo(); if (lastToast) lastToast.dismiss(); undoAt = Date.now();
-    const tt = undoToast = ui.toast(`Archived #${t.num} ${t.title}`, { action: { label: 'Undo', onClick: () => { if (undoToast === tt) undoToast = null; undoQuickArchive(t); } }, timeout: 8000 });
+    const tt = undoToast = ui.toast(`Archived #${t.num} ${t.title}`, { action: { label: 'Undo', onClick: () => { if (undoToast === tt) undoToast = null; quickUndo = null; undoQuickArchive(t); } }, timeout: 8000 });
+    quickUndo = { toast: tt, task: t };
   }
   async function undoQuickArchive(t) {   // the archived copy, not t: it holds the history lines the archive took
     try { archived = null; archivedSig = ''; const a = await loadArchived(), hit = a.tasks.find(x => x.item.id === t.id);

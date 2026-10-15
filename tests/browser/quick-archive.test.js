@@ -90,10 +90,37 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       assert.deepEqual(back.history.slice(0, -1), before.history); assert.match(back.history.at(-1).text, /restored/);
       assert.deepEqual(JSON.parse(api.files[archiveFile]).tasks, []);
       assert.equal(await page.locator('#dlgCard[open]').count(), 0, 'Undo does not open the card');
+      // Ctrl+Z while the toast shows takes back the archive too (split boards keep no undo entry for it)
+      await page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }).locator('.quickarch').click(); await undo.waitFor();
+      assert.equal(api.card('t_two'), null);
+      await page.locator('#board').click({ position: { x: 900, y: 700 } }); await page.keyboard.press('Control+z');
+      await page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }).waitFor();
+      for (let i = 0; i < 50 && !api.card('t_two'); i++) await page.waitForTimeout(100);
+      assert.ok(api.card('t_two'), 'Ctrl+Z puts the card back');
+      // a card someone moved out of Done since this page drew it is not archived
+      api.files['cards/t_two.json'] = text({ ...api.card('t_two'), column: 'todo' }); api.head = 'head-' + ++api.n;   // someone else's commit
+      await page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }).locator('.quickarch').click();
+      await page.getByText('#2 is no longer in Done', { exact: false }).waitFor();
+      assert.equal(api.card('t_two').column, 'todo', 'the moved card stays on the board');
       // List view: Done rows have the button too
       await page.evaluate(() => { location.hash = 'view=list'; }); await page.waitForFunction(() => document.body.dataset.view === 'list'); await page.waitForSelector('.trow');
       assert.equal(await page.locator('.trow', { hasText: 'Finished work' }).locator('.quickarch').count(), 1);
       assert.equal(await page.locator('.trow', { hasText: 'Open work' }).locator('.quickarch').count(), 0);
+      assert.deepEqual(errors, [], 'no page errors'); await page.close(); }
+
+    // single-file board (no split layout): one click archives, Undo puts it back
+    { const api = new Github(), cards = ['t_one', 't_two', 't_three'].map(id => api.card(id));
+      api.files = { 'tasks.json': text({ ...root, layout: undefined, tasks: cards }) };
+      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(init, 'board'); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      const board = () => JSON.parse(api.files['tasks.json']), done = page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' });
+      await done.hover(); await done.locator('.quickarch').dblclick();
+      const undo = page.getByRole('button', { name: 'Undo', exact: true }); await undo.waitFor();
+      assert.ok(!board().tasks.some(t => t.id === 't_two'), 'archived from the board file');
+      const archiveFile = Object.keys(api.files).find(p => p.startsWith('archive/')); assert.deepEqual(JSON.parse(api.files[archiveFile]).tasks.map(t => t.id), ['t_two'], 'a double click archives once');
+      await undo.click(); await done.waitFor();
+      for (let i = 0; i < 50 && JSON.parse(api.files[archiveFile]).tasks.length; i++) await page.waitForTimeout(100);
+      assert.ok(board().tasks.some(t => t.id === 't_two' && t.column === 'done'), 'back on the board'); assert.deepEqual(JSON.parse(api.files[archiveFile]).tasks, []);
       assert.deepEqual(errors, [], 'no page errors'); await page.close(); }
 
     // phone (touch, no hover): always visible, and a tap archives without opening the card
