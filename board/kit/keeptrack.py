@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 58  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 59  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1784,6 +1784,38 @@ def waiting_days(data):
     return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 365 else WAITING_DAYS
 
 
+RESEARCH_PER_RUN = 2       # settings.backlog_research.per_run default: bare Backlog cards one dispatcher run researches
+BARE_DETAILS_CHARS = 120   # details shorter than this (spaces folded) count as empty for bare_card
+# A card with one of these labels is never picked for backlog research: done or running already, the owner said no,
+# or it waits on a person.
+RESEARCH_SKIP_LABELS = ("researched", "researching", "no-research", "needs-human", "held")
+
+
+def backlog_research(data):
+    """settings.backlog_research (kit v59), read safely: {"enabled": bool, "per_run": 1-10}. Off when it is missing or
+    malformed: only an explicit `"enabled": true` turns it on."""
+    v = (data.get("settings") or {}).get("backlog_research")
+    v = v if isinstance(v, dict) else {}
+    n = v.get("per_run")
+    return {"enabled": v.get("enabled") is True,
+            "per_run": n if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= 10 else RESEARCH_PER_RUN}
+
+
+def bare_card(t):
+    """True for a card too thin to start (board/CARDS.md tests 2-4): no to-dos, no links, and details shorter than
+    BARE_DETAILS_CHARS characters. A fixed rule, not a judgement, so people and agents get the same answer."""
+    details = re.sub(r"\s+", " ", str(t.get("details") or "")).strip()
+    return not t.get("todos") and not t.get("links") and len(details) < BARE_DETAILS_CHARS
+
+
+def research_candidate(data, t):
+    """A Backlog card backlog auto-research may pick: bare, no running claim, no open wait, none of
+    RESEARCH_SKIP_LABELS. The setting itself is checked by the caller."""
+    labels = {str(x).lower() for x in t.get("labels") or []}
+    return (t.get("column") == "backlog" and bare_card(t) and not labels & set(RESEARCH_SKIP_LABELS)
+            and claim_state(data, t.get("claim")) not in ("running", "blocked", "stuck") and not open_waiting(t))
+
+
 def chase_date(data, w):
     """The day to chase a wait: its nudge date, else `since` plus settings.waiting_days; '' when there is none (the board
     set waiting_days to 0, or the wait has no valid since)."""
@@ -2107,6 +2139,7 @@ def cmd_list(a):
                 continue
         if getattr(a, "client", None) and t.get("client") != a.client: continue
         if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
+        if getattr(a, "bare", False) and not bare_card(t): continue
         cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
@@ -4969,8 +5002,13 @@ def cmd_task_set(a):
                 sys.exit("a task needs a title")
             if a.title != t.get("title"):
                 t["title"] = a.title; changed.append(f"title: {a.title}")
+        if getattr(a, "details", None) is not None and getattr(a, "add_details", None) is not None:
+            sys.exit("use --details or --add-details, not both")
         if getattr(a, "details", None) is not None and a.details != t.get("details", ""):
             t["details"] = a.details; changed.append("details updated" if a.details else "details cleared")
+        if (getattr(a, "add_details", None) or "").strip():   # adds below what is there; never replaces a person's text
+            cur = str(t.get("details") or "").rstrip()
+            t["details"] = (cur + "\n\n" if cur else "") + a.add_details.strip(); changed.append("details added")
         if getattr(a, "priority", None) and a.priority != t.get("priority"):
             t["priority"] = a.priority; changed.append(f"priority: {a.priority}")
         if getattr(a, "due", None) is not None:
@@ -5676,6 +5714,8 @@ def cmd_settings(a):
     # From kit v44 the Review Inbox is always on for split boards; the line keeps its v42 shape for older skill copies.
     print("review_inbox.enabled: " + ("true" if review_storage_ok(data) else "false (needs split storage: keeptrack.py migrate --to 4)"))
     print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
+    br = backlog_research(data)
+    print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
     print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
@@ -5718,13 +5758,25 @@ def cmd_settings_set(a):
                              "python3 board/keeptrack.py kit-update")
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "max_agent_claims",
-                                                                  "rename_stage", "stages")):
+                                                                  "rename_stage", "stages", "backlog_research", "research_per_run")):
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
             elif not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
                 sys.exit(f"min kit must be between the stored value ({cur or 'none'}) and this kit's version ({KIT_VERSION})")
             st["min_kit"] = a.min_kit; print(f"min_kit: {a.min_kit}")
+        if getattr(a, "backlog_research", None) is not None or getattr(a, "research_per_run", None) is not None:
+            br = dict(st.get("backlog_research")) if isinstance(st.get("backlog_research"), dict) else {}
+            if getattr(a, "backlog_research", None) is not None:
+                br["enabled"] = a.backlog_research == "on"
+            if getattr(a, "research_per_run", None) is not None:
+                if not 1 <= a.research_per_run <= 10:
+                    sys.exit("research per run must be between 1 and 10")
+                br["per_run"] = a.research_per_run
+            br.setdefault("enabled", False)
+            st["backlog_research"] = br
+            now_br = backlog_research(data)
+            print("backlog_research: " + (f"on, {now_br['per_run']} card(s) per dispatcher run" if now_br["enabled"] else "off"))
         if getattr(a, "max_agent_claims", None) is not None:
             if not 0 <= a.max_agent_claims <= 100:
                 sys.exit("max agent claims must be between 0 (no limit) and 100")
@@ -7615,6 +7667,7 @@ def main():
     s.add_argument("--all", action="store_true", help="ignore this repo's default project")
     s.add_argument("--sort", choices=["score", "priority"], help="score descending (unscored last), or board-wide priority order; reading never changes ranks")
     s.add_argument("--links", action="store_true", help="end each line with the card's web board link")
+    s.add_argument("--bare", action="store_true", help="only bare cards: no to-dos, no links, details under 120 characters (board/CARDS.md)")
     s.set_defaults(f=cmd_list)
     s = sub.add_parser("priority-move", help="change board-wide priority order without changing Kanban status or rank")
     s.add_argument("id")
@@ -7750,7 +7803,9 @@ def main():
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
     s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project, contact or after")
-    s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details"); s.add_argument("--priority", choices=["high", "medium", "low"])
+    s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details")
+    s.add_argument("--add-details", dest="add_details", help="add text below the current details (a blank line between); never replaces them")
+    s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
     s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
@@ -7795,6 +7850,9 @@ def main():
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
     s.add_argument("--rename-stage", dest="rename_stage", action="append", help="OLD=NEW (repeatable); moves people in OLD")
+    s.add_argument("--backlog-research", dest="backlog_research", choices=["on", "off"],
+                   help="backlog auto-research: the relay dispatcher adds details to bare Backlog cards (default off)")
+    s.add_argument("--research-per-run", dest="research_per_run", type=int, help="bare Backlog cards one dispatcher run researches (1-10, default 2)")
     s.add_argument("--waiting-days", dest="waiting_days", type=int,
                    help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
     s.add_argument("--min-kit", dest="min_kit", type=int,

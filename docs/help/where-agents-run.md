@@ -151,6 +151,15 @@ ChatGPT cannot read or change your board yet. A connector for ChatGPT is planned
 2. Paste it into ChatGPT and ask for a draft.
 3. Send the message yourself, then log it on the board.
 
+## Backlog auto-research
+
+Settings → Board → **Backlog auto-research** (off by default). When it is on, the relay dispatcher picks bare Backlog
+cards (no to-dos, no links, almost no details) and an agent adds details, links and to-dos. It posts one comment with
+what it found and the questions only you can answer, and labels the card `researched`. It never moves or approves a
+card, and it never replaces text you wrote. "Cards each run" (1 to 10, default 2) limits how many cards one run
+researches. Put the label `no-research` on a card to keep agents off it. The rules are in `board/CARDS.md`. You need
+relay 0.9.16 or later in the board repo.
+
 ## How the tool reads and saves your board
 
 - Each command reads only the board subtree: `board/tasks.json` plus the task, CRM-person and archive files under `board/cards/`, `board/people/` and `board/archive/`. It does not download the whole repo.

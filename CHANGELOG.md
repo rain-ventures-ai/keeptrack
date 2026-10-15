@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v59 — 2026-10-15
+
+Backlog auto-research, a board setting that is off by default. When it is on, the relay dispatcher (relay 0.9.16 or
+later) picks **bare** Backlog cards and an agent adds details, links and to-dos, posts one comment with what it found
+and the questions it could not answer, and labels the card `researched`. The agent never moves, approves, claims or
+retitles a card, and never replaces text a person wrote.
+- `settings.backlog_research`: `{ "enabled": true, "per_run": 2 }`. Only `"enabled": true` turns it on; `per_run`
+  (1-10, default 2) is how many cards one dispatcher run researches. Set it with `keeptrack.py settings-set
+  --backlog-research on|off [--research-per-run N]`, or in the web board: Settings → Board → Backlog auto-research.
+- A **bare** card has no to-dos, no links and details shorter than 120 characters (`board/CARDS.md`, tests 2-4).
+  `keeptrack.py list --bare` lists them. Cards labelled `researched`, `researching`, `no-research`, `needs-human` or
+  `held` are never picked; put `no-research` on a card to keep agents off it.
+- `keeptrack.py task-set '#N' --add-details "<text>"` adds text below the current details (a blank line between) and
+  never replaces them.
+- No schema migration. Older kits and pages ignore the setting.
+
 ## Kit v58 — 2026-10-14
 
 Web board: the bell opens **New for you**, a list of every card with news for you, newest first. Each row shows the
