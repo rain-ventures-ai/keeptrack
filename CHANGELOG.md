@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: split boards fetch uncached files in GraphQL batches, so a new browser needs fewer GitHub calls.
+Files GitHub cannot return this way fall back to the existing REST read. No schema change.
+
+Web board: live board data and sync status now appear before optional widgets finish loading. Widgets redraw the board
+only when their layout changes; stale widget responses are discarded. Demo loading is unchanged. No schema change.
+
 Web board: the **Archive** button on Done cards now takes the card off the board at once, instead of after GitHub
 has the commit (about 2 to 3 seconds on a split board). If the archive does not happen, the card comes back and the
 toast says why. Undo still shows once the archive has landed. No schema change.
@@ -18,6 +24,16 @@ browser's saved copy and refreshes in place when the live sync lands; edits wait
 also remember their last sync (head, ETag, file list), so an unchanged board now costs one free conditional
 call instead of five serial calls. Measured on a 192-card board at 250 ms per call: card link 1.86 s → 0.17 s, live sync
 1.41 s → 0.40 s. Opening a card also shows the drawer before redrawing the board behind it. No schema change.
+
+## Kit v69 — 2026-10-15
+
+- Harden kit-update against symlink aliases; reserve complete automation batches atomically and release undelivered runs as failed. Hash item action keys, retain invalid/missing packs in list, and report mixed tick problems while allowing work (exit 0). Failed completion remains possible after pack loss.
+
+Board owners can install, check and explicitly enable proposal-only automations. One cheap tick reserves work only
+when a source has new items. Includes stale-card nudges, notes-folder tasks, exact-contact Gmail tasks, a setup guide
+and a create-automation skill. Checks use bounded output, private state and digest-pinned access approval.
+Nothing is installed, enabled or scheduled by upgrading. Own packs and runtime state are protected from kit updates.
+No schema change to board data. Adds separate automation-install and generic seen-log records under automation/.
 
 ## Kit v68 — 2026-10-15
 

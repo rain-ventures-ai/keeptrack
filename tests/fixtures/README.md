@@ -29,3 +29,5 @@ Each fixture may include `fixture.json` with expected entity counts and the kit 
 `proposal-change-cases.json` is not a board either: it holds shared Review Inbox accept checks (allowed fields and value types) that `tests/test_proposal_parity.py` runs through `keeptrack.py` and `board.js`, and `tests/browser/page-safety.test.js` through the page. Add a case there when either check changes.
 
 `v4_kit68` freezes unchanged split data before the card-first link release (kit v67 → v68).
+
+`v4_kit69` freezes unchanged split data before automations (kit v68 → v69).

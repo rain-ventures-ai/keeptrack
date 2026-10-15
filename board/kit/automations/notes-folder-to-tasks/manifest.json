@@ -1,0 +1,59 @@
+{
+  "schema": "keeptrack-automation/1",
+  "slug": "notes-folder-to-tasks",
+  "name": "Notes folder to tasks",
+  "summary": "Propose work for review from files.read",
+  "version": "1.0.0",
+  "needs": [
+    {
+      "id": "files.read",
+      "why": "Read the automation source",
+      "routes": [
+        {
+          "runtime": "local",
+          "how": "Read the local board and source files",
+          "probe": [
+            "python3",
+            "-c",
+            "import os,json,pathlib,sys; c=json.load(open(os.environ[\"KEEPTRACK_CONFIG\"])); sys.exit(not pathlib.Path(c[\"notes_dir\"]).is_dir())"
+          ]
+        },
+        {
+          "runtime": "claude",
+          "how": "Confirm read-only access to files.read"
+        },
+        {
+          "runtime": "chatgpt",
+          "how": "Confirm read-only access to files.read"
+        },
+        {
+          "runtime": "grok",
+          "how": "Confirm read-only access to files.read"
+        }
+      ]
+    }
+  ],
+  "writes": [
+    "proposals"
+  ],
+  "never": [
+    "send-email",
+    "delete",
+    "spend",
+    "external-post",
+    "edit-contacts"
+  ],
+  "every": "1d",
+  "check": {
+    "file": "check.py",
+    "network": false,
+    "tools": []
+  },
+  "config": {
+    "notes_dir": {
+      "type": "path",
+      "required": true,
+      "help": "Folder containing Markdown or text notes"
+    }
+  }
+}

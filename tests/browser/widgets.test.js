@@ -78,6 +78,22 @@ async function open(browser, base, api, viewport, enabled = true, options = {}) 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    {   // Optional widgets must not hold the live board or its sync status hostage.
+      const api = new Api(), route = api.route.bind(api); let release, requested;
+      const held = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { requested = resolve; });
+      api.route = async r => { if (new URL(r.request().url()).pathname.endsWith('/widgets.json')) { requested(); await held; } return route(r); };
+      let page;
+      try {
+        page = await open(browser, base, api, { width: 1280, height: 860 });
+        await page.waitForFunction(() => /^Synced /.test(document.querySelector('#status').textContent));
+        assert.match(await page.locator('#board .todaygo').textContent(), /4 open/, 'live task counts render while widgets are held');
+        assert.equal(await page.locator('.kbwidget').count(), 0);
+        await started; release(); await page.locator('.kbwidgets').waitFor();
+        assert.deepEqual(await page.locator('.kbwidget').evaluateAll(xs => xs.map(x => x.dataset.widget)), ['recent', 'weather', 'pulse']);
+        assert.deepEqual(page.errors, []);
+      } finally { release(); if (page) await page.close(); }
+    }
+
     const offApi = new Api(), off = await open(browser, base, offApi, { width: 1280, height: 860 }, false);
     assert.equal(await off.locator('.kbwidget').count(), 0);
     assert.equal(offApi.calls.includes('/contents/board/widgets.json'), false, 'default off does not fetch board customisations');

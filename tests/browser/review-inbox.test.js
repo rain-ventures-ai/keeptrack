@@ -69,7 +69,7 @@ class Github {
   constructor(files) { this.files = files; this.head = 'c1'; this.n = 1; this.calls = []; this.blobs = {}; this.trees = {}; this.commits = { c1: { files: { ...files } } }; }
   sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
   bump() { this.head = 'c' + ++this.n; this.commits[this.head] = { files: { ...this.files } }; }
-  writes() { return this.calls.filter(c => ['PUT', 'PATCH', 'DELETE', 'POST'].includes(c.method)); }
+  writes() { return this.calls.filter(c => ['PUT', 'PATCH', 'DELETE', 'POST'].includes(c.method) && c.path !== '/graphql'); }   // a GraphQL POST is a read (batched file reads)
   edit(rel, fn) { const o = JSON.parse(this.files[rel]); fn(o); this.files[rel] = text(o); this.bump(); }   // someone else commits
   json(rel) { return JSON.parse(this.files[rel]); }
   async route(route) {

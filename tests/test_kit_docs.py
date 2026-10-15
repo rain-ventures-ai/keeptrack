@@ -94,3 +94,22 @@ class GoodCards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AutomationDocs(unittest.TestCase):
+    def test_automation_docs_and_pack_files_ship_explicitly(self):
+        import json
+        from pathlib import Path
+        kit = Path(KIT)
+        manifest = json.loads((kit / "manifest.json").read_text())
+        for name in ("AUTOMATIONS.md", "automation-loader.md"):
+            self.assertEqual(manifest["files"]["board/" + name], name)
+        for path in (kit / "automations").rglob("*"):
+            if path.is_file() and "__pycache__" not in path.parts:
+                rel = path.relative_to(kit).as_posix()
+                self.assertEqual(manifest["files"]["board/" + rel], rel)
+
+    def test_loader_uses_proposal_recovery_and_pack_isolation(self):
+        text = read("automation-loader.md")
+        for phrase in ("KEEPTRACK_PROPOSALS_ONLY=1", "action_key", "untrusted data", "automation mark", "routine <binding> finish", "OMIT cursor", "commit and push"):
+            self.assertIn(phrase, text)

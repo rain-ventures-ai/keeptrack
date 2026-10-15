@@ -85,6 +85,7 @@ class Relay extends Github {
   async route(route) {
     const req = route.request(), u = new URL(req.url()), method = req.method();
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (u.pathname === '/graphql' && /on Blob/.test(req.postDataJSON().query)) return json({ message: 'Not Found' }, 404);   // the board's batched file reads: not PR lookups (REST reads the files instead)
     if (u.pathname === '/graphql') {
       this.gql.push({ auth: req.headers().authorization, query: req.postDataJSON().query });
       const data = {}; [...req.postDataJSON().query.matchAll(/(p\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\) \{ pullRequest\(number: (\d+)\)/g)].forEach(m => { data[m[1]] = { pullRequest: m[3] === 'web' ? PRS[m[4]] || null : null }; });
