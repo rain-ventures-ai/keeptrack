@@ -29,6 +29,12 @@ class BackendFlags(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0); self.assertIn("unknown BOARD_BACKEND 'gitub'", r.stderr)
 
     def test_empty_backend_means_github(self):
+        # Without --file, which skips backend selection: the module itself must pick github.
+        e = {k: v for k, v in os.environ.items() if not k.startswith('BOARD_')}
+        e['BOARD_BACKEND'] = ''
+        code = 'import importlib.util,sys; s=importlib.util.spec_from_file_location("kt", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.BACKEND, m.storage_adapter() is m._GITHUB_STORAGE)'
+        r = subprocess.run([sys.executable, '-c', code, str(KIT)], capture_output=True, text=True, env=e, timeout=60)
+        self.assertEqual(r.stdout.split(), ['github', 'True'], r.stderr)
         r = run(['--file', self.file, 'list'], BOARD_BACKEND='')
         self.assertEqual(r.returncode, 0, r.stderr); self.assertIn('One', r.stdout)
 
