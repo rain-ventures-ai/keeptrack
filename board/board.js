@@ -164,7 +164,7 @@ if (typeof window !== 'undefined') (() => {
     // another tab may have switched this browser to repo: its live keys (kb_repo, its token ...) go too, not only kb_boards
     if (rawRepo() === repo) try { ['kb_repo', ...BOARD_KEYS.map(k => 'kb_' + k)].forEach(k => localStorage.removeItem(k)); } catch {}
     try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`) || k.startsWith(`kb_weather_location:${repo}:`)).forEach(k => localStorage.removeItem(k)); } catch {}
-    const pre = [`kb_snap:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
+    const pre = [`kb_snap:${repo}:`, `kb_meta:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
     try { Object.keys(localStorage).filter(k => (k.startsWith(`kb_context:${repo}:`) || k.startsWith(`kb_drafts:${repo}:`))).forEach(k => localStorage.removeItem(k)); } catch {} }   // also drop cached cards, local drafts, context and Undo
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
   (() => { const q = new URLSearchParams(location.search), repo = q.get('repo'), over = {};
@@ -627,18 +627,21 @@ if (typeof window !== 'undefined') (() => {
     [...files.entries()].sort().forEach(([p, x]) => { if (/^cards\/[^/]+\.json$/.test(p)) tasks.push(clone(x.obj)); else if (/^people\/[^/]+\.json$/.test(p)) contacts.push(clone(x.obj)); else if (/^projects\/[^/]+\.json$/.test(p)) projects.push(clone(x.obj)); });
     raw.tasks = tasks; raw.contacts = contacts; raw.projects = projects; return raw;
   }
-  async function splitSnapshot(force = false) {
+  async function splitSnapshot(force = false, model = true) {
     const c = cfg(), ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
     const rr = await ghApi('GET', `/git/ref/heads/${ref}`, null, !force && sameBoard && splitMeta.headEtag ? { etag: splitMeta.headEtag } : {});
-    if (rr.status === 304 && sameBoard) return { unchanged: true, data: modelFromSplit(splitMeta.files), meta: splitMeta };
+    if (rr.status === 304 && sameBoard) return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta };
     if (!rr.ok) throw new Error(`GitHub error ${rr.status} reading branch`);
     const rd = await rr.json(), head = rd.object.sha, headEtag = rr.headers.get('ETag');
-    if (sameBoard && head === splitMeta.head) { splitMeta.headEtag = headEtag || splitMeta.headEtag; return { unchanged: true, data: modelFromSplit(splitMeta.files), meta: splitMeta }; }
+    if (sameBoard && head === splitMeta.head) { splitMeta.headEtag = headEtag || splitMeta.headEtag; return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta }; }
     const cr = await ghApi('GET', `/git/commits/${head}`); if (!cr.ok) throw new Error(`GitHub error ${cr.status} reading commit`);
     let tree = (await cr.json()).tree.sha, rootTree = tree;
+    const unchanged = () => { splitMeta = { ...splitMeta, head, headEtag, rootTree }; return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta }; };
+    if (sameBoard && rootTree === splitMeta.rootTree) return unchanged();   // an empty commit cannot change the board
     const p = c.path, slash = p.lastIndexOf('/'), parts = (slash < 0 ? '' : p.slice(0, slash)).split('/').filter(Boolean);
     for (const part of parts) { const tr = await ghApi('GET', `/git/trees/${tree}`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board folder`);
       tree = ((await tr.json()).tree || []).find(x => x.type === 'tree' && x.path === part)?.sha; if (!tree) throw new Error(`cannot read ${c.path}`); }
+    if (sameBoard && tree === splitMeta.boardTree) return unchanged();   // changes elsewhere in the repo need no board reads
     const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board files`);
     const td = await tr.json(); if (td.truncated) throw new Error('The board file list was too large for GitHub.');
     const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
@@ -664,14 +667,20 @@ if (typeof window !== 'undefined') (() => {
   let lastProblem = '';   // shown in Settings → Connection → Health
   // ---- instant start: show the copy this browser loaded last time, then replace it with the live file ---------
   const snapKey = c => 'kb_snap:' + c.repo + ':' + c.branch + ':' + c.path;
-  function snapSave(c, raw) { idb.set(snapKey(c), raw); }
+  function metaSave(c) { const m = splitMeta; if (!m || m.key !== `${c.repo}:${c.branch}:${c.path}`) return idb.del(snapKey(c).replace('kb_snap:', 'kb_meta:'));
+    return idb.set(snapKey(c).replace('kb_snap:', 'kb_meta:'), { ...m, files: [...m.files].map(([path, x]) => ({ path, sha: x.sha, size: x.size })) }); }
+  function snapSave(c, raw) { idb.set(snapKey(c), raw); metaSave(c); }
   async function snapLoad() {
     try { Object.keys(localStorage).filter(k => k.startsWith('kb_snap:')).forEach(k => localStorage.removeItem(k)); } catch {}   // older pages kept the copy in localStorage
     const c = cfg(); if (DEMO || !c.token || !c.repo || !window.indexedDB) return;
     try { const raw = await Promise.race([idb.get(snapKey(c)), new Promise(r => setTimeout(r, 400))]); if (!raw || lastSyncOk) return;
-      if (Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA) return; state = normalise(raw); fromSnap = true; setStatus('Showing the last copy, syncing…'); } catch {}
+      if (Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA) return; state = normalise(raw); fromSnap = true; setStatus('Showing the last copy, syncing…');
+      if (isSplit(raw)) { const m = await idb.get(snapKey(c).replace('kb_snap:', 'kb_meta:')); if (m && m.key === `${c.repo}:${c.branch}:${c.path}` && Array.isArray(m.files)) {
+        const texts = await Promise.all(m.files.map(x => idb.get(blobKey(x.sha)))); if (texts.some(text => typeof text !== 'string')) return;   // incomplete blob caches take the full discovery path
+        const files = new Map(m.files.map((x, i) => [x.path, { sha: x.sha, size: x.size, text: texts[i], obj: JSON.parse(texts[i]) }]));
+        if (files.has('tasks.json')) splitMeta = { ...m, files }; } } } catch {}
   }
-  const snapClear = async () => { archMem = {}; for (const k of await idb.keys()) if (/^kb_(snap|arch|blob):/.test(k)) idb.del(k); };
+  const snapClear = async () => { archMem = {}; splitMeta = null; for (const k of await idb.keys()) if (/^kb_(snap|meta|arch|blob):/.test(k)) idb.del(k); };
   function demoShift(raw) {   // demo files carry demo_base (the day they were written): move every date so that "today" is always today
     const base = raw && raw.demo_base; if (!base || !/^\d{4}-\d{2}-\d{2}$/.test(base)) return raw;
     const shift = Math.round((new Date(todayIso() + 'T00:00:00Z') - new Date(base + 'T00:00:00Z')) / 864e5);
@@ -703,11 +712,11 @@ if (typeof window !== 'undefined') (() => {
     if (!quiet) setStatus(fromSnap ? 'Showing the last copy, syncing…' : 'Loading…');
     try {
       if (splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`) {
-        const got = await splitSnapshot(false); if (stale()) return false;
-        if (!isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
-        if (got.unchanged) { const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
+        const got = await splitSnapshot(false, false); if (stale()) return false;
+        if (!got.unchanged && !isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
+        if (got.unchanged) { const cached = fromSnap; boardSize = [...got.meta.files.values()].reduce((n, x) => n + (x.size || 0), 0); sizeBar(); splitMeta = got.meta; lastSyncOk = true; fromSnap = false; setKitRo(state); initSeen(); metaSave(c); if (cached) { checkKit(); checkRelayKit(); checkPublic(); render(); setTimeout(restoreBoardContext, 30); } const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
         const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); setKitRo(got.data); state = normalise(got.data);
-        if (prev) alertChanges(prev, state); lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
+        if (prev) alertChanges(prev, state); if (fromSnap) { checkKit(); checkRelayKit(); checkPublic(); } lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
       }
       const res = await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
@@ -980,7 +989,7 @@ if (typeof window !== 'undefined') (() => {
       if (!res.ok) return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       const out = await res.json(), files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
       const parent = ((out.commit.parents || [])[0] || {}).sha;
-      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
+      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, boardTree: null, files }); state = next; return 'ok';   // boardTree null: unknown after a write, so the next read never trusts a stale folder SHA
     }
     const made = await mapLimit([...changes], 8, async ([rel, content]) => { const r = await ghApi('POST', '/git/blobs', { content, encoding: 'utf-8' }); if (!r.ok) throw new Error(`GitHub error ${r.status} creating ${rel}`); return [rel, content, (await r.json()).sha]; });
     const entries = made.map(([rel, , blob]) => ({ path: remotePath(rel), mode: '100644', type: 'blob', sha: blob }));
@@ -990,10 +999,11 @@ if (typeof window !== 'undefined') (() => {
     const rr = await ghApi('PATCH', `/git/refs/heads/${encodeURIComponent(cfg().branch)}`, { sha: commit, force: false });
     if (!rr.ok) return (rr.status === 409 || rr.status === 422) ? 'conflict' : 'error:' + rr.status;
     const files = new Map(meta.files); made.forEach(([rel, text, blob]) => { files.set(rel, { sha: blob, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(blob), text); }); deletes.forEach(rel => files.delete(rel));
-    splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
+    splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, boardTree: null, files }); state = next; return 'ok';
   }
 
   async function save(next, message, expectedSha = sha, extra = {}, tree = false) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
+    if (fromSnap) { setStatus('Syncing… try again in a moment'); return 'error:syncing'; }
     if (ro) { roToast(); return 'error:readonly'; }
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return 'error:schema'; }
     if (isSplit(next)) {
@@ -1283,7 +1293,7 @@ if (typeof window !== 'undefined') (() => {
   async function mutateNow(fn, message, targetIds = [], baseState = null, options = {}) {
     if (ro) { roToast(); return false; }
     if (busy) { setStatus('Busy, try again', 'err'); return false; }
-    if (fromSnap) { setStatus('Still loading the latest board, try again in a moment', 'err'); return false; }
+    if (fromSnap) { setStatus('Syncing… try again in a moment'); return false; }
     busy = true; syncUndo(); loadGen++; const before = clone(state); let base = baseState || before;
     // A failure is also a toast: the status line alone is overwritten by the next queued save's "Saved".
     const fail = msg => { setStatus(msg, 'err'); toast(msg, true); };
@@ -3079,6 +3089,7 @@ if (typeof window !== 'undefined') (() => {
   }
   const baseFor = key => { const b = clone(state), i = b.tasks.findIndex(x => x.id === editing); if (i >= 0) b.tasks[i][key] = fieldBase[key]; return b; };   // the text as it was when I started editing it
   async function saveField(fn, msg, baseKey, baseState = null, options = {}) {     // every field saves on its own (no Save button); conflicts are checked per field
+    if (fromSnap) { $('dSaved').textContent = 'Syncing…'; setStatus('Syncing… try again in a moment'); return false; }
     const id = editing, sv = $('dSaved'); sv.textContent = 'Saving…'; sv.className = 'dsaved';
     const ok = await mutate(fn, msg, [id], baseState || (baseKey ? baseFor(baseKey) : null), options); sv.textContent = ok ? 'Saved ✓' : 'Not saved'; sv.className = 'dsaved ' + (ok ? 'ok' : 'bad');
     clearTimeout(saveTimer); saveTimer = setTimeout(() => { sv.textContent = ''; }, 2500);
@@ -3813,8 +3824,8 @@ if (typeof window !== 'undefined') (() => {
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
     fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me;
-    markSeen(id); render();
-    $('dlgCard').showModal(); $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
+    markSeen(id); $('dlgCard').showModal(); render();
+    $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
     if (focus && focus.comment) setTimeout(() => {   // from @Mentions: show that one comment, briefly highlighted
       const row = [...$('cmStream').querySelectorAll('.cmcard')].find(r => r.dataset.cid === focus.comment);
@@ -6648,12 +6659,13 @@ if (typeof window !== 'undefined') (() => {
     archMem[key] = got; if (ro !== 'demo') idb.set(key, got); return got;
   }
   function writeBlocked() {   // every archive write checks this, like save() does for the board
+    if (fromSnap) { setStatus('Syncing… try again in a moment'); return true; }
     if (ro) { roToast(); return true; }
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return true; }
     return false;
   }
   async function writeArchive(y, data, sha, message) {
-    if (ro || newerSchema) return false;
+    if (fromSnap || ro || newerSchema) return false;
     const res = await gh('PUT', { message, content: b64e(JSON.stringify(data, null, 2) + '\n'), branch: cfg().branch, ...(sha ? { sha } : {}) }, false, { path: archPath(y) });
     if (!res.ok) return false; const out = await res.json(); archMem[archKey(y)] = { data, sha: out.content.sha, etag: null }; return true;
   }
@@ -7033,5 +7045,5 @@ if (typeof window !== 'undefined') (() => {
     ['focus', 'pointerdown', 'contextmenu'].forEach(event => a.addEventListener(event, () => { a.href = navigationLink('#settings=' + encodeURIComponent(name)); }));
     a.addEventListener('click', e => { e.preventDefault(); settingsTab(name); }); sec.append(a);
   });
-  (async () => { await restoreUndo(); await snapLoad(); if (fromSnap) render(); if (cfg().token || !cfg().repo || SETUP || location.hash) { load(); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
+  (async () => { await restoreUndo(); await snapLoad(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
 })();
