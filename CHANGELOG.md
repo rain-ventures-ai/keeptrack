@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v59 — 2026-10-15
+
+Web board: adding a task can open a **New card** form with every field a good card needs (`board/CARDS.md`): title,
+details, column, client, project, priority, due date, assignee, labels, checklist (one step per line) and links (one
+per line, `Title | URL`). The lane's pencil button, Shift+Enter in the lane's box, Add with an empty box, the lane's
+＋ and the phone ＋ open it. Nothing is saved until **Add card**; a bad link line or an empty title keeps the form open
+with a message. Quick add stays: type a title and press Enter (or Add) for a title-only card, as before. A new client
+or label typed in the form joins the board's lists. No schema migration.
+
 ## Kit v58 — 2026-10-14
 
 Web board: the bell opens **New for you**, a list of every card with news for you, newest first. Each row shows the
