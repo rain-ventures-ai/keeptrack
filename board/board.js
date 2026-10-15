@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 62;
+  const PAGE_KIT = 63;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1841,12 +1841,13 @@ if (typeof window !== 'undefined') (() => {
       capList('b:' + col.id, items, t => cardEl(t, ci, focused), cards); if (!items.length) cards.append(emptyNote('Nothing here. Drop a card or add one below.', 'square-kanban')); c.append(cards);
       const add = el('div', 'add'), inp = el('input'), btn = el('button', 'primary', 'Add'); inp.placeholder = 'Add a task…'; inp.setAttribute('aria-label', 'Quick add a task to ' + col.name);
       const draft = drafts.get(col.id); if (draft) { inp.value = draft.value; if (draft.focus) refocus = [inp, draft]; }
-      // Enter (or Add with text) is quick add: a title-only card. The pencil, Shift+Enter or an empty Add also opens the card in the drawer.
-      const form = elI('button', 'addform', 'pencil'); form.type = 'button'; form.title = 'Add and open the card (Shift+Enter)'; form.setAttribute('aria-label', 'Add a card to ' + col.name + ' and open it');
-      const full2 = () => { const v = inp.value.trim(); inp.value = ''; openNewCard(col.id, v); };
-      const go = () => { const v = inp.value.trim(); if (!v) { full2(); return; } inp.value = ''; addTask(v, col.id); };
-      btn.onclick = go; form.onclick = full2; inp.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; if (e.shiftKey) { e.preventDefault(); full2(); } else go(); });
-      add.append(inp, form, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = full2; board.append(c);
+      // Enter is quick add: a title-only card. Add (or Shift+Enter, or the lane's ＋) adds the card and opens it in the drawer;
+      // with an empty box it asks for the title first.
+      btn.title = 'Add and open the card (Enter adds it without opening)';
+      const open = () => { const v = inp.value.trim(); inp.value = ''; openNewCard(col.id, v); };
+      const quickAdd = () => { const v = inp.value.trim(); if (!v) { open(); return; } inp.value = ''; addTask(v, col.id); };
+      btn.onclick = open; inp.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; if (e.shiftKey) { e.preventDefault(); open(); } else quickAdd(); });
+      add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = open; board.append(c);
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
     renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
@@ -2960,7 +2961,7 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- new card (kit v61): the card drawer is the one card form. The card is saved with its title, then opens in the
   // drawer for details, client, project, priority, due, labels, checklist and links (board/CARDS.md). With no title typed
-  // yet, a short prompt asks for one first. Opened by the lane's pencil, Shift+Enter, an empty Add, the lane's ＋ and the phone ＋.
+  // yet, a short prompt asks for one first. Opened by the lane's Add, Shift+Enter, the lane's ＋ and the phone ＋.
   // A failed save puts the title back in the lane's box.
   let newCardBusy = false;
   async function openNewCard(col, seed) {

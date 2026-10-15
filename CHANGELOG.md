@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v63 — 2026-10-15
+
+Web board: the lane's add bar loses the pencil button, which did the same as Add. **Add** now adds the card and opens it
+in the card drawer (with an empty box it asks for the title first), like Shift+Enter and the lane's ＋. **Enter** in the
+box is still quick add: a title-only card that does not open. No schema migration.
+
 ## Kit v62 — 2026-10-15
 
 Readable cards: Markdown in descriptions and comments, and comments that recommend a way forward.
