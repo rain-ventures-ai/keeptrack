@@ -89,11 +89,9 @@ let base;
     await page.locator('#cTitle').fill('First'); await page.locator('#cTitle').blur();
     release(); await synced(); assert.equal(await page.locator('#cTitle').inputValue(), 'Fresh title'); assert.equal(await page.evaluate(() => window.drawerOpens), 0, 'drawer refreshes without reopening');
     api.calls = []; await page.reload(); await synced(); assert.equal(data().length, 1, JSON.stringify(data())); assert.equal(data()[0].conditional, true);
-    // A new commit with the same root tree needs only the ref and commit.
-    api.head = 'empty-commit'; api.calls = []; await page.reload(); await synced(); assert.equal(data().length, 2, JSON.stringify(data()));
-    // A changed root tree with an unchanged board folder stops at that folder lookup.
-    outside = true; api.head = 'outside-commit'; api.n++; api.calls = []; await page.reload(); await synced(); assert.equal(data().length, 3, JSON.stringify(data())); assert(!data().some(x => x.path.includes('recursive')));
-    outside = false; const next = JSON.parse(api.files['cards/t_one.json']); next.title = 'Real change'; api.files['cards/t_one.json'] = text(next); api.head = 'real-change'; api.n++; api.calls = [];
+    // A new commit that changes no board file re-lists the board but reads no files: they are cached by SHA.
+    api.head = 'other-commit'; api.n++; api.calls = []; await page.reload(); await synced(); assert(data().some(x => x.path.includes('recursive'))); assert(!data().some(x => x.path.startsWith('/git/blobs/')), JSON.stringify(data()));
+    const next = JSON.parse(api.files['cards/t_one.json']); next.title = 'Real change'; api.files['cards/t_one.json'] = text(next); api.head = 'real-change'; api.n++; api.calls = [];
     await page.reload(); await synced(); assert.equal(await page.locator('#cTitle').inputValue(), 'Real change'); assert(data().some(x => x.path.startsWith('/git/blobs/')));
     await page.close(); console.log('fast start browser tests passed');
   } finally { await browser.close(); server.close(); }

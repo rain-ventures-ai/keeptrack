@@ -636,12 +636,9 @@ if (typeof window !== 'undefined') (() => {
     if (sameBoard && head === splitMeta.head) { splitMeta.headEtag = headEtag || splitMeta.headEtag; return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta }; }
     const cr = await ghApi('GET', `/git/commits/${head}`); if (!cr.ok) throw new Error(`GitHub error ${cr.status} reading commit`);
     let tree = (await cr.json()).tree.sha, rootTree = tree;
-    const unchanged = () => { splitMeta = { ...splitMeta, head, headEtag, rootTree }; return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta }; };
-    if (sameBoard && rootTree === splitMeta.rootTree) return unchanged();   // an empty commit cannot change the board
     const p = c.path, slash = p.lastIndexOf('/'), parts = (slash < 0 ? '' : p.slice(0, slash)).split('/').filter(Boolean);
     for (const part of parts) { const tr = await ghApi('GET', `/git/trees/${tree}`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board folder`);
       tree = ((await tr.json()).tree || []).find(x => x.type === 'tree' && x.path === part)?.sha; if (!tree) throw new Error(`cannot read ${c.path}`); }
-    if (sameBoard && tree === splitMeta.boardTree) return unchanged();   // changes elsewhere in the repo need no board reads
     const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board files`);
     const td = await tr.json(); if (td.truncated) throw new Error('The board file list was too large for GitHub.');
     const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
@@ -989,7 +986,7 @@ if (typeof window !== 'undefined') (() => {
       if (!res.ok) return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       const out = await res.json(), files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
       const parent = ((out.commit.parents || [])[0] || {}).sha;
-      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, boardTree: null, files }); state = next; return 'ok';   // boardTree null: unknown after a write, so the next read never trusts a stale folder SHA
+      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
     }
     const made = await mapLimit([...changes], 8, async ([rel, content]) => { const r = await ghApi('POST', '/git/blobs', { content, encoding: 'utf-8' }); if (!r.ok) throw new Error(`GitHub error ${r.status} creating ${rel}`); return [rel, content, (await r.json()).sha]; });
     const entries = made.map(([rel, , blob]) => ({ path: remotePath(rel), mode: '100644', type: 'blob', sha: blob }));
@@ -999,7 +996,7 @@ if (typeof window !== 'undefined') (() => {
     const rr = await ghApi('PATCH', `/git/refs/heads/${encodeURIComponent(cfg().branch)}`, { sha: commit, force: false });
     if (!rr.ok) return (rr.status === 409 || rr.status === 422) ? 'conflict' : 'error:' + rr.status;
     const files = new Map(meta.files); made.forEach(([rel, text, blob]) => { files.set(rel, { sha: blob, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(blob), text); }); deletes.forEach(rel => files.delete(rel));
-    splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, boardTree: null, files }); state = next; return 'ok';
+    splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
   }
 
   async function save(next, message, expectedSha = sha, extra = {}, tree = false) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
