@@ -10,6 +10,25 @@ Web board: the **Archive** button on Done cards now takes the card off the board
 has the commit (about 2 to 3 seconds on a split board). If the archive does not happen, the card comes back and the
 toast says why. Undo still shows once the archive has landed. No schema change.
 
+## Kit v67 — 2026-10-15
+
+New kit file **`board/upgrade.py`**: the whole board-kit upgrade in one command (Ollie, 15 Oct: agents slipped twice doing
+it by hand in each board repo). Run it from the board repo's root: `python3 board/upgrade.py [--push]`. It refuses a
+checkout with uncommitted changes, finds the base branch (origin's default, else master, else main), makes the backup
+branch `backup/kit<old>-<date>` (reused when it is already there at the same commit, else `-2`, `-3`), and works in a new
+git worktree on `kit-upgrade/v<N>` from `origin/<base>`, so the main checkout never changes. There it runs `kit-update`,
+puts back the repo's own lines from the new optional, repo-owned **`board/upgrade-keep.txt`** (`<path> :: <regex>`; it
+stops when the number of matching lines changes), prints the `UPGRADING.md` sections for each new version and the
+commands in them to do by hand (it never runs a migration), and lists the `keeptrack.py` lines of the kit's
+`templates/AGENTS.md` that the repo's `AGENTS.md` lacks (report only). When the repo has `relay/`, it also upgrades the
+relay kit (`relay.py kit-update --into <worktree>`, or the older `--from` way before relay 0.9.24) and runs relay's
+`kit-check`, `check` and `selftest`. Owner-only relay files are listed for the owner; only `--owner-files` (the owner's
+yes) copies those the repo never changed, and the PR names each one. It commits only the paths an upgrade step wrote. Then the board checks (`py_compile`, `kit-check`, `doctor`, `list`), a commit
+("Board kit vA -> vB", with `--trailer` lines), and with `--push` the push and a draft PR through `gh` (else it prints
+the PR text). It never merges. After the merge, `python3 board/upgrade.py --after-merge` checks the upgrade commit is
+on the base branch, runs `verify --against` the backup on the board as it was in that commit, and removes the worktree. The board-upgrade skill now uses it first and keeps the hand steps as the fallback.
+No schema change.
+
 ## Kit v66 — 2026-10-15
 
 Web board: **one Activity timeline in the card drawer** (Ollie, 15 Oct: "combine comments and history, GitHub combines
