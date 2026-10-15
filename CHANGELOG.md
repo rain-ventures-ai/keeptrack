@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v64 — 2026-10-15
+
+**Pending review** column: finished work that waits on a person's decision is no longer closed (Ollie, 15 Oct: a
+research card went to Done with nothing decided).
+- **keeptrack.py:** new `review ID --note "..." [--who LOGIN]`. Like `done` it needs a note, refuses open to-dos and
+  ends the claim with a run record; unlike `done` the card stays open in the **Pending review** column
+  (`pending-review`, after In progress; added the first time, so no migration) and the note is posted as a comment that
+  @mentions who decides (default: the first assignee). `--note -` reads stdin. New boards get the column.
+- **Web board:** the Today pulse shows a "pending review" count when the board has the column.
+- **CARDS.md:** new section "Done, Pending review or waiting". The board skill, README, routine prompt and AGENTS
+  template say when to use `review` instead of `done`.
+- No schema change.
+
 ## Kit v63 — 2026-10-15
 
 Web board: the lane's add bar loses the pencil button, which did the same as Add. **Add** now adds the card and opens it

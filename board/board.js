@@ -217,7 +217,7 @@ if (typeof window !== 'undefined') (() => {
       .then(yes => { if (!yes) return; try { applyCode('kbcfg1.' + m[1]); location.reload(); } catch (e) { toast('Could not import the settings link: ' + e.message, true); } })); })();
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
-    columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }],
+    columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'pending-review', name: 'Pending review' }, { id: 'done', name: 'Done' }],
     people: [], agents: ['claude', 'codex'], clients: ['General'], labels: [], tasks: [], contacts: [], projects: [], client_info: {}
   });
   // DEFAULT is also the compatibility shape used while reading legacy boards. New boards start on the current
@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 63;
+  const PAGE_KIT = 64;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -6038,6 +6038,7 @@ if (typeof window !== 'undefined') (() => {
     const active = open.filter(t => activeClaim(t) && claimState(t.claim) === 'running'), attention = open.filter(needsAttention), doing = open.filter(t => t.column === 'in-progress'), doneToday = state.tasks.filter(t => { const c = completionOf(t); return c && String(c.at || '').slice(0, 10) === today; });
     const grid = el('div', 'kwwmetrics'), metric = (value, label, tone) => { const x = el('div', 'kwwmetric' + (tone ? ' ' + tone : '')); x.append(el('strong', null, String(value)), el('span', null, label)); return x; };
     grid.append(metric(doing.length, 'in progress'), metric(active.length, 'agent runs', active.length ? 'active' : ''), metric(attention.length, 'need attention', attention.length ? 'warn' : ''), metric(doneToday.length, 'done today', doneToday.length ? 'good' : ''));
+    if (state.columns.some(c => c.id === 'pending-review')) { const n = open.filter(t => t.column === 'pending-review').length; grid.append(metric(n, 'pending review', n ? 'warn' : '')); grid.classList.add('five'); }   // kit v64: work done, a person decides
     box.append(grid);
     if (active.length) { const t = active.sort((a, b) => numOf(a) - numOf(b))[0], b = el('button', 'kwwactive', `${agentLabel(t.claim)} · #${t.num} ${t.title}`); b.type = 'button'; b.onclick = () => openCard(t.id, 'comments'); box.append(b); }
     return box;

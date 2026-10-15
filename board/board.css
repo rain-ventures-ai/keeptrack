@@ -1200,6 +1200,7 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 .kwwweather > .hint { font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
 .kwwweatherdetail > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kwwmetrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
+.kwwmetrics.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .kwwmetric { min-width: 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--panel); text-align: center; }
 .kwwmetric strong, .kwwmetric span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kwwmetric strong { font-size: var(--fs-lg); } .kwwmetric span { color: var(--muted); font-size: var(--fs-xs); }
@@ -1207,7 +1208,7 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 .kwwactive { width: 100%; margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3); overflow: hidden; border: 0; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent); box-shadow: none; text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
 .kwwproblem { display: flex; align-items: center; gap: var(--sp-3); margin: 0 0 var(--sp-4); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--warn); border-radius: var(--r-md); color: var(--warn); font-size: var(--fs-sm); }
 .kwwproblem svg { width: 17px; height: 17px; flex: 0 0 auto; }
-@media (max-width: 760px) { .kbwidgets { grid-template-columns: minmax(0, 1fr); } .kwwtasks { grid-column: auto; } .kwwmetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .kbwidgets { grid-template-columns: minmax(0, 1fr); } .kwwtasks { grid-column: auto; } .kwwmetrics, .kwwmetrics.five { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 #dock { display: none; }
 
 /* Dock: a one-row header (board, clients, attention, filters, bell) and a floating tab bar at the bottom with
