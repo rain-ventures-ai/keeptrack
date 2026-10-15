@@ -74,7 +74,9 @@ This JSON format is not compatible with back-office agent-packs' YAML format.
 | proposals | Review Inbox; human acceptance remains separate |
 
 Retiring a built-in is an explicit release step: disable affected installs first. kit-update never removes registers
-or seen logs. The web Automations screen, Relay scheduler hook-up, usage and direct writes are outside v1.
+or seen logs. The web board shows packs and installs read-only in Settings → Agents → Automations (deep link
+`#settings=automations`), with the command for each next step to copy; it never installs or enables. Relay scheduler
+hook-up, usage and direct writes are outside v1.
 
 Tick supplies each item’s `action_key`: `auto:<slug>:` + sha256 of compact JSON `[key, rev]` (list order preserved). Copy it unchanged for proposals and retries. Mixed ticks exit 0 with work; report every payload `problems` entry. Invalid/missing packs remain visible in list. Undelivered reservations finish failed with code `undelivered`; owners can finish failed even after pack loss.
 
