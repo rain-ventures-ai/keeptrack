@@ -239,7 +239,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 68;
+  const PAGE_KIT = 69;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -572,11 +572,12 @@ if (typeof window !== 'undefined') (() => {
     }
     return out;
   }
-  async function loadWidgets(c) {
-    if (HOSTED) return;
+  async function loadWidgets(c, stale = () => false) {   // optional layouts must not overwrite a newer load
+    if (HOSTED) return false;
+    if (stale()) return false;
     if (!c.repo || !widgetsEnabled(c)) { const changed = widgets.length > 0 || !!widgetMeta.problem; widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; return changed; }
     const key = boardStoreId(c), same = widgetMeta.key === key, path = widgetPath(c);
-    const current = () => boardStoreId() === key && widgetsEnabled(c);
+    const current = () => !stale() && boardStoreId() === key && widgetsEnabled(c);
     const url = `${c.api}/repos/${c.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(c.branch)}`;
     try {
       const r = await fetch(url, { cache: 'no-store', signal: ghSignal('GET'), headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(same && widgetMeta.etag ? { 'If-None-Match': widgetMeta.etag } : {}) } });
@@ -647,6 +648,25 @@ if (typeof window !== 'undefined') (() => {
       const d = await r.json(); text = d.encoding === 'base64' ? b64d(d.content || '') : d.content || ''; idb.set(blobKey(item.sha), text); }
     return text;
   }
+  let graphqlBlobsDenied = false;   // a token without GraphQL access should not retry on every poll
+  async function graphqlBlobTexts(items, texts) {
+    const c = cfg(), [owner, name] = c.repo.split('/'), batches = [];
+    const valid = items.filter(x => /^[0-9a-f]{40}$/.test(x.sha));
+    for (let i = 0; i < valid.length; i += 40) batches.push(valid.slice(i, i + 40));
+    await mapLimit(batches, 4, async batch => {
+      if (graphqlBlobsDenied) return;
+      const query = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${batch.map((x, i) => `b${i}:object(oid:"${x.sha}"){... on Blob{text isBinary isTruncated}}`).join(' ')}}}`;
+      try {
+        const r = await fetch(`${c.api}/graphql`, { method: 'POST', cache: 'no-store', signal: ghSignal('POST'), body: JSON.stringify({ query, variables: { owner, name } }),
+          headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' } });
+        if (r.status === 401 || r.status === 403) graphqlBlobsDenied = true;
+        if (!r.ok) return;
+        const d = await r.json(); if (d.errors) return;
+        batch.forEach((x, i) => { const b = d.data?.repository?.[`b${i}`];
+          if (b && !b.isBinary && !b.isTruncated && typeof b.text === 'string') { texts.set(x, b.text); idb.set(blobKey(x.sha), b.text); } });
+      } catch {}   // REST still reads the blobs this batch could not supply
+    });
+  }
   function modelFromSplit(files) {
     const root = files.get('tasks.json'); if (!root) throw new Error(`cannot read ${cfg().path}`);
     const raw = clone(root.obj), tasks = [], contacts = [], projects = []; if (!isSplit(raw)) return raw;   // tasks.json is no longer split: it holds the whole board
@@ -670,7 +690,10 @@ if (typeof window !== 'undefined') (() => {
     const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
     const old = sameBoard ? splitMeta.files : new Map(), files = new Map(), changed = listed.filter(x => !old.has(x.path) || old.get(x.path).sha !== x.sha);
     old.forEach((v, k) => { const item = byPath.get(k); if (item && item.sha === v.sha) files.set(k, v); });
-    await mapLimit(changed, 8, async item => { const text = await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
+    const texts = new Map(), missing = [];
+    await mapLimit(changed, 8, async item => { const text = await idb.get(blobKey(item.sha)); if (typeof text === 'string') texts.set(item, text); else missing.push(item); });
+    if (missing.length > 8 && !graphqlBlobsDenied) await graphqlBlobTexts(missing, texts);
+    await mapLimit(changed, 8, async item => { const text = texts.has(item) ? texts.get(item) : await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
     const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true };
     return { unchanged: false, data: modelFromSplit(files), meta };
@@ -744,8 +767,9 @@ if (typeof window !== 'undefined') (() => {
       if (r && r.ok) { const { d: data, raw: raw0 } = await fileJson(r); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = r.headers.get('ETag'); let raw = raw0;
         if (isSplit(raw)) { ro = 'public'; applyRo(); setStatus('This board needs a token to read', 'err'); const b = $('board'); b.textContent = ''; b.append(el('div', 'empty', 'This board needs a token to read')); return false; }
         const isDemo = fileDemo = !!raw.demo_base; raw = demoShift(raw);
-        newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo(); await loadWidgets(c); if (stale()) return false;
-        setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true; }
+        newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; state = normalise(raw); lastSyncOk = true; ro = isDemo ? 'demo' : 'public'; applyRo(); if (isDemo) { await loadWidgets(c, stale); if (stale()) return false; }
+        setStatus((isDemo ? 'Demo board' : 'Public board') + ' (read-only) · synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
+        if (!isDemo) { const changed = await loadWidgets(c, stale); if (stale()) return false; if (changed) render(); } return true; }
       if (ro === 'public') { ro = ''; applyRo(); }
     }
     if (!c.token) { widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; setStatus('Not connected', 'err'); if ($('board').className !== 'v-welcome') render(); if (c.repo) noTokenBox(); else if ($('board').className !== 'v-welcome') renderWelcome(); return false; }
@@ -755,13 +779,14 @@ if (typeof window !== 'undefined') (() => {
       if (splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`) {
         const got = await splitSnapshot(false, false); if (stale()) return false;
         if (!got.unchanged && !isSplit(got.data)) { splitMeta = null; return load(quiet); }   // rolled back to v3, or a newer schema: read tasks.json the normal way
-        if (got.unchanged) { const cached = fromSnap; boardSize = [...got.meta.files.values()].reduce((n, x) => n + (x.size || 0), 0); sizeBar(); splitMeta = got.meta; lastSyncOk = true; fromSnap = false; setKitRo(state); initSeen(); metaSave(c); if (cached) { checkKit(); checkRelayKit(); checkPublic(); render(); setTimeout(restoreBoardContext, 30); } const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
+        if (got.unchanged) { const cached = fromSnap; boardSize = [...got.meta.files.values()].reduce((n, x) => n + (x.size || 0), 0); sizeBar(); splitMeta = got.meta; lastSyncOk = true; fromSnap = false; setKitRo(state); initSeen(); metaSave(c); setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (cached) { checkKit(); checkRelayKit(); checkPublic(); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30); } const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
         const prev = lastSyncOk ? state : null; splitMeta = got.meta; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); setKitRo(got.data); state = normalise(got.data);
-        if (prev) alertChanges(prev, state); if (fromSnap) { checkKit(); checkRelayKit(); checkPublic(); } lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
+        if (prev) alertChanges(prev, state); if (fromSnap) { checkKit(); checkRelayKit(); checkPublic(); } lastSyncOk = true; fromSnap = false; initSeen(); snapSave(c, got.data); sizeBar(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
+        const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true;
       }
       const res = first || await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
-      if (res.status === 304) { const widgetChanged = await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); if (widgetChanged) render(); return true; }
+      if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
       if (res.status === 404) { await diagnose404(); return false; }
       if (res.status === 401 || res.status === 403) { lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
       if (!res.ok) { lastProblem = `Loading the board: GitHub error ${res.status}`; setStatus(`GitHub error ${res.status}`, 'err'); return false; }
@@ -772,8 +797,10 @@ if (typeof window !== 'undefined') (() => {
       if (isSplit(raw)) { const got = await splitSnapshot(true); if (stale()) return false; splitMeta = got.meta; raw = got.data; boardSize = [...splitMeta.files.values()].reduce((n, x) => n + (x.size || 0), 0); }
       else splitMeta = null;
       newerSchema = Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA ? raw.version : 0; setKitRo(raw); const prev = lastSyncOk ? state : null; state = normalise(raw); if (prev) alertChanges(prev, state); checkKit(); checkRelayKit(); checkPublic(); lastSyncOk = true; initSeen();
-      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); await loadWidgets(c); if (stale()) return false; setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(restoreBoardContext, 30); return true;
-    } catch (e) { console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
+      fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); if (fileDemo) { await loadWidgets(c, stale); if (stale()) return false; }   // demo files keep their loading order
+      setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
+      if (!fileDemo) { const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); } return true;
+    } catch (e) { if (stale()) return false; console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
@@ -4391,8 +4418,10 @@ if (typeof window !== 'undefined') (() => {
       if (!current()) return;
       const matches = report => report && typeof report === 'object' && !Array.isArray(report) &&
         (!report.board_repo || String(report.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!report.branch || report.branch === c.branch) && (!report.board_path || report.board_path === c.path);
-      const scoped = reports.filter(matches); box.textContent = scoped.length ? '' : 'No routines registered for this board context yet.';
-      if (scoped.length < reports.length) box.append(el('p', 'hint', 'Registrations for other board contexts are not shown.'));
+      const autos = reports.filter(r => r && typeof r === 'object' && r.automation && typeof r.automation === 'object').length;
+      const scoped = reports.filter(r => matches(r) && !(r.automation && typeof r.automation === 'object')); box.textContent = scoped.length ? '' : 'No routines registered for this board context yet.';
+      if (scoped.length < reports.length - autos) box.append(el('p', 'hint', 'Registrations for other board contexts are not shown.'));
+      if (autos) box.append(el('p', 'hint', 'Automations are listed in their own section below.'));
       const friendlyTime = value => { const d = new Date(value); return value && Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Not reported'; };
       scoped.forEach(report => {
         const item = el('section', 'routine-card'), last = report.last_run, head = el('div', 'routine-card__head');
@@ -4430,6 +4459,100 @@ if (typeof window !== 'undefined') (() => {
     } catch (err) { if (current()) box.textContent = err.message || 'Routine reports could not be loaded.'; }
   }
   $('routineRefresh').onclick = renderRoutineRegister;
+  // ---- Settings → Agents → Automations: read-only list of the automation packs in this repo (built-in board/automations/ and
+  // own automations/) and their installs in automation/routines/auto-<slug>-<owner>.json. The browser never installs or turns
+  // an automation on: the owner approves the pack's digest from a clone, so each step here is a command to copy (AUTOMATIONS.md).
+  const AUTO_NEEDS = { 'board.read': 'this board', 'files.read': 'a folder on your computer', 'gmail.read': 'Gmail (read only)', 'drive.read': 'Google Drive (read only)', 'github.read': 'GitHub (read only)', 'calendar.read': 'your calendar (read only)' };
+  const AUTO_EVERY = { '15m': 'every 15 minutes', '30m': 'every 30 minutes', '1h': 'every hour', '6h': 'every 6 hours', '1d': 'once a day' };
+  const AUTO_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+  const own = (map, key) => typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined;   // repo data names keys: never reach the prototype
+  let autoLoad = 0;
+  async function renderAutomations() {
+    const c = cfg(), generation = ++autoLoad, box = $('autoList');
+    box.textContent = 'Loading automations…';
+    if (DEMO || !c.repo) { box.textContent = 'Connect a board to see its automations.'; return; }
+    const current = () => generation === autoLoad && cfg().repo === c.repo && cfg().branch === c.branch;
+    const ref = `?ref=${encodeURIComponent(c.branch)}`, enc = p => p.split('/').map(encodeURIComponent).join('/');
+    const readJson = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (!r.ok) throw new Error(String(r.status)); return JSON.parse(b64d((await r.json()).content)); };
+    const listDir = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (r.status === 404) return []; if (!r.ok) throw new Error('Cannot read the automation packs. Check repository access.'); const d = await r.json(); return Array.isArray(d) ? d : []; };
+    try {
+      const [kit, own, regs] = await Promise.all([listDir('board/automations'), listDir('automations'), listDir('automation/routines')]);
+      const packs = await Promise.all([...kit.map(x => ['kit', x]), ...own.map(x => ['own', x])].filter(([, x]) => x.type === 'dir' && AUTO_SLUG.test(x.name)).map(async ([source, x]) => {
+        const folder = (source === 'kit' ? 'board/automations/' : 'automations/') + x.name;
+        try { const m = await readJson(folder + '/manifest.json'); return { source, folder, slug: x.name, m: m && typeof m === 'object' && !Array.isArray(m) ? m : null }; }
+        catch { return { source, folder, slug: x.name, m: null }; }
+      }));
+      const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readJson('automation/routines/' + x.name).catch(() => null))))
+        .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object' && AUTO_SLUG.test(String(r.automation.slug || '')));
+      if (!current()) return;
+      box.textContent = '';
+      if (!packs.length) { box.append(el('p', 'hint', 'No automation packs in this repo yet. Upgrade the board kit to get the built-in ones, or make your own below.')); return; }
+      const login = (c.me || '').replace(/^@/, '').toLowerCase(), me = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) ? login : '', seen = {};   // only a valid login goes into a copied command
+      packs.forEach(p => { seen[p.slug] = (seen[p.slug] || 0) + 1; });
+      const here = installs.filter(r => r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!r.branch || r.branch === c.branch) && (!r.board_path || r.board_path === c.path));
+      packs.forEach(p => box.append(autoCard(p, here.filter(r => r.automation.slug === p.slug), me, seen[p.slug] > 1, c)));
+      const orphans = here.filter(r => !packs.some(p => p.slug === r.automation.slug));   // installed, but its pack is gone: still show it, so it can be turned off
+      [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => box.append(autoCard({ source: 'missing', folder: '', slug, m: null }, orphans.filter(r => r.automation.slug === slug), me, false, c)));
+      uiBtns(box);
+    } catch (err) { if (current()) box.textContent = err.message || 'Automations could not be loaded.'; }
+  }
+  function autoCard(p, installs, me, clash, c) {
+    const m = p.m || {}, item = el('section', 'routine-card auto-card'), head = el('div', 'routine-card__head');
+    const str = (v, max = 200) => typeof v === 'string' ? v.slice(0, max) : '';
+    const network = !!(m.check && m.check.network), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object') : [];
+    const mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
+    const states = { unverified: ['Needs setup', 'warn'], paused: ['Ready, off', 'neutral'], active: ['On', 'ok'] };
+    const [label, tone] = p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
+    head.append(el('h4', null, str(m.name, 80) || p.slug), el('span', `ui-pill ui-pill--${tone}`, label)); item.append(head);
+    item.append(el('p', 'routine-card__scope', `${p.source === 'kit' ? 'Built-in' : p.source === 'own' ? 'Your own pack' : 'Installed, but its pack is gone'} · ${p.slug}`));
+    if (p.source === 'missing') item.append(el('p', 'hint', 'This install has no pack in the repo any more. Turn it off or uninstall it.'));
+    else if (!p.m) { item.append(el('p', 'hint', 'Its manifest.json could not be read. Run the validate command below in a clone to see why.')); }
+    else {
+      if (str(m.summary)) item.append(el('p', null, str(m.summary)));
+      const uses = needs.map(n => own(AUTO_NEEDS, n.id) || str(n.id, 40)).filter(Boolean);
+      item.append(el('p', 'hint', `Reads ${uses.length ? uses.join(', ') : 'nothing outside the board'} · checks ${own(AUTO_EVERY, (mine && mine.automation.every) || m.every) || 'on its schedule'}${network ? ' · uses the network' : ''} · writes proposals to your Review Inbox only`));
+      if (!m.check) item.append(el('p', 'hint', 'It has no cheap check, so an agent runs each time it is due.'));
+    }
+    if (clash) item.append(el('p', 'hint', 'A built-in pack and your own pack share this name. Rename your own pack: automation commands refuse to run until you do.'));
+    const others = installs.filter(r => r !== mine);
+    if (others.length) item.append(el('p', 'hint', 'Also installed by ' + others.map(r => '@' + String(r.owner || '?').replace(/^@/, '')).join(', ') + '.'));
+    if (mine) {
+      const last = mine.last_run, runs = { success: 'Succeeded', partial: 'Partly done', failed: 'Failed', blocked: 'Blocked' };
+      const when = v => { const d = new Date(v); return v && Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'never'; };
+      item.append(el('p', 'routine-card__result', last && typeof last === 'object' ? `Last run: ${own(runs, last.status) || 'status unknown'}${last.summary ? ' — ' + str(last.summary) : ''}` : 'No run reported yet.'));
+      item.append(el('p', 'hint', `Last success: ${when(mine.last_successful_run_at)} (your local time)`));
+      if (mine.current_run) item.append(el('p', 'hint', `A run started ${when(mine.current_run.started_at)} and has not finished. If no agent is working on it, it has stopped; check the runner.`));
+      const setup = mine.automation.setup;
+      if (mine.status === 'unverified' && setup && Array.isArray(setup.notes) && setup.notes.length) {
+        const why = { 'probe-failed': 'the local check of its access failed', 'probe-missing': 'there is no local check for its access', 'route-missing': 'this runtime cannot reach what it needs', 'confirmation-needed': 'an agent must confirm its access' };
+        item.append(el('p', 'hint', 'Setup is blocked: ' + [...new Set(setup.notes.map(n => own(why, n) || 'see the setup steps'))].join('; ') + '.'));
+      }
+    }
+    const cmd = 'python3 board/keeptrack.py automation ', who = me ? ' --owner ' + me : '', steps = [];
+    if (p.source === 'missing') { if (mine && mine.status !== 'retired') steps.push(['Uninstall it', cmd + 'uninstall ' + p.slug + who]); }
+    else if (!p.m) steps.push(['Check the pack', cmd + 'validate ' + p.folder]);
+    else if (!mine) {
+      const cfgs = m.config && typeof m.config === 'object' ? Object.entries(m.config).filter(([k, v]) => v && v.required && !('default' in v) && /^[a-z0-9_]+$/.test(k)) : [];
+      if (!network && !cfgs.length) steps.push(['Try it first (changes nothing)', cmd + 'dry-run ' + p.slug + who]);
+      steps.push(['Install it (it stays off)', cmd + 'install ' + p.slug + who + (network ? ' --allow-network' : '') + cfgs.map(([k]) => ` --set '${k}=REPLACE-WITH-${k}'`).join('')]);
+      steps.push(['Then check its access', cmd + 'setup ' + p.slug + who + ' --runtime local']);
+    } else if (mine.status === 'unverified') steps.push(['Check its access', cmd + 'setup ' + p.slug + who + ' --runtime local']);
+    else if (mine.status === 'paused') { steps.push(['Turn it on', cmd + 'enable ' + p.slug + who]); steps.push(['Try it first (changes nothing)', cmd + 'dry-run ' + p.slug + who]); }
+    else if (mine.status === 'active') steps.push(['Turn it off', cmd + 'disable ' + p.slug + who]);
+    const row = el('div', 'sbtns');
+    steps.forEach(([text, line]) => { const b = elI('button', 'small', 'clipboard-copy', text); b.type = 'button'; b.title = line;
+      b.onclick = () => copyText(line, /REPLACE-WITH-/.test(line) ? 'Command copied. Replace each REPLACE-WITH- value, then run it in a clone of this board repo.' : 'Command copied. Run it in a clone of this board repo.'); row.append(b); });
+    if (p.m) { const ask = elI('button', 'small', 'bot', 'Copy prompt for my assistant'); ask.type = 'button';
+      ask.onclick = () => copyText([`Help me ${mine ? (mine.status === 'active' ? 'check' : 'finish setting up') : 'install and set up'} the "${p.slug}" Keeptrack automation on my board ${c.repo}${me ? ' for @' + me : ''}.`,
+        `Read ${p.folder}/SETUP.md and board/AUTOMATIONS.md in the board repo first, and use python3 board/keeptrack.py automation commands only.`,
+        'Run a dry run before turning it on. It must stay proposals-only. Never put tokens, account addresses or source text in the repo, and ask me before you enable it.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
+      row.append(ask); }
+    item.append(row);
+    if (p.m) { const a = el('a', null, 'Setup steps (SETUP.md) ↗'); a.href = `https://github.com/${c.repo.split('/').map(encodeURIComponent).join('/')}/blob/${encodeURIComponent(c.branch)}/${p.folder}/SETUP.md`; a.target = '_blank'; a.rel = 'noopener noreferrer'; item.append(a); }
+    return item;
+  }
+  $('autoRefresh').onclick = renderAutomations;
+  $('autoCreate').onclick = () => copyText(`Help me make my own Keeptrack automation for my board ${cfg().repo || '(ask me)'}. Use the keeptrack-automation-create skill. Ask me what it should do, from which source and how often, then build, validate, test and dry-run the pack. Install it switched off and do not enable it until I say so.`, 'Prompt copied. Paste it into your board-aware assistant.');
   async function tokenRepos(c = cfg()) { try { const r = await ghGet('/user/repos?per_page=100&sort=updated', null, c); return r.ok ? (await r.json()).map(x => x.full_name) : []; } catch { return []; } }
   async function nearRepos(repo, c = cfg()) {   // repos this token can see, closest names first (same owner, then shared words)
     if (!c.token) return []; const all = await tokenRepos(c), [o, n] = String(repo).toLowerCase().split('/'), words = String(n || '').split(/[-_.]/).filter(Boolean);
@@ -4574,7 +4697,7 @@ if (typeof window !== 'undefined') (() => {
     claude: ['agents', 'agClaude'], codex: ['agents', 'agLocal'], chat: ['agents', 'agLocal'], email: ['agents', 'agEmail'] };
   // Every concrete settings section is a destination, including plugin/routine subsections.
   SET_TABS.forEach(([tab]) => $('panel' + cap(tab)).querySelectorAll('[data-sec][id]').forEach(sec => { SET_LINKS[sec.id] = [tab, sec.id]; }));
-  SET_LINKS.routines = ['agents', 'agRegister']; SET_LINKS['routine-setup'] = ['agents', 'agRoutineSetup'];
+  SET_LINKS.routines = ['agents', 'agRegister']; SET_LINKS.automations = ['agents', 'agAutomations']; SET_LINKS['routine-setup'] = ['agents', 'agRoutineSetup'];
   const setTabs = ui.tabs({ items: SET_TABS.map(([value, label]) => ({ value, label })), value: 'prefs', style: 'underline', label: 'Settings sections', onChange: v => setPanel(v) });
   setTabs.classList.add('stabs'); setTabs.querySelectorAll('.ui-tab').forEach((b, i) => { const n = cap(b.dataset.value), short = SET_TABS[i][2]; b.id = 'tab' + n; b.setAttribute('aria-controls', 'panel' + n);
     if (short) { const l = b.querySelector('.ui-tab__label'); l.textContent = ''; l.append(el('span', 'tl-long', SET_TABS[i][1]), el('span', 'tl-short', short)); } });   // phones: the short name, so all four fit
@@ -4592,7 +4715,7 @@ if (typeof window !== 'undefined') (() => {
     if (tab === 'conn') { renderBoards(); showEdit(!!cfg().repo && !cfg().token && !DEMO && !SETUP); autoCheck(); }   // ?setup: never open the old board's form
     if (tab === 'agents') { $('sClaudeUrl').value = LS.get('kb_claude_url'); $('sClaudeTok').value = LS.get('kb_claude_token'); $('sCronKey').value = LS.get('kb_cron_key');
       const mine = myAgents(); $('sUseClaude').checked = mine.includes('claude'); $('sUseCodex').checked = mine.includes('codex'); $('sUseEmail').checked = !!LS.get('kb_email_sync'); showAgentBoxes(); cwOpen = 0; cwRender(); renderTools();
-      renderRoutineRegister(); $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
+      renderRoutineRegister(); renderAutomations(); $('cwCronCk').textContent = ''; if (claudeCfg().cron && !cronOk()) cronTest(); else if (cronOk()) ckRow($('cwCronCk'), true, 'The key works'); }
   }
   function settingsTab(name, over) {   // a deep link: an old tab name, a tab, or a section (see SET_LINKS)
     const [tab, sec] = SET_LINKS[name] || [SET_TABS.some(t => t[0] === name) ? name : 'prefs'];

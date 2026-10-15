@@ -19,6 +19,17 @@ class ClaudePlugin(unittest.TestCase):
             self.assertRegex(v or "", rf"^0\.{kit}\.\d+$", f"{d}/plugin.json version must be 0.{kit}.N")
         self.assertEqual(len(set(ver.values())), 1, f"plugin versions differ: {ver}")
 
+    def test_automation_create_skill_is_in_plugin_and_board_mapping(self):
+        from pathlib import Path
+        kit = Path(KIT)
+        manifest = json.loads((kit / "manifest.json").read_text())
+        skill = kit / "skills/keeptrack-automation-create"
+        for path in skill.rglob("*"):
+            if not path.is_file() or "__pycache__" in path.parts: continue
+            relative = path.relative_to(skill).as_posix()
+            self.assertEqual(manifest["files"][".claude/skills/keeptrack-automation-create/" + relative], path.relative_to(kit).as_posix())
+        self.assertIn("name: keeptrack-automation-create", (skill / "SKILL.md").read_text())
+
     def test_hooks_run_a_script_inside_the_plugin(self):
         hooks = json.load(open(os.path.join(KIT, "hooks", "hooks.json")))["hooks"]
         for groups in hooks.values():

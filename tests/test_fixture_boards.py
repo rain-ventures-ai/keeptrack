@@ -147,6 +147,24 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, code, out.getvalue())
         self.assertEqual(expect, board_counts(kt.load_board()))
 
+    def test_v69_automations_preserve_board_and_owned_runtime_files(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit69", "fixture.json"))
+        board_dir, expect = self.use_fixture("v4_kit69", meta)
+        before = kt.load_board()
+        paths = {"automations/own-pack/manifest.json": b'{"owned": true}',
+                 "automation/routines/auto-existing-owner.json": b'{"version": 1}',
+                 "automation/seen/auto-existing-owner.json": b'{"keys": {"key": "rev"}}'}
+        for rel, raw in paths.items():
+            path = os.path.join(self.temp.name, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f: f.write(raw)
+        with contextlib.redirect_stdout(io.StringIO()): kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(expect, board_counts(kt.load_board()))
+        self.assertEqual(0, kt.doctor_board(False)[2])
+        for rel, raw in paths.items():
+            with open(os.path.join(self.temp.name, rel), "rb") as f: self.assertEqual(raw, f.read())
+
     def test_v68_links_preserve_frozen_board_on_upgrade(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit68", "fixture.json"))
         board_dir, expect = self.use_fixture("v4_kit68", meta)
