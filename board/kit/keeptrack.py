@@ -204,7 +204,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 61  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 62  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2852,6 +2852,21 @@ def cmd_todo_move(a):
         _MUT["after"].append(lambda dd: print(f"added #{num_of(dd, oid)} ({oid}): follow-up of #{num}; to-do {n} moved and ticked, "
                                               "both cards linked and commented" + link_note(num_of(dd, oid))))
     mutate(fn, f"Move to-do: {a.id} {a.n}")
+
+
+def read_stdin_args(a):
+    """`-` as a comment's text, --details or --add-details reads the text from stdin (kit v62), so an agent can write
+    multi-line Markdown (a heading, a list of options, a table) without shell quoting: `comment '#N' - <<'EOF'`."""
+    if a.f not in (cmd_comment, cmd_add, cmd_task_set):
+        return
+    keys = [k for k in ("text", "details", "add_details") if getattr(a, k, None) == "-"]
+    if len(keys) > 1:
+        sys.exit("only one of the text, --details and --add-details can be '-' (stdin)")
+    if keys:
+        value = sys.stdin.read().strip("\n")
+        if not value.strip():
+            sys.exit(f"{keys[0].replace('_', '-')}: '-' reads stdin, and stdin was empty")
+        setattr(a, keys[0], value)
 
 
 def cmd_comment(a):
@@ -7796,11 +7811,11 @@ def main():
     s.add_argument("--remove", action="store_true"); s.add_argument("--note"); s.set_defaults(f=cmd_assign)
     s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_link)
     s = sub.add_parser("history"); s.add_argument("id"); s.set_defaults(f=cmd_history)
-    s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_comment)
+    s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
     s = sub.add_parser("add"); s.add_argument("title"); s.add_argument("--column"); s.add_argument("--client"); s.add_argument("--project")
     s.add_argument("--priority", default="medium", choices=["high", "medium", "low"]); s.add_argument("--due")
-    s.add_argument("--assign", action="append"); s.add_argument("--label", action="append"); s.add_argument("--details")
+    s.add_argument("--assign", action="append"); s.add_argument("--label", action="append"); s.add_argument("--details", help="Markdown; - reads it from stdin")
     s.add_argument("--todo", action="append", help="initial checklist item (repeatable)")
     s.add_argument("--no-check", action="store_true", help="do not mark close cards as possible duplicates")
     s.add_argument("--after", action="append", metavar="REF", help="runs after this card, '#62' or an id (repeatable); a hint and a gate, never a trigger")
@@ -7886,8 +7901,8 @@ def main():
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
     s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project, contact or after")
-    s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details")
-    s.add_argument("--add-details", dest="add_details", help="add text below the current details (a blank line between); never replaces them")
+    s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details", help="replace the details (Markdown); - reads them from stdin")
+    s.add_argument("--add-details", dest="add_details", help="add text below the current details (a blank line between); never replaces them; - reads stdin")
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
@@ -7984,6 +7999,7 @@ def main():
             sub._choices_actions.append(sub._ChoicesPseudoAction(name, (), COMMAND_HELP[name]))
     a = p.parse_args()
     FILE = a.file
+    read_stdin_args(a)
     if UNTRUSTED_CONFIG and not getattr(a, "hook", False) and a.f is not cmd_use:
         print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
               "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",

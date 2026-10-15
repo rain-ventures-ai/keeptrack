@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## Kit v62 — 2026-10-15
+
+Readable cards: Markdown in descriptions and comments, and comments that recommend a way forward.
+- **Web board:** card descriptions and comments (also CRM touches) show as Markdown: `##` headings, `-` and `1.`
+  lists (nested by indent), `- [ ]` / `- [x]` tick boxes, `|` tables, `>` quotes, fenced code, `---`, `**bold**`,
+  `*italic*`, `~~strike~~` and `` `code` ``, with the existing links, `@mentions` and `#12`. It is a small built-in
+  renderer that builds DOM nodes, never HTML, so no new library and no change to the page's security policy.
+  **Raw** next to **Edit** shows the saved text (one choice per browser, `kb_md_raw`, for descriptions and comments).
+  The description editor has **Write** and **Preview** tabs and a small toolbar (bold, italic, heading, lists, tick
+  box, quote, code, link; Ctrl/Cmd+B and +I). Card faces and lists show the words without the marks.
+- **keeptrack.py:** `-` as `comment`'s text, `add --details`, `task-set --details` or `task-set --add-details` reads
+  the text from stdin, so an agent can write multi-line Markdown with no shell quoting.
+- **CARDS.md:** new sections "Format the text (Markdown)" and "Comments that need a person: always recommend": what
+  waits and why, 2-4 options each with a score out of 10, the recommendation and its reason, and the next step. The
+  board skill, plugin skill, routine prompt, AGENTS template and the "Copy for Codex" brief point to it.
+- No schema change. Older pages show the same text as plain text.
+
 ## Kit v61 — 2026-10-15
 
 Web board: a new card uses the card drawer, the same form as every other card. The v59 **New card** form is gone. The

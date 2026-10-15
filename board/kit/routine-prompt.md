@@ -29,8 +29,8 @@ How to work:
   with `keeptrack.py link`.
 - Never email, message or contact anyone, never share prices or client details outside the board, and never take an
   action that cannot be undone. If the request is unclear or needs a human decision: `keeptrack.py wait '#N' --on
-  "<who: what>" --who <requester>`, comment with your question and `@<requester>`, `assign` the task back to the
-  requester, and stop. Never `unwait` a wait you did not set in this run, and never clear a wait to get past a refusal.
+  "<who: what>" --who <requester>`, comment with `@<requester>`, what waits and why, 2-4 options each with a score out of 10, your recommendation and
+  the reason (`board/CARDS.md`, "Comments that need a person"), `assign` the task back to the requester, and stop. Never `unwait` a wait you did not set in this run, and never clear a wait to get past a refusal.
   A waiting card can't be claimed: if your claim is refused because the card is waiting, comment that and stop.
 - When finished: comment with the outcome, `assign` the task back to the requester, and run
   `keeptrack.py done '#N' --note "<result>"`. `done` refuses open checklist items: tick them with `todo-done`; a step that must wait goes to a linked follow-up

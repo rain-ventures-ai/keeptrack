@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v62 (schema 4)
+Markdown in card details and comments, and comments that recommend. No data migration.
+- Run `kit-update` only. Check: `kit-check` says v62; open a card in the web board: the description shows **Raw** and
+  **Edit**, and the editor has **Write** and **Preview**.
+- Agents read the new `board/CARDS.md` sections "Format the text" and "Comments that need a person: always recommend".
+  If this repo has its own `AGENTS.md`, add the same two rules there (the kit's `templates/AGENTS.md` has the wording).
+
 ### v60 (schema 4)
 Backlog auto-research setting (off by default). No data migration.
 - Run `kit-update` only. Check: `kit-check` says v60; `keeptrack.py settings` shows `backlog_research: off`.

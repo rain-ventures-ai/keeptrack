@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 61;
+  const PAGE_KIT = 62;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -329,10 +329,10 @@ if (typeof window !== 'undefined') (() => {
 
   // [label](https://…) Markdown links show as the label (kit v56: agents write card numbers as [#12](card link));
   // a card link of this board opens the card here, like a plain #12
-  function linkify(parent, text) { // build DOM (no innerHTML): plain text plus safe http(s) links
+  function linkify(parent, text, leaf = decorate) { // build DOM (no innerHTML): plain text plus safe http(s) links
     String(text || '').split(/(\[[^\]\n]{1,200}\]\(https?:\/\/[^\s<>"()]+\))/g).forEach((chunk, j) => {
       const md = j % 2 === 1 && /^\[([^\]\n]+)\]\((.+)\)$/.exec(chunk), href = md && safeUrl(md[2]);
-      if (!href) { linkifyPlain(parent, chunk); return; }
+      if (!href) { linkifyPlain(parent, chunk, leaf); return; }
       const n = /^#(\d{1,5})$/.exec(md[1].trim()), t = n && state && state.tasks.find(x => x.num === Number(n[1])), mine = t && boardCardNum(href) === t.num;
       const a = el('a', mine ? 'mref' : null, md[1]); a.href = href;
       if (mine) { a.title = t.title; a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
@@ -345,10 +345,10 @@ if (typeof window !== 'undefined') (() => {
       if ((q.get('path') || 'board/tasks.json') !== (c.path || 'board/tasks.json') || (q.get('branch') && c.branch && q.get('branch') !== c.branch)) return null;
       return Number(m[1]); } catch { return null; }
   }
-  function linkifyPlain(parent, text) {
+  function linkifyPlain(parent, text, leaf = decorate) {
     String(text || '').split(/(https?:\/\/[^\s<>"')]+)/g).forEach((part, i) => {
       if (i % 2 === 1 && safeUrl(part)) { const a = el('a', null, part); a.href = safeUrl(part); a.target = '_blank'; a.rel = 'noopener noreferrer'; parent.append(a); }
-      else if (part) decorate(parent, part);
+      else if (part) leaf(parent, part);
     });
   }
   // @github highlights a known person or agent; #12 links to that task. Anything else stays plain text.
@@ -366,6 +366,88 @@ if (typeof window !== 'undefined') (() => {
     }
     if (last < text.length) parent.append(document.createTextNode(text.slice(last)));
   }
+
+  // Markdown for descriptions and comments (kit v62). A small, safe subset, built as DOM (never innerHTML): headings,
+  // paragraphs, - and 1. lists (nested by indent), - [ ] / - [x] items, > quotes, ``` code blocks, --- rules, | tables |,
+  // **bold**, *italic*, ~~strike~~, `code`, plus the links, @mentions and #12 of linkify. Anything else stays as text.
+  // The reader can switch to the raw text (kb_md_raw), which shows exactly what is saved.
+  const mdRaw = () => LS.get('kb_md_raw', '') === '1';
+  function richText(parent, text) {   // a description or comment body: Markdown, or the raw text when the reader chose that
+    parent.classList.toggle('md', !mdRaw());
+    if (mdRaw()) linkify(parent, text); else mdRender(parent, text);
+  }
+  function mdInline(parent, text) {   // `code` first (nothing inside it is changed), then emphasis, then links and mentions
+    String(text || '').split(/(`[^`\n]+`)/g).forEach((chunk, i) => {
+      if (i % 2 === 1) parent.append(el('code', null, chunk.slice(1, -1)));
+      else if (chunk) mdEmph(parent, chunk);
+    });
+  }
+  const MD_EMPH = /(\*\*(?=\S)[^\n]+?\*\*(?!\*)|__(?=\S)[^\n]+?__(?![\w_])|~~(?=\S)[^~\n]+?~~|(?<![\w*])\*(?=[^\s*])[^*\n]*?[^\s*]?\*(?![\w*])|(?<![\w_])_(?=[^\s_])[^_\n]*?_(?![\w_]))/g;
+  function mdEmph(parent, text) {
+    let last = 0; MD_EMPH.lastIndex = 0; const parts = [];
+    for (let m; (m = MD_EMPH.exec(text));) { parts.push([m.index, m[0]]); }
+    parts.forEach(([at, tok]) => {
+      if (at > last) linkify(parent, text.slice(last, at));
+      const two = /^(\*\*|__|~~)/.test(tok), inner = tok.slice(two ? 2 : 1, two ? -2 : -1);
+      const node = el(tok.startsWith('~~') ? 'del' : two ? 'strong' : 'em'); mdEmph(node, inner); parent.append(node); last = at + tok.length;
+    });
+    if (last < text.length) linkify(parent, text.slice(last));
+  }
+  const mdCells = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
+  function mdRender(parent, text) {
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n'); let para = null, lists = [], i = 0;
+    const endPara = () => { para = null; }, endLists = () => { lists = []; };
+    const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^\s*```/.test(line)) {   // fenced code: kept exactly, to the closing fence (or the end)
+        endPara(); endLists(); const body = []; i++;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) body.push(lines[i++]);
+        i++; const pre = el('pre', 'mdpre'); pre.append(el('code', null, body.join('\n'))); parent.append(pre); continue;
+      }
+      if (!line.trim()) { endPara(); if (!(lists.length && LIST.test(lines[i + 1] || ''))) endLists(); i++; continue; }
+      let m;
+      if ((m = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line))) {
+        endPara(); endLists(); const h = el('h' + Math.min(6, m[1].length + 2), 'mdh mdh' + m[1].length); mdInline(h, m[2]); parent.append(h); i++; continue;
+      }
+      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { endPara(); endLists(); parent.append(el('hr', 'mdhr')); i++; continue; }
+      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
+        endPara(); endLists(); const wrap = el('div', 'mdtable'), tb = el('table'), head = el('tr');
+        mdCells(line).forEach(c => { const th = el('th'); mdInline(th, c); head.append(th); });
+        const thead = el('thead'); thead.append(head); tb.append(thead); const tbody = el('tbody'); i += 2;
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { const tr = el('tr'); mdCells(lines[i]).forEach(c => { const td = el('td'); mdInline(td, c); tr.append(td); }); tbody.append(tr); i++; }
+        tb.append(tbody); wrap.append(tb); parent.append(wrap); continue;
+      }
+      if ((m = /^\s*>\s?(.*)$/.exec(line))) {
+        endPara(); endLists(); const q = []; while (i < lines.length && (m = /^\s*>\s?(.*)$/.exec(lines[i]))) { q.push(m[1]); i++; }
+        const bq = el('blockquote', 'mdquote'); mdRender(bq, q.join('\n')); parent.append(bq); continue;
+      }
+      if ((m = LIST.exec(line))) {
+        endPara(); const indent = m[1].replace(/\t/g, '    ').length, ordered = /\d/.test(m[2]);
+        while (lists.length && indent < lists[lists.length - 1].indent) lists.pop();
+        let top = lists[lists.length - 1];
+        if (!top || indent > top.indent || top.ordered !== ordered) {
+          if (top && indent <= top.indent) lists.pop();
+          const ls = el(ordered ? 'ol' : 'ul', 'mdlist'); if (ordered && parseInt(m[2], 10) !== 1) ls.start = parseInt(m[2], 10);
+          const host = lists.length && indent > lists[lists.length - 1].indent ? lists[lists.length - 1].el.lastElementChild : null;
+          (host || parent).append(ls); top = { el: ls, indent, ordered }; lists.push(top);
+        }
+        const li = el('li'), task = /^\[([ xX])\]\s+(.*)$/.exec(m[3]);
+        if (task) { li.classList.add('mdtask'); const cb = el('input'); cb.type = 'checkbox'; cb.disabled = true; cb.checked = task[1] !== ' '; li.append(cb, ' '); mdInline(li, task[2]); }
+        else mdInline(li, m[3]);
+        top.el.append(li); i++; continue;
+      }
+      if (lists.length && /^\s+\S/.test(line)) {   // an indented line under a list item continues it
+        const li = lists[lists.length - 1].el.lastElementChild; li.append(el('br')); mdInline(li, line.trim()); i++; continue;
+      }
+      endLists();
+      if (!para) { para = el('p', 'mdp'); parent.append(para); } else para.append(el('br'));
+      mdInline(para, line); i++;
+    }
+  }
+  // A one-line preview of Markdown (card faces, lists): the words without the marks
+  const mdPlain = s => String(s || '').replace(/^\s*```.*$/gm, '').replace(/^\s{0,3}([-*_])(\s*\1){2,}\s*$/gm, '').replace(/^\s{0,3}#{1,6}\s+/gm, '').replace(/^\s*([-*+]|\d{1,9}[.)])\s+(\[[ xX]\]\s+)?/gm, '').replace(/^\s*>\s?/gm, '')
+    .replace(/\[([^\]\n]+)\]\(https?:\/\/[^\s)]+\)/g, '$1').replace(/(\*\*|__|~~|`)(?=\S)([^\n]*?\S)\1/g, '$2').replace(/^\s*\|?\s*:?-{2,}[-|: ]*$/gm, '').replace(/\|/g, ' ');
 
   // Task numbers (#12): stable, human-friendly, never reused. Every writer (this page and keeptrack.py) runs the same deterministic rule:
   // unnumbered tasks get the next numbers in creation order, so concurrent writers converge instead of colliding.
@@ -1874,7 +1956,7 @@ if (typeof window !== 'undefined') (() => {
         '1. python3 board/keeptrack.py list --assignee $BOARD_USER --column todo --unclaimed   (find work; python3 board/keeptrack.py show <id> to read a card)',
         '2. python3 board/keeptrack.py claim <id> --note "starting: <one-line plan>"',
         '3. Heartbeat while working: python3 board/keeptrack.py heartbeat <id> --note "<what you are doing>" at each milestone and at least every 10 minutes. If the card has a to-do list, tick items off as you finish them (python3 board/keeptrack.py todo-done <id> <number>) and add new steps with todo-add.',
-        '4. Blocked or need a human: python3 board/keeptrack.py heartbeat <id> --status blocked --note "<what you need>" and tell the user.',
+        '4. Blocked or need a human: python3 board/keeptrack.py heartbeat <id> --status blocked --note "<what you need>" and tell the user. A comment that asks a person gives options, each with a score out of 10, your recommendation and why (board/CARDS.md).',
         '5. Finished: python3 board/keeptrack.py done <id> --note "<result and link>"   (or keeptrack.py release <id> --column todo).',
         '6. New work you discover: python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM-DD --client "<client>" --details "<text and URLs>"',
         'Never leave a task claimed without a recent heartbeat; update the card as you go, not at the end.');
@@ -2007,7 +2089,7 @@ if (typeof window !== 'undefined') (() => {
       row.dataset.cid = cmKey(cm);
       head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
       head.lastChild.title = cm.at; if (safeUrl(cm.session_url)) { const a = elI('a', 'cmsess', 'bot', 'Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
-      const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
+      const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); box.append(row);
     });
   }
   function cmKey(c) { return c.id || (c.at || '') + '|' + (c.by || ''); }   // a comment's key in the drawer and in @Mentions (older comments may have no id)
@@ -2207,7 +2289,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
-  const firstLine = t => (t.details || '').split('\n').find(x => x.trim()) || '';
+  const firstLine = t => mdPlain((t.details || '').split('\n').find(x => x.trim() && !/^\s*(```|\|?\s*:?-{2,}[-|: ]*$|([-*_])(\s*\3){2,}\s*$)/.test(x)) || '').trim();
   // The chips a task shows in every view (kanban card, list row, schedule row). always: also show an empty checklist/comments chip (cards).
   function chipTodo(t, always) {
     const tc = todoCount(t); if (!tc.all && !always) return null;
@@ -2584,7 +2666,7 @@ if (typeof window !== 'undefined') (() => {
       const head = el('span', 'mnhead'); head.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title)); if (fresh) head.append(el('span', 'newb', 'New'));
       head.append(el('span', 'ssub', cardSub(t)));
       r.append(head);
-      if ((t.details || '').trim()) r.append(el('span', 'mndesc', snippet(t.details, 160)));
+      if ((t.details || '').trim()) r.append(el('span', 'mndesc', snippet(mdPlain(t.details), 160)));
       const cm = el('span', 'mncm'), who = el('span', 'mnwho'), tm = el('time', null, ago2(c.at)); tm.title = c.at;
       who.append(avatar(String(c.by || '?').replace(/@.*/, '')), el('b', null, c.by || '?'), tm);
       cm.append(who, el('span', 'mnbody', snippet(c.text, 400))); r.append(cm);   // plain text: a link inside the row's button would be a button in a button
@@ -2786,7 +2868,7 @@ if (typeof window !== 'undefined') (() => {
     bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent');
     top.append(edit, bot); c.append(top);
     c.append(el('div', 't', t.title));
-    if (t.details) c.append(el('div', 'n', t.details));
+    if (t.details) c.append(el('div', 'n', mdPlain(t.details).replace(/\n{3,}/g, '\n\n').trim()));
     const tags = el('div', 'tags');
     [...labelTags(t), clientTag(t), projectTag(t)].forEach(x => x && tags.append(x));
     if (tags.childNodes.length) c.append(tags);
@@ -2917,7 +2999,7 @@ if (typeof window !== 'undefined') (() => {
       if (d.draft === live || d.draft === d.base) { clearDraft(t.id, key); continue; }
       fieldBase[key] = d.base; activeDraft[key] = true; const changed = live !== d.base; notices.push(changed ? `${key} draft recovered; GitHub also changed it` : `${key} draft recovered`);
       if (key === 'title') { $('cTitle').value = d.draft; autosize($('cTitle')); }
-      else { editingDesc = true; $('cDetails').value = d.draft; $('cDescView').hidden = true; $('cDescBtn').hidden = true; $('descEdit').hidden = false; autosize($('cDetails')); }
+      else { editingDesc = true; mdEditReset(); $('cDetails').value = d.draft; $('cDescView').hidden = true; $('cDescBtn').hidden = true; $('descEdit').hidden = false; autosize($('cDetails')); }
     }
     if (notices.length) { const sv = $('dSaved'); sv.textContent = notices.some(x => x.includes('GitHub')) ? 'Draft restored · GitHub changed too' : 'Draft restored'; sv.className = 'dsaved ' + (notices.some(x => x.includes('GitHub')) ? 'bad' : 'ok'); }
   }
@@ -2994,6 +3076,8 @@ if (typeof window !== 'undefined') (() => {
     $('cProps').append(props, after);
     // sections: Description, Checklist, Links, Contacts, Comments, History
     const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
+    const rawBtn = ui.button({ label: 'Raw', variant: 'ghost', size: 'sm', title: 'Show the saved text with no formatting (also for comments)' }); rawBtn.id = 'cRawBtn';
+    const descActs = el('span', 'descacts'); descActs.append(rawBtn, descBtn);
     const todos = el('div', 'dtodos'); todos.id = 'cTodos';
     const todoAdd = drawerAddRow('cTodoNew', { placeholder: 'Add a checklist item', ghostLabel: 'Add item', label: 'New checklist item', onAdd: v => { const id = editing; addTodo(id, v).then(() => { if (editing === id) renderDlgTodos(); }); } });
     const links = el('div', 'dlist'); links.id = 'cLinkList';
@@ -3005,7 +3089,7 @@ if (typeof window !== 'undefined') (() => {
     const hist = el('ol', 'hist'); hist.id = 'cHist';
     const rel = el('div', 'dlist'); rel.id = 'cRelList';
     const secs = [
-      drawerSection('cDescSec', { title: 'Description', action: descBtn, body: $('cDescParts') }),
+      drawerSection('cDescSec', { title: 'Description', action: descActs, body: $('cDescParts') }),
       drawerSection('cRelSec', { title: 'Related cards', count: '', body: rel }),
       drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
       drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint] }),
@@ -3021,11 +3105,11 @@ if (typeof window !== 'undefined') (() => {
   buildDrawer();
 
   function renderDescView(t) {
-    const v = $('cDescView'); v.textContent = ''; if (t.details) linkify(v, t.details); else v.append(el('span', 'ph', 'Add a more detailed description…'));
+    const v = $('cDescView'); v.textContent = ''; v.classList.remove('md'); if (t.details) richText(v, t.details); else v.append(el('span', 'ph', 'Add a more detailed description…'));
   }
   function startDesc() {
     const t = taskNow(); if (!t || editingDesc) return; editingDesc = true; fieldBase.details = t.details || '';
-    $('cDetails').value = fieldBase.details; $('cDescView').hidden = true; $('cDescBtn').hidden = true; $('descEdit').hidden = false; autosize($('cDetails')); const ta = $('cDetails'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    mdEditReset(); $('cDetails').value = fieldBase.details; $('cDescView').hidden = true; $('cDescBtn').hidden = true; $('descEdit').hidden = false; autosize($('cDetails')); const ta = $('cDetails'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
   }
   async function closeDesc(save) {
     if (!editingDesc) return; const t = taskNow(), v = $('cDetails').value, id = editing; editingDesc = false;
@@ -3039,11 +3123,42 @@ if (typeof window !== 'undefined') (() => {
     }
     { const now = taskNow(); if (now) renderDescView(now); }
   }
+  // Formatted or raw: one choice per browser, for descriptions and comments. The editor has Write and Preview tabs and a
+  // small toolbar that puts Markdown marks round the selection (the text stays plain Markdown, so agents and keeptrack.py read it).
+  function syncRawBtn() { const b = $('cRawBtn'), raw = mdRaw(); b.querySelector('.ui-btn__label').textContent = raw ? 'Formatted' : 'Raw';
+    b.title = raw ? 'Show descriptions and comments with their Markdown formatting' : 'Show the saved text with no formatting (also for comments)'; b.setAttribute('aria-pressed', String(raw)); }
+  $('cRawBtn').onclick = () => { LS.set('kb_md_raw', mdRaw() ? '' : '1'); syncRawBtn(); const t = taskNow(); if (t) { if (!editingDesc) renderDescView(t); cmSig = ''; renderComments(); } };
+  syncRawBtn();
+  function mdWrap(before, after = before, ph = 'text') {
+    const ta = $('cDetails'), a = ta.selectionStart, b = ta.selectionEnd, sel = ta.value.slice(a, b) || ph;
+    ta.setRangeText(before + sel + after, a, b, 'end'); ta.setSelectionRange(a + before.length, a + before.length + sel.length); ta.focus(); ta.dispatchEvent(new Event('input'));
+  }
+  function mdLines(prefix) {   // put a prefix at the start of every selected line ('1. ' counts up)
+    const ta = $('cDetails'), v = ta.value, a = v.lastIndexOf('\n', ta.selectionStart - 1) + 1, e = v.indexOf('\n', ta.selectionEnd), b = e < 0 ? v.length : e;
+    const out = v.slice(a, b).split('\n').map((l, i) => (prefix === '1. ' ? (i + 1) + '. ' : prefix) + l).join('\n');
+    ta.setRangeText(out, a, b, 'end'); ta.setSelectionRange(a, a + out.length); ta.focus(); ta.dispatchEvent(new Event('input'));
+  }
+  const MD_TOOLS = [['B', 'Bold', () => mdWrap('**')], ['I', 'Italic', () => mdWrap('*')], ['H', 'Heading', () => mdLines('## ')],
+    ['•', 'Bulleted list', () => mdLines('- ')], ['1.', 'Numbered list', () => mdLines('1. ')], ['☐', 'Checklist item', () => mdLines('- [ ] ')],
+    ['❝', 'Quote', () => mdLines('> ')], ['</>', 'Code', () => mdWrap('`')], ['Link', 'Link', () => mdWrap('[', '](https://)', 'label')]];
+  (function buildMdBar() {
+    const bar = $('descTools'), tabs = el('div', 'mdtabs'); tabs.setAttribute('role', 'tablist');
+    const tab = (id, label) => { const b = el('button', 'mdtab', label); b.type = 'button'; b.id = id; b.setAttribute('role', 'tab'); return b; };
+    const w = tab('descWrite', 'Write'), pv = tab('descPreview', 'Preview'); tabs.append(w, pv);
+    const tools = el('div', 'mdtools'); tools.id = 'descToolBtns';
+    MD_TOOLS.forEach(([txt, name, fn]) => { const b = el('button', 'mdtool', txt); b.type = 'button'; b.title = name; b.setAttribute('aria-label', name); b.onmousedown = e => e.preventDefault(); b.onclick = fn; tools.append(b); });
+    bar.append(tabs, tools);
+    const show = prev => { w.setAttribute('aria-selected', String(!prev)); pv.setAttribute('aria-selected', String(prev)); tools.hidden = prev; $('cDetails').hidden = prev; const v = $('descPrev'); v.hidden = !prev;
+      if (prev) { v.textContent = ''; const x = $('cDetails').value; if (x.trim()) mdRender(v, x); else v.append(el('span', 'ph', 'Nothing to preview')); } else $('cDetails').focus(); };
+    w.onclick = () => show(false); pv.onclick = () => show(true);
+  })();
+  function mdEditReset() { $('descPrev').hidden = true; $('cDetails').hidden = false; $('descToolBtns').hidden = false; $('descWrite').setAttribute('aria-selected', 'true'); $('descPreview').setAttribute('aria-selected', 'false'); }
   $('cDescBtn').onclick = startDesc; $('cDescView').addEventListener('dblclick', startDesc);
   $('cDescView').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); startDesc(); } });
   $('cDescSave').onclick = () => closeDesc(true); $('cDescCancel').onclick = () => closeDesc(false);
   $('cDetails').addEventListener('input', () => { autosize($('cDetails')); captureDraft('details', $('cDetails').value); });
-  $('cDetails').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); closeDesc(true); } });
+  $('cDetails').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); closeDesc(true); }
+    else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'i')) { e.preventDefault(); mdWrap(e.key === 'b' ? '**' : '*'); } });
 
   async function commitTitle() {
     if (titleSaving) return;
@@ -6236,7 +6351,7 @@ if (typeof window !== 'undefined') (() => {
         const s = ui.button({ label: 'Mark sent', variant: 'primary', size: 'sm', onClick: () => markSent(p.id, cm.id) });
         const cp = roKeep(ui.button({ label: 'Copy', icon: 'clipboard-copy', variant: 'ghost', size: 'sm', onClick: () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.') }));
         const acts = el('div', 'cmacts'); acts.append(s, cp); head.append(acts); }
-      const body = el('div', 'cmbody'); linkify(body, cm.text); row.append(head, body); box.append(row);
+      const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); box.append(row);
     });
   }
   async function markSent(pid, cmid) {

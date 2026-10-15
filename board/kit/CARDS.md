@@ -15,7 +15,8 @@ A good card passes all five. A bad card fails one or more.
    "SPEC-12", "C239") as the main words. You can put them later in the details.
 2. **The details say what, why and what "done" means.** One short paragraph: the current state, why it matters, and
    the decision or result that finishes the card. Write full sentences. Explain each term that a newcomer does not
-   know, or link to a page that explains it.
+   know, or link to a page that explains it. When the details are longer than about three sentences, use Markdown
+   (see "Format the text" below) so a reader can scan them.
 3. **Each to-do is one step that a person can do and tick.** Write it as an action ("Choose A or B for the meeting
    notes rule"), not as a code or a label. If a step needs a decision, give the options.
 4. **Every source is in the card's links.** When the card talks about a pull request, an issue, a document, a design,
@@ -23,6 +24,126 @@ A good card passes all five. A bad card fails one or more.
    A number in the text ("see #481") is not a link. The links section is what people click, what the Pull requests
    panel reads (for PRs), and what `keeptrack-search` and `links` search.
 5. **Nothing secret is in the card.** Link to where confidential material lives. Do not copy it into the card.
+
+## Format the text (Markdown)
+
+The web board shows card details and comments as Markdown (kit v62). A reader can press **Raw** to see the saved text.
+Agents: write every description, and every comment longer than two sentences, in Markdown. A wall of text is hard to
+read, most of all on a phone.
+
+Use only this small set. The board shows nothing else as formatting:
+
+| Write | For |
+|---|---|
+| `## Heading` | short sections: `## Now`, `## Why`, `## Plan`, `## Done when`, `## Decision needed` |
+| `- item` and `1. item` | lists and steps (indent two spaces for a sub-item) |
+| `- [ ] step`, `- [x] step` | a list that shows tick boxes (use the card's checklist for real to-dos) |
+| `**bold**`, `*italic*`, `` `code` `` | a key word, a file name, a command |
+| table rows under a `\|---\|---\|` line | a small table, for example options and scores |
+| `> text` | a quote from a person or a document |
+| `[label](https://...)` | a link with a readable label; `[#12](<card link>)` for a card |
+| `---` | a line between parts |
+
+Keep each paragraph to two or three sentences. Put a blank line between paragraphs, lists and tables.
+
+To write multi-line text from a shell, give `-` and send the text on stdin. Then you need no quoting:
+
+```bash
+python3 board/keeptrack.py task-set '#12' --details - <<'TEXT'
+## Now
+...
+TEXT
+python3 board/keeptrack.py comment '#12' - <<'TEXT'
+...
+TEXT
+```
+
+`add --details -`, `task-set --details -` and `task-set --add-details -` work the same way.
+
+### Example: hard to read, then easy to read
+
+```text
+Asked 13 Oct with #77 (chains must shout loudly). Today nothing sends: relay.py digest only prints, and README says the
+sender is not built yet. Alarms use GitHub issues, which need Actions. Plan: a small non-LLM job next to the connector
+...
+```
+
+```markdown
+## Why
+Asked on 13 Oct with [#77](<card link>): a stopped chain must alert the owner loudly.
+
+## Now
+- Nothing sends an alert. `relay.py digest` only prints.
+- Alarms use GitHub issues, which need GitHub Actions (blocked).
+
+## Plan
+A small job (no AI) next to the connector reads the board every few minutes and pushes each new event once.
+
+## Done when
+The owner gets a phone alert for each loud event. The alert text has card numbers and titles only.
+```
+
+## Comments that need a person: always recommend
+
+When a comment asks a person to decide, approve, unblock or do something, it must help them act at once. A question
+alone ("What do you decide so it can go on?") is a bad comment: the reader must open the card, read the history and
+find the options with no help.
+
+Every such comment has four parts, in this order:
+
+1. **What waits, and why.** One or two sentences: what is stopped, on what, and what happens if nothing changes. Start
+   with `@<login>`.
+2. **Options.** Two to four real options. Give each one a score out of 10 and a short reason. The score says how good
+   the option is for the owner's goal, with value, cost, risk and how easy it is to undo all counted. Include "do
+   nothing" or "wait" when it is a real choice.
+3. **Recommendation.** The option you recommend and the reason, in one sentence. Normally it has the highest score.
+4. **Next step.** What you (or the next agent) do after the answer, and what the person must do, if anything (a click,
+   a command, a setting).
+
+When only one way makes sense (for example, a step that only the person can do), still give the recommendation, its
+score and the reason, and say exactly what to do.
+
+Template:
+
+```markdown
+@<login> <what waits on you, and why it matters, in one or two sentences>
+
+**Options**
+1. **<option A>** (8/10): <what happens, cost, risk>
+2. **<option B>** (5/10): <what happens, cost, risk>
+3. **<do nothing>** (2/10): <what stays broken>
+
+**Recommendation:** 1, because <one reason>.
+
+**Next:** <what happens after you answer; any step only you can do>
+```
+
+### Example: a bad and a good "waits on you" comment
+
+Bad:
+
+```text
+dispatcher: @alex this card is blocked and waits on you. What do you decide so it can go on?
+```
+
+Good:
+
+```markdown
+@alex This card is blocked on to-do 6. The phone alerts are built and live, but your phone does not subscribe to
+them yet, so no alert gets to you.
+
+**Options**
+1. **Subscribe now** (9/10): open the ntfy app, add the topic from the README, send the test push. About two minutes.
+2. **Use email alerts instead** (5/10): no app, but a new sender to build, and alerts come later.
+3. **Leave it** (2/10): stopped chains and waiting questions stay silent.
+
+**Recommendation:** 1, because it is two minutes of work and all the rest is done.
+
+**Next:** when you tick to-do 6, I close the card.
+```
+
+The same rule applies to Review Inbox questions, research comments, done notes that leave work for a person, and
+replies to a person in a thread or a chat.
 
 ## Links: what goes in the links section
 
@@ -130,6 +251,9 @@ Why it is good:
 - When you find a card that fails a test while you work on it, fix the card if it is yours to change, or say so in a
   comment.
 - Keep the card short. Put long content in a document and link it.
+- Write details and comments in Markdown (see "Format the text"). Use `-` and stdin for multi-line text.
+- When a comment needs a person, give options with a score out of 10, your recommendation and the reason, and the
+  next step (see "Comments that need a person: always recommend").
 - When you name a card (in a reply, comment, done note, PR, brief or hand-off), write its number as a link:
   `keeptrack.py card-link '#58'` prints `[#58](<card link>)`. A person can then tap straight to the card.
 
