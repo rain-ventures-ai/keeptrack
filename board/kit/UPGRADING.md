@@ -25,6 +25,26 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v67 (schema 4)
+New kit file `board/upgrade.py`: one command for the whole upgrade. No data migration.
+- Run `kit-update` (or, from now on, `python3 board/upgrade.py`). Check: `kit-check` says v67, and `board/upgrade.py`
+  exists.
+- `python3 board/upgrade.py [--push]` does the steps of "Backups and checks for every upgrade" for you. It makes the
+  backup branch, makes a new worktree on a new branch from `origin/<default>` (the main checkout does not change), runs
+  `kit-update`, puts back this repo's own lines, prints the notes below for each new version and the commands to do by
+  hand, lists the `keeptrack.py` lines of the kit's `templates/AGENTS.md` that `AGENTS.md` lacks, upgrades the relay kit
+  when `relay/` exists, runs the checks, commits, and with `--push` pushes and opens a draft PR. It never merges, never
+  migrates and never edits board data. It commits only the paths an upgrade step wrote, and stops on any other change.
+  After the merge, `python3 board/upgrade.py --after-merge` checks that the upgrade commit is on the default branch,
+  runs `verify --against` the backup on the board as it was in that commit, and removes the worktree.
+- Relay (relay 0.9.24 or later): owner-only relay files (code, prompts, the merge gate) are listed under "Do by hand".
+  Only with `--owner-files`, the owner's yes for this upgrade, does it copy the ones this repo never changed; the PR then
+  lists them under "Owner-only relay files copied (read these before merging)".
+- New optional file `board/upgrade-keep.txt` (this repo's own file, not a kit file): lines that `kit-update` must not
+  overwrite. One rule per line, `<path> :: <python regex>`; `#` starts a comment. Example:
+  `.github/workflows/visibility-alarm.yml :: ^\s*OWNER:`. If the number of matching lines changes, the upgrade stops.
+- If this repo puts lines back by hand after each upgrade, write them in `board/upgrade-keep.txt` now.
+
 ### v66 (schema 4)
 Web board only: the card drawer shows comments and history as one **Activity** timeline, and marks updates that arrive
 while the card is open as **New**. No data migration.

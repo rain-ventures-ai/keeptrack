@@ -366,4 +366,6 @@ Each person can connect their own Claude routine so that either the **Assign to 
 ## Board kit
 The tools in this folder (and `.claude/skills/board*`) are the **board kit**. Their source is `rain-ventures-ai/keeptrack` `board/kit/`; `board/KIT_VERSION` says which version this repo has. Do not edit them here: see `board/UPGRADING.md`.
 
+To upgrade, run `python3 board/upgrade.py` from the repo root (`--push` to push the branch and open a draft PR). It works in a new worktree, so this checkout does not change; after the merge, `python3 board/upgrade.py --after-merge` checks the board against the backup. Lines this repo must keep in kit files go in `board/upgrade-keep.txt` (`<path> :: <regex>`, one per line).
+
 When you change the kit or board schema in the keeptrack repo, add a `CHANGELOG.md` entry, update `UPGRADING.md`, and check in a new frozen sample board under `tests/fixtures/` (documented in `tests/fixtures/README.md`).
