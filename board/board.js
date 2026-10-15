@@ -237,7 +237,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 64;
+  const PAGE_KIT = 65;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1220,6 +1220,7 @@ if (typeof window !== 'undefined') (() => {
     }
   }
   async function undoLast(target) {   // target: the entry a toast's Undo button belongs to; Ctrl+Z and the Undo buttons pass none (the newest)
+    if (!target && quickUndo && undoToast === quickUndo.toast) { const t = quickUndo.task; hideUndo(); quickUndo = null; undoQuickArchive(t); return; }   // the newest change is a Done-lane archive: put that card back
     hideUndo();
     // A save still in flight is the newest change: let it finish and record its own entry, then take back the newest one.
     // (Reading the stack first would undo the change before it, and the pop below would then drop the wrong entry.)
@@ -2422,6 +2423,7 @@ if (typeof window !== 'undefined') (() => {
     const more = el('div', 'c-more'); [chipWaiting(t), ...chipsAfter(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
+    { const a = quickArchiveBtn(t); if (a) more.append(a); }
     row.append(c0, task, desc, ppl, lab, due, pr, more); return row;
   }
 
@@ -2886,7 +2888,7 @@ if (typeof window !== 'undefined') (() => {
     const edit = elI('button', 'ico', 'pencil'), bot = elI('button', 'ico', 'bot');
     edit.title = 'Edit task'; edit.setAttribute('aria-label', 'Edit task'); edit.onclick = () => openCard(t.id);
     bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent');
-    top.append(edit, bot); c.append(top);
+    top.append(edit, bot); { const a = quickArchiveBtn(t); if (a) top.append(a); } c.append(top);
     c.append(el('div', 't', t.title));
     if (t.details) c.append(el('div', 'n', mdPlain(t.details).replace(/\n{3,}/g, '\n\n').trim()));
     const tags = el('div', 'tags');
@@ -6559,6 +6561,7 @@ if (typeof window !== 'undefined') (() => {
       const t = d.tasks.find(x => x.id === rules.taskId);
       if (!t) throw new Error('This task is no longer on the board. Refresh before archiving.');
       if (t.claim && t.claim.status !== 'done') throw new Error('An agent is working on this task. Finish or release its claim before archiving.');
+      if (rules.onlyDone && t.column !== (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id) throw new Error(`#${t.num} is no longer in Done, so it was not archived.`);
       const y = todayIso().slice(0, 4); d.tasks = d.tasks.filter(x => x.id !== t.id);
       return { [y]: { tasks: [t], contacts: [], history: {} } };
     }
@@ -6652,6 +6655,28 @@ if (typeof window !== 'undefined') (() => {
     }
     setStatus('Could not archive after retries', 'err'); toast('The board stayed busy. Try Archive again.', true);
   }
+  // Done cards get an Archive button on the card face (shown on hover on desktop, always on touch screens): one tap, no
+  // dialog, and the toast has Undo, which puts the card back from the archive.
+  function quickArchiveBtn(t) {
+    if (ro || t.column !== doneColId() || activeClaim(t)) return null;
+    const b = elI('button', 'ico quickarch', 'archive'); b.type = 'button'; b.title = `Archive #${t.num}`; b.setAttribute('aria-label', `Archive task #${t.num}`);
+    b.onclick = e => { e.stopPropagation(); quickArchive(t.id); }; return b;
+  }
+  const quickBusy = new Set(); let quickUndo = null;   // quickUndo: { toast, task } while the last quick archive's Undo toast shows (Ctrl+Z uses it too)
+  async function quickArchive(id) {
+    const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked() || quickBusy.has(id)) return;   // a second click while the first runs does nothing
+    quickBusy.add(id); try { await archiveNow({ taskId: id, onlyDone: true }); } finally { quickBusy.delete(id); }
+    if (state.tasks.some(x => x.id === id)) return;   // not archived: archiveNow said why
+    hideUndo(); if (lastToast) lastToast.dismiss(); undoAt = Date.now();
+    const tt = undoToast = ui.toast(`Archived #${t.num} ${t.title}`, { action: { label: 'Undo', onClick: () => { if (undoToast === tt) undoToast = null; quickUndo = null; undoQuickArchive(t); } }, timeout: 8000 });
+    quickUndo = { toast: tt, task: t };
+  }
+  async function undoQuickArchive(t) {   // the archived copy, not t: it holds the history lines the archive took
+    try { archived = null; archivedSig = ''; const a = await loadArchived(), hit = a.tasks.find(x => x.item.id === t.id);
+      if (!hit) { toast(`#${t.num} is not in the archive. Search with Include archive to find it.`, true); return; }
+      await restoreArchived('task', hit.item, hit.year, false);
+    } catch (e) { console.error(e); toast('Could not put the card back: ' + (e.message || e), true); }
+  }
   async function archiveTask(id = editing) {
     const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked()) return;
     if (!(await ask('Archive this task?', `“${t.title}” will leave the active board. Nothing is deleted: its details, checklist, comments and history are kept. Search with Include archive, then choose Put back on the board to restore it.`, 'Archive task'))) return;
@@ -6699,7 +6724,7 @@ if (typeof window !== 'undefined') (() => {
     if (!ok) { toast('The archive files were written, but the board was not saved. Nothing was removed from the board; run Archive again.', true); return; }
     toast(`Archived ${what}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : ''));
   }
-  async function restoreArchived(kind, item, y) {
+  async function restoreArchived(kind, item, y, open = true) {   // open: show the restored card or person afterwards
     if (writeBlocked()) return;
     if (isSplit(state)) {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
@@ -6711,7 +6736,7 @@ if (typeof window !== 'undefined') (() => {
           nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
           fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
           const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) });
-          if (out === 'ok') { archived = null; archivedSig = ''; $('dlgArch').close(); render(); toast(`${item.title || item.name} is back on the board.`); if (kind === 'task') openCard(item.id); else openContact(item.id); return; }
+          if (out === 'ok') { archived = null; archivedSig = ''; $('dlgArch').close(); render(); toast(`${item.title || item.name} is back on the board.`); if (open) { if (kind === 'task') openCard(item.id); else openContact(item.id); } return; }
           if (out !== 'conflict') throw new Error(out);
         } catch (e) { console.error(e); toast('Could not restore the archived item: ' + (e.message || e), true); return; }
       }
@@ -6724,7 +6749,7 @@ if (typeof window !== 'undefined') (() => {
       if (await writeArchive(y, next, sha, `Restore ${item.id} from the archive`)) { await mutate(d => { d.archive = Object.assign({}, d.archive); d.archive.files = Object.assign({}, d.archive.files, { [y]: { tasks: (next.tasks || []).length, contacts: (next.contacts || []).length } }); }, 'Update the archive index'); break; }
       delete archMem[archKey(y)]; } } catch (e) { console.error(e); }   // a leftover archive copy is harmless: the board copy wins and the next archive run replaces it
     archived = null; $('dlgArch').close(); toast(`${item.title || item.name} is back on the board.`);
-    if (kind === 'task') openCard(item.id); else openContact(item.id);
+    if (open) { if (kind === 'task') openCard(item.id); else openContact(item.id); }
   }
   function openArchived(kind, item, y) {   // archived cards are shown read-only, with one button to bring them back
     $('aTitle').textContent = (kind === 'task' ? (item.num ? '#' + item.num + ' ' : '') + item.title : item.name);
