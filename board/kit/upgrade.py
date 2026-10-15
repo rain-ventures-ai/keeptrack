@@ -563,8 +563,9 @@ def work(a, wt, src, st, rkit, do_board, do_relay):
             print("no gh here: open the PR with this text")
     else:
         print(f"not pushed (no --push): git -C {wt} push -u origin {st['branch']}, then open the PR with this text")
-        print(f"\n!!! THE BACKUP {st['backup']} IS IN THIS CLONE ONLY, NOT ON ORIGIN. Push it (git push origin "
-              f"{st['backup']}) before the merge, and run --after-merge from this clone.")
+        if not remote_sha(wt, st["backup"]):
+            print(f"\n!!! THE BACKUP {st['backup']} IS IN THIS CLONE ONLY, NOT ON ORIGIN. Push it (git push origin "
+                  f"{st['backup']}) before the merge, and run --after-merge from this clone.")
     return f"\n--- PR ({pr_file}) ---\n{title}\n\n{body}"
 
 
