@@ -108,6 +108,28 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       assert.equal(await page.locator('.trow', { hasText: 'Open work' }).locator('.quickarch').count(), 0);
       assert.deepEqual(errors, [], 'no page errors'); await page.close(); }
 
+    // the card leaves at once, before GitHub has the commit; when the commit fails it comes back with a warning
+    { const api = new Github(), page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
+      let hold = null, held = false, fail = false;
+      await page.addInitScript(init, 'board');
+      await page.route('https://api.test/**', async r => { const req = r.request();
+        if (req.method() === 'PATCH' && req.url().endsWith('/git/refs/heads/main')) { if (fail) return r.fulfill({ status: 500, contentType: 'application/json', body: '{"message":"boom"}' }); if (!held) { held = true; await new Promise(ok => { hold = ok; }); } }
+        return api.route(r); });
+      await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      const done = () => page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' });
+      await done().hover(); await done().locator('.quickarch').click();
+      await page.waitForFunction(() => ![...document.querySelectorAll('.col[data-col="done"] .card')].some(c => c.textContent.includes('Finished work')), null, { timeout: 1000 });
+      for (let i = 0; i < 50 && !hold; i++) await page.waitForTimeout(100);
+      assert.ok(hold, 'the commit is still in flight'); assert.ok(api.card('t_two'), 'GitHub still has the card while it is hidden');
+      hold(); await page.getByRole('button', { name: 'Undo', exact: true }).waitFor(); assert.equal(api.card('t_two'), null, 'archived once the commit lands');
+      await page.getByRole('button', { name: 'Undo', exact: true }).click(); await done().waitFor();
+      for (let i = 0; i < 50 && !api.card('t_two'); i++) await page.waitForTimeout(100);
+      fail = true; await page.waitForTimeout(3000);   // let the Undo toast and status settle
+      await done().hover(); await done().locator('.quickarch').click();
+      await page.locator('.ui-toast__text', { hasText: 'Archive failed' }).waitFor();
+      await done().waitFor(); assert.ok(api.card('t_two'), 'a failed archive leaves the card on GitHub'); assert.equal(await page.getByRole('button', { name: 'Undo', exact: true }).count(), 0, 'no Undo for an archive that did not happen');
+      assert.deepEqual(errors, [], 'no page errors'); await page.close(); }
+
     // single-file board (no split layout): one click archives, Undo puts it back
     { const api = new Github(), cards = ['t_one', 't_two', 't_three'].map(id => api.card(id));
       api.files = { 'tasks.json': text({ ...root, layout: undefined, tasks: cards }) };
