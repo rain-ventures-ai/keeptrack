@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline
+again; "Sign in to a local hosted board" shows only on a local page; the `api.github.com` preconnect is back. CLI:
+`claim --on-behalf-of` on a GitHub board now fails clearly instead of being ignored; `approve` help says hosted boards
+only; an empty `BOARD_BACKEND` means github and a mistyped one is refused by name. No schema change.
+
 CLI: inside a board repo clone, the clone's own git remote names the board. A `.keeptrack` or `.board` config in a
 folder above the clone that names another board (for example one `use` wrote in the home folder) is now ignored there,
 and `where` names the file it skipped. Before, it set `BOARD_REPO` and sent the clone's commands to that other board.
