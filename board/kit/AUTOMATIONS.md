@@ -79,8 +79,9 @@ Checks must reject duplicate item keys (including different revisions); tick rep
 Checks receive `KEEPTRACK_DEADLINE_SECONDS`, a work budget below the manifest timeout. Bound source calls by the
 remaining budget and cap pages per invocation. Return accumulated items, `more: true` and an opaque continuation
 cursor when stopping early. Prefer `KEEPTRACK_SCAN_CURSOR` over the seen-log cursor when supplied.
-On an empty result with `more: true`, tick saves the cursor as the binding's `scan_cursor` in ignored
+On a successful check, an empty result's cursor is kept locally as the next starting point,
+whether `more` is true or false. Tick saves it as the binding's `scan_cursor` in ignored
 `automation/.local/tick-state.json` and passes it to the next due check. This causes no tracked writes or reservation.
 A result with items never advances this local continuation. Only a successful `mark` carrying the batch cursor
-advances the seen cursor and clears local continuation; partial marks retain it. A result with `more: false`
-also clears local continuation. The seen log remains exclusively written by `mark`.
+advances the seen cursor and clears local continuation; partial marks retain it. An empty result with `more: false`
+and no cursor clears local continuation. The seen log remains exclusively written by `mark`.

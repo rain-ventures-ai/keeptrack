@@ -8111,7 +8111,7 @@ def _auto_record_check(state, binding, result=None, error=None):
         entry["result"] = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
     elif not result["items"]:
         # Item batches retain their starting point until completed mark.
-        if result["more"]: entry["scan_cursor"] = result["cursor"]
+        if result["cursor"] is not None: entry["scan_cursor"] = result["cursor"]
         else: entry.pop("scan_cursor", None)
     state[binding] = entry
     return entry["result"]

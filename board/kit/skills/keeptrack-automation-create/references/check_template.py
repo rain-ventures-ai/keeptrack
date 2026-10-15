@@ -14,7 +14,10 @@ def hashed(value):
     return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
 
 # For paginated sources, prefer this local empty-scan continuation to seen["cursor"].
-# It is untracked; only mark may advance the seen log. A completed mark or more:false clears it.
+# On success, an empty result's cursor is kept locally as the next starting point,
+# whether more is true or false. An empty more:false result without a cursor clears it.
+# Item batches preserve the old local cursor until a completed mark advances the seen log.
+# Only mark may advance the seen log; doing so clears the local cursor.
 def scan_cursor(seen):
     return os.environ.get("KEEPTRACK_SCAN_CURSOR") or seen.get("cursor")
 

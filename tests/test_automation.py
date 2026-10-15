@@ -278,6 +278,68 @@ else:
             self.call('mark', slug='email-to-tasks', run_id=batch['run_id'], input=str(done))
             self.assertNotIn('scan_cursor', self.read(local_path)[binding])
 
+    def test_empty_check_watermark_independent_of_more_and_items_preserve_it(self):
+        for more in (True, False):
+            with self.subTest(more=more):
+                state = {'binding': dict(scan_cursor='old')}
+                kt._auto_record_check(state, 'binding', dict(items=[], more=more, cursor='watermark'))
+                self.assertEqual(state['binding']['scan_cursor'], 'watermark')
+                kt._auto_record_check(state, 'binding', dict(items=[dict(key='item')], more=more, cursor='batch'))
+                self.assertEqual(state['binding']['scan_cursor'], 'watermark')
+        kt._auto_record_check(state, 'binding', dict(items=[], more=False, cursor=None))
+        self.assertNotIn('scan_cursor', state['binding'])
+
+    def test_email_empty_exhaustion_watermark_finds_mail_after_ten_days(self):
+        import base64
+        from types import SimpleNamespace
+        spec = importlib.util.spec_from_file_location('email_check', KIT/'automations/email-to-tasks/check.py')
+        check = importlib.util.module_from_spec(spec); spec.loader.exec_module(check)
+        self.write(self.root/'board/tasks.json', dict(contacts=[dict(email='match@example.invalid')]))
+        seen = self.root/'seen.json'; self.write(seen, dict(keys={}))
+        binding = 'auto-email-to-tasks-owner'
+        local_path = self.root/'automation/.local/tick-state.json'
+        start = 100 * 86400
+        arrival = start + 86400
+        queries = []
+        real_run = subprocess.run
+        def fake_run(argv, **kwargs):
+            if argv[0] != 'gog': return real_run(argv, **kwargs)
+            if argv[1] == 'auth':
+                return SimpleNamespace(returncode=0, stdout='{"accounts":["local"]}')
+            query = argv[4]; queries.append(query)
+            after = int(query.split('after:')[1].split()[0])
+            until = int(query.split('before:')[1])
+            page = int(argv[argv.index('--page')+1]) if '--page' in argv else 0
+            # The original frozen window takes ten daily invocations to exhaust.
+            if until == start:
+                data = dict(messages=[], nextPageToken=str(page+1) if page < 49 else None)
+            else:
+                data = dict(messages=[dict(id='late-mail', **{'from': 'match@example.invalid'})]
+                            if after < arrival < until else [])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(data))
+        with patch.dict(os.environ, KEEPTRACK_STATE=str(seen)), \
+                patch.object(check.shutil, 'which', return_value='gog'), \
+                patch.object(check.subprocess, 'run', side_effect=fake_run), \
+                contextlib.chdir(self.root):
+            for day in range(11):
+                local = self.read(local_path) if local_path.exists() else {}
+                cursor = local.get(binding, {}).get('scan_cursor', '')
+                out = io.StringIO()
+                with patch.dict(os.environ, KEEPTRACK_SCAN_CURSOR=cursor), \
+                        patch.object(check.time, 'time', return_value=start + day*86400), \
+                        contextlib.redirect_stdout(out):
+                    self.assertEqual(check.main(), 0)
+                result = json.loads(out.getvalue())
+                kt._auto_save_check(binding, result)
+                if day < 10:
+                    self.assertEqual(result['items'], [])
+                if day == 9:
+                    self.assertFalse(result['more'])
+                    self.assertEqual(json.loads(base64.urlsafe_b64decode(result['cursor']))['after'], start-1)
+            self.assertEqual(len(result['items']), 1, queries)
+            self.assertEqual(result['items'][0]['key'], check.hashed('late-mail'))
+            self.assertFalse((self.root/('automation/seen/'+binding+'.json')).exists())
+
     def test_scan_cursor_retained_with_items_and_cleared_on_mark_or_exhaustion(self):
         self.items(); self.ready()
         local_path = self.root/'automation/.local/tick-state.json'; binding = self.read(self.rp)['id']
