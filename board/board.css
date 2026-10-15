@@ -1200,7 +1200,7 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
 .kwwweather > .hint { font-size: var(--fs-sm); margin: var(--sp-2) 0 0; }
 .kwwweatherdetail > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kwwmetrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
-.kwwmetrics.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.kwwmetrics.five { grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 0; } .kwwmetrics.five .kwwmetric { padding: var(--sp-2) var(--sp-1); } .kwwmetrics.five .kwwmetric span { white-space: normal; overflow-wrap: anywhere; }
 .kwwmetric { min-width: 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--panel); text-align: center; }
 .kwwmetric strong, .kwwmetric span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kwwmetric strong { font-size: var(--fs-lg); } .kwwmetric span { color: var(--muted); font-size: var(--fs-xs); }

@@ -6038,7 +6038,7 @@ if (typeof window !== 'undefined') (() => {
     const active = open.filter(t => activeClaim(t) && claimState(t.claim) === 'running'), attention = open.filter(needsAttention), doing = open.filter(t => t.column === 'in-progress'), doneToday = state.tasks.filter(t => { const c = completionOf(t); return c && String(c.at || '').slice(0, 10) === today; });
     const grid = el('div', 'kwwmetrics'), metric = (value, label, tone) => { const x = el('div', 'kwwmetric' + (tone ? ' ' + tone : '')); x.append(el('strong', null, String(value)), el('span', null, label)); return x; };
     grid.append(metric(doing.length, 'in progress'), metric(active.length, 'agent runs', active.length ? 'active' : ''), metric(attention.length, 'need attention', attention.length ? 'warn' : ''), metric(doneToday.length, 'done today', doneToday.length ? 'good' : ''));
-    if (state.columns.some(c => c.id === 'pending-review')) { const n = open.filter(t => t.column === 'pending-review').length; grid.append(metric(n, 'pending review', n ? 'warn' : '')); grid.classList.add('five'); }   // kit v64: work done, a person decides
+    if (state.columns.some(c => c.id === 'pending-review')) { const n = open.filter(t => t.column === 'pending-review').length; grid.append(metric(n, 'to decide', n ? 'warn' : '')); grid.classList.add('five'); }   // kit v64: work done, a person decides
     box.append(grid);
     if (active.length) { const t = active.sort((a, b) => numOf(a) - numOf(b))[0], b = el('button', 'kwwactive', `${agentLabel(t.claim)} · #${t.num} ${t.title}`); b.type = 'button'; b.onclick = () => openCard(t.id, 'comments'); box.append(b); }
     return box;

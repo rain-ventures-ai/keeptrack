@@ -14,7 +14,7 @@ research card went to Done with nothing decided).
   ends the claim with a run record; unlike `done` the card stays open in the **Pending review** column
   (`pending-review`, after In progress; added the first time, so no migration) and the note is posted as a comment that
   @mentions who decides (default: the first assignee). `--note -` reads stdin. New boards get the column.
-- **Web board:** the Today pulse shows a "pending review" count when the board has the column.
+- **Web board:** the Today pulse shows a "to decide" count (cards in Pending review) when the board has the column.
 - **CARDS.md:** new section "Done, Pending review or waiting". The board skill, README, routine prompt and AGENTS
   template say when to use `review` instead of `done`.
 - No schema change.
