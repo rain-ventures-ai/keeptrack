@@ -288,6 +288,14 @@ class UpgradeScript(unittest.TestCase):
         self.assertFalse(self.on_origin(self.state()["branch"]))
         self.assertFalse(os.path.exists(self.gh_log))
 
+    def test_without_push_a_backup_already_on_origin_gives_no_warning(self):
+        name = f"backup/kit{self.have}-{TODAY}"
+        sh("git", "-C", self.repo, "push", "-q", "origin", f"main:refs/heads/{name}")
+        rc, out = self.upgrade()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("reused", out)
+        self.assertNotIn("IN THIS CLONE ONLY", out)
+
     def relay_log(self):
         return slurp(self.env["RELAY_STUB_LOG"]).splitlines()
 
