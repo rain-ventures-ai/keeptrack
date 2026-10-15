@@ -407,22 +407,25 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       };
       page.api.routines = [];
       const regs = { 'auto-stale-cards-nudge-alex.json': reg('stale-cards-nudge', 'alex', 'active', { last_run: { status: 'success', summary: 'Two nudges proposed' }, last_successful_run_at: '2026-10-15T09:00:00Z' }),
-        'auto-email-to-tasks-alex.json': reg('email-to-tasks', 'alex', 'unverified'), 'auto-my-pack-sam.json': reg('my-pack', 'sam', 'paused'), 'auto-my-pack-alex.json': reg('my-pack', 'alex', 'retired') };
+        'auto-email-to-tasks-alex.json': reg('email-to-tasks', 'alex', 'unverified'), 'auto-my-pack-sam.json': reg('my-pack', 'sam', 'paused'), 'auto-my-pack-alex.json': reg('my-pack', 'alex', 'retired'),
+        'auto-notes-folder-to-tasks-alex.json': reg('notes-folder-to-tasks', 'alex', 'active', { branch: 'other' }), 'auto-broken-alex.json': reg('broken', 'alex', '__proto__', { last_run: { status: 'constructor' } }),
+        'auto-gone-pack-alex.json': reg('gone-pack', 'alex', 'active') };
       page.api.extra['/contents/automation/routines'] = Object.keys(regs).map(name => ({ type: 'file', name }));
       Object.entries(regs).forEach(([n, r]) => { page.api.extra['/contents/automation/routines/' + n] = r; });
       const before = page.api.writes;
       await page.evaluate(() => document.getElementById('btnSettings').click()); await page.locator('#tabAgents').click();
-      await page.waitForFunction(() => document.querySelectorAll('.auto-card').length === 5);
-      assert.deepEqual(await page.locator('.auto-card h4').allTextContents(), ['Stale cards nudge', 'Email to tasks', '<img src=x onerror=alert(1)>', 'broken', 'My pack'], 'pack text is shown as text');
+      await page.waitForFunction(() => document.querySelectorAll('.auto-card').length === 6);
+      assert.deepEqual(await page.locator('.auto-card h4').allTextContents(), ['Stale cards nudge', 'Email to tasks', '<img src=x onerror=alert(1)>', 'broken', 'My pack', 'gone-pack'], 'pack text is shown as text; an install without a pack still shows');
       const cards = page.locator('.auto-card'), txt = async i => (await cards.nth(i).textContent()).replace(/\s+/g, ' ');
+      const copy = async (i, label) => { await cards.nth(i).locator('button', { hasText: label }).click(); return page.evaluate(() => window.__copied); };
       assert.match(await txt(0), /On/); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/);
       assert.match(await txt(1), /Needs setup/); assert.match(await txt(1), /Gmail \(read only\)/); assert.match(await txt(1), /uses the network/); assert.match(await txt(1), /local check of its access failed/);
-      assert.match(await txt(2), /Not installed/); assert.match(await txt(3), /Pack has a problem/);
+      assert.match(await txt(2), /Not installed/, 'an install for another branch does not count here'); assert.match(await txt(3), /Pack has a problem/); assert.match(await txt(3), /status unknown/, 'odd status values do not break the list');
+      assert.match(await txt(5), /Pack missing/); assert.equal(await copy(5, 'Uninstall it'), 'python3 board/keeptrack.py automation uninstall gone-pack --owner alex');
       assert.match(await txt(4), /Your own pack/); assert.match(await txt(4), /Not installed/, 'a retired install counts as not installed'); assert.match(await txt(4), /Also installed by @sam/); assert.match(await txt(4), /an agent runs each time/);
-      const copy = async (i, label) => { await cards.nth(i).locator('button', { hasText: label }).click(); return page.evaluate(() => window.__copied); };
       assert.equal(await copy(0, 'Turn it off'), 'python3 board/keeptrack.py automation disable stale-cards-nudge --owner alex');
       assert.equal(await copy(1, 'Check its access'), 'python3 board/keeptrack.py automation setup email-to-tasks --owner alex --runtime local');
-      assert.equal(await copy(2, 'Install it'), 'python3 board/keeptrack.py automation install notes-folder-to-tasks --owner alex --set notes_dir=<notes_dir>');
+      assert.equal(await copy(2, 'Install it'), "python3 board/keeptrack.py automation install notes-folder-to-tasks --owner alex --set 'notes_dir=REPLACE-WITH-notes_dir'");
       assert.equal(await cards.nth(2).locator('button', { hasText: 'Try it first' }).count(), 0, 'no dry run while a required setting is missing');
       assert.equal(await copy(4, 'Try it first'), 'python3 board/keeptrack.py automation dry-run my-pack --owner alex');
       assert.equal(await copy(3, 'Check the pack'), 'python3 board/keeptrack.py automation validate board/automations/broken');
@@ -430,7 +433,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(await cards.nth(1).locator('a').getAttribute('href'), 'https://github.com/acme/board/blob/main/board/automations/email-to-tasks/SETUP.md');
       await page.locator('#autoCreate').click(); assert.match(await page.evaluate(() => window.__copied), /keeptrack-automation-create/);
       assert.equal(page.api.writes, before, 'the screen writes nothing');
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll at 390px');
+      assert.equal(await page.evaluate(() => { const d = document.getElementById('dlgSettings'); return document.documentElement.scrollWidth <= window.innerWidth && d.scrollWidth <= d.clientWidth && [...document.querySelectorAll('.auto-card')].every(x => x.scrollWidth <= x.clientWidth + 1); }), true, 'no sideways scroll at 390px, in the page or the Settings dialog');
       await shot(page, 'automations');
       assert.deepEqual(page.errors, []); await page.close();
     }
@@ -440,7 +443,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       page.api.extra = { '/contents/board/automations': 404, '/contents/automations': 404 };
       page.api.routines = [{ id: 'notes_alex', name: 'Meeting notes', board_repo: 'acme/board', branch: 'main', board_path: 'board/tasks.json' }, { id: 'auto-x-alex', name: 'auto x', automation: { slug: 'x' } }];
       await page.evaluate(() => window.kbSettings.open('automations')); await settle(page);
-      assert.equal(await visiblePanel(page), 'panelAgents');
+      assert.equal(await visiblePanel(page), 'panelAgents'); assert.equal(await inView(page, 'agAutomations'), true, 'the deep link scrolls to the Automations section');
       await page.waitForFunction(() => document.querySelectorAll('.routine-card:not(.auto-card)').length === 1 && /No automation packs/.test(document.getElementById('autoList').textContent));
       assert.match(await page.locator('#routineRegister').textContent(), /Automations are listed in their own section/);
       assert.doesNotMatch(await page.locator('#routineRegister').textContent(), /other board contexts/);

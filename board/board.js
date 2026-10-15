@@ -4422,6 +4422,7 @@ if (typeof window !== 'undefined') (() => {
   const AUTO_NEEDS = { 'board.read': 'this board', 'files.read': 'a folder on your computer', 'gmail.read': 'Gmail (read only)', 'drive.read': 'Google Drive (read only)', 'github.read': 'GitHub (read only)', 'calendar.read': 'your calendar (read only)' };
   const AUTO_EVERY = { '15m': 'every 15 minutes', '30m': 'every 30 minutes', '1h': 'every hour', '6h': 'every 6 hours', '1d': 'once a day' };
   const AUTO_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+  const own = (map, key) => typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined;   // repo data names keys: never reach the prototype
   let autoLoad = 0;
   async function renderAutomations() {
     const c = cfg(), generation = ++autoLoad, box = $('autoList');
@@ -4445,7 +4446,10 @@ if (typeof window !== 'undefined') (() => {
       if (!packs.length) { box.append(el('p', 'hint', 'No automation packs in this repo yet. Upgrade the board kit to get the built-in ones, or make your own below.')); return; }
       const login = (c.me || '').replace(/^@/, '').toLowerCase(), me = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) ? login : '', seen = {};   // only a valid login goes into a copied command
       packs.forEach(p => { seen[p.slug] = (seen[p.slug] || 0) + 1; });
-      packs.forEach(p => box.append(autoCard(p, installs.filter(r => r.automation.slug === p.slug && r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase())), me, seen[p.slug] > 1, c)));
+      const here = installs.filter(r => r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!r.branch || r.branch === c.branch) && (!r.board_path || r.board_path === c.path));
+      packs.forEach(p => box.append(autoCard(p, here.filter(r => r.automation.slug === p.slug), me, seen[p.slug] > 1, c)));
+      const orphans = here.filter(r => !packs.some(p => p.slug === r.automation.slug));   // installed, but its pack is gone: still show it, so it can be turned off
+      [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => box.append(autoCard({ source: 'missing', folder: '', slug, m: null }, orphans.filter(r => r.automation.slug === slug), me, false, c)));
       uiBtns(box);
     } catch (err) { if (current()) box.textContent = err.message || 'Automations could not be loaded.'; }
   }
@@ -4455,14 +4459,15 @@ if (typeof window !== 'undefined') (() => {
     const network = !!(m.check && m.check.network), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object') : [];
     const mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
     const states = { unverified: ['Needs setup', 'warn'], paused: ['Ready, off', 'neutral'], active: ['On', 'ok'] };
-    const [label, tone] = !p.m ? ['Pack has a problem', 'danger'] : mine ? (states[mine.status] || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
+    const [label, tone] = p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
     head.append(el('h4', null, str(m.name, 80) || p.slug), el('span', `ui-pill ui-pill--${tone}`, label)); item.append(head);
-    item.append(el('p', 'routine-card__scope', `${p.source === 'kit' ? 'Built-in' : 'Your own pack'} · ${p.slug}`));
-    if (!p.m) { item.append(el('p', 'hint', 'Its manifest.json could not be read. Run the validate command below in a clone to see why.')); }
+    item.append(el('p', 'routine-card__scope', `${p.source === 'kit' ? 'Built-in' : p.source === 'own' ? 'Your own pack' : 'Installed, but its pack is gone'} · ${p.slug}`));
+    if (p.source === 'missing') item.append(el('p', 'hint', 'This install has no pack in the repo any more. Turn it off or uninstall it.'));
+    else if (!p.m) { item.append(el('p', 'hint', 'Its manifest.json could not be read. Run the validate command below in a clone to see why.')); }
     else {
       if (str(m.summary)) item.append(el('p', null, str(m.summary)));
-      const uses = needs.map(n => AUTO_NEEDS[n.id] || str(n.id, 40)).filter(Boolean);
-      item.append(el('p', 'hint', `Reads ${uses.length ? uses.join(', ') : 'nothing outside the board'} · checks ${AUTO_EVERY[(mine && mine.automation.every) || m.every] || 'on its schedule'}${network ? ' · uses the network' : ''} · writes proposals to your Review Inbox only`));
+      const uses = needs.map(n => own(AUTO_NEEDS, n.id) || str(n.id, 40)).filter(Boolean);
+      item.append(el('p', 'hint', `Reads ${uses.length ? uses.join(', ') : 'nothing outside the board'} · checks ${own(AUTO_EVERY, (mine && mine.automation.every) || m.every) || 'on its schedule'}${network ? ' · uses the network' : ''} · writes proposals to your Review Inbox only`));
       if (!m.check) item.append(el('p', 'hint', 'It has no cheap check, so an agent runs each time it is due.'));
     }
     if (clash) item.append(el('p', 'hint', 'A built-in pack and your own pack share this name. Rename your own pack: automation commands refuse to run until you do.'));
@@ -4471,27 +4476,29 @@ if (typeof window !== 'undefined') (() => {
     if (mine) {
       const last = mine.last_run, runs = { success: 'Succeeded', partial: 'Partly done', failed: 'Failed', blocked: 'Blocked' };
       const when = v => { const d = new Date(v); return v && Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'never'; };
-      item.append(el('p', 'routine-card__result', last && typeof last === 'object' ? `Last run: ${runs[last.status] || 'status unknown'}${last.summary ? ' — ' + str(last.summary) : ''}` : 'No run reported yet.'));
+      item.append(el('p', 'routine-card__result', last && typeof last === 'object' ? `Last run: ${own(runs, last.status) || 'status unknown'}${last.summary ? ' — ' + str(last.summary) : ''}` : 'No run reported yet.'));
       item.append(el('p', 'hint', `Last success: ${when(mine.last_successful_run_at)} (your local time)`));
       if (mine.current_run) item.append(el('p', 'hint', `A run started ${when(mine.current_run.started_at)} and has not finished. If no agent is working on it, it has stopped; check the runner.`));
       const setup = mine.automation.setup;
       if (mine.status === 'unverified' && setup && Array.isArray(setup.notes) && setup.notes.length) {
         const why = { 'probe-failed': 'the local check of its access failed', 'probe-missing': 'there is no local check for its access', 'route-missing': 'this runtime cannot reach what it needs', 'confirmation-needed': 'an agent must confirm its access' };
-        item.append(el('p', 'hint', 'Setup is blocked: ' + [...new Set(setup.notes.map(n => why[n] || 'see the setup steps'))].join('; ') + '.'));
+        item.append(el('p', 'hint', 'Setup is blocked: ' + [...new Set(setup.notes.map(n => own(why, n) || 'see the setup steps'))].join('; ') + '.'));
       }
     }
     const cmd = 'python3 board/keeptrack.py automation ', who = me ? ' --owner ' + me : '', steps = [];
-    if (!p.m) steps.push(['Check the pack', cmd + 'validate ' + p.folder]);
+    if (p.source === 'missing') { if (mine && mine.status !== 'retired') steps.push(['Uninstall it', cmd + 'uninstall ' + p.slug + who]); }
+    else if (!p.m) steps.push(['Check the pack', cmd + 'validate ' + p.folder]);
     else if (!mine) {
       const cfgs = m.config && typeof m.config === 'object' ? Object.entries(m.config).filter(([k, v]) => v && v.required && !('default' in v) && /^[a-z0-9_]+$/.test(k)) : [];
       if (!network && !cfgs.length) steps.push(['Try it first (changes nothing)', cmd + 'dry-run ' + p.slug + who]);
-      steps.push(['Install it (it stays off)', cmd + 'install ' + p.slug + who + (network ? ' --allow-network' : '') + cfgs.map(([k]) => ` --set ${k}=<${k}>`).join('')]);
+      steps.push(['Install it (it stays off)', cmd + 'install ' + p.slug + who + (network ? ' --allow-network' : '') + cfgs.map(([k]) => ` --set '${k}=REPLACE-WITH-${k}'`).join('')]);
       steps.push(['Then check its access', cmd + 'setup ' + p.slug + who + ' --runtime local']);
     } else if (mine.status === 'unverified') steps.push(['Check its access', cmd + 'setup ' + p.slug + who + ' --runtime local']);
     else if (mine.status === 'paused') { steps.push(['Turn it on', cmd + 'enable ' + p.slug + who]); steps.push(['Try it first (changes nothing)', cmd + 'dry-run ' + p.slug + who]); }
     else if (mine.status === 'active') steps.push(['Turn it off', cmd + 'disable ' + p.slug + who]);
     const row = el('div', 'sbtns');
-    steps.forEach(([text, line]) => { const b = elI('button', 'small', 'clipboard-copy', text); b.type = 'button'; b.title = line; b.onclick = () => copyText(line, 'Command copied. Run it in a clone of this board repo.'); row.append(b); });
+    steps.forEach(([text, line]) => { const b = elI('button', 'small', 'clipboard-copy', text); b.type = 'button'; b.title = line;
+      b.onclick = () => copyText(line, /REPLACE-WITH-/.test(line) ? 'Command copied. Replace each REPLACE-WITH- value, then run it in a clone of this board repo.' : 'Command copied. Run it in a clone of this board repo.'); row.append(b); });
     if (p.m) { const ask = elI('button', 'small', 'bot', 'Copy prompt for my assistant'); ask.type = 'button';
       ask.onclick = () => copyText([`Help me ${mine ? (mine.status === 'active' ? 'check' : 'finish setting up') : 'install and set up'} the "${p.slug}" Keeptrack automation on my board ${c.repo}${me ? ' for @' + me : ''}.`,
         `Read ${p.folder}/SETUP.md and board/AUTOMATIONS.md in the board repo first, and use python3 board/keeptrack.py automation commands only.`,
