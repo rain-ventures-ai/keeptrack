@@ -8083,6 +8083,19 @@ def _auto_check(path, manifest, register, scan_cursor=None):
     return result
 
 
+def _auto_record_check(state, binding, result=None, error=None):
+    """Merge check status and continuation identically for tick and standalone check."""
+    entry = dict(state.get(binding, {}), time=time.time(), result="ok")
+    if error is not None:
+        entry["result"] = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
+    elif not result["items"]:
+        # Item batches retain their starting point until completed mark.
+        if result["more"]: entry["scan_cursor"] = result["cursor"]
+        else: entry.pop("scan_cursor", None)
+    state[binding] = entry
+    return entry["result"]
+
+
 def _auto_payload(path, m, r, result, run_id):
     prefix = m.get("action_key_prefix", "auto:" + m["slug"])
     items = [dict(i, action_key=prefix + ":" + hashlib.sha256(
@@ -8121,11 +8134,7 @@ def _auto_tick(a, packs, owner):
                         result = _auto_check(path, m, r, previous.get("scan_cursor"))
                         # A changed file during the subprocess must never yield a reservation.
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
-                        state[binding] = dict(previous, time=time.time(), result="ok")
-                        # Item batches retain their starting point until completed mark.
-                        if not result["items"]:
-                            if result["more"]: state[binding]["scan_cursor"] = result["cursor"]
-                            else: state[binding].pop("scan_cursor", None)
+                        _auto_record_check(state, binding, result=result)
                         if result["items"]:
                             run_id = "tick-" + uuid.uuid4().hex
                             r["last_started_at"] = now()
@@ -8137,8 +8146,7 @@ def _auto_tick(a, packs, owner):
                             payloads.append(_auto_payload(path, m, r, result, run_id))
                     except (ValueError, OSError, SystemExit) as error:
                         if reserved: raise
-                        code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z-]+(?::[a-z0-9-]+)?", str(error)) else "check-error"
-                        state[binding] = dict(state.get(binding, {}), time=time.time(), result=code)
+                        code = _auto_record_check(state, binding, error=error)
                         problems.append({"slug": slug, "code": code})
             os.makedirs(os.path.dirname(state_path), exist_ok=True)
             _auto_write(state_path, state)
@@ -8297,14 +8305,14 @@ def cmd_automation(a):
                 if runtime != "local": print(open(os.path.join(path, "SETUP.md")).read())
             elif action in ("check", "dry-run"):
                 if install["digest"] != digest: sys.exit("pack digest changed; reinstall before check")
-                try: result = _auto_check(path, m, r)
+                try: result = _auto_check(path, m, r, local.get(binding, {}).get("scan_cursor"))
                 except (ValueError, OSError) as error:
                     if action == "check":
-                        local[binding] = {"time": time.time(), "result": str(error) if isinstance(error, ValueError) else "check-error"}; _auto_write(_auto_local(), local)
+                        _auto_record_check(local, binding, error=error); _auto_write(_auto_local(), local)
                     sys.exit(str(error))
                 if _auto_pack(path)[1] != digest: sys.exit("pack changed during check")
                 if action == "check":
-                    local[binding] = {"time": time.time(), "result": "ok"}; _auto_write(_auto_local(), local)
+                    _auto_record_check(local, binding, result=result); _auto_write(_auto_local(), local)
                     print(json.dumps(result))
                 else:
                     print(json.dumps(_auto_payload(path, m, r, result, "dry-run")))

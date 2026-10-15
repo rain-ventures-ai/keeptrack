@@ -173,6 +173,36 @@ else:
                 self.assertEqual(check.call_args.args[3], 'continuation')
                 self.assertEqual(self.read(local_path)[binding]['scan_cursor'], 'next-page')
 
+    def standalone_check_between_ticks(self, failed=False):
+        self.ready()
+        local_path = self.root/'automation/.local/tick-state.json'
+        binding = self.read(self.rp)['id']
+        with patch.object(kt, '_auto_check', return_value=dict(items=[], more=True, cursor='saved-page')):
+            self.tick()
+        local = self.read(local_path); local[binding]['retained'] = 'value'; self.write(local_path, local)
+        result = dict(items=[], more=True, cursor='next-page')
+        with patch.object(kt, '_auto_check', side_effect=ValueError('auth-expired') if failed else None,
+                          return_value=result) as check:
+            if failed: self.assertEqual(self.refuse('check'), 'auth-expired')
+            else: self.call('check')
+        self.assertEqual(check.call_args.args[3], 'saved-page')
+        expected = 'saved-page' if failed else 'next-page'
+        local = self.read(local_path)
+        self.assertEqual(local[binding]['scan_cursor'], expected)
+        self.assertEqual(local[binding]['result'], 'auth-expired' if failed else 'ok')
+        self.assertEqual(local[binding]['retained'], 'value')
+        local[binding]['time'] = 0; self.write(local_path, local)
+        with patch.object(kt, '_auto_check', return_value=dict(items=[], more=True, cursor='later-page')) as check:
+            self.tick()
+        self.assertEqual(check.call_args.args[3], expected)
+        self.assertEqual(self.read(local_path)[binding]['scan_cursor'], 'later-page')
+
+    def test_successful_standalone_check_between_ticks_resumes_continuation(self):
+        self.standalone_check_between_ticks()
+
+    def test_auth_expired_standalone_check_between_ticks_resumes_continuation(self):
+        self.standalone_check_between_ticks(failed=True)
+
     def test_custom_action_key_prefix_through_tick(self):
         import hashlib
         self.manifest['action_key_prefix'] = 'custom:namespace'
