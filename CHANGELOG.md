@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v72: the three built-in automation packs (stale-cards-nudge, notes-folder-to-tasks, email-to-tasks) are rebuilt
+(pack version 1.2.0). Each SKILL.md gives numbered steps with exact commands, the proposal shape with its evidence and
+stable keys, skip rules, and a failure path that ends in a Review Inbox question in the `CARDS.md` "always recommend"
+form or a counted stop. Each SETUP.md gives a verify command and expected output for every need, per runtime. Checks
+are stricter: stale-cards-nudge reads the local board through `keeptrack.py` (flat or split) and reports malformed cards
+once a week; notes-folder-to-tasks skips hidden, lock and empty files, hashes normalised text, skips copies and adds
+`lookback_days`; email-to-tasks never treats a board member as a contact, skips spam, trash, drafts and bulk categories,
+can match mail you sent (`max_recipients`, `include_sent`) and blocks early when CRM mode is off or no contact has an
+address. Each pack ships `evals/cases.json`, behaviour tests run with `relay.py eval`; a wording change to a pack is
+kept only after its evals pass (`AUTOMATIONS.md`, "Behaviour tests"; the create skill adds one to new packs, from
+`references/evals_template.json`). `tests/test_automation_packs.py` checks every built-in pack's evals file and docs.
+Security (#175): `automation install`, `setup`, `enable`, `disable`, `uninstall`, `check`, `tick` and `mark` refuse an
+`--owner` that is not the person running the command (case ignored); no admin override. Built-in pack digests changed:
+each install must be reinstalled and set up again (`UPGRADING.md`, v72). No schema change, no migration.
+
 Kit v71: comments and routine answers that need a person say whose view each point is and what it rests on.
 `CARDS.md` ("Comments that need a person: always recommend") adds "Who it affects" (the two or three viewpoints the
 choice touches, scored from what they would say, not from an opinion of the agent's own) and "What it rests on" (each

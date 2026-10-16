@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 71  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 72  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -8982,11 +8982,27 @@ def _auto_tick(a, packs, owner):
         raise
 
 
+# Actions that create, change, run or record work for one owner's binding. Only that owner may run them:
+# --owner must name the person running the command (default_user(), case-insensitive). There is no admin
+# override; another person's binding is installed, set up, enabled, ticked or retired by that person.
+_AUTO_OWNER_ACTIONS = ("install", "setup", "enable", "disable", "uninstall", "check", "tick", "mark")
+
+
+def _auto_owner(a):
+    """The owner this command acts for; refuses an --owner that is not the person running a changing action."""
+    runner = (default_user() or "").strip().lower()
+    asked = (getattr(a, "owner", None) or "").strip().lower()
+    if a.action in _AUTO_OWNER_ACTIONS and asked and asked != runner:
+        if not runner: sys.exit("automation " + a.action + ": cannot tell who is running this; set BOARD_USER to your GitHub login")
+        sys.exit("automation " + a.action + ": --owner " + asked + " is not you (" + runner + "); only the owner can " + a.action + " their own automations")
+    return asked or runner
+
+
 def cmd_automation(a):
     action = a.action
     if action == "validate":
         _auto_pack(a.path); print("valid"); return
-    owner = (getattr(a, "owner", None) or default_user()).strip().lower()
+    owner = _auto_owner(a)
     slug = getattr(a, "slug", None)
     if action in ("disable", "uninstall"):
         binding, rp = _auto_binding(slug, owner)
@@ -9098,7 +9114,7 @@ def cmd_automation(a):
                                      setup=dict(status="blocked", digest=digest, runtime=None, checked_at=now(), notes=[])))
         else:
             if not r or r.get("status") == "retired": sys.exit("automation is not installed")
-            if r.get("owner") != owner: sys.exit("automation owner mismatch")
+            if r.get("owner", "").lower() != owner: sys.exit("automation owner mismatch")
             install = r["automation"]
             if action == "enable":
                 if not _auto_ready(r, digest): sys.exit("setup is not ready for current pack digest; reinstall and setup")
