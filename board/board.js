@@ -5346,7 +5346,17 @@ if (typeof window !== 'undefined') (() => {
     return b - a >= days ? b - a : 0;
   }
   // <<< inbox-rules
-  const lapsedDays = p => askLapsed(p, todayIso(), inboxLapseDays(state.settings));
+  // The board's today for lapses, as keeptrack.py's board_today: the signed-in member's time zone, else the kit owner's,
+  // else the first member with one, else this browser's clock.
+  function boardTodayIso() {
+    const people = (state.people || []).filter(m => m && typeof m === 'object'), me = String(cfg().me || '').toLowerCase(), owner = String((state.settings || {}).kit_owner || '').toLowerCase();
+    const okZone = z => { if (typeof z !== 'string' || !z) return false; try { new Intl.DateTimeFormat('en', { timeZone: z }); return true; } catch { return false; } };
+    const pick = [people.find(m => me && String(m.github || '').toLowerCase() === me), people.find(m => owner && String(m.github || '').toLowerCase() === owner), people.find(m => okZone(m.timezone))].find(m => m && okZone(m.timezone));
+    if (!pick) return todayIso();
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: pick.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+  const lapsedDays = p => askLapsed(p, boardTodayIso(), inboxLapseDays(state.settings));
   const SRC_LABEL = { meeting: 'Meeting', email: 'Email', other: 'Other' };
   const LIST_FIELDS = ['comments', 'todos', 'links'];
   // The fields a proposal may change, the same lists as keeptrack.py (TASK_CHANGE_FIELDS, PERSON_CHANGE_FIELDS, TOUCH_CHANGE_FIELDS).
@@ -5910,17 +5920,37 @@ if (typeof window !== 'undefined') (() => {
       if (await pressRun(p.id, go, () => decideProposal(p.id, 'merge', { into, fields }), DONE_TEXT.merge)) { delete inboxOpen[p.id]; inboxSay(`Merged into ${refTitle(into)}.`); render(); } else render(); });
     return f;
   }
-  async function acceptAllRecommended(items, btn) {
+  // The bulk answer runs one item at a time. Its state lives here, not on the button, because every save redraws the
+  // Inbox: while it runs the button stays off with its progress, and every queued item's controls stay off.
+  const inboxBulk = { running: false, done: 0, total: 0, queue: new Set() };
+  const bulkCandidates = () => inboxAll().filter(p => p.status === 'pending' && p.kind === 'ask.choose' && recommendedOption(p.change) && !askDecider(p) && !lapsedDays(p) && !inboxPress.busy.has(p.id));
+  async function acceptAllRecommended() {
     if (ro) { roToast(); return; }
-    const list = items.map(p => `${p.title || p.id}: ${recommendedOption(p.change).label}`);
-    if (!(await ask(`Answer ${items.length} question${items.length === 1 ? '' : 's'} with the recommended option?`, [...list.slice(0, 8), ...(list.length > 8 ? [`…and ${list.length - 8} more`] : []), 'Each answer is saved as if you picked it. Undo changes one until the agent acts on it.'], 'Answer them'))) return;
-    btn.disabled = true; const lab = btn.querySelector('.ui-btn__label') || btn; let n = 0, failed = 0;
-    for (const p of items) {
-      lab.textContent = `Saving ${n + failed + 1} of ${items.length}…`;
-      const rec = recommendedOption(p.change), answer = { choice: rec.key };
-      if (await pressRun(p.id, null, () => answerProposal(p.id, answer), answerDone(answer))) n++; else failed++;
-    }
-    inboxSay(failed ? `Answered ${n}. ${failed} not saved; each says why.` : `Answered ${n} with the recommended option. Use Undo to change an answer.`, !!failed);
+    if (inboxBulk.running) return;   // a second press while a run is out does nothing
+    const items = bulkCandidates(); if (!items.length) return;
+    // The confirm lists EVERY question it will answer (question text and the recommended option), and only those are answered.
+    const body = el('div', 'kb-ask'), list = el('ol', 'inbox__bulklist');
+    items.forEach(p => { const li = el('li'), c = p.change || {}; li.dataset.id = p.id;
+      li.append(el('span', 'inbox__bulkq', c.question || p.title || p.id), el('span', 'muted', ' Recommended: ' + recommendedOption(c).label)); list.append(li); });
+    body.append(list, el('p', 'ui-sheet__text', 'Each answer is saved as if you picked it. Undo changes one until the agent acts on it.'));
+    if (!(await ui.confirm({ title: `Answer ${items.length} question${items.length === 1 ? '' : 's'} with the recommended option?`, body, confirmLabel: 'Answer them' }))) return;
+    if (inboxBulk.running) return;
+    Object.assign(inboxBulk, { running: true, done: 0, total: items.length, queue: new Set(items.map(p => p.id)) });
+    let n = 0, failed = 0, skipped = 0;
+    try {
+      render();
+      for (const seen of items) {
+        const cur = inboxAll().find(x => x.id === seen.id);
+        if (!cur || cur.status !== 'pending' || !recommendedOption(cur.change) || recommendedOption(cur.change).key !== recommendedOption(seen.change).key) skipped++;   // answered or changed meanwhile: not ours to answer
+        else {
+          const answer = { choice: recommendedOption(cur.change).key };
+          if (await pressRun(cur.id, null, () => answerProposal(cur.id, answer), answerDone(answer))) n++;
+          else { const now = inboxAll().find(x => x.id === cur.id); if (now && now.status !== 'pending') { inboxPress.err.delete(cur.id); skipped++; } else failed++; }
+        }
+        inboxBulk.queue.delete(seen.id); inboxBulk.done++; render();
+      }
+    } finally { Object.assign(inboxBulk, { running: false, done: 0, total: 0 }); inboxBulk.queue.clear(); }
+    inboxSay(`Answered ${n} with the recommended option.` + (skipped ? ` ${skipped} already answered by someone, so left as they are.` : '') + (failed ? ` ${failed} not saved; each says why.` : ' Use Undo to change an answer.'), !!failed);
     render();
   }
   async function inboxAct(p, act, btn) {
@@ -6002,6 +6032,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function pressFinish(art, p) {   // the press state survives a redraw: controls stay off while a save is out
     const n = pressNote(p); if (n) art.append(n);
+    if (!inboxPress.busy.has(p.id) && inboxBulk.queue.has(p.id)) { const q = el('p', 'prop__press', 'Waiting to be answered with the recommended option…'); q.setAttribute('role', 'status'); art.append(q); art.querySelectorAll('button, input, textarea, select').forEach(b => { b.disabled = true; }); return; }
     if (!inboxPress.busy.has(p.id)) return;
     art.setAttribute('aria-busy', 'true'); art.querySelectorAll('button, input, textarea, select').forEach(b => { b.disabled = true; });
     const key = inboxPress.busy.get(p.id), b = key && [...art.querySelectorAll('[data-press]')].find(x => x.dataset.press === key);
@@ -6018,10 +6049,11 @@ if (typeof window !== 'undefined') (() => {
     const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · e edits · m merges · i ignores · r picks the recommended answer')); wrap.append(keys);
     // kit v71: answer every question that recommends an option with that option, after one confirm. Each is saved on its
     // own, exactly as if picked by hand. Lapsed questions and ones for someone else are left for a person to look at.
-    const recs = all.filter(p => p.status === 'pending' && p.kind === 'ask.choose' && recommendedOption(p.change) && !askDecider(p) && !lapsedDays(p) && !inboxPress.busy.has(p.id));
-    if (recs.length) {
-      const bulk = el('div', 'inbox__bulk'), go = ui.button({ label: `Accept all recommended (${recs.length})`, variant: 'secondary', size: 'sm', onClick: () => acceptAllRecommended(recs, go) });
-      go.dataset.act = 'accept-all-recommended'; if (ro) go.disabled = true;
+    const recs = bulkCandidates().filter(p => !inboxBulk.queue.has(p.id));
+    if (recs.length || inboxBulk.running) {
+      const label = inboxBulk.running ? `Saving ${Math.min(inboxBulk.done + 1, inboxBulk.total)} of ${inboxBulk.total}…` : `Accept all recommended (${recs.length})`;
+      const bulk = el('div', 'inbox__bulk'), go = ui.button({ label, variant: 'secondary', size: 'sm', onClick: () => acceptAllRecommended() });
+      go.dataset.act = 'accept-all-recommended'; if (ro || inboxBulk.running) go.disabled = true; if (inboxBulk.running) go.setAttribute('aria-busy', 'true');
       bulk.append(go, el('span', 'muted', 'Answers each question that recommends an option with that option. Lapsed questions are left out.')); wrap.append(bulk);
     }
     const filters = el('div', 'inbox__filters'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', 'Filter proposals');

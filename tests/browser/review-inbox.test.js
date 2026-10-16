@@ -492,6 +492,8 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
         change: { question: title, options: [{ key: 'a', label: 'Option A' }, { key: 'b', label: 'Option B' }], ...change }, ...extra }));
       files['proposals/r_recpick001.json'] = q('r_recpick001', 'Which supplier?', { recommended: 'b' });
       files['proposals/r_recpick002.json'] = q('r_recpick002', 'Which venue?', { recommended: 'a' });
+      for (let n = 3; n <= 10; n++) files[`proposals/r_recmany0${String(n).padStart(2, '0')}.json`] = q(`r_recmany0${String(n).padStart(2, '0')}`, `Bulk question ${n}?`, { recommended: 'a' });
+      files['proposals/r_recmany099.json'] = q('r_recmany099', 'Send the reply to the client now?', { options: [{ key: 'send', label: 'Send it' }, { key: 'hold', label: 'Hold it' }], recommended: 'send' });
       files['proposals/r_recsam0001.json'] = q('r_recsam0001', 'Which logo?', { recommended: 'a' }, { decider: 'sam' });
       files['proposals/r_reclaps001.json'] = q('r_reclaps001', 'Which colour, from long ago?', { recommended: 'a' }, { created: old });
       files['proposals/r_plain00001.json'] = q('r_plain00001', 'Which day?', {});
@@ -509,13 +511,36 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.equal(await lapsed.locator('[data-recommended]').isDisabled(), false, 'a lapsed question can still be answered');
       await page.selectOption('[data-filter="status"]', 'lapsed'); assert.deepEqual(await page.locator('article.prop').evaluateAll(a => a.map(x => x.dataset.id)), ['r_reclaps001']);
       await page.selectOption('[data-filter="status"]', 'pending');
-      // Accept all recommended: one confirm, then each answer saved as if picked by hand.
-      const bulk = page.locator('[data-act="accept-all-recommended"]'); assert.match(await bulk.textContent(), /Accept all recommended \(2\)/, 'only the two that are not lapsed and not for someone else');
+      // Accept all recommended: the confirm lists EVERY question it will answer (no "…and N more"), with its question
+      // text and the recommended option; then each answer is saved as if picked by hand, one at a time.
+      const bulk = page.locator('[data-act="accept-all-recommended"]'); assert.match(await bulk.textContent(), /Accept all recommended \(11\)/, 'not lapsed and not for someone else');
+      const bulkIds = ['r_recpick001', 'r_recpick002', ...Array.from({ length: 8 }, (_, i) => `r_recmany0${String(i + 3).padStart(2, '0')}`), 'r_recmany099'];
       await clearLive(page); await bulk.click(); const dlg = page.getByRole('alertdialog'); await dlg.waitFor();
-      assert.match(await dlg.textContent(), /Which supplier\?: Option B/); await dlg.getByRole('button', { name: 'Answer them' }).click(); await said(page, /Answered 2 with the recommended option/);
-      for (const [id, key] of [['r_recpick001', 'b'], ['r_recpick002', 'a']]) { const o = api.json(`proposals/${id}.json`); assert.equal(o.status, 'answered'); assert.deepEqual(o.decision.answer, { choice: key }); assert.equal(o.history.at(-1).text, 'answered'); }
+      assert.deepEqual((await dlg.locator('.inbox__bulklist li').evaluateAll(l => l.map(x => x.dataset.id))).sort(), bulkIds.slice().sort(), 'every question it will answer is listed');
+      assert.doesNotMatch(await dlg.textContent(), /more/, 'nothing is hidden behind "…and N more"');
+      assert.match(await dlg.locator('li[data-id="r_recmany099"]').textContent(), /Send the reply to the client now\?\s*Recommended: Send it/, 'question text and the recommended option');
+      assert.match(await dlg.locator('li[data-id="r_recpick001"]').textContent(), /Which supplier\?\s*Recommended: Option B/);
+      // A slow run: the button stays off with its progress across redraws, queued items stay off, a second press does nothing.
+      let releaseBulk; const heldBulk = new Promise(ok => { releaseBulk = ok; });
+      await page.route('https://api.test/**', async r => { if (r.request().method() === 'PATCH') await heldBulk; return api.route(r); });
+      await dlg.getByRole('button', { name: 'Answer them' }).click();
+      await page.waitForFunction(() => /Saving 1 of 11…/.test((document.querySelector('[data-act="accept-all-recommended"]') || {}).textContent || ''));
+      assert.equal(await bulk.isDisabled(), true, 'the bulk button is off while it runs');
+      assert.equal(await propCard(page, 'r_recmany099').locator('button:not([disabled])').count(), 0, 'a queued item cannot be picked by hand mid-run');
+      assert.match(await propCard(page, 'r_recmany099').textContent(), /Waiting to be answered with the recommended option/);
+      await bulk.click({ force: true });
+      assert.equal(await page.getByRole('alertdialog').count(), 0, 'a second press starts no second run');
+      // Someone else answers a queued item meanwhile: it is skipped, not counted as failed, and their answer stays.
+      api.edit('proposals/r_recmany010.json', o => { o.status = 'answered'; o.decision = { action: 'answer', id: 'a_other00001', by: 'sam', at: '2026-10-12T09:00:00Z', answer: { choice: 'b' }, result: null, commit: null }; });
+      releaseBulk(); await said(page, /Answered 10 with the recommended option\. 1 already answered by someone/);
+      await page.unroute('https://api.test/**'); await page.route('https://api.test/**', r => api.route(r));
+      for (const id of bulkIds.filter(x => x !== 'r_recmany010')) { const o = api.json(`proposals/${id}.json`); assert.equal(o.status, 'answered', id); assert.equal(o.history.filter(h => h.text === 'answered').length, 1, id + ' answered once'); }
+      assert.deepEqual(api.json('proposals/r_recmany099.json').decision.answer, { choice: 'send' });
+      assert.deepEqual(api.json('proposals/r_recmany010.json').decision.answer, { choice: 'b' }, "the other person's answer is kept");
+      assert.equal(await propCard(page, 'r_recmany010').locator('.prop__press--err').count(), 0, 'no false "Not saved"');
       for (const id of ['r_recsam0001', 'r_reclaps001', 'r_plain00001']) assert.equal(api.json(`proposals/${id}.json`).status, 'pending', id + ' stays pending');
       assert.equal(api.json('proposals/r_reclaps001.json').created, old, 'a lapse is never written to the file');
+      assert.equal(await bulk.count(), 0, 'nothing left to bulk-answer');
       assert.match(await propCard(page, 'r_recpick001').locator('.prop__press--ok').textContent(), /✓ Answered/, 'a bulk answer shows its result on each item');
       assert.match(await propCard(page, 'r_recpick001').textContent(), /Option B \(recommended\)/, 'the answer says it was the recommended option');
       // Press: "Saving…" and every control off while the save is out; a second press writes nothing more; then "✓ Approved".

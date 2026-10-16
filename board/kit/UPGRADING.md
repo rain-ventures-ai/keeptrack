@@ -29,7 +29,8 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 `CARDS.md` ("Comments that need a person") and `routine-prompt.md` ask agents to say who a choice affects and what each
 reason rests on (a link, or "judgement"). The Review Inbox gains two optional fields and one read-time rule: an
 `ask.choose` may carry `change.recommended` (an option key), `settings.inbox_lapse_days` (default 14, 0 = never) sets when
-an unanswered question shows as lapsed, and a lapse is computed when the board is read, never written. The web board
+an unanswered question shows as lapsed, and a lapse is computed when the board is read, never written. A new question's
+`created` is always the time it is added (a payload value is ignored), so the lapse clock cannot be set by the asker. The web board
 shows each press's result. No migration and no data change: existing proposals and settings stay as they are, and
 `settings.min_kit` does not rise (an older page or `keeptrack.py` reads the new field and setting without harm, but an
 older `keeptrack.py` refuses to add a question with `recommended`).

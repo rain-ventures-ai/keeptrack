@@ -14,11 +14,15 @@ the good example show both. `routine-prompt.md` follows the rule and, when asked
 a review or a choice, names the people whose view matters before it recommends.
 Review Inbox (ideas from petekp/inbox (MIT)): an `ask.choose` question may name its **recommended option**
 (`change.recommended`, an option key; `proposal-add --recommend <key, number or label>`; anything else is refused). The
-web board shows it first, as the main button marked "Recommended" in words, with **Accept all recommended** (one confirm,
-each answer saved as if picked by hand) and the key `r`; `proposal-answer --recommended` does the same from the CLI, and
+web board shows it first, as the main button marked "Recommended" in words, with **Accept all recommended** (one confirm
+that lists every question it will answer with its recommended option; then each answer is saved in turn as if picked by
+hand, with the button and the queued items off until the run ends, and an item someone answered meanwhile is skipped) and
+the key `r`; `proposal-answer --recommended` does the same from the CLI, and
 `proposals` marks it. A pending question unanswered for `settings.inbox_lapse_days` (default 14, 0 = never;
-`settings-set --inbox-lapse-days`) is **lapsed**: worked out when the board is read, never written. The board marks it and
-has a "Lapsed questions" filter; `proposals --lapsed`, `list --attention` (one `lapsed question …` line each) and
+`settings-set --inbox-lapse-days`) is **lapsed**: worked out when the board is read (on the board's clock), never
+written; a question's `created` is now always the time it was added, so a payload cannot start or stop its lapse clock. The board marks it and
+has a "Lapsed questions" filter; `proposals --lapsed`, `list --attention` (one `lapsed question …` line each, only with no
+card filter or project scope; with `--assignee`, the questions that person answers) and
 `proposal-result` (`lapsed`, `lapsed_days`) report it. Agents do not ask a lapsed or dismissed question again unless the
 person brings it up (`CARDS.md`). A dismissed question now reads "Dismissed". Every press in the Inbox shows its result:
 "Saving…" with the item's controls off (no double submit), then "✓ Approved" / "✓ Answered" on the item, or why it was not

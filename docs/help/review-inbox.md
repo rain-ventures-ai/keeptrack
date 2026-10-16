@@ -72,8 +72,10 @@ A Choose question can name the option the agent recommends. That option comes fi
 **Recommended** on it. Pressing it is the same answer as picking that option yourself. The key **r** does the same for
 the question in focus.
 
-When more than one question has a recommendation, **Accept all recommended** answers them all after one check. Each
-answer is saved on its own, as if you picked it, and Undo changes one until the agent acts on it. It leaves out
+When more than one question has a recommendation, **Accept all recommended** answers them all after one check. The
+check lists every question it will answer, with the option it will pick, and it answers only those. Each answer is saved
+in turn, as if you picked it; while it runs the button shows its progress and the waiting questions cannot be pressed. A
+question someone else answers meanwhile is left as they answered it. Undo changes an answer until the agent acts on it. It leaves out
 questions for someone else and questions that have lapsed.
 
 ### Lapsed questions

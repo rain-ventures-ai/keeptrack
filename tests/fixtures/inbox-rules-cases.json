@@ -9,7 +9,9 @@
     {"name": "negative is ignored", "settings": {"inbox_lapse_days": -1}, "want": 14},
     {"name": "text is ignored", "settings": {"inbox_lapse_days": "7"}, "want": 14},
     {"name": "a boolean is ignored", "settings": {"inbox_lapse_days": true}, "want": 14},
-    {"name": "a fraction is ignored", "settings": {"inbox_lapse_days": 2.5}, "want": 14}
+    {"name": "a fraction is ignored", "settings": {"inbox_lapse_days": 2.5}, "want": 14},
+    {"name": "a whole number written with .0 is that number", "settings": {"inbox_lapse_days": 30.0}, "want": 30},
+    {"name": "0.0 turns lapsing off too", "settings": {"inbox_lapse_days": 0.0}, "want": 0}
   ],
   "recommended": [
     {"name": "the matching option", "change": {"options": [{"key": "a", "label": "A"}, {"key": "b", "label": "B"}], "recommended": "b"}, "want": "b"},

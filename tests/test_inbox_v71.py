@@ -7,7 +7,7 @@ KT = os.path.join(HERE, "..", "board", "kit", "keeptrack.py")
 OLD = "2020-01-01T09:00:00Z"
 
 
-def choose(action, recommended=None, created=None, **extra):
+def choose(action, recommended=None, **extra):
     change = {"question": f"Which supplier for {action}?",
               "options": [{"key": "acme", "label": "Acme Supplies"}, {"key": "bolt", "label": "Bolt Ltd"}]}
     if recommended is not None:
@@ -15,8 +15,6 @@ def choose(action, recommended=None, created=None, **extra):
     value = {"kind": "ask.choose", "title": change["question"],
              "source": {"kind": "other", "id": "agent-run-1", "revision": "1", "title": "Supplier review", "date": "2026-10-12"},
              "action_key": action, "work_key": action, "reason": "Needs a person's decision.", "target": None, "change": change}
-    if created:
-        value["created"] = created
     value.update(extra)
     return value
 
@@ -43,6 +41,17 @@ class InboxV71(unittest.TestCase):
 
     def add(self, *items, extra=(), ok=True):
         return self.kt("proposal-add", "-", *extra, stdin=json.dumps(list(items)), env=self.agent, ok=ok)
+
+    def age(self, action, created=OLD):
+        """Make a question old on disk (the CLI sets a question's created time itself; this simulates days passing)."""
+        rid = self.stored(action)["id"]
+        path = os.path.join(self.board, "proposals", rid + ".json")
+        with open(path, encoding="utf-8") as f:
+            p = json.load(f)
+        p["created"] = created
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(p, f, indent=2)
+        return rid
 
     def stored(self, action):
         return next(p for p in json.loads(self.kt("proposals", "--status", "all", "--json").stdout) if p["action_key"] == action)
@@ -120,7 +129,8 @@ class InboxV71(unittest.TestCase):
 
     # ---- lapsed questions ---------------------------------------------------------------------------------------
     def test_old_unanswered_question_shows_as_lapsed_and_nothing_is_written(self):
-        self.add(choose("old", created=OLD), choose("new"))
+        self.add(choose("old"), choose("new"))
+        self.age("old")
         before = self.stored("old")
         lines = self.kt("proposals").stdout.splitlines()
         self.assertTrue(any("for old?" in x and "[lapsed: unanswered" in x for x in lines), lines)
@@ -135,7 +145,8 @@ class InboxV71(unittest.TestCase):
         self.assertFalse(fresh["lapsed"]); self.assertNotIn("lapsed_days", fresh)
 
     def test_attention_lists_lapsed_questions_one_line_each(self):
-        self.add(choose("old-att", created=OLD, decider="alex"), choose("new-att"))
+        self.add(choose("old-att", decider="alex"), choose("new-att"))
+        self.age("old-att")
         out = self.kt("list", "--attention").stdout.splitlines()
         hits = [x for x in out if x.startswith("lapsed question ")]
         self.assertEqual(1, len(hits), out)
@@ -143,21 +154,58 @@ class InboxV71(unittest.TestCase):
         self.assertEqual("[]", self.kt("list", "--attention", "--json").stdout.strip(), "--json lists cards only")
 
     def test_a_lapsed_question_can_still_be_answered(self):
-        self.add(choose("late", "acme", created=OLD))
-        rid = self.stored("late")["id"]
+        self.add(choose("late", "acme"))
+        rid = self.age("late")
         self.kt("proposal-answer", rid, "--recommended")
         self.assertEqual("answered", self.stored("late")["status"])
         self.assertNotIn("lapsed question", self.kt("list", "--attention").stdout)
         self.assertFalse(json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)["lapsed"])
 
     def test_dismissed_question_is_not_lapsed(self):
-        self.add(choose("gone", created=OLD))
+        self.add(choose("gone"))
+        self.age("gone")
         self.kt("proposal-ignore", self.stored("gone")["id"], env=self.agent)   # the asking agent withdraws its own question
         self.assertNotIn("lapsed question", self.kt("list", "--attention").stdout)
 
+    def test_a_question_payload_cannot_set_its_own_lapse_clock(self):
+        self.add(choose("past", created=OLD), choose("future", created="2999-01-01T00:00:00Z"))
+        for action in ("past", "future"):
+            created = self.stored(action)["created"]
+            self.assertNotIn(created[:4], ("2020", "2999"), "a question's created time is the time it was added")
+        self.assertNotIn("lapsed question", self.kt("list", "--attention").stdout)
+
+    def test_attention_lapsed_lines_follow_filters_and_scope(self):
+        self.add(choose("for-alex", decider="alex"), choose("for-sam", decider="sam"), choose("for-anyone"))
+        for action in ("for-alex", "for-sam", "for-anyone"):
+            self.age(action)
+        everything = self.kt("list", "--attention").stdout
+        self.assertEqual(3, everything.count("lapsed question "))
+        mine = self.kt("list", "--attention", "--assignee", "alex").stdout
+        self.assertEqual(1, mine.count("lapsed question ")); self.assertIn("for for-alex?", mine)
+        for flags in (("--column", "todo"), ("--client", "Acme"), ("--label", "x"), ("--unclaimed",), ("-q", "supplier"),
+                      ("--project", "nope")):
+            with self.subTest(flags=flags):
+                self.assertNotIn("lapsed question", self.kt("list", "--attention", *flags).stdout,
+                                 "questions belong to no project or card filter")
+
+    def test_recommend_flag_key_wins_and_ambiguity_is_refused(self):
+        item = choose("keys")
+        item["change"]["options"] = [{"key": "2", "label": "Two"}, {"key": "1", "label": "One"}, {"key": "x", "label": "Ex"}]
+        p = self.add(item, extra=("--recommend", "1"), ok=False)
+        self.assertEqual(2, p.returncode)
+        self.assertIn("--recommend '1' is ambiguous: it names options 1, 2", p.stderr)
+        self.add(item, extra=("--recommend", "x"))
+        self.assertEqual("x", self.stored("keys")["change"]["recommended"])
+        item2 = choose("keys2")
+        item2["change"]["options"] = [{"key": "a", "label": "b"}, {"key": "b", "label": "Bee"}]
+        self.assertIn("is ambiguous", self.add(item2, extra=("--recommend", "b"), ok=False).stderr, "a key and a label naming two options")
+        self.add(item2, extra=("--recommend", "Bee"))
+        self.assertEqual("b", self.stored("keys2")["change"]["recommended"])
+
     def test_inbox_lapse_days_setting(self):
         self.assertIn("inbox_lapse_days: 14", self.kt("settings").stdout)
-        self.add(choose("set-old", created=OLD))
+        self.add(choose("set-old"))
+        self.age("set-old")
         self.kt("settings-set", "--inbox-lapse-days", "0")
         self.assertIn("inbox_lapse_days: off (questions never lapse)", self.kt("settings").stdout)
         self.assertNotIn("lapsed question", self.kt("list", "--attention").stdout, "0 turns lapsing off")

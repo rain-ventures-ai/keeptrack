@@ -2732,10 +2732,15 @@ def cmd_list(a):
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
         print(line(data, t, today=today) + cleared + scoring + url)
-    if a.attention and not getattr(a, "json", False) and not query:
+    card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "waiting", "project", "client", "label", "bare")) or query or wait_on
+    if a.attention and not getattr(a, "json", False) and not card_filter:
         # kit v71: Review Inbox questions nobody answered in settings.inbox_lapse_days. One self-contained line each (relay
         # reads every line as an item). An agent does not ask a lapsed question again unless the person brings it up.
+        # Questions belong to no project, so a filtered or project-scoped run (the repo's default scope too) lists none;
+        # with --assignee, only the questions that person is named to answer.
         for p, waited in lapsed_questions(data, today):
+            if a.assignee and str(p.get("decider") or "").lower() != a.assignee.lower():
+                continue
             who = f", for @{p['decider']}" if p.get("decider") else ""
             print(f"lapsed question {p.get('id')} ({p.get('kind')}{who}, unanswered {waited} days): {p.get('title', '')}")
 
@@ -6913,6 +6918,8 @@ DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 def inbox_lapse_days(data):
     """settings.inbox_lapse_days as a whole number 0-365 (0 = questions never lapse), else the default 14."""
     v = (data.get("settings") or {}).get("inbox_lapse_days")
+    if isinstance(v, float) and v.is_integer():   # 30.0 in the JSON is 30, as the web page reads it
+        v = int(v)
     return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 365 else INBOX_LAPSE_DAYS
 
 
@@ -7112,13 +7119,20 @@ def check_ask_change(kind, change):
 
 
 def resolve_recommend(change, ref):
-    """--recommend: an option key, its number in the list (1 = first) or its label (any case). The key, or a clear refusal."""
-    options = change.get("options") if isinstance(change.get("options"), list) else []
+    """--recommend: an option key, its number in the list (1 = first) or its label (any case). An exact key wins, then the
+    number, then the label; when these name different options the reference is ambiguous and refused."""
+    options = [o for o in (change.get("options") if isinstance(change.get("options"), list) else []) if isinstance(o, dict)]
     ref = str(ref or "").strip()
-    listing = "; ".join(f"{i}. {o.get('label')} ({o.get('key')})" for i, o in enumerate(options, 1) if isinstance(o, dict))
-    for i, o in enumerate(options, 1):
-        if isinstance(o, dict) and (ref == o.get("key") or ref == str(i) or ref.casefold() == str(o.get("label", "")).strip().casefold()):
-            return o.get("key")
+    listing = "; ".join(f"{i}. {o.get('label')} ({o.get('key')})" for i, o in enumerate(options, 1))
+    by_key = [o.get("key") for o in options if ref == o.get("key")]
+    by_pos = [options[int(ref) - 1].get("key")] if ref.isdigit() and 1 <= int(ref) <= len(options) else []
+    by_label = [o.get("key") for o in options if ref.casefold() == str(o.get("label", "")).strip().casefold()]
+    named = list(dict.fromkeys(by_key + by_pos + by_label))
+    if len(named) > 1:
+        proposal_error(f"--recommend {ref!r} is ambiguous: it names options " + ", ".join(named)
+                       + f" (by key, number or label). Options: {listing}. Give a key that names one option only.")
+    if named:
+        return named[0]
     proposal_error(f"--recommend {ref!r} matches none of the options: {listing or '(none)'}. Give a key, a number or a label.")
 
 
@@ -7217,7 +7231,8 @@ def validate_proposal_input(raw, recipients_confirmed=False):
            "source": clean_source, "action_key": action_key, "work_key": work_key,
            "reason": reason.strip(), "target": copy.deepcopy(target), "change": copy.deepcopy(change),
            "likely_duplicates": [], "decision": None, "history": [],
-           "created": raw.get("created") or now(),
+           # kit v71: a question's lapse clock starts when it is added; the payload cannot set it (as with createdBy below)
+           "created": now() if kind in ASK_KINDS else (raw.get("created") or now()),
            "createdBy": who_am_i() if kind in ASK_KINDS else (raw.get("createdBy") or who_am_i())}   # an answer goes back to the asker only
     for key in ("run", "evidence", "reviewer", "decider"):
         if raw.get(key) not in (None, ""):
