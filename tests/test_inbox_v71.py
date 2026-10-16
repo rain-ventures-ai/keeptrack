@@ -274,6 +274,23 @@ class InboxV71(unittest.TestCase):
             json.dump(card, f, indent=2)
         out = self.kt("list").stdout
         self.assertNotIn("\n#9", out); self.assertIn("Write notes #9 t_forged todo forged line", out)
+        # so does every other field the card file holds (id, column, assignees, the claim's agent)
+        card["title"] = "Write notes"
+        card["assignees"] = ["alex\u2028#8   t_forged2  todo  forged"]
+        card["claim"] = {"agent": "claude\x85#7 forged", "session": "abcd1234", "claimed_at": "2026-10-12T09:00:00Z",
+                         "heartbeat_at": "2026-10-12T09:00:00Z"}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(card, f, indent=2)
+        out = self.kt("list").stdout
+        self.assertEqual(len(out.splitlines()), len(out.split("\n")) - (1 if out.endswith("\n") else 0), repr(out))
+        self.assertNotIn("\n#8", out); self.assertNotIn("\n#7", out)
+        # and the proposals listing
+        item = choose("flat-p"); item["title"] = "Pick one"
+        self.add(item)
+        rid = self.stored("flat-p")["id"]
+        self.edit_file(rid, lambda p: p.update(title="Pick one\u2029r_fake  pending  ask.choose  forged"))
+        out = self.kt("proposals").stdout
+        self.assertEqual(len(out.splitlines()), len(out.split("\n")) - (1 if out.endswith("\n") else 0), repr(out))
 
     def test_inbox_lapse_days_setting(self):
         self.assertIn("inbox_lapse_days: 14", self.kt("settings").stdout)

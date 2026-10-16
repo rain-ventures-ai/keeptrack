@@ -1288,8 +1288,10 @@ def hosted_dispatch(a):
             if a.column and a.column != "backlog":
                 sys.exit("ineligible: hosted cards are created in Backlog; approve separately")
             card = {"id": "t_" + secrets.token_hex(8), "title": a.title, "assignees": a.assign or [], "column": "backlog"}
-            if not a.title.strip():
-                sys.exit("invalid_schema: a task needs a title")
+            if not a.title.strip() or _has_break(a.title):
+                sys.exit("invalid_schema: a task needs a title on one line")
+            for name in a.label or []:
+                check_label_name(name)
             for k in ("details", "client", "priority"):
                 if getattr(a, k, None) is not None:
                     card[k] = getattr(a, k)
@@ -2652,12 +2654,13 @@ def _has_break(value):
 
 def line(data, t, wait_suffix="list", today=None):
     cs = claim_state(data, t.get("claim"))
-    who = ",".join("@" + a for a in t.get("assignees", [])) or "-"
+    # every field from the card file is flattened: a hand-edited file can't make this one line two (relay reads lines)
+    who = ",".join("@" + _flat(a) for a in t.get("assignees", [])) or "-"
     c = t.get("claim") or {}
     if c.get("blocked_by_wait") and cs == "blocked":   # never goes stale, so show how old its last heartbeat is
-        cl = f"  [{c.get('agent')}:blocked by wait, beat {_age(minutes_since(c.get('heartbeat_at') or c.get('claimed_at')))} ago]"
+        cl = f"  [{_flat(c.get('agent'))}:blocked by wait, beat {_age(minutes_since(c.get('heartbeat_at') or c.get('claimed_at')))} ago]"
     else:
-        cl = f"  [{c.get('agent')}:{cs}]" if c else ""
+        cl = f"  [{_flat(c.get('agent'))}:{cs}]" if c else ""
     td = t.get("todos") or []
     pr = f"  [{sum(1 for d in td if d.get('done'))}/{len(td)}]" if td else ""
     cm = f"  \U0001F4AC{len(t['comments'])}" if t.get("comments") else ""
@@ -2671,7 +2674,8 @@ def line(data, t, wait_suffix="list", today=None):
     if after_ids(t) and t.get("column") != "done":   # the links on the board not done yet (show ID reads the archive)
         todo = [after_ref(x) for x in after_links(data, t) if x["state"] not in ("done", "missing")]
         af = f"  [after {', '.join(todo)}]" if todo else ""
-    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {_flat(t['title'])}{pr}{cm}{wt}{af}{cl}"
+    return (f"#{_flat(t.get('num', '?')):<4}{_flat(t['id'])}  {_flat(t['column']):<11} {who:<22} {_flat(t['title'])}"
+            f"{pr}{cm}{wt}{af}{cl}")
 
 
 def _default_scope(a, data=None):
@@ -7486,8 +7490,8 @@ def cmd_proposals(a):
         print(json.dumps(rows, indent=2, ensure_ascii=False)); return
     for p in rows:
         rec, waited = recommended_option(p.get("change")), ask_lapsed(p, today, days, zone)
-        marks = (f"  (recommended: {rec.get('label') or rec.get('key')})" if rec else "") + (f"  [lapsed: unanswered {waited} days]" if waited else "")
-        print(f"{p['id']}  {p['status']:<8} {p['kind']:<13} {p['title']}{marks}")
+        marks = (f"  (recommended: {_flat(rec.get('label') or rec.get('key'))})" if rec else "") + (f"  [lapsed: unanswered {waited} days]" if waited else "")
+        print(f"{_flat(p['id'])}  {_flat(p['status']):<8} {_flat(p['kind']):<13} {_flat(p['title'])}{marks}")
     if not rows: print("(no proposals)")
 
 

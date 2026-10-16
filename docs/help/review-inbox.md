@@ -190,6 +190,6 @@ and `proposal-done` still lets only one of them act.
 If the card waits on the answer, use `keeptrack.py wait <card> --on "answer to <question id>"` and stop.
 
 A question unanswered for `settings.inbox_lapse_days` (default 14) has lapsed: `proposal-result` says `"lapsed": true`
-and `list --attention` lists it. Treat it as a no for now. Do not ask it again, or a reworded copy, unless the person
+and `list --attention` lists it (with no card filter; in a repo with a default project, add `--all`). Treat it as a no for now. Do not ask it again, or a reworded copy, unless the person
 brings it up. If an answer comes later, act on it only if the work still applies; otherwise close it with
 `proposal-done --not-acted`. The full rule is in `board/CARDS.md`, "Review Inbox questions: recommended and lapsed".
