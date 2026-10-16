@@ -49,7 +49,7 @@ For each proposal, pick one:
 | **Ignore** | Nothing changes on the board. The same suggestion from the same source will not come back. |
 | **Leave pending** | Nothing changes. Move on to the next one. |
 
-There is no "accept all". Each change is a choice.
+There is no "accept all" for proposals. Each change is a choice.
 
 Keys: **j** and **k** move between proposals. **a** accepts, **e** edits, **m** merges and **i** ignores. **Enter** opens the record, or moves to the buttons when there is no record yet.
 
@@ -65,6 +65,30 @@ ways to answer:
 | **Question** | Write your answer and choose **Send answer**. |
 
 You can add a note to any answer. **Dismiss** closes a question without an answer, and **Leave pending** moves on.
+
+### Recommended answers
+
+A Choose question can name the option the agent recommends. That option comes first, as the main button, with the word
+**Recommended** on it. Pressing it is the same answer as picking that option yourself. The key **r** does the same for
+the question in focus.
+
+When more than one question has a recommendation, **Accept all recommended** answers them all after one check. Each
+answer is saved on its own, as if you picked it, and Undo changes one until the agent acts on it. It leaves out
+questions for someone else and questions that have lapsed.
+
+### Lapsed questions
+
+A question nobody answers for 14 days **lapses**. It shows **Lapsed**, and the **Lapsed questions** filter lists them.
+The agent treats it as a no for now and does not ask it again unless you bring it up. You can still answer it. Nothing
+is saved to mark a lapse: it is worked out each time the board is read.
+
+Change the number of days with `python3 board/keeptrack.py settings-set --inbox-lapse-days N` (0 = never lapse).
+
+### What you see when you press
+
+Every button in the Inbox shows its result. While it saves, the button reads **Saving…** and the item's other buttons
+are off, so a second press does nothing. Then the item says what happened, such as **✓ Approved**, and stays in view
+until you change the filter or leave the Inbox. If the save fails, the item says why and its buttons work again.
 
 - A question can name the person who answers it ("Who answers: @sam"). Only that person can answer, dismiss or
   change it; others see "Waiting for @sam to answer". Without a name, any board member can.
@@ -118,6 +142,8 @@ python3 board/keeptrack.py proposal-accept <id> [--edit edited.json]
 python3 board/keeptrack.py proposal-merge <id> --into <task or person id> [--fields title,due]
 python3 board/keeptrack.py proposal-ignore <id> [--reason "..."]
 python3 board/keeptrack.py proposal-reopen <id>
+python3 board/keeptrack.py proposals --lapsed               # questions unanswered for settings.inbox_lapse_days
+python3 board/keeptrack.py proposal-answer <id> --recommended   # a person: pick the recommended option
 python3 board/keeptrack.py proposal-undo <id>
 ```
 
@@ -126,7 +152,8 @@ A routine only adds and lists proposals. It never accepts them. Exit code 3 mean
 Questions (kit v44) use three kinds. The `change` holds `question` (one line, at most 300 characters), optional
 `task` (a card id for context) and `links` (`[{url, title}]`, https only), plus:
 
-- `ask.choose`: `options` (2 to 10 of `{key, label, url, note}`) and `allow_other` (true or false);
+- `ask.choose`: `options` (2 to 10 of `{key, label, url, note}`), `allow_other` (true or false) and, from kit v71,
+  `recommended` (the key of the option you recommend; `proposal-add --recommend <key, number or label>` sets it);
 - `ask.approve`: `subject` (`{type: email|message|pr|document|other, url, summary}`) and `content_hash`
   (required: `sha256:<64 hex>` of the exact content you will send or merge). An email `summary` needs
   `--recipients-confirmed`; without it, link the draft and leave the summary out;
@@ -157,3 +184,8 @@ a later run of the same routine can pick up the answer. Every run for that agent
 and `proposal-done` still lets only one of them act.
 
 If the card waits on the answer, use `keeptrack.py wait <card> --on "answer to <question id>"` and stop.
+
+A question unanswered for `settings.inbox_lapse_days` (default 14) has lapsed: `proposal-result` says `"lapsed": true`
+and `list --attention` lists it. Treat it as a no for now. Do not ask it again, or a reworded copy, unless the person
+brings it up. If an answer comes later, act on it only if the work still applies; otherwise close it with
+`proposal-done --not-acted`. The full rule is in `board/CARDS.md`, "Review Inbox questions: recommended and lapsed".

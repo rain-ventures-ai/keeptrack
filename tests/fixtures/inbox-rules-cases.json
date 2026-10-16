@@ -1,0 +1,39 @@
+{
+  "about": "Shared Review Inbox read-time rules (kit v71). tests/test_inbox_rules_parity.py runs each case through keeptrack.py (inbox_lapse_days, recommended_option, ask_lapsed) and board.js (inboxLapseDays, recommendedOption, askLapsed). Add a case when either changes.",
+  "lapse_days": [
+    {"name": "unset is the default", "settings": {}, "want": 14},
+    {"name": "zero turns lapsing off", "settings": {"inbox_lapse_days": 0}, "want": 0},
+    {"name": "a whole number is used", "settings": {"inbox_lapse_days": 30}, "want": 30},
+    {"name": "365 is the most", "settings": {"inbox_lapse_days": 365}, "want": 365},
+    {"name": "too many days is ignored", "settings": {"inbox_lapse_days": 366}, "want": 14},
+    {"name": "negative is ignored", "settings": {"inbox_lapse_days": -1}, "want": 14},
+    {"name": "text is ignored", "settings": {"inbox_lapse_days": "7"}, "want": 14},
+    {"name": "a boolean is ignored", "settings": {"inbox_lapse_days": true}, "want": 14},
+    {"name": "a fraction is ignored", "settings": {"inbox_lapse_days": 2.5}, "want": 14}
+  ],
+  "recommended": [
+    {"name": "the matching option", "change": {"options": [{"key": "a", "label": "A"}, {"key": "b", "label": "B"}], "recommended": "b"}, "want": "b"},
+    {"name": "no recommendation", "change": {"options": [{"key": "a", "label": "A"}, {"key": "b", "label": "B"}]}, "want": null},
+    {"name": "a key that is not an option", "change": {"options": [{"key": "a", "label": "A"}], "recommended": "z"}, "want": null},
+    {"name": "a label is not a key", "change": {"options": [{"key": "a", "label": "A"}], "recommended": "A"}, "want": null},
+    {"name": "a number is not a key", "change": {"options": [{"key": "1", "label": "One"}], "recommended": 1}, "want": null},
+    {"name": "options missing", "change": {"recommended": "a"}, "want": null},
+    {"name": "change not an object", "change": null, "want": null}
+  ],
+  "lapsed": [
+    {"name": "pending question past the limit", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-01T09:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 15},
+    {"name": "exactly the limit lapses", "p": {"kind": "ask.question", "status": "pending", "created": "2026-10-02T23:59:59Z"}, "today": "2026-10-16", "days": 14, "want": 14},
+    {"name": "one day short", "p": {"kind": "ask.approve", "status": "pending", "created": "2026-10-03T00:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "lapsing off", "p": {"kind": "ask.choose", "status": "pending", "created": "2020-01-01T00:00:00Z"}, "today": "2026-10-16", "days": 0, "want": 0},
+    {"name": "answered never lapses", "p": {"kind": "ask.choose", "status": "answered", "created": "2020-01-01T00:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "dismissed never lapses", "p": {"kind": "ask.choose", "status": "ignored", "created": "2020-01-01T00:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "a proposal is not a question", "p": {"kind": "task.create", "status": "pending", "created": "2020-01-01T00:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "no created date", "p": {"kind": "ask.choose", "status": "pending"}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "an impossible created date", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-02-30T00:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "a created date in the future", "p": {"kind": "ask.choose", "status": "pending", "created": "2027-01-01T00:00:00Z"}, "today": "2026-10-16", "days": 1, "want": 0},
+    {"name": "a date-only created", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01"}, "today": "2026-10-16", "days": 30, "want": 45},
+    {"name": "a bad today", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01T00:00:00Z"}, "today": "16/10/2026", "days": 14, "want": 0},
+    {"name": "days as text", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01T00:00:00Z"}, "today": "2026-10-16", "days": "14", "want": 0},
+    {"name": "across a leap day", "p": {"kind": "ask.choose", "status": "pending", "created": "2028-02-15T00:00:00Z"}, "today": "2028-03-01", "days": 14, "want": 15}
+  ]
+}

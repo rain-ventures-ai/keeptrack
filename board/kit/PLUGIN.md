@@ -91,6 +91,60 @@ python3 <plugin>/keeptrack.py where
 - The file holds the repo, branch, path and user, and only the **name** of the environment variable with the token. Never the token.
 - Auth: a `gh` login that can see the board repo, or a fine-grained token (Contents: Read and write on that repo) in that variable or in `BOARD_TOKEN`.
 
+## What it runs, sends and changes
+Facts from the code, so you can decide what to allow. File names are in `rain-ventures-ai/keeptrack`.
+
+**What leaves your machine (the command-line tool, `board/kit/keeptrack.py`).**
+- Board reads and writes go to the GitHub API for the board repo only: `https://api.github.com`, or `BOARD_API` when
+  set (`http()`). The token is `BOARD_TOKEN` (else `GH_TOKEN` or `GITHUB_TOKEN`), sent as a Bearer header to that host.
+  Without `BOARD_TOKEN`, and with `gh` installed, it runs `gh api` instead, under your own `gh` sign-in.
+- In Claude's cloud sandbox, where API writes are refused, it commits the changed board files and runs `git push` to the
+  board clone's own `origin` (`BOARD_WRITE=git` forces this, `BOARD_WRITE=api` turns it off).
+- `kit-check`, `kit-update` and the `min_kit` check read the published kit: `git ls-remote` of
+  `https://github.com/rain-ventures-ai/keeptrack`, then files from `raw.githubusercontent.com` (or a shallow
+  `git clone` when that is blocked), or `BOARD_KIT_URL` when set. These requests carry no token and no board data.
+- A hosted board (`BOARD_BACKEND=hosted`) talks only to its `BOARD_API`, never to GitHub.
+- Nothing else: no analytics, no telemetry, no model calls. Agents that run the tool send what they send themselves.
+
+**What leaves the browser (the web board, `board/board.js`).**
+- The GitHub API (`api.github.com`, or the API you set), with the token you gave the page, kept in this browser's local
+  storage.
+- Only if you set up "@claude" on the board (Settings, Agents): `api.cron-job.org`, with your cron-job.org key. Each
+  request makes a one-off job that holds your routine's fire URL (`api.anthropic.com`), its token, and a short request
+  naming the board repo, the task number and who asked. The page deletes the job once it has run.
+- Only if you add the weather widget: `api.open-meteo.com`, with the latitude and longitude you chose, no cookies and no
+  referrer.
+
+**Programs it starts.**
+
+| Program | When |
+|---|---|
+| `git` | To find the board repo and branch from the clone, to read and write board files in a clone, the git-push fallback, and the kit checks above |
+| `gh` | `gh api` and `gh auth token`, when `BOARD_TOKEN` is not set and `gh` is installed |
+| `python3` on an automation's `check.py` or tests | Only for an automation pack you installed (`automation tick`, `setup`, `test`). It runs with a private temporary home, bounded output and a time limit, and on Linux without network access (`unshare -rn`) unless its manifest asks for network and you granted it at install |
+| `unshare -rn true` | To test whether that network isolation is available (Linux) |
+
+**What the hooks see and do** (`board/kit/hooks/`, and `board/kit/templates/settings.json` in a board repo).
+- Neither hook reads the hook input Claude Code sends (tool names, arguments, prompts). They look only at files on disk.
+- `PostToolUse` (`auto-heartbeat.sh`, after every tool call): walks up from the current folder looking for a claim
+  record (`.keeptrack/claim.json`, `.board/claim.json` or `.board-claim.json`) with plain shell. With no record, a record
+  with no card, a symlinked one or an attended claim, it stops there and starts nothing. Otherwise it runs
+  `keeptrack.py auto-heartbeat`, which saves the claim's heartbeat time on the board at most every 15 minutes per card,
+  and only for this session's own claims. The board repo's own hook runs the same command.
+- `SessionStart` (`session-start.sh`): only where a personal `.keeptrack/config.json` (not tracked by git) or
+  `BOARD_REPO` exists, it runs `keeptrack.py here --hook`, which reads the board and prints a few lines: the board, the
+  project and your open cards. It writes nothing. Everywhere else it prints nothing.
+
+**What it writes on your machine.**
+- `.board-claim.json` at a board clone's root, or `.keeptrack/claim.json` in another project: the active claim, for the
+  heartbeat hook. `done` and `release` clear it.
+- `.keeptrack/config.json` and `.keeptrack/.gitignore` (`*`), only when you run `use`. They name the board and the
+  name of the token variable, never the token.
+- In a board clone: the board files a command changes (then committed and pushed, or saved through the API), the kit
+  files on `kit-update`, and the automation state under `automation/` once you install one.
+- A temporary folder for each automation check, removed when the check ends. When `raw.githubusercontent.com` is
+  blocked, a shallow kit clone in the system temporary folder (`board-kit-…`), which is left for the system to clear.
+
 ## Limits
 - From another project there is no clone of the board repo, so the git-push fallback is not available. In Claude's cloud sandbox (which blocks GitHub API writes) writes fail there.
 - Claude Code cloud does not load plugins. Add the board repo to the cloud session and use its repo-local skill and CLI.

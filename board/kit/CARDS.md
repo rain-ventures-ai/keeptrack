@@ -168,6 +168,20 @@ keep working.
 The same rule applies to Review Inbox questions, research comments, done notes that leave work for a person, and
 replies to a person in a thread or a chat.
 
+### Review Inbox questions: recommended and lapsed
+
+- An `ask.choose` question names the option you recommend: `change.recommended` holds that option's key, or add the
+  question with `proposal-add <file> --recommend <key, number or label>`. The board shows it first, marked
+  "Recommended", and the person can accept it in one press. Say why in `reason`, as above. Leave it out only when you
+  truly have no view.
+- A question nobody answers for `settings.inbox_lapse_days` (default 14; 0 = never) has **lapsed**. The board marks it,
+  `list --attention` lists it, and `proposal-result` says `"lapsed": true`. Nothing is written: it stays pending.
+- Treat a lapsed question as a no for now. Do not ask it again, and do not ask a reworded copy, unless the person brings
+  it up. Do the work that does not depend on it, and say in your result what still waits on it.
+- A lapsed question can still be answered. If an answer comes later, read it with `proposal-result` and act only if the
+  work still applies; otherwise close it with `proposal-done --not-acted --answer-id <answer_id> --note "<why>"`.
+- A dismissed question (closed by a person without an answer) is a no. Do not ask it again unless the person brings it up.
+
 ## Links: what goes in the links section
 
 Add a link each time the card names or depends on one of these:

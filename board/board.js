@@ -2349,7 +2349,9 @@ if (typeof window !== 'undefined') (() => {
   // Each view you switch to is a step in the browser's history, so Back and Forward move between views (and back out of a
   // card to the view it was opened from). fromHistory: the switch came from Back/Forward, so it adds no new step.
   const setView = (v, fromHistory) => {
-    const was = view; view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); saveBoardContext({ view: v }); render();
+    const was = view; view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); saveBoardContext({ view: v });
+    if (v !== was) { try { inboxPress.done.clear(); inboxPress.err.clear(); } catch { /* the Inbox code is not set up yet */ } }   // a press result shows for this visit only
+    render();
     if (fromHistory || v === was) return;
     const push = () => { try { history.pushState({ kbView: v }, '', location.pathname + location.search + '#view=' + v); } catch {} };
     if (backPending) backPending.then(push); else push();   // a dialog that just closed is still taking its own step off
@@ -5327,6 +5329,24 @@ if (typeof window !== 'undefined') (() => {
   const KIND_LABEL = { 'task.create': 'New task', 'task.update': 'Task edit', 'person.upsert': 'Person', 'contact.touch': 'CRM log entry',
     'ask.choose': 'Choose', 'ask.approve': 'Approve', 'ask.question': 'Question' };
   const STATUS_LABEL = { accepted: 'Accepted', answered: 'Answered', ignored: 'Ignored' };
+  // >>> inbox-rules (kit v71): read-time rules, the same as keeptrack.py's inbox_lapse_days / recommended_option / ask_lapsed.
+  // tests/test_inbox_rules_parity.py cuts this block out and runs it against tests/fixtures/inbox-rules-cases.json.
+  const INBOX_LAPSE_DAYS = 14;
+  const inboxLapseDays = settings => { const v = (settings || {}).inbox_lapse_days; return Number.isInteger(v) && v >= 0 && v <= 365 ? v : INBOX_LAPSE_DAYS; };
+  function recommendedOption(change) {   // the option an ask.choose recommends, or null
+    const c = change && typeof change === 'object' && !Array.isArray(change) ? change : {};
+    if (typeof c.recommended !== 'string' || !Array.isArray(c.options)) return null;
+    return c.options.find(o => o && typeof o === 'object' && o.key === c.recommended) || null;
+  }
+  function askLapsed(p, today, days) {   // days a pending question has waited when that is `days` or more; else 0. Never written.
+    const DAY = /^\d{4}-\d{2}-\d{2}$/, num = s => { const t = Date.parse(s + 'T00:00:00Z'); return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== s ? null : Math.round(t / 864e5); };
+    if (!p || typeof p !== 'object' || !/^ask\.(choose|approve|question)$/.test(p.kind || '') || p.status !== 'pending' || !Number.isInteger(days) || days <= 0) return 0;
+    const created = String(p.created || '').slice(0, 10), a = DAY.test(created) ? num(created) : null, b = DAY.test(String(today || '')) ? num(String(today)) : null;
+    if (a === null || b === null) return 0;
+    return b - a >= days ? b - a : 0;
+  }
+  // <<< inbox-rules
+  const lapsedDays = p => askLapsed(p, todayIso(), inboxLapseDays(state.settings));
   const SRC_LABEL = { meeting: 'Meeting', email: 'Email', other: 'Other' };
   const LIST_FIELDS = ['comments', 'todos', 'links'];
   // The fields a proposal may change, the same lists as keeptrack.py (TASK_CHANGE_FIELDS, PERSON_CHANGE_FIELDS, TOUCH_CHANGE_FIELDS).
@@ -5385,6 +5405,33 @@ if (typeof window !== 'undefined') (() => {
   }
   let inboxF = { status: 'pending', kind: '', source: '', reviewer: '' }, inboxFocus = '';
   const inboxOpen = {};   // proposal id -> 'edit' | 'merge' (the inline form that is open)
+  // Every press shows its result (kit v71; idea from petekp/inbox, MIT). While a save is out the pressed button reads
+  // "Saving…" and every control on the item is off, so a second press does nothing. Then the item says what happened
+  // ("✓ Answered") and stays in view for this visit, or says why it was not saved and keeps its buttons.
+  const inboxPress = { busy: new Map(), done: new Map(), err: new Map() };   // busy: proposal id -> the pressed button's data-press
+  async function pressRun(id, btn, run, doneText) {
+    if (inboxPress.busy.has(id)) return false;
+    inboxPress.busy.set(id, (btn && btn.dataset && btn.dataset.press) || ''); inboxPress.done.delete(id); inboxPress.err.delete(id);
+    const art = btn && btn.closest && btn.closest('article.prop');
+    if (art) { art.setAttribute('aria-busy', 'true'); art.querySelectorAll('button, input, textarea, select').forEach(b => { b.disabled = true; }); }
+    const lab = btn && (btn.querySelector('.ui-btn__label') || btn); if (lab) lab.textContent = 'Saving…';
+    if ($('inboxLive')) $('inboxLive').textContent = '';
+    let ok = false;
+    try { ok = !!(await run()); } catch (e) { inboxSay('Not saved: ' + ((e && e.message) || e), true); }
+    finally { inboxPress.busy.delete(id); }
+    if (ok) { if (doneText) inboxPress.done.set(id, doneText); }
+    else inboxPress.err.set(id, (($('inboxLive') || {}).textContent || '').trim() || 'Not saved. Check your connection and try again.');
+    if (art && art.isConnected && !ok) { art.removeAttribute('aria-busy'); }
+    return ok;
+  }
+  function pressNote(p) {   // the item's press state, also after a redraw
+    if (inboxPress.busy.has(p.id)) { const n = el('p', 'prop__press', 'Saving…'); n.setAttribute('role', 'status'); return n; }
+    if (inboxPress.err.has(p.id)) { const n = el('p', 'prop__press prop__press--err', inboxPress.err.get(p.id)); n.setAttribute('role', 'alert'); return n; }
+    if (inboxPress.done.has(p.id)) return el('p', 'prop__press prop__press--ok', '✓ ' + inboxPress.done.get(p.id));
+    return null;
+  }
+  const DONE_TEXT = { accept: 'Accepted', ignore: 'Ignored', undo: 'Undone', reopen: 'Reopened', edit: 'Accepted with your edits', merge: 'Merged' };
+  const answerDone = a => 'approved' in a ? (a.approved ? 'Approved' : 'Not approved') : 'Answered';
   let todayQueue = { key: '', order: [], visible: [], reviewed: new Map(), busy: new Set() };
   // Stored duplicates plus, for a pending new task, the open cards that are close to it NOW: a card added after the
   // proposal was made (a chat added it directly) still shows here, so Accept does not make a second copy.
@@ -5658,7 +5705,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function answerText(p) {
     const a = (p.decision || {}).answer || {}, c = p.change || {};
-    const opt = 'choice' in a ? ((c.options || []).find(o => o.key === a.choice) || {}).label || a.choice : '';
+    const rec = recommendedOption(c), opt = 'choice' in a ? (((c.options || []).find(o => o.key === a.choice) || {}).label || a.choice) + (rec && rec.key === a.choice ? ' (recommended)' : '') : '';
     const main = opt || a.other || ('approved' in a ? (a.approved ? 'Approved' : 'Not approved') : a.text || '');
     return main + (a.note ? ` (${a.note})` : '');
   }
@@ -5687,30 +5734,35 @@ if (typeof window !== 'undefined') (() => {
     if (blocked) { wrap.append(el('p', 'muted', `Waiting for @${p.decider} to answer.`)); }
     const note = el('input'); note.type = 'text'; note.maxLength = 2000; note.placeholder = 'Note (optional)'; note.className = 'ask__note';
     note.setAttribute('aria-label', 'Note with your answer (optional)');
-    const send = async answer => {
+    const send = async (answer, btn) => {
       const n = note.value.trim(); if (n) answer.note = n;
       wrap.querySelectorAll('button, input, textarea').forEach(b => { b.disabled = true; });
-      if (options.today) return todayInboxAct(p, 'answer', answer);
-      if (await answerProposal(p.id, answer)) { inboxSay('Answered. Use Undo to change your answer.'); render(); }
-      else wrap.querySelectorAll('button, input, textarea').forEach(b => { b.disabled = false; });
+      if (options.today) return todayInboxAct(p, 'answer', answer, btn);
+      if (await pressRun(p.id, btn, () => answerProposal(p.id, answer), answerDone(answer))) inboxSay('Answered. Use Undo to change your answer.');
+      render();
     };
     const row = el('div', 'ask__answers'); row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Answer: ' + (c.question || p.title || ''));
-    const add = (label, variant, answer) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => send(answer()) }); if (ro || busy || blocked) b.disabled = true; row.append(b); return b; };
+    const add = (label, variant, answer) => { const b = ui.button({ label, variant, size: 'sm', onClick: e => send(answer(), e.currentTarget) }); b.dataset.press = 'answer:' + JSON.stringify(answer()); if (ro || busy || blocked) b.disabled = true; row.append(b); return b; };
     if (p.kind === 'ask.choose') {
-      (c.options || []).forEach(o => { const b = add(o.label, 'secondary', () => ({ choice: o.key })); if (o.note) b.title = o.note; });
+      // kit v71: the recommended option comes first, as the main button, marked in words (not by colour alone). Pressing it
+      // is "accept the recommendation": the same answer, the same save, as picking that option by hand.
+      const rec = recommendedOption(c), opts = rec ? [rec, ...(c.options || []).filter(o => o !== rec)] : (c.options || []);
+      opts.forEach(o => { const isRec = o === rec, b = add(o.label, isRec ? 'primary' : 'secondary', () => ({ choice: o.key }));
+        if (isRec) { b.dataset.recommended = 'true'; b.append(el('span', 'ask__rec', 'Recommended')); b.setAttribute('aria-label', `${o.label} (recommended)`); b.setAttribute('aria-keyshortcuts', 'r'); }
+        if (o.note) b.title = o.note; });
       wrap.append(row);
       const optLinks = el('ul', 'ask__links'); (c.options || []).forEach(o => { const u = httpsUrl(o.url); if (u) { const li = el('li'); li.append(askLink(u, 'View ' + o.label)); optLinks.append(li); } });
       if (optLinks.children.length) wrap.append(optLinks);
       if (c.allow_other) { const f = el('form', 'ask__other'), i = el('input'); i.type = 'text'; i.maxLength = 2000; i.placeholder = 'Something else'; i.setAttribute('aria-label', 'Something else');
-        const go = ui.button({ label: 'Send', variant: 'secondary', size: 'sm', type: 'submit' }); if (ro || busy || blocked) { i.disabled = go.disabled = true; }
-        f.append(i, go); f.addEventListener('submit', e => { e.preventDefault(); if (i.value.trim()) send({ other: i.value.trim() }); }); wrap.append(f); }
+        const go = ui.button({ label: 'Send', variant: 'secondary', size: 'sm', type: 'submit' }); go.dataset.press = 'other'; if (ro || busy || blocked) { i.disabled = go.disabled = true; }
+        f.append(i, go); f.addEventListener('submit', e => { e.preventDefault(); if (i.value.trim()) send({ other: i.value.trim() }, go); }); wrap.append(f); }
     } else if (p.kind === 'ask.approve') {
       add('Approve', 'primary', () => ({ approved: true })); add('Do not approve', 'secondary', () => ({ approved: false })); wrap.append(row);
       wrap.append(el('p', 'muted', 'Approval is for exactly this version. If it changes, you are asked again.'));
     } else {
       const f = el('form', 'ask__other'), t = el('textarea'); t.maxLength = 2000; t.rows = 2; t.setAttribute('aria-label', 'Your answer');
-      const go = ui.button({ label: 'Send answer', variant: 'primary', size: 'sm', type: 'submit' }); if (ro || busy || blocked) { t.disabled = go.disabled = true; }
-      f.append(t, go); f.addEventListener('submit', e => { e.preventDefault(); if (t.value.trim()) send({ text: t.value.trim() }); }); wrap.append(f);
+      const go = ui.button({ label: 'Send answer', variant: 'primary', size: 'sm', type: 'submit' }); go.dataset.press = 'text'; if (ro || busy || blocked) { t.disabled = go.disabled = true; }
+      f.append(t, go); f.addEventListener('submit', e => { e.preventDefault(); if (t.value.trim()) send({ text: t.value.trim() }, go); }); wrap.append(f);
     }
     wrap.append(note);
     return wrap;
@@ -5751,6 +5803,7 @@ if (typeof window !== 'undefined') (() => {
       const tags = el('div', 'trow__tags'); tags.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm', tone: 'neutral' }));
       if (p.kind === 'task.update' && p.target) { const target = findRef(state, p.target); tags.append(ui.pill({ text: 'Updates ' + (target && target.num ? '#' + target.num : refTitle(p.target)), size: 'sm', tone: 'info' })); }
       if (otherProposalDuplicates(p).length) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
+      if (lapsedDays(p)) tags.append(ui.pill({ text: 'Lapsed', size: 'sm', tone: 'warn' }));
       const sameDay = sameDayTouches(p, items);
       if (sameDay) { const pl = ui.pill({ text: `${sameDay + 1} from this person this day`, size: 'sm', tone: 'info' }); pl.title = 'Different messages from the same person on the same day. Review each one.'; tags.append(pl); }
       const gist = String((p.change || {}).text || p.reason || '').trim();
@@ -5770,13 +5823,15 @@ if (typeof window !== 'undefined') (() => {
     if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }
     return sec;
   }
-  async function todayInboxAct(p, act, answer) {
+  async function todayInboxAct(p, act, answer, btn) {
     if (todayQueue.busy.has(p.id)) return;
     if (act === 'edit' || act === 'merge') { inboxFocus = p.id; inboxOpen[p.id] = act; setView('inbox'); return; }
     if (act === 'leave') return;
     const queue = todayQueue, pos = todayReviewPosition(), index = queue.visible.indexOf(p.id);
     if ($('inboxLive')) $('inboxLive').textContent = '';
-    queue.busy.add(p.id); document.querySelectorAll(`.trow[data-id="${p.id}"] .prop__actions button`).forEach(b => { b.disabled = true; });
+    queue.busy.add(p.id); document.querySelectorAll(`.trow[data-id="${p.id}"] article.prop button, .trow[data-id="${p.id}"] article.prop input, .trow[data-id="${p.id}"] article.prop textarea`).forEach(b => { b.disabled = true; });
+    const lab = btn && (btn.querySelector('.ui-btn__label') || btn); if (lab) lab.textContent = 'Saving…';   // the press shows at once
+    inboxPress.err.delete(p.id);
     let ok = false;
     try { ok = act === 'answer' ? await answerProposal(p.id, answer) : await decideProposal(p.id, act, { reviewed: p }); }
     finally { queue.busy.delete(p.id); }
@@ -5789,7 +5844,10 @@ if (typeof window !== 'undefined') (() => {
       if (pos.id === p.id) { pos.id = todayQueue.visible[Math.min(index, todayQueue.visible.length - 1)]; }
       if (pos.focus && pos.focus.id === p.id) pos.focus = { id: pos.id, review: true };
       inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : act === 'answer' ? 'Answered. Use Undo to change your answer.' : 'Accepted.');
-    } else if (!$('inboxLive') || !$('inboxLive').textContent) inboxSay('Not saved. The proposal is still pending; check your connection and try again.', true);
+    } else {
+      if (!$('inboxLive') || !$('inboxLive').textContent) inboxSay('Not saved. The proposal is still pending; check your connection and try again.', true);
+      inboxPress.err.set(p.id, $('inboxLive').textContent);   // shown on the item, not only in a toast
+    }
     render(); restoreTodayReviewPosition(pos);
   }
   function syncInboxButton() {
@@ -5827,11 +5885,11 @@ if (typeof window !== 'undefined') (() => {
       if (i.tagName === 'INPUT') i.type = SCALAR_INPUT[k] || 'text';
       i.value = Array.isArray(c[k]) ? c[k].join(', ') : (c[k] ?? ''); inputs[k] = i; l.append(i); f.append(l);
     });
-    const go = ui.button({ label: 'Accept edited', variant: 'primary', type: 'submit' }), cancel = ui.button({ label: 'Cancel', onClick: () => { delete inboxOpen[p.id]; inboxFocus = p.id; render(); } });
+    const go = ui.button({ label: 'Accept edited', variant: 'primary', type: 'submit' }); go.dataset.press = 'edit-go'; const cancel = ui.button({ label: 'Cancel', onClick: () => { delete inboxOpen[p.id]; inboxFocus = p.id; render(); } });
     const row = el('div', 'propform__actions'); row.append(go, cancel); f.append(row);
     f.addEventListener('submit', async e => { e.preventDefault();
       const next = clone(c); Object.entries(inputs).forEach(([k, i]) => { next[k] = Array.isArray(c[k]) ? i.value.split(',').map(s => s.trim()).filter(Boolean) : i.value.trim(); });
-      if (await decideProposal(p.id, 'accept', { change: next })) { delete inboxOpen[p.id]; inboxSay('Accepted with your edits.'); render(); } });
+      if (await pressRun(p.id, go, () => decideProposal(p.id, 'accept', { change: next }), DONE_TEXT.edit)) { delete inboxOpen[p.id]; inboxSay('Accepted with your edits.'); render(); } else render(); });
     return f;
   }
   function proposalMergeForm(p) {
@@ -5844,25 +5902,36 @@ if (typeof window !== 'undefined') (() => {
     const scalars = Object.keys(p.change || {}).filter(k => !LIST_FIELDS.includes(k)), boxes = {};
     if (scalars.length) { const fs = el('fieldset', 'propform__fields'); fs.append(el('legend', null, 'Also set these fields (comments, checklist and links are always added)'));
       scalars.forEach(k => { const lab = el('label', 'propform__chk'), i = el('input'); i.type = 'checkbox'; boxes[k] = i; lab.append(i, ` ${k}: ${fmtVal(p.change[k])}`); fs.append(lab); }); f.append(fs); }
-    const go = ui.button({ label: 'Merge', variant: 'primary', type: 'submit' }), cancel = ui.button({ label: 'Cancel', onClick: () => { delete inboxOpen[p.id]; inboxFocus = p.id; render(); } });
+    const go = ui.button({ label: 'Merge', variant: 'primary', type: 'submit' }); go.dataset.press = 'merge-go'; const cancel = ui.button({ label: 'Cancel', onClick: () => { delete inboxOpen[p.id]; inboxFocus = p.id; render(); } });
     const row = el('div', 'propform__actions'); row.append(go, cancel); f.append(row);
     if (!pool.length) { go.disabled = true; f.append(el('p', 'muted', `There is no ${type} to merge into.`)); }
     f.addEventListener('submit', async e => { e.preventDefault(); if (!s.value) return;
       const into = { type, id: s.value }, fields = Object.keys(boxes).filter(k => boxes[k].checked);
-      if (await decideProposal(p.id, 'merge', { into, fields })) { delete inboxOpen[p.id]; inboxSay(`Merged into ${refTitle(into)}.`); render(); } });
+      if (await pressRun(p.id, go, () => decideProposal(p.id, 'merge', { into, fields }), DONE_TEXT.merge)) { delete inboxOpen[p.id]; inboxSay(`Merged into ${refTitle(into)}.`); render(); } else render(); });
     return f;
   }
-  async function inboxAct(p, act) {
+  async function acceptAllRecommended(items, btn) {
+    if (ro) { roToast(); return; }
+    const list = items.map(p => `${p.title || p.id}: ${recommendedOption(p.change).label}`);
+    if (!(await ask(`Answer ${items.length} question${items.length === 1 ? '' : 's'} with the recommended option?`, [...list.slice(0, 8), ...(list.length > 8 ? [`…and ${list.length - 8} more`] : []), 'Each answer is saved as if you picked it. Undo changes one until the agent acts on it.'], 'Answer them'))) return;
+    btn.disabled = true; const lab = btn.querySelector('.ui-btn__label') || btn; let n = 0, failed = 0;
+    for (const p of items) {
+      lab.textContent = `Saving ${n + failed + 1} of ${items.length}…`;
+      const rec = recommendedOption(p.change), answer = { choice: rec.key };
+      if (await pressRun(p.id, null, () => answerProposal(p.id, answer), answerDone(answer))) n++; else failed++;
+    }
+    inboxSay(failed ? `Answered ${n}. ${failed} not saved; each says why.` : `Answered ${n} with the recommended option. Use Undo to change an answer.`, !!failed);
+    render();
+  }
+  async function inboxAct(p, act, btn) {
     const cards = [...document.querySelectorAll('#board article.prop')], i = cards.findIndex(c => c.dataset.id === p.id), next = cards[i + 1] || cards[i - 1];
     if (act === 'edit' || act === 'merge') { inboxOpen[p.id] = inboxOpen[p.id] === act ? '' : act; inboxFocus = p.id; render();
       const box = document.querySelector(`#board article.prop[data-id="${p.id}"] .propform`); const first = box && box.querySelector('input, select, textarea'); if (first) first.focus(); return; }
     if (act === 'leave') { inboxSay('Left pending.'); if (next) { inboxFocus = next.dataset.id; next.focus(); } return; }
-    let ok = false;
-    if (act === 'accept' || act === 'ignore') ok = await decideProposal(p.id, act);
-    else if (act === 'undo') ok = await undoDecision(p.id);
-    else if (act === 'reopen') ok = await reopenProposal(p.id);
-    if (!ok) return;
-    if (act === 'accept') inboxSay('Accepted.'); else if (act === 'ignore') inboxSay('Ignored. It will not come back for this source.');
+    const run = () => act === 'accept' || act === 'ignore' ? decideProposal(p.id, act) : act === 'undo' ? undoDecision(p.id) : act === 'reopen' ? reopenProposal(p.id) : false;
+    const ok = await pressRun(p.id, btn, run, act === 'ignore' && isAsk(p) ? 'Dismissed' : DONE_TEXT[act]);
+    if (!ok) { render(); return; }
+    if (act === 'accept') inboxSay('Accepted.'); else if (act === 'ignore') inboxSay(isAsk(p) ? 'Dismissed.' : 'Ignored. It will not come back for this source.');
     inboxFocus = next ? next.dataset.id : ''; render();
   }
   // What Accept does, in plain words: one action, the record it touches, and whether it adds or edits.
@@ -5882,17 +5951,21 @@ if (typeof window !== 'undefined') (() => {
     const art = el('article', 'prop prop--' + p.status); art.tabIndex = 0; art.dataset.id = p.id; const hid = 'prop-' + p.id; art.setAttribute('aria-labelledby', hid);
     const top = el('div', 'prop__top'), t = el('h4', 'prop__title', p.title || '(no title)'); t.id = hid;
     top.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm' }), t);
-    if (p.status !== 'pending') top.append(ui.pill({ text: STATUS_LABEL[p.status] || p.status, tone: p.status === 'ignored' ? 'neutral' : 'ok', size: 'sm' }));
+    const lapsed = lapsedDays(p);
+    if (p.status !== 'pending') top.append(ui.pill({ text: isAsk(p) && p.status === 'ignored' ? 'Dismissed' : STATUS_LABEL[p.status] || p.status, tone: p.status === 'ignored' ? 'neutral' : 'ok', size: 'sm' }));
+    else if (lapsed) top.append(ui.pill({ text: 'Lapsed', tone: 'warn', size: 'sm' }));
     art.append(top);
     if (isAsk(p)) {   // a question: no field table, no accept / edit / merge
+      if (lapsed) art.append(el('p', 'prop__lapsed', `Unanswered for ${lapsed} days, so it has lapsed: the agent will not ask again unless you bring it up. You can still answer it.`));
       if (p.reason) art.append(el('p', 'prop__reason', p.reason));
       if (p.decider) { const meta = el('dl', 'prop__meta'); meta.append(el('dt', null, 'Who answers'), el('dd', null, '@' + p.decider)); art.append(meta); }
       art.append(askBody(p, options));
       const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'More choices');
-      const btn = (act, label) => { const b = ui.button({ label, variant: 'ghost', size: 'sm', onClick: () => options.today ? todayInboxAct(p, act) : inboxAct(p, act) }); b.dataset.act = act; if (ro || (options.today && todayQueue.busy.has(p.id)) || (act !== 'leave' && askDecider(p))) b.disabled = true; acts.append(b); };
+      const btn = (act, label) => { const b = ui.button({ label, variant: 'ghost', size: 'sm', onClick: e => options.today ? todayInboxAct(p, act, undefined, e.currentTarget) : inboxAct(p, act, e.currentTarget) }); b.dataset.act = b.dataset.press = act; if (ro || (options.today && todayQueue.busy.has(p.id)) || (act !== 'leave' && askDecider(p))) b.disabled = true; acts.append(b); };
       if (p.status === 'pending') { btn('ignore', 'Dismiss'); btn('leave', 'Leave pending'); }
       else if (p.change && (p.status === 'ignored' || (p.status === 'answered' && !(p.decision || {}).done))) btn('reopen', p.status === 'answered' ? 'Change answer' : 'Reopen');
       if (acts.children.length) art.append(acts);
+      pressFinish(art, p);
       art.addEventListener('focus', () => { inboxFocus = p.id; });
       return art;
     }
@@ -5915,7 +5988,7 @@ if (typeof window !== 'undefined') (() => {
     art.append(proposalChange(p));
     if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
-    const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: () => options.today ? todayInboxAct(p, act) : inboxAct(p, act) }); b.dataset.act = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).some(d => d.type !== 'proposal'))))) b.disabled = true; acts.append(b); };
+    const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: e => options.today ? todayInboxAct(p, act, undefined, e.currentTarget) : inboxAct(p, act, e.currentTarget) }); b.dataset.act = b.dataset.press = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).some(d => d.type !== 'proposal'))))) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
     if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Leave pending if anything needs checking.')); btn('accept', plan.verb, 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
@@ -5923,8 +5996,16 @@ if (typeof window !== 'undefined') (() => {
     if (acts.children.length) art.append(acts);
     if (p.status === 'pending' && inboxOpen[p.id] === 'edit') art.append(proposalEditForm(p));
     if (p.status === 'pending' && inboxOpen[p.id] === 'merge') art.append(proposalMergeForm(p));
+    pressFinish(art, p);
     art.addEventListener('focus', () => { inboxFocus = p.id; });
     return art;
+  }
+  function pressFinish(art, p) {   // the press state survives a redraw: controls stay off while a save is out
+    const n = pressNote(p); if (n) art.append(n);
+    if (!inboxPress.busy.has(p.id)) return;
+    art.setAttribute('aria-busy', 'true'); art.querySelectorAll('button, input, textarea, select').forEach(b => { b.disabled = true; });
+    const key = inboxPress.busy.get(p.id), b = key && [...art.querySelectorAll('[data-press]')].find(x => x.dataset.press === key);
+    if (b) (b.querySelector('.ui-btn__label') || b).textContent = 'Saving…';
   }
   function renderInbox() {
     const board = $('board'), wrap = el('section', 'inbox'); wrap.setAttribute('aria-label', 'Review Inbox'); board.append(wrap);
@@ -5934,16 +6015,25 @@ if (typeof window !== 'undefined') (() => {
     const all = inboxAll(), head = el('div', 'inbox__head');
     head.append(el('h2', null, 'Review Inbox'), el('span', 'inbox__count', `${all.filter(p => p.status === 'pending').length} pending`)); wrap.append(head);
     wrap.append(el('p', 'inbox__hint muted', 'Review proposed changes and answer questions from agents. Nothing changes on the board until you accept.'));
-    const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · e edits · m merges · i ignores')); wrap.append(keys);
+    const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · e edits · m merges · i ignores · r picks the recommended answer')); wrap.append(keys);
+    // kit v71: answer every question that recommends an option with that option, after one confirm. Each is saved on its
+    // own, exactly as if picked by hand. Lapsed questions and ones for someone else are left for a person to look at.
+    const recs = all.filter(p => p.status === 'pending' && p.kind === 'ask.choose' && recommendedOption(p.change) && !askDecider(p) && !lapsedDays(p) && !inboxPress.busy.has(p.id));
+    if (recs.length) {
+      const bulk = el('div', 'inbox__bulk'), go = ui.button({ label: `Accept all recommended (${recs.length})`, variant: 'secondary', size: 'sm', onClick: () => acceptAllRecommended(recs, go) });
+      go.dataset.act = 'accept-all-recommended'; if (ro) go.disabled = true;
+      bulk.append(go, el('span', 'muted', 'Answers each question that recommends an option with that option. Lapsed questions are left out.')); wrap.append(bulk);
+    }
     const filters = el('div', 'inbox__filters'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', 'Filter proposals');
     const sel = (key, label, opts) => { const l = el('label', 'inbox__filter'), s = el('select'); s.dataset.filter = key; l.append(el('span', null, label), s);
       opts.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; s.append(o); }); s.value = inboxF[key]; if (s.value !== inboxF[key]) s.value = '';
-      s.onchange = () => { inboxF[key] = s.value; render(); const again = document.querySelector(`#board [data-filter="${key}"]`); if (again) again.focus(); }; return l; };
-    filters.append(sel('status', 'Status', [['pending', 'Pending'], ['accepted', 'Accepted'], ['answered', 'Answered'], ['ignored', 'Ignored'], ['all', 'All']]),
+      s.onchange = () => { inboxF[key] = s.value; inboxPress.done.clear(); inboxPress.err.clear(); render(); const again = document.querySelector(`#board [data-filter="${key}"]`); if (again) again.focus(); }; return l; };
+    filters.append(sel('status', 'Status', [['pending', 'Pending'], ['lapsed', 'Lapsed questions'], ['accepted', 'Accepted'], ['answered', 'Answered'], ['ignored', 'Ignored or dismissed'], ['all', 'All']]),
       sel('kind', 'Type', [['', 'All'], ...Object.entries(KIND_LABEL)]), sel('source', 'Source', [['', 'All'], ...Object.entries(SRC_LABEL)]),
       sel('reviewer', 'Reviewer', [['', 'Anyone'], ...[...new Set(all.map(p => p.reviewer).filter(Boolean))].sort().map(r => [r, '@' + r])]));
     wrap.append(filters);
-    const rows = all.filter(p => (inboxF.status === 'all' || p.status === inboxF.status) && (!inboxF.kind || p.kind === inboxF.kind) && (!inboxF.source || (p.source || {}).kind === inboxF.source) && (!inboxF.reviewer || p.reviewer === inboxF.reviewer))
+    const statusOk = p => inboxF.status === 'all' || (inboxF.status === 'lapsed' ? !!lapsedDays(p) : p.status === inboxF.status) || inboxPress.done.has(p.id) || inboxPress.busy.has(p.id);   // a press result stays in view this visit
+    const rows = all.filter(p => statusOk(p) && (!inboxF.kind || p.kind === inboxF.kind) && (!inboxF.source || (p.source || {}).kind === inboxF.source) && (!inboxF.reviewer || p.reviewer === inboxF.reviewer))
       .sort((a, b) => String((b.source || {}).date || '').localeCompare(String((a.source || {}).date || '')) || String(a.created || '').localeCompare(String(b.created || '')) || String(a.id).localeCompare(String(b.id)));
     if (!rows.length) { wrap.append(ui.empty({ text: inboxF.status === 'pending' && !inboxF.kind && !inboxF.source && !inboxF.reviewer ? 'Nothing to review.' : 'No proposals match these filters.', icon: 'inbox' })); }
     const groups = new Map();
@@ -5968,6 +6058,7 @@ if (typeof window !== 'undefined') (() => {
       if (!cur) return;
       if (e.key === 'Enter' && e.target === cur) { const p = all.find(x => x.id === cur.dataset.id), ref = p && ((p.decision && p.decision.result) || p.target); if (ref && findRef(state, ref)) { e.preventDefault(); if (ref.type === 'task') openCard(ref.id); else openContact(ref.id); return; }
         const first = cur.querySelector('.prop__actions button'); if (first) { e.preventDefault(); first.focus(); } return; }
+      if (e.key === 'r') { const b = cur.querySelector('.ask__answers [data-recommended="true"]'); if (b && !b.disabled) { e.preventDefault(); b.click(); } return; }
       const act = { a: 'accept', e: 'edit', m: 'merge', i: 'ignore' }[e.key]; if (!act) return;
       const b = cur.querySelector(`.prop__actions [data-act="${act}"]`); if (b && !b.disabled) { e.preventDefault(); b.click(); }
     });

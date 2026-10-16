@@ -26,9 +26,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Versions
 ### v71 (schema 4)
-Text only: `CARDS.md` ("Comments that need a person") and `routine-prompt.md` ask agents to say who a choice affects
-and what each reason rests on (a link, or "judgement"). No migration.
-- Run `kit-update` only. Check: `kit-check` says v71, and `board/CARDS.md` has "Who it affects".
+`CARDS.md` ("Comments that need a person") and `routine-prompt.md` ask agents to say who a choice affects and what each
+reason rests on (a link, or "judgement"). The Review Inbox gains two optional fields and one read-time rule: an
+`ask.choose` may carry `change.recommended` (an option key), `settings.inbox_lapse_days` (default 14, 0 = never) sets when
+an unanswered question shows as lapsed, and a lapse is computed when the board is read, never written. The web board
+shows each press's result. No migration and no data change: existing proposals and settings stay as they are, and
+`settings.min_kit` does not rise (an older page or `keeptrack.py` reads the new field and setting without harm, but an
+older `keeptrack.py` refuses to add a question with `recommended`).
+- Run `kit-update` only. Check: `kit-check` says v71, `board/CARDS.md` has "Who it affects" and "Review Inbox questions:
+  recommended and lapsed", and `keeptrack.py settings` shows `inbox_lapse_days`.
+- Optional: change the lapse with `keeptrack.py settings-set --inbox-lapse-days N`. Nothing else to do.
 
 ### v70 (schema 4)
 Automation manifests may carry an optional `flow` that the web board draws on its new Automations page. The three

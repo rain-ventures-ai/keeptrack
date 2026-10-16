@@ -147,6 +147,23 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, code, out.getvalue())
         self.assertEqual(expect, board_counts(kt.load_board()))
 
+    def test_v71_recommended_and_lapse_setting_survive_and_lapse_is_read_time(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit71", "fixture.json"))
+        board_dir, expect = self.use_fixture("v4_kit71", meta)
+        before = kt.load_board()
+        with contextlib.redirect_stdout(io.StringIO()): kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        self.assertEqual(before, data)
+        self.assertEqual(expect, board_counts(data))
+        self.assertEqual(0, kt.doctor_board(False)[2])
+        rec = next(p for p in data["proposals"] if p["id"] == "r_askrec0071")
+        self.assertEqual("Bolt Ltd", kt.recommended_option(rec["change"])["label"])
+        self.assertEqual(10, kt.inbox_lapse_days(data))
+        self.assertEqual([("r_askrec0071", 15)], [(p["id"], n) for p, n in kt.lapsed_questions(data, "2026-09-16")],
+                         "the old unanswered question lapses; answered ones never do")
+        self.assertEqual([], kt.lapsed_questions(data, "2026-09-10"))
+        self.assertEqual("pending", rec["status"], "nothing is written to mark a lapse")
+
     def test_v70_flows_preserve_board_and_own_packs(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit70", "fixture.json"))
         board_dir, expect = self.use_fixture("v4_kit70", meta)

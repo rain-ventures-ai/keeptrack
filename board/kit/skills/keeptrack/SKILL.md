@@ -180,13 +180,16 @@ $B proposal-add proposals.json --dry-run   # suggested changes from notes, email
 $B proposals --status pending              # what waits for a person's decision
 $B proposal-accept <id>                    # only after the user chose it; also proposal-merge / -ignore / -reopen / -undo
 $B proposal-add question.json              # ask a person: ask.choose / ask.approve / ask.question (kit v44)
-$B proposal-result <id>                    # the answer to your own question
+$B proposal-add question.json --recommend 2  # ask.choose: mark the option you recommend (key, number or label; kit v71)
+$B proposal-result <id>                    # the answer to your own question; "lapsed": true = unanswered too long
 $B proposal-done <id> --answer-id <answer_id> [--content-hash sha256:..]   # just before acting; act on the answer it prints
 $B proposal-done <id> --not-acted --answer-id <answer_id> --note "why"   # rejected, content changed, or no longer needed: close it without acting
 ```
 Proposals are not tasks: never count them, claim them or work on them. Only a person decides. A routine never accepts.
 When you need a person's decision (pick a design, send a draft, merge a PR, any open question), ask in the Inbox
 instead of guessing. Link the draft or design; never paste its content. Agents never answer questions.
+A question unanswered for `settings.inbox_lapse_days` (default 14) has lapsed: do not ask it again unless the person
+brings it up (board/CARDS.md, "Review Inbox questions: recommended and lapsed").
 See docs/help/review-inbox.md (privacy: no email summary or subject without `--recipients-confirmed`).
 
 ## Rules

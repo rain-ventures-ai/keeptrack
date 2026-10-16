@@ -485,6 +485,63 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.match(await propCard(page, 'r_askmail001').textContent(), /Closed without acting by claude@alex/);
       await page.close(); }
 
+    // Kit v71 (ideas from petekp/inbox): the recommended option first and marked in words, "Accept all recommended",
+    // lapsed questions (computed when read, never written) and a visible result for every press.
+    { const nowIso = new Date().toISOString(), old = '2020-01-01T09:00:00Z', files = fixture();
+      const q = (id, title, change, extra = {}) => text(prop(id, 'ask.choose', title, { source: { kind: 'other', id: 'agent-2', revision: '1', title: 'Agent picks', date: '2026-10-11' }, run: null, reason: '', created: nowIso,
+        change: { question: title, options: [{ key: 'a', label: 'Option A' }, { key: 'b', label: 'Option B' }], ...change }, ...extra }));
+      files['proposals/r_recpick001.json'] = q('r_recpick001', 'Which supplier?', { recommended: 'b' });
+      files['proposals/r_recpick002.json'] = q('r_recpick002', 'Which venue?', { recommended: 'a' });
+      files['proposals/r_recsam0001.json'] = q('r_recsam0001', 'Which logo?', { recommended: 'a' }, { decider: 'sam' });
+      files['proposals/r_reclaps001.json'] = q('r_reclaps001', 'Which colour, from long ago?', { recommended: 'a' }, { created: old });
+      files['proposals/r_plain00001.json'] = q('r_plain00001', 'Which day?', {});
+      files['proposals/r_slowapprv1.json'] = text(prop('r_slowapprv1', 'ask.approve', 'Send the summary?', { run: null, reason: '', created: nowIso, change: { question: 'Send the summary?', content_hash: 'sha256:' + 'e'.repeat(64), subject: { type: 'email' } } }));
+      const api = new Github(files), page = await openBoard(browser, api, { view: 'inbox' }); await page.waitForSelector('article.prop');
+      // Recommended: first, the main button, and says so in words.
+      const rec = propCard(page, 'r_recpick001'), firstBtn = rec.locator('.ask__answers button').first();
+      assert.match(await firstBtn.textContent(), /Option B\s*Recommended/, 'the recommended option comes first and is marked in words');
+      assert.equal(await firstBtn.getAttribute('aria-label'), 'Option B (recommended)');
+      assert.equal(await propCard(page, 'r_plain00001').locator('[data-recommended]').count(), 0, 'no recommendation, no marker: rendered as before');
+      assert.deepEqual(await propCard(page, 'r_plain00001').locator('.ask__answers button').allTextContents(), ['Option A', 'Option B'], 'order unchanged without a recommendation');
+      // Lapsed: marked on the item, listed by the Lapsed filter, still answerable, and left out of the bulk answer.
+      const lapsed = propCard(page, 'r_reclaps001');
+      assert.match(await lapsed.textContent(), /Lapsed/); assert.match(await lapsed.textContent(), /will not ask again unless you bring it up/);
+      assert.equal(await lapsed.locator('[data-recommended]').isDisabled(), false, 'a lapsed question can still be answered');
+      await page.selectOption('[data-filter="status"]', 'lapsed'); assert.deepEqual(await page.locator('article.prop').evaluateAll(a => a.map(x => x.dataset.id)), ['r_reclaps001']);
+      await page.selectOption('[data-filter="status"]', 'pending');
+      // Accept all recommended: one confirm, then each answer saved as if picked by hand.
+      const bulk = page.locator('[data-act="accept-all-recommended"]'); assert.match(await bulk.textContent(), /Accept all recommended \(2\)/, 'only the two that are not lapsed and not for someone else');
+      await clearLive(page); await bulk.click(); const dlg = page.getByRole('alertdialog'); await dlg.waitFor();
+      assert.match(await dlg.textContent(), /Which supplier\?: Option B/); await dlg.getByRole('button', { name: 'Answer them' }).click(); await said(page, /Answered 2 with the recommended option/);
+      for (const [id, key] of [['r_recpick001', 'b'], ['r_recpick002', 'a']]) { const o = api.json(`proposals/${id}.json`); assert.equal(o.status, 'answered'); assert.deepEqual(o.decision.answer, { choice: key }); assert.equal(o.history.at(-1).text, 'answered'); }
+      for (const id of ['r_recsam0001', 'r_reclaps001', 'r_plain00001']) assert.equal(api.json(`proposals/${id}.json`).status, 'pending', id + ' stays pending');
+      assert.equal(api.json('proposals/r_reclaps001.json').created, old, 'a lapse is never written to the file');
+      assert.match(await propCard(page, 'r_recpick001').locator('.prop__press--ok').textContent(), /✓ Answered/, 'a bulk answer shows its result on each item');
+      assert.match(await propCard(page, 'r_recpick001').textContent(), /Option B \(recommended\)/, 'the answer says it was the recommended option');
+      // Press: "Saving…" and every control off while the save is out; a second press writes nothing more; then "✓ Approved".
+      let release; const held = new Promise(ok => { release = ok; });
+      await page.route('https://api.test/**', async r => { if (r.request().method() === 'PATCH') await held; return api.route(r); });
+      const slow = propCard(page, 'r_slowapprv1'), approve = slow.getByRole('button', { name: 'Approve', exact: true });
+      await clearLive(page); await approve.click();
+      await page.waitForFunction(() => /Saving…/.test(document.querySelector('article.prop[data-id="r_slowapprv1"]').textContent));
+      assert.equal(await slow.locator('button:not([disabled])').count(), 0, 'every control on the item is off while saving');
+      await slow.locator('button', { hasText: 'Saving…' }).click({ force: true }); await page.keyboard.press('Enter');
+      release(); await said(page, /Answered/);
+      assert.equal(api.calls.filter(c => c.method === 'PATCH').length >= 1, true);
+      assert.equal(api.json('proposals/r_slowapprv1.json').history.filter(h => h.text === 'answered').length, 1, 'answered once, not twice');
+      assert.match(await propCard(page, 'r_slowapprv1').locator('.prop__press--ok').textContent(), /✓ Approved/, 'the done state stays on the item');
+      await page.unroute('https://api.test/**'); await page.route('https://api.test/**', r => api.route(r));
+      // Error: the save fails, the item says why (not only a toast) and its buttons work again.
+      api.failRefOnce = true; await clearLive(page); await propCard(page, 'r_plain00001').getByRole('button', { name: 'Option A', exact: true }).click();
+      await page.waitForSelector('article.prop[data-id="r_plain00001"] .prop__press--err');
+      assert.equal(await propCard(page, 'r_plain00001').locator('.prop__press--err').getAttribute('role'), 'alert');
+      assert.equal(api.json('proposals/r_plain00001.json').status, 'pending');
+      assert.equal(await propCard(page, 'r_plain00001').getByRole('button', { name: 'Option A', exact: true }).isDisabled(), false, 'buttons come back after an error');
+      // r picks the recommended answer of the focused question.
+      await propCard(page, 'r_reclaps001').focus(); await clearLive(page); await page.keyboard.press('r'); await said(page, /Answered/);
+      assert.deepEqual(api.json('proposals/r_reclaps001.json').decision.answer, { choice: 'a' });
+      await page.close(); }
+
     // Kit v52: a card added AFTER a new-task item was proposed (its stored likely_duplicates is empty) still shows as a
     // possible duplicate when the item is shown, and Merge offers that card first. The private-tasks double-card case.
     { const files = fixture(); files['cards/t_late.json'] = text(card('t_late', 3, 'Send the revised plan'));
