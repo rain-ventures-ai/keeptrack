@@ -67,6 +67,7 @@ async function appDetails(page) {
 
     await context.setOffline(true); await page.reload({ waitUntil: 'domcontentloaded' });
     assert.equal(await page.title(), 'Keeptrack'); assert.equal(await page.locator('body').count(), 1);
+    await page.waitForFunction(() => window.kbBoardMarkup && window.KeeptrackHosted && document.querySelector('#board').children.length > 0, null, { timeout: 15000 });   // every shell script ran offline, and the board drew
     // An unvisited hosted URL must use its strict cached entry, including all external assets.
     await page.goto(`${origin}/board/hosted.html?api=${encodeURIComponent(origin)}&board=30000000-0000-4000-8000-000000000001`);
     await page.locator('#hostedSignIn').waitFor();

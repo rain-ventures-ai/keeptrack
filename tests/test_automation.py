@@ -936,7 +936,7 @@ print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME
         self.assertTrue(self.read(self.rp)['automation']['network_granted'])
 
     def test_validate_each_bad_manifest_case(self):
-        mutations=[lambda m:m.update(extra=True),lambda m:m.update(slug='wrong'),lambda m:m.update(name='a'*61),lambda m:m.update(summary='b'*201),lambda m:m.update(version='v1'),lambda m:m.update(writes=['direct']),lambda m:m.update(every='2h'),lambda m:m.update(never=['unknown']),lambda m:m.update(needs=[dict(id='unknown',why='Read',routes=[])]),lambda m:m.update(needs=[dict(id='board.read',why='Read',routes=[dict(runtime='local',how='Read',probe='shell')])]),lambda m:m.update(needs=[dict(id='board.read',why='Read',routes=[dict(runtime='claude',how='Read',probe=['true'])])]),lambda m:m.update(check=dict(file='../check.py')),lambda m:m.update(check=dict(file='check.py',network=True)),lambda m:m.update(check=dict(file='check.py',timeout_seconds=121)),lambda m:m.update(check=dict(file='check.py',tools='gog')),lambda m:m.update(config={'n':dict(type='int',required=True,help='Count',default=True)}),lambda m:m.update(config={'n':dict(type='int',required=True,help='Count',unknown=True)}),lambda m:m.update(action_key_prefix='hello@example.com'),lambda m:m.update(needs=[dict(id='board.read',why='Read',routes=[dict(runtime='local',how='Read',unknown=True)])])]
+        mutations=[lambda m:m.update(extra=True),lambda m:m.update(slug='wrong'),lambda m:m.update(name='a'*61),lambda m:m.update(summary='b'*201),lambda m:m.update(version='v1'),lambda m:m.update(writes=['direct']),lambda m:m.update(every='2h'),lambda m:m.update(never=['unknown']),lambda m:m.update(needs=[dict(id='unknown',why='Read',routes=[])]),lambda m:m.update(needs=[dict(id='board.read',why='Read',routes=[dict(runtime='local',how='Read',probe='shell')])]),lambda m:m.update(needs=[dict(id='board.read',why='Read',routes=[dict(runtime='claude',how='Read',probe=['true'])])]),lambda m:m.update(check=dict(file='../check.py')),lambda m:m.update(check=dict(file='check.py',network=True)),lambda m:m.update(check=dict(file='check.py',timeout_seconds=121)),lambda m:m.update(check=dict(file='check.py',tools='gog')),lambda m:m.update(config={'n':dict(type='int',required=True,help='Count',default=True)}),lambda m:m.update(config={'n':dict(type='int',required=True,help='Count',unknown=True)}),lambda m:m.update(action_key_prefix='hello@example.com'),lambda m:m.update(needs=[dict(id='board.read',why='Read',routes=[dict(runtime='local',how='Read',unknown=True)])]),lambda m:m.update(flow=[dict(kind='trigger',title='Daily')]),lambda m:m.update(flow=[dict(kind='trigger',title='Daily')]*9),lambda m:m.update(flow=[dict(kind='shell',title='A'),dict(kind='output',title='B')]),lambda m:m.update(flow=[dict(kind='trigger',title='a'*41),dict(kind='output',title='B')]),lambda m:m.update(flow=[dict(kind='trigger',title='A',text='x\ny'),dict(kind='output',title='B')]),lambda m:m.update(flow=[dict(kind='trigger',title='A',run='rm'),dict(kind='output',title='B')]),lambda m:m.update(flow='trigger')]
         for mutate in mutations:
             value=copy.deepcopy(self.manifest); mutate(value); self.write(self.pack/'manifest.json',value)
             with self.subTest(manifest=value): self.refuse('validate',path=str(self.pack))
@@ -945,6 +945,14 @@ print(json.dumps({"env":dict(os.environ),"empty":not os.listdir(os.environ["HOME
             p=self.pack/name; raw=p.read_text(); p.unlink()
             with self.subTest(missing=name): self.refuse('validate',path=str(self.pack))
             p.write_text(raw)
+
+    def test_flow_is_optional_and_validated(self):
+        value=copy.deepcopy(self.manifest); value['flow']=[dict(kind='trigger',title='Once a day',text='Runs on schedule.'),dict(kind='output',title='Review Inbox')]
+        self.write(self.pack/'manifest.json',value); self.call('validate',path=str(self.pack))
+        for slug in ('stale-cards-nudge','notes-folder-to-tasks','email-to-tasks'):
+            with self.subTest(slug=slug):
+                m=json.loads((KIT/'automations'/slug/'manifest.json').read_text()); self.assertGreaterEqual(len(m['flow']),2)
+                self.assertEqual([s['kind'] for s in m['flow']][-1],'output')
 
     def test_sample_packs_tests_and_notes_real_check(self):
         shutil.copytree(KIT/'automations',self.root/'board/automations')

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline
+again; "Sign in to a local hosted board" shows only on a local page; the `api.github.com` preconnect is back. CLI:
+`claim --on-behalf-of` on a GitHub board now fails clearly instead of being ignored; `approve` help says hosted boards
+only; an empty `BOARD_BACKEND` means github and a mistyped one is refused by name. No schema change.
+
+Kit v70: an Automations page in the web board (header button, `#view=automations`). Each automation is a card with a
+node diagram of what it does (schedule, what it reads, the no-AI check, the agent, the Review Inbox), its status and
+the command for each next step. Manifests may carry an optional `flow` for that diagram; the built-in packs have one.
+Built-in pack digests changed: reinstall any v69 install of them. No schema change.
+
+CLI: inside a board repo clone, the clone's own git remote names the board. A `.keeptrack` or `.board` config in a
+folder above the clone that names another board (for example one `use` wrote in the home folder) is now ignored there,
+and `where` names the file it skipped. Before, it set `BOARD_REPO` and sent the clone's commands to that other board.
+A parent config naming the clone's own board still applies, and outside board clones nothing changes. A claim taken in
+such a clone before this change was recorded in `.keeptrack/claim.json`; finish or release it with the older kit, or
+claim again. START.md no longer suggests running `use` in the home folder. No schema change.
+
 Web board: split boards fetch uncached files in GraphQL batches, so a new browser needs fewer GitHub calls.
 Files GitHub cannot return this way fall back to the existing REST read. No schema change.
 

@@ -31,3 +31,4 @@ Each fixture may include `fixture.json` with expected entity counts and the kit 
 `v4_kit68` freezes unchanged split data before the card-first link release (kit v67 → v68).
 
 `v4_kit69` freezes unchanged split data before automations (kit v68 → v69).
+`v4_kit70` freezes unchanged split data before automation flows (kit v69 → v70).

@@ -166,12 +166,56 @@ def _untrusted(d, name):
         return True
 
 
+PARENT_CONFIG = None   # a config above a board clone, ignored so the clone's own remote decides (said by commands)
+
+
+_CLONES = {}   # {current folder: its clones}, asked once a run per folder
+
+
+def _board_clones():
+    """The board repo clones the current folder is in: the one this keeptrack.py sits in and the one git names for the
+    current folder (a plugin copy run inside a clone), each kept only when the current folder is inside it.
+    {real path of the clone top: its origin's owner/name}."""
+    cwd = os.path.realpath(os.getcwd())
+    if cwd not in _CLONES:
+        tops = [ROOT]
+        try:
+            tops.append(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                       timeout=10).stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+        found = _CLONES[cwd] = {}
+        for t in tops:
+            c = os.path.realpath(t) if t else ""
+            if c and os.path.isfile(os.path.join(c, "board", "tasks.json")) and (cwd == c or cwd.startswith(c.rstrip(os.sep) + os.sep)):
+                try:
+                    out = subprocess.run(["git", "-C", c, "remote", "get-url", "origin"], capture_output=True, text=True,
+                                         timeout=10).stdout.strip()
+                except (OSError, subprocess.SubprocessError):
+                    out = ""
+                m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", out)
+                found[c] = m.group(1).lower() if m else ""
+    return _CLONES[cwd]
+
+
+def _above_a_clone(d, conf):
+    """True when folder d is a parent of a board clone the current folder is in, and the config there names another
+    board than that clone's own remote. Such a config (for example one `use` wrote in the home folder) must never beat
+    the clone's remote: inside a clone, the clone names its board. A config naming the same board still applies (its
+    user, token_env, project)."""
+    d = os.path.realpath(d)
+    repo = str(conf.get("repo") or "").lower()
+    return any(c != d and c.startswith(d.rstrip(os.sep) + os.sep) and repo and r and repo != r
+               for c, r in _board_clones().items())
+
+
 def project_config():
     """A project that is not a board repo names its board in .keeptrack/config.json: personal, never committed
     (`keeptrack.py use` writes it, with a .gitignore of its own). Found by walking up from the current folder; the
-    pre-v22 .board/config.json is still read. Environment variables still win over it.
+    pre-v22 .board/config.json is still read. Environment variables still win over it. A config in a folder above a
+    board clone is ignored: inside a clone its own git remote names the board (PARENT_CONFIG says which was skipped).
     Returns (project folder, settings, config folder name)."""
-    global UNTRUSTED_CONFIG
+    global UNTRUSTED_CONFIG, PARENT_CONFIG
     d = os.getcwd()
     while True:
         for name in CONFIG_DIRS:
@@ -181,9 +225,14 @@ def project_config():
                 continue
             if os.path.isfile(p):
                 try:
-                    return d, json.load(open(p)), name
+                    with open(p) as f:
+                        conf = json.load(f)
                 except (OSError, ValueError) as e:
                     sys.exit(f"cannot read {p}: {e}")
+                if isinstance(conf, dict) and _above_a_clone(d, conf):
+                    PARENT_CONFIG = PARENT_CONFIG or p
+                    continue
+                return d, conf, name
         if os.path.dirname(d) == d:
             return None, {}, CONFIG_DIRS[0]
         d = os.path.dirname(d)
@@ -205,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 69  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 70  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -226,7 +275,7 @@ def _default_branch():
 
 BRANCH = _default_branch()
 PATH = os.environ.get("BOARD_PATH", "board/tasks.json")
-BACKEND = os.environ.get("BOARD_BACKEND", "github").lower()
+BACKEND = (os.environ.get("BOARD_BACKEND") or "github").strip().lower()  # empty means github; main() refuses any other value
 FILE = None  # set by --file
 WRITE = os.environ.get("BOARD_WRITE", "auto").lower()  # auto | api | git (auto switches to git when the sandbox blocks API writes)
 
@@ -408,9 +457,9 @@ def _rate_wait(code, headers, text, attempt):
 
 
 def gh(*args, body=None):
+    """gh-api-style call: gh("repos/x/contents/y?ref=b") or gh("-X", "PUT", "repos/x/contents/y", "--input", "-", body=...)."""
     if BACKEND == "hosted" and not FILE:
         sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
-    """gh-api-style call: gh("repos/x/contents/y?ref=b") or gh("-X", "PUT", "repos/x/contents/y", "--input", "-", body=...)."""
     if use_http():
         method, path, rest = "GET", None, list(args)
         if rest[:1] == ["-X"]:
@@ -2864,6 +2913,8 @@ def with_record(run):
 
 
 def cmd_claim(a):
+    if getattr(a, "on_behalf_of", None):
+        sys.exit("--on-behalf-of works only with BOARD_BACKEND=hosted (a hosted dispatcher); on a GitHub board, claim as BOARD_USER")
     _PENDING_CLAIM.clear()
     with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
 
@@ -4907,6 +4958,8 @@ def cmd_where(a):
             "BOARD_TOKEN" if os.environ.get("BOARD_TOKEN") else "gh login" if shutil.which("gh") else "GH_TOKEN/GITHUB_TOKEN" if token() else "none")
     print(f"auth:    {auth}")
     print(f"config:  {os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json') if PROJECT_DIR else '(no .keeptrack/config.json found)'}")
+    if PARENT_CONFIG:
+        print(f"         (ignored {PARENT_CONFIG}: it is above this board clone, whose own git remote names the board)")
     print(f"claims:  {CLAIM_FILE}")
 
 
@@ -8344,6 +8397,7 @@ def _routine_report(a, path):
 _AUTO_INTERVALS = {"15m": 900, "30m": 1800, "1h": 3600, "6h": 21600, "1d": 86400}
 _AUTO_NEEDS = {"board.read", "files.read", "gmail.read", "drive.read", "github.read", "calendar.read"}
 _AUTO_NEVER = {"send-email", "delete", "spend", "external-post", "edit-contacts"}
+_AUTO_FLOW = {"trigger", "read", "check", "agent", "output", "step"}   # node kinds for the web board's flow diagram
 _AUTO_RUNTIMES = {"claude", "chatgpt", "grok", "local"}
 
 
@@ -8386,7 +8440,7 @@ def _auto_pack(path):
         for name in dirs + files: require(not os.path.islink(os.path.join(root, name)), "pack must not contain symlinks")
     try: m = _auto_json(os.path.join(path, "manifest.json"))
     except (OSError, ValueError): m = None
-    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix".split(),
+    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix flow".split(),
             "schema slug name summary version needs writes never every".split(), "manifest")
     require(m.get("schema") == "keeptrack-automation/1", "unsupported manifest schema")
     slug = m.get("slug")
@@ -8431,6 +8485,14 @@ def _auto_pack(path):
         require(type(v.get("required")) is bool and text(v.get("help"), 200), "invalid config required/help")
         if "default" in v:
             require(_auto_config_type(v["default"], v.get("type")), "invalid config default")
+    if "flow" in m:   # optional: the steps the web board draws as a diagram (2-8 nodes); text only, never instructions
+        flow = m["flow"]
+        require(isinstance(flow, list) and 2 <= len(flow) <= 8, "flow must list 2-8 steps")
+        for step in flow if isinstance(flow, list) else []:
+            step = obj(step, ("kind", "title", "text"), ("kind", "title"), "flow step")
+            require(isinstance(step.get("kind"), str) and step["kind"] in _AUTO_FLOW, "unknown flow step kind")
+            require(text(step.get("title"), 40), "invalid flow step title")
+            if "text" in step: require(text(step["text"], 160), "invalid flow step text")
     if "action_key_prefix" in m:
         try: _auto_token(m["action_key_prefix"])
         except ValueError: errors.append("invalid action_key_prefix")
@@ -9058,7 +9120,7 @@ def main():
     s.add_argument("id"); s.set_defaults(f=cmd_research_lock)
     s = sub.add_parser("card-link", help="cards as Markdown links to the web board ([#12](url) title): write card numbers this way")
     s.add_argument("ids", nargs="+", metavar="id"); s.set_defaults(f=cmd_card_link)
-    s = sub.add_parser("approve", help="hosted: approve an assigned card (scope checked by server)")
+    s = sub.add_parser("approve", help="hosted boards only (BOARD_BACKEND=hosted): approve an assigned card (on a GitHub board, move it to To do)")
     s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
@@ -9293,6 +9355,8 @@ def main():
         print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
               "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",
               file=sys.stderr)
+    if BACKEND not in ("github", "hosted"):
+        sys.exit(f"unknown BOARD_BACKEND {BACKEND!r}: use github (the default) or hosted, or unset it")
     if not FILE and BACKEND != "github":
         return hosted_dispatch(a) or 0
     return a.f(a) or 0
