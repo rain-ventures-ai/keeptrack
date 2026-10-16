@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v71 (schema 4)
+`CARDS.md` ("Comments that need a person") and `routine-prompt.md` ask agents to say who a choice affects and what each
+reason rests on (a link, or "judgement"). The Review Inbox gains two optional fields and one read-time rule: an
+`ask.choose` may carry `change.recommended` (an option key), `settings.inbox_lapse_days` (default 14, 0 = never) sets when
+an unanswered question shows as lapsed, and a lapse is computed when the board is read, never written. A new question's
+`created` is always the time it is added (a payload value is ignored), and a reopened question's wait starts again from
+the reopen, so the lapse clock cannot be set by the asker. One-line fields (titles, option labels) now refuse the rarer
+line breaks too (`\v`, `\f`, `\x1c`-`\x1e`, `\x85`, `\u2028`, `\u2029`), not only `\n` and `\r`. The web board
+shows each press's result. No migration and no data change: existing proposals and settings stay as they are, and
+`settings.min_kit` does not rise (an older page or `keeptrack.py` reads the new field and setting without harm, but an
+older `keeptrack.py` refuses to add a question with `recommended`).
+- Run `kit-update` only. Check: `kit-check` says v71, `board/CARDS.md` has "Who it affects" and "Review Inbox questions:
+  recommended and lapsed", and `keeptrack.py settings` shows `inbox_lapse_days`.
+- Optional: change the lapse with `keeptrack.py settings-set --inbox-lapse-days N`. Nothing else to do.
+
 ### v70 (schema 4)
 Automation manifests may carry an optional `flow` that the web board draws on its new Automations page. The three
 built-in packs get plain-words summaries and a flow (pack version 1.1.0). No migration.

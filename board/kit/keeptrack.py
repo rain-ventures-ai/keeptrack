@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 70  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 71  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1288,8 +1288,10 @@ def hosted_dispatch(a):
             if a.column and a.column != "backlog":
                 sys.exit("ineligible: hosted cards are created in Backlog; approve separately")
             card = {"id": "t_" + secrets.token_hex(8), "title": a.title, "assignees": a.assign or [], "column": "backlog"}
-            if not a.title.strip():
-                sys.exit("invalid_schema: a task needs a title")
+            if not a.title.strip() or _has_break(a.title):
+                sys.exit("invalid_schema: a task needs a title on one line")
+            for name in a.label or []:
+                check_label_name(name)
             for k in ("details", "client", "priority"):
                 if getattr(a, k, None) is not None:
                     card[k] = getattr(a, k)
@@ -2639,14 +2641,26 @@ def _age(mins):
     return "?" if mins is None else f"{int(mins)}m" if mins < 120 else f"{int(mins // 60)}h" if mins < 48 * 60 else f"{int(mins // 1440)}d"
 
 
+def _flat(value):
+    """Text printed as part of one output line: printable characters only, words joined by single spaces. relay and
+    routines read `list` output one item per line, so a title can never print as a second, forged line."""
+    return " ".join("".join(c if c.isprintable() else " " for c in str(value or "")).split())
+
+
+def _has_break(value):
+    """True when text holds a line break of any kind str.splitlines knows (\v \f \x1c-\x1e \x85 \u2028 \u2029 too)."""
+    return "".join(str(value).splitlines()) != str(value)
+
+
 def line(data, t, wait_suffix="list", today=None):
     cs = claim_state(data, t.get("claim"))
-    who = ",".join("@" + a for a in t.get("assignees", [])) or "-"
+    # every field from the card file is flattened: a hand-edited file can't make this one line two (relay reads lines)
+    who = ",".join("@" + _flat(a) for a in t.get("assignees", [])) or "-"
     c = t.get("claim") or {}
     if c.get("blocked_by_wait") and cs == "blocked":   # never goes stale, so show how old its last heartbeat is
-        cl = f"  [{c.get('agent')}:blocked by wait, beat {_age(minutes_since(c.get('heartbeat_at') or c.get('claimed_at')))} ago]"
+        cl = f"  [{_flat(c.get('agent'))}:blocked by wait, beat {_age(minutes_since(c.get('heartbeat_at') or c.get('claimed_at')))} ago]"
     else:
-        cl = f"  [{c.get('agent')}:{cs}]" if c else ""
+        cl = f"  [{_flat(c.get('agent'))}:{cs}]" if c else ""
     td = t.get("todos") or []
     pr = f"  [{sum(1 for d in td if d.get('done'))}/{len(td)}]" if td else ""
     cm = f"  \U0001F4AC{len(t['comments'])}" if t.get("comments") else ""
@@ -2660,7 +2674,10 @@ def line(data, t, wait_suffix="list", today=None):
     if after_ids(t) and t.get("column") != "done":   # the links on the board not done yet (show ID reads the archive)
         todo = [after_ref(x) for x in after_links(data, t) if x["state"] not in ("done", "missing")]
         af = f"  [after {', '.join(todo)}]" if todo else ""
-    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {t['title']}{pr}{cm}{wt}{af}{cl}"
+    out = (f"#{_flat(t.get('num', '?')):<4}{_flat(t['id'])}  {_flat(t['column']):<11} {who:<22} {_flat(t['title'])}"
+           f"{pr}{cm}{wt}{af}{cl}")
+    # last guard over the whole line (after refs, wait text and anything added later): no break or control character
+    return "".join(c if c.isprintable() else " " for c in out)
 
 
 def _default_scope(a, data=None):
@@ -2732,6 +2749,19 @@ def cmd_list(a):
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
         print(line(data, t, today=today) + cleared + scoring + url)
+    card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "waiting", "project", "client", "label", "bare")) or query or wait_on
+    if a.attention and not getattr(a, "json", False) and not card_filter:
+        # kit v71: Review Inbox questions nobody answered in settings.inbox_lapse_days. One self-contained line each (relay
+        # reads every line as an item). An agent does not ask a lapsed question again unless the person brings it up.
+        # Questions belong to no project, so a filtered or project-scoped run (the repo's default scope too) lists none;
+        # with --assignee, only the questions that person is named to answer.
+        for p, waited in lapsed_questions(data, today):
+            # a question with no decider is one any member answers, so it stays in an --assignee run
+            if a.assignee and p.get("decider") and str(p.get("decider")).lower() != a.assignee.lower():
+                continue
+            who = f", for @{_flat(p['decider'])}" if p.get("decider") else ""
+            print(f"lapsed question {_flat(p.get('id'))} ({_flat(p.get('kind'))}{who}, unanswered {waited} days): "
+                  f"{_flat(p.get('title', ''))}")   # every field flattened: a hand-edited file can't add a line
 
     if getattr(a, "json", False): print(json.dumps(json_items))
 
@@ -3600,6 +3630,8 @@ def cmd_auto_heartbeat(a):
 
 def cmd_add(a):
     _default_scope(a)
+    if not str(a.title or "").strip() or _has_break(a.title):
+        sys.exit("a task needs a title on one line")
     def fn(data):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
@@ -5692,8 +5724,8 @@ def cmd_task_set(a):
         if a.contact is not None and a.contact != t.get("contact", ""):
             t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
         if getattr(a, "title", None) is not None:
-            if not a.title.strip():
-                sys.exit("a task needs a title")
+            if not a.title.strip() or _has_break(a.title):
+                sys.exit("a task needs a title on one line")
             if a.title != t.get("title"):
                 t["title"] = a.title; changed.append(f"title: {a.title}")
         if getattr(a, "details", None) is not None and getattr(a, "add_details", None) is not None:
@@ -5788,7 +5820,7 @@ def check_color(c):
 
 def check_label_name(name):
     name = (name or "").strip()
-    if not name or len(name) > 40 or any(ch in name for ch in ",\n"):
+    if not name or len(name) > 40 or "," in name or _has_break(name):
         sys.exit("a label name must be 1-40 characters with no comma or line break")
     return name
 
@@ -6408,6 +6440,7 @@ def cmd_settings(a):
     # From kit v44 the Review Inbox is always on for split boards; the line keeps its v42 shape for older skill copies.
     print("review_inbox.enabled: " + ("true" if review_storage_ok(data) else "false (needs split storage: keeptrack.py migrate --to 4)"))
     print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
+    print(f"inbox_lapse_days: {inbox_lapse_days(data) or 'off (questions never lapse)'}")
     br = backlog_research(data)
     print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
     print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
@@ -6440,6 +6473,11 @@ def cmd_settings_set(a):
             if not 0 <= a.waiting_days <= 365:
                 sys.exit("waiting days must be between 0 (no automatic chase) and 365")
             st["waiting_days"] = a.waiting_days; print(f"waiting_days: {a.waiting_days or 'off (no automatic chase)'}")
+        if getattr(a, "inbox_lapse_days", None) is not None:
+            if not 0 <= a.inbox_lapse_days <= 365:
+                sys.exit("inbox lapse days must be between 0 (questions never lapse) and 365")
+            st["inbox_lapse_days"] = a.inbox_lapse_days
+            print(f"inbox_lapse_days: {a.inbox_lapse_days or 'off (questions never lapse)'}")
         if getattr(a, "min_kit", None) is not None:
             cur = st.get("min_kit") if isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) else 0
             if cur > KIT_VERSION:   # a typo that locks every tool out: it may come down, to a kit this one is, never below the content
@@ -6451,7 +6489,7 @@ def cmd_settings_set(a):
                              + ", so it is not lowered (only a value above the published kit is a typo). Upgrade the board tools: "
                              "python3 board/keeptrack.py kit-update")
                 needed = min_kit_needed(data)[0]
-                if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "max_agent_claims",
+                if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
                                                                   "rename_stage", "stages", "backlog_research", "research_per_run")):
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
@@ -6890,10 +6928,88 @@ TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priori
 PERSON_CHANGE_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "github", "emails", "phones",
                         "stage", "value", "source", "notes", "next", "due", "next_due", "links", "comments"}
 TOUCH_CHANGE_FIELDS = {"text", "channel", "at", "source_id", "source_message_ids", "next", "due", "next_due"}
-ASK_CHANGE_FIELDS = {"ask.choose": {"question", "options", "allow_other", "task", "links"},
+ASK_CHANGE_FIELDS = {"ask.choose": {"question", "options", "allow_other", "recommended", "task", "links"},
                      "ask.approve": {"question", "subject", "content_hash", "task", "links"},
                      "ask.question": {"question", "task", "links"}}
 ASK_SUBJECT_TYPES = {"email", "message", "pr", "document", "other"}
+INBOX_LAPSE_DAYS = 14      # settings.inbox_lapse_days default: a question unanswered this many days shows as lapsed (0 = never)
+DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def inbox_lapse_days(data):
+    """settings.inbox_lapse_days as a whole number 0-365 (0 = questions never lapse), else the default 14."""
+    v = (data.get("settings") or {}).get("inbox_lapse_days")
+    if isinstance(v, float) and v.is_integer():   # 30.0 in the JSON is 30, as the web page reads it
+        v = int(v)
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 365 else INBOX_LAPSE_DAYS
+
+
+def recommended_option(change):
+    """The option an ask.choose recommends ({key, label, ...}), or None. Same rule as board.js recommendedOption."""
+    c = change if isinstance(change, dict) else {}
+    rec, options = c.get("recommended"), c.get("options")
+    if not isinstance(rec, str) or not isinstance(options, list):
+        return None
+    return next((o for o in options if isinstance(o, dict) and o.get("key") == rec), None)
+
+
+def ask_pending_since(proposal):
+    """When a question last became pending: the newest "reopened" history entry's time, else `created`."""
+    p = proposal if isinstance(proposal, dict) else {}
+    for h in reversed(p.get("history") if isinstance(p.get("history"), list) else []):
+        if isinstance(h, dict) and str(h.get("text") or "").startswith("reopened") and isinstance(h.get("at"), str):
+            return h["at"]
+    return str(p.get("created") or "")
+
+
+TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?")
+
+
+def stamp_day(value, zone=None):
+    """The YYYY-MM-DD a timestamp falls on in `zone` (a time zone name or tzinfo; none: the date as written), or ""."""
+    m = TIMESTAMP_RE.fullmatch(str(value or ""))
+    if not m:
+        return ""
+    try:
+        day = dt.date.fromisoformat(m.group(1))
+        if not zone or m.group(2) is None:
+            return day.isoformat()
+        if isinstance(zone, str):
+            import zoneinfo
+            zone = zoneinfo.ZoneInfo(zone)
+        off = m.group(5) or "Z"
+        tz = dt.timezone.utc if off == "Z" else dt.timezone(dt.timedelta(hours=int(off[1:3]), minutes=int(off[4:6])) * (1 if off[0] == "+" else -1))
+        at = dt.datetime(day.year, day.month, day.day, int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), tzinfo=tz)
+        return at.astimezone(zone).date().isoformat()
+    except (ValueError, OverflowError, LookupError, OSError):
+        return ""
+
+
+def ask_lapsed(proposal, today, days, zone=None):
+    """Days a pending question has waited, when that is `days` or more (it has lapsed); else 0. Computed when the board is
+    read, never written: a lapsed question stays pending and a person can still answer it. Same rule as board.js askLapsed.
+    The wait starts when it last became pending (ask_pending_since), on that day in `zone` (the board's time zone).
+    today: YYYY-MM-DD on the board's clock; days: inbox_lapse_days(data)."""
+    p = proposal if isinstance(proposal, dict) else {}
+    if p.get("kind") not in ASK_KINDS or p.get("status") != "pending" or not isinstance(days, int) or isinstance(days, bool) or days <= 0:
+        return 0
+    since = stamp_day(ask_pending_since(p), zone)
+    if not since or not DAY_RE.fullmatch(str(today or "")):
+        return 0
+    try:
+        waited = (dt.date.fromisoformat(str(today)) - dt.date.fromisoformat(since)).days
+    except ValueError:
+        return 0
+    return waited if waited >= days else 0
+
+
+def lapsed_questions(data, today=None):
+    """[(proposal, days waited)] for every pending question that has lapsed, oldest first."""
+    if not review_storage_ok(data):
+        return []
+    days, today, zone = inbox_lapse_days(data), today or board_today(data).isoformat(), board_timezone(data)
+    out = [(p, ask_lapsed(p, today, days, zone)) for p in data.get("proposals", []) or [] if isinstance(p, dict)]
+    return sorted([x for x in out if x[1]], key=lambda x: (-x[1], x[0].get("id", "")))
 
 
 def proposal_error(message):
@@ -6924,7 +7040,8 @@ def find_proposal(data, ref):
 
 
 def _one_line(value, label, limit=None):
-    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+    # every line break str.splitlines knows (\v \f \x1c-\x1e \x85 \u2028 \u2029 too), so a value can never make a second line
+    if not isinstance(value, str) or not value.strip() or "".join(value.splitlines()) != value:
         proposal_error(f"{label} must be one non-empty line")
     value = value.strip()
     if limit is not None and len(value) > limit:
@@ -6958,6 +7075,8 @@ def check_change_values(kind, change):
     for key, value in change.items():
         if key in STR_FIELDS and not (key == "value" and kind.startswith("task.")) and not isinstance(value, str):
             proposal_error(f"change.{key} must be text")
+        if key == "title" and _has_break(value):
+            proposal_error("change.title must be one line")
         if key in DATE_FIELDS and (not isinstance(value, str) or (value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))):
             proposal_error(f"change.{key} must be a YYYY-MM-DD date or empty")
         if key in STR_LIST_FIELDS and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
@@ -7044,6 +7163,8 @@ def check_ask_change(kind, change):
             if "note" in o: _one_line(o["note"], "option note", PROPOSAL_DETAIL_LIMIT)
         if "allow_other" in change and not isinstance(change["allow_other"], bool):
             proposal_error("change.allow_other must be true or false")
+        if "recommended" in change and (not isinstance(change["recommended"], str) or change["recommended"] not in keys):   # kit v71: the option the agent recommends
+            proposal_error("change.recommended must be the key of one of the options (" + ", ".join(o["key"] for o in options) + ")")
     if kind == "ask.approve":
         subject = change.get("subject")
         if not isinstance(subject, dict) or set(subject) - {"type", "url", "summary"} or subject.get("type") not in ASK_SUBJECT_TYPES:
@@ -7052,6 +7173,24 @@ def check_ask_change(kind, change):
         if "summary" in subject: _one_line(subject["summary"], "change.subject.summary", PROPOSAL_DETAIL_LIMIT)
         if not isinstance(change.get("content_hash"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", change["content_hash"]):
             proposal_error("ask.approve needs change.content_hash: sha256: and 64 lower-case hex digits of the exact content approved")
+
+
+def resolve_recommend(change, ref):
+    """--recommend: an option key, its number in the list (1 = first) or its label (any case). An exact key wins, then the
+    number, then the label; when these name different options the reference is ambiguous and refused."""
+    options = [o for o in (change.get("options") if isinstance(change.get("options"), list) else []) if isinstance(o, dict)]
+    ref = str(ref or "").strip()
+    listing = "; ".join(f"{i}. {o.get('label')} ({o.get('key')})" for i, o in enumerate(options, 1))
+    by_key = [o.get("key") for o in options if ref == o.get("key")]
+    by_pos = [options[int(ref) - 1].get("key")] if ref.isdigit() and 1 <= int(ref) <= len(options) else []
+    by_label = [o.get("key") for o in options if ref.casefold() == str(o.get("label", "")).strip().casefold()]
+    named = list(dict.fromkeys(by_key + by_pos + by_label))
+    if len(named) > 1:
+        proposal_error(f"--recommend {ref!r} is ambiguous: it names options " + ", ".join(named)
+                       + f" (by key, number or label). Options: {listing}. Give a key that names one option only.")
+    if named:
+        return named[0]
+    proposal_error(f"--recommend {ref!r} matches none of the options: {listing or '(none)'}. Give a key, a number or a label.")
 
 
 def validate_proposal_input(raw, recipients_confirmed=False):
@@ -7084,7 +7223,7 @@ def validate_proposal_input(raw, recipients_confirmed=False):
     reason = raw.get("reason", "")
     evidence = raw.get("evidence", "")
     for label, value in (("reason", reason), ("evidence", evidence)):
-        if not isinstance(value, str) or "\n" in value or "\r" in value or len(value) > PROPOSAL_DETAIL_LIMIT:
+        if not isinstance(value, str) or _has_break(value) or len(value) > PROPOSAL_DETAIL_LIMIT:
             proposal_error(f"{label} must be one line of at most {PROPOSAL_DETAIL_LIMIT} characters")
     change = raw.get("change")
     if not isinstance(change, dict) or not change:
@@ -7149,7 +7288,8 @@ def validate_proposal_input(raw, recipients_confirmed=False):
            "source": clean_source, "action_key": action_key, "work_key": work_key,
            "reason": reason.strip(), "target": copy.deepcopy(target), "change": copy.deepcopy(change),
            "likely_duplicates": [], "decision": None, "history": [],
-           "created": raw.get("created") or now(),
+           # kit v71: a question's lapse clock starts when it is added; the payload cannot set it (as with createdBy below)
+           "created": now() if kind in ASK_KINDS else (raw.get("created") or now()),
            "createdBy": who_am_i() if kind in ASK_KINDS else (raw.get("createdBy") or who_am_i())}   # an answer goes back to the asker only
     for key in ("run", "evidence", "reviewer", "decider"):
         if raw.get(key) not in (None, ""):
@@ -7312,6 +7452,14 @@ def cmd_research_suggest(a):
 
 def cmd_proposal_add(a):
     values = _read_proposal_payload(a.path)
+    if getattr(a, "recommend", None) is not None:   # kit v71: mark the recommended option of the one ask.choose in the payload
+        chooses = [v for v in values if isinstance(v, dict) and v.get("kind") == "ask.choose"]
+        if len(values) != 1 or len(chooses) != 1:
+            proposal_error("--recommend needs exactly one ask.choose question in the payload; for a list, set change.recommended in each")
+        change = chooses[0].get("change")
+        if not isinstance(change, dict):
+            proposal_error("change must be a non-empty object")
+        change["recommended"] = resolve_recommend(change, a.recommend)
     if a.dry_run:
         data, _ = load(); before = copy.deepcopy(data)
         _, lines = _prepare_proposals(data, values, a.recipients_confirmed, True)
@@ -7337,10 +7485,15 @@ def cmd_proposals(a):
     if a.reviewer: rows = [p for p in rows if p.get("reviewer") == a.reviewer]
     if a.mine: rows = [p for p in rows if p.get("createdBy") == who_am_i()]
     rows = sorted(rows, key=lambda p: (p.get("created", ""), p.get("id", "")))
+    days, today = inbox_lapse_days(data), board_today(data).isoformat()
+    zone = board_timezone(data)
+    if getattr(a, "lapsed", False): rows = [p for p in rows if ask_lapsed(p, today, days, zone)]
     if a.json:
         print(json.dumps(rows, indent=2, ensure_ascii=False)); return
     for p in rows:
-        print(f"{p['id']}  {p['status']:<8} {p['kind']:<13} {p['title']}")
+        rec, waited = recommended_option(p.get("change")), ask_lapsed(p, today, days, zone)
+        marks = (f"  (recommended: {_flat(rec.get('label') or rec.get('key'))})" if rec else "") + (f"  [lapsed: unanswered {waited} days]" if waited else "")
+        print(f"{_flat(p['id'])}  {_flat(p['status']):<8} {_flat(p['kind']):<13} {_flat(p['title'])}{marks}")
     if not rows: print("(no proposals)")
 
 
@@ -7740,7 +7893,13 @@ def cmd_proposal_answer(a):
             proposal_error(f"{proposal['id']} is a {proposal.get('kind')} proposal: use proposal-accept, -merge or -ignore")
         _ask_person(proposal, "answer")
         approve = True if a.approve else False if a.reject else None
-        answer = ask_answer(proposal, a.choose, a.other, approve, a.text, a.note)
+        choose = a.choose
+        if getattr(a, "recommended", False):   # kit v71: the same answer as --choose <the recommended key>
+            rec = recommended_option(proposal.get("change")) if proposal.get("kind") == "ask.choose" else None
+            if not rec:
+                proposal_error(f"{proposal['id']} has no recommended option; answer with --choose KEY")
+            choose = rec["key"]
+        answer = ask_answer(proposal, choose, a.other, approve, a.text, a.note)
         ts, by = now(), who_am_i()
         proposal["status"] = "answered"
         proposal["decision"] = {"action": "answer", "id": "a_" + uuid.uuid4().hex[:10], "by": by, "at": ts, "answer": answer,
@@ -7763,6 +7922,11 @@ def cmd_proposal_result(a):
     out = {"id": proposal["id"], "kind": proposal.get("kind"), "status": proposal.get("status"), "decider": proposal.get("decider"),
            "answer": d.get("answer"), "answer_id": d.get("id"), "by": d.get("by"), "at": d.get("at"), "done": d.get("done"),
            "content_hash": (proposal.get("change") or {}).get("content_hash")}
+    rec = recommended_option(proposal.get("change"))
+    if rec: out["recommended"] = rec.get("key")
+    waited = ask_lapsed(proposal, board_today(data).isoformat(), inbox_lapse_days(data), board_timezone(data))
+    out["lapsed"] = bool(waited)   # kit v71: unanswered for settings.inbox_lapse_days; do not ask again unless the person raises it
+    if waited: out["lapsed_days"] = waited
     print(json.dumps(out, indent=2, ensure_ascii=False))
 
 
@@ -9303,6 +9467,8 @@ def main():
     s.add_argument("--research-per-run", dest="research_per_run", type=int, help="bare Backlog cards one dispatcher run researches (1-10, default 2)")
     s.add_argument("--waiting-days", dest="waiting_days", type=int,
                    help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
+    s.add_argument("--inbox-lapse-days", dest="inbox_lapse_days", type=int,
+                   help="days after which an unanswered Review Inbox question shows as lapsed (default 14; 0 = never)")
     s.add_argument("--min-kit", dest="min_kit", type=int,
                    help="the oldest board kit that may write this board; only between the stored value and this kit's version "
                         "(a stored value above the published kit, a typo, may come down to it)")
@@ -9310,11 +9476,14 @@ def main():
     s = sub.add_parser("proposal-add", aliases=["propose"], help="add one proposal, or a JSON list, to the Review Inbox")
     s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")
     s.add_argument("--recipients-confirmed", action="store_true", help="every intended board reader received this specific email")
+    s.add_argument("--recommend", metavar="OPTION",
+                   help="the recommended option of the one ask.choose in the payload: its key, number (1 = first) or label")
     s.set_defaults(f=cmd_proposal_add)
     s = sub.add_parser("proposals", help="list Review Inbox proposals")
     s.add_argument("--status", choices=["pending", "accepted", "answered", "ignored", "all"], default="pending")
     s.add_argument("--mine", action="store_true", help="only items this BOARD_AGENT@BOARD_USER added")
     s.add_argument("--kind", choices=sorted(PROPOSAL_KINDS)); s.add_argument("--source", choices=sorted(PROPOSAL_SOURCE_KINDS))
+    s.add_argument("--lapsed", action="store_true", help="only questions unanswered for settings.inbox_lapse_days (default 14)")
     s.add_argument("--run"); s.add_argument("--reviewer"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposals)
     s = sub.add_parser("proposal-show", help="show one proposal and its current target")
     s.add_argument("id"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposal_show)
@@ -9333,7 +9502,9 @@ def main():
     s = sub.add_parser("proposal-answer", help="a person answers a question (ask.choose, ask.approve, ask.question)")
     s.add_argument("id"); g = s.add_mutually_exclusive_group()
     g.add_argument("--choose", metavar="KEY"); g.add_argument("--other", metavar="TEXT"); g.add_argument("--approve", action="store_true")
-    g.add_argument("--reject", action="store_true"); g.add_argument("--text"); s.add_argument("--note"); s.set_defaults(f=cmd_proposal_answer)
+    g.add_argument("--reject", action="store_true"); g.add_argument("--text")
+    g.add_argument("--recommended", action="store_true", help="choose the option the question recommends (ask.choose)")
+    s.add_argument("--note"); s.set_defaults(f=cmd_proposal_answer)
     s = sub.add_parser("proposal-result", help="the answer to a question, for the agent that asked")
     s.add_argument("id"); s.set_defaults(f=cmd_proposal_result)
     s = sub.add_parser("proposal-done", help="the asking agent marks an answer as acted on (once; run it just before acting)")

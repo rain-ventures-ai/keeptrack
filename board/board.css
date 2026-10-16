@@ -1366,6 +1366,16 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .ask__other { display: flex; gap: 8px; align-items: flex-start; }
 .ask__other input, .ask__other textarea { flex: 1 1 auto; min-height: 36px; min-width: 0; box-sizing: border-box; }
 .ask__note { min-height: 36px; width: 100%; box-sizing: border-box; }
+/* kit v71: recommended option, lapsed questions, press results */
+.ask__rec { margin-left: 6px; padding: 0 6px; border: 1px solid currentColor; border-radius: 999px; font-size: var(--fs-xs, 11px); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.prop__lapsed { margin: 6px 0 0; padding: 6px 10px; background: var(--warn-soft); border-radius: var(--r-sm, 6px); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.prop__press { margin: 8px 0 0; font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.prop__press--ok { color: var(--ok); }
+.prop__press--err { color: var(--danger); }
+.inbox__bulklist { max-height: 50vh; overflow-y: auto; margin: 0 0 8px; padding-left: 22px; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.inbox__bulkq { font-weight: 600; }
+.inbox__bulkwhy { display: block; font-size: var(--fs-sm); color: var(--muted); }
+.inbox__bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; font-size: var(--fs-sm); }
 .propform { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .propform__row { display: grid; gap: 4px; font-size: var(--fs-sm); }
 .propform__row input, .propform__row select, .propform__row textarea { min-height: 36px; width: 100%; box-sizing: border-box; }

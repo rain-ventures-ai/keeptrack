@@ -32,3 +32,9 @@ Each fixture may include `fixture.json` with expected entity counts and the kit 
 
 `v4_kit69` freezes unchanged split data before automations (kit v68 → v69).
 `v4_kit70` freezes unchanged split data before automation flows (kit v69 → v70).
+`v4_kit71` adds a pending `ask.choose` with `change.recommended`, an old unanswered question and
+`settings.inbox_lapse_days` (kit v70 → v71). A lapse is computed when read, so the files never change.
+
+`inbox-rules-cases.json` is not a board: it holds the Review Inbox read-time rules (the lapse setting, the recommended
+option, when a question has lapsed) that `tests/test_inbox_rules_parity.py` runs through `keeptrack.py` and `board.js`.
+Add a case there when either changes.

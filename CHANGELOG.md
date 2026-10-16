@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v71: comments and routine answers that need a person say whose view each point is and what it rests on.
+`CARDS.md` ("Comments that need a person: always recommend") adds "Who it affects" (the two or three viewpoints the
+choice touches, scored from what they would say, not from an opinion of the agent's own) and "What it rests on" (each
+reason links its evidence, or says "judgement"); the recommendation names whose concern decides it. The template and
+the good example show both. `routine-prompt.md` follows the rule and, when asked "what do you think" or for research,
+a review or a choice, names the people whose view matters before it recommends.
+Review Inbox (ideas from petekp/inbox (MIT)): an `ask.choose` question may name its **recommended option**
+(`change.recommended`, an option key; `proposal-add --recommend <key, number or label>`; anything else is refused). The
+web board shows it first, as the main button marked "Recommended" in words, with **Accept all recommended** (one confirm
+that lists every question it will answer with its recommended option; then each answer is saved in turn as if picked by
+hand, with the button and the queued items off until the run ends, and an item someone answered meanwhile is skipped) and
+the key `r`; `proposal-answer --recommended` does the same from the CLI, and
+`proposals` marks it. A pending question unanswered for `settings.inbox_lapse_days` (default 14, 0 = never;
+`settings-set --inbox-lapse-days`) is **lapsed**: worked out when the board is read (on the board's clock), never
+written. The wait runs from when the question last became pending (its newest reopen, else when it was added), counted in
+days on the board's time zone; a question's `created` is now always the time it was added, so a payload cannot start or
+stop its lapse clock. The board marks it and
+has a "Lapsed questions" filter; `proposals --lapsed`, `list --attention` (one `lapsed question …` line each, only with no
+card filter or project scope; with `--assignee`, the questions named for that person plus those any member answers) and
+`proposal-result` (`lapsed`, `lapsed_days`) report it. Agents do not ask a lapsed or dismissed question again unless the
+person brings it up (`CARDS.md`). A dismissed question now reads "Dismissed". Every press in the Inbox shows its result:
+"Saving…" with the item's controls off (no double submit), then "✓ Approved" / "✓ Answered" on the item, or why it was not
+saved, with what the person typed kept. Card and proposal titles, labels, reasons and other one-line fields refuse every line break Python's
+`splitlines` knows (`add`, `task-set --title`, `label-add`, `proposal-add`), and `list` prints every title, id and
+decider on one line, so no title or hand-edited file can add a line to its output. `PLUGIN.md` gains "What it runs, sends and changes". Optional fields only: no schema change, no migration, and no
+new `min_kit` (an older page shows the options in their stored order and no lapse).
+
 Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline
 again; "Sign in to a local hosted board" shows only on a local page; the `api.github.com` preconnect is back. CLI:
 `claim --on-behalf-of` on a GitHub board now fails clearly instead of being ignored; `approve` help says hosted boards
