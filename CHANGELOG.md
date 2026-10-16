@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v71: comments and routine answers that need a person say whose view each point is and what it rests on.
+`CARDS.md` ("Comments that need a person: always recommend") adds "Who it affects" (the two or three viewpoints the
+choice touches, scored from what they would say, not from an opinion of the agent's own) and "What it rests on" (each
+reason links its evidence, or says "judgement"); the recommendation names whose concern decides it. The template and
+the good example show both. `routine-prompt.md` follows the rule and, when asked "what do you think" or for research,
+a review or a choice, names the people whose view matters before it recommends. No code or schema change.
+
 Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline
 again; "Sign in to a local hosted board" shows only on a local page; the `api.github.com` preconnect is back. CLI:
 `claim --on-behalf-of` on a GitHub board now fails clearly instead of being ignored; `approve` help says hosted boards

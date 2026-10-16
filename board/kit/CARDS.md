@@ -96,6 +96,10 @@ When a comment asks a person to decide, approve, unblock or do something, it mus
 alone ("What do you decide so it can go on?") is a bad comment: the reader must open the card, read the history and
 find the options with no help.
 
+An agent has no stake in the work and has not lived with it. Asked "what do you think?", it answers in a made-up
+voice, and its scores look exact while resting on nothing. So say **whose view** each point is and **what it rests
+on**: the people the choice affects, and evidence the reader can check.
+
 Every such comment has four parts, in this order:
 
 1. **What waits, and why.** One or two sentences: what is stopped, on what, and what happens if nothing changes. Start
@@ -103,24 +107,32 @@ Every such comment has four parts, in this order:
 2. **Options.** Two to four real options. Give each one a score out of 10 and a short reason. The score says how good
    the option is for the owner's goal, with value, cost, risk and how easy it is to undo all counted. Include "do
    nothing" or "wait" when it is a real choice.
-3. **Recommendation.** The option you recommend and the reason, in one sentence. Normally it has the highest score.
+   - **Who it affects.** Above the options, name the two or three viewpoints that matter for this choice (for example
+     whoever maintains the code, whoever pays if it breaks, the user or client who sees it) and what each wants, in a
+     few words. Score from what they would say, not from an opinion of your own.
+   - **What it rests on.** Base each reason on something the reader can check, and link it: the PR, test, file,
+     decision or incident. Where there is nothing to check, write "judgement".
+3. **Recommendation.** The option you recommend and the reason, in one sentence: say which viewpoint's concern decides
+   it. Normally it has the highest score.
 4. **Next step.** What you (or the next agent) do after the answer, and what the person must do, if anything (a click,
    a command, a setting).
 
 When only one way makes sense (for example, a step that only the person can do), still give the recommendation, its
-score and the reason, and say exactly what to do.
+score and the reason, and say exactly what to do. Then "Who it affects" can be left out.
 
 Template:
 
 ```markdown
 @<login> <what waits on you, and why it matters, in one or two sentences>
 
+**Who it affects:** <viewpoint 1> wants <x>; <viewpoint 2> wants <y>.
+
 **Options**
-1. **<option A>** (8/10): <what happens, cost, risk>
-2. **<option B>** (5/10): <what happens, cost, risk>
+1. **<option A>** (8/10): <what happens, cost, risk> ([<evidence>](<link>))
+2. **<option B>** (5/10): <what happens, cost, risk> (judgement)
 3. **<do nothing>** (2/10): <what stays broken>
 
-**Recommendation:** 1, because <one reason>.
+**Recommendation:** 1, because <one reason>; <viewpoint 1>'s concern decides it.
 
 **Next:** <what happens after you answer; any step only you can do>
 ```
@@ -139,12 +151,16 @@ Good:
 @alex This card is blocked on to-do 6. The phone alerts are built and live, but your phone does not subscribe to
 them yet, so no alert gets to you.
 
+**Who it affects:** you want alerts that reach you at once; whoever maintains the board wants no second sender to
+keep working.
+
 **Options**
-1. **Subscribe now** (9/10): open the ntfy app, add the topic from the README, send the test push. About two minutes.
-2. **Use email alerts instead** (5/10): no app, but a new sender to build, and alerts come later.
+1. **Subscribe now** (9/10): open the ntfy app, add the topic from the [README](https://github.com/acme/board/blob/main/README.md#phone-alerts),
+   send the test push. About two minutes.
+2. **Use email alerts instead** (5/10): no app, but a new sender to build and keep, and alerts come later (judgement).
 3. **Leave it** (2/10): stopped chains and waiting questions stay silent.
 
-**Recommendation:** 1, because it is two minutes of work and all the rest is done.
+**Recommendation:** 1, because it is two minutes of work and all the rest is done; your need for alerts at once decides it.
 
 **Next:** when you tick to-do 6, I close the card.
 ```
@@ -259,8 +275,9 @@ Why it is good:
   comment.
 - Keep the card short. Put long content in a document and link it.
 - Write details and comments in Markdown (see "Format the text"). Use `-` and stdin for multi-line text.
-- When a comment needs a person, give options with a score out of 10, your recommendation and the reason, and the
-  next step (see "Comments that need a person: always recommend").
+- When a comment needs a person, give options with a score out of 10, scored from the viewpoints the choice affects,
+  each reason linked to its evidence or marked "judgement", your recommendation and the reason, and the next step
+  (see "Comments that need a person: always recommend").
 - When your result needs a person's decision, use `review`, not `done` (see "Done, Pending review or waiting").
 - When you name a card (in a reply, comment, done note, PR, brief or hand-off), write its number as a link:
   `keeptrack.py card-link '#58'` prints `[#58](<card link>)`. A person can then tap straight to the card.

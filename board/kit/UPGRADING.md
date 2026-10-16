@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v71 (schema 4)
+Text only: `CARDS.md` ("Comments that need a person") and `routine-prompt.md` ask agents to say who a choice affects
+and what each reason rests on (a link, or "judgement"). No migration.
+- Run `kit-update` only. Check: `kit-check` says v71, and `board/CARDS.md` has "Who it affects".
+
 ### v70 (schema 4)
 Automation manifests may carry an optional `flow` that the web board draws on its new Automations page. The three
 built-in packs get plain-words summaries and a flow (pack version 1.1.0). No migration.
