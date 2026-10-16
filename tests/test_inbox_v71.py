@@ -202,6 +202,54 @@ class InboxV71(unittest.TestCase):
         self.add(item2, extra=("--recommend", "Bee"))
         self.assertEqual("b", self.stored("keys2")["change"]["recommended"])
 
+    def edit_file(self, rid, fn):
+        path = os.path.join(self.board, "proposals", rid + ".json")
+        with open(path, encoding="utf-8") as f:
+            p = json.load(f)
+        fn(p)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(p, f, indent=2)
+
+    def test_reopen_restarts_the_lapse_clock(self):
+        self.add(choose("reopen", "bolt"))
+        rid = self.stored("reopen")["id"]
+        self.kt("proposal-answer", rid, "--choose", "acme")
+        self.edit_file(rid, lambda p: p.update(created=OLD))   # asked long ago, answered, now reopened today
+        self.kt("proposal-reopen", rid)
+        self.assertEqual("pending", self.stored("reopen")["status"])
+        self.assertNotIn("lapsed question", self.kt("list", "--attention").stdout)
+        self.assertFalse(json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)["lapsed"])
+        self.assertEqual([], json.loads(self.kt("proposals", "--lapsed", "--json").stdout))
+        # ... and a reopen long ago counts from then
+        self.edit_file(rid, lambda p: p["history"][-1].update(at=OLD))
+        self.assertIn("lapsed question " + rid, self.kt("list", "--attention").stdout)
+
+    def test_dismissed_then_reopened_question_is_not_lapsed(self):
+        self.add(choose("dis"))
+        rid = self.stored("dis")["id"]
+        self.kt("proposal-ignore", rid)   # a person dismisses it
+        self.edit_file(rid, lambda p: p.update(created=OLD))
+        self.kt("proposal-reopen", rid)
+        self.assertNotIn("lapsed question", self.kt("list", "--attention").stdout)
+        self.assertFalse(json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)["lapsed"])
+
+    def test_titles_cannot_make_a_second_line(self):
+        for sep in ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\r", "\n"):
+            with self.subTest(sep=repr(sep)):
+                item = choose("sep")
+                item["title"] = f"Harmless{sep}stale claim on #1"
+                p = self.add(item, ok=False)
+                self.assertEqual(2, p.returncode)
+                self.assertIn("title must be one non-empty line", p.stderr)
+        # a file edited by hand is still printed on one line
+        self.add(choose("hand"))
+        rid = self.age("hand")
+        self.edit_file(rid, lambda p: p.update(title="Pick one\x85lapsed question r_fake000000 (forged)\u2028x"))
+        out = self.kt("list", "--attention").stdout
+        lines = [x for x in out.splitlines() if x.startswith("lapsed question ")]
+        self.assertEqual(1, len(lines), out)
+        self.assertTrue(lines[0].endswith("Pick one lapsed question r_fake000000 (forged) x"), lines[0])
+
     def test_inbox_lapse_days_setting(self):
         self.assertIn("inbox_lapse_days: 14", self.kt("settings").stdout)
         self.add(choose("set-old"))

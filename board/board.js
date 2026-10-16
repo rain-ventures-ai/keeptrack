@@ -5338,25 +5338,49 @@ if (typeof window !== 'undefined') (() => {
     if (typeof c.recommended !== 'string' || !Array.isArray(c.options)) return null;
     return c.options.find(o => o && typeof o === 'object' && o.key === c.recommended) || null;
   }
-  function askLapsed(p, today, days) {   // days a pending question has waited when that is `days` or more; else 0. Never written.
+  function askPendingSince(p) {   // when a question last became pending: the newest "reopened" history entry, else created
+    const h = Array.isArray(p && p.history) ? p.history : [];
+    for (let i = h.length - 1; i >= 0; i--) if (h[i] && typeof h[i] === 'object' && String(h[i].text || '').startsWith('reopened') && typeof h[i].at === 'string') return h[i].at;
+    return String((p && p.created) || '');
+  }
+  const ZONE_FMT = new Map();   // one formatter per time zone
+  function stampDay(value, zone) {   // the YYYY-MM-DD a timestamp falls on in `zone` (none: the date as written), or ''
+    const m = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.exec(String(value || ''));
+    if (!m) return '';
+    const t = Date.parse(m[1] + 'T00:00:00Z'); if (Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== m[1]) return '';
+    if (!zone || m[2] === undefined) return m[1];
+    const at = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4] || '00'}${m[5] || 'Z'}`); if (Number.isNaN(at)) return '';
+    try {
+      if (!ZONE_FMT.has(zone)) ZONE_FMT.set(zone, new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }));
+      const parts = Object.fromEntries(ZONE_FMT.get(zone).formatToParts(new Date(at)).map(x => [x.type, x.value]));
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    } catch { return ''; }
+  }
+  function askLapsed(p, today, days, zone) {   // days a pending question has waited when that is `days` or more; else 0. Never written.
     const DAY = /^\d{4}-\d{2}-\d{2}$/, num = s => { const t = Date.parse(s + 'T00:00:00Z'); return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== s ? null : Math.round(t / 864e5); };
     if (!p || typeof p !== 'object' || !/^ask\.(choose|approve|question)$/.test(p.kind || '') || p.status !== 'pending' || !Number.isInteger(days) || days <= 0) return 0;
-    const created = String(p.created || '').slice(0, 10), a = DAY.test(created) ? num(created) : null, b = DAY.test(String(today || '')) ? num(String(today)) : null;
+    const since = stampDay(askPendingSince(p), zone), a = since ? num(since) : null, b = DAY.test(String(today || '')) ? num(String(today)) : null;
     if (a === null || b === null) return 0;
     return b - a >= days ? b - a : 0;
   }
   // <<< inbox-rules
   // The board's today for lapses, as keeptrack.py's board_today: the signed-in member's time zone, else the kit owner's,
   // else the first member with one, else this browser's clock.
-  function boardTodayIso() {
+  function boardZone() {
     const people = (state.people || []).filter(m => m && typeof m === 'object'), me = String(cfg().me || '').toLowerCase(), owner = String((state.settings || {}).kit_owner || '').toLowerCase();
     const okZone = z => { if (typeof z !== 'string' || !z) return false; try { new Intl.DateTimeFormat('en', { timeZone: z }); return true; } catch { return false; } };
     const pick = [people.find(m => me && String(m.github || '').toLowerCase() === me), people.find(m => owner && String(m.github || '').toLowerCase() === owner), people.find(m => okZone(m.timezone))].find(m => m && okZone(m.timezone));
-    if (!pick) return todayIso();
-    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: pick.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value]));
-    return `${parts.year}-${parts.month}-${parts.day}`;
+    return pick ? pick.timezone : '';
   }
-  const lapsedDays = p => askLapsed(p, boardTodayIso(), inboxLapseDays(state.settings));
+  let lapseCtx = { at: 0, key: '', zone: '', today: '' };   // worked out once a minute (or when the members change), not per item
+  function lapseContext() {
+    const key = JSON.stringify([(state.people || []).map(m => m && [m.github, m.timezone]), (state.settings || {}).kit_owner, cfg().me]);
+    if (Date.now() - lapseCtx.at > 60000 || lapseCtx.key !== key) {
+      const zone = boardZone(); lapseCtx = { at: Date.now(), key, zone, today: zone ? stampDay(new Date().toISOString().slice(0, 19) + 'Z', zone) : todayIso() };
+    }
+    return lapseCtx;
+  }
+  const lapsedDays = p => { const c = lapseContext(); return askLapsed(p, c.today, inboxLapseDays(state.settings), c.zone); };
   const SRC_LABEL = { meeting: 'Meeting', email: 'Email', other: 'Other' };
   const LIST_FIELDS = ['comments', 'todos', 'links'];
   // The fields a proposal may change, the same lists as keeptrack.py (TASK_CHANGE_FIELDS, PERSON_CHANGE_FIELDS, TOUCH_CHANGE_FIELDS).
@@ -5419,8 +5443,14 @@ if (typeof window !== 'undefined') (() => {
   // "Saving…" and every control on the item is off, so a second press does nothing. Then the item says what happened
   // ("✓ Answered") and stays in view for this visit, or says why it was not saved and keeps its buttons.
   const inboxPress = { busy: new Map(), done: new Map(), err: new Map() };   // busy: proposal id -> the pressed button's data-press
+  // What the person typed on an item (answer, "something else", note, edited values, merge picks), kept while its save is
+  // out so a redraw, or a failed save, refills the rebuilt item instead of emptying it. Cleared when the save lands.
+  const inboxDraft = new Map();
+  const draftFields = art => [...art.querySelectorAll('input, textarea, select')];
+  const snapDraft = (id, art) => { if (art) inboxDraft.set(id, draftFields(art).map(e => e.type === 'checkbox' ? e.checked : e.value)); };
   async function pressRun(id, btn, run, doneText) {
     if (inboxPress.busy.has(id)) return false;
+    snapDraft(id, btn && btn.closest && btn.closest('article.prop'));
     inboxPress.busy.set(id, (btn && btn.dataset && btn.dataset.press) || ''); inboxPress.done.delete(id); inboxPress.err.delete(id);
     const art = btn && btn.closest && btn.closest('article.prop');
     if (art) { art.setAttribute('aria-busy', 'true'); art.querySelectorAll('button, input, textarea, select').forEach(b => { b.disabled = true; }); }
@@ -5429,7 +5459,7 @@ if (typeof window !== 'undefined') (() => {
     let ok = false;
     try { ok = !!(await run()); } catch (e) { inboxSay('Not saved: ' + ((e && e.message) || e), true); }
     finally { inboxPress.busy.delete(id); }
-    if (ok) { if (doneText) inboxPress.done.set(id, doneText); }
+    if (ok) { inboxDraft.delete(id); if (doneText) inboxPress.done.set(id, doneText); }
     else inboxPress.err.set(id, (($('inboxLive') || {}).textContent || '').trim() || 'Not saved. Check your connection and try again.');
     if (art && art.isConnected && !ok) { art.removeAttribute('aria-busy'); }
     return ok;
@@ -5839,6 +5869,7 @@ if (typeof window !== 'undefined') (() => {
     if (act === 'leave') return;
     const queue = todayQueue, pos = todayReviewPosition(), index = queue.visible.indexOf(p.id);
     if ($('inboxLive')) $('inboxLive').textContent = '';
+    snapDraft(p.id, document.querySelector(`.trow[data-id="${p.id}"] article.prop`));
     queue.busy.add(p.id); document.querySelectorAll(`.trow[data-id="${p.id}"] article.prop button, .trow[data-id="${p.id}"] article.prop input, .trow[data-id="${p.id}"] article.prop textarea`).forEach(b => { b.disabled = true; });
     const lab = btn && (btn.querySelector('.ui-btn__label') || btn); if (lab) lab.textContent = 'Saving…';   // the press shows at once
     inboxPress.err.delete(p.id);
@@ -5847,7 +5878,7 @@ if (typeof window !== 'undefined') (() => {
     finally { queue.busy.delete(p.id); }
     if (todayQueue !== queue || view !== 'today') return;
     if (ok) {
-      todayQueue.reviewed.delete(p.id); todayQueue.visible = todayQueue.visible.filter(id => id !== p.id);
+      inboxDraft.delete(p.id); todayQueue.reviewed.delete(p.id); todayQueue.visible = todayQueue.visible.filter(id => id !== p.id);
       const pending = new Set(inboxPending().map(x => x.id));
       const next = todayQueue.order.find(id => pending.has(id) && !todayQueue.visible.includes(id));
       if (next) todayQueue.visible.push(next);
@@ -5931,7 +5962,9 @@ if (typeof window !== 'undefined') (() => {
     // The confirm lists EVERY question it will answer (question text and the recommended option), and only those are answered.
     const body = el('div', 'kb-ask'), list = el('ol', 'inbox__bulklist');
     items.forEach(p => { const li = el('li'), c = p.change || {}; li.dataset.id = p.id;
-      li.append(el('span', 'inbox__bulkq', c.question || p.title || p.id), el('span', 'muted', ' Recommended: ' + recommendedOption(c).label)); list.append(li); });
+      li.append(el('span', 'inbox__bulkq', c.question || p.title || p.id), el('span', 'muted', ' Recommended: ' + recommendedOption(c).label));
+      const why = String(p.reason || '').replace(/\s+/g, ' ').trim(); if (why) li.append(el('span', 'inbox__bulkwhy', 'Why: ' + (why.length > 140 ? why.slice(0, 139) + '…' : why)));
+      list.append(li); });
     body.append(list, el('p', 'ui-sheet__text', 'Each answer is saved as if you picked it. Undo changes one until the agent acts on it.'));
     if (!(await ui.confirm({ title: `Answer ${items.length} question${items.length === 1 ? '' : 's'} with the recommended option?`, body, confirmLabel: 'Answer them' }))) return;
     if (inboxBulk.running) return;
@@ -6032,6 +6065,9 @@ if (typeof window !== 'undefined') (() => {
   }
   function pressFinish(art, p) {   // the press state survives a redraw: controls stay off while a save is out
     const n = pressNote(p); if (n) art.append(n);
+    const draft = inboxDraft.get(p.id), fields = draft && draftFields(art);
+    if (draft && fields.length === draft.length && p.status === 'pending') fields.forEach((e, i) => { if (e.type === 'checkbox') e.checked = !!draft[i]; else e.value = draft[i]; });
+    if (draft && !inboxPress.busy.has(p.id) && !todayQueue.busy.has(p.id)) inboxDraft.delete(p.id);   // refilled once after the save
     if (!inboxPress.busy.has(p.id) && inboxBulk.queue.has(p.id)) { const q = el('p', 'prop__press', 'Waiting to be answered with the recommended option…'); q.setAttribute('role', 'status'); art.append(q); art.querySelectorAll('button, input, textarea, select').forEach(b => { b.disabled = true; }); return; }
     if (!inboxPress.busy.has(p.id)) return;
     art.setAttribute('aria-busy', 'true'); art.querySelectorAll('button, input, textarea, select').forEach(b => { b.disabled = true; });

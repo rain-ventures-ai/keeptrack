@@ -2742,7 +2742,8 @@ def cmd_list(a):
             if a.assignee and str(p.get("decider") or "").lower() != a.assignee.lower():
                 continue
             who = f", for @{p['decider']}" if p.get("decider") else ""
-            print(f"lapsed question {p.get('id')} ({p.get('kind')}{who}, unanswered {waited} days): {p.get('title', '')}")
+            title = " ".join("".join(c if c.isprintable() else " " for c in str(p.get("title", ""))).split())   # one line, always
+            print(f"lapsed question {p.get('id')} ({p.get('kind')}{who}, unanswered {waited} days): {title}")
 
     if getattr(a, "json", False): print(json.dumps(json_items))
 
@@ -6932,18 +6933,51 @@ def recommended_option(change):
     return next((o for o in options if isinstance(o, dict) and o.get("key") == rec), None)
 
 
-def ask_lapsed(proposal, today, days):
+def ask_pending_since(proposal):
+    """When a question last became pending: the newest "reopened" history entry's time, else `created`."""
+    p = proposal if isinstance(proposal, dict) else {}
+    for h in reversed(p.get("history") if isinstance(p.get("history"), list) else []):
+        if isinstance(h, dict) and str(h.get("text") or "").startswith("reopened") and isinstance(h.get("at"), str):
+            return h["at"]
+    return str(p.get("created") or "")
+
+
+TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?")
+
+
+def stamp_day(value, zone=None):
+    """The YYYY-MM-DD a timestamp falls on in `zone` (a time zone name or tzinfo; none: the date as written), or ""."""
+    m = TIMESTAMP_RE.fullmatch(str(value or ""))
+    if not m:
+        return ""
+    try:
+        day = dt.date.fromisoformat(m.group(1))
+        if not zone or m.group(2) is None:
+            return day.isoformat()
+        if isinstance(zone, str):
+            import zoneinfo
+            zone = zoneinfo.ZoneInfo(zone)
+        off = m.group(5) or "Z"
+        tz = dt.timezone.utc if off == "Z" else dt.timezone(dt.timedelta(hours=int(off[1:3]), minutes=int(off[4:6])) * (1 if off[0] == "+" else -1))
+        at = dt.datetime(day.year, day.month, day.day, int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), tzinfo=tz)
+        return at.astimezone(zone).date().isoformat()
+    except (ValueError, OverflowError, LookupError, OSError):
+        return ""
+
+
+def ask_lapsed(proposal, today, days, zone=None):
     """Days a pending question has waited, when that is `days` or more (it has lapsed); else 0. Computed when the board is
     read, never written: a lapsed question stays pending and a person can still answer it. Same rule as board.js askLapsed.
+    The wait starts when it last became pending (ask_pending_since), on that day in `zone` (the board's time zone).
     today: YYYY-MM-DD on the board's clock; days: inbox_lapse_days(data)."""
     p = proposal if isinstance(proposal, dict) else {}
     if p.get("kind") not in ASK_KINDS or p.get("status") != "pending" or not isinstance(days, int) or isinstance(days, bool) or days <= 0:
         return 0
-    created = str(p.get("created") or "")[:10]
-    if not DAY_RE.fullmatch(created) or not DAY_RE.fullmatch(str(today or "")):
+    since = stamp_day(ask_pending_since(p), zone)
+    if not since or not DAY_RE.fullmatch(str(today or "")):
         return 0
     try:
-        waited = (dt.date.fromisoformat(str(today)) - dt.date.fromisoformat(created)).days
+        waited = (dt.date.fromisoformat(str(today)) - dt.date.fromisoformat(since)).days
     except ValueError:
         return 0
     return waited if waited >= days else 0
@@ -6953,8 +6987,8 @@ def lapsed_questions(data, today=None):
     """[(proposal, days waited)] for every pending question that has lapsed, oldest first."""
     if not review_storage_ok(data):
         return []
-    days, today = inbox_lapse_days(data), today or board_today(data).isoformat()
-    out = [(p, ask_lapsed(p, today, days)) for p in data.get("proposals", []) or [] if isinstance(p, dict)]
+    days, today, zone = inbox_lapse_days(data), today or board_today(data).isoformat(), board_timezone(data)
+    out = [(p, ask_lapsed(p, today, days, zone)) for p in data.get("proposals", []) or [] if isinstance(p, dict)]
     return sorted([x for x in out if x[1]], key=lambda x: (-x[1], x[0].get("id", "")))
 
 
@@ -6986,7 +7020,8 @@ def find_proposal(data, ref):
 
 
 def _one_line(value, label, limit=None):
-    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+    # every line break str.splitlines knows (\v \f \x1c-\x1e \x85 \u2028 \u2029 too), so a value can never make a second line
+    if not isinstance(value, str) or not value.strip() or "".join(value.splitlines()) != value:
         proposal_error(f"{label} must be one non-empty line")
     value = value.strip()
     if limit is not None and len(value) > limit:
@@ -7429,11 +7464,12 @@ def cmd_proposals(a):
     if a.mine: rows = [p for p in rows if p.get("createdBy") == who_am_i()]
     rows = sorted(rows, key=lambda p: (p.get("created", ""), p.get("id", "")))
     days, today = inbox_lapse_days(data), board_today(data).isoformat()
-    if getattr(a, "lapsed", False): rows = [p for p in rows if ask_lapsed(p, today, days)]
+    zone = board_timezone(data)
+    if getattr(a, "lapsed", False): rows = [p for p in rows if ask_lapsed(p, today, days, zone)]
     if a.json:
         print(json.dumps(rows, indent=2, ensure_ascii=False)); return
     for p in rows:
-        rec, waited = recommended_option(p.get("change")), ask_lapsed(p, today, days)
+        rec, waited = recommended_option(p.get("change")), ask_lapsed(p, today, days, zone)
         marks = (f"  (recommended: {rec.get('label') or rec.get('key')})" if rec else "") + (f"  [lapsed: unanswered {waited} days]" if waited else "")
         print(f"{p['id']}  {p['status']:<8} {p['kind']:<13} {p['title']}{marks}")
     if not rows: print("(no proposals)")
@@ -7866,7 +7902,7 @@ def cmd_proposal_result(a):
            "content_hash": (proposal.get("change") or {}).get("content_hash")}
     rec = recommended_option(proposal.get("change"))
     if rec: out["recommended"] = rec.get("key")
-    waited = ask_lapsed(proposal, board_today(data).isoformat(), inbox_lapse_days(data))
+    waited = ask_lapsed(proposal, board_today(data).isoformat(), inbox_lapse_days(data), board_timezone(data))
     out["lapsed"] = bool(waited)   # kit v71: unanswered for settings.inbox_lapse_days; do not ask again unless the person raises it
     if waited: out["lapsed_days"] = waited
     print(json.dumps(out, indent=2, ensure_ascii=False))

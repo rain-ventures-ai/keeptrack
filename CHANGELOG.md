@@ -20,13 +20,16 @@ hand, with the button and the queued items off until the run ends, and an item s
 the key `r`; `proposal-answer --recommended` does the same from the CLI, and
 `proposals` marks it. A pending question unanswered for `settings.inbox_lapse_days` (default 14, 0 = never;
 `settings-set --inbox-lapse-days`) is **lapsed**: worked out when the board is read (on the board's clock), never
-written; a question's `created` is now always the time it was added, so a payload cannot start or stop its lapse clock. The board marks it and
+written. The wait runs from when the question last became pending (its newest reopen, else when it was added), counted in
+days on the board's time zone; a question's `created` is now always the time it was added, so a payload cannot start or
+stop its lapse clock. The board marks it and
 has a "Lapsed questions" filter; `proposals --lapsed`, `list --attention` (one `lapsed question …` line each, only with no
 card filter or project scope; with `--assignee`, the questions that person answers) and
 `proposal-result` (`lapsed`, `lapsed_days`) report it. Agents do not ask a lapsed or dismissed question again unless the
 person brings it up (`CARDS.md`). A dismissed question now reads "Dismissed". Every press in the Inbox shows its result:
 "Saving…" with the item's controls off (no double submit), then "✓ Approved" / "✓ Answered" on the item, or why it was not
-saved. `PLUGIN.md` gains "What it runs, sends and changes". Optional fields only: no schema change, no migration, and no
+saved, with what the person typed kept. Titles, labels and other one-line fields refuse every line break Python's
+`splitlines` knows, and `list --attention` prints titles on one line, so a title cannot add a line to its output. `PLUGIN.md` gains "What it runs, sends and changes". Optional fields only: no schema change, no migration, and no
 new `min_kit` (an older page shows the options in their stored order and no lapse).
 
 Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline

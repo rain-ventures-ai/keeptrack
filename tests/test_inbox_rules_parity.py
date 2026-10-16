@@ -18,7 +18,7 @@ let raw = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', x => r
 process.stdin.on('end', () => { const c = JSON.parse(raw); process.stdout.write(JSON.stringify({
   lapse_days: c.lapse_days.map(x => f.inboxLapseDays(x.settings)),
   recommended: c.recommended.map(x => { const o = f.recommendedOption(x.change); return o ? o.key : null; }),
-  lapsed: c.lapsed.map(x => f.askLapsed(x.p, x.today, x.days)) })); });
+  lapsed: c.lapsed.map(x => f.askLapsed(x.p, x.today, x.days, x.zone)) })); });
 """
 
 
@@ -26,7 +26,7 @@ def python_results():
     rec = [keeptrack.recommended_option(c["change"]) for c in CASES["recommended"]]
     return {"lapse_days": [keeptrack.inbox_lapse_days({"settings": c["settings"]}) for c in CASES["lapse_days"]],
             "recommended": [o["key"] if o else None for o in rec],
-            "lapsed": [keeptrack.ask_lapsed(c["p"], c["today"], c["days"]) for c in CASES["lapsed"]]}
+            "lapsed": [keeptrack.ask_lapsed(c["p"], c["today"], c["days"], c.get("zone")) for c in CASES["lapsed"]]}
 
 
 class InboxRulesParity(unittest.TestCase):

@@ -80,7 +80,8 @@ questions for someone else and questions that have lapsed.
 
 ### Lapsed questions
 
-A question nobody answers for 14 days **lapses**. It shows **Lapsed**, and the **Lapsed questions** filter lists them.
+A question nobody answers for 14 days **lapses**. Reopening a question, or changing an answer, starts the 14 days
+again. It shows **Lapsed**, and the **Lapsed questions** filter lists them.
 The agent treats it as a no for now and does not ask it again unless you bring it up. You can still answer it. Nothing
 is saved to mark a lapse: it is worked out each time the board is read.
 
@@ -90,7 +91,8 @@ Change the number of days with `python3 board/keeptrack.py settings-set --inbox-
 
 Every button in the Inbox shows its result. While it saves, the button reads **Saving…** and the item's other buttons
 are off, so a second press does nothing. Then the item says what happened, such as **✓ Approved**, and stays in view
-until you change the filter or leave the Inbox. If the save fails, the item says why and its buttons work again.
+until you change the filter or leave the Inbox. If the save fails, the item says why, its buttons work again, and what
+you typed is still there.
 
 - A question can name the person who answers it ("Who answers: @sam"). Only that person can answer, dismiss or
   change it; others see "Waiting for @sam to answer". Without a name, any board member can.

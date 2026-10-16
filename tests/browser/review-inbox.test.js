@@ -493,7 +493,8 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       files['proposals/r_recpick001.json'] = q('r_recpick001', 'Which supplier?', { recommended: 'b' });
       files['proposals/r_recpick002.json'] = q('r_recpick002', 'Which venue?', { recommended: 'a' });
       for (let n = 3; n <= 10; n++) files[`proposals/r_recmany0${String(n).padStart(2, '0')}.json`] = q(`r_recmany0${String(n).padStart(2, '0')}`, `Bulk question ${n}?`, { recommended: 'a' });
-      files['proposals/r_recmany099.json'] = q('r_recmany099', 'Send the reply to the client now?', { options: [{ key: 'send', label: 'Send it' }, { key: 'hold', label: 'Hold it' }], recommended: 'send' });
+      files['proposals/r_recmany099.json'] = q('r_recmany099', 'Send the reply to the client now?', { options: [{ key: 'send', label: 'Send it' }, { key: 'hold', label: 'Hold it' }], recommended: 'send' }, { reason: 'The client asked for the reply by Friday.' });
+      files['proposals/r_freetext01.json'] = text(prop('r_freetext01', 'ask.question', 'What budget?', { run: null, reason: '', created: nowIso, change: { question: 'What budget?' } }));
       files['proposals/r_recsam0001.json'] = q('r_recsam0001', 'Which logo?', { recommended: 'a' }, { decider: 'sam' });
       files['proposals/r_reclaps001.json'] = q('r_reclaps001', 'Which colour, from long ago?', { recommended: 'a' }, { created: old });
       files['proposals/r_plain00001.json'] = q('r_plain00001', 'Which day?', {});
@@ -518,7 +519,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       await clearLive(page); await bulk.click(); const dlg = page.getByRole('alertdialog'); await dlg.waitFor();
       assert.deepEqual((await dlg.locator('.inbox__bulklist li').evaluateAll(l => l.map(x => x.dataset.id))).sort(), bulkIds.slice().sort(), 'every question it will answer is listed');
       assert.doesNotMatch(await dlg.textContent(), /more/, 'nothing is hidden behind "…and N more"');
-      assert.match(await dlg.locator('li[data-id="r_recmany099"]').textContent(), /Send the reply to the client now\?\s*Recommended: Send it/, 'question text and the recommended option');
+      assert.match(await dlg.locator('li[data-id="r_recmany099"]').textContent(), /Send the reply to the client now\?\s*Recommended: Send it\s*Why: The client asked for the reply by Friday\./, 'question text, the recommended option and why');
       assert.match(await dlg.locator('li[data-id="r_recpick001"]').textContent(), /Which supplier\?\s*Recommended: Option B/);
       // A slow run: the button stays off with its progress across redraws, queued items stay off, a second press does nothing.
       let releaseBulk; const heldBulk = new Promise(ok => { releaseBulk = ok; });
@@ -557,11 +558,28 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.match(await propCard(page, 'r_slowapprv1').locator('.prop__press--ok').textContent(), /✓ Approved/, 'the done state stays on the item');
       await page.unroute('https://api.test/**'); await page.route('https://api.test/**', r => api.route(r));
       // Error: the save fails, the item says why (not only a toast) and its buttons work again.
+      await propCard(page, 'r_plain00001').locator('.ask__note').fill('Only if it is cheaper');
       api.failRefOnce = true; await clearLive(page); await propCard(page, 'r_plain00001').getByRole('button', { name: 'Option A', exact: true }).click();
       await page.waitForSelector('article.prop[data-id="r_plain00001"] .prop__press--err');
       assert.equal(await propCard(page, 'r_plain00001').locator('.prop__press--err').getAttribute('role'), 'alert');
       assert.equal(api.json('proposals/r_plain00001.json').status, 'pending');
       assert.equal(await propCard(page, 'r_plain00001').getByRole('button', { name: 'Option A', exact: true }).isDisabled(), false, 'buttons come back after an error');
+      assert.equal(await propCard(page, 'r_plain00001').locator('.ask__note').inputValue(), 'Only if it is cheaper', 'the typed note survives a failed save');
+      // A typed free-text answer and its note survive a failed save too.
+      const free = propCard(page, 'r_freetext01'), long = 'Use 12,000 for the first phase. '.repeat(20).trim();
+      await free.locator('textarea').fill(long); await free.locator('.ask__note').fill('Ask finance first');
+      api.failRefOnce = true; await clearLive(page); await free.getByRole('button', { name: 'Send answer' }).click();
+      await page.waitForSelector('article.prop[data-id="r_freetext01"] .prop__press--err');
+      assert.equal(await free.locator('textarea').inputValue(), long, 'the typed answer is kept'); assert.equal(await free.locator('.ask__note').inputValue(), 'Ask finance first');
+      assert.equal(api.json('proposals/r_freetext01.json').status, 'pending');
+      await clearLive(page); await free.getByRole('button', { name: 'Send answer' }).click(); await said(page, /Answered/);
+      assert.equal(api.json('proposals/r_freetext01.json').decision.answer.text, long, 'the retry sends what was typed');
+      // Edited values survive a failed Edit & accept.
+      const ed = propCard(page, 'r_editme0001'); await ed.locator('[data-act="edit"]').click(); await ed.locator('form').getByLabel('title').fill('Draft the Acme summary v2');
+      api.failRefOnce = true; await clearLive(page); await ed.locator('form').getByRole('button', { name: 'Accept edited' }).click();
+      await page.waitForSelector('article.prop[data-id="r_editme0001"] .prop__press--err');
+      assert.equal(await ed.locator('form').getByLabel('title').inputValue(), 'Draft the Acme summary v2', 'edited values are kept');
+      assert.equal(api.json('proposals/r_editme0001.json').status, 'pending');
       // r picks the recommended answer of the focused question.
       await propCard(page, 'r_reclaps001').focus(); await clearLive(page); await page.keyboard.press('r'); await said(page, /Answered/);
       assert.deepEqual(api.json('proposals/r_reclaps001.json').decision.answer, { choice: 'a' });

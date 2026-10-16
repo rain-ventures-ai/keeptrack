@@ -36,6 +36,13 @@
     {"name": "a date-only created", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01"}, "today": "2026-10-16", "days": 30, "want": 45},
     {"name": "a bad today", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01T00:00:00Z"}, "today": "16/10/2026", "days": 14, "want": 0},
     {"name": "days as text", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01T00:00:00Z"}, "today": "2026-10-16", "days": "14", "want": 0},
+    {"name": "reopened: the wait starts at the newest reopen", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01T09:00:00Z", "history": [{"at": "2026-09-01T09:00:00Z", "text": "proposed"}, {"at": "2026-09-02T09:00:00Z", "text": "answered"}, {"at": "2026-10-15T09:00:00Z", "text": "reopened (was answered by alex)"}]}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "reopened twice: the newest counts", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-08-01T09:00:00Z", "history": [{"at": "2026-08-20T09:00:00Z", "text": "reopened (was ignored by sam)"}, {"at": "2026-09-01T09:00:00Z", "text": "reopened (was answered by alex)"}]}, "today": "2026-10-16", "days": 14, "want": 45},
+    {"name": "dismissed then reopened", "p": {"kind": "ask.question", "status": "pending", "created": "2026-01-01T00:00:00Z", "history": [{"at": "2026-01-02T00:00:00Z", "text": "ignore"}, {"at": "2026-10-10T08:00:00Z", "text": "reopened (was ignored by alex)"}]}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "other history lines do not restart the clock", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-09-01T09:00:00Z", "history": [{"at": "2026-10-15T09:00:00Z", "text": "proposed again"}]}, "today": "2026-10-16", "days": 14, "want": 45},
+    {"name": "near midnight: the board's zone decides the day", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-03T03:00:00Z"}, "today": "2026-10-16", "days": 14, "zone": "America/Los_Angeles", "want": 14},
+    {"name": "near midnight without a zone: the date as written", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-03T03:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 0},
+    {"name": "an offset in the timestamp", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T23:30:00-05:00"}, "today": "2026-10-17", "days": 14, "zone": "Europe/London", "want": 14},
     {"name": "across a leap day", "p": {"kind": "ask.choose", "status": "pending", "created": "2028-02-15T00:00:00Z"}, "today": "2028-03-01", "days": 14, "want": 15}
   ]
 }
