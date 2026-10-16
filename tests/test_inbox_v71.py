@@ -284,6 +284,13 @@ class InboxV71(unittest.TestCase):
         out = self.kt("list").stdout
         self.assertEqual(len(out.splitlines()), len(out.split("\n")) - (1 if out.endswith("\n") else 0), repr(out))
         self.assertNotIn("\n#8", out); self.assertNotIn("\n#7", out)
+        # the wait text and every other part of the line too
+        card["assignees"] = ["alex"]; card["claim"] = None
+        card["waiting"] = [{"id": "w_x", "on": "Sam\u2028#6   t_forged3  todo  forged", "who": "alex", "since": "2026-10-12T09:00:00Z"}]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(card, f, indent=2)
+        out = self.kt("list").stdout
+        self.assertEqual(len(out.splitlines()), len(out.split("\n")) - (1 if out.endswith("\n") else 0), repr(out))
         # and the proposals listing
         item = choose("flat-p"); item["title"] = "Pick one"
         self.add(item)

@@ -2674,8 +2674,10 @@ def line(data, t, wait_suffix="list", today=None):
     if after_ids(t) and t.get("column") != "done":   # the links on the board not done yet (show ID reads the archive)
         todo = [after_ref(x) for x in after_links(data, t) if x["state"] not in ("done", "missing")]
         af = f"  [after {', '.join(todo)}]" if todo else ""
-    return (f"#{_flat(t.get('num', '?')):<4}{_flat(t['id'])}  {_flat(t['column']):<11} {who:<22} {_flat(t['title'])}"
-            f"{pr}{cm}{wt}{af}{cl}")
+    out = (f"#{_flat(t.get('num', '?')):<4}{_flat(t['id'])}  {_flat(t['column']):<11} {who:<22} {_flat(t['title'])}"
+           f"{pr}{cm}{wt}{af}{cl}")
+    # last guard over the whole line (after refs, wait text and anything added later): no break or control character
+    return "".join(c if c.isprintable() else " " for c in out)
 
 
 def _default_scope(a, data=None):
