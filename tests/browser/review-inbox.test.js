@@ -533,7 +533,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.equal(await page.getByRole('alertdialog').count(), 0, 'a second press starts no second run');
       // Someone else answers a queued item meanwhile: it is skipped, not counted as failed, and their answer stays.
       api.edit('proposals/r_recmany010.json', o => { o.status = 'answered'; o.decision = { action: 'answer', id: 'a_other00001', by: 'sam', at: '2026-10-12T09:00:00Z', answer: { choice: 'b' }, result: null, commit: null }; });
-      releaseBulk(); await said(page, /Answered 10 with the recommended option\. 1 already answered by someone/);
+      releaseBulk(); await said(page, /Answered 10 with the recommended option\. 1 changed meanwhile/);
       await page.unroute('https://api.test/**'); await page.route('https://api.test/**', r => api.route(r));
       for (const id of bulkIds.filter(x => x !== 'r_recmany010')) { const o = api.json(`proposals/${id}.json`); assert.equal(o.status, 'answered', id); assert.equal(o.history.filter(h => h.text === 'answered').length, 1, id + ' answered once'); }
       assert.deepEqual(api.json('proposals/r_recmany099.json').decision.answer, { choice: 'send' });

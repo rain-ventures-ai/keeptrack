@@ -5983,7 +5983,7 @@ if (typeof window !== 'undefined') (() => {
         inboxBulk.queue.delete(seen.id); inboxBulk.done++; render();
       }
     } finally { Object.assign(inboxBulk, { running: false, done: 0, total: 0 }); inboxBulk.queue.clear(); }
-    inboxSay(`Answered ${n} with the recommended option.` + (skipped ? ` ${skipped} already answered by someone, so left as they are.` : '') + (failed ? ` ${failed} not saved; each says why.` : ' Use Undo to change an answer.'), !!failed);
+    inboxSay(`Answered ${n} with the recommended option.` + (skipped ? ` ${skipped} changed meanwhile (answered, dismissed or re-asked), so left as they are.` : '') + (failed ? ` ${failed} not saved; each says why.` : ' Use Undo to change an answer.'), !!failed);
     render();
   }
   async function inboxAct(p, act, btn) {

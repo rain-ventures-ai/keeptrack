@@ -181,7 +181,8 @@ class InboxV71(unittest.TestCase):
         everything = self.kt("list", "--attention").stdout
         self.assertEqual(3, everything.count("lapsed question "))
         mine = self.kt("list", "--attention", "--assignee", "alex").stdout
-        self.assertEqual(1, mine.count("lapsed question ")); self.assertIn("for for-alex?", mine)
+        self.assertEqual(2, mine.count("lapsed question "), "alex's own and the one any member answers")
+        self.assertIn("for for-alex?", mine); self.assertIn("for for-anyone?", mine); self.assertNotIn("for for-sam?", mine)
         for flags in (("--column", "todo"), ("--client", "Acme"), ("--label", "x"), ("--unclaimed",), ("-q", "supplier"),
                       ("--project", "nope")):
             with self.subTest(flags=flags):
@@ -249,6 +250,30 @@ class InboxV71(unittest.TestCase):
         lines = [x for x in out.splitlines() if x.startswith("lapsed question ")]
         self.assertEqual(1, len(lines), out)
         self.assertTrue(lines[0].endswith("Pick one lapsed question r_fake000000 (forged) x"), lines[0])
+
+    def test_card_titles_and_labels_stay_one_line(self):
+        for sep in ("\x0b", "\x85", "\u2028", "\r"):
+            with self.subTest(sep=repr(sep)):
+                self.assertIn("title on one line", self.kt("add", f"Fix login{sep}stale claim on #1", ok=False).stderr)
+                self.assertIn("title on one line", self.kt("task-set", "#2", "--title", f"Notes{sep}x", ok=False).stderr)
+                self.assertNotEqual(0, self.kt("label-add", f"ops{sep}x", ok=False).returncode)
+                item = {"kind": "task.create", "title": "New card", "action_key": f"t-{ord(sep)}", "work_key": f"t-{ord(sep)}",
+                        "source": {"kind": "other", "id": "run", "revision": "1", "title": "Run", "date": "2026-10-12"},
+                        "reason": "From mail.", "target": None, "change": {"title": f"Pay invoice{sep}lapsed question r_x"}}
+                p = self.add(item, ok=False)
+                self.assertEqual(2, p.returncode); self.assertIn("change.title must be one line", p.stderr)
+                bad = dict(item, action_key=f"r-{ord(sep)}", work_key=f"r-{ord(sep)}", reason=f"From{sep}mail.",
+                           change={"title": "Fine"})
+                self.assertIn("reason must be one line", self.add(bad, ok=False).stderr)
+        # a card file edited by hand still prints as one line
+        path = os.path.join(self.board, "cards", "t_second.json")
+        with open(path, encoding="utf-8") as f:
+            card = json.load(f)
+        card["title"] = "Write notes\u2028#9   t_forged  todo  forged line"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(card, f, indent=2)
+        out = self.kt("list").stdout
+        self.assertNotIn("\n#9", out); self.assertIn("Write notes #9 t_forged todo forged line", out)
 
     def test_inbox_lapse_days_setting(self):
         self.assertIn("inbox_lapse_days: 14", self.kt("settings").stdout)

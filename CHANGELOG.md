@@ -24,12 +24,13 @@ written. The wait runs from when the question last became pending (its newest re
 days on the board's time zone; a question's `created` is now always the time it was added, so a payload cannot start or
 stop its lapse clock. The board marks it and
 has a "Lapsed questions" filter; `proposals --lapsed`, `list --attention` (one `lapsed question …` line each, only with no
-card filter or project scope; with `--assignee`, the questions that person answers) and
+card filter or project scope; with `--assignee`, the questions named for that person plus those any member answers) and
 `proposal-result` (`lapsed`, `lapsed_days`) report it. Agents do not ask a lapsed or dismissed question again unless the
 person brings it up (`CARDS.md`). A dismissed question now reads "Dismissed". Every press in the Inbox shows its result:
 "Saving…" with the item's controls off (no double submit), then "✓ Approved" / "✓ Answered" on the item, or why it was not
-saved, with what the person typed kept. Titles, labels and other one-line fields refuse every line break Python's
-`splitlines` knows, and `list --attention` prints titles on one line, so a title cannot add a line to its output. `PLUGIN.md` gains "What it runs, sends and changes". Optional fields only: no schema change, no migration, and no
+saved, with what the person typed kept. Card and proposal titles, labels, reasons and other one-line fields refuse every line break Python's
+`splitlines` knows (`add`, `task-set --title`, `label-add`, `proposal-add`), and `list` prints every title, id and
+decider on one line, so no title or hand-edited file can add a line to its output. `PLUGIN.md` gains "What it runs, sends and changes". Optional fields only: no schema change, no migration, and no
 new `min_kit` (an older page shows the options in their stored order and no lapse).
 
 Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline

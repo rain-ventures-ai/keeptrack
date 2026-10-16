@@ -101,8 +101,8 @@ Facts from the code, so you can decide what to allow. File names are in `rain-ve
 - In Claude's cloud sandbox, where API writes are refused, it commits the changed board files and runs `git push` to the
   board clone's own `origin` (`BOARD_WRITE=git` forces this, `BOARD_WRITE=api` turns it off).
 - `kit-check`, `kit-update` and the `min_kit` check read the published kit: `git ls-remote` of
-  `https://github.com/rain-ventures-ai/keeptrack`, then files from `raw.githubusercontent.com` (or a shallow
-  `git clone` when that is blocked), or `BOARD_KIT_URL` when set. These requests carry no token and no board data.
+  `https://github.com/rain-ventures-ai/keeptrack` (or the latest commit from `api.github.com` when git can't), then
+  files from `raw.githubusercontent.com` (or a shallow `git clone` when that is blocked), or `BOARD_KIT_URL` when set. These requests carry no token and no board data.
 - A hosted board (`BOARD_BACKEND=hosted`) talks only to its `BOARD_API`, never to GitHub.
 - Nothing else: no analytics, no telemetry, no model calls. Agents that run the tool send what they send themselves.
 

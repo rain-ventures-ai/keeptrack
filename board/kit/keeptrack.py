@@ -2639,6 +2639,17 @@ def _age(mins):
     return "?" if mins is None else f"{int(mins)}m" if mins < 120 else f"{int(mins // 60)}h" if mins < 48 * 60 else f"{int(mins // 1440)}d"
 
 
+def _flat(value):
+    """Text printed as part of one output line: printable characters only, words joined by single spaces. relay and
+    routines read `list` output one item per line, so a title can never print as a second, forged line."""
+    return " ".join("".join(c if c.isprintable() else " " for c in str(value or "")).split())
+
+
+def _has_break(value):
+    """True when text holds a line break of any kind str.splitlines knows (\v \f \x1c-\x1e \x85 \u2028 \u2029 too)."""
+    return "".join(str(value).splitlines()) != str(value)
+
+
 def line(data, t, wait_suffix="list", today=None):
     cs = claim_state(data, t.get("claim"))
     who = ",".join("@" + a for a in t.get("assignees", [])) or "-"
@@ -2660,7 +2671,7 @@ def line(data, t, wait_suffix="list", today=None):
     if after_ids(t) and t.get("column") != "done":   # the links on the board not done yet (show ID reads the archive)
         todo = [after_ref(x) for x in after_links(data, t) if x["state"] not in ("done", "missing")]
         af = f"  [after {', '.join(todo)}]" if todo else ""
-    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {t['title']}{pr}{cm}{wt}{af}{cl}"
+    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {_flat(t['title'])}{pr}{cm}{wt}{af}{cl}"
 
 
 def _default_scope(a, data=None):
@@ -2739,11 +2750,12 @@ def cmd_list(a):
         # Questions belong to no project, so a filtered or project-scoped run (the repo's default scope too) lists none;
         # with --assignee, only the questions that person is named to answer.
         for p, waited in lapsed_questions(data, today):
-            if a.assignee and str(p.get("decider") or "").lower() != a.assignee.lower():
+            # a question with no decider is one any member answers, so it stays in an --assignee run
+            if a.assignee and p.get("decider") and str(p.get("decider")).lower() != a.assignee.lower():
                 continue
-            who = f", for @{p['decider']}" if p.get("decider") else ""
-            title = " ".join("".join(c if c.isprintable() else " " for c in str(p.get("title", ""))).split())   # one line, always
-            print(f"lapsed question {p.get('id')} ({p.get('kind')}{who}, unanswered {waited} days): {title}")
+            who = f", for @{_flat(p['decider'])}" if p.get("decider") else ""
+            print(f"lapsed question {_flat(p.get('id'))} ({_flat(p.get('kind'))}{who}, unanswered {waited} days): "
+                  f"{_flat(p.get('title', ''))}")   # every field flattened: a hand-edited file can't add a line
 
     if getattr(a, "json", False): print(json.dumps(json_items))
 
@@ -3612,6 +3624,8 @@ def cmd_auto_heartbeat(a):
 
 def cmd_add(a):
     _default_scope(a)
+    if not str(a.title or "").strip() or _has_break(a.title):
+        sys.exit("a task needs a title on one line")
     def fn(data):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
@@ -5704,8 +5718,8 @@ def cmd_task_set(a):
         if a.contact is not None and a.contact != t.get("contact", ""):
             t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
         if getattr(a, "title", None) is not None:
-            if not a.title.strip():
-                sys.exit("a task needs a title")
+            if not a.title.strip() or _has_break(a.title):
+                sys.exit("a task needs a title on one line")
             if a.title != t.get("title"):
                 t["title"] = a.title; changed.append(f"title: {a.title}")
         if getattr(a, "details", None) is not None and getattr(a, "add_details", None) is not None:
@@ -5800,7 +5814,7 @@ def check_color(c):
 
 def check_label_name(name):
     name = (name or "").strip()
-    if not name or len(name) > 40 or any(ch in name for ch in ",\n"):
+    if not name or len(name) > 40 or "," in name or _has_break(name):
         sys.exit("a label name must be 1-40 characters with no comma or line break")
     return name
 
@@ -7055,6 +7069,8 @@ def check_change_values(kind, change):
     for key, value in change.items():
         if key in STR_FIELDS and not (key == "value" and kind.startswith("task.")) and not isinstance(value, str):
             proposal_error(f"change.{key} must be text")
+        if key == "title" and _has_break(value):
+            proposal_error("change.title must be one line")
         if key in DATE_FIELDS and (not isinstance(value, str) or (value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))):
             proposal_error(f"change.{key} must be a YYYY-MM-DD date or empty")
         if key in STR_LIST_FIELDS and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
@@ -7201,7 +7217,7 @@ def validate_proposal_input(raw, recipients_confirmed=False):
     reason = raw.get("reason", "")
     evidence = raw.get("evidence", "")
     for label, value in (("reason", reason), ("evidence", evidence)):
-        if not isinstance(value, str) or "\n" in value or "\r" in value or len(value) > PROPOSAL_DETAIL_LIMIT:
+        if not isinstance(value, str) or _has_break(value) or len(value) > PROPOSAL_DETAIL_LIMIT:
             proposal_error(f"{label} must be one line of at most {PROPOSAL_DETAIL_LIMIT} characters")
     change = raw.get("change")
     if not isinstance(change, dict) or not change:
