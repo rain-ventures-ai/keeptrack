@@ -57,5 +57,14 @@ Contacts are personal data. Keep the data repo **private**. The board warns you 
 ## Not in scope (for now)
 Calendar sync, sending messages, quotes and invoices, a hosted ChatGPT connector. Email reconciliation uses your assistant's approved Gmail or Outlook connection and a separately configured scheduler; Keeptrack does not host that scheduler.
 
+## Web entry maintenance
+
+After editing shared markup in [board/index.html](board/index.html), run
+`python3 tools/build-hosted-entry.py` and include the generated [board/hosted.html](board/hosted.html)
+in the same change. The stdlib build tool lives in `tools/` because it maintains this repository's
+static web app; `board/kit/manifest.json` distributes the CLI kit and ships neither HTML entry.
+The Python tests regenerate hosted.html in memory and reject any byte difference. CI also runs
+the hosted browser suite, and `board/sw.js` caches both entries and their assets for offline use.
+
 ## Licence
 MIT. See [LICENSE](LICENSE). MiniSearch in `board/vendor/` has its own MIT licence.
