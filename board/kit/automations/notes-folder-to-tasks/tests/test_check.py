@@ -223,6 +223,46 @@ class PackTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(marker.exists(), "a program named in the folder's .git/config ran")
 
+    def old_clone(self, name):
+        source = self.root / (name + "-src"); source.mkdir(); self.git(source, "init", "-q")
+        for n in range(2): (source / ("old-%d.md" % n)).write_text("Old meeting " + str(n))
+        self.git(source, "add", "-A"); self.git(source, "commit", "-qm", "old", when=time.time() - 400 * 86400)
+        clone = self.root / name; self.git(self.root, "clone", "-q", str(source), str(clone))
+        self.config.write_text(json.dumps({"notes_dir": str(clone)}))
+        return clone
+
+    def test_no_key_in_the_notes_repo_config_runs_a_program(self):
+        clone = self.old_clone("hostile")
+        marker = self.root / "PWNED"
+        prog = self.root / "prog.sh"; prog.write_text("#!/bin/sh\ntouch '%s'\ncat\n" % marker); prog.chmod(0o755)
+        (clone / ".gitattributes").write_text("* filter=evil diff=evil\n")
+        (clone / "old-0.md").write_text("Old meeting 0, edited")      # a work-tree file that differs from HEAD
+        with open(clone / ".git/config", "a") as f:
+            f.write("[core]\n\tfsmonitor = {p}\n\tpager = {p}\n\tsshCommand = {p}\n"
+                    "[filter \"evil\"]\n\tclean = {p}\n\tsmudge = {p}\n\tprocess = {p}\n"
+                    "[diff \"evil\"]\n\ttextconv = {p}\n\tcommand = {p}\n[diff]\n\texternal = {p}\n"
+                    "[log]\n\tshowSignature = true\n[gpg]\n\tprogram = {p}\n[gpg \"ssh\"]\n\tprogram = {p}\n"
+                    "[core]\n\thooksPath = {d}\n".format(p=prog, d=self.root))
+        code, value = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertFalse(marker.exists(), "a program named in the notes repository's config ran")
+        keys = {i["key"] for i in value["items"]}
+        self.assertIn(self.mod.hashed("old-0.md"), keys, "an edited, uncommitted note uses its mtime")
+        self.assertNotIn(self.mod.hashed("old-1.md"), keys)
+
+    def test_a_linked_or_huge_shallow_list_is_not_read(self):
+        clone = self.old_clone("linked")
+        os.symlink("/dev/zero", clone / ".git/shallow")
+        code, value = self.run_check()
+        self.assertEqual(code, 0); self.assertEqual(value["items"], [], "unknown history: never-imported notes wait")
+
+    def test_a_clone_with_packed_refs_is_still_dated(self):
+        clone = self.old_clone("packed")
+        self.git(clone, "pack-refs", "--all")
+        self.assertFalse((clone / ".git/refs/heads").exists() and any((clone / ".git/refs/heads").iterdir()))
+        code, value = self.run_check()
+        self.assertEqual(code, 0); self.assertEqual(value["items"], [], "old notes in a fresh clone are not new")
+
     def test_a_shallow_clone_does_not_date_old_notes_to_its_newest_commit(self):
         source = self.root / "deep"; source.mkdir(); self.git(source, "init", "-q")
         (source / "old.md").write_text("Old meeting"); self.git(source, "add", "-A")

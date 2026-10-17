@@ -27,8 +27,10 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -102,75 +104,143 @@ def note_files(folder, deadline=None):
     return sorted(found)
 
 
-# The notes folder may be a synced copy that someone else can write to, .git/config included. git honours the
-# repository's own config, and some keys run a program (core.fsmonitor, diff.external, a textconv driver, a pager).
-# So every git call here turns those off on its command line, which beats the repository's config, takes no lock,
-# and reads no global or system config.
-GIT = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-       "-c", "diff.external=", "-c", "core.pager=cat", "-c", "core.untrackedCache=false"]
-
-
-def git_env():
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
-    return env
+# The notes folder may be a synced copy that someone else can write to, its .git folder included. git always reads a
+# repository's own config, and many keys there run a program (fsmonitor, filter and diff drivers, signature checks, a
+# pager, ...); turning them off one by one is a list that never ends. So this check never runs git on the notes
+# repository. It reads three small files of its .git folder itself (HEAD, the branch ref, the shallow list), then runs
+# git on a new, empty repository of its own that borrows the notes repository's objects (objects/info/alternates) and
+# has no config but git's defaults. Work-tree files are compared with their committed blobs by hashing them here, so no
+# filter or attribute runs either.
+SMALL = 1_000_000
+HEX = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 class Unknown(dict):
     """A git work tree whose history could not be read (a timeout, an error): no note's date is known."""
 
 
-def commit_times(folder, deadline):
-    """{relative posix path: time of the last commit that touched it} when folder is in a git work tree, else {}.
+def read_small(path):
+    """The text of a small regular file, or None for a link, a non-file, an unreadable or a big file."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > SMALL:
+            return None
+        return os.read(fd, SMALL + 1).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
 
-    A fresh clone sets every file's mtime to now, so in a clone only git knows when a note last changed. One local
-    `git log` over the folder, bounded by the deadline; any failure (no git, not a repo, too slow) gives {} and the
-    check falls back to mtimes. Inside a work tree a failure gives Unknown() instead, never {}: a fresh clone's mtimes
-    are all "now", so falling back would import the whole folder. A shallow clone's boundary commit lists every file
-    it holds; a path last seen there has no known date, so it counts as older than any lookback (time 0).
+
+def repository(folder):
+    """(.git folder, work-tree root) for a plain clone holding folder; None when there is none or it is not a plain
+    .git folder (a link, or a .git file of a worktree or submodule): those fall back to mtimes, as a local folder does."""
+    here = Path(folder).resolve()
+    for top in [here, *here.parents]:
+        dot = top / ".git"
+        if os.path.lexists(dot):
+            if dot.is_symlink() or not dot.is_dir():
+                return None
+            return dot, top
+    return None
+
+
+def head_commit(gd):
+    """The commit HEAD names, read from the .git folder's own files; "" for a branch with no commit; None if unclear."""
+    head = read_small(gd / "HEAD")
+    if head is None:
+        return None
+    head = head.strip()
+    if HEX.fullmatch(head):
+        return head
+    ref = re.fullmatch(r"ref: (refs/[A-Za-z0-9._/-]{1,200})", head)
+    if not ref or ".." in ref.group(1):
+        return None
+    loose = read_small(gd / ref.group(1))
+    if loose is not None and HEX.fullmatch(loose.strip()):
+        return loose.strip()
+    for line in (read_small(gd / "packed-refs") or "").splitlines():
+        parts = line.split(" ")
+        if len(parts) == 2 and parts[1] == ref.group(1) and HEX.fullmatch(parts[0]):
+            return parts[0]
+    return "" if loose is None else None
+
+
+def blob_id(path, hex_len):
+    """The git blob id of a work-tree file, computed here (no filter, no attribute), or None if it cannot be read."""
+    try:
+        if path.stat().st_size > MAX_NOTE_BYTES:
+            return None
+        data = path.read_bytes()
+    except OSError:
+        return None
+    algo = hashlib.sha1 if hex_len == 40 else hashlib.sha256
+    return algo(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def commit_times(folder, deadline):
+    """{relative posix path: time of the last commit that touched it} when folder is in a git clone, else {}.
+
+    A fresh clone sets every file's mtime to now, so in a clone only git knows when a note last changed. Inside a
+    clone any failure gives Unknown() instead, never {}: falling back to fresh mtimes would import the whole folder.
+    A shallow clone's boundary commit lists every file it holds; a path last seen there has no known date, so it
+    counts as older than any lookback (time 0). A file whose content differs from its commit uses its mtime.
     """
-    budget = deadline - time.monotonic() - 1
-    if budget <= 1:
+    found = repository(folder)
+    if not found:
         return {}
+    gd, top = found
     try:
-        inside = subprocess.run(GIT + ["-C", str(folder), "rev-parse", "--is-inside-work-tree"], capture_output=True,
-                                text=True, timeout=min(budget, 10), env=git_env())
-        if inside.returncode != 0 or inside.stdout.strip() != "true":
-            return {}
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return {}
+        prefix = Path(folder).resolve().relative_to(top).as_posix()
+    except ValueError:
+        return Unknown()
+    prefix = "" if prefix == "." else prefix
+    head = head_commit(gd)
+    if head == "":
+        return {}                              # a branch with no commit yet: no history, so mtimes are the truth
+    objects = gd / "objects"
+    if head is None or objects.is_symlink() or not objects.is_dir():
+        return Unknown()
+    boundary = set()
+    if os.path.lexists(gd / "shallow"):
+        text = read_small(gd / "shallow")
+        if text is None:
+            return Unknown()
+        boundary = {line.strip() for line in text.splitlines() if HEX.fullmatch(line.strip())}
+    env = {"PATH": os.environ.get("PATH", os.defpath), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+           "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
     try:
-        head = subprocess.run(GIT + ["-C", str(folder), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True,
-                              text=True, timeout=max(1, deadline - time.monotonic() - 1), env=git_env())
-        if head.returncode == 1 and not head.stdout.strip():
-            return {}                              # a repository with no commit yet: no history, so mtimes are the truth
-        if head.returncode != 0:
-            return Unknown()
-        shallow = subprocess.run(GIT + ["-C", str(folder), "rev-parse", "--is-shallow-repository"], capture_output=True,
-                                 text=True, timeout=max(1, deadline - time.monotonic() - 1), env=git_env())
-        boundary = set()
-        if shallow.returncode != 0:
-            return Unknown()
-        if shallow.stdout.strip() == "true":
-            where = subprocess.run(GIT + ["-C", str(folder), "rev-parse", "--git-path", "shallow"], capture_output=True,
-                                   text=True, timeout=max(1, deadline - time.monotonic() - 1), env=git_env())
-            shallow_file = Path(where.stdout.strip())
-            if where.returncode != 0:
+        with tempfile.TemporaryDirectory(prefix="kt-notes-git-") as tmp:
+            env["HOME"] = tmp
+            bare = os.path.join(tmp, "r.git")
+            def git(*args, text=False):
+                left = deadline - time.monotonic() - 1
+                if left <= 0:
+                    raise subprocess.TimeoutExpired("git", 0)
+                return subprocess.run(["git", "--git-dir", bare, *args], capture_output=True, text=text,
+                                      timeout=left, env=env, stdin=subprocess.DEVNULL)
+            init = git("init", "-q", "--bare", bare)
+            if init.returncode != 0:
                 return Unknown()
-            if not shallow_file.is_absolute():
-                shallow_file = Path(folder) / shallow_file
-            boundary = set(shallow_file.read_text().split())
-        log = subprocess.run(GIT + ["-C", str(folder), "log", "--no-renames", "--no-ext-diff", "--no-textconv",
-                                    "--format=%x00commit %ct %H", "--name-only", "-z", "--relative", "--", "."],
-                             capture_output=True, timeout=max(1, deadline - time.monotonic() - 1), env=git_env())
-        edited = subprocess.run(GIT + ["-C", str(folder), "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z",
-                                       "--relative", "HEAD", "--", "."],
-                                capture_output=True, timeout=max(1, deadline - time.monotonic() - 1), env=git_env())
+            with open(os.path.join(bare, "objects", "info", "alternates"), "w") as f:
+                f.write(str(objects.resolve()) + "\n")
+            if boundary:
+                with open(os.path.join(bare, "shallow"), "w") as f:
+                    f.write("".join(b + "\n" for b in sorted(boundary)))
+            where = ["--", prefix] if prefix else []
+            log = git("log", "--no-renames", "--format=%x00commit %ct %H", "--name-only", "-z", head, *where)
+            tree = git("ls-tree", "-r", "-z", "--full-tree", head, *where)
     except (OSError, subprocess.SubprocessError, ValueError):
         return Unknown()
-    if log.returncode != 0 or edited.returncode != 0:
+    if log.returncode != 0 or tree.returncode != 0:
         return Unknown()
-    # Output: for each commit, NUL "commit <time>" NUL "\n" then each path NUL-terminated, newest commit first.
+    def local(name):
+        return name[len(prefix) + 1:] if prefix and name.startswith(prefix + "/") else (None if prefix else name)
+    # Output: for each commit, NUL "commit <time> <id>" NUL "\n" then each path NUL-terminated, newest commit first.
     times, when, header, after_header = {}, None, False, False
     for field in log.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
         if field == "":
@@ -185,18 +255,41 @@ def commit_times(folder, deadline):
         if after_header and field.startswith("\n"):
             field = field[1:]
         after_header = False
-        if when is not None and field:
-            times.setdefault(field, when)      # newest first: a path's first appearance is its last change
-    for field in edited.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
-        times.pop(field, None)                 # changed here and not committed yet: its mtime is the truth
-    return times
+        rel = local(field)
+        if when is not None and rel:
+            times.setdefault(rel, when)        # newest first: a path's first appearance is its last change
+    blobs = {}
+    for entry in tree.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        meta, _, name = entry.partition("\t")
+        bits = meta.split()
+        rel = local(name) if name else None
+        if rel and len(bits) == 3 and bits[1] == "blob" and HEX.fullmatch(bits[2]):
+            blobs[rel] = bits[2]
+    edited = Edited(folder, blobs)
+    return Committed({rel: t for rel, t in times.items() if rel in blobs}, edited)
+
+
+class Edited:
+    """Tells whether a work-tree file still holds its committed content, hashing it only when asked."""
+    def __init__(self, folder, blobs):
+        self.folder, self.blobs = Path(folder), blobs
+
+    def changed(self, rel, path):
+        want = self.blobs.get(rel)
+        return want is None or blob_id(path, len(want)) != want
+
+
+class Committed(dict):
+    """Commit times, plus a way to see a file changed here and not committed yet (its mtime is then the truth)."""
+    def __init__(self, times, edited):
+        super().__init__(times); self.edited = edited
 
 
 def arrived(path, rel=None, committed=None):
     """When a note last changed: its last commit in a git clone, else its mtime (never ctime: copies reset it).
     In a clone whose history could not be read (Unknown), a note never imported counts as old: it waits for a run
     where git works instead of being imported with every other note in the folder."""
-    if committed and rel in committed:
+    if committed and rel in committed and not (isinstance(committed, Committed) and committed.edited.changed(rel, path)):
         return committed[rel]
     if isinstance(committed, Unknown):
         return 0
