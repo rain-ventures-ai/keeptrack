@@ -1481,7 +1481,18 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 .autos__tools { margin-left: auto; display: flex; gap: var(--sp-3); flex-wrap: wrap; }
 .autos__hint { color: var(--muted); max-width: 72ch; margin: var(--sp-3) 0 var(--sp-6); line-height: 1.5; }
 .autos__note { margin: 0 0 var(--sp-6); padding: var(--sp-4) var(--sp-5); border-radius: var(--r-md); background: var(--accent-soft); color: var(--text); font-size: var(--fs-md); }
-.autos__grid { display: grid; gap: var(--sp-7); }
+.autos__list { display: grid; gap: var(--sp-3); }
+.autorow { display: flex; align-items: center; gap: var(--sp-5); width: 100%; min-width: 0; min-height: 64px; padding: var(--sp-5) var(--sp-6); text-align: left; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); cursor: pointer; transition: box-shadow .15s, border-color .15s; }
+.autorow:hover { box-shadow: var(--shadow-hover); border-color: var(--border-strong, var(--border)); }
+.autorow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.autorow .autocard__icon { width: 40px; height: 40px; }
+.autorow__text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.autorow__text h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; overflow-wrap: anywhere; }
+.autorow__summary { color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.autorow__state { flex: 0 0 auto; }
+.autorow > svg:last-child { flex: 0 0 auto; width: 18px; height: 18px; color: var(--muted); }
+.autocard.autocard--sheet { background: none; border: 0; border-radius: 0; box-shadow: none; padding: 0; }
+.autocard.autocard--sheet:hover { box-shadow: none; }
 .autocard { container-type: inline-size; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow); padding: var(--sp-7); transition: box-shadow .15s; }
 .autocard:hover { box-shadow: var(--shadow-hover); }
 .autocard__head { display: flex; align-items: center; gap: var(--sp-5); }
@@ -1531,8 +1542,11 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 @media (max-width: 760px) {
   #board.v-automations { padding: var(--sp-3) var(--sp-5) 90px; }
   .autocard { padding: var(--sp-6); }
+  .autocard.autocard--sheet { padding: 0; }
+  .autorow { padding: var(--sp-4) var(--sp-5); gap: var(--sp-4); }
+  .autorow .autocard__icon { width: 36px; height: 36px; }
   .autos__tools { margin-left: 0; }
   .autocard__head { flex-wrap: wrap; }
   .autocard__link { margin-left: 0; }
 }
-@media (prefers-reduced-motion: reduce) { .autocard { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .autocard, .autorow { transition: none; } }

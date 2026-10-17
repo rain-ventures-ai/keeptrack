@@ -391,8 +391,9 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(page.api.root().settings.title, 'Settings test', 'other settings stay');
       assert.deepEqual(page.errors, []); await page.close();
     }
-    // 16. The Automations page (header button, #view=automations): one card per pack with a node diagram of what it does, read
-    // only; every step is a command to copy, nothing is written; pack text is shown as text; no sideways scroll at 390px.
+    // 16. The Automations page (header button, #view=automations): one row per pack (icon, name, summary, state); a row opens
+    // its details in a drawer, as a card does, with a node diagram of what it does; read only; every step is a command to copy,
+    // nothing is written; pack text is shown as text; no sideways scroll at 390px.
     {
       const page = await open(browser, { width: 390, height: 844 });
       const man = (slug, name, extra = {}) => ({ schema: 'keeptrack-automation/1', slug, name, summary: 'Summary of ' + name, version: '1.0.0', needs: [{ id: 'board.read', routes: [] }], writes: ['proposals'], never: [], every: '1d', check: { file: 'check.py', network: false, tools: [] }, ...extra });
@@ -416,19 +417,28 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       Object.entries(regs).forEach(([n, r]) => { page.api.extra['/contents/automation/routines/' + n] = r; });
       const before = page.api.writes;
       await page.evaluate(() => document.getElementById('btnAutos').click());
-      await page.waitForFunction(() => document.querySelectorAll('.autocard').length === 6);
+      await page.waitForFunction(() => document.querySelectorAll('.autorow').length === 6);
       assert.equal(await page.evaluate(() => document.getElementById('board').className), 'v-automations');
+      assert.equal(await page.locator('#board .autocard, #board .aflow').count(), 0, 'the list shows no workflow: that is in the details');
       assert.match(await page.evaluate(() => location.hash), /view=automations/, 'the page has its own link');
-      assert.deepEqual(await page.locator('.autocard h3').allTextContents(), ['Stale cards nudge', 'Email to tasks', '<img src=x onerror=alert(1)>', 'broken', 'My pack', 'gone-pack'], 'pack text is shown as text; an install without a pack still shows');
-      assert.equal(await page.locator('.autocard img').count(), 0, 'no markup from pack text');
+      assert.deepEqual(await page.locator('.autorow h3').allTextContents(), ['Stale cards nudge', 'Email to tasks', '<img src=x onerror=alert(1)>', 'broken', 'My pack', 'gone-pack'], 'pack text is shown as text; an install without a pack still shows');
+      assert.equal(await page.locator('.autorow img').count(), 0, 'no markup from pack text');
+      assert.deepEqual(await page.locator('.autorow__state').allTextContents(), ['On', 'Needs setup', 'Not installed', 'Pack has a problem', 'Not installed', 'Pack missing'], 'each row says its state');
+      assert.match(await page.locator('.autorow').first().textContent(), /Summary of Stale cards nudge/, 'a row carries the one-line summary');
       assert.match(await page.locator('.autos__count').textContent(), /5 available · 2 on for you/, 'an install whose pack is gone still counts: it still runs');
-      const cards = page.locator('.autocard'), txt = async i => (await cards.nth(i).textContent()).replace(/\s+/g, ' ');
+      const rows = page.locator('.autorow'), sheet = page.locator('#dlgAuto .autocard');
+      const opened = async i => {   // open row i's details drawer (closing any other first) and return its content
+        if (await page.evaluate(() => document.getElementById('dlgAuto').open)) { await page.locator('#auClose').click(); await page.waitForFunction(() => !document.getElementById('dlgAuto').open); }
+        await rows.nth(i).click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open); return sheet; };
+      const cards = { nth: i => ({ locator: sel => ({ count: async () => (await opened(i)).locator(sel).count(), textContent: async () => (await opened(i)).locator(sel).textContent(),
+        getAttribute: async a => (await opened(i)).locator(sel).getAttribute(a), evaluateAll: async f => (await opened(i)).locator(sel).evaluateAll(f) }) }) };
+      const txt = async i => (await (await opened(i)).textContent()).replace(/\s+/g, ' ');
       const nodes = async i => cards.nth(i).locator('.aflow__node').evaluateAll(xs => xs.map(x => x.dataset.kind + ':' + x.querySelector('.aflow__title').textContent));
       assert.deepEqual(await nodes(0), ['trigger:Once a day', 'read:<b>Read</b> the board', 'output:Review Inbox'], 'the manifest flow is drawn; an unknown kind is dropped; the install interval names the trigger');
       assert.deepEqual(await nodes(1), ['trigger:Once a day', 'read:Read Gmail (read only)', 'check:Find what is new', 'agent:Do the work', 'output:Review Inbox'], 'with no flow, the steps come from the schedule, needs and check');
       assert.equal((await nodes(4)).length, 8, 'a pack with 500 needs still draws at most 8 steps'); assert.equal((await nodes(4))[5], 'check:No cheap check');
       assert.equal(await cards.nth(4).locator('.autocard__fact').count(), 10, 'and at most 8 "Reads" chips, plus its schedule and "AI runs every time"');
-      const copy = async (i, label) => { await cards.nth(i).locator('button', { hasText: label }).click(); return page.evaluate(() => window.__copied); };
+      const copy = async (i, label) => { await (await opened(i)).locator('button', { hasText: label }).click(); return page.evaluate(() => window.__copied); };
       assert.match(await txt(0), /On/); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/); assert.match(await txt(0), /Last success: never/, 'an odd date value does not break the card'); assert.equal(await cards.nth(0).locator('.autocard__never').textContent(), 'Never: delete anything', 'an unknown never value is not shown');
       assert.doesNotMatch(await txt(0), /Hidden/);
       assert.match(await txt(1), /Needs setup/); assert.match(await txt(1), /Reads Gmail \(read only\)/); assert.match(await txt(1), /Uses the network/); assert.match(await txt(1), /local check of its access failed/);
@@ -438,15 +448,20 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(await copy(0, 'Turn it off'), 'python3 board/keeptrack.py automation disable stale-cards-nudge --owner alex');
       assert.equal(await copy(1, 'Check its access'), 'python3 board/keeptrack.py automation setup email-to-tasks --owner alex --runtime local');
       assert.equal(await copy(2, 'Install it'), "python3 board/keeptrack.py automation install notes-folder-to-tasks --owner alex --set 'notes_dir=REPLACE-WITH-notes_dir'");
-      assert.equal(await cards.nth(2).locator('button', { hasText: 'Try it first' }).count(), 0, 'no dry run while a required setting is missing');
+      assert.equal(await (await opened(2)).locator('button', { hasText: 'Try it first' }).count(), 0, 'no dry run while a required setting is missing');
       assert.equal(await copy(4, 'Try it first'), 'python3 board/keeptrack.py automation dry-run my-pack --owner alex');
       assert.equal(await copy(3, 'Check the pack'), 'python3 board/keeptrack.py automation validate board/automations/broken');
       assert.match(await copy(1, 'Ask my assistant'), /board\/automations\/email-to-tasks\/SETUP\.md/);
       assert.equal(await cards.nth(1).locator('a.autocard__link').getAttribute('href'), 'https://github.com/acme/board/blob/main/board/automations/email-to-tasks/SETUP.md');
+      assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('dlgAuto')).display), 'flex', 'the details open in a drawer');
+      await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('dlgAuto').open);
       await page.locator('.autos__tools button', { hasText: 'Make your own' }).click(); assert.match(await page.evaluate(() => window.__copied), /keeptrack-automation-create/);
       assert.equal(page.api.writes, before, 'the page writes nothing');
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && [...document.querySelectorAll('.autocard, .aflow')].every(x => x.scrollWidth <= x.clientWidth + 1)), true, 'no sideways scroll at 390px');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && [...document.querySelectorAll('.autorow')].every(x => x.scrollWidth <= x.clientWidth + 1)), true, 'no sideways scroll at 390px');
       await shot(page, 'automations');
+      await rows.nth(1).click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+      assert.equal(await page.evaluate(() => [...document.querySelectorAll('#dlgAuto .autocard, #dlgAuto .aflow')].every(x => x.scrollWidth <= x.clientWidth + 1)), true, 'the details drawer does not scroll sideways at 390px');
+      await page.waitForTimeout(350); await shot(page, 'automation-details'); await page.locator('#auClose').click();
       assert.deepEqual(page.errors, []); await page.close();
     }
     // 17. The routine register leaves automation installs to the Automations page; the old Settings deep link opens a button to it.
@@ -462,18 +477,23 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.doesNotMatch(await page.locator('#routineRegister').textContent(), /other board contexts/);
       await page.locator('#autoOpen').click();
       await page.waitForFunction(() => document.getElementById('board').className === 'v-automations' && !document.getElementById('dlgSettings').open);
-      await page.waitForFunction(() => document.querySelectorAll('.autocard').length === 3);
+      await page.waitForFunction(() => document.querySelectorAll('.autorow').length === 3);
       assert.match(await page.locator('.autos__note').textContent(), /no automation packs yet/, 'a board without packs previews the kit and says to upgrade');
-      assert.equal(await page.locator('.autocard button', { hasText: 'Copy the upgrade command' }).count(), 3);
+      await page.locator('.autorow').first().click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+      assert.equal(await page.locator('#dlgAuto .autocard button', { hasText: 'Copy the upgrade command' }).count(), 1, 'its details copy the upgrade command');
+      await page.locator('#auClose').click();
       assert.deepEqual(page.errors, []); await page.close();
       const demo = await browser.newPage({ viewport: { width: 1280, height: 900 } }), errs = []; demo.on('pageerror', e => errs.push(e.message));
       await demo.addInitScript(() => { localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); });
       await demo.goto(base + '/board/index.html?demo=board#view=automations');
-      await demo.waitForFunction(() => document.querySelectorAll('.autocard').length === 3);
-      assert.deepEqual(await demo.locator('.autocard__state').allTextContents(), ['Example', 'Example', 'Example']);
-      assert.equal(await demo.locator('.autocard .aflow__node').count(), 15, 'each built-in pack draws its five steps');
-      assert.equal(await demo.locator('.autocard__actions').count(), 0, 'the demo copies no commands');
-      assert.equal(await demo.evaluate(() => getComputedStyle(document.querySelector('.aflow')).display), 'grid', 'wide cards draw the flow in a row');
+      await demo.waitForFunction(() => document.querySelectorAll('.autorow').length === 3);
+      assert.deepEqual(await demo.locator('.autorow__state').allTextContents(), ['Example', 'Example', 'Example']);
+      for (let i = 0; i < 3; i++) {
+        await demo.locator('.autorow').nth(i).click(); await demo.waitForFunction(() => document.getElementById('dlgAuto').open);
+        assert.equal(await demo.locator('#dlgAuto .aflow__node').count(), 5, 'each built-in pack draws its five steps in its details');
+        assert.equal(await demo.locator('#dlgAuto .autocard__actions').count(), 0, 'the demo copies no commands');
+        await demo.locator('#auClose').click(); await demo.waitForFunction(() => !document.getElementById('dlgAuto').open);
+      }
       assert.deepEqual(errs, []); await demo.close();
     }
     console.log('settings: all checks passed');

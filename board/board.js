@@ -3728,7 +3728,7 @@ if (typeof window !== 'undefined') (() => {
   // Archive or Add a person adds one history entry, so Back closes it and returns to the board instead of leaving the
   // site. Closing it any other way (X, Escape, backdrop) takes that entry off again, so Back never goes somewhere odd.
   // A card's entry carries its #number; the entry under it is the board without one (so a #13 link backs to the board).
-  const BACK_DIALOGS = ['dlgCard', 'dlgContact', 'dlgClient', 'dlgProject', 'dlgSettings', 'dlgHelp', 'dlgSearch', 'dlgArch', 'dlgAddPerson', 'dlgCopy'];
+  const BACK_DIALOGS = ['dlgCard', 'dlgContact', 'dlgClient', 'dlgProject', 'dlgAuto', 'dlgSettings', 'dlgHelp', 'dlgSearch', 'dlgArch', 'dlgAddPerson', 'dlgCopy'];
   const backStack = []; let backClosing = 0, closingHash = false;
   // the page is going to another address (switching board, reload): a history.back() now would cancel that
   window.addEventListener('beforeunload', markLeaving);
@@ -4551,22 +4551,55 @@ if (typeof window !== 'undefined') (() => {
     const login = (c.me || '').replace(/^@/, '').toLowerCase(), me = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(login) ? login : '', seen = {};   // only a valid login goes into a copied command
     data.packs.forEach(p => { seen[p.slug] = (seen[p.slug] || 0) + 1; });
     const here = data.installs.filter(r => r.status !== 'retired' && (!r.board_repo || String(r.board_repo).toLowerCase() === c.repo.toLowerCase()) && (!r.branch || r.branch === c.branch) && (!r.board_path || r.board_path === c.path));
-    const safeCard = (p, ...rest) => { try { return autoCard(p, ...rest); } catch { const x = el('article', 'autocard'); x.dataset.slug = p.slug; x.append(el('h3', null, p.slug), el('p', 'hint', 'This automation could not be shown: its pack or install file has unexpected values. Run the validate command in a clone.')); return x; } };   // one bad file never blanks the page
-    const cards = data.packs.map(p => safeCard(p, here.filter(r => r.automation.slug === p.slug), me, seen[p.slug] > 1, c));
+    const items = data.packs.map(p => ({ p, installs: here.filter(r => r.automation.slug === p.slug), clash: seen[p.slug] > 1 }));
     const orphans = here.filter(r => !data.packs.some(p => p.slug === r.automation.slug));   // installed, but its pack is gone: still show it, so it can be turned off
-    [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => cards.push(safeCard({ source: 'missing', folder: '', slug, m: null }, orphans.filter(r => r.automation.slug === slug), me, false, c)));
+    [...new Set(orphans.map(r => r.automation.slug))].forEach(slug => items.push({ p: { source: 'missing', folder: '', slug, m: null }, installs: orphans.filter(r => r.automation.slug === slug), clash: false }));
+    autoItems = { items, me, c };
+    const cards = items.map(x => safeRow(x));
     const on = here.filter(r => r.status === 'active' && String(r.owner || '').toLowerCase() === me).length;
     head.querySelector('h2').after(el('span', 'autos__count', `${data.packs.length} available · ${on} on for you`));
     if (!cards.length) wrap.append(ui.empty({ text: 'No automations yet. Upgrade the board kit, or make your own.', icon: 'bot' }));
-    const grid = el('div', 'autos__grid'); grid.append(...cards); wrap.append(grid);
+    const grid = el('div', 'autos__list'); grid.setAttribute('role', 'list'); grid.append(...cards); wrap.append(grid);
+    if ($('dlgAuto').open) fillAuto();   // a refresh while a sheet is open shows its new state
   }
+  // The page lists one row per automation (icon, name, summary, state); the row opens its details in a drawer, as a card does.
+  let autoItems = null, autoOpenSlug = '';
+  function autoState(p, mine) {
+    const states = { unverified: ['Needs setup', 'warn'], paused: ['Ready, off', 'neutral'], active: ['On', 'ok'] };
+    return p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : p.preview ? [DEMO ? 'Example' : 'Not in this board', 'neutral'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
+  }
+  function autoIcon(m) {
+    const needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object').slice(0, 8) : [];
+    const tile = el('span', 'autocard__icon'); tile.append(svgIcon(((needs.map(n => own(AUTO_NEEDS, n.id)).find(x => x && x[1] !== 'square-kanban')) || ['', 'bot'])[1])); tile.setAttribute('aria-hidden', 'true'); return tile;
+  }
+  function safeRow(x) {
+    const { p, installs } = x, m = p.m || {}, mine = installs.find(r => String(r.owner || '').toLowerCase() === autoItems.me);
+    const row = el('button', 'autorow'); row.type = 'button'; row.dataset.slug = p.slug; row.setAttribute('role', 'listitem');
+    let name = p.slug, label = 'Pack has a problem', tone = 'danger', summary = '';
+    try { name = autoStr(m.name, 80) || p.slug; [label, tone] = autoState(p, mine); summary = p.source === 'missing' ? 'Installed, but its pack is gone.' : !p.m ? 'Its manifest.json could not be read.' : autoStr(m.summary); } catch { /* the row still opens; the sheet says what is wrong */ }
+    const text = el('span', 'autorow__text'); text.append(el('h3', null, name)); if (summary) text.append(el('span', 'autorow__summary', summary));
+    row.append(autoIcon(m), text, el('span', `ui-pill ui-pill--${tone} autorow__state`, label), svgIcon('chevron-right'));
+    row.setAttribute('aria-label', `${name}: ${label}. Open details`);
+    row.onclick = () => openAuto(p.slug); return roKeep(row);
+  }
+  function openAuto(slug) { autoOpenSlug = slug; fillAuto(); if (!$('dlgAuto').open) $('dlgAuto').showModal(); $('auBody').scrollTop = 0; }
+  function fillAuto() {
+    const x = autoItems && autoItems.items.find(i => i.p.slug === autoOpenSlug); if (!x) { $('dlgAuto').close(); return; }
+    let body; try { body = autoCard(x.p, x.installs, autoItems.me, x.clash, autoItems.c); }
+    catch { body = el('article', 'autocard'); body.dataset.slug = x.p.slug; body.append(el('h3', null, x.p.slug), el('p', 'hint', 'This automation could not be shown: its pack or install file has unexpected values. Run the validate command in a clone.')); }   // one bad file never blanks the page
+    body.classList.add('autocard--sheet'); $('auBody').replaceChildren(body);
+  }
+  (function buildAutoDrawer() {
+    const who = el('span', 'didentity'); who.append(iconTile('bot'), el('span', 'didentity__kind', 'Automation'));
+    const close = ui.iconButton({ icon: 'x', label: 'Close' }); close.id = 'auClose'; roKeep(close); close.onclick = () => $('dlgAuto').close();
+    $('auHead').append(who, el('span', 'spacer'), close);
+  })();
   function autoCard(p, installs, me, clash, c) {
     const m = p.m || {}, item = el('article', 'autocard'), head = el('div', 'autocard__head'); item.dataset.slug = p.slug;
     const network = !!(m.check && m.check.network), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object').slice(0, 8) : [];
     const mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
-    const states = { unverified: ['Needs setup', 'warn'], paused: ['Ready, off', 'neutral'], active: ['On', 'ok'] };
-    const [label, tone] = p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : p.preview ? [DEMO ? 'Example' : 'Not in this board', 'neutral'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
-    const tile = el('span', 'autocard__icon'); tile.append(svgIcon(((needs.map(n => own(AUTO_NEEDS, n.id)).find(x => x && x[1] !== 'square-kanban')) || ['', 'bot'])[1])); tile.setAttribute('aria-hidden', 'true');
+    const [label, tone] = autoState(p, mine);
+    const tile = autoIcon(m);
     const name = el('div', 'autocard__name'); name.append(el('h3', null, autoStr(m.name, 80) || p.slug), el('span', 'autocard__scope', `${p.source === 'kit' ? 'Built-in' : p.source === 'own' ? 'Your own' : 'Installed, but its pack is gone'} · ${p.slug}`));
     head.append(tile, name, el('span', `ui-pill ui-pill--${tone} autocard__state`, label)); item.append(head);
     if (p.source === 'missing') item.append(el('p', 'hint', 'This install has no pack in the repo any more. Uninstall it.'));
