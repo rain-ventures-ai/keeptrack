@@ -57,7 +57,9 @@ def main(argv=None):
             out.append("=== " + key + " not-found ==="); continue
         rel, path = files[key]
         try:
-            raw = path.read_bytes(); when = check.arrived(path, rel, committed)
+            if path.stat().st_size > check.MAX_NOTE_BYTES:
+                out.append("=== " + key + " too-large ==="); continue
+            raw = path.read_bytes(); when = check.arrived(path, rel, committed) or path.stat().st_mtime
         except OSError:
             out.append("=== " + key + " not-found ==="); continue
         text = raw.decode("utf-8", errors="replace")

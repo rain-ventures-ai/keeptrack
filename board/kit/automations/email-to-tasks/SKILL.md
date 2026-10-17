@@ -41,7 +41,9 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
    It repeats the check's own search on the page the check read (one call), then reads each message's Message-ID
    from `gog gmail get <id> --json` and hashes it itself. It prints only ids and keys, one line per item key:
    `<key> <message id> <thread id> rfc822:<sha256>`, `<key> <message id> <thread id> no-message-id`, or
-   `<key> not-found`. For a question's answer, run it with `--day <YYYY-MM-DD>` in place of the ref. If items carry
+   `<key> not-found`. For a question's answer, run it with `--day 'YYYY-MM-DD'` in place of the ref: single-quoted, and only when
+   the stored `source.date` is exactly four digits, a dash, two digits, a dash, two digits; anything else is not a
+   date, so mark that item done as `malformed`. If items carry
    different refs, run it once per ref. Exit 3 with `gog-error` or `gog-timeout` is "Gmail fails during the run".
 3. Read headers first (From, To, Cc, Date): `gog gmail get <message id> --json` with the message id the resolver
    printed (never one taken from mail text), or the connector's get-thread tool. Read the text only of matched mail.

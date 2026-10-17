@@ -38,7 +38,8 @@ question when a note is unclear. Nothing goes live until a person accepts it.
    python3 board/automations/notes-folder-to-tasks/resolve.py '<notes_dir>' '<key>' '<key>' ...
    ```
    Never `cat`, `head` or open a note by its name in a shell command: a file name can hold `$(...)`, backticks or
-   quotes. A key printed as `not-found` has no file now (see "When something fails").
+   quotes. A key printed as `not-found` has no file now (see "When something fails"); one printed as `too-large`
+   is over 2 MB and is not a note: mark it done as `malformed` and propose nothing.
 4. Read the note. Find the meeting title, date (from the note, else the `date` line) and the attendees.
 5. Find earlier imports of this note: `$B proposals --status all --source meeting --json`, keep those whose
    `source.id` is the item `key`. A "Changed notes" item is a new revision of the same meeting: propose only what

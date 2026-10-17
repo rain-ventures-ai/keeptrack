@@ -208,6 +208,57 @@ class PackTest(unittest.TestCase):
         self.assertIn(self.mod.hashed("local.md"), {i["key"] for i in self.run_check()[1]["items"]},
                       "a file git does not know falls back to its mtime")
 
+    def test_a_planted_git_config_runs_no_program(self):
+        # A synced notes folder can carry its own .git/config. Keys that run a program must not run.
+        source = self.root / "planted"; source.mkdir()
+        self.git(source, "init", "-q")
+        (source / "a.md").write_text("Meeting"); self.git(source, "add", "-A"); self.git(source, "commit", "-qm", "a")
+        (source / "a.md").write_text("Meeting, edited")   # makes `git diff` look at the work tree
+        marker = self.root / "PWNED"
+        hook = self.root / "run.sh"; hook.write_text("#!/bin/sh\ntouch '%s'\n" % marker); hook.chmod(0o755)
+        with open(source / ".git/config", "a") as f:
+            f.write("[core]\n\tfsmonitor = %s\n\tpager = %s\n[diff]\n\texternal = %s\n" % (hook, hook, hook))
+        self.config.write_text(json.dumps({"notes_dir": str(source)}))
+        code, _ = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertFalse(marker.exists(), "a program named in the folder's .git/config ran")
+
+    def test_a_shallow_clone_does_not_date_old_notes_to_its_newest_commit(self):
+        source = self.root / "deep"; source.mkdir(); self.git(source, "init", "-q")
+        (source / "old.md").write_text("Old meeting"); self.git(source, "add", "-A")
+        self.git(source, "commit", "-qm", "old", when=time.time() - 400 * 86400)
+        (source / "new.md").write_text("This week's meeting"); self.git(source, "add", "-A")
+        self.git(source, "commit", "-qm", "new", when=time.time() - 86400)
+        clone = self.root / "shallow"; self.git(self.root, "clone", "-q", "--depth", "1", "file://" + str(source), str(clone))
+        self.config.write_text(json.dumps({"notes_dir": str(clone)}))
+        code, value = self.run_check()
+        self.assertEqual(code, 0)
+        self.assertNotIn(self.mod.hashed("old.md"), {i["key"] for i in value["items"]},
+                         "an old note in a shallow clone is not new just because the boundary commit lists it")
+
+    def test_a_git_failure_in_a_clone_imports_nothing_rather_than_everything(self):
+        source = self.root / "broken"; source.mkdir(); self.git(source, "init", "-q")
+        for n in range(3): (source / ("old-%d.md" % n)).write_text("Old meeting " + str(n))
+        self.git(source, "add", "-A"); self.git(source, "commit", "-qm", "old", when=time.time() - 400 * 86400)
+        self.config.write_text(json.dumps({"notes_dir": str(source)}))
+        real = self.mod.subprocess.run
+        def failing(cmd, *a, **k):
+            if "log" in cmd: raise self.mod.subprocess.TimeoutExpired(cmd, 1)
+            return real(cmd, *a, **k)
+        with patch.object(self.mod.subprocess, "run", failing):
+            code, value = self.run_check()
+        self.assertEqual(code, 0); self.assertEqual(value["items"], [], "fresh mtimes in a clone are not trusted")
+
+    def test_a_repo_with_no_commit_yet_uses_mtimes(self):
+        source = self.root / "empty"; source.mkdir(); self.git(source, "init", "-q")
+        (source / "draft.md").write_text("Draft")
+        self.config.write_text(json.dumps({"notes_dir": str(source)}))
+        self.assertIn(self.mod.hashed("draft.md"), {i["key"] for i in self.run_check()[1]["items"]})
+
+    def test_a_huge_file_is_never_read(self):
+        folder = self.notes(); (folder / "dump.txt").write_bytes(b"x" * (self.mod.MAX_NOTE_BYTES + 1))
+        self.assertEqual(self.run_check()[1]["items"], [])
+
     def test_board_modes_are_honoured(self):
         folder = self.notes(); (folder / "a.md").write_text("Note")
         self.board({"modes": ["tasks"]}); self.assertEqual(len(self.run_check()[1]["items"]), 1)
