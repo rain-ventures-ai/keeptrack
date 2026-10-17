@@ -4494,7 +4494,8 @@ if (typeof window !== 'undefined') (() => {
   async function fetchAutomations(c) {
     if (DEMO || !c.repo) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: DEMO ? 'demo' : 'connect' };
     const ref = `?ref=${encodeURIComponent(c.branch)}`, enc = p => p.split('/').map(encodeURIComponent).join('/');
-    const readJson = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (!r.ok) throw new Error(String(r.status)); return JSON.parse(b64d((await r.json()).content)); };
+    const readFile = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (!r.ok) throw new Error(String(r.status)); const j = await r.json(); return { data: JSON.parse(b64d(j.content)), sha: j.sha }; };
+    const readJson = async p => (await readFile(p)).data;
     const listDir = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (r.status === 404) return []; if (!r.ok) throw new Error('Cannot read the automation packs. Check repository access in Settings → Connection.'); const d = await r.json(); return Array.isArray(d) ? d : []; };
     const [kit, mine, regs] = await Promise.all([listDir('board/automations'), listDir('automations'), listDir('automation/routines')]);
     const packs = await Promise.all([...kit.map(x => ['kit', x]), ...mine.map(x => ['own', x])].filter(([, x]) => x.type === 'dir' && AUTO_SLUG.test(x.name)).map(async ([source, x]) => {
@@ -4502,10 +4503,13 @@ if (typeof window !== 'undefined') (() => {
       try { const m = await readJson(folder + '/manifest.json'); return { source, folder, slug: x.name, m: m && typeof m === 'object' && !Array.isArray(m) ? m : null }; }
       catch { return { source, folder, slug: x.name, m: null }; }
     }));
-    const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readJson('automation/routines/' + x.name).catch(() => null))))
-      .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object').map(autoInstall).filter(r => AUTO_SLUG.test(r.automation.slug));
+    const raws = {};   // register file name -> { data, sha }: the switch rewrites the register itself
+    const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readFile('automation/routines/' + x.name).then(f => { raws[x.name] = f; return { ...f.data, __file: x.name }; }).catch(() => null))))
+      .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object').map(r => ({ ...autoInstall(r), file: r.__file })).filter(r => AUTO_SLUG.test(r.automation.slug));
     if (!packs.length && !installs.length) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: 'upgrade' };
-    return { packs, installs };
+    // The runner's own report (relay's dispatcher writes it each sweep): connectors it holds, secret NAMES set, last sweep.
+    const runner = await readJson('automation/runner.json').then(autoRunnerInfo).catch(() => null);
+    return { packs, installs, raws, runner };
   }
   async function loadAutomations() {
     const c = cfg(), key = autoKey(c), gen = ++autoGen;
@@ -4559,9 +4563,148 @@ if (typeof window !== 'undefined') (() => {
     const on = here.filter(r => r.status === 'active' && String(r.owner || '').toLowerCase() === me).length;
     head.querySelector('h2').after(el('span', 'autos__count', `${data.packs.length} available · ${on} on for you`));
     if (!cards.length) wrap.append(ui.empty({ text: 'No automations yet. Upgrade the board kit, or make your own.', icon: 'bot' }));
+    if (!data.preview && !DEMO) wrap.append(runnerPanel(data, items));
     const grid = el('div', 'autos__list'); grid.setAttribute('role', 'list'); grid.append(...cards); wrap.append(grid);
     if ($('dlgAuto').open) fillAuto();   // a refresh while a sheet is open shows its new state
   }
+  // ---- The cloud runner and the on/off switch (card #180) ----
+  // One routine (relay's dispatcher) runs every automation that is on. Each sweep it writes automation/runner.json: when it
+  // last swept and what it holds (connector names, secret NAMES, never a value). A person turns an automation on or off
+  // with a switch: the page writes that automation's install register as them, as `keeptrack.py automation install
+  // --runner cloud`, `setup --runtime claude --runner cloud` and `enable` would. The dispatcher runs it only while the
+  // routine holds what the pack needs.
+  const AUTO_NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/i, AUTO_SECRET = /^[A-Z][A-Z0-9_]{1,62}$/, RUNNER_FRESH_H = 26;
+  function autoRunnerInfo(j) {
+    const o = autoObj(j), list = (v, re) => Array.isArray(v) ? v.filter(x => typeof x === 'string' && re.test(x)).slice(0, 50) : [];
+    const t = Date.parse(autoStr(o.updated_at, 40));
+    return { at: Number.isFinite(t) ? t : 0, connectors: list(o.connectors, AUTO_NAME).map(x => x.toLowerCase()), secrets: list(o.secrets, AUTO_SECRET), relay: autoStr(o.relay, 20) };
+  }
+  function autoCloudNeeds(m) {   // keeptrack.py _auto_needs(m, "cloud"): what one cloud install of this pack needs
+    const req = autoObj(m.requires), over = autoObj(req.cloud), pick = (k, re) => (Array.isArray(over[k]) ? over[k] : Array.isArray(req[k]) ? req[k] : []).filter(x => typeof x === 'string' && re.test(x));
+    return { runner: autoStr(req.runner, 10) || 'any', connectors: pick('connectors', AUTO_NAME).map(x => x.toLowerCase()), secrets: pick('secrets', AUTO_SECRET) };
+  }
+  // Why this pack's switch cannot be turned on in the cloud now ('' when it can).
+  function autoBlocked(p, runner) {
+    const m = p.m || {}, needs = autoCloudNeeds(m), cfgs = m.config && typeof m.config === 'object' ? Object.entries(m.config) : [];
+    if (needs.runner === 'local') return 'Runs only on a computer, not in the cloud.';
+    if ((Array.isArray(m.needs) ? m.needs : []).some(n => !n || !Array.isArray(n.routes) || !n.routes.some(r => r && r.runtime === 'claude'))) return 'Has no cloud route for something it reads.';
+    if (cfgs.some(([, v]) => v && v.required && !('default' in v))) return 'Needs a setting first: use Ask my assistant.';
+    if (!runner) return 'Set up your runner first.';
+    const miss = [...needs.connectors.filter(x => !runner.connectors.includes(x)).map(x => own(AUTO_CONNECTORS, x) || x), ...needs.secrets.filter(x => !runner.secrets.includes(x))];
+    return miss.length ? 'Needs ' + miss.join(', ') + ' on your runner.' : '';
+  }
+  const AUTO_CONNECTORS = { gmail: 'Gmail', 'google-drive': 'Google Drive', drive: 'Google Drive', calendar: 'Google Calendar', github: 'GitHub', slack: 'Slack' };
+  // The pack digest, as keeptrack.py _auto_pack computes it: sha256 over each file (sorted relative path, NUL, byte length,
+  // NUL, bytes), every file of the pack folder except its top-level tests/. Read from git, so it matches a fresh clone.
+  async function autoDigest(c, folder) {
+    const r = await ghGet(`/repos/${c.repo}/git/trees/${encodeURIComponent(c.branch + ':' + folder)}?recursive=1`, null, c);
+    if (!r.ok) throw new Error('Cannot read the pack files.');
+    const t = await r.json(); if (t.truncated) throw new Error('The pack has too many files.');
+    const files = (t.tree || []).filter(e => e.type === 'blob' && !/^tests\//.test(e.path));
+    if ((t.tree || []).some(e => e.mode === '120000' || e.type === 'commit')) throw new Error('The pack holds a symlink or submodule.');
+    files.sort((x, y) => x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
+    const enc = new TextEncoder(), parts = [];
+    for (const f of files) {
+      const b = await ghGet(`/repos/${c.repo}/git/blobs/${f.sha}`, null, c); if (!b.ok) throw new Error('Cannot read the pack files.');
+      const raw = Uint8Array.from(atob(String((await b.json()).content || '').replace(/\s/g, '')), ch => ch.charCodeAt(0));
+      parts.push(enc.encode(f.path), new Uint8Array([0]), enc.encode(String(raw.length)), new Uint8Array([0]), raw);
+    }
+    const all = new Uint8Array(parts.reduce((n, x) => n + x.length, 0)); let at = 0; parts.forEach(x => { all.set(x, at); at += x.length; });
+    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', all))].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+  const autoStamp = () => new Date().toISOString().replace(/\.(\d{3})\d*Z$/, '.$1Z');
+  // The register an install, a cloud setup and an enable would leave (keeptrack.py cmd_automation), kept install_id and
+  // run history when the same pack is turned on again.
+  function autoRegister(p, me, c, digest, old) {
+    const m = p.m, binding = `auto-${p.slug}-${me}`, now = autoStamp(), same = old && old.status !== 'retired' && autoObj(old.automation).digest === digest;
+    const config = {}; Object.entries(m.config && typeof m.config === 'object' ? m.config : {}).forEach(([k, v]) => { if (v && 'default' in v) config[k] = v.default; });
+    const needs = (Array.isArray(m.needs) ? m.needs : []).map(n => n.id);
+    const prev = same ? autoObj(old.automation) : {};
+    const reg = same ? JSON.parse(JSON.stringify(old)) : { version: 1, id: binding, owner: me, board_repo: c.repo, branch: c.branch, board_path: c.path, status: 'paused', connections: needs.map(need => ({ need })), current_run: null };
+    reg.automation = { schema: 'keeptrack-automation-install/1', slug: p.slug, source: p.source, pack_path: p.folder, pack_version: m.version, digest,
+      install_id: prev.install_id || ([...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join('')),
+      writes: 'proposals', every: prev.every || m.every, config: prev.config || config, network_granted: !!(m.check && m.check.network), runner: 'cloud',
+      setup: { status: 'ready-cloud', runtime: 'claude', runner: 'cloud', checked_at: now, digest, notes: [], confirmed: needs } };
+    reg.status = 'active';
+    return reg;
+  }
+  let autoBusy = '';
+  async function autoSwitch(x, on) {
+    const c = cfg(), me = autoItems.me, p = x.p, mine = x.installs.find(r => String(r.owner || '').toLowerCase() === me);
+    const file = `auto-${p.slug}-${me}.json`, raw = (autoCache.raws || {})[file], path = 'automation/routines/' + file;
+    if (autoBusy || ro || !c.token || !me) return;
+    autoBusy = p.slug; render();
+    try {
+      let next;
+      if (on) {
+        const why = autoBlocked(p, autoCache.runner); if (why) throw new Error(why);
+        next = autoRegister(p, me, c, await autoDigest(c, p.folder), raw && raw.data);
+      } else {
+        if (!raw || !mine) throw new Error('It is not on.');
+        next = JSON.parse(JSON.stringify(raw.data)); next.status = 'paused';
+      }
+      const res = await githubContents('PUT', { message: `Automation ${p.slug}: ${on ? 'on' : 'off'} for @${me} (board page)`, content: b64e(JSON.stringify(next, null, 2) + '\n'),
+        branch: c.branch, ...(raw ? { sha: raw.sha } : {}) }, false, { path });
+      if (res.status === 409 || res.status === 422) throw new Error('It changed on GitHub meanwhile. Refresh and try again.');
+      if (!res.ok) throw new Error(res.status === 403 || res.status === 404 ? 'Your token cannot write this repo.' : 'GitHub said ' + res.status + '.');
+      toast(on ? `${autoStr(p.m && p.m.name, 80) || p.slug} is on. The next runner sweep starts it.` : `${autoStr(p.m && p.m.name, 80) || p.slug} is off.`);
+    } catch (err) { toast(err.message || 'The switch did not save.', true); }
+    autoBusy = ''; autoCache = null; render();
+  }
+  function autoSwitchEl(x) {
+    const { p, installs } = x, me = autoItems.me, mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
+    const on = !!mine && mine.status === 'active', why = on ? '' : autoBlocked(p, autoCache.runner);
+    const b = el('button', 'autoswitch' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(on));
+    b.append(el('span', 'autoswitch__knob')); b.dataset.slug = p.slug;
+    const name = autoStr(p.m && p.m.name, 80) || p.slug;
+    b.setAttribute('aria-label', `${name}: ${on ? 'on' : 'off'}`); b.title = why || (on ? 'Turn it off' : 'Turn it on');
+    b.disabled = ro || !cfg().token || !me || autoBusy === p.slug || (!on && !!why);
+    if (autoBusy === p.slug) b.classList.add('busy');
+    b.onclick = e => { e.stopPropagation(); autoSwitch(x, !on); };
+    return b;
+  }
+  function runnerPanel(data, packs) {
+    const r = data.runner, box = el('div', 'runnerbox'), ago = r && r.at ? Math.round((Date.now() - r.at) / 60000) : null;
+    const fresh = ago !== null && ago < RUNNER_FRESH_H * 60;
+    const need = new Set(); packs.forEach(x => { if (x.p.m && !x.p.preview) { const n = autoCloudNeeds(x.p.m); n.connectors.forEach(v => need.add('c:' + v)); n.secrets.forEach(v => need.add('s:' + v)); } });
+    const missing = r ? [...need].filter(k => k[0] === 'c' ? !r.connectors.includes(k.slice(2)) : !r.secrets.includes(k.slice(2))) : [];
+    const [label, tone] = !r ? ['Not set up', 'warn'] : !fresh ? ['Not sweeping', 'danger'] : missing.length ? ['Ready, with gaps', 'warn'] : ['Ready', 'ok'];
+    const text = el('span', 'runnerbox__text');
+    text.append(el('b', null, 'Cloud runner'), el('span', 'runnerbox__meta', !r ? 'One routine runs every automation you turn on. Set it up once.' :
+      `Last sweep ${ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}${missing.length ? ` · missing ${missing.length}` : ''}`));
+    const open = el('button', 'runnerbox__open'); open.type = 'button'; open.append(svgIcon('refresh-cw'), text, el('span', `ui-pill ui-pill--${tone}`, label), svgIcon('chevron-right'));
+    open.setAttribute('aria-label', `Cloud runner: ${label}. Open setup`); open.onclick = () => openRunner(); box.append(roKeep(open));
+    return box;
+  }
+  function openRunner() { autoOpenSlug = ':runner'; fillAuto(); if (!$('dlgAuto').open) $('dlgAuto').showModal(); $('auBody').scrollTop = 0; }
+  function runnerSheet() {
+    const data = autoCache || {}, r = data.runner, c = cfg(), wrap = el('article', 'autocard autocard--sheet runnersheet');
+    const head = el('div', 'autocard__head'), tile = el('span', 'autocard__icon'); tile.append(svgIcon('refresh-cw')); tile.setAttribute('aria-hidden', 'true');
+    const name = el('div', 'autocard__name'); name.append(el('h3', null, 'Cloud runner'), el('span', 'autocard__scope', 'One routine for every automation'));
+    head.append(tile, name); wrap.append(head);
+    wrap.append(el('p', 'autocard__summary', 'A Claude routine on this repo sweeps on a schedule, starts each automation that is on and due, and only when its cheap check finds something new. It holds the connectors and secrets the automations need; this board stores only their names.'));
+    const ago = r && r.at ? (Date.now() - r.at) / 3600000 : null, list = el('ul', 'runnercheck');
+    const item = (ok, title, fix) => { const li = el('li', 'runnercheck__item ' + (ok ? 'ok' : 'todo')); li.append(svgIcon(ok ? 'circle-check' : 'triangle-alert'));
+      const t = el('span'); t.append(el('b', null, title)); if (!ok && fix) t.append(el('span', 'runnercheck__fix', fix)); li.append(t); list.append(li); };
+    item(!!r && ago < RUNNER_FRESH_H, r ? (ago < RUNNER_FRESH_H ? 'The routine is sweeping' : 'The routine has not swept for a day') : 'A routine runs the automations',
+      'Create one Claude routine on this repo that runs relay’s dispatcher (relay/prompts/dispatcher-loader.md) at least daily. Ask my assistant below to set it up.');
+    const need = new Map(); (data.packs || []).forEach(p => { if (p.m) { const n = autoCloudNeeds(p.m); n.connectors.forEach(v => need.set('c:' + v, v)); n.secrets.forEach(v => need.set('s:' + v, v)); } });
+    [...need].forEach(([k, v]) => {
+      const held = !!r && (k[0] === 'c' ? r.connectors.includes(v) : r.secrets.includes(v));
+      item(held, k[0] === 'c' ? `${own(AUTO_CONNECTORS, v) || v} connector on the routine` : `${v} in the routine’s environment`,
+        k[0] === 'c' ? `Add the ${own(AUTO_CONNECTORS, v) || v} connector to the routine in its claude.ai settings.` : `Add the secret ${v} to the routine’s environment (claude.ai → the routine’s environment → secrets). Its value never goes in the repo.`);
+    });
+    wrap.append(list);
+    const row = el('div', 'autocard__actions'), ask = elI('button', 'small primary', 'bot', 'Ask my assistant'); ask.type = 'button';
+    ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one Claude routine that runs relay's dispatcher and the board's automations.`,
+      'Read relay/README.md (Automations) and relay/prompts/dispatcher-loader.md in the board repo first.',
+      `It must hold these connectors: ${[...need].filter(([k]) => k[0] === 'c').map(([, v]) => v).join(', ') || 'none'}; and these secret names in its environment: ${[...need].filter(([k]) => k[0] === 's').map(([, v]) => v).join(', ') || 'none'}.`,
+      'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the routine.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
+    const link = el('a', 'autocard__link', 'Routines on claude.ai ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    row.append(ask, link); uiBtns(row); wrap.append(row);
+    return wrap;
+  }
+
   // The page lists one row per automation (icon, name, summary, state); the row opens its details in a drawer, as a card does.
   let autoItems = null, autoOpenSlug = '';
   function autoState(p, mine) {
@@ -4574,20 +4717,31 @@ if (typeof window !== 'undefined') (() => {
   }
   function safeRow(x) {
     const { p, installs } = x, m = p.m || {}, mine = installs.find(r => String(r.owner || '').toLowerCase() === autoItems.me);
-    const row = el('button', 'autorow'); row.type = 'button'; row.dataset.slug = p.slug; row.setAttribute('role', 'listitem');
+    const row = el('div', 'autorow'); row.dataset.slug = p.slug; row.setAttribute('role', 'listitem');
+    const open = el('button', 'autorow__open'); open.type = 'button';
     let name = p.slug, label = 'Pack has a problem', tone = 'danger', summary = '';
     try { name = autoStr(m.name, 80) || p.slug; [label, tone] = autoState(p, mine); summary = p.source === 'missing' ? 'Installed, but its pack is gone.' : !p.m ? 'Its manifest.json could not be read.' : autoStr(m.summary); } catch { /* the row still opens; the sheet says what is wrong */ }
     const text = el('span', 'autorow__text'); text.append(el('h3', null, name)); if (summary) text.append(el('span', 'autorow__summary', summary));
-    row.append(autoIcon(m), text, el('span', `ui-pill ui-pill--${tone} autorow__state`, label), svgIcon('chevron-right'));
-    row.setAttribute('aria-label', `${name}: ${label}. Open details`);
-    row.onclick = () => openAuto(p.slug); return roKeep(row);
+    open.append(autoIcon(m), text, el('span', `ui-pill ui-pill--${tone} autorow__state`, label), svgIcon('chevron-right'));
+    open.setAttribute('aria-label', `${name}: ${label}. Open details`);
+    open.onclick = () => openAuto(p.slug); row.append(roKeep(open));
+    if (autoSwitchable(x)) row.append(autoSwitchEl(x));
+    return row;
   }
+  const autoSwitchable = x => !DEMO && !x.p.preview && !!x.p.m && x.p.source !== 'missing' && !!autoItems.me && !!cfg().token;
   function openAuto(slug) { autoOpenSlug = slug; fillAuto(); if (!$('dlgAuto').open) $('dlgAuto').showModal(); $('auBody').scrollTop = 0; }
   function fillAuto() {
+    if (autoOpenSlug === ':runner') { $('auBody').replaceChildren(runnerSheet()); return; }
     const x = autoItems && autoItems.items.find(i => i.p.slug === autoOpenSlug); if (!x) { $('dlgAuto').close(); return; }
     let body; try { body = autoCard(x.p, x.installs, autoItems.me, x.clash, autoItems.c); }
     catch { body = el('article', 'autocard'); body.dataset.slug = x.p.slug; body.append(el('h3', null, x.p.slug), el('p', 'hint', 'This automation could not be shown: its pack or install file has unexpected values. Run the validate command in a clone.')); }   // one bad file never blanks the page
-    body.classList.add('autocard--sheet'); $('auBody').replaceChildren(body);
+    body.classList.add('autocard--sheet');
+    if (autoSwitchable(x)) {   // the switch, and why it cannot be turned on yet
+      const head = body.querySelector('.autocard__head'); if (head) head.append(autoSwitchEl(x));
+      const mine = x.installs.find(r => String(r.owner || '').toLowerCase() === autoItems.me), why = mine && mine.status === 'active' ? '' : autoBlocked(x.p, autoCache.runner);
+      if (why) { const n = el('p', 'autocard__blocked'); n.append(svgIcon('triangle-alert'), why); head ? head.after(n) : body.prepend(n); }
+    }
+    $('auBody').replaceChildren(body);
   }
   (function buildAutoDrawer() {
     const who = el('span', 'didentity'); who.append(iconTile('bot'), el('span', 'didentity__kind', 'Automation'));
@@ -5943,7 +6097,8 @@ if (typeof window !== 'undefined') (() => {
     const hd = el('tr'); hd.append(el('th', null, 'Field')); if (rec) hd.append(el('th', null, 'Current')); hd.append(el('th', null, adds ? 'To add' : 'Proposed'));
     const th = el('thead'); th.append(hd); tbl.append(th); const tb = el('tbody');
     keys.forEach(k => { const tr = el('tr'); tr.append(el('th', null, LIST_FIELDS.includes(k) ? 'Add ' + k : label(k))); if (rec) { const current = el('td'); if (LIST_FIELDS.includes(k)) { current.append(el('span', 'muted', 'Existing entries are kept')); if ((rec[k] || []).length) { const details = el('details', 'prop__context'); details.append(el('summary', null, 'View existing ' + k), el('div', null, fmtVal(rec[k]))); current.append(details); } } else current.textContent = fmtVal(rec[k === 'due' && p.target.type === 'person' ? 'next_due' : k]); tr.append(current); }
-      const td = el('td', null, k === 'at' && touch && c[k] ? whenText(c[k]) : fmtVal(c[k])); td.dataset.label = LIST_FIELDS.includes(k) || adds ? 'To add' : 'Proposed'; if (rec) tr.children[1].dataset.label = 'Current'; if (rec && !LIST_FIELDS.includes(k) && !sameJson(rec[k], c[k])) td.classList.add('propchanged'); tr.append(td); tb.append(tr); });
+      const md = !touch && typeof c[k] === 'string' && (k === 'details' || k === 'text' || k === 'body') && /\n|^#|\[[^\]]+\]\(/.test(c[k]);   // Markdown fields read as they will on the card
+      const td = el('td', md ? 'propmd' : null, md ? '' : k === 'at' && touch && c[k] ? whenText(c[k]) : fmtVal(c[k])); if (md) mdRender(td, c[k]); td.dataset.label = LIST_FIELDS.includes(k) || adds ? 'To add' : 'Proposed'; if (rec) tr.children[1].dataset.label = 'Current'; if (rec && !LIST_FIELDS.includes(k) && !sameJson(rec[k], c[k])) td.classList.add('propchanged'); tr.append(td); tb.append(tr); });
     tbl.append(tb);
     if (!Object.keys(c).length) return el('p', 'muted', 'The details of this decided proposal were removed after 30 days.');
     if (keys.length) wrap.append(tbl);

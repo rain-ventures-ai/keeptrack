@@ -35,6 +35,8 @@ class Github {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (method !== 'GET') this.writes++;
+    if (this.raw && method === 'GET' && Object.hasOwn(this.raw, decodeURIComponent(p))) return json(this.raw[decodeURIComponent(p)]);
+    if (this.puts && method === 'PUT' && p.startsWith('/contents/automation/')) { this.puts.push({ path: p, body: req.postDataJSON() }); return json({ content: { sha: 'put-' + this.puts.length } }); }
     if (this.extra && Object.hasOwn(this.extra, p) && method === 'GET') { const x = this.extra[p]; return x === 404 ? json({ message: 'Not Found' }, 404) : json(Array.isArray(x) ? x : { content: Buffer.from(text(x)).toString('base64') }); }
     if (p === '/contents/automation/routines' && method === 'GET') return json((this.routines || []).map((_, i) => ({ type: 'file', name: `routine_${i}.json` })));
     if (/^\/contents\/automation\/routines\/routine_\d+\.json$/.test(p) && method === 'GET') return json({ content: Buffer.from(text(this.routines[Number(/routine_(\d+)/.exec(p)[1])])).toString('base64') });
@@ -462,6 +464,60 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await rows.nth(1).click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
       assert.equal(await page.evaluate(() => [...document.querySelectorAll('#dlgAuto .autocard, #dlgAuto .aflow')].every(x => x.scrollWidth <= x.clientWidth + 1)), true, 'the details drawer does not scroll sideways at 390px');
       await page.waitForTimeout(350); await shot(page, 'automation-details'); await page.locator('#auClose').click();
+      assert.deepEqual(page.errors, []); await page.close();
+    }
+    // 16b. The cloud runner and the switch (card #180): the runner panel reads automation/runner.json; a pack whose needs the
+    // runner lacks cannot be turned on and says why; turning one on writes the register keeptrack.py would write, with the
+    // pack digest computed in the browser from git, and keeptrack.py itself then lists it as due on the cloud runner.
+    {
+      const page = await open(browser, { width: 390, height: 844 });
+      const kit = path.join(ROOT, 'board/kit/automations'), files = {};
+      const walk = (dir, rel = '') => fs.readdirSync(dir, { withFileTypes: true }).forEach(e => { if (e.name === '__pycache__') return;
+        const r = rel ? rel + '/' + e.name : e.name; if (e.isDirectory()) walk(path.join(dir, e.name), r); else files[r] = fs.readFileSync(path.join(dir, e.name)); });
+      walk(path.join(kit, 'stale-cards-nudge'));
+      const sha1 = b => crypto.createHash('sha1').update(b).digest('hex'), manifest = f => JSON.parse(fs.readFileSync(path.join(kit, f, 'manifest.json')));
+      page.api.raw = { '/git/trees/main:board/automations/stale-cards-nudge': { truncated: false, tree: Object.entries(files).map(([r, b]) => ({ path: r, type: 'blob', mode: '100644', sha: sha1(b) })) } };
+      Object.values(files).forEach(b => { page.api.raw['/git/blobs/' + sha1(b)] = { encoding: 'base64', content: b.toString('base64') }; });
+      page.api.extra = {
+        '/contents/board/automations': [{ type: 'dir', name: 'stale-cards-nudge' }, { type: 'dir', name: 'email-to-tasks' }],
+        '/contents/automations': 404, '/contents/automation/routines': [],
+        '/contents/board/automations/stale-cards-nudge/manifest.json': manifest('stale-cards-nudge'),
+        '/contents/board/automations/email-to-tasks/manifest.json': manifest('email-to-tasks'),
+        '/contents/automation/runner.json': { schema: 'keeptrack-runner/1', updated_at: new Date(Date.now() - 12 * 60000).toISOString(), connectors: [], secrets: [], relay: '0.9.35' },
+      };
+      page.api.routines = []; page.api.puts = [];
+      await page.evaluate(() => document.getElementById('btnAutos').click());
+      await page.waitForFunction(() => document.querySelectorAll('.autorow').length === 2);
+      assert.match(await page.locator('.runnerbox').textContent(), /Last sweep 12 min ago/, 'the runner panel says when it last swept');
+      assert.match(await page.locator('.runnerbox').textContent(), /Ready, with gaps/, 'email-to-tasks needs Gmail or a secret the runner lacks');
+      const sw = slug => page.locator(`.autorow[data-slug="${slug}"] .autoswitch`);
+      assert.equal(await sw('email-to-tasks').isDisabled(), true, 'a pack whose needs the runner lacks cannot be turned on');
+      assert.match(await sw('email-to-tasks').getAttribute('title'), /on your runner/);
+      assert.equal(await sw('stale-cards-nudge').getAttribute('aria-checked'), 'false');
+      await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+      assert.match(await page.locator('#dlgAuto .runnersheet').textContent(), /The routine is sweeping/);
+      assert.ok(await page.locator('#dlgAuto .runnercheck__item.todo').count() >= 1, 'the checklist lists what the runner lacks');
+      await page.waitForTimeout(350); await shot(page, 'automation-runner'); await page.locator('#auClose').click();
+      await sw('stale-cards-nudge').click();
+      await page.waitForFunction(() => window.__lastPut || true); await page.waitForTimeout(400);
+      assert.equal(page.api.puts.length, 1, 'the switch writes one file');
+      const put = page.api.puts[0]; assert.equal(put.path, '/contents/automation/routines/auto-stale-cards-nudge-alex.json');
+      assert.match(put.body.message, /stale-cards-nudge: on for @alex/);
+      const reg = JSON.parse(Buffer.from(put.body.content, 'base64').toString());
+      assert.equal(reg.status, 'active'); assert.equal(reg.owner, 'alex'); assert.equal(reg.automation.runner, 'cloud'); assert.equal(reg.automation.setup.status, 'ready-cloud');
+      // keeptrack.py on the same pack files: the digest matches, and the register is due on the cloud runner.
+      const tmp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'kt-switch-'));
+      fs.mkdirSync(path.join(tmp, 'board/automations'), { recursive: true }); fs.mkdirSync(path.join(tmp, 'automation/routines'), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, 'board/kit/keeptrack.py'), path.join(tmp, 'board/keeptrack.py'));
+      fs.cpSync(path.join(kit, 'stale-cards-nudge'), path.join(tmp, 'board/automations/stale-cards-nudge'), { recursive: true, filter: f => !f.includes('__pycache__') });
+      fs.writeFileSync(path.join(tmp, 'board/tasks.json'), text(root));
+      fs.writeFileSync(path.join(tmp, 'automation/routines/auto-stale-cards-nudge-alex.json'), JSON.stringify(reg, null, 2) + '\n');
+      const kt = require('node:child_process').spawnSync('python3', ['board/keeptrack.py', 'automation', 'due', '--json', '--runner', 'cloud'],
+        { cwd: tmp, encoding: 'utf8', env: { ...process.env, BOARD_USER: 'alex', PYTHONDONTWRITEBYTECODE: '1', BOARD_TOKEN: '', GH_TOKEN: '' } });
+      assert.equal(kt.status, 0, kt.stderr);
+      const due = JSON.parse(kt.stdout).due;
+      assert.deepEqual(due.map(d => [d.slug, d.owner, d.runner, d.digest]), [['stale-cards-nudge', 'alex', 'cloud', reg.automation.digest]], 'keeptrack.py agrees: same digest, due in the cloud');
+      fs.rmSync(tmp, { recursive: true, force: true });
       assert.deepEqual(page.errors, []); await page.close();
     }
     // 17. The routine register leaves automation installs to the Automations page; the old Settings deep link opens a button to it.

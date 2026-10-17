@@ -36,7 +36,7 @@ function fixture({ enabled = true } = {}) {
     'cards/t_first.json': card('t_first', 1, 'First'),
     'cards/t_second.json': card('t_second', 2, 'Second', { comments: [{ id: 'c_old', at: T0, by: 'alex', text: 'Existing comment' }], todos: [{ id: 'd_old', text: 'Existing item', done: true }], history: [{ at: T0, by: 'alex', text: 'created' }] }),
     'people/p_casey.json': person,
-    'proposals/r_create0001.json': prop('r_create0001', 'task.create', 'Send the revised plan', { change: { title: 'Send the revised plan', client: 'Acme', owner: 'alex', due: '2026-10-20' }, reviewer: 'alex' }),
+    'proposals/r_create0001.json': prop('r_create0001', 'task.create', 'Send the revised plan', { change: { title: 'Send the revised plan', client: 'Acme', owner: 'alex', due: '2026-10-20', details: '## Why\nThe client asked. See [the brief](https://example.com/brief).' }, reviewer: 'alex' }),
     'proposals/r_update0001.json': prop('r_update0001', 'task.update', 'Raise priority of First', { target: { type: 'task', id: 't_first', base: { priority: 'medium' } }, change: { priority: 'high' } }),
     'proposals/r_merge00001.json': prop('r_merge00001', 'task.create', 'Second', { change: { title: 'Second', comments: [{ text: 'From the meeting' }], todos: [{ text: 'Book the room' }] }, likely_duplicates: [{ type: 'task', id: 't_second', why: 'same title and client' }] }),
     'proposals/r_editme0001.json': prop('r_editme0001', 'task.create', 'Draft the summary', { change: { title: 'Draft the summary', client: 'Acme' } }),
@@ -163,6 +163,8 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.equal(await page.locator('.inbox__technical').filter({ hasText: 'Source revision: 7' }).getAttribute('open'), null, 'revision retained behind collapsed import details');
     if (process.env.INBOX_REVIEW_SCREENSHOT) await page.screenshot({ path: process.env.INBOX_REVIEW_SCREENSHOT, fullPage: true });
     const createCard = propCard(page, 'r_create0001');
+    assert.equal(await createCard.locator('td.propmd .mdh2').textContent(), 'Why', 'Markdown details render as they will on the card (card #181)');
+    assert.equal(await createCard.locator('td.propmd a').getAttribute('href'), 'https://example.com/brief'); assert.doesNotMatch(await createCard.locator('td.propmd').textContent(), /##/);
     assert.match(await createCard.textContent(), /Owner\s*alex/); assert.match(await createCard.textContent(), /Due\s*2026-10-20/);
     assert.match(await propCard(page, 'r_editme0001').textContent(), /OwnerUnassigned/, 'new tasks explicitly unassigned');
     assert.match(await propCard(page, 'r_update0001').textContent(), /OwnerUnchanged/, 'omitted update owner stays unchanged');
