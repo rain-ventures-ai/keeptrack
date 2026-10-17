@@ -8,10 +8,11 @@ uses no model. Rules, in order:
   2. Skip a card that is waiting (an open `waiting`), or labelled `held`.
   3. Skip a card nudged this ISO week: the seen log (key = card id, rev = week), a nudge proposal from this pack
      already pending in the Review Inbox or added this week, or a comment posted this week after the claim went stale
-     (stuck or blocked: after the agent set that status, its last heartbeat). Comments by the claim's own agent
-     never count: an agent that sets blocked also comments to ask for a person, and that is not a nudge.
-  4. A card the check cannot read (no usable id, a broken claim time) is never dropped silently: one item
-     `check:malformed-cards` per week asks the agent to raise it with the owner.
+     (stuck or blocked: after the agent set that status, its last heartbeat; with no claim time, the history line
+     that set the status). Comments by the claim's own agent never count: an agent that sets blocked also comments
+     to ask for a person, and that is not a nudge.
+  4. A card the check cannot read (no usable id, a broken claim time, a stuck or blocked claim with no time at all)
+     is never dropped silently: one item `check:malformed-cards` per week asks the agent to raise it with the owner.
 Output is one keeptrack-check/1 object; titles are fixed text and refs are card ids, never card text.
 """
 import contextlib, datetime, importlib.util, io, json, os, re, sys
@@ -82,7 +83,17 @@ def open_wait(kt, t):
     return w if isinstance(w, dict) and w and t.get("column") != "done" else None
 
 
-def claim_status(claim, limit, now):
+def status_set_at(t, status):
+    """When the card's history last recorded the claim moving to `status` ("status blocked[: note]"), or None."""
+    when = None
+    for h in t.get("history") or [] if isinstance(t, dict) else []:
+        text = h.get("text") if isinstance(h, dict) else None
+        if isinstance(text, str) and re.match(r"status " + status + r"(?::|$)", text):
+            when = parse_time(h.get("at")) or when
+    return when
+
+
+def claim_status(claim, limit, now, t=None):
     """("stale"|"stuck"|"blocked"|None, went_stale_at) for a claim; raises ValueError on a broken claim."""
     if not claim:
         return None, None
@@ -93,6 +104,11 @@ def claim_status(claim, limit, now):
     if status in ("stuck", "blocked"):
         if claim.get("blocked_by_wait"):
             return None, None          # a claim blocked by the card's own wait: the wait rules handle it
+        # With no claim time, the history line that set the status says since when; with neither, the check
+        # cannot tell an earlier comment from a nudge, so the card is malformed rather than silently skipped.
+        last = last or status_set_at(t, status)
+        if last is None:
+            raise ValueError("claim time")
         return status, last
     if status == "done":
         return None, None
@@ -111,12 +127,20 @@ def claim_author(claim):
     return (claim["agent"] + "@" + user if user else claim["agent"]).lower()
 
 
-def nudged_this_week(t, data, prefix, week, since):
+def proposal_index(data, prefix):
+    """{target card id: [this pack's proposals]}, built once per run instead of once per stale card."""
+    index = {}
     for p in data.get("proposals") or []:
         if not isinstance(p, dict) or not str(p.get("action_key") or "").startswith(prefix):
             continue
-        if ((p.get("target") or {}).get("id") if isinstance(p.get("target"), dict) else None) != t.get("id"):
-            continue
+        target = (p.get("target") or {}).get("id") if isinstance(p.get("target"), dict) else None
+        if isinstance(target, str):
+            index.setdefault(target, []).append(p)
+    return index
+
+
+def nudged_this_week(t, proposals, week, since):
+    for p in proposals.get(t.get("id"), []):
         created = parse_time(p.get("created"))
         if p.get("status") == "pending" or (created and week_of(created) == week):
             return True
@@ -145,6 +169,7 @@ def main():
     limit = stale_minutes(data.get("settings"))
     prefix = "auto:" + (os.environ.get("KEEPTRACK_AUTOMATION") or "stale-cards-nudge") + ":"
     seen = state().get("keys") or {}
+    proposals = proposal_index(data, prefix)
     found, malformed = [], 0
     for t in data["tasks"]:
         if not isinstance(t, dict) or not isinstance(t.get("id"), str) or not TOKEN.fullmatch(t["id"]) or "://" in t["id"]:
@@ -152,7 +177,7 @@ def main():
         if t.get("column") == "done":
             continue
         try:
-            status, since = claim_status(t.get("claim"), limit, now)
+            status, since = claim_status(t.get("claim"), limit, now, t)
         except ValueError:
             malformed += 1; continue
         if not status:
@@ -161,7 +186,7 @@ def main():
         if labels & HOLD_LABELS or open_wait(kt, t):
             continue
         # since: when the claim went stale, or (stuck/blocked) the heartbeat that set that status
-        if seen.get(t["id"]) == week or nudged_this_week(t, data, prefix, week, since):
+        if seen.get(t["id"]) == week or nudged_this_week(t, proposals, week, since):
             continue
         found.append((since or now, t["id"], status))
     found.sort()

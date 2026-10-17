@@ -8428,7 +8428,7 @@ def cmd_checkpoint(a):
             if not isinstance(data, dict) or data.get("version") != 1: sys.exit("unsupported checkpoint version")
             if a.action == "show":
                 print(json.dumps({"sha256": digest, "checkpoint": data}, indent=2)); return
-            if register.get("owner", "").lower() != default_user().strip().lower(): sys.exit("checkpoint can only be updated by the registered owner")
+            if str(register.get("owner") or "").lower() != default_user().strip().lower(): sys.exit("checkpoint can only be updated by the registered owner")
             current = register.get("current_run") or {}
             if not a.run_id or current.get("id") != a.run_id: sys.exit("run id does not match the running attempt")
             if not a.expect_sha or digest != a.expect_sha: sys.exit("checkpoint changed; reread and regroup before saving")
@@ -8866,7 +8866,7 @@ def _auto_state(*, write=True):
 def _auto_identity(register):
     install = register.get("automation", {})
     return dict(digest=install.get("digest"), install_id=install.get("install_id"),
-                owner=register.get("owner", "").lower())
+                owner=str(register.get("owner") or "").lower())
 
 
 def _auto_local_entry(state, register):
@@ -8934,7 +8934,7 @@ def _auto_tick(a, packs, owner):
                     except (ValueError, OSError, UnicodeDecodeError):
                         if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
                         continue
-                    if not install or r.get("owner", "").lower() != owner.lower() or r.get("status") != "active": continue
+                    if not install or str(r.get("owner") or "").lower() != owner.lower() or r.get("status") != "active": continue
                     slug = install["slug"]; binding = r["id"]; reserved = False
                     try:
                         if slug not in packs: raise ValueError("pack-missing")
@@ -8985,13 +8985,16 @@ def _auto_tick(a, packs, owner):
 # Actions that create, change, run or record work for one owner's binding. Only that owner may run them:
 # --owner must name the person running the command (default_user(), case-insensitive). There is no admin
 # override; another person's binding is installed, set up, enabled, ticked or retired by that person.
-_AUTO_OWNER_ACTIONS = ("install", "setup", "enable", "disable", "uninstall", "check", "tick", "mark")
+# dry-run is here too: it runs that owner's installed check, under their network grant and seen state.
+_AUTO_OWNER_ACTIONS = ("install", "setup", "enable", "disable", "uninstall", "check", "tick", "mark", "dry-run")
 
 
 def _auto_owner(a):
     """The owner this command acts for; refuses an --owner that is not the person running a changing action."""
-    runner = (default_user() or "").strip().lower()
     asked = (getattr(a, "owner", None) or "").strip().lower()
+    if asked and a.action not in _AUTO_OWNER_ACTIONS:
+        return asked                     # a read-only look at someone's automations: no login lookup needed
+    runner = (default_user() or "").strip().lower()
     if a.action in _AUTO_OWNER_ACTIONS and asked and asked != runner:
         if not runner: sys.exit("automation " + a.action + ": cannot tell who is running this; set BOARD_USER to your GitHub login")
         sys.exit("automation " + a.action + ": --owner " + asked + " is not you (" + runner + "); only the owner can " + a.action + " their own automations")
@@ -9009,7 +9012,7 @@ def cmd_automation(a):
         with _auto_lock(rp + ".lock"):
             r = _auto_json(rp)
             if not r: sys.exit("automation is not installed")
-            if r.get("owner", "").lower() != owner: sys.exit("automation owner mismatch")
+            if str(r.get("owner") or "").lower() != owner: sys.exit("automation owner mismatch")
             if r.get("status") == "retired": sys.exit("automation is not installed")
             if action == "uninstall":
                 if r.get("status") == "retired": sys.exit("automation is not installed")
@@ -9114,7 +9117,7 @@ def cmd_automation(a):
                                      setup=dict(status="blocked", digest=digest, runtime=None, checked_at=now(), notes=[])))
         else:
             if not r or r.get("status") == "retired": sys.exit("automation is not installed")
-            if r.get("owner", "").lower() != owner: sys.exit("automation owner mismatch")
+            if str(r.get("owner") or "").lower() != owner: sys.exit("automation owner mismatch")
             install = r["automation"]
             if action == "enable":
                 if not _auto_ready(r, digest): sys.exit("setup is not ready for current pack digest; reinstall and setup")
@@ -9170,7 +9173,7 @@ def cmd_automation(a):
                     print(open(os.path.join(path, "SKILL.md")).read())
                 return
             elif action == "mark":
-                if r.get("owner", "").lower() != default_user().strip().lower(): sys.exit("mark requires the registered owner")
+                if str(r.get("owner") or "").lower() != default_user().strip().lower(): sys.exit("mark requires the registered owner")
                 current = r.get("current_run") or {}
                 if current.get("id") != a.run_id: sys.exit("run id does not match the running attempt")
                 if digest != install["digest"] or current.get("digest") != digest: sys.exit("pack digest changed since reservation")

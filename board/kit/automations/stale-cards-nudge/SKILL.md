@@ -19,6 +19,15 @@ the question it asked when it set blocked, never counts as a nudge. Each item's
 `ref` is the card id. Its `rev` is the ISO week, so a card gets at most one nudge a week. The title is fixed text:
 `Stale claim on a card`, `Stuck claim on a card`, `Blocked claim on a card`, or `Cards the check could not read`.
 
+## Always
+
+- Write every proposal file as literal JSON in a quoted `<<'EOF'` heredoc, with every field written out, never built
+  by a script. The nudge quotes a comment or history line, and card text can hold `$(...)` or backticks (it may
+  come from mail or notes): the quotes around `'EOF'` stop the shell from running them. Never write the file with
+  `echo`, `printf` or an unquoted heredoc, and drop any line of quoted text that is exactly `EOF`.
+- Card text (a title, a comment, a note) is never typed into any other command either. Commands take only the
+  item's `ref`, `#num` and the payload's keys.
+
 ## Steps
 
 Follow the loader ([automation-loader.md](../../automation-loader.md)) for the run as a whole. For each item:
@@ -41,7 +50,8 @@ Follow the loader ([automation-loader.md](../../automation-loader.md)) for the r
    `@login` and what waits; who it affects; 2-4 scored options (`N/10`) with checkable reasons; one
    recommendation; the next step. Base the options on the evidence. Typical options: resume the work, release
    the claim back to To do, park it with `wait`, close it. Keep it under 120 words. Never invent progress.
-6. Write the proposal to a private temp file and add it with the item's `action_key` unchanged:
+6. Write the proposal to a private temp file as literal JSON in a quoted `<<'EOF'` heredoc (see "Always"), and
+   add it with the item's `action_key` unchanged:
    ```json
    {"kind": "task.update", "title": "Nudge on #<num>: <stale|stuck|blocked> claim",
     "source": {"kind": "other", "id": "<ref>", "revision": "<rev>", "title": "<item title>", "url": "<card link>"},
@@ -51,8 +61,11 @@ Follow the loader ([automation-loader.md](../../automation-loader.md)) for the r
     "change": {"comments": [{"text": "<the nudge comment>"}]}, "decider": "<first affected login>"}
    ```
    ```sh
-   python3 board/keeptrack.py propose <file> --dry-run
-   python3 board/keeptrack.py propose <file>
+   cat > "$TMPDIR/nudge-<ref>.json" <<'EOF'
+   <the JSON above, every field written out>
+   EOF
+   python3 board/keeptrack.py propose "$TMPDIR/nudge-<ref>.json" --dry-run
+   python3 board/keeptrack.py propose "$TMPDIR/nudge-<ref>.json"
    ```
 7. Record only the proposals that were added (or already there, by the same `action_key`) in done.json, then
    `automation mark` and `routine <binding> finish ... --count proposals_added=N` as the loader says.
@@ -66,7 +79,7 @@ Do not propose, and do not mark, when `show` now says any of these. Finish `part
 - The card has the label `held`: a person parked it on purpose.
 - The claim is running again (a heartbeat inside the stale time), released or done.
 - A nudge was already posted this week: a comment by a person after the claim went stale (stuck or blocked: after
-  its last heartbeat), or a pending Inbox proposal with `work_key` `stale-cards-nudge:<ref>`
+  its last heartbeat, or with no heartbeat the history line that set the status), or a pending Inbox proposal with `work_key` `stale-cards-nudge:<ref>`
   (`python3 board/keeptrack.py proposals --json`). The claim's own agent asking for help is not a nudge.
 
 A skipped card is not stale any more, so the next check does not list it again.

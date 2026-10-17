@@ -27,40 +27,29 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
 ## Steps
 
 1. Run `$B automation show email-to-tasks`, then `$B routine <binding> show`: digest and run must match the payload.
-   Note `lookback_days` in `install.automation.config`. Run `$B settings` and `$B members`: the members and their
+   Run `$B settings` and `$B members`: the members and their
    addresses are the board's readers, and mail between them is never a contact exchange.
    Act on answers first: in `$B proposals --status answered --json`, for each question whose `action_key` starts with
    `auto:email-to-tasks:`, run `$B proposal-result <id>`. A "which person" answer with `done` null: map its
-   `source.id` (an item key) as in step 2 and propose the touch for the chosen person, with `action_key`
-   `<question action_key>:answer:<answer_id>`.
-2. Map each item `key` to a Gmail message. The key is `sha256:` + sha256 of the Gmail message id. Pass the keys as
-   arguments; the script prints `key  message-id  thread-id` and nothing from the mail:
+   `source.id` (an item key) with `--day <the question's source.date>` in step 2 and propose the touch for the
+   chosen person, with `action_key` `<question action_key>:answer:<answer_id>`.
+2. Map the item keys to Gmail messages and their message keys with the pack's resolver. Every item in one payload
+   comes from the same search page, so pass the first item's `ref` (it starts `pg:`) unchanged, then every key:
    ```sh
-   python3 - <lookback_days> <until from the payload cursor> <key> <key> ... <<'PY'
-   import hashlib, json, subprocess, sys
-   days, until, want = int(sys.argv[1]), int(sys.argv[2]), set(sys.argv[3:])
-   for span in (days, days + 30, 90):
-       q = f"in:anywhere -in:spam -in:trash -in:drafts after:{until - span * 86400} before:{until + 1}"; page = None
-       for _ in range(20):
-           argv = ["gog", "gmail", "messages", "search", q, "--json", "--max", "50"] + (["--page", page] if page else [])
-           data = json.loads(subprocess.run(argv, capture_output=True, check=True).stdout)
-           for m in data.get("messages", []):
-               k = "sha256:" + hashlib.sha256(str(m.get("id")).encode()).hexdigest()
-               if k in want: print(k, m["id"], m.get("threadId", "")); want.discard(k)
-           page = data.get("nextPageToken")
-           if not want or not page: break
-       if not want: break
-   PY
+   python3 board/automations/email-to-tasks/resolve.py '<item ref>' '<key>' '<key>' ...
    ```
-   The payload `cursor` is base64 JSON: decode it to read `until`. With a Gmail connector instead of gog, run the
-   same search and hash each message id the same way.
-3. Read headers first (From, To, Cc, Date, Message-ID): `gog gmail get <message id> --json` (or `gog gmail --help`
-   if your version names it differently), or the connector's get-thread tool. Read the text only of matched mail.
-4. Build the message key from the Message-ID header, passed as data on stdin, never pasted into a command:
-   ```sh
-   python3 -c 'import hashlib,sys; v=sys.stdin.read().strip().strip("<>"); l,d=v.rsplit("@",1); print("rfc822:"+hashlib.sha256((l+"@"+d.lower()).encode()).hexdigest())'
-   ```
-   No usable Message-ID: the Inbox needs this `rfc822:` key, so nothing can be proposed. Count it as malformed.
+   It repeats the check's own search on the page the check read (one call), then reads each message's Message-ID
+   from `gog gmail get <id> --json` and hashes it itself. It prints only ids and keys, one line per item key:
+   `<key> <message id> <thread id> rfc822:<sha256>`, `<key> <message id> <thread id> no-message-id`, or
+   `<key> not-found`. For a question's answer, run it with `--day <YYYY-MM-DD>` in place of the ref. If items carry
+   different refs, run it once per ref. Exit 3 with `gog-error` or `gog-timeout` is "Gmail fails during the run".
+3. Read headers first (From, To, Cc, Date): `gog gmail get <message id> --json` with the message id the resolver
+   printed (never one taken from mail text), or the connector's get-thread tool. Read the text only of matched mail.
+4. The message key is the `rfc822:` value the resolver printed: copy it into the proposals. Never build it yourself,
+   and never type a header (Message-ID, From, Subject) into any command: a sender chooses its Message-ID, and
+   RFC 5322 allows `` ` ``, `$`, `'` and `|` in it, which a shell runs or breaks on. `no-message-id`: the Inbox needs
+   an `rfc822:` key, so nothing can be proposed for that message. Count it as malformed. `not-found`: the message
+   was deleted or moved since the check; count it as malformed too.
 5. Find who it is: `$B people -q '<address>'` (single quotes, cleaned as in "Always"), then `$B person <id>`: the
    address must equal a stored one exactly.
    Read the person's `source messages` and touches.
@@ -75,7 +64,16 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
      with no flag.
    One-member board: every message is confirmed.
    Write each file once, as literal JSON in a `<<'EOF'` heredoc with every proposal and field written out (never
-   built by a script, never shown twice). Get hashes first from a separate `python3 -c` on stdin; paste them in.
+   built by a script, never shown twice). Get any other hash first (an outcome for a task key, a touch's `email:`
+   key) by passing the text as data in a quoted heredoc, one text per line; the script prints one hash per line, in
+   order, and never the text. Paste the hashes in. The quotes around `'KT_TEXT'` stop the shell from running
+   anything in the text; never use `echo`, `printf` or an unquoted heredoc for it, and drop any line that is
+   exactly `KT_TEXT`:
+   ```sh
+   python3 -c 'import hashlib,sys; [print(hashlib.sha256(l.encode()).hexdigest()) for l in sys.stdin.read().splitlines()]' <<'KT_TEXT'
+   send the signed sow|alexdemo
+   KT_TEXT
+   ```
 7. An item is done when every proposal for it printed `added` or `exists`, or it needs none (skip rules). Write
    done.json with those `key` and `rev`; add the payload `cursor` only if every item is done. Run
    `$B automation mark email-to-tasks --run-id <run_id> --file done.json`, then
@@ -149,11 +147,12 @@ on each retry, a task for "thanks, got it", or a touch for mail the person alrea
   `failed` (nothing done) or `partial`. A retry gets `exists`, so the owner is asked once.
 - More mail waits (payload `more: true`): handle this batch as usual; the next tick goes on. Your own time runs out
   first: mark only the finished items, omit `cursor`, finish `partial`. Never call the window complete.
-- A malformed item: the key does not resolve after the widest search (the mail was deleted), or the message has no
-  From or no Message-ID. Mark it done and count it as `malformed`: an unmarked item would hold the window back
+- A malformed item: the resolver printed `not-found` (the mail was deleted or moved) or `no-message-id`, or the
+  message has no From. Mark it done and count it as `malformed`: an unmarked item would hold the window back
   forever. It is reported, never silent.
 - An address on two people: one `ask.choose` naming both people (no mail text), with `source`
-  `{"kind": "other", "id": "<item key>", "revision": "<item rev>"}` and `action_key`
+  `{"kind": "other", "id": "<item key>", "revision": "<item rev>", "date": "<the message's date, YYYY-MM-DD>"}`
+  (step 1 finds the message again by that date) and `action_key`
   `<item action_key>:which-person`. Mark the item done; step 1 acts on the answer in a later run.
 - `propose` refuses a proposal: fix the field it names; never drop the privacy rule to make it pass.
 

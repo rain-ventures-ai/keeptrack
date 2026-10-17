@@ -1,4 +1,4 @@
-import sys, contextlib, hashlib, importlib.util, io, json, os, pathlib, tempfile, time, unittest
+import sys, contextlib, hashlib, importlib.util, io, json, os, pathlib, shutil, subprocess, tempfile, time, unittest
 from unittest.mock import patch
 
 class PackTest(unittest.TestCase):
@@ -72,10 +72,33 @@ class PackTest(unittest.TestCase):
     def test_deadline_stops_early_with_a_cursor(self):
         folder = self.notes()
         for n in range(3): (folder / (str(n) + ".md")).write_text("Note " + str(n))
-        with patch.dict(os.environ, KEEPTRACK_DEADLINE_SECONDS="0"):
+        listed = self.mod.note_files
+        with patch.dict(os.environ, KEEPTRACK_DEADLINE_SECONDS="0"), \
+             patch.object(self.mod, "note_files", lambda folder, deadline=None: listed(folder)):
             code, value = self.run_check()
         self.assertEqual(code, 0); self.assertEqual(value["items"], []); self.assertTrue(value["more"])
         self.assertEqual(value["cursor"], "pos:0")
+
+    def test_listing_a_folder_too_large_for_the_budget_blocks_instead_of_overrunning(self):
+        folder = self.notes()
+        for n in range(3): (folder / ("d%d" % n)).mkdir(); (folder / ("d%d/a.md" % n)).write_text("Note")
+        with patch.dict(os.environ, KEEPTRACK_DEADLINE_SECONDS="0"):
+            code, value = self.run_check()
+        self.assertEqual(code, 2); self.assertEqual(value["note"], "setup-missing:notes-dir-too-large"); self.assertEqual(value["items"], [])
+
+    def test_never_seen_notes_older_than_the_lookback_are_not_read(self):
+        folder = self.notes()
+        for n in range(3):
+            note = folder / ("old-%d.md" % n); note.write_text("Old " + str(n)); self.age(note, 400)
+        (folder / "new.md").write_text("New")
+        seen_old = folder / "seen-old.md"; seen_old.write_text("Seen, then changed"); self.age(seen_old, 400)
+        self.seen([dict(key=self.mod.hashed("seen-old.md"), rev="sha256:" + "0" * 64)])
+        read, real = [], pathlib.Path.read_bytes
+        def spy(path): read.append(path.name); return real(path)
+        with patch.object(pathlib.Path, "read_bytes", spy):
+            keys = {i["key"] for i in self.run_check()[1]["items"]}
+        self.assertEqual(sorted(read), ["new.md", "seen-old.md"], "old never-seen notes are judged by date, unread")
+        self.assertEqual(keys, {self.mod.hashed("new.md"), self.mod.hashed("seen-old.md")})
 
     def test_missing_folder_blocked(self):
         self.config.write_text(json.dumps({"notes_dir": str(self.root / "missing")}))
@@ -129,24 +152,61 @@ class PackTest(unittest.TestCase):
     def test_first_run_lookback_skips_old_notes_but_not_changed_ones(self):
         folder = self.notes()
         (folder / "old.md").write_text("Last year"); (folder / "recent.md").write_text("This week")
-        year_ago = time.time() - 400 * 86400
-        when = lambda path: year_ago if path.name == "old.md" else time.time()
-        with patch.object(self.mod, "arrived", when):
-            self.assertEqual({i["key"] for i in self.run_check()[1]["items"]}, {self.mod.hashed("recent.md")})
-            self.notes(lookback_days=0)
-            self.assertEqual(len(self.run_check()[1]["items"]), 2, "0 means the whole folder")
-            self.notes(lookback_days=7)
-            self.seen([dict(key=self.mod.hashed("old.md"), rev="sha256:" + "0" * 64)])
-            keys = {i["key"] for i in self.run_check()[1]["items"]}
-            self.assertIn(self.mod.hashed("old.md"), keys, "a changed note is checked whatever its age")
-            self.seen([]); self.notes(lookback_days="bad")
-            keys = {i["key"] for i in self.run_check()[1]["items"]}
-            self.assertEqual(keys, {self.mod.hashed("recent.md")}, "a bad value falls back to 7 days")
+        self.age(folder / "old.md", 400)          # real files, no patching: mtime old, ctime now
+        self.assertEqual({i["key"] for i in self.run_check()[1]["items"]}, {self.mod.hashed("recent.md")})
+        self.notes(lookback_days=0)
+        self.assertEqual(len(self.run_check()[1]["items"]), 2, "0 means the whole folder")
+        self.notes(lookback_days=7)
+        self.seen([dict(key=self.mod.hashed("old.md"), rev="sha256:" + "0" * 64)])
+        keys = {i["key"] for i in self.run_check()[1]["items"]}
+        self.assertIn(self.mod.hashed("old.md"), keys, "a changed note is checked whatever its age")
+        self.seen([]); self.notes(lookback_days="bad")
+        keys = {i["key"] for i in self.run_check()[1]["items"]}
+        self.assertEqual(keys, {self.mod.hashed("recent.md")}, "a bad value falls back to 7 days")
 
-    def test_arrived_uses_the_later_of_change_and_arrival(self):
-        folder = self.notes(); note = folder / "copied.md"; note.write_text("Copied with an old date")
-        old = time.time() - 400 * 86400; os.utime(note, (old, old))
-        self.assertGreater(self.mod.arrived(note), time.time() - 86400)
+    def test_fresh_copy_of_an_old_folder_is_not_imported_on_the_first_run(self):
+        # A restore, `cp -p`, rsync or a sync tool keeps each note's mtime but sets its ctime to now.
+        folder = self.notes()
+        for n in range(5):
+            note = folder / ("meeting-%d.md" % n); note.write_text("Old meeting " + str(n)); self.age(note, 400)
+        self.assertGreater(os.stat(folder / "meeting-0.md").st_ctime, time.time() - 3600, "ctime is now")
+        code, value = self.run_check()
+        self.assertEqual(code, 0); self.assertEqual(value["items"], [], "old notes with a fresh ctime are not new")
+        (folder / "today.md").write_text("Today's meeting")
+        self.assertEqual([i["key"] for i in self.run_check()[1]["items"]], [self.mod.hashed("today.md")])
+
+    def git(self, cwd, *args, when=None):
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid", GIT_CONFIG_NOSYSTEM="1",
+                   HOME=str(self.root))
+        if when is not None:
+            stamp = "@%d +0000" % int(when); env.update(GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp)
+        subprocess.run(["git", *args], cwd=str(cwd), env=env, check=True, capture_output=True)
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_fresh_git_clone_of_an_old_notes_repo_is_not_imported_on_the_first_run(self):
+        # The cloud routine clones the notes repo on every run, so every file's mtime and ctime are "now".
+        source = self.root / "source"; source.mkdir()
+        self.git(source, "init", "-q")
+        for n in range(3): (source / ("old-%d.md" % n)).write_text("Old meeting " + str(n))
+        (source / "sub").mkdir(); (source / "sub/older.md").write_text("Older meeting")
+        self.git(source, "add", "-A"); self.git(source, "commit", "-qm", "old", when=time.time() - 400 * 86400)
+        clone = self.root / "clone"; self.git(self.root, "clone", "-q", str(source), str(clone))
+        self.config.write_text(json.dumps({"notes_dir": str(clone)}))
+        self.assertGreater(os.stat(clone / "old-0.md").st_mtime, time.time() - 3600, "a clone writes every file now")
+        code, value = self.run_check()
+        self.assertEqual(code, 0); self.assertEqual(value["items"], [], "old notes in a fresh clone are not new")
+        (source / "new.md").write_text("This week's meeting"); (source / "old-1.md").write_text("Old meeting 1, edited")
+        self.git(source, "add", "-A"); self.git(source, "commit", "-qm", "new", when=time.time() - 86400)
+        self.git(clone, "pull", "-q")
+        keys = {i["key"] for i in self.run_check()[1]["items"]}
+        self.assertEqual(keys, {self.mod.hashed("new.md"), self.mod.hashed("old-1.md")})
+        (clone / "old-2.md").write_text("Old meeting 2, edited here and not committed")
+        self.assertIn(self.mod.hashed("old-2.md"), {i["key"] for i in self.run_check()[1]["items"]},
+                      "a tracked note with uncommitted changes uses its mtime")
+        (clone / "local.md").write_text("Not committed yet")
+        self.assertIn(self.mod.hashed("local.md"), {i["key"] for i in self.run_check()[1]["items"]},
+                      "a file git does not know falls back to its mtime")
 
     def test_board_modes_are_honoured(self):
         folder = self.notes(); (folder / "a.md").write_text("Note")

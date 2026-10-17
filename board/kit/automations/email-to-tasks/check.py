@@ -88,6 +88,18 @@ def unknown_flag(result):
     text = (err.decode("utf-8", "replace") if isinstance(err, bytes) else str(err)).casefold()
     return "include-recipients" in text and any(w in text for w in ("unknown", "unrecognized", "unexpected", "not defined", "no such", "invalid flag"))
 
+def query(after, until):
+    """The Gmail search the check runs, and resolve.py repeats for the page it read: one definition for both."""
+    # in:anywhere keeps sent and archived mail; spam, trash and drafts are never a contact exchange.
+    return "in:anywhere -in:spam -in:trash -in:drafts after:" + str(after) + " before:" + str(until)
+
+def page_ref(after, until, page):
+    """An item's ref: the exact search page it was read from (window bounds and page token), so step 2 of SKILL.md
+    maps keys to messages with one call to that page. Falls back to None (ref = key) for a page token too long for
+    a 256-character ref; Gmail page tokens are about 20 digits."""
+    ref = "pg:" + base64.urlsafe_b64encode(json.dumps(dict(a=after, u=until, p=page), separators=(",", ":")).encode()).decode()
+    return ref if len(ref) <= 256 else None
+
 TITLES = {"received": "Email from a board contact ready to review", "sent": "Email to a board contact ready to review"}
 
 def main():
@@ -125,10 +137,9 @@ def main():
         with_recipients = include_sent
         while True:
             if pages >= max_pages or time.monotonic() >= deadline: break
-            # in:anywhere keeps sent and archived mail; spam, trash and drafts are never a contact exchange.
-            query = "in:anywhere -in:spam -in:trash -in:drafts after:" + str(progress["after"]) + " before:" + str(progress["until"])
-            argv = ["gog", "gmail", "messages", "search", query, "--json", "--max", "50"]
+            argv = ["gog", "gmail", "messages", "search", query(progress["after"], progress["until"]), "--json", "--max", "50"]
             if progress["page"]: argv += ["--page", progress["page"]]
+            ref = page_ref(progress["after"], progress["until"], progress["page"])
             try:
                 # --include-recipients lists To/Cc, needed to see mail sent to a contact. Without To/Cc, sent mail
                 # would be skipped and the window would still move on, losing it for good. So an older gog that does
@@ -156,7 +167,7 @@ def main():
                 if key in keys: continue   # the same message twice in one batch: keys must be unique
                 if seen.get("keys", {}).get(key) != rev:
                     keys.add(key)
-                    items.append(dict(key=key, rev=rev, title=TITLES[direction], ref=key))
+                    items.append(dict(key=key, rev=rev, title=TITLES[direction], ref=ref or key))
             page = data.get("nextPageToken") if isinstance(data, dict) else None
             progress["page"] = page
             # Empty pages must not hide later contact mail; no agent is started for them.

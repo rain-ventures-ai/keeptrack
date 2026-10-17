@@ -122,7 +122,30 @@ class Automation(unittest.TestCase):
         self.assertEqual(json.loads(out)[0]['status'], 'not-installed')
         out, _ = self.call('show', owner='alexdemo')
         self.assertIsNone(json.loads(out)['install'])
-        self.call('dry-run', owner='alexdemo')
+
+    def test_dry_run_for_another_owner_is_refused(self):
+        # dry-run runs that person's installed check, under their network grant and seen state, with your login.
+        kt.default_user = lambda: 'other'
+        self.call('install'); self.call('setup', runtime='local')
+        kt.default_user = lambda: 'owner'
+        self.assertIn('--owner other is not you (owner)', self.refuse('dry-run', owner='other'))
+        self.assertIn('dry-run', kt._AUTO_OWNER_ACTIONS)
+        self.call('dry-run', owner='OWNER')          # your own, in any case, still works
+
+    def test_read_only_owner_lookup_skips_the_login_call(self):
+        calls = []
+        kt.default_user = lambda: calls.append(1) or 'owner'
+        self.call('show', owner='alexdemo'); self.call('list', owner='alexdemo')
+        self.assertEqual(calls, [], "a read-only action with --owner needs no GitHub login lookup")
+        self.call('show')
+        self.assertEqual(len(calls), 1, "without --owner it still asks who you are")
+
+    def test_register_with_null_owner_is_a_mismatch_not_a_crash(self):
+        self.ready()
+        r = self.read(self.rp); r['owner'] = None; self.write(self.rp, r)
+        for action in ('disable', 'enable'):
+            with self.subTest(action=action):
+                self.assertIn('owner mismatch', self.refuse(action))
         self.assertFalse((self.root/'automation/routines/auto-example-pack-alexdemo.json').exists())
 
     def test_owner_refused_when_runner_unknown(self):

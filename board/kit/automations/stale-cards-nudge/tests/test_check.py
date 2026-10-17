@@ -147,6 +147,37 @@ class PackTest(unittest.TestCase):
         self.board([own, older, answered])
         self.assertEqual(sorted(self.keys()), ["t_bo1", "t_bo2"])
 
+    def test_blocked_claim_without_times_uses_the_history_line_that_set_it(self):
+        # No heartbeat_at or claimed_at: a person's comment from before the claim was blocked is not a nudge.
+        def timeless(ident, comments, history):
+            t = card(ident, 30, comments=comments, history=history)
+            t["claim"].update(status="blocked"); t["claim"].pop("heartbeat_at"); t["claim"].pop("claimed_at")
+            return t
+        earlier = timeless("t_h1", [dict(at=ago(60), by="alexdemo", text="Started on this.")],
+                           [dict(at=ago(30), by="claude", text="status blocked: need a decision")])
+        answered = timeless("t_h2", [dict(at=ago(10), by="alexdemo", text="Use CSV.")],
+                            [dict(at=ago(30), by="claude", text="status blocked")])
+        nothing = timeless("t_h3", [dict(at=ago(60), by="alexdemo", text="Started on this.")], [])
+        self.board([earlier, answered, nothing])
+        code, value = self.run_check(); self.assertEqual(code, 0)
+        self.assertEqual([i["key"] for i in value["items"]], ["check:malformed-cards", "t_h1"],
+                         "an earlier comment is not a nudge; no time at all is malformed, not silently skipped")
+
+    def test_proposals_are_indexed_once_not_scanned_per_card(self):
+        prefix = "auto:stale-cards-nudge:"
+        tasks = [card("t_q%03d" % n, 90) for n in range(40)]
+        proposals = [dict(id="r_%010d" % n, kind="task.update", status="ignored", action_key=prefix + "%064d" % n,
+                          target=dict(type="task", id="t_other%d" % n, base={}), created=ago(9 * 1440),
+                          change={"comments": [{"text": "nudge"}]}) for n in range(200)]
+        proposals.append(dict(id="r_pending001", kind="task.update", status="pending", action_key=prefix + "f" * 64,
+                              target=dict(type="task", id="t_q007", base={}), created=ago(0),
+                              change={"comments": [{"text": "nudge"}]}))
+        self.board(tasks, proposals=proposals)
+        with patch.object(self.mod, "proposal_index", wraps=self.mod.proposal_index) as index:
+            keys = self.keys()
+        self.assertEqual(index.call_count, 1, "one pass over the proposals, not one per stale card")
+        self.assertEqual(len(keys), 39); self.assertNotIn("t_q007", keys)
+
     def test_malformed_cards_raise_one_weekly_item(self):
         broken = card("t_m1", 90); broken["claim"]["heartbeat_at"] = "not a time"; broken["claim"]["claimed_at"] = None
         self.board([broken, card("t_ok2", 90), dict(id="bad id with spaces", column="todo")])

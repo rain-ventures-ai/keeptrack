@@ -38,6 +38,7 @@ If the check stops instead, the message says why:
 | `setup-missing:notes-dir` | no folder configured | uninstall, install again with `--set notes_dir=...` |
 | `source-missing` | the folder does not exist here | create it, or fix the path (cloud: clone the notes repo there) |
 | `source-error` | the folder cannot be listed | fix its permissions (`ls <folder>` must work) |
+| `setup-missing:notes-dir-too-large` | listing the folder took the whole time budget | point `notes_dir` at the notes themselves, not a home folder or a large tree |
 | `setup-missing:board-modes` | the board has neither Tasks nor People mode | turn one on in board Settings |
 | `check-error` | `board/tasks.json` cannot be read | run the board-doctor skill |
 
@@ -58,6 +59,8 @@ The check runs inside the routine's container, so the notes must be there too.
 1. Keep the notes in a private repo (for example `alexdemo/meeting-notes`) and add it to the routine's sources
    next to the board repo. Install with `notes_dir` set to where it is cloned (for example
    `/home/user/meeting-notes`). Verify in a routine session: `ls /home/user/meeting-notes | head -3` lists notes.
+   A clone dates every file to the moment it was cloned, so the check dates notes in a git folder by their last
+   commit instead. A note you add to the notes repo is new once it is committed and pushed.
 2. Give the routine a board login: `BOARD_TOKEN` in the routine's environment (fine-grained, Contents read and write
    on the board repo only), or the GitHub connection the routine already has. Verify: `$B me` prints your member
    record, and `git push --dry-run` prints `Everything up-to-date`.

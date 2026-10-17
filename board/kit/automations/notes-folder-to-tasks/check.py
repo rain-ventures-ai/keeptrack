@@ -13,15 +13,21 @@ Rules, in order:
   re-saving a note unchanged is not new work. A revision recorded by the older raw-bytes hash still counts as seen.
 - A note whose text was already imported under another path (a copy, a rename) is skipped; two identical new notes
   are reported once.
-- A note never seen before is reported only if it arrived or changed within lookback_days (default 7; 0 = no limit),
-  so installing on a full folder does not import years of old notes.
+- A note never seen before is reported only if it changed within lookback_days (default 7; 0 = no limit), so
+  installing on a full folder does not import years of old notes. "Changed" is the file's mtime, which a restore,
+  `cp -p`, rsync and sync tools keep; never its ctime, which all of them set to now. In a git work tree (the cloud
+  routine clones the notes repo on every run, which sets every mtime to now) it is the time of the last commit
+  that touched the file, from one `git log`; a file git does not track, or one changed and not committed, falls
+  back to its mtime. Such a note is judged from its date alone, before its text is read.
 - At most 50 items. Work is bounded by KEEPTRACK_DEADLINE_SECONDS; on an early stop the check returns what it found
-  with more: true and an opaque pos:N cursor, and the next run continues from there.
+  with more: true and an opaque pos:N cursor, and the next run continues from there. A folder too large to even
+  list within the budget blocks with setup-missing:notes-dir-too-large.
 """
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -72,12 +78,18 @@ def board_modes():
     return modes if isinstance(modes, list) and modes else ["tasks", "crm"]
 
 
-def note_files(folder):
+class OutOfTime(Exception):
+    pass
+
+
+def note_files(folder, deadline=None):
     """Every candidate note as (relative posix path, Path), sorted, never following links or hidden folders."""
     found = []
     def fail(error):
         raise error
     for root, dirs, files in os.walk(folder, followlinks=False, onerror=fail):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise OutOfTime()
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not os.path.islink(os.path.join(root, d)))
         for name in files:
             path = Path(root) / name
@@ -87,10 +99,55 @@ def note_files(folder):
     return sorted(found)
 
 
-def arrived(path):
-    """When a note last arrived or changed: ctime also moves when a file is copied or moved in with an old mtime."""
-    info = os.stat(path)
-    return max(info.st_mtime, info.st_ctime)
+def commit_times(folder, deadline):
+    """{relative posix path: time of the last commit that touched it} when folder is in a git work tree, else {}.
+
+    A fresh clone sets every file's mtime to now, so in a clone only git knows when a note last changed. One local
+    `git log` over the folder, bounded by the deadline; any failure (no git, not a repo, too slow) gives {} and the
+    check falls back to mtimes. A shallow clone's oldest commit lists every file, which bounds their time from above.
+    """
+    budget = deadline - time.monotonic() - 1
+    if budget <= 1:
+        return {}
+    try:
+        inside = subprocess.run(["git", "-C", str(folder), "rev-parse", "--is-inside-work-tree"], capture_output=True,
+                                text=True, timeout=min(budget, 10))
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            return {}
+        log = subprocess.run(["git", "-C", str(folder), "log", "--no-renames", "--format=%x00commit %ct",
+                              "--name-only", "-z", "--relative", "--", "."],
+                             capture_output=True, timeout=max(1, deadline - time.monotonic() - 1))
+        edited = subprocess.run(["git", "-C", str(folder), "diff", "--name-only", "-z", "--relative", "HEAD", "--", "."],
+                                capture_output=True, timeout=max(1, deadline - time.monotonic() - 1))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    if log.returncode != 0 or edited.returncode != 0:
+        return {}
+    # Output: for each commit, NUL "commit <time>" NUL "\n" then each path NUL-terminated, newest commit first.
+    times, when, header, after_header = {}, None, False, False
+    for field in log.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        if field == "":
+            header = True; continue
+        if header:
+            header = False
+            stamp = field[len("commit "):] if field.startswith("commit ") else ""
+            when = int(stamp) if stamp.isdigit() else None
+            after_header = True; continue
+        if after_header and field.startswith("\n"):
+            field = field[1:]
+        after_header = False
+        if when is not None and field:
+            times.setdefault(field, when)      # newest first: a path's first appearance is its last change
+    for field in edited.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        times.pop(field, None)                 # changed here and not committed yet: its mtime is the truth
+    return times
+
+
+def arrived(path, rel=None, committed=None):
+    """When a note last changed: its last commit in a git clone, else its mtime (never ctime: copies reset it)."""
+    if committed and rel in committed:
+        return committed[rel]
+    return os.stat(path).st_mtime
 
 
 def start_position(seen, total):
@@ -114,7 +171,9 @@ def main():
     if modes is not None and not {"tasks", "crm"} & set(modes):
         emit(note="setup-missing:board-modes"); return 2
     try:
-        files = note_files(folder)
+        files = note_files(folder, deadline)
+    except OutOfTime:
+        emit(note="setup-missing:notes-dir-too-large"); return 2
     except OSError:
         emit(note="source-error"); return 2
 
@@ -122,6 +181,7 @@ def main():
     lookback = lookback if type(lookback) is int and lookback >= 0 else 7
     oldest = time.time() - lookback * 86400 if lookback else None
     seen = state(); keys = seen.get("keys", {}) or {}
+    committed = None                     # read from git only when a never-seen note needs a date
     imported = set(keys.values())        # every revision already imported, under any path
     items, reported, total = [], set(), len(files)
     start = start_position(seen, total)
@@ -133,22 +193,25 @@ def main():
         if len(items) == BATCH:
             more, cursor = True, "pos:" + str(index); break
         rel, path = files[index]
+        key = hashed(rel)
+        old = keys.get(key)
         try:
-            raw = path.read_bytes(); when = arrived(path)
+            if old is None and oldest is not None:
+                if committed is None:
+                    committed = commit_times(folder, deadline)
+                if arrived(path, rel, committed) < oldest:
+                    continue                            # never imported and older than the lookback: not even read
+            raw = path.read_bytes()
         except OSError:
             continue    # vanished or unreadable between listing and reading: the next run sees it again
         text = normalised(raw)
         if text is None:
             continue
-        key = hashed(rel)
         rev = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
-        old = keys.get(key)
         if old in (rev, legacy_rev(raw)):
             continue                                    # unchanged since it was imported
         if rev in imported or legacy_rev(raw) in imported or rev in reported:
             continue                                    # same text already imported (or reported now) under another path
-        if old is None and oldest is not None and when < oldest:
-            continue                                    # never imported and older than the first-run lookback
         reported.add(rev)
         title = "Changed notes ready to review" if old is not None else "New notes ready to review"
         items.append(dict(key=key, rev=rev, title=title, ref=key))

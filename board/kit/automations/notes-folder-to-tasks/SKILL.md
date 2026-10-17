@@ -15,7 +15,8 @@ question when a note is unclear. Nothing goes live until a person accepts it.
   the shell runs `$(...)` and backticks there. For a search, keep only letters, digits, spaces and `@ . - _`, drop
   everything else, and put the result in single quotes: `$B list -q 'rollout plan' --all`. If a term holds a
   single quote, drop it.
-- Read only the notes this payload names, only inside `notes_dir`. Use no other pack's tools or data.
+- Read only the notes this payload names, only inside `notes_dir`, only through the resolver (step 3). Use no
+  other pack's tools or data.
 - Never copy note text to the board. `reason` and `evidence` are one line each (300 characters at most). The
   evidence quotes at most the one action sentence (120 characters), never personal, health, money or HR detail.
 - Personal, health, family, money or HR detail in a note is never repeated anywhere: not in a file, a command, your
@@ -31,18 +32,14 @@ question when a note is unclear. Nothing goes live until a person accepts it.
 2. Act on answers first. Run `$B proposals --status answered --source meeting --json`. For each question whose
    `action_key` starts with `auto:notes-folder-to-tasks:`, run `$B proposal-result <id>`. If `done` is null and the
    answer asks for work, propose it now with `action_key` `<question action_key>:answer:<answer_id>`.
-3. Map each item `key` to its file (the key is a hash of the path inside the folder):
+3. Read the notes with the pack's resolver. It finds each item `key` (a hash of the path inside the folder) and
+   prints the note's file name, date and text itself:
    ```sh
-   python3 - "$NOTES_DIR" <<'PY'
-   import hashlib, pathlib, sys
-   root = pathlib.Path(sys.argv[1])
-   for p in sorted(root.rglob("*")):
-       if p.is_file() and not p.is_symlink():
-           rel = p.relative_to(root).as_posix()
-           print("sha256:" + hashlib.sha256(rel.encode()).hexdigest(), rel)
-   PY
+   python3 board/automations/notes-folder-to-tasks/resolve.py '<notes_dir>' '<key>' '<key>' ...
    ```
-4. Read the note. Find the meeting title, date (from the note, else the file date) and the attendees.
+   Never `cat`, `head` or open a note by its name in a shell command: a file name can hold `$(...)`, backticks or
+   quotes. A key printed as `not-found` has no file now (see "When something fails").
+4. Read the note. Find the meeting title, date (from the note, else the `date` line) and the attendees.
 5. Find earlier imports of this note: `$B proposals --status all --source meeting --json`, keep those whose
    `source.id` is the item `key`. A "Changed notes" item is a new revision of the same meeting: propose only what
    is new or different in it.
@@ -53,8 +50,16 @@ question when a note is unclear. Nothing goes live until a person accepts it.
    or `$B person <id>` (the id from the `people` result) for a match.
    (`archived` and `similar` are refused under the guard; `propose` still flags likely duplicates.)
 7. Write one JSON list for the note (shape below) as literal JSON in a `<<'EOF'` heredoc, every proposal and field
-   written out with `"kind": "task.create"` etc., never built by a script. Get hashes first from a separate
-   `python3 -c` that reads the text on stdin and prints them; paste them in. Then run `$B propose <file> --dry-run`, then `$B propose <file>`.
+   written out with `"kind": "task.create"` etc., never built by a script. Get the hashes first by passing the
+   texts as data in a quoted heredoc, one per line; the script prints one hash per line, in order, and never the
+   text. The quotes around `'KT_TEXT'` stop the shell from running anything in the text; never use `echo`, `printf`
+   or an unquoted heredoc for it, and drop any line that is exactly `KT_TEXT`:
+   ```sh
+   python3 -c 'import hashlib,sys; [print(hashlib.sha256(l.encode()).hexdigest()) for l in sys.stdin.read().splitlines()]' <<'KT_TEXT'
+   send acme demo the revised rollout plan|alexdemo
+   KT_TEXT
+   ```
+   Paste the hashes in. Then run `$B propose <file> --dry-run`, then `$B propose <file>`.
    An unclear note gets one `ask.choose` instead (below); add it with `$B propose <file> --recommend <key>`.
 8. A note is done when every proposal for it printed `added` or `exists`, or when it has nothing to propose. Put it
    in done.json with the item `key` and `rev`. Then `automation mark` and `routine finish` as the loader says.

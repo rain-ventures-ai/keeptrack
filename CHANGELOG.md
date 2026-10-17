@@ -12,12 +12,17 @@ stable keys, skip rules, and a failure path that ends in a Review Inbox question
 form or a counted stop. Each SETUP.md gives a verify command and expected output for every need, per runtime. Checks
 are stricter: stale-cards-nudge reads the local board through `keeptrack.py` (flat or split) and reports malformed cards
 once a week; notes-folder-to-tasks skips hidden, lock and empty files, hashes normalised text, skips copies and adds
-`lookback_days`; email-to-tasks never treats a board member as a contact, skips spam, trash, drafts and bulk categories,
+`lookback_days` (a note's age is its mtime, or its last commit in a git folder such as a cloned notes repo, never its
+ctime, so a restore, a sync or a fresh clone does not import old notes; such notes are judged before they are read);
+email-to-tasks never treats a board member as a contact, skips spam, trash, drafts and bulk categories,
 can match mail you sent (`max_recipients`, `include_sent`) and blocks early when CRM mode is off or no contact has an
-address. Each pack ships `evals/cases.json`, behaviour tests run with `relay.py eval`; a wording change to a pack is
+address. email-to-tasks and notes-folder-to-tasks ship a `resolve.py`: the agent maps item keys through it, so no mail
+header and no file name is ever typed into a shell (email: one search of the exact page the check read, named by the
+item's `ref`, and the `rfc822:` key hashed from gog's own JSON; notes: the resolver prints the note itself). Any other
+text to hash goes through a quoted `<<'KT_TEXT'` heredoc, and stale-cards-nudge writes its proposal files the same way. Each pack ships `evals/cases.json`, behaviour tests run with `relay.py eval`; a wording change to a pack is
 kept only after its evals pass (`AUTOMATIONS.md`, "Behaviour tests"; the create skill adds one to new packs, from
 `references/evals_template.json`). `tests/test_automation_packs.py` checks every built-in pack's evals file and docs.
-Security (#175): `automation install`, `setup`, `enable`, `disable`, `uninstall`, `check`, `tick` and `mark` refuse an
+Security (#175): `automation install`, `setup`, `enable`, `disable`, `uninstall`, `check`, `tick`, `mark` and `dry-run` refuse an
 `--owner` that is not the person running the command (case ignored); no admin override. Built-in pack digests changed:
 each install must be reinstalled and set up again (`UPGRADING.md`, v72). No schema change, no migration.
 
