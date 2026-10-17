@@ -28,6 +28,12 @@
       ]
     }
   ],
+  "requires": {
+    "runner": "any",
+    "connectors": [],
+    "secrets": [],
+    "check": "script"
+  },
   "writes": [
     "proposals"
   ],

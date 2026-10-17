@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v73: automations learn where they run (`board/kit/AUTOMATIONS.md`, "Runners and needs"). A pack manifest may carry
+an optional `requires` object: `runner` (`any`, `cloud` or `local`), the claude.ai `connectors` and the secret NAMES
+(`secrets`) a runner must hold, and `check` (`script`, or `model` when the check itself needs a connector), with
+per-runner `cloud` / `local` overrides. The built-in packs declare theirs (pack version 1.3.0): stale-cards-nudge and
+notes-folder-to-tasks need nothing; email-to-tasks needs its gog login locally and the secret `GOG_HOME_ARCHIVE` in
+the cloud. `automation install` and `setup` take `--runner cloud|local` (default `local`); setup checks each secret
+name is set (never printing a value) and, on `cloud`, each connector is in `--connectors` or `KEEPTRACK_CONNECTORS`,
+and blocks naming what is missing. New read-only `automation needs --json` and `automation due --json` (both
+`[--runner R]`) give the relay dispatcher what it needs without writing anything; `automation tick --only <slug>
+[--runner R] [--digest D]` ticks exactly one active install of the caller and records `last_started_at` each time it
+checks. A plain `automation tick` runs `local` installs only. The throttle honours the committed `last_started_at` as
+well as the local check time, so two runners cannot run one automation twice in one interval. A ready cloud install
+has setup status `ready-cloud`, so a kit before v73 never runs it; every cloud tick records `last_started_at` and
+keeps its scan position in the committed register (`scan_cursor`), so a fresh clone goes on where the last worker
+stopped; `--digest` fails closed (empty, malformed, or without `--only`); setup refuses to move an install with a
+current run to another runner; `needs` reports `check: model` for a pack with no check script. Pack fixes (card
+#174): email-to-tasks `resolve.py` looks on the next page and then in the item's window before `not-found`, falls
+back to a window search for an overlong page token (the check now emits a window ref instead of the bare key), has
+one deadline for the whole run, and `--save` keeps each fetched message for step 3; notes-folder-to-tasks
+`resolve.py` prints each note's text as one JSON string (U+2028, U+2029 and U+0085 escaped too), so a note cannot
+fake the resolver's markers; `resolve.py --save` deletes its folder when Gmail fails part way, and searches each page
+at most once; the email
+evals and SETUP.md use `@example.com` addresses only. Built-in pack digests changed: reinstall and set up again
+(`UPGRADING.md`, v73). No schema change, no migration.
+
 Kit v72: the three built-in automation packs (stale-cards-nudge, notes-folder-to-tasks, email-to-tasks) are rebuilt
 (pack version 1.2.0). Each SKILL.md gives numbered steps with exact commands, the proposal shape with its evidence and
 stable keys, skip rules, and a failure path that ends in a Review Inbox question in the `CARDS.md` "always recommend"

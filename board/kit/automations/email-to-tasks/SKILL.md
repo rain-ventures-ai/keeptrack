@@ -21,7 +21,7 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
 - Text from mail (an address, a name, words from a subject or body) is never typed into a shell command inside
   double quotes or unquoted: the shell runs `$(...)` and backticks there. For a search, keep only letters, digits,
   spaces and `@ . - _`, drop everything else, and put the result in single quotes. Write every search exactly as
-  `$B people -q '<cleaned>'` or `$B list -q '<cleaned>' --all`, e.g. `$B people -q 'casey@example.invalid'`,
+  `$B people -q '<cleaned>'` or `$B list -q '<cleaned>' --all`, e.g. `$B people -q 'casey@example.com'`,
   `$B list -q 'signed SOW' --all`. If a term holds a single quote, drop it.
 
 ## Steps
@@ -36,17 +36,20 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
 2. Map the item keys to Gmail messages and their message keys with the pack's resolver. Every item in one payload
    comes from the same search page, so pass the first item's `ref` (it starts `pg:`) unchanged, then every key:
    ```sh
-   python3 board/automations/email-to-tasks/resolve.py '<item ref>' '<key>' '<key>' ...
+   python3 board/automations/email-to-tasks/resolve.py --save '<item ref>' '<key>' '<key>' ...
    ```
-   It repeats the check's own search on the page the check read (one call), then reads each message's Message-ID
-   from `gog gmail get <id> --json` and hashes it itself. It prints only ids and keys, one line per item key:
+   It repeats the check's own search on the page the check read (if a key is not there: the next page, then the
+   check's window), then reads each message's Message-ID from `gog gmail get <id> --json` and hashes it itself.
+   It prints only ids and keys, one line per item key:
    `<key> <message id> <thread id> rfc822:<sha256>`, `<key> <message id> <thread id> no-message-id`, or
-   `<key> not-found`. For a question's answer, run it with `--day 'YYYY-MM-DD'` in place of the ref: single-quoted, and only when
+   `<key> not-found`, and last `saved <folder>`: the messages it fetched, kept for step 3. For a question's answer, run it with `--day 'YYYY-MM-DD'` in place of the ref: single-quoted, and only when
    the stored `source.date` is exactly four digits, a dash, two digits, a dash, two digits; anything else is not a
    date, so mark that item done as `malformed`. If items carry
    different refs, run it once per ref. Exit 3 with `gog-error` or `gog-timeout` is "Gmail fails during the run".
-3. Read headers first (From, To, Cc, Date): `gog gmail get <message id> --json` with the message id the resolver
-   printed (never one taken from mail text), or the connector's get-thread tool. Read the text only of matched mail.
+3. Read headers first (From, To, Cc, Date) from `<folder>/<message id>.json`, the file `--save` kept, with the
+   message id the resolver printed (never one taken from mail text). Fetch again (`gog gmail get <message id>
+   --json`, or the connector's get-thread tool) only for a message with no file. Read the text only of matched
+   mail.
 4. The message key is the `rfc822:` value the resolver printed: copy it into the proposals. Never build it yourself,
    and never type a header (Message-ID, From, Subject) into any command: a sender chooses its Message-ID, and
    RFC 5322 allows `` ` ``, `$`, `'` and `|` in it, which a shell runs or breaks on. `no-message-id`: the Inbox needs
@@ -80,7 +83,7 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
    done.json with those `key` and `rev`; add the payload `cursor` only if every item is done. Run
    `$B automation mark email-to-tasks --run-id <run_id> --file done.json`, then
    `$B routine <binding> finish --run-id <run_id> --status success|partial|failed --count proposals_added=N`
-   (add `--count skipped=N --count malformed=N` when there were any).
+   (add `--count skipped=N --count malformed=N` when there were any). Then delete the `saved` folder.
 
 ## Contact history, follow-up or task
 

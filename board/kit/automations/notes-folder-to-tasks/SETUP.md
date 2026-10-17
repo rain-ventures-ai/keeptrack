@@ -66,6 +66,9 @@ The check runs inside the routine's container, so the notes must be there too.
    record, and `git push --dry-run` prints `Everything up-to-date`.
    Also set `BOARD_USER=alexdemo` (your own GitHub login) in the routine's environment: with no `gh` login,
    `automation tick` cannot tell whose automations to run and prints nothing, which looks like "no work".
+   If the relay dispatcher runs it (one cloud worker per due automation), install and set up with
+   `--runner cloud`; the pack needs no connector and no secret there. Your own routine running the loader keeps
+   the default `local` runner.
 3. Run `$B automation setup notes-folder-to-tasks --runtime claude`, then
    `$B automation setup notes-folder-to-tasks --runtime claude --confirm files.read`.
    Confirm only if the routine can read the notes and cannot write them. Expected: `ready; ...`.

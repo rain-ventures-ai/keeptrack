@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 72  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 73  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -8563,6 +8563,54 @@ _AUTO_NEEDS = {"board.read", "files.read", "gmail.read", "drive.read", "github.r
 _AUTO_NEVER = {"send-email", "delete", "spend", "external-post", "edit-contacts"}
 _AUTO_FLOW = {"trigger", "read", "check", "agent", "output", "step"}   # node kinds for the web board's flow diagram
 _AUTO_RUNTIMES = {"claude", "chatgpt", "grok", "local"}
+# Kit v73: where an install runs. "local" is a person's own machine or scheduler; "cloud" is a claude.ai routine
+# started by the relay dispatcher. A pack's optional `requires` says which runners it allows and what each needs.
+_AUTO_RUNNERS = ("cloud", "local")
+# The setup status that makes an install ready, per runner. A cloud install is "ready-cloud" so that a kit before v73,
+# which knows no runner and accepts only "ready", never runs it next to the relay's cloud worker.
+_AUTO_READY = {"local": "ready", "cloud": "ready-cloud"}
+_AUTO_CONNECTOR = re.compile(r"[a-z][a-z0-9_-]{0,39}")     # a claude.ai connector name, such as gmail
+_AUTO_SECRET = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")  # an environment variable NAME with an underscore; never a value
+
+
+def _auto_requires(req, has_script, errors):
+    """Validate the optional manifest `requires` object (kit v73) into `errors`."""
+    def names(value, pattern, label):
+        ok = isinstance(value, list) and len(value) <= 16 and all(isinstance(x, str) and len(x) <= 64 and pattern.fullmatch(x) for x in value)
+        if not ok: errors.append("requires: invalid " + label)
+        elif len(set(value)) != len(value): errors.append("requires: duplicate " + label)
+    if not isinstance(req, dict):
+        errors.append("requires: expected object"); return
+    if set(req) - {"runner", "connectors", "secrets", "check", "cloud", "local"}: errors.append("requires: unknown keys")
+    runner = req.get("runner", "any")
+    if runner not in ("any",) + _AUTO_RUNNERS: errors.append("requires: runner must be any, cloud or local")
+    if req.get("check", "script") not in ("script", "model"): errors.append("requires: check must be script or model")
+    if req.get("check") == "model" and has_script: errors.append("requires: a model check has no check script")
+    names(req.get("connectors", []), _AUTO_CONNECTOR, "connectors")
+    names(req.get("secrets", []), _AUTO_SECRET, "secrets")
+    for where in _AUTO_RUNNERS:
+        if where not in req: continue
+        override = req[where]
+        if not isinstance(override, dict) or set(override) - {"connectors", "secrets"}:
+            errors.append("requires: " + where + " may set only connectors and secrets"); continue
+        if runner not in ("any", where): errors.append("requires: " + where + " needs for a pack that never runs there")
+        names(override.get("connectors", []), _AUTO_CONNECTOR, "connectors")
+        names(override.get("secrets", []), _AUTO_SECRET, "secrets")
+
+
+def _auto_needs(m, runner):
+    """What one install of pack manifest `m` needs on `runner`: the contract's needs object, resolved."""
+    req = m.get("requires") or {}
+    override = req.get(runner) or {} if runner in _AUTO_RUNNERS else {}
+    return dict(runner=req.get("runner", "any"),
+                connectors=list(override.get("connectors", req.get("connectors", []))),
+                secrets=list(override.get("secrets", req.get("secrets", []))),
+                check=req.get("check", "script" if m.get("check") else "model"))   # no script: the agent runs every interval
+
+
+def _auto_runner_allowed(m, slug, runner):
+    allowed = (m.get("requires") or {}).get("runner", "any")
+    if allowed not in ("any", runner): sys.exit("automation " + slug + " runs only on a " + allowed + " runner")
 
 
 def _auto_json(path, default=None):
@@ -8604,7 +8652,7 @@ def _auto_pack(path):
         for name in dirs + files: require(not os.path.islink(os.path.join(root, name)), "pack must not contain symlinks")
     try: m = _auto_json(os.path.join(path, "manifest.json"))
     except (OSError, ValueError): m = None
-    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix flow".split(),
+    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix flow requires".split(),
             "schema slug name summary version needs writes never every".split(), "manifest")
     require(m.get("schema") == "keeptrack-automation/1", "unsupported manifest schema")
     slug = m.get("slug")
@@ -8657,6 +8705,7 @@ def _auto_pack(path):
             require(isinstance(step.get("kind"), str) and step["kind"] in _AUTO_FLOW, "unknown flow step kind")
             require(text(step.get("title"), 40), "invalid flow step title")
             if "text" in step: require(text(step["text"], 160), "invalid flow step text")
+    if "requires" in m: _auto_requires(m["requires"], "check" in m, errors)
     if "action_key_prefix" in m:
         try: _auto_token(m["action_key_prefix"])
         except ValueError: errors.append("invalid action_key_prefix")
@@ -8810,8 +8859,9 @@ def _auto_result(value):
 
 
 def _auto_ready(register, digest):
-    a = register["automation"]; setup = a.get("setup", {})
-    return a.get("digest") == digest == setup.get("digest") and setup.get("status") == "ready"
+    a = register["automation"]; setup = a.get("setup", {}); runner = _auto_runner(a)
+    return (a.get("digest") == digest == setup.get("digest") and setup.get("status") == _AUTO_READY[runner]
+            and setup.get("runner", "local") == runner)
 
 
 def _auto_seen_state(register):
@@ -8908,7 +8958,72 @@ def _auto_payload(path, m, r, result, run_id):
                 action_key_prefix=prefix, skill=os.path.join(path, "SKILL.md"), items=items, more=result["more"], cursor=result["cursor"])
 
 
+def _auto_epoch(value):
+    """A register's committed last_started_at as epoch seconds; 0 for a missing, unreadable or future time.
+    A time in the future is ignored so a bad edit cannot block an automation for good."""
+    if not isinstance(value, str): return 0
+    try: when = dt.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError: return 0
+    return 0 if when > time.time() + 300 else when
+
+
+def _auto_runner(install):
+    return install.get("runner") if install.get("runner") in _AUTO_RUNNERS else "local"   # installs before v73 are local
+
+
+def _auto_digest_pin(a):
+    """tick --digest: None, or the approved digest as 64 lowercase hex. Fails closed: an empty or malformed value, or
+    --digest without --only, is refused rather than ignored."""
+    pin = getattr(a, "digest", None)
+    if pin is None: return None
+    if getattr(a, "only", None) is None: sys.exit("automation tick: --digest needs --only <slug>")
+    match = re.fullmatch(r"(?:sha256:)?([0-9a-f]{64})", pin) if isinstance(pin, str) else None
+    if not match: sys.exit("automation tick --digest: expected the approved digest, 64 lowercase hex characters")
+    return match.group(1)
+
+
+def _auto_cloud_cursor(r):
+    """A cloud install's committed scan continuation (fresh clones have no local state); None when unreadable."""
+    try: return _auto_token(r["scan_cursor"]) if r.get("scan_cursor") is not None else None
+    except ValueError: return None
+
+
+def _auto_keep_cloud_cursor(r, result):
+    """The same continuation rules as _auto_record_check, kept in the committed register for a cloud install."""
+    if result["items"]:
+        if _auto_cloud_cursor(r) is None and result.get("start_cursor") is not None: r["scan_cursor"] = result["start_cursor"]
+    elif result["cursor"] is not None: r["scan_cursor"] = result["cursor"]
+    else: r.pop("scan_cursor", None)
+
+
+def _auto_only(a, packs, owner, runner, pin=None):
+    """tick --only: refuse anything but this owner's active install of exactly this slug on this runner."""
+    slug = a.only
+    if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", slug): sys.exit("automation tick --only: invalid slug")
+    _, rp = _auto_binding(slug, owner)
+    try: r = _auto_json(rp, {})
+    except (ValueError, OSError, UnicodeDecodeError): sys.exit("automation tick --only " + slug + ": register unreadable")
+    install = r.get("automation") if isinstance(r, dict) else None
+    if not isinstance(install, dict) or install.get("slug") != slug or r.get("status") == "retired":
+        sys.exit("automation tick --only " + slug + ": not installed for " + owner)
+    if str(r.get("owner") or "").lower() != owner.lower(): sys.exit("automation owner mismatch")
+    if r.get("status") != "active": sys.exit("automation tick --only " + slug + ": not active (status " + str(r.get("status")) + ")")
+    if _auto_runner(install) != runner:
+        sys.exit("automation tick --only " + slug + ": installed for the " + _auto_runner(install) + " runner, not " + runner)
+    if pin is not None and pin != install.get("digest"):
+        sys.exit("automation tick --only " + slug + ": approved digest does not match --digest")
+    if slug not in packs: sys.exit("automation pack not found: " + slug)
+    return os.path.basename(rp)
+
+
 def _auto_tick(a, packs, owner):
+    runner = getattr(a, "runner", None) or "local"
+    if runner not in _AUTO_RUNNERS: sys.exit("--runner must be cloud or local")
+    pin = _auto_digest_pin(a)
+    only = _auto_only(a, packs, owner, runner, pin) if getattr(a, "only", None) is not None else None
+    # Every cloud check is recorded in the committed register, work or not: a cloud worker is a fresh clone, so
+    # local state is lost and `due` reads only the register.
+    commit_start = only is not None or runner == "cloud"
     _auto_local(); payloads = []; problems = []; reservations = []
     # Validate parent directories before opening the shared, non-JSON tick lock.
     lock_path = os.path.join(os.path.dirname(_automation_path("automation/tick.json")), ".tick.lock")
@@ -8919,6 +9034,7 @@ def _auto_tick(a, packs, owner):
             register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
             for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
                 if not name.endswith(".json"): continue
+                if only is not None and name != only: continue
                 if not re.fullmatch(r"[a-zA-Z0-9_-]+\.json", name):
                     if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
                     continue
@@ -8935,7 +9051,13 @@ def _auto_tick(a, packs, owner):
                         if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
                         continue
                     if not install or str(r.get("owner") or "").lower() != owner.lower() or r.get("status") != "active": continue
-                    slug = install["slug"]; binding = r["id"]; reserved = False
+                    if _auto_runner(install) != runner: continue   # another runner's install: never run it here
+                    if only is not None:   # re-checked under the lock: the file may have changed since _auto_only read it
+                        if install.get("slug") != a.only or r.get("id") != name[:-5]:
+                            problems.append({"slug": a.only, "code": "register-changed"}); continue
+                        if pin is not None and install.get("digest") != pin:
+                            problems.append({"slug": a.only, "code": "digest-mismatch"}); continue
+                    slug = install["slug"]; binding = r["id"]; reserved = False; started = None
                     try:
                         if slug not in packs: raise ValueError("pack-missing")
                         _, path = packs[slug]; m, digest = _auto_pack(path)
@@ -8944,24 +9066,35 @@ def _auto_tick(a, packs, owner):
                             problems.append({"slug": slug, "code": "busy"}); continue
                         with _auto_state(write=False) as local:
                             previous = _auto_local_entry(local, r).copy()
-                        if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
+                        # Both this clone's last check and the committed last_started_at throttle, so a second
+                        # runner with a fresh clone cannot run the same automation again within one interval.
+                        if time.time() - max(previous.get("time", 0), _auto_epoch(r.get("last_started_at"))) < _AUTO_INTERVALS[install["every"]]:
                             if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
+                            if only is not None: print("automation " + slug + ": not due yet", file=sys.stderr)
                             continue
-                        result = _auto_check(path, m, r, previous.get("scan_cursor"))
+                        started = now()
+                        cloud = runner == "cloud"
+                        result = _auto_check(path, m, r, _auto_cloud_cursor(r) if cloud else previous.get("scan_cursor"))
                         # A changed file during the subprocess must never yield a reservation.
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
+                        if cloud: _auto_keep_cloud_cursor(r, result)
                         if result["items"]:
                             run_id = "tick-" + uuid.uuid4().hex
-                            r["last_started_at"] = now()
+                            r["last_started_at"] = started
                             r["current_run"] = dict(id=run_id, started_at=r["last_started_at"], status="running", digest=digest,
                                 batch=dict(items=[{k: i[k] for k in ("key", "rev")} for i in result["items"]], cursor=result["cursor"]))
                             reserved = True
                             _auto_write(rp, r)
                             reservations.append((rp, run_id))
                             payloads.append(_auto_payload(path, m, r, result, run_id))
+                        elif commit_start:
+                            # tick --only and every cloud tick record each checked start, work or not; the worker commits it.
+                            r["last_started_at"] = started; _auto_write(rp, r)
                         _auto_save_check(binding, result=result, register=r)
                     except (ValueError, OSError, SystemExit) as error:
                         if reserved: raise
+                        if commit_start and started is not None:
+                            r["last_started_at"] = started; _auto_write(rp, r)
                         code = _auto_save_check(binding, error=error, register=r)
                         problems.append({"slug": slug, "code": code})
         if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}), flush=True)
@@ -8980,6 +9113,67 @@ def _auto_tick(a, packs, owner):
                     r["current_run"] = None
                     _auto_write(rp, r)
         raise
+
+
+def _auto_active(owner, packs, runner=None):
+    """This owner's active installs, read only: no lock, no local state and no git exclude are written."""
+    register_dir = os.path.join(ROOT, "automation", "routines")
+    for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) and not os.path.islink(register_dir) else []:
+        if not re.fullmatch(r"auto-[a-zA-Z0-9_-]+\.json", name): continue
+        path = os.path.join(register_dir, name)
+        if os.path.islink(path): continue
+        try: r = _auto_json(path, {})
+        except (ValueError, OSError, UnicodeDecodeError): continue
+        install = r.get("automation") if isinstance(r, dict) else None
+        if not isinstance(install, dict) or not isinstance(install.get("slug"), str) or r.get("status") != "active": continue
+        if str(r.get("owner") or "").lower() != owner.lower() or r.get("id") != name[:-5]: continue
+        if runner and _auto_runner(install) != runner: continue
+        if install["slug"] not in packs: continue
+        try: m, digest = _auto_pack(packs[install["slug"]][1])
+        except (ValueError, OSError, SystemExit): continue
+        yield r, install, m, digest
+
+
+def _auto_view_runner(a):
+    runner = getattr(a, "runner", None)
+    if runner is not None and runner not in _AUTO_RUNNERS: sys.exit("--runner must be cloud or local")
+    return runner
+
+
+def _auto_needs_cmd(a, packs, owner):
+    """automation needs --json: the connectors and secret names this owner's active installs need."""
+    by_slug = {}
+    for r, install, m, _ in _auto_active(owner, packs, _auto_view_runner(a)):
+        by_slug[install["slug"]] = _auto_needs(m, _auto_runner(install))
+    print(json.dumps(dict(connectors=sorted({c for n in by_slug.values() for c in n["connectors"]}),
+                          secrets=sorted({s for n in by_slug.values() for s in n["secrets"]}), by_slug=by_slug)))
+
+
+def _auto_due(a, packs, owner):
+    """automation due --json: active, approved, idle installs whose interval has passed. Reserves and writes nothing."""
+    try: local = _auto_json(_automation_path("automation/.local/tick-state.json"), {})
+    except (ValueError, OSError, UnicodeDecodeError): local = {}
+    if not isinstance(local, dict): local = {}
+    due = []
+    for r, install, m, digest in _auto_active(owner, packs, _auto_view_runner(a)):
+        if not _auto_ready(r, digest) or r.get("current_run"): continue
+        every = install.get("every")
+        if every not in _AUTO_INTERVALS: continue
+        last = _auto_local_entry(local, r).get("time", 0)
+        if time.time() - max(last if isinstance(last, (int, float)) else 0, _auto_epoch(r.get("last_started_at"))) < _AUTO_INTERVALS[every]: continue
+        due.append(dict(slug=install["slug"], owner=str(r["owner"]).lower(), binding=r["id"], digest=install["digest"],
+                        runner=_auto_runner(install), needs=_auto_needs(m, _auto_runner(install)), every=every,
+                        last_started_at=r.get("last_started_at")))
+    print(json.dumps(dict(board=REPO or None, due=due)))
+
+
+def _auto_held_connectors(a):
+    raw = getattr(a, "connectors", None)
+    if raw is None: raw = os.environ.get("KEEPTRACK_CONNECTORS", "")
+    held = [x.strip().lower() for x in raw.split(",") if x.strip()]
+    for name in held:
+        if not _AUTO_CONNECTOR.fullmatch(name): sys.exit("invalid connector name in --connectors or KEEPTRACK_CONNECTORS")
+    return held
 
 
 # Actions that create, change, run or record work for one owner's binding. Only that owner may run them:
@@ -9026,6 +9220,8 @@ def cmd_automation(a):
         print(slug + ": " + r["status"]); return
     packs = _auto_packs()
     if action == "tick": return _auto_tick(a, packs, owner)
+    if action == "due": return _auto_due(a, packs, owner)
+    if action == "needs": return _auto_needs_cmd(a, packs, owner)
     if action == "list":
         out = []
         listed = dict(packs)
@@ -9097,6 +9293,8 @@ def cmd_automation(a):
             if r and r.get("status") != "retired": sys.exit("automation already installed")
             network = m.get("check", {}).get("network", False)
             if bool(a.allow_network) != network: sys.exit("network check requires --allow-network; grant refused for offline checks")
+            runner = getattr(a, "runner", None) or "local"
+            _auto_runner_allowed(m, slug, runner)
             config = {k: v["default"] for k, v in m.get("config", {}).items() if "default" in v}
             for pair in a.set:
                 k, sep, v = pair.partition("=")
@@ -9113,7 +9311,7 @@ def cmd_automation(a):
                      status="unverified", connections=[{"need": n["id"]} for n in m["needs"]], current_run=None,
                      automation=dict(schema="keeptrack-automation-install/1", slug=slug, source=source,
                                      pack_path=os.path.relpath(path, ROOT), pack_version=m["version"], digest=digest, install_id=uuid.uuid4().hex,
-                                     writes="proposals", every=a.every or m["every"], config=config, network_granted=network,
+                                     writes="proposals", every=a.every or m["every"], config=config, network_granted=network, runner=runner,
                                      setup=dict(status="blocked", digest=digest, runtime=None, checked_at=now(), notes=[])))
         else:
             if not r or r.get("status") == "retired": sys.exit("automation is not installed")
@@ -9125,6 +9323,12 @@ def cmd_automation(a):
             elif action == "setup":
                 if digest != install["digest"]: sys.exit("pack changed; uninstall and reinstall before setup")
                 setup = install["setup"]
+                runner = getattr(a, "runner", None) or _auto_runner(install)
+                _auto_runner_allowed(m, slug, runner)
+                if runner != _auto_runner(install):
+                    if r.get("current_run"): sys.exit("automation has a current run; finish it before moving it to another runner")
+                    r.pop("scan_cursor", None)   # a cloud continuation belongs to the cloud runner
+                held = _auto_held_connectors(a) if runner == "cloud" else []
                 runtime = a.runtime or setup.get("runtime")
                 if runtime not in _AUTO_RUNTIMES: sys.exit("setup needs --runtime")
                 confirmed = setup.get("confirmed", []) if runtime == setup.get("runtime") else []
@@ -9146,10 +9350,22 @@ def cmd_automation(a):
                     elif need["id"] not in confirmed:
                         print("Confirm read-only access to " + need["id"] + ": " + route["how"])
                         notes.append("confirmation-needed")
+                # Kit v73: the runner's needs. Only secret NAMES are checked for presence; a value is never read out.
+                needs = _auto_needs(m, runner); missing = []
+                for name in needs["secrets"]:
+                    if not os.environ.get(name):
+                        notes.append("secret-missing:" + name)
+                        missing.append("missing secret " + name + ": set it in this runner's environment (only its name is checked)")
+                for name in needs["connectors"] if runner == "cloud" else []:
+                    if name not in held:
+                        notes.append("connector-missing:" + name)
+                        missing.append("missing connector " + name + ": give the routine this connector, then pass --connectors or KEEPTRACK_CONNECTORS")
                 ready = not notes
-                install["setup"] = dict(status="ready" if ready else "blocked", runtime=runtime, checked_at=now(), digest=digest, notes=notes, confirmed=confirmed)
+                install["runner"] = runner
+                install["setup"] = dict(status=_AUTO_READY[runner] if ready else "blocked", runtime=runtime, runner=runner, checked_at=now(), digest=digest, notes=notes, confirmed=confirmed)
                 r["status"] = "paused" if ready else "unverified"
-                print(("ready" if ready else "blocked") + "; network isolation " + ("available" if _auto_isolation() else "unavailable"))
+                print(("ready" if ready else "blocked") + "; runner " + runner + "; network isolation " + ("available" if _auto_isolation() else "unavailable"))
+                for line in missing: print(line)
                 print(os.path.join(path, "SETUP.md"))
                 if runtime != "local": print(open(os.path.join(path, "SETUP.md")).read())
             elif action in ("check", "dry-run"):
@@ -9206,6 +9422,7 @@ def cmd_automation(a):
                         entry = dict(_auto_local_entry(local, r))
                         entry.pop("scan_cursor", None)
                         local[binding] = entry
+                    if r.pop("scan_cursor", None) is not None: _auto_write(rp, r)   # the committed seen cursor now leads
                 print("marked " + str(len(completed))); return
         _auto_write(rp, r)
         if action == "install":
@@ -9217,12 +9434,21 @@ def cmd_automation(a):
 def _automation_parser(sub):
     s = sub.add_parser("automation", help="install and run digest-pinned proposal automations")
     commands = s.add_subparsers(dest="action", required=True)
-    for name in ("list", "show", "validate", "install", "setup", "enable", "disable", "check", "tick", "dry-run", "mark", "fork", "test", "uninstall"):
+    for name in ("list", "show", "validate", "install", "setup", "enable", "disable", "check", "tick", "dry-run", "mark", "fork", "test", "uninstall", "needs", "due"):
         p = commands.add_parser(name); p.set_defaults(f=cmd_automation)
         if name == "validate": p.add_argument("path"); continue
+        if name in ("needs", "due"):
+            p.add_argument("--json", action="store_true", help="print JSON (the only output format)")
+            p.add_argument("--runner", choices=_AUTO_RUNNERS, help="only installs for this runner"); continue
         p.add_argument("--owner")
         if name not in ("list", "tick"): p.add_argument("slug")
         if name in ("list", "tick"): p.add_argument("--json", action="store_true")
+        if name in ("install", "setup", "tick"):
+            p.add_argument("--runner", choices=_AUTO_RUNNERS, help="where this runs: local (default) or cloud")
+        if name == "setup": p.add_argument("--connectors", help="comma list of connectors this routine holds (cloud), else KEEPTRACK_CONNECTORS")
+        if name == "tick":
+            p.add_argument("--only", metavar="SLUG", help="tick exactly this automation (relay workers)")
+            p.add_argument("--digest", help="with --only: refuse unless the approved digest is this one")
         if name == "list": p.add_argument("--installed", action="store_true")
         if name == "install":
             p.add_argument("--every", choices=sorted(_AUTO_INTERVALS)); p.add_argument("--set", action="append", default=[])
@@ -9240,7 +9466,7 @@ def _proposals_only(a):
     if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
     # Fail closed: new commands must be deliberately classified before loader use.
     reads = {"list", "show", "people", "person", "projects", "project", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
-    allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
+    allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
 
 

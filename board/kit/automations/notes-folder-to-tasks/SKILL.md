@@ -33,7 +33,8 @@ question when a note is unclear. Nothing goes live until a person accepts it.
    `action_key` starts with `auto:notes-folder-to-tasks:`, run `$B proposal-result <id>`. If `done` is null and the
    answer asks for work, propose it now with `action_key` `<question action_key>:answer:<answer_id>`.
 3. Read the notes with the pack's resolver. It finds each item `key` (a hash of the path inside the folder) and
-   prints the note's file name, date and text itself:
+   prints the note's file name, date and text itself. The text comes on one `text: ` line as one JSON string
+   (a line break is `\n`), so a note cannot print a line that looks like the resolver's own `===` or `---` markers:
    ```sh
    python3 board/automations/notes-folder-to-tasks/resolve.py '<notes_dir>' '<key>' '<key>' ...
    ```

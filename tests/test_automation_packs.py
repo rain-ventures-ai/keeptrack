@@ -151,13 +151,14 @@ class PackEvals(unittest.TestCase):
                 seen[c["name"]] = slug
 
     def test_evals_use_invented_addresses_only(self):
-        # every address in a pack's text is on a reserved test domain (example.invalid, example.com, ...)
+        # Every address in a pack's text is exactly @example.com or @example.org (kit v73, card #174): relay's
+        # `relay.py check` (EMAIL_OK in relay/scripts/relay.py) warns on any other address, subdomains included.
         for slug in packs():
             for name in ("SKILL.md", "SETUP.md", os.path.join("evals", "cases.json")):
                 for m in EMAIL_RE.finditer(read(os.path.join(PACKS, slug, name))):
                     domain = m.group(0).rsplit("@", 1)[1].lower()
                     with self.subTest(pack=slug, file=name, address=m.group(0)):
-                        self.assertRegex(domain, r"(^|\.)(example\.(com|org|net)|invalid|test|example)$")
+                        self.assertIn(domain, ("example.com", "example.org"))
 
     def test_template_is_valid(self):
         doc = json.loads(read(TEMPLATE))

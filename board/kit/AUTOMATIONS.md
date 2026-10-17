@@ -23,6 +23,8 @@ Use `python3 board/keeptrack.py automation` followed by:
 - `mark <slug> --run-id R --file done.json`: worker-only success recording under its reservation.
 - `test <slug>`: unittest discovery in the check environment. `fork <slug> <new-slug>` copies a built-in to an own pack.
 - `uninstall <slug> [--forget]`: retire when idle; preserve seen state unless explicitly forgotten.
+- `needs --json [--runner R]`, `due --json [--runner R]`: read-only views for a scheduler, as in
+  `automation due --json` and `automation needs --json` (kit v73, below).
 
 `--owner` defaults to you (`BOARD_USER`, or your `gh` login). You can only act on your own automations:
 `install`, `setup`, `enable`, `disable`, `uninstall`, `check`, `tick`, `mark` and `dry-run` refuse an `--owner`
@@ -37,11 +39,78 @@ Install state extends `automation/routines/auto-<slug>-<owner>.json`; generic st
 `automation/seen/<binding>.json`. Mailbox checkpoints are separate and unchanged. Commit register/seen changes;
 `automation/.local/`, `.tick.lock` and `*.json.lock` are local, ignored state.
 
+## Runners and needs (kit v73)
+
+A runner is who starts the tick. `local` (the default) is the board's own loader: `automation tick` on your machine
+or in your own scheduled routine. `cloud` is the relay dispatcher: it asks which automations are due and starts one
+cloud worker for each. An install records its runner. A plain `automation tick` runs `local` installs only, and
+`automation tick --runner cloud` runs `cloud` installs only, so two schedulers never run the same install.
+
+A pack says what it needs in an optional manifest object, `requires` (the key `needs` is already the capability
+list). Every field is optional:
+
+```json
+"requires": {"runner": "any", "connectors": [], "secrets": [], "check": "script",
+             "cloud": {"secrets": ["GOG_HOME_ARCHIVE"]}}
+```
+
+- `runner`: `any` (default), `cloud` or `local`. Install and setup refuse another runner.
+- `connectors`: claude.ai connector names a cloud routine must hold, such as `gmail`.
+- `secrets`: environment variable NAMES, never values. A name is capitals, digits and at least one underscore.
+- `check`: `script` (default) or `model`. `model` means the cheap check itself needs a connector, so it costs a
+  small model run. A `model` pack has no check script: tick gives the agent one scheduled item per interval, and
+  the agent does the check.
+- `cloud`, `local`: per-runner `connectors` and `secrets` that replace the shared ones on that runner.
+
+Secret names are checked for presence only. Their values are never printed, stored or passed to a check: a check
+still gets only the variables listed under "Contracts and trust". A secret is for the runner's own setup (for
+example an environment setup script) and for the agent. A secret in a cloud routine's environment is visible to the
+whole worker session: the agent and every command it runs can read it, while the agent reads untrusted source
+text. Give it read-only scope only, and remove it from the session after setup where the platform allows.
+
+- `install <slug> --runner cloud|local` records the runner (default `local`). A ready cloud install has setup status
+  `ready-cloud`, so a kit before v73 (which knows no runner) never runs it.
+- `setup <slug> --runtime .. [--runner cloud|local] [--connectors gmail,drive]` checks the needs for that runner and
+  can move an install to another runner (enable it again after a move; not while it has a current run). Each secret name must be set in the
+  environment. On `cloud`, each connector must be listed in `--connectors` or in `KEEPTRACK_CONNECTORS` (the
+  routine says which connectors it holds). A missing need blocks setup and names it, such as
+  `missing secret GOG_HOME_ARCHIVE` or `missing connector gmail`. Setup trusts this list; it guards mistakes.
+- `needs --json [--runner R]` prints `{"connectors": [..], "secrets": [..], "by_slug": {slug: needs}}`: the union
+  over your active installs (enable first: paused and unverified installs are not counted). `needs` is
+  `{runner, connectors, secrets, check}`, resolved for the install's runner. `check` is `model` for a pack with no
+  check script: the agent runs every interval.
+- `due --json [--runner R]` prints `{"board": "<owner/repo>", "due": [{slug, owner, binding, digest, runner,
+  needs, every, last_started_at}]}`: your active, set-up, idle installs whose interval has passed. It runs no
+  check, reserves nothing and writes nothing, not even a lock file. So each due interval of a cloud install
+  starts one cloud worker, even when its check then finds nothing.
+- `tick --only <slug> [--runner R] [--digest D]` ticks exactly that automation. It refuses a slug that is not your
+  active install, an install for another runner (`--runner` defaults to `local`), and with `--digest`, an approved
+  digest that is not D (pass the digest the relay allowlist approved: 64 lowercase hex, `sha256:` allowed in
+  front). An empty or malformed D, or `--digest` without `--only`, is refused. If the register changes between the
+  first check and the run, it reports `register-changed` or `digest-mismatch` and exits 3. It writes
+  `last_started_at` to the register each time it runs the check, work or not: commit and push the register before
+  doing any work, and stop if the push is refused. When it is not due it prints `not due yet` on stderr and nothing
+  on stdout. A plain `tick --runner cloud` records `last_started_at` the same way.
+- A cloud worker is a fresh clone, so a cloud install keeps its scan position in the register (`scan_cursor`), not
+  in the ignored local state. A check that read its page limit and found nothing goes on from there next time.
+  `mark` with a cursor clears it, because the committed seen cursor then leads. Commit the register each time.
+
+The throttle reads both this clone's last check time and the committed `last_started_at`. So a second runner with
+a fresh clone cannot run the same automation again within one interval once the first one's register is pushed. A
+`last_started_at` more than five minutes in the future is ignored, so a bad edit cannot stop an automation for good.
+Before kit v73 an install has no runner: it is `local`.
+
 ## Included packs
 
 - stale-cards-nudge: local board attention logic, a nudge proposal per card per ISO week; no external access.
+  Runner any; needs nothing.
 - notes-folder-to-tasks: `--set notes_dir=/path`; hashes relative paths/content, follows keeptrack-notes.
+  Runner any; no connectors and no secrets. On a cloud runner `notes_dir` must be a folder in the worker's clone.
 - email-to-tasks: `--allow-network`, existing gog login; only exact board contact addresses, follows keeptrack-email.
+  Runner any. Local: the gog login only. Cloud: the secret named `GOG_HOME_ARCHIVE`, which the environment's
+  setup script uses to restore a read-only gog login under `HOME` before the tick (see its SETUP.md). The check
+  and `resolve.py` read mail through gog, so a Gmail connector with a `model` check is not offered: that would be
+  a separate pack.
 
 Each pack's SETUP.md explains access per runtime. The create skill builds and tests your own pack; it leaves it
 unverified. Never put tokens, account addresses or source text into a pack, check output or run summary.
@@ -75,7 +144,7 @@ its digest, so a change to it needs reinstall and setup too. CI only checks that
 
 ## Contracts and trust
 
-Manifest schema is `keeptrack-automation/1`: fixed needs board.read, files.read, gmail.read, drive.read,
+Manifest schema is `keeptrack-automation/1` (the optional `requires` object is kit v73, above): fixed needs board.read, files.read, gmail.read, drive.read,
 github.read, calendar.read; writes is ["proposals"]. Optional `flow` (kit v70) lists 2–8 steps
 `{kind, title, text}` that the web board draws as a node diagram: kind is trigger, read, check, agent, output or step;
 title up to 40 characters, text up to 160. It is shown as plain text, never followed as instructions. Without it the
@@ -112,8 +181,8 @@ This JSON format is not compatible with back-office agent-packs' YAML format.
 
 Retiring a built-in is an explicit release step: disable affected installs first. kit-update never removes registers
 or seen logs. The web board's Automations page (header button, deep link `#view=automations`) shows each pack as a card with its
-flow diagram, status and the command for each next step to copy; it never installs or enables. Relay scheduler
-hook-up, usage and direct writes are outside v1.
+flow diagram, status and the command for each next step to copy; it never installs or enables. The relay
+scheduler uses `due`, `needs` and `tick --only` (kit v73); usage and direct writes are outside v1.
 
 Tick supplies each item’s `action_key`: `auto:<slug>:` + sha256 of compact JSON `[key, rev]` (list order preserved). Copy it unchanged for proposals and retries. Mixed ticks exit 0 with work; report every payload `problems` entry. Invalid/missing packs remain visible in list. Undelivered reservations finish failed with code `undelivered`; owners can finish failed even after pack loss.
 
