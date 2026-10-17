@@ -47,7 +47,15 @@ class Automation(unittest.TestCase):
             for binding, entry in value.items():
                 rp = self.root/'automation/routines'/ (binding + '.json')
                 if rp.exists(): entry.update(kt._auto_identity(self.read(rp)))
+                if entry.get('time') == 0: self.started_long_ago(rp)
         path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value))
+
+    def started_long_ago(self, rp):
+        """Kit v73: the committed last_started_at throttles too, so making a binding due clears it as well."""
+        if rp.exists():
+            r = self.read(rp)
+            if r.get('last_started_at') and not r.get('current_run'):   # a busy binding is refused anyway
+                r['last_started_at'] = '2000-01-01T00:00:00.000Z'; rp.write_text(json.dumps(r))
 
     def read(self,path): return json.loads(path.read_text())
 
@@ -85,6 +93,7 @@ class Automation(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()): kt.cmd_routine(argparse.Namespace(id=r['id'],action='finish',run_id=r['current_run']['id'],status=status,count=['proposals_added=1'],summary=None))
 
     def force_due(self):
+        for rp in (self.root/'automation/routines').glob('auto-*.json'): self.started_long_ago(rp)
         self.write(self.root/'automation/.local/tick-state.json',{})
 
     def test_other_owner_refused_for_every_changing_action(self):

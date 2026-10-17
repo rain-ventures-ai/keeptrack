@@ -4,7 +4,7 @@ This pack reads Gmail through `gog`, read only, and proposes contact notes and t
 sends, drafts, labels or deletes mail. Setup never enables or schedules it: you do that at the end, on purpose.
 
 `$B` means `python3 board/keeptrack.py`, run from the board repo. The examples use the invented owner `alexdemo`
-and the invented address `alex@example.invalid`: use your own.
+and the invented address `alex@example.com`: use your own.
 
 ## What every runtime needs
 
@@ -15,12 +15,12 @@ keyring under `HOME` alone.
 | Need | Set it up | Verify it works | Expected output |
 |---|---|---|---|
 | Python 3 | Install Python 3.9 or newer | `python3 --version` | `Python 3.9` or newer |
-| Board access | `gh auth login`, or `BOARD_TOKEN` (see `board/README.md`) | `$B members` | your login and work address, e.g. `alexdemo  Alex Demo` then `alex@example.invalid` |
-| Your own addresses | `$B member-set alexdemo --email alex@example.invalid` (work addresses only) | `$B members` | every address you send from is listed under your login |
+| Board access | `gh auth login`, or `BOARD_TOKEN` (see `board/README.md`) | `$B members` | your login and work address, e.g. `alexdemo  Alex Demo` then `alex@example.com` |
+| Your own addresses | `$B member-set alexdemo --email alex@example.com` (work addresses only) | `$B members` | every address you send from is listed under your login |
 | People to match | People on the board with an email address; CRM on | `$B settings` | `modes: tasks, crm`, or `modes: -` (both on) |
 | | | `$B people` | at least one person; `$B person <id>` shows an email address |
 | gog | Install gog ([gogcli](https://github.com/steipete/gogcli)) on `PATH` | `command -v gog` | a path such as `/usr/local/bin/gog` |
-| Gmail login | `gog auth add alex@example.invalid --services gmail --gmail-scope readonly` | `gog auth list --json` | JSON listing your account |
+| Gmail login | `gog auth add alex@example.com --services gmail --gmail-scope readonly` | `gog auth list --json` | JSON listing your account |
 | Login the check can read | Use a keyring that needs no environment variable (see below) | `env -i PATH="$PATH" HOME="$HOME" gog gmail messages search 'newer_than:1d' --json --max 1` | JSON with a `messages` list (it may be empty), exit 0 |
 | Network grant | `$B automation install email-to-tasks --owner alexdemo --allow-network` | `$B automation show email-to-tasks` | `"network_granted": true` in `install` |
 
@@ -59,23 +59,37 @@ Codex sandboxes often block network: allow network for the scheduled task, or th
 ## Claude Code cloud routine
 
 The cloud container starts empty, and the check gets no secrets from the environment. So the check works in the
-cloud only when the container has gog and a login gog can read from files under `HOME` alone.
+cloud only when the container has gog and a login gog can read from files under `HOME` alone. In the cloud the
+pack needs one secret, named `GOG_HOME_ARCHIVE` (this name is fixed in the pack's `requires`; only the name is
+ever checked or shown). It holds your gog home with a read-only Gmail login, packed by you (for example a
+base64 tar of gog's config folder). The environment's setup script unpacks it under `HOME` before any tick. The
+check itself never sees it. But the variable is visible to the whole worker session: the agent and every shell
+command it runs can read it, while the agent reads mail that anyone can send. So the login in it must be read-only
+(`--gmail-scope readonly`). `automation setup` needs the name set only when you run it. After setup has passed once,
+remove it from worker sessions if your platform allows: for example end the setup script with
+`unset GOG_HOME_ARCHIVE` where that carries into the session.
 
-1. In the environment's setup script, install gog. Verify in a session: `command -v gog` prints a path.
-2. Restore a gog home with a read-only Gmail login from your own secure store. Do not commit it to any repo.
-   Verify: `env -i PATH="$PATH" HOME="$HOME" gog gmail messages search 'newer_than:1d' --json --max 1` prints
-   JSON with `messages`.
-3. Set `BOARD_USER=alexdemo` (your own GitHub login) and a board login (`BOARD_TOKEN`, as in
+1. In the environment's setup script, install gog and unpack `GOG_HOME_ARCHIVE` under `HOME`. Store the secret in
+   the environment's secrets, never in any repo. Verify in a session: `command -v gog` prints a path, and
+   `env -i PATH="$PATH" HOME="$HOME" gog gmail messages search 'newer_than:1d' --json --max 1` prints JSON with
+   `messages`.
+2. Set `BOARD_USER=alexdemo` (your own GitHub login) and a board login (`BOARD_TOKEN`, as in
    `board/ROUTINE-SETUP.md`) in the routine's environment. With no `gh` login and no `BOARD_USER`, `automation tick`
-   cannot tell whose automations to run and prints nothing, which looks like "no work". Verify after step 4:
+   cannot tell whose automations to run and prints nothing, which looks like "no work". Verify after step 3:
    `$B automation list --installed` shows `email-to-tasks` with `"status": "active"`.
-4. `$B automation install email-to-tasks --owner alexdemo --allow-network`, then
-   `$B automation setup email-to-tasks --runtime claude` and `--confirm gmail.read` once Claude can read Gmail
-   read-only. Verify: `$B automation check email-to-tasks` prints `"note": null`; then `enable` as above.
+3. If the relay dispatcher runs it (one cloud worker per due automation):
+   `$B automation install email-to-tasks --owner alexdemo --allow-network --runner cloud`, then, in the routine,
+   `$B automation setup email-to-tasks --runtime claude --runner cloud --connectors ''` and `--confirm gmail.read`
+   once Claude can read Gmail read-only. Expected: `ready; runner cloud; ...`. A missing secret prints
+   `missing secret GOG_HOME_ARCHIVE`. If your own routine runs the loader instead, leave out `--runner` (the
+   install is `local`: the board's own loader starts it).
+4. Verify: `$B automation check email-to-tasks` prints `"note": null`; then `$B automation enable email-to-tasks`.
+   Then verify: `$B automation needs --json --runner cloud` lists `GOG_HOME_ARCHIVE` under `secrets`. `needs`
+   counts active installs only, so before `enable` its lists are empty.
 
-If step 2 does not pass, run this pack from local Claude Code or Codex instead. Do not give the cloud routine a
+If step 1 does not pass, run this pack from local Claude Code or Codex instead. Do not give the cloud routine a
 token with send or modify rights. A Gmail connector alone is not enough: the agent can read with it, but the check
-needs gog.
+and `resolve.py` need gog. The pack offers no connector-only (`model` check) way; that would be a separate pack.
 
 ## When the check is blocked
 

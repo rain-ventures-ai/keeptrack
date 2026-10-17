@@ -3,7 +3,7 @@
   "slug": "notes-folder-to-tasks",
   "name": "Notes folder to tasks",
   "summary": "Turn new or changed meeting notes in a folder into proposed tasks and follow-ups.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "needs": [
     {
       "id": "files.read",
@@ -33,6 +33,12 @@
       ]
     }
   ],
+  "requires": {
+    "runner": "any",
+    "connectors": [],
+    "secrets": [],
+    "check": "script"
+  },
   "writes": [
     "proposals"
   ],

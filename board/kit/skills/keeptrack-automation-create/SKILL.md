@@ -15,6 +15,9 @@ Use [references/manifest_template.json](references/manifest_template.json),
 [references/test_template.py](references/test_template.py) as starting points. Read the guide's contracts first.
 Create manifest.json, SKILL.md, SETUP.md, stdlib check.py and tests/test_check.py with a temp folder or fake CLI fixture.
 Give the manifest a plain-words `summary` and a `flow` (trigger, read, check, agent, output) that the web board draws.
+Give it a `requires` object (board/AUTOMATIONS.md, "Runners and needs"): the runner it allows (`any`, `cloud` or
+`local`), the claude.ai connectors and the secret NAMES (never values) it needs, per runner where they differ, and
+`check` `script` or `model`. Ask the owner which runner they will use; install and setup with `--runner`.
 Add scripts/ helpers only when needed. SETUP.md needs per-runtime read-only access steps and fixes.
 
 Also write evals/cases.json, behaviour tests for SKILL.md. Start from

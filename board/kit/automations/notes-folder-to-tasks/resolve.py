@@ -7,13 +7,14 @@ For each key, in the order given:
     === <key> ===
     file: "<path inside the folder, as a JSON string>"
     date: <YYYY-MM-DD of its last change: the last commit in a git folder, else the file's mtime>
-    --- text ---
-    <the note's text>
+    text: "<the note's whole text, as one JSON string on one line>"
     --- end <key> ---
 
 or `=== <key> not-found ===` when no note in the folder has that key (moved or deleted since the check). The file
-name is shown for reading only: a name can hold `$(...)`, backticks or quotes. A note longer than 200,000
-characters is cut off with a marker line. Keys are matched against the same files the check lists.
+name is shown for reading only: a name can hold `$(...)`, backticks or quotes. The text is one JSON string, so a
+line break in a note is `\n` and a note cannot print a line that looks like one of these markers. A note longer
+than 200,000 characters is cut off with a marker line after its text. Keys are matched against the same files the
+check lists.
 """
 import datetime
 import hashlib
@@ -35,6 +36,15 @@ def _check():
         mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
     finally:
         sys.dont_write_bytecode = flag
+
+
+def quoted(value):
+    """One JSON string on one line. JSON leaves U+0085, U+2028 and U+2029 as they are, but str.splitlines() and many
+    viewers break lines on them, so a note could still fake a marker line: escape them too."""
+    text = json.dumps(value, ensure_ascii=False)
+    for brk in ("\u0085", "\u2028", "\u2029"):
+        text = text.replace(brk, "\\u%04x" % ord(brk))
+    return text
 
 
 def main(argv=None):
@@ -64,8 +74,9 @@ def main(argv=None):
             out.append("=== " + key + " not-found ==="); continue
         text = raw.decode("utf-8", errors="replace")
         cut = len(text) > LIMIT
-        out += ["=== " + key + " ===", "file: " + json.dumps(rel, ensure_ascii=False),
-                "date: " + datetime.datetime.fromtimestamp(when).strftime("%Y-%m-%d"), "--- text ---", text[:LIMIT]]
+        out += ["=== " + key + " ===", "file: " + quoted(rel),
+                "date: " + datetime.datetime.fromtimestamp(when).strftime("%Y-%m-%d"),
+                "text: " + quoted(text[:LIMIT])]
         if cut:
             out.append("[cut off here: the note is longer than %d characters]" % LIMIT)
         out.append("--- end " + key + " ---")

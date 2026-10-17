@@ -1,18 +1,27 @@
 """Step 2 of SKILL.md: map item keys to Gmail messages and build each message's rfc822: key.
 
-    python3 board/automations/email-to-tasks/resolve.py <item ref> <key> [<key> ...]
-    python3 board/automations/email-to-tasks/resolve.py --day <YYYY-MM-DD> <key> [<key> ...]
+    python3 board/automations/email-to-tasks/resolve.py [--save] <item ref> <key> [<key> ...]
+    python3 board/automations/email-to-tasks/resolve.py [--save] --day <YYYY-MM-DD> <key> [<key> ...]
 
 Prints one line per key and nothing from the mail:
     <key> <gmail id> <thread id> rfc822:<sha256>     found, with the canonical message key
     <key> <gmail id> <thread id> no-message-id       found, but no usable Message-ID header (malformed)
-    <key> not-found                                  not on that page (deleted or moved since the check)
+    <key> not-found                                  not found (deleted or moved since the check)
 
-The item ref names the exact search page the check read (its query and page token), so one search finds every key
-of the batch. --day is for an answered question about an older item: it searches that day and the day around it,
-at most 10 pages. The Message-ID header is read from `gog gmail get <id> --json` and hashed here, so no header
-ever passes through a command line someone types. Every gog call has a timeout; a gog failure prints
-`gog-error` or `gog-timeout` and exits 3 (the skill's "Gmail fails during the run").
+The item ref names the exact search page the check read (its query and page token), so one search usually finds
+every key of the batch. A key not on that page is looked for on the next page once, then in a search of the ref's
+whole window from its first page (at most 10 pages, as --day does), before it is printed as not-found. A window
+ref (`"w": 1`, made when a page token was too long for a ref) goes straight to that window search. --day is for
+an answered question about an older item: it searches that day and the day around it, at most 10 pages. The
+Message-ID header is read from `gog gmail get <id> --json` and hashed here, so no header ever passes through a
+command line someone types. One deadline (DEADLINE_SECONDS) bounds the whole run and every gog call within it;
+a gog failure prints `gog-error` or `gog-timeout` and exits 3 (the skill's "Gmail fails during the run").
+
+--save keeps each message the resolver fetched as `<folder>/<gmail id>.json` in a new private folder (mode 0700,
+files 0600) and prints `saved <folder>` as the last line, so step 3 reads the headers from there instead of
+fetching the message again. Delete the folder when the run ends. A run that fails part way (exit 3) deletes the
+folder itself, so no fetched message stays on disk. A page is searched at most once in a run, even when the window
+search passes the ref's own page again.
 """
 import base64
 import datetime
@@ -20,13 +29,19 @@ import hashlib
 import importlib.util
 import json
 import re
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 SEARCH_SECONDS = 40
 GET_SECONDS = 20
 DAY_PAGES = 10
+DEADLINE_SECONDS = 120      # the whole run: every search and get together
+_DEADLINE = [None]
 GMAIL_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 KEY = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -46,6 +61,10 @@ class GogFailed(Exception):
 
 
 def gog(argv, seconds):
+    if _DEADLINE[0] is not None:
+        seconds = min(seconds, _DEADLINE[0] - time.monotonic())
+        if seconds <= 0:
+            raise GogFailed("gog-timeout")
     try:
         result = subprocess.run(argv, capture_output=True, timeout=seconds)
     except subprocess.TimeoutExpired:
@@ -101,64 +120,117 @@ def message_id(data, depth=0):
     return None
 
 
+_PAGES = {}                 # (query, page token) -> (messages, next token): one run never searches a page twice
+
+
 def search(query, page):
+    if (query, page) in _PAGES:
+        return _PAGES[(query, page)]
     argv = ["gog", "gmail", "messages", "search", query, "--json", "--max", "50"] + (["--page", page] if page else [])
     data = gog(argv, SEARCH_SECONDS)
     messages = data.get("messages", []) if isinstance(data, dict) else data
     if not isinstance(messages, list):
         raise GogFailed("gog-error: unreadable output")
-    return messages, (data.get("nextPageToken") if isinstance(data, dict) else None)
+    _PAGES[(query, page)] = messages, (data.get("nextPageToken") if isinstance(data, dict) else None)
+    return _PAGES[(query, page)]
+
+
+def _ids(messages, want, found):
+    for m in messages:
+        if not isinstance(m, dict) or not isinstance(m.get("id"), (str, int)): continue
+        k = "sha256:" + hashlib.sha256(str(m["id"]).encode()).hexdigest()
+        if k in want and k not in found and GMAIL_ID.fullmatch(str(m["id"])):
+            thread = str(m.get("threadId") or "")
+            found[k] = (str(m["id"]), thread if GMAIL_ID.fullmatch(thread) else "-")
+
+
+def _scan(query, page, limit, want, found):
+    """Search `limit` pages from `page`; return the next page token (None at the end of the results)."""
+    for _ in range(limit):
+        messages, page = search(query, page)
+        _ids(messages, want, found)
+        if len(found) == len(want) or not page:
+            break
+    return page
+
+
+def _save_folder():
+    folder = tempfile.mkdtemp(prefix="email-to-tasks-")
+    os.chmod(folder, 0o700)
+    return folder
+
+
+def _save(folder, gmail_id, data):
+    path = os.path.join(folder, gmail_id + ".json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f)
 
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
+    save = bool(args) and args[0] == "--save"
+    if save:
+        args = args[1:]
     check = _check()
+    window = None
     if len(args) >= 2 and args[0] == "--day":
         try:
             day = datetime.datetime.strptime(args[1], "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
         except ValueError:
-            print("usage: resolve.py --day YYYY-MM-DD <key> ..."); return 2
+            print("usage: resolve.py [--save] --day YYYY-MM-DD <key> ..."); return 2
         start = int((day - datetime.timedelta(days=1)).timestamp())
-        pages = [(check.query(start, start + 3 * 86400), None)]
-        limit, want = DAY_PAGES, args[2:]
+        query, page, limit, want = check.query(start, start + 3 * 86400), None, DAY_PAGES, args[2:]
     elif args and args[0].startswith("pg:"):
         try:
             ref = json.loads(base64.urlsafe_b64decode(args[0][3:]))
-            after, until, page = int(ref["a"]), int(ref["u"]), ref["p"]
-            if page is not None and not isinstance(page, str): raise ValueError("page")
-        except (ValueError, KeyError, TypeError):
+            after, until = int(ref["a"]), int(ref["u"])
+            if ref.get("w") == 1:
+                page, limit = None, DAY_PAGES
+            else:
+                page, limit = ref["p"], 1
+                if page is not None and not isinstance(page, str): raise ValueError("page")
+                window = check.query(after, until)
+        except (ValueError, KeyError, TypeError, AttributeError):
             print("unreadable item ref: copy the item's ref from the payload unchanged"); return 2
-        pages = [(check.query(after, until), page)]
-        limit, want = 1, args[1:]
+        query, want = check.query(after, until), args[1:]
     else:
-        print("usage: resolve.py <item ref> <key> ... | --day YYYY-MM-DD <key> ...  (an item ref starts with pg:)")
+        print("usage: resolve.py [--save] <item ref> <key> ... | [--save] --day YYYY-MM-DD <key> ...  (an item ref starts with pg:)")
         return 2
     want = [k for k in dict.fromkeys(want)]
     if not want or any(not KEY.fullmatch(k) for k in want):
         print("every key must be an item key, sha256:<64 hex>"); return 2
-    found = {}
+    found = {}; folder = None; printed = False
+    _DEADLINE[0] = time.monotonic() + DEADLINE_SECONDS
+    _PAGES.clear()
     try:
-        query, page = pages[0]
-        for _ in range(limit):
-            messages, page = search(query, page)
-            for m in messages:
-                if not isinstance(m, dict) or not isinstance(m.get("id"), (str, int)): continue
-                k = "sha256:" + hashlib.sha256(str(m["id"]).encode()).hexdigest()
-                if k in want and k not in found and GMAIL_ID.fullmatch(str(m["id"])):
-                    thread = str(m.get("threadId") or "")
-                    found[k] = (str(m["id"]), thread if GMAIL_ID.fullmatch(thread) else "-")
-            if len(found) == len(want) or not page:
-                break
+        page = _scan(query, page, limit, want, found)
+        if window is not None and len(found) < len(want):
+            if page:                                   # the next page once: the mail may have moved down a page
+                _scan(query, page, 1, want, found)
+            if len(found) < len(want):                 # then the whole window, from its first page
+                _scan(window, None, DAY_PAGES, want, found)
+        folder = _save_folder() if save else None
         lines = []
         for k in want:
             if k not in found:
                 lines.append(k + " not-found"); continue
             gmail_id, thread = found[k]
-            key = rfc822(message_id(gog(["gog", "gmail", "get", gmail_id, "--json"], GET_SECONDS)))
+            data = gog(["gog", "gmail", "get", gmail_id, "--json"], GET_SECONDS)
+            if folder:
+                _save(folder, gmail_id, data)
+            key = rfc822(message_id(data))
             lines.append(" ".join((k, gmail_id, thread, key or "no-message-id")))
+        if folder:
+            lines.append("saved " + folder)
+        print("\n".join(lines), flush=True)
+        printed = True
     except GogFailed as failed:
         print(str(failed)); return 3
-    print("\n".join(lines))
+    finally:
+        _DEADLINE[0] = None; _PAGES.clear()
+        if folder and not printed:                     # any run that did not print the folder keeps no mail on disk
+            shutil.rmtree(folder, ignore_errors=True)
     return 0
 
 

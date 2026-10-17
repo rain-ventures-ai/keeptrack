@@ -25,6 +25,38 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v73 (schema 4)
+Automations learn where they run. A pack manifest may carry an optional `requires` object (runner, claude.ai
+connectors, secret NAMES, and a `script` or `model` check); the three built-in packs declare theirs (pack version
+1.3.0). An install records its runner, `local` (the board's own loader, the default) or `cloud` (the relay
+dispatcher). New read-only commands `automation due --json` and `automation needs --json`, and
+`automation tick --only <slug> [--runner R] [--digest D]`, let the relay start one cloud worker per due automation.
+A plain `automation tick` now runs `local` installs only, and the throttle also honours the committed
+`last_started_at`, so two runners cannot run one automation twice in one interval. Pack fixes (card #174):
+email-to-tasks `resolve.py` tries the next page and then the item's window before `not-found`, re-runs the window
+search for an overlong page token, has one deadline for the whole run and keeps what it fetched for step 3
+(`--save`); notes-folder-to-tasks `resolve.py` prints each note's text as one JSON string; the email evals use
+`@example.com` addresses only. See [AUTOMATIONS.md](AUTOMATIONS.md), "Runners and needs". No migration and no data
+change.
+- Run `kit-update` only. Check: `kit-check` says v73, and `automation validate board/automations/email-to-tasks`
+  says valid.
+- The built-in pack files changed, so their digests changed. Each owner reinstalls each installed built-in pack and
+  runs setup again, as in v72: `python3 board/keeptrack.py automation uninstall <slug>`, then
+  `automation install <slug> [--every ..] [--set k=v] [--allow-network]`, then
+  `automation setup <slug> --runtime local|claude|chatgpt|grok`, then `automation enable <slug>`. Seen state is kept.
+- An install the relay dispatcher should run in the cloud: install with `--runner cloud`, and run
+  `automation setup <slug> --runtime claude --runner cloud --connectors <the routine's connectors, comma list>` in
+  the routine (or set `KEEPTRACK_CONNECTORS` there). Each secret the pack names must be set in that environment:
+  email-to-tasks needs `GOG_HOME_ARCHIVE` in the cloud (its SETUP.md). An existing install can move with
+  `automation setup <slug> --runtime claude --runner cloud ...`, then `automation enable <slug>` again.
+  Check, after `automation enable <slug>` (`needs` counts active installs only):
+  `automation needs --json --runner cloud` lists what the routine must hold, and
+  `automation due --json --runner cloud` lists it when due.
+- A cloud install's setup status is `ready-cloud`, not `ready`. A kit before v73 knows no runner, so it treats a
+  cloud install as not set up and never runs it next to the relay's worker (it reports it as `changed`). Upgrade
+  every copy of `keeptrack.py` that ticks this board.
+- Installs made before v73 have no runner and stay `local`: the board's own loader runs them as before.
+
 ### v72 (schema 4)
 The three built-in automation packs are rebuilt (pack version 1.2.0): clearer SKILL.md steps, a SETUP.md with a
 verify command for each need, stricter checks, and a new `evals/cases.json` of behaviour tests in each pack (see

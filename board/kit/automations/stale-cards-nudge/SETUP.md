@@ -53,7 +53,8 @@ The check never needs network, so use `--runtime local` in all three runtimes be
      work, and nothing when there is none.
 3. Write access is proven by the first real run: the loader commits and pushes `automation/routines/` before any
    proposal. If that push fails, fix `BOARD_TOKEN` and run again; nothing was proposed.
-4. Remove all connectors from this routine. The pack needs none.
+4. Remove all connectors from this routine. The pack needs none, and no secret, on any runner. If the relay
+   dispatcher runs it, install and set up with `--runner cloud` (the default `local` is the board's own loader).
 
 ## Local Claude Code
 

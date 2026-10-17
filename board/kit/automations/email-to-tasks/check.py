@@ -95,10 +95,13 @@ def query(after, until):
 
 def page_ref(after, until, page):
     """An item's ref: the exact search page it was read from (window bounds and page token), so step 2 of SKILL.md
-    maps keys to messages with one call to that page. Falls back to None (ref = key) for a page token too long for
-    a 256-character ref; Gmail page tokens are about 20 digits."""
-    ref = "pg:" + base64.urlsafe_b64encode(json.dumps(dict(a=after, u=until, p=page), separators=(",", ":")).encode()).decode()
-    return ref if len(ref) <= 256 else None
+    maps keys to messages with one call to that page. A page token too long for a 256-character ref (Gmail page
+    tokens are about 20 digits) falls back to a window ref, {"a", "u", "w": 1}: resolve.py then re-runs the
+    window's search from its first page."""
+    def ref(value):
+        return "pg:" + base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode()
+    exact = ref(dict(a=after, u=until, p=page))
+    return exact if len(exact) <= 256 else ref(dict(a=after, u=until, w=1))
 
 TITLES = {"received": "Email from a board contact ready to review", "sent": "Email to a board contact ready to review"}
 
@@ -167,7 +170,7 @@ def main():
                 if key in keys: continue   # the same message twice in one batch: keys must be unique
                 if seen.get("keys", {}).get(key) != rev:
                     keys.add(key)
-                    items.append(dict(key=key, rev=rev, title=TITLES[direction], ref=ref or key))
+                    items.append(dict(key=key, rev=rev, title=TITLES[direction], ref=ref))
             page = data.get("nextPageToken") if isinstance(data, dict) else None
             progress["page"] = page
             # Empty pages must not hide later contact mail; no agent is started for them.

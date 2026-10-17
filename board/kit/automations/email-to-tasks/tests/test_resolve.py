@@ -111,7 +111,10 @@ class ResolveTest(unittest.TestCase):
         finally:
             sys.dont_write_bytecode = saved
         kt._auto_result(value)                     # raises on a ref the loader refuses
-        self.assertIsNone(load("check").page_ref(1, 2, "9" * 200))
+        window = load("check").page_ref(1, 2, "9" * 200)
+        self.assertTrue(window.startswith("pg:"), "an overlong page token falls back to a window ref, not the key")
+        kt._auto_token(window)
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(window[3:])), {"a": 1, "u": 2, "w": 1})
 
     def test_hostile_message_id_is_hashed_from_gog_json_and_never_printed(self):
         fake = FakeGmail({"m010": HOSTILE, "m011": HOSTILE_PARENS})
@@ -139,13 +142,148 @@ class ResolveTest(unittest.TestCase):
         code, out = self.resolve(fake, item["ref"], item["key"])
         self.assertEqual(out.split(), [key("m001"), "m001", "tm001", "no-message-id"])
 
-    def test_unknown_key_is_reported_and_day_mode_is_bounded(self):
+    def searches(self, fake):
+        return [c[0] for c in fake.calls if c[0][1:4] == ["gmail", "messages", "search"]]
+
+    def test_key_not_on_the_page_tries_the_next_page_then_the_window(self):
+        fake = FakeGmail()
+        ref = self.check_on_page(fake, None)["items"][0]["ref"]      # page 1: m000..m049
+        fake.calls.clear()
+        code, out = self.resolve(fake, ref, key("m010"), key("m060"))
+        self.assertEqual(code, 0)
+        self.assertIn(key("m060") + " m060 tm060 rfc822:", out)
+        pages = [s[s.index("--page") + 1] if "--page" in s else None for s in self.searches(fake)]
+        self.assertEqual(pages, [None, "50"], "the exact page, then the next page once")
+        fake.calls.clear()
+        code, out = self.resolve(fake, ref, key("m010"), key("m200"))
+        self.assertIn(key("m200") + " m200 tm200 rfc822:", out)
+        searches = self.searches(fake)
+        self.assertEqual({s[4] for s in searches}, {searches[0][4]}, "then the window search, with the check's own query")
+        pages = [s[s.index("--page") + 1] if "--page" in s else None for s in searches]
+        self.assertEqual(pages, [None, "50", "100", "150", "200"],
+                         "the window search starts at the first page; pages already read are not searched again")
+
+    def test_unknown_key_is_reported_after_a_bounded_search(self):
         fake = FakeGmail()
         ref = self.check_on_page(fake, None)["items"][0]["ref"]
         fake.calls.clear()
         code, out = self.resolve(fake, ref, key("deleted"))
         self.assertEqual(out.split(), [key("deleted"), "not-found"])
-        self.assertEqual(len(fake.calls), 1, "no wider search: the page is the answer")
+        self.assertGreater(len(self.searches(fake)), 2, "the exact page and the next page are not the whole answer")
+        self.assertLessEqual(len(self.searches(fake)), 2 + 10, "page, next page, then at most 10 window pages")
+        self.assertEqual([c for c in fake.calls if c[0][1:3] == ["gmail", "get"]], [])
+
+    def test_window_ref_for_an_overlong_page_token_reruns_the_window_search(self):
+        fake = FakeGmail()
+        ref = load("check").page_ref(1000, 2000, "9" * 200)
+        code, out = self.resolve(fake, ref, key("m120"))
+        self.assertEqual(code, 0)
+        self.assertIn(key("m120") + " m120 tm120 rfc822:", out)
+        searches = self.searches(fake)
+        self.assertNotIn("--page", searches[0]); self.assertIn("after:1000", searches[0][4]); self.assertIn("before:2000", searches[0][4])
+
+    def test_one_deadline_for_the_whole_run(self):
+        mod = load("resolve")
+        clock = [1000.0]; budget = mod.DEADLINE_SECONDS; calls = []
+        fake = FakeGmail()
+        def slow(argv, **kw):
+            remaining = 1000.0 + budget - clock[0]
+            self.assertLessEqual(kw["timeout"], remaining + 1e-6, "no call may outlive the run's deadline")
+            calls.append(argv); clock[0] += 45
+            return fake(argv, **kw)
+        ref = self.check_on_page(FakeGmail(), None)["items"][0]["ref"]
+        out = io.StringIO()
+        with patch.object(mod.subprocess, "run", side_effect=slow), patch.object(mod.time, "monotonic", side_effect=lambda: clock[0]), \
+             contextlib.redirect_stdout(out):
+            code = mod.main([ref, key("deleted")])
+        self.assertEqual(code, 3); self.assertIn("gog-timeout", out.getvalue())
+        self.assertLessEqual(len(calls), budget // 45 + 1)
+
+    def test_save_keeps_each_fetched_message_for_step_3(self):
+        fake = FakeGmail({"m010": HOSTILE})
+        ref = self.check_on_page(fake, None)["items"][0]["ref"]
+        code, out = self.resolve(fake, "--save", ref, key("m010"), key("m011"))
+        self.assertEqual(code, 0)
+        last = out.splitlines()[-1]
+        self.assertTrue(last.startswith("saved "), out)
+        folder = pathlib.Path(last[len("saved "):])
+        self.addCleanup(lambda: [p.unlink() for p in folder.iterdir()] and folder.rmdir() or (folder.exists() and folder.rmdir()))
+        self.assertEqual(oct(folder.stat().st_mode & 0o777), "0o700")
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["m010.json", "m011.json"])
+        saved = folder / "m010.json"
+        self.assertEqual(oct(saved.stat().st_mode & 0o777), "0o600")
+        self.assertEqual(json.loads(saved.read_text())["payload"]["headers"][1]["value"], HOSTILE)
+        for leak in ("curl", "IFS", "evil", "Casey"): self.assertNotIn(leak, out)
+        code, out = self.resolve(FakeGmail(), ref, key("m010"))
+        self.assertFalse(any(l.startswith("saved ") for l in out.splitlines()), "nothing is kept without --save")
+
+    def test_save_folder_is_removed_when_gmail_fails_part_way(self):
+        """--save, the first get succeeds and is saved, the second fails: no message may stay behind on disk."""
+        mod = load("resolve")
+        fake = FakeGmail()
+        ref = self.check_on_page(fake, None)["items"][0]["ref"]
+        tmp = pathlib.Path(self.temp.name) / "tmp"; tmp.mkdir()
+        for failure in ("exit", "timeout"):
+            with self.subTest(failure=failure):
+                gets = []
+                def flaky(argv, **kw):
+                    if argv[1:3] == ["gmail", "get"]:
+                        gets.append(argv[3])
+                        if len(gets) == 2:
+                            if failure == "timeout": raise subprocess.TimeoutExpired(argv, kw["timeout"])
+                            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"oauth2: token expired")
+                    return fake(argv, **kw)
+                out = io.StringIO()
+                with patch.object(mod.subprocess, "run", side_effect=flaky), patch.object(mod.tempfile, "tempdir", str(tmp)), \
+                     contextlib.redirect_stdout(out):
+                    code = mod.main(["--save", ref, key("m010"), key("m011")])
+                self.assertEqual(code, 3); self.assertIn("gog-", out.getvalue())
+                self.assertEqual(gets, ["m010", "m011"], "the first message was fetched (and saved) before the failure")
+                self.assertEqual(list(tmp.iterdir()), [], "the saved folder and its message are deleted on failure")
+
+    def test_save_folder_is_removed_on_any_exception_or_unprinted_exit(self):
+        """--save: whatever stops the run before it prints the folder (an unexpected error while building a key, a
+        disk error while saving, Ctrl-C, a closed stdout), no fetched message may stay behind on disk."""
+        mod = load("resolve")
+        fake = FakeGmail()
+        ref = self.check_on_page(fake, None)["items"][0]["ref"]
+        tmp = pathlib.Path(self.temp.name) / "tmp2"; tmp.mkdir()
+        real_rfc822, real_save = mod.rfc822, mod._save
+        calls = []
+        def second(real, error):
+            def wrapped(*a):
+                calls.append(a)
+                if len(calls) == 2: raise error
+                return real(*a)
+            return wrapped
+        class ClosedOut(io.StringIO):
+            def write(self, text): raise BrokenPipeError("stdout closed")
+        cases = (("key error", "rfc822", second(real_rfc822, RuntimeError("bad header")), RuntimeError, io.StringIO),
+                 ("disk error", "_save", second(real_save, OSError("disk full")), OSError, io.StringIO),
+                 ("interrupt", "rfc822", second(real_rfc822, KeyboardInterrupt()), KeyboardInterrupt, io.StringIO),
+                 ("closed stdout", "rfc822", real_rfc822, BrokenPipeError, ClosedOut))
+        for label, name, replacement, error, out in cases:
+            with self.subTest(case=label):
+                calls.clear()
+                with patch.object(mod.subprocess, "run", side_effect=fake), patch.object(mod.tempfile, "tempdir", str(tmp)), \
+                     patch.object(mod, name, replacement), contextlib.redirect_stdout(out()):
+                    with self.assertRaises(error): mod.main(["--save", ref, key("m010"), key("m011")])
+                self.assertEqual(list(tmp.iterdir()), [], "the saved folder and its messages are deleted")
+
+    def test_window_scan_does_not_read_a_page_twice(self):
+        """A key not found costs the ref page, the next page and the rest of the window, each page read once."""
+        fake = FakeGmail()
+        ref = self.check_on_page(fake, None)["items"][0]["ref"]
+        fake.calls.clear()
+        code, out = self.resolve(fake, ref, key("deleted"))
+        self.assertEqual(out.split(), [key("deleted"), "not-found"])
+        pages = [s[s.index("--page") + 1] if "--page" in s else None for s in self.searches(fake)]
+        self.assertEqual(len(pages), len(set(pages)), "no page is searched twice: " + repr(pages))
+        self.assertEqual(len(pages), 6, "300 messages are 6 pages, each read once")
+
+    def test_unknown_key_is_reported_and_day_mode_is_bounded(self):
+        fake = FakeGmail()
+        ref = self.check_on_page(fake, None)["items"][0]["ref"]
         fake.calls.clear()
         code, out = self.resolve(fake, "--day", "2026-10-14", key("m120"), key("nowhere"))
         searches = [c[0] for c in fake.calls if c[0][1:4] == ["gmail", "messages", "search"]]
@@ -176,6 +314,7 @@ class SkillTest(unittest.TestCase):
         self.assertNotIn("sys.stdin.read().strip().strip", text, "no hand-fed Message-ID hashing")
         self.assertNotIn("range(20)", text, "no open-ended scan from the newest mail")
         self.assertIn("<<'", text)
+        self.assertIn("--save", text, "step 3 reads what the resolver already fetched")
         for block in text.split("```sh")[1:]:
             block = block.split("```")[0]
             if "subprocess.run(" in block: self.assertIn("timeout=", block)
