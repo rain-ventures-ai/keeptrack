@@ -25,6 +25,32 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v72 (schema 4)
+The three built-in automation packs are rebuilt (pack version 1.2.0): clearer SKILL.md steps, a SETUP.md with a
+verify command for each need, stricter checks, and a new `evals/cases.json` of behaviour tests in each pack (see
+[AUTOMATIONS.md](AUTOMATIONS.md), "Behaviour tests"). `automation install`, `setup`, `enable`, `disable`,
+`uninstall`, `check`, `tick`, `mark` and `dry-run` now refuse an `--owner` that is not the person running the command
+(the match ignores case). No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v72, and `automation validate board/automations/stale-cards-nudge`
+  says valid.
+- The built-in pack files changed, so their digests changed. An install of a built-in pack made before v72 is refused
+  until each owner reinstalls it and runs setup again. For each installed built-in pack:
+  `python3 board/keeptrack.py automation uninstall <slug>`, then
+  `python3 board/keeptrack.py automation install <slug> [--every ..] [--set k=v] [--allow-network]` (the same
+  settings as before), then `python3 board/keeptrack.py automation setup <slug> --runtime local|claude|chatgpt|grok`
+  (with `--confirm <need-id>` for each need on an agent route), then `python3 board/keeptrack.py automation enable <slug>`.
+  Seen state is kept. Check with `automation list --installed`.
+- New optional pack settings: `lookback_days` (notes-folder-to-tasks, email-to-tasks), `max_recipients` and
+  `include_sent` (email-to-tasks). email-to-tasks now blocks with `setup-missing:board-contacts` when no board
+  contact has an address, and `setup-missing:crm-mode` when CRM mode is off. notes-folder-to-tasks blocks with
+  `setup-missing:notes-dir` when no folder is set, and `setup-missing:notes-dir-too-large` when the folder cannot be
+  listed within the check's time.
+- notes-folder-to-tasks dates a never-imported note by its mtime, or by its last commit when the folder is a git
+  checkout (a cloned notes repo), not by when the file arrived: a note restored, synced or cloned with an old date is
+  outside `lookback_days`. To import such a note, edit it, or reinstall with `--set lookback_days=0` for one run.
+- A script or routine that ran `automation ... --owner <someone else>` now stops with "is not you". That person
+  runs the command themselves. There is no admin override.
+
 ### v71 (schema 4)
 `CARDS.md` ("Comments that need a person") and `routine-prompt.md` ask agents to say who a choice affects and what each
 reason rests on (a link, or "judgement"). The Review Inbox gains two optional fields and one read-time rule: an

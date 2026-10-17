@@ -2,8 +2,8 @@
   "schema": "keeptrack-automation/1",
   "slug": "stale-cards-nudge",
   "name": "Stale cards nudge",
-  "summary": "Find cards nobody has touched for a while and propose a friendly nudge comment for each one.",
-  "version": "1.1.0",
+  "summary": "Find cards whose claim went stale, stuck or blocked and propose one friendly nudge comment for each, at most once a week.",
+  "version": "1.2.0",
   "needs": [
     {
       "id": "board.read",
@@ -48,17 +48,17 @@
     {
       "kind": "read",
       "title": "Read the board",
-      "text": "Looks at open cards and their last activity."
+      "text": "Reads the local board and its stale time setting. Read only."
     },
     {
       "kind": "check",
       "title": "Find stale cards",
-      "text": "A small script lists cards the board marks for attention. No AI is used."
+      "text": "A small script lists stale, stuck or blocked claims. It skips waiting and held cards and cards nudged this week. No AI."
     },
     {
       "kind": "agent",
       "title": "Write a nudge",
-      "text": "An agent drafts a short, polite nudge for each card, once per card per week."
+      "text": "An agent reads each card and drafts a short nudge with options and a recommendation."
     },
     {
       "kind": "output",

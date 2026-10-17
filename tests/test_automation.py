@@ -87,6 +87,71 @@ class Automation(unittest.TestCase):
     def force_due(self):
         self.write(self.root/'automation/.local/tick-state.json',{})
 
+    def test_other_owner_refused_for_every_changing_action(self):
+        # A binding that really belongs to 'other', made by 'other'.
+        kt.default_user = lambda: 'other'
+        self.call('install'); self.call('setup', runtime='local')
+        other_rp = self.root/'automation/routines/auto-example-pack-other.json'
+        before = other_rp.read_text()
+        kt.default_user = lambda: 'owner'
+        for action in kt._AUTO_OWNER_ACTIONS:
+            with self.subTest(action=action):
+                extra = dict(run_id='r', input='done.json') if action == 'mark' else {}
+                message = self.refuse(action, owner='other', **extra)
+                self.assertIn('--owner other is not you (owner)', message)
+        self.assertEqual(other_rp.read_text(), before)
+        self.assertFalse(self.rp.exists())
+        self.assertFalse((self.root/'automation/.local/tick-state.json').exists())
+
+    def test_install_for_other_owner_writes_nothing(self):
+        self.assertIn('is not you', self.refuse('install', owner='alexdemo'))
+        self.assertFalse((self.root/'automation/routines/auto-example-pack-alexdemo.json').exists())
+
+    def test_own_owner_accepted_and_case_insensitive(self):
+        kt.default_user = lambda: 'Owner'
+        self.call('install', owner='OWNER'); self.call('setup', runtime='local', owner='owner')
+        self.call('enable', owner='oWnEr')
+        self.assertEqual(self.read(self.rp)['owner'], 'owner')
+        self.assertEqual(self.read(self.rp)['status'], 'active')
+        self.call('check', owner='OWNER'); self.call('tick', owner='Owner')
+        self.call('disable', owner='OWNER'); self.call('uninstall', owner='owner')
+        self.assertEqual(self.read(self.rp)['status'], 'retired')
+
+    def test_read_only_actions_accept_other_owner(self):
+        out, _ = self.call('list', owner='alexdemo')
+        self.assertEqual(json.loads(out)[0]['status'], 'not-installed')
+        out, _ = self.call('show', owner='alexdemo')
+        self.assertIsNone(json.loads(out)['install'])
+
+    def test_dry_run_for_another_owner_is_refused(self):
+        # dry-run runs that person's installed check, under their network grant and seen state, with your login.
+        kt.default_user = lambda: 'other'
+        self.call('install'); self.call('setup', runtime='local')
+        kt.default_user = lambda: 'owner'
+        self.assertIn('--owner other is not you (owner)', self.refuse('dry-run', owner='other'))
+        self.assertIn('dry-run', kt._AUTO_OWNER_ACTIONS)
+        self.call('dry-run', owner='OWNER')          # your own, in any case, still works
+
+    def test_read_only_owner_lookup_skips_the_login_call(self):
+        calls = []
+        kt.default_user = lambda: calls.append(1) or 'owner'
+        self.call('show', owner='alexdemo'); self.call('list', owner='alexdemo')
+        self.assertEqual(calls, [], "a read-only action with --owner needs no GitHub login lookup")
+        self.call('show')
+        self.assertEqual(len(calls), 1, "without --owner it still asks who you are")
+
+    def test_register_with_null_owner_is_a_mismatch_not_a_crash(self):
+        self.ready()
+        r = self.read(self.rp); r['owner'] = None; self.write(self.rp, r)
+        for action in ('disable', 'enable'):
+            with self.subTest(action=action):
+                self.assertIn('owner mismatch', self.refuse(action))
+        self.assertFalse((self.root/'automation/routines/auto-example-pack-alexdemo.json').exists())
+
+    def test_owner_refused_when_runner_unknown(self):
+        kt.default_user = lambda: ''
+        self.assertIn('cannot tell who is running this', self.refuse('install', owner='alexdemo'))
+
     def test_reinstall_discards_incompatible_local_and_seen_cursor(self):
         self.ready()
         with patch.object(kt, '_auto_check', return_value=dict(self.result, cursor='v1-page-token')):
