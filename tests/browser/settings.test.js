@@ -425,7 +425,8 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.match(await page.evaluate(() => location.hash), /view=automations/, 'the page has its own link');
       assert.deepEqual(await page.locator('.autorow h3').allTextContents(), ['Stale cards nudge', 'Email to tasks', '<img src=x onerror=alert(1)>', 'broken', 'My pack', 'gone-pack'], 'pack text is shown as text; an install without a pack still shows');
       assert.equal(await page.locator('.autorow img').count(), 0, 'no markup from pack text');
-      assert.deepEqual(await page.locator('.autorow__state').allTextContents(), ['On', 'Needs setup', 'Not installed', 'Pack has a problem', 'Not installed', 'Pack missing'], 'each row says its state');
+      assert.deepEqual(await page.locator('.autos__list .autorow__open').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label').split(': ')[1].replace('. Open details', ''))), ['On', 'Needs setup', 'Not installed', 'Pack has a problem', 'Not installed', 'Pack missing'], 'each row says its state');
+      assert.deepEqual(await page.locator('.autorow__state').allTextContents(), ['Needs setup', 'Pack has a problem', 'Pack missing'], 'a pill only when it says more than the switch');
       assert.match(await page.locator('.autorow').first().textContent(), /Summary of Stale cards nudge/, 'a row carries the one-line summary');
       assert.match(await page.locator('.autos__count').textContent(), /5 available · 2 on for you/, 'an install whose pack is gone still counts: it still runs');
       const rows = page.locator('.autorow'), sheet = page.locator('#dlgAuto .autocard');
@@ -476,8 +477,11 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
         const r = rel ? rel + '/' + e.name : e.name; if (e.isDirectory()) walk(path.join(dir, e.name), r); else files[r] = fs.readFileSync(path.join(dir, e.name)); });
       walk(path.join(kit, 'stale-cards-nudge'));
       const sha1 = b => crypto.createHash('sha1').update(b).digest('hex'), manifest = f => JSON.parse(fs.readFileSync(path.join(kit, f, 'manifest.json')));
-      page.api.raw = { '/git/trees/main:board/automations/stale-cards-nudge': { truncated: false, tree: Object.entries(files).map(([r, b]) => ({ path: r, type: 'blob', mode: '100644', sha: sha1(b) })) } };
-      Object.values(files).forEach(b => { page.api.raw['/git/blobs/' + sha1(b)] = { encoding: 'base64', content: b.toString('base64') }; });
+      const serve = (slug, fs_) => { page.api.raw['/git/trees/main:board/automations/' + slug] = { truncated: false, sha: 'tree-' + slug, tree: Object.entries(fs_).map(([r, b]) => ({ path: r, type: 'blob', mode: '100644', sha: sha1(b) })) };
+        Object.values(fs_).forEach(b => { page.api.raw['/git/blobs/' + sha1(b)] = { encoding: 'base64', content: b.toString('base64') }; }); };
+      page.api.raw = {}; serve('stale-cards-nudge', files);
+      const stale = { ...files }; Object.keys(files).forEach(k => delete files[k]); walk(path.join(kit, 'email-to-tasks')); serve('email-to-tasks', files); Object.assign(files, stale);
+      for (const k of Object.keys(files)) if (!Object.hasOwn(stale, k)) delete files[k];
       page.api.extra = {
         '/contents/board/automations': [{ type: 'dir', name: 'stale-cards-nudge' }, { type: 'dir', name: 'email-to-tasks' }],
         '/contents/automations': 404, '/contents/automation/routines': [],
@@ -496,7 +500,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(await sw('stale-cards-nudge').getAttribute('aria-checked'), 'false');
       await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
       assert.match(await page.locator('#dlgAuto .runnersheet').textContent(), /The routine is sweeping/);
-      assert.ok(await page.locator('#dlgAuto .runnercheck__item.todo').count() >= 1, 'the checklist lists what the runner lacks');
+      assert.ok(await page.locator('#dlgAuto .runnercheck .ui-check--warn').count() >= 1, 'the checklist lists what the runner lacks');
       await page.waitForTimeout(350); await shot(page, 'automation-runner'); await page.locator('#auClose').click();
       await sw('stale-cards-nudge').click();
       await page.waitForFunction(() => window.__lastPut || true); await page.waitForTimeout(400);
@@ -518,6 +522,32 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       const due = JSON.parse(kt.stdout).due;
       assert.deepEqual(due.map(d => [d.slug, d.owner, d.runner, d.digest]), [['stale-cards-nudge', 'alex', 'cloud', reg.automation.digest]], 'keeptrack.py agrees: same digest, due in the cloud');
       fs.rmSync(tmp, { recursive: true, force: true });
+
+      // A pack that reads more than this board, or uses the network, asks first; Cancel writes nothing. A register under this
+      // person's binding that another owner wrote is never reused: a fresh install, with only the pack's own settings.
+      const email = manifest('email-to-tasks'), need = email.requires || {}, cloud = need.cloud || {};
+      page.api.extra['/contents/automation/runner.json'] = { schema: 'keeptrack-runner/1', updated_at: new Date().toISOString(), relay: '0.9.35',
+        connectors: cloud.connectors || need.connectors || [], secrets: cloud.secrets || need.secrets || [] };
+      page.api.extra['/contents/automation/routines'] = [{ type: 'file', name: 'auto-email-to-tasks-alex.json' }];
+      page.api.extra['/contents/automation/routines/auto-email-to-tasks-alex.json'] = { id: 'auto-email-to-tasks-alex', owner: 'mallory', status: 'paused',
+        automation: { slug: 'email-to-tasks', digest: 'x', install_id: 'planted', config: { lookback_days: 999, planted: 'yes' }, setup: {} } };
+      page.api.puts = [];
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
+      await page.waitForFunction(() => { const b = document.querySelector('.autorow[data-slug="email-to-tasks"] .autoswitch'); return b && !b.disabled; });
+      await sw('email-to-tasks').click();
+      const ask = page.getByRole('alertdialog'); await ask.waitFor();
+      assert.match(await ask.textContent(), /Reads Gmail/); assert.match(await ask.textContent(), /network/i);
+      await ask.getByRole('button', { name: 'Cancel' }).click(); await page.waitForTimeout(300);
+      assert.equal(page.api.puts.length, 0, 'Cancel writes nothing');
+      await page.waitForFunction(() => { const b = document.querySelector('.autorow[data-slug="email-to-tasks"] .autoswitch'); return b && !b.disabled; });
+      await sw('email-to-tasks').click(); await page.getByRole('alertdialog').getByRole('button', { name: 'Turn on' }).click();
+      await page.waitForFunction(() => true); await page.waitForTimeout(500);
+      assert.equal(page.api.puts.length, 1);
+      const reg2 = JSON.parse(Buffer.from(page.api.puts[0].body.content, 'base64').toString());
+      assert.equal(reg2.owner, 'alex'); assert.notEqual(reg2.automation.install_id, 'planted', 'another owner\'s register is not reused');
+      assert.equal(reg2.automation.network_granted, true, 'the network grant was confirmed');
+      assert.equal(Object.hasOwn(reg2.automation.config, 'planted'), false, 'only settings the pack declares');
+      assert.notEqual(reg2.automation.config.lookback_days, 999, 'and the pack defaults, not the planted values');
       assert.deepEqual(page.errors, []); await page.close();
     }
     // 17. The routine register leaves automation installs to the Automations page; the old Settings deep link opens a button to it.

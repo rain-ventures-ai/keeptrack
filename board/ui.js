@@ -396,6 +396,16 @@
   }
 
   // ---- list row -----------------------------------------------------------------------------------------------
+  // ---- toggle: an on/off switch (role=switch); onChange gets the new value. A label is required, as for iconButton --------
+  function toggle({ checked = false, label, onChange, disabled = false, title } = {}) {
+    if (!label) throw new Error('ui.toggle needs a label');
+    const b = btn('ui-toggle'), set = v => { b.setAttribute('aria-checked', String(!!v)); b.classList.toggle('ui-toggle--on', !!v); };
+    b.setAttribute('role', 'switch'); b.setAttribute('aria-label', label); b.append(h('span', 'ui-toggle__knob')); set(checked);
+    b.disabled = !!disabled; if (title) b.title = title;
+    b.addEventListener('click', e => { e.stopPropagation(); if (b.disabled) return; const v = b.getAttribute('aria-checked') !== 'true'; set(v); if (onChange) onChange(v); });
+    b.setChecked = set; return b;
+  }
+
   function listRow({ text, meta, href, onRemove, removeLabel, icon: ic } = {}) {
     const row = h('div', 'ui-listrow'), url = href ? safeHref(href) : null;
     const main = url ? h('a', 'ui-listrow__main') : h('span', 'ui-listrow__main');
@@ -456,6 +466,6 @@
 
   window.ui = Object.freeze({
     button, iconButton, pill, select, avatar, person, colourFor, hueFor, initials, props, addRow, sheet, menu, closeMenu,
-    section, tabs, toast, banner, confirm, promptText, listRow, taskRow, check, empty, icon, priority, priorityTone, due, dueInfo
+    section, tabs, toast, banner, confirm, promptText, listRow, taskRow, check, empty, icon, priority, priorityTone, due, dueInfo, toggle
   });
 })();
