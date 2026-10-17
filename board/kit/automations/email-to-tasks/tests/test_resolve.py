@@ -241,6 +241,35 @@ class ResolveTest(unittest.TestCase):
                 self.assertEqual(gets, ["m010", "m011"], "the first message was fetched (and saved) before the failure")
                 self.assertEqual(list(tmp.iterdir()), [], "the saved folder and its message are deleted on failure")
 
+    def test_save_folder_is_removed_on_any_exception_or_unprinted_exit(self):
+        """--save: whatever stops the run before it prints the folder (an unexpected error while building a key, a
+        disk error while saving, Ctrl-C, a closed stdout), no fetched message may stay behind on disk."""
+        mod = load("resolve")
+        fake = FakeGmail()
+        ref = self.check_on_page(fake, None)["items"][0]["ref"]
+        tmp = pathlib.Path(self.temp.name) / "tmp2"; tmp.mkdir()
+        real_rfc822, real_save = mod.rfc822, mod._save
+        calls = []
+        def second(real, error):
+            def wrapped(*a):
+                calls.append(a)
+                if len(calls) == 2: raise error
+                return real(*a)
+            return wrapped
+        class ClosedOut(io.StringIO):
+            def write(self, text): raise BrokenPipeError("stdout closed")
+        cases = (("key error", "rfc822", second(real_rfc822, RuntimeError("bad header")), RuntimeError, io.StringIO),
+                 ("disk error", "_save", second(real_save, OSError("disk full")), OSError, io.StringIO),
+                 ("interrupt", "rfc822", second(real_rfc822, KeyboardInterrupt()), KeyboardInterrupt, io.StringIO),
+                 ("closed stdout", "rfc822", real_rfc822, BrokenPipeError, ClosedOut))
+        for label, name, replacement, error, out in cases:
+            with self.subTest(case=label):
+                calls.clear()
+                with patch.object(mod.subprocess, "run", side_effect=fake), patch.object(mod.tempfile, "tempdir", str(tmp)), \
+                     patch.object(mod, name, replacement), contextlib.redirect_stdout(out()):
+                    with self.assertRaises(error): mod.main(["--save", ref, key("m010"), key("m011")])
+                self.assertEqual(list(tmp.iterdir()), [], "the saved folder and its messages are deleted")
+
     def test_window_scan_does_not_read_a_page_twice(self):
         """A key not found costs the ref page, the next page and the rest of the window, each page read once."""
         fake = FakeGmail()

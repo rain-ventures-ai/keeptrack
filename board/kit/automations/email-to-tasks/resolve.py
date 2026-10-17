@@ -200,7 +200,7 @@ def main(argv=None):
     want = [k for k in dict.fromkeys(want)]
     if not want or any(not KEY.fullmatch(k) for k in want):
         print("every key must be an item key, sha256:<64 hex>"); return 2
-    found = {}; folder = None
+    found = {}; folder = None; printed = False
     _DEADLINE[0] = time.monotonic() + DEADLINE_SECONDS
     _PAGES.clear()
     try:
@@ -223,13 +223,14 @@ def main(argv=None):
             lines.append(" ".join((k, gmail_id, thread, key or "no-message-id")))
         if folder:
             lines.append("saved " + folder)
+        print("\n".join(lines), flush=True)
+        printed = True
     except GogFailed as failed:
-        if folder:                                     # a failed run keeps no mail on disk: its path is never printed
-            shutil.rmtree(folder, ignore_errors=True)
         print(str(failed)); return 3
     finally:
         _DEADLINE[0] = None; _PAGES.clear()
-    print("\n".join(lines))
+        if folder and not printed:                     # any run that did not print the folder keeps no mail on disk
+            shutil.rmtree(folder, ignore_errors=True)
     return 0
 
 

@@ -8586,6 +8586,7 @@ def _auto_requires(req, has_script, errors):
     if runner not in ("any",) + _AUTO_RUNNERS: errors.append("requires: runner must be any, cloud or local")
     if req.get("check", "script") not in ("script", "model"): errors.append("requires: check must be script or model")
     if req.get("check") == "model" and has_script: errors.append("requires: a model check has no check script")
+    if req.get("check") == "script" and not has_script: errors.append("requires: a script check needs a check script")
     names(req.get("connectors", []), _AUTO_CONNECTOR, "connectors")
     names(req.get("secrets", []), _AUTO_SECRET, "secrets")
     for where in _AUTO_RUNNERS:
@@ -8959,12 +8960,19 @@ def _auto_payload(path, m, r, result, run_id):
 
 
 def _auto_epoch(value):
-    """A register's committed last_started_at as epoch seconds; 0 for a missing, unreadable or future time.
-    A time in the future is ignored so a bad edit cannot block an automation for good."""
+    """A register's committed last_started_at as epoch seconds; 0 for a missing or unreadable time.
+    A time more than 5 minutes ahead (a worker whose clock runs fast) is clamped to now, so it counts as just started
+    and cannot cause an early second run. A time more than the longest interval ahead cannot come from clock skew: it
+    is a bad edit, and counts as 0 so it cannot block an automation for good."""
     if not isinstance(value, str): return 0
-    try: when = dt.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError: return 0
-    return 0 if when > time.time() + 300 else when
+    try:
+        when = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if when.tzinfo is None: when = when.replace(tzinfo=dt.timezone.utc)
+        when = when.timestamp()
+    except (ValueError, OverflowError, OSError): return 0
+    current = time.time()
+    if when > current + max(_AUTO_INTERVALS.values()): return 0
+    return current if when > current + 300 else when
 
 
 def _auto_runner(install):
@@ -9031,6 +9039,7 @@ def _auto_tick(a, packs, owner):
     try:
         with _auto_lock(lock_path, True) as acquired:
             if not acquired: print("automation tick busy", file=sys.stderr); return
+            only_seen = False
             register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
             for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
                 if not name.endswith(".json"): continue
@@ -9039,6 +9048,7 @@ def _auto_tick(a, packs, owner):
                     if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
                     continue
                 rp = _automation_path("automation/routines/" + name)
+                if only is not None: only_seen = True
                 with _auto_lock(rp + ".lock"):
                     # One unreadable register (a merge conflict, another routine's file) must not stop other bindings.
                     try:
@@ -9050,13 +9060,17 @@ def _auto_tick(a, packs, owner):
                     except (ValueError, OSError, UnicodeDecodeError):
                         if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
                         continue
-                    if not install or str(r.get("owner") or "").lower() != owner.lower() or r.get("status") != "active": continue
-                    if _auto_runner(install) != runner: continue   # another runner's install: never run it here
                     if only is not None:   # re-checked under the lock: the file may have changed since _auto_only read it
-                        if install.get("slug") != a.only or r.get("id") != name[:-5]:
+                        # Checked before the skips below, so a register disabled, handed over or moved to another
+                        # runner since the first check is reported (exit 3), never skipped silently (exit 0).
+                        if (not install or install.get("slug") != a.only or r.get("id") != name[:-5]
+                                or str(r.get("owner") or "").lower() != owner.lower() or r.get("status") != "active"
+                                or _auto_runner(install) != runner):
                             problems.append({"slug": a.only, "code": "register-changed"}); continue
                         if pin is not None and install.get("digest") != pin:
                             problems.append({"slug": a.only, "code": "digest-mismatch"}); continue
+                    if not install or str(r.get("owner") or "").lower() != owner.lower() or r.get("status") != "active": continue
+                    if _auto_runner(install) != runner: continue   # another runner's install: never run it here
                     slug = install["slug"]; binding = r["id"]; reserved = False; started = None
                     try:
                         if slug not in packs: raise ValueError("pack-missing")
@@ -9097,6 +9111,8 @@ def _auto_tick(a, packs, owner):
                             r["last_started_at"] = started; _auto_write(rp, r)
                         code = _auto_save_check(binding, error=error, register=r)
                         problems.append({"slug": slug, "code": code})
+            if only is not None and not only_seen:   # the register was removed after the first check
+                problems.append({"slug": a.only, "code": "register-changed"})
         if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}), flush=True)
         elif problems:
             print(json.dumps(problems), file=sys.stderr); return 3

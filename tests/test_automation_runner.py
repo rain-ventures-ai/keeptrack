@@ -593,6 +593,57 @@ class Runner(unittest.TestCase):
         self.assertIsNone(self.read(self.rp)['current_run']); self.assertIsNone(self.read(other)['current_run'])
 
 
+    # --- review fixes, round 2 (PR #148) -------------------------------------------------------------------------
+
+    def tick_only_after_change(self, change, **kw):
+        """tick --only whose first check passed, then `change` rewrites the register before the lock is taken."""
+        name = self.rp.name; change()
+        with patch.object(kt, '_auto_only', return_value=name), contextlib.redirect_stderr(io.StringIO()) as err:
+            payload, code = self.tick(only='example-pack', **kw)
+        return payload, code, err.getvalue()
+
+    def test_attack_tick_only_register_disabled_or_moved_under_the_lock_is_reported(self):
+        """A register disabled, moved to another runner, handed to another owner or deleted between the first check
+        and the lock must report register-changed and exit 3, never exit 0 with nothing done."""
+        def disable(): r = self.read(self.rp); r['status'] = 'paused'; self.write(self.rp, r)
+        def move(): r = self.read(self.rp); r['automation']['runner'] = 'cloud'; self.write(self.rp, r)
+        def hand_over(): r = self.read(self.rp); r['owner'] = 'other'; self.write(self.rp, r)
+        def delete(): self.rp.unlink()
+        for label, change in (('disabled', disable), ('moved', move), ('other owner', hand_over), ('deleted', delete)):
+            with self.subTest(change=label):
+                if self.rp.exists(): self.rp.unlink()
+                self.items(); self.ready()
+                payload, code, err = self.tick_only_after_change(change)
+                self.assertIsNone(payload); self.assertEqual(code, 3)
+                self.assertIn('register-changed', err)
+                if self.rp.exists():
+                    self.assertIsNone(self.read(self.rp).get('current_run'))
+                    self.assertIsNone(self.read(self.rp).get('last_started_at'))
+
+    def test_requires_check_script_needs_a_check_script(self):
+        del self.manifest['check']
+        self.requires(dict(check='script'))
+        with self.assertRaises(SystemExit) as err: kt._auto_pack(str(self.pack))
+        self.assertIn('script check needs a check script', str(err.exception))
+        self.requires(dict(check='model')); kt._auto_pack(str(self.pack))
+        self.requires(dict(connectors=['gmail'])); kt._auto_pack(str(self.pack))   # no check key: model, not refused
+
+    def test_attack_fast_worker_clock_cannot_cause_an_early_second_run(self):
+        """A worker whose clock runs an hour fast commits a last_started_at an hour ahead. Another runner must treat
+        it as just started (not due), not as never started (due now)."""
+        self.items(); self.ready()
+        ahead = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+        r = self.read(self.rp); r['last_started_at'] = ahead.strftime('%Y-%m-%dT%H:%M:%S.000Z'); self.write(self.rp, r)
+        self.write(self.root / 'automation/.local/tick-state.json', {})
+        self.assertEqual(self.due()['due'], [])
+        with contextlib.redirect_stderr(io.StringIO()) as err: payload, code = self.tick(only='example-pack')
+        self.assertIsNone(payload); self.assertIn('not due', err.getvalue())
+        self.assertIsNone(self.read(self.rp)['current_run'])
+        self.assertAlmostEqual(kt._auto_epoch(ahead.strftime('%Y-%m-%dT%H:%M:%SZ')), kt.time.time(), delta=5)
+        for value in (None, 7, '', 'not a time', '2026-13-45T00:00:00Z'):
+            with self.subTest(value=value): self.assertEqual(kt._auto_epoch(value), 0)
+
+
 class Docs(unittest.TestCase):
     def read(self, rel): return (KIT / rel).read_text(encoding='utf-8')
 
