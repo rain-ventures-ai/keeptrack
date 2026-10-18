@@ -239,7 +239,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 73;
+  const PAGE_KIT = 74;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -4577,8 +4577,14 @@ if (typeof window !== 'undefined') (() => {
   function autoRunnerInfo(j) {
     const o = autoObj(j), list = (v, re) => Array.isArray(v) ? v.filter(x => typeof x === 'string' && re.test(x)).slice(0, 50) : [];
     const t = Date.parse(autoStr(o.updated_at, 40));
-    return { at: Number.isFinite(t) ? t : 0, connectors: list(o.connectors, AUTO_NAME).map(x => x.toLowerCase()), secrets: list(o.secrets, AUTO_SECRET), relay: autoStr(o.relay, 20) };
+    const waits = (Array.isArray(o.awaiting_approval) ? o.awaiting_approval : []).slice(0, 50).map(w => autoObj(w))
+      .filter(w => AUTO_NAME.test(autoStr(w.slug, 64)) && autoStr(w.owner, 40)).map(w => ({ slug: w.slug, owner: String(w.owner).toLowerCase() }));
+    return { at: Number.isFinite(t) ? t : 0, connectors: list(o.connectors, AUTO_NAME).map(x => x.toLowerCase()), secrets: list(o.secrets, AUTO_SECRET), relay: autoStr(o.relay, 20), waits };
   }
+  // relay 0.9.35 splits the approval by risk: the switch alone runs a built-in pack that needs no connectors and no secrets;
+  // any other pack also needs the owner's entry in relay/registry/automations.yaml. The runner reports those still waiting.
+  const autoNeedsEntry = (p, m) => { const n = autoCloudNeeds(m || {}); return p.source !== 'kit' || n.connectors.length > 0 || n.secrets.length > 0; };
+  const autoAwaiting = (p, me) => !!(autoCache && autoCache.runner && autoCache.runner.waits.some(w => w.slug === p.slug && w.owner === me));
   function autoCloudNeeds(m) {   // keeptrack.py _auto_needs(m, "cloud"): what one cloud install of this pack needs
     const req = autoObj(m.requires), over = autoObj(req.cloud), pick = (k, re) => (Array.isArray(over[k]) ? over[k] : Array.isArray(req[k]) ? req[k] : []).filter(x => typeof x === 'string' && re.test(x));
     return { runner: autoStr(req.runner, 10) || 'any', connectors: pick('connectors', AUTO_NAME).map(x => x.toLowerCase()), secrets: pick('secrets', AUTO_SECRET) };
@@ -4653,9 +4659,12 @@ if (typeof window !== 'undefined') (() => {
         const { digest, manifest } = await autoDigest(c, p.folder);
         if (autoBlocked({ ...p, m: manifest }, autoCache.runner)) throw new Error('The pack changed since the page loaded. Refresh and try again.');
         const reads = (Array.isArray(manifest.needs) ? manifest.needs : []).map(n => n && n.id).filter(id => typeof id === 'string' && id !== 'board.read');
-        if (reads.length || (manifest.check && manifest.check.network)) {   // never grant access silently: say what it reads and that it uses the network
-          const lines = [...reads.map(id => 'Reads ' + ((own(AUTO_NEEDS, id) || [id])[0])), ...(manifest.check && manifest.check.network ? ['Uses the network for its check'] : [])];
-          if (!(await ui.confirm({ title: `Turn on ${autoStr(manifest.name, 80) || p.slug}?`, body: lines.join('. ') + '. It only proposes changes for your Review Inbox.', confirmLabel: 'Turn on' }))) { autoBusy = ''; render(); return; }
+        const secrets = autoCloudNeeds(manifest).secrets;
+        if (reads.length || secrets.length || (manifest.check && manifest.check.network)) {   // never grant access silently: say what it reads, uses and holds
+          const lines = [...reads.map(id => 'Reads ' + ((own(AUTO_NEEDS, id) || [id])[0])), ...(manifest.check && manifest.check.network ? ['Uses the network for its check'] : []),
+            ...(secrets.length ? ['Uses the runner secret ' + secrets.join(', ')] : [])];
+          const entry = autoNeedsEntry(p, manifest) ? ' It runs only after you also approve it in relay/registry/automations.yaml: the runner setup shows how.' : '';
+          if (!(await ui.confirm({ title: `Turn on ${autoStr(manifest.name, 80) || p.slug}?`, body: lines.join('. ') + '. It only proposes changes for your Review Inbox.' + entry, confirmLabel: 'Turn on' }))) { autoBusy = ''; render(); return; }
         }
         next = autoRegister(p, manifest, me, c, digest, raw && raw.data);
       } else {
@@ -4683,10 +4692,11 @@ if (typeof window !== 'undefined') (() => {
     const fresh = ago !== null && ago < RUNNER_FRESH_H * 60;
     const need = new Set(); packs.forEach(x => { if (x.p.m && !x.p.preview) { const n = autoCloudNeeds(x.p.m); n.connectors.forEach(v => need.add('c:' + v)); n.secrets.forEach(v => need.add('s:' + v)); } });
     const missing = r ? [...need].filter(k => k[0] === 'c' ? !r.connectors.includes(k.slice(2)) : !r.secrets.includes(k.slice(2))) : [];
-    const [label, tone] = !r ? ['Not set up', 'warn'] : !fresh ? ['Not sweeping', 'danger'] : missing.length ? ['Ready, with gaps', 'warn'] : ['Ready', 'ok'];
+    const waits = r ? r.waits.filter(w => w.owner === autoItems.me).length : 0;
+    const [label, tone] = !r ? ['Not set up', 'warn'] : !fresh ? ['Not sweeping', 'danger'] : missing.length || waits ? ['Ready, with gaps', 'warn'] : ['Ready', 'ok'];
     const text = el('span', 'autorow__text');
     text.append(el('h3', null, 'Cloud runner'), el('span', 'autorow__summary', !r ? 'One routine runs every automation you turn on. Set it up once.' :
-      `Last sweep ${ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}${missing.length ? ` · missing ${missing.length}` : ''}`));
+      `Last sweep ${ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}${missing.length ? ` · missing ${missing.length}` : ''}${waits ? ` · ${waits} to approve` : ''}`));
     const tile = el('span', 'autocard__icon'); tile.append(svgIcon('refresh-cw')); tile.setAttribute('aria-hidden', 'true');
     const open = el('button', 'autorow__open runnerbox__open'); open.type = 'button'; open.append(tile, text, el('span', `ui-pill ui-pill--${tone} runnerbox__state`, label), svgIcon('chevron-right'));
     open.setAttribute('aria-label', `Cloud runner: ${label}. Open setup`); open.onclick = () => openRunner(); box.append(roKeep(open));
@@ -4709,11 +4719,14 @@ if (typeof window !== 'undefined') (() => {
       item(held, k[0] === 'c' ? `${own(AUTO_CONNECTORS, v) || v} connector on the routine` : `${v} in the routine’s environment`,
         k[0] === 'c' ? `Add the ${own(AUTO_CONNECTORS, v) || v} connector to the routine in its claude.ai settings.` : `Add the secret ${v} to the routine’s environment (claude.ai → the routine’s environment → secrets). Its value never goes in the repo.`);
     });
+    const me = (autoItems && autoItems.me) || '', waits = r ? r.waits.filter(w => w.owner === me) : [];
+    waits.forEach(w => item(false, `Approve ${w.slug} for the runner`, `It uses connectors or secrets, is your own pack, or is on a board that is not your relay home, so relay also needs your entry in relay/registry/automations.yaml (board, slug, owner, the pack's digest, runner, connectors, secrets). Ask my assistant below to open that PR; you merge it.`));
     wrap.append(list);
     const row = el('div', 'autocard__actions'), ask = elI('button', 'small primary', 'bot', 'Ask my assistant'); ask.type = 'button';
     ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one Claude routine that runs relay's dispatcher and the board's automations.`,
       'Read relay/README.md (Automations) and relay/prompts/dispatcher-loader.md in the board repo first.',
       `It must hold these connectors: ${[...need].filter(([k]) => k[0] === 'c').map(([, v]) => v).join(', ') || 'none'}; and these secret names in its environment: ${[...need].filter(([k]) => k[0] === 's').map(([, v]) => v).join(', ') || 'none'}.`,
+      ...(waits.length ? [`Also add an entry to relay/registry/automations.yaml for each of these, as @${me}, with runner cloud, pinned to the digest \`python3 board/keeptrack.py automation show <slug>\` prints, and only the connectors and secret names the pack needs: ${waits.map(w => w.slug).join(', ')}. Open it as a PR for me to merge.`] : []),
       'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the routine.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
     const link = el('a', 'autocard__link', 'Routines on claude.ai ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';
     row.append(ask, link); uiBtns(row); wrap.append(row);
@@ -4724,6 +4737,7 @@ if (typeof window !== 'undefined') (() => {
   let autoItems = null, autoOpenSlug = '';
   function autoState(p, mine) {
     const states = { unverified: ['Needs setup', 'warn'], paused: ['Ready, off', 'neutral'], active: ['On', 'ok'] };
+    if (mine && mine.status === 'active' && p.m && !p.preview && autoAwaiting(p, String(mine.owner || '').toLowerCase())) return ['Needs approval', 'warn'];
     return p.source === 'missing' ? ['Pack missing', 'danger'] : !p.m ? ['Pack has a problem', 'danger'] : p.preview ? [DEMO ? 'Example' : 'Not in this board', 'neutral'] : mine ? (own(states, mine.status) || ['Needs setup', 'warn']) : ['Not installed', 'neutral'];
   }
   function autoIcon(m) {
@@ -4755,7 +4769,8 @@ if (typeof window !== 'undefined') (() => {
     if (autoSwitchable(x)) {   // the switch, and why it cannot be turned on yet
       const head = body.querySelector('.autocard__head'); if (head) head.append(autoSwitchEl(x));
       const mine = x.installs.find(r => String(r.owner || '').toLowerCase() === autoItems.me), why = mine && mine.status === 'active' ? '' : autoBlocked(x.p, autoCache.runner);
-      if (why) { const n = ui.banner({ tone: 'warn', text: why }); n.classList.add('autocard__blocked'); head ? head.after(n) : body.prepend(n); }
+      const wait = !why && mine && mine.status === 'active' && autoAwaiting(x.p, autoItems.me) ? 'On, but it waits for your approval in relay/registry/automations.yaml. Open the cloud runner to add it.' : '';
+      if (why || wait) { const n = ui.banner({ tone: 'warn', text: why || wait }); n.classList.add('autocard__blocked'); head ? head.after(n) : body.prepend(n); }
     }
     $('auBody').replaceChildren(body);
   }

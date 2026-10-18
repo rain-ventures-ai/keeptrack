@@ -537,6 +537,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await sw('email-to-tasks').click();
       const ask = page.getByRole('alertdialog'); await ask.waitFor();
       assert.match(await ask.textContent(), /Reads Gmail/); assert.match(await ask.textContent(), /network/i);
+      assert.match(await ask.textContent(), /relay\/registry\/automations\.yaml/, 'a pack with connectors or secrets says it also needs the allowlist entry');
       await ask.getByRole('button', { name: 'Cancel' }).click(); await page.waitForTimeout(300);
       assert.equal(page.api.puts.length, 0, 'Cancel writes nothing');
       await page.waitForFunction(() => { const b = document.querySelector('.autorow[data-slug="email-to-tasks"] .autoswitch'); return b && !b.disabled; });
@@ -548,6 +549,18 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(reg2.automation.network_granted, true, 'the network grant was confirmed');
       assert.equal(Object.hasOwn(reg2.automation.config, 'planted'), false, 'only settings the pack declares');
       assert.notEqual(reg2.automation.config.lookback_days, 999, 'and the pack defaults, not the planted values');
+      // relay 0.9.35 split by risk: the runner reports an install that is on but waits for the owner's allowlist entry.
+      page.api.extra['/contents/automation/routines/auto-email-to-tasks-alex.json'] = reg2;
+      page.api.extra['/contents/automation/runner.json'] = { ...page.api.extra['/contents/automation/runner.json'], awaiting_approval: [{ slug: 'email-to-tasks', owner: 'alex' }, { slug: 'bad slug!', owner: 'alex' }] };
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
+      await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
+      assert.match(await page.locator('.runnerbox').textContent(), /1 to approve/, 'the runner panel counts installs to approve (a bad slug is dropped)');
+      await page.locator('.autorow[data-slug="email-to-tasks"] .autorow__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+      assert.match(await page.locator('#dlgAuto .autocard__blocked').textContent(), /waits for your approval/);
+      await page.locator('#auClose').click();
+      await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+      assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve email-to-tasks for the runner/);
+      await page.waitForTimeout(350); await shot(page, 'automation-runner-approval'); await page.locator('#auClose').click();
       assert.deepEqual(page.errors, []); await page.close();
     }
     // 17. The routine register leaves automation installs to the Automations page; the old Settings deep link opens a button to it.
