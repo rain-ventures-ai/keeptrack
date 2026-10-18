@@ -4489,13 +4489,18 @@ if (typeof window !== 'undefined') (() => {
   // This person's install of a pack: only the register at its own binding (automation/routines/auto-<slug>-<login>.json, id the
   // same), never one that merely says it is theirs. Any board writer can write a register file under any name.
   const autoMine = (installs, slug, me) => !me ? undefined : installs.find(r => r.file === `auto-${slug}-${me}.json` && r.id === `auto-${slug}-${me}` && String(r.owner || '').toLowerCase() === me);
-  // Who made the last commit to a register file (GitHub login, lower case; '' when it can't be told). The switch and the approval
-  // list trust a register's content only when its last commit is this person's own.
+  // Whether this person made the last commit to a register file: { yours, by }. A commit's author is only an email anyone can set,
+  // so it counts as theirs only when GitHub verified the commit's signature and both its author and its committer are them (or
+  // GitHub's own web-flow committer, as for the page's and the CLI's API writes). `by`: the login GitHub shows, for the warning.
+  // The switch and the approval list trust a register's content only when it is `yours`; anything else fails closed.
   async function autoLastAuthor(c, file) {
     const r = await ghGet(`/repos/${c.repo}/commits?path=${encodeURIComponent('automation/routines/' + file)}&sha=${encodeURIComponent(c.branch)}&per_page=1`, null, c).catch(() => null);
-    if (!r || !r.ok) return '';
-    const j = await r.json().catch(() => null), a = Array.isArray(j) && j[0] && j[0].author;
-    return a && typeof a.login === 'string' ? a.login.toLowerCase() : '';
+    const me = (c.me || '').replace(/^@/, '').toLowerCase();
+    if (!r || !r.ok) return { yours: false, by: '' };
+    const j = await r.json().catch(() => null), x = Array.isArray(j) && j[0] && typeof j[0] === 'object' ? j[0] : {};
+    const login = v => v && typeof v.login === 'string' ? v.login.toLowerCase() : '', by = login(x.author), cm = login(x.committer);
+    const verified = !!(x.commit && x.commit.verification && x.commit.verification.verified === true);
+    return { yours: !!me && verified && by === me && (cm === me || cm === 'web-flow'), by };
   }
   const AUTO_DIGEST = /^[0-9a-f]{64}$/;
   async function autoKitPacks() {   // the packs this page's own kit ships (board/kit/manifest.json): the demo, and boards without packs yet
@@ -4525,7 +4530,7 @@ if (typeof window !== 'undefined') (() => {
     // A wait the runner reports is only offered for approval when this person made the last commit to their own register.
     const me = (c.me || '').replace(/^@/, '').toLowerCase(), authored = new Set();
     if (runner && me) await Promise.all(runner.waits.filter(w => w.owner === me && raws[`auto-${w.slug}-${me}.json`]).slice(0, 10)
-      .map(async w => { if (await autoLastAuthor(c, `auto-${w.slug}-${me}.json`) === me) authored.add(w.slug); }));
+      .map(async w => { if ((await autoLastAuthor(c, `auto-${w.slug}-${me}.json`)).yours) authored.add(w.slug); }));
     return { packs, installs, raws, runner, authored };
   }
   async function loadAutomations() {
@@ -4719,11 +4724,16 @@ if (typeof window !== 'undefined') (() => {
         if (old && old.status !== 'retired' && typeof old.board_repo === 'string' && !autoSameBoard(old, c)) throw new Error('This automation is installed for another board in this repo. Uninstall it there first.');
         if (old && old.current_run && (autoObj(old.automation).runner !== 'cloud' || autoObj(old.automation).digest !== digest)) throw new Error('It has a run in progress. Let it finish first.');   // as keeptrack.py setup; a changed pack never drops a live run's lock
         needsEntry = autoNeedsEntry(p, manifest);
-        if (old && await autoLastAuthor(c, file) !== me) old = null;   // someone else wrote it last: start a fresh install over it
+        if (old && !(await autoLastAuthor(c, file)).yours) old = null;   // not verifiably theirs: start a fresh install over it
         next = autoRegister(p, manifest, me, c, digest, old);
       } else {
         if (!raw || !mine) throw new Error('It is not on.');
-        next = JSON.parse(JSON.stringify(raw.data)); next.status = 'paused';
+        if ((await autoLastAuthor(c, file)).yours || !p.m) { next = JSON.parse(JSON.stringify(raw.data)); next.status = 'paused'; }   // as keeptrack.py disable
+        else {   // never re-commit content someone else wrote under this person's name: a fresh install, paused
+          const { digest, manifest } = await autoDigest(c, p.folder);
+          next = autoRegister(p, manifest, me, c, digest, null); next.status = 'paused';
+          if (raw.data && raw.data.current_run) next.current_run = raw.data.current_run;   // a live run keeps its lock
+        }
       }
       const res = await githubContents('PUT', { message: `Automation ${p.slug}: ${on ? 'on' : 'off'} for @${me} (board page)`, content: b64e(JSON.stringify(next, null, 2) + '\n'),
         branch: c.branch, ...(raw ? { sha: raw.sha } : {}) }, false, { path });
@@ -4776,17 +4786,17 @@ if (typeof window !== 'undefined') (() => {
     const me = (autoItems && autoItems.me) || '', waits = autoWaits(me);
     const waitNeeds = w => { const n = autoCloudNeeds(w.p.m); return [...n.connectors.map(v => (own(AUTO_CONNECTORS, v) || v) + ' connector'), ...n.secrets]; };
     waits.filter(w => !w.yours).forEach(w => item(false, `Check ${autoStr(w.p.m.name, 80) || w.slug}: someone else last changed your install of it`,
-      'Its register says it is yours and on, but its last commit is not yours. Turn it off, and check that commit before you approve anything for it.'));
+      'Its register says it is yours and on, but its last commit is not a verified commit of yours (an agent’s command-line enable counts as someone else). Turn it off and on here if you meant it; otherwise check that commit before you approve anything for it.'));
     waits.filter(w => w.yours).forEach(w => item(false, `Approve ${autoStr(w.p.m.name, 80) || w.slug} for the runner (${w.p.source === 'kit' ? 'built-in' : 'your board’s own pack'}${waitNeeds(w).length ? ', uses ' + waitNeeds(w).join(', ') : ''})`,
-      `You turned it on, but it uses connectors or secrets, is the board's own pack, or is on a board that is not your relay home, so relay also needs your entry in relay/registry/automations.yaml for digest ${w.digest.slice(0, 12)}…. Check the pack's files and who changed them before you approve. Ask my assistant below to open that PR; you merge it.`));
+      `Its register is on under your name (your verified commit), but it uses connectors or secrets, is the board's own pack, or is on a board that is not your relay home, so relay also needs your entry in relay/registry/automations.yaml for digest ${w.digest.slice(0, 12)}…. Check the pack's files and who changed them before you approve. Ask my assistant below to open that PR; you merge it.`));
     wrap.append(list);
     const row = el('div', 'autocard__actions'), ask = elI('button', 'small primary', 'bot', 'Ask my assistant'); ask.type = 'button';
     ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one Claude routine that runs relay's dispatcher and the board's automations.`,
       'Read relay/README.md (Automations) and relay/prompts/dispatcher-loader.md in the board repo first.',
       `It must hold these connectors: ${[...need].filter(([k]) => k[0] === 'c').map(([, v]) => v).join(', ') || 'none'}; and these secret names in its environment: ${[...need].filter(([k]) => k[0] === 's').map(([, v]) => v).join(', ') || 'none'}.`,
-      ...(waits.some(w => w.yours) ? [`I turned on these automations, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
+      ...(waits.some(w => w.yours) ? [`The board says these automations are on under my name, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
         ...waits.filter(w => w.yours).map(w => `- ${w.slug} (${w.p.folder}, register automation/routines/auto-${w.slug}-${me}.json), digest ${w.digest}, needs: ${waitNeeds(w).join(', ') || 'nothing beyond the board'}`),
-        'For each one, first show me its files, its manifest needs and the git log of its folder and of its register, and check its digest matches the one above (python3 board/keeptrack.py automation show <slug>). Add an entry only after I say yes to that pack, with only the connectors and secret names it needs, pinned to that digest. Open it as a PR for me to merge.'] : []),
+        'For each one, first show me its files, its manifest needs and the git log of its folder and of its register (author, committer and signature), confirm with me that I turned it on, and check its digest matches the one above (python3 board/keeptrack.py automation show <slug>). Add an entry only after I say yes to that pack, with only the connectors and secret names it needs, pinned to that digest. Open it as a PR for me to merge.'] : []),
       'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the routine.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
     const link = el('a', 'autocard__link', 'Routines on claude.ai ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';
     row.append(ask, link); uiBtns(row); wrap.append(row);

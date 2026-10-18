@@ -552,7 +552,8 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.notEqual(reg2.automation.config.lookback_days, 999, 'and the pack defaults, not the planted values');
       // relay 0.9.35 split by risk: the runner reports an install that is on but waits for the owner's allowlist entry.
       page.api.extra['/contents/automation/routines/auto-email-to-tasks-alex.json'] = reg2;
-      page.api.raw['/commits'] = [{ author: { login: 'mallory' } }];   // someone else last changed alex's register: not offered for approval
+      // The last commit claims alex as author (an email anyone can set) but is not signed: not offered for approval.
+      page.api.raw['/commits'] = [{ author: { login: 'alex' }, committer: { login: 'mallory' }, commit: { verification: { verified: false } } }];
       page.api.extra['/contents/automation/runner.json'] = { ...page.api.extra['/contents/automation/runner.json'], awaiting_approval: [{ slug: 'email-to-tasks', owner: 'alex' }] };
       await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
       await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
@@ -560,7 +561,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), /someone else last changed your install/, 'a register someone else committed last is flagged, not offered');
       assert.doesNotMatch(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve /);
       await page.locator('#auClose').click();
-      page.api.raw['/commits'] = [{ author: { login: 'Alex' } }];
+      page.api.raw['/commits'] = [{ author: { login: 'Alex' }, committer: { login: 'web-flow' }, commit: { verification: { verified: true } } }];
       page.api.extra['/contents/automation/runner.json'] = { ...page.api.extra['/contents/automation/runner.json'], awaiting_approval: [{ slug: 'email-to-tasks', owner: 'alex' }, { slug: 'bad slug!', owner: 'alex' }, { slug: 'stale-cards-nudge', owner: 'alex' }] };
       await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
       await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
