@@ -108,7 +108,7 @@ runner**: one Claude routine, relay's dispatcher, that runs every automation tha
 the runner still lacks (a connector, a secret NAME) and how to add it.
 
 **The runner's report.** Each dispatcher run writes `automation/runner.json` (relay 0.9.35, `relay.py runner-status
---write`), and commits it when it changed or is a day old:
+--write`), and commits it when it changed or is 12 hours old:
 
 ```json
 {"schema": "keeptrack-runner/1", "updated_at": "2026-10-17T12:00:00.000Z", "relay": "0.9.35",
