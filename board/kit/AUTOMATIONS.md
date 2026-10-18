@@ -104,8 +104,12 @@ Before kit v73 an install has no runner: it is `local`.
 
 The Automations page lists one row per pack: icon, name, a one-line summary and a switch. Tapping a row opens its
 details in a drawer (the flow, what it reads, the Never list, the last run). The panel at the top is the **cloud
-runner**: one Claude routine, relay's dispatcher, that runs every automation that is on. Its setup sheet lists what
-the runner still lacks (a connector, a secret NAME) and how to add it.
+runner**: one scheduled agent session running relay's dispatcher (a Claude routine, a Codex or Cursor scheduled task,
+or any agent that can run on a schedule, clone the board and push), which runs every automation that is on. Its setup
+sheet lists what the runner still lacks (a connector, a secret NAME) and how to add it. Relay's dispatcher, not this
+page, enforces what a worker may hold: it starts a worker only with exactly the connectors and secrets the owner's
+entry approves, so a runner that cannot limit connectors starts only automations that need none, or none at all
+(relay's README, Automations).
 
 **The runner's report.** Each dispatcher run writes `automation/runner.json` (relay 0.9.35, `relay.py runner-status
 --write`), and commits it when it changed or is 12 hours old:
@@ -116,8 +120,8 @@ the runner still lacks (a connector, a secret NAME) and how to add it.
  "awaiting_approval": [{"slug": "email-to-tasks", "owner": "alexdemo"}]}
 ```
 
-`connectors` and `secrets` are the claude.ai connector names and secret NAMES the owner's entries for this board approve
-that the routine holds and has set (never the routine's other connectors, never a name a manifest guessed, never a
+`connectors` and `secrets` are the connector names (claude.ai's, on a Claude routine) and secret NAMES the owner's
+entries for this board approve that the runner holds and has set (never the runner's other connectors, never a name a manifest guessed, never a
 value). `awaiting_approval` lists the person's installs that are on but that no entry approves (below). The runner
 checklist asks only about what an automation that is on needs. A runner that has not swept for 26 hours shows as not sweeping.
 

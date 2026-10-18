@@ -6,11 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Board page (no kit change): the automation switch keeps its own 44x26 size on phones (dialog and header buttons get a
+Board page and AUTOMATIONS.md (no version change): the automation switch keeps its own 44x26 size on phones (dialog and header buttons get a
 44px minimum height), with a grey off track and a white knob; the details drawer drops the "Not installed" / "On" pill
 when it shows a switch, as the rows do. The cloud runner is described as any scheduled agent (a Claude routine, a
 Codex or Cursor scheduled task, or another), not only a Claude routine; a runner that cannot give each automation
-exactly its approved connectors runs only automations that need none.
+exactly its approved connectors runs only automations that need none (relay's dispatcher enforces it, not the page).
 
 Kit v74: one runner, a switch per automation (card #180; `board/kit/AUTOMATIONS.md`, "The board page"). The
 Automations page lists one row per pack with an on/off switch; a row opens its details in a drawer, as a card does.

@@ -442,10 +442,10 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal((await nodes(4)).length, 8, 'a pack with 500 needs still draws at most 8 steps'); assert.equal((await nodes(4))[5], 'check:No cheap check');
       assert.equal(await cards.nth(4).locator('.autocard__fact').count(), 10, 'and at most 8 "Reads" chips, plus its schedule and "AI runs every time"');
       const copy = async (i, label) => { await (await opened(i)).locator('button', { hasText: label }).click(); return page.evaluate(() => window.__copied); };
-      assert.match(await txt(0), /On/); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/); assert.match(await txt(0), /Last success: never/, 'an odd date value does not break the card'); assert.equal(await cards.nth(0).locator('.autocard__never').textContent(), 'Never: delete anything', 'an unknown never value is not shown');
+      const sw0 = async i => (await opened(i)).locator('.autoswitch').getAttribute('aria-checked');
+      assert.equal(await sw0(0), 'true', 'an active install: its drawer switch is on'); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/); assert.match(await txt(0), /Last success: never/, 'an odd date value does not break the card'); assert.equal(await cards.nth(0).locator('.autocard__never').textContent(), 'Never: delete anything', 'an unknown never value is not shown');
       assert.doesNotMatch(await txt(0), /Hidden/);
       assert.match(await txt(1), /Needs setup/); assert.match(await txt(1), /Reads Gmail \(read only\)/); assert.match(await txt(1), /Uses the network/); assert.match(await txt(1), /local check of its access failed/);
-      const sw0 = async i => (await opened(i)).locator('.autoswitch').getAttribute('aria-checked');
       assert.equal(await sw0(2), 'false', 'an install for another branch does not count here: its switch is off'); assert.match(await txt(3), /Pack has a problem/); assert.match(await txt(3), /status unknown/, 'odd status values do not break the page');
       assert.match(await txt(5), /Pack missing/); assert.equal(await copy(5, 'Uninstall it'), 'python3 board/keeptrack.py automation uninstall gone-pack --owner alex');
       assert.match(await txt(4), /Your own/); assert.equal(await sw0(4), 'false', 'a retired install counts as not installed: its switch is off'); assert.match(await txt(4), /Also on for @sam/); assert.match(await txt(4), /AI runs every time/);
