@@ -442,12 +442,13 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal((await nodes(4)).length, 8, 'a pack with 500 needs still draws at most 8 steps'); assert.equal((await nodes(4))[5], 'check:No cheap check');
       assert.equal(await cards.nth(4).locator('.autocard__fact').count(), 10, 'and at most 8 "Reads" chips, plus its schedule and "AI runs every time"');
       const copy = async (i, label) => { await (await opened(i)).locator('button', { hasText: label }).click(); return page.evaluate(() => window.__copied); };
-      assert.match(await txt(0), /On/); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/); assert.match(await txt(0), /Last success: never/, 'an odd date value does not break the card'); assert.equal(await cards.nth(0).locator('.autocard__never').textContent(), 'Never: delete anything', 'an unknown never value is not shown');
+      const sw0 = async i => (await opened(i)).locator('.autoswitch').getAttribute('aria-checked');
+      assert.equal(await sw0(0), 'true', 'an active install: its drawer switch is on'); assert.match(await txt(0), /Last run: Succeeded — Two nudges proposed/); assert.match(await txt(0), /Last success: never/, 'an odd date value does not break the card'); assert.equal(await cards.nth(0).locator('.autocard__never').textContent(), 'Never: delete anything', 'an unknown never value is not shown');
       assert.doesNotMatch(await txt(0), /Hidden/);
       assert.match(await txt(1), /Needs setup/); assert.match(await txt(1), /Reads Gmail \(read only\)/); assert.match(await txt(1), /Uses the network/); assert.match(await txt(1), /local check of its access failed/);
-      assert.match(await txt(2), /Not installed/, 'an install for another branch does not count here'); assert.match(await txt(3), /Pack has a problem/); assert.match(await txt(3), /status unknown/, 'odd status values do not break the page');
+      assert.equal(await sw0(2), 'false', 'an install for another branch does not count here: its switch is off'); assert.match(await txt(3), /Pack has a problem/); assert.match(await txt(3), /status unknown/, 'odd status values do not break the page');
       assert.match(await txt(5), /Pack missing/); assert.equal(await copy(5, 'Uninstall it'), 'python3 board/keeptrack.py automation uninstall gone-pack --owner alex');
-      assert.match(await txt(4), /Your own/); assert.match(await txt(4), /Not installed/, 'a retired install counts as not installed'); assert.match(await txt(4), /Also on for @sam/); assert.match(await txt(4), /AI runs every time/);
+      assert.match(await txt(4), /Your own/); assert.equal(await sw0(4), 'false', 'a retired install counts as not installed: its switch is off'); assert.match(await txt(4), /Also on for @sam/); assert.match(await txt(4), /AI runs every time/);
       assert.equal(await copy(0, 'Turn it off'), 'python3 board/keeptrack.py automation disable stale-cards-nudge --owner alex');
       assert.equal(await copy(1, 'Check its access'), 'python3 board/keeptrack.py automation setup email-to-tasks --owner alex --runtime local');
       assert.equal(await copy(2, 'Install it'), "python3 board/keeptrack.py automation install notes-folder-to-tasks --owner alex --set 'notes_dir=REPLACE-WITH-notes_dir'");
@@ -498,9 +499,18 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(await sw('email-to-tasks').isDisabled(), false, 'the runner reports only approved names, so a pack is never blocked on them: it can be turned on and then approved');
       assert.equal(await sw('stale-cards-nudge').getAttribute('aria-checked'), 'false');
       await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
-      assert.match(await page.locator('#dlgAuto .runnersheet').textContent(), /The routine is sweeping/);
+      assert.match(await page.locator('#dlgAuto .runnersheet').textContent(), /The runner is sweeping/);
       assert.equal(await page.locator('#dlgAuto .runnercheck .ui-check--warn').count(), 0, 'nothing is on, so the checklist asks for nothing');
       await page.waitForTimeout(350); await shot(page, 'automation-runner'); await page.locator('#auClose').click();
+      // The switch keeps its own size at phone width (the board gives dialog and header buttons a 44px min-height).
+      await page.waitForFunction(() => !document.getElementById('dlgAuto').open); await sw('stale-cards-nudge').waitFor();
+      const box = await sw('stale-cards-nudge').boundingBox();
+      assert.ok(box && Math.abs(box.width - 44) <= 1 && Math.abs(box.height - 26) <= 1, `the switch is 44x26, got ${box && box.width}x${box && box.height}`);
+      await page.locator('.autorow[data-slug="stale-cards-nudge"] .autorow__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+      const dbox = await page.locator('#dlgAuto .autoswitch').boundingBox();
+      assert.ok(dbox && Math.abs(dbox.height - 26) <= 1, `the drawer switch keeps its size, got ${dbox && dbox.height}`);
+      assert.equal(await page.locator('#dlgAuto .autocard__state').count(), 0, 'with a switch, the drawer shows no Not installed pill');
+      await page.waitForTimeout(350); await shot(page, 'automation-drawer-switch'); await page.locator('#auClose').click();
       await sw('stale-cards-nudge').click();
       await page.waitForFunction(() => true); await (async () => { for (let i = 0; i < 50 && page.api.puts.length < 1; i++) await page.waitForTimeout(100); })();
       assert.equal(page.api.puts.length, 1, 'the switch writes one file');
@@ -572,7 +582,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       const yml = e => ({ content: Buffer.from(e).toString('base64') });
       const conns = (cloud.connectors || need.connectors || []), secs = (cloud.secrets || need.secrets || []);
       assert.doesNotMatch(await (async () => { await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
-        const t = await page.locator('#dlgAuto .runnercheck').textContent(); await page.locator('#auClose').click(); return t; })(), / connector on the routine| in the routine’s environment/,
+        const t = await page.locator('#dlgAuto .runnercheck').textContent(); await page.locator('#auClose').click(); return t; })(), / connector on the runner| in the runner’s environment/,
         'an install no entry approves never asks for a connector or secret on the routine (a forged register could)');
       const entry = (extra = '') => `# owner-only\nautomations:\n  mail:                 # note\n    board: acme/board\n    slug: email-to-tasks\n    owner: alex\n    digest: "${reg2.automation.digest}"\n    runner: cloud\n    connectors: [${conns.join(', ')}]\n    secrets:\n${secs.map(x => '      - ' + x + '\n').join('')}${extra}`;
       page.api.raw['/contents/relay/registry/automations.yaml'] = yml(entry('    run_as: mallory\n'));
@@ -589,7 +599,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await page.waitForFunction(() => { const r = document.querySelector('.autorow[data-slug="email-to-tasks"]'); return r && !/Needs approval/.test(r.textContent) && r.querySelector('.autoswitch'); });
       assert.equal(await sw('email-to-tasks').getAttribute('aria-checked'), 'true', 'an entry at the install digest that names its needs approves it: just On');
       await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
-      if (conns.length || secs.length) assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), / connector on the routine| in the routine’s environment/, 'an approved install lists what the routine must hold');
+      if (conns.length || secs.length) assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), / connector on the runner| in the runner’s environment/, 'an approved install lists what the routine must hold');
       assert.doesNotMatch(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve /);
       await page.locator('#auClose').click();
       // A local install is never a cloud wait; a register under this binding that belongs to someone else is never overwritten.
