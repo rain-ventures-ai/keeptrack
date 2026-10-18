@@ -4574,7 +4574,7 @@ if (typeof window !== 'undefined') (() => {
     if ($('dlgAuto').open) fillAuto();   // a refresh while a sheet is open shows its new state
   }
   // ---- The cloud runner and the on/off switch (card #180) ----
-  // One routine (relay's dispatcher) runs every automation that is on. Each sweep it writes automation/runner.json: when it
+  // One scheduled agent session (relay's dispatcher, in any agent that can run on a schedule) runs every automation that is on. Each sweep it writes automation/runner.json: when it
   // last swept and what it holds (connector names, secret NAMES, never a value). A person turns an automation on or off
   // with a switch: the page writes that automation's install register as them, as `keeptrack.py automation install
   // --runner cloud`, `setup --runtime claude --runner cloud` and `enable` would. The dispatcher runs it only while the
@@ -4779,7 +4779,7 @@ if (typeof window !== 'undefined') (() => {
     const waits = autoWaits(autoItems.me).length;
     const [label, tone] = !r ? ['Not set up', 'warn'] : !fresh ? ['Not sweeping', 'danger'] : missing.length || waits ? ['Ready, with gaps', 'warn'] : ['Ready', 'ok'];
     const text = el('span', 'autorow__text');
-    text.append(el('h3', null, 'Cloud runner'), el('span', 'autorow__summary', !r ? 'One routine runs every automation you turn on. Set it up once.' :
+    text.append(el('h3', null, 'Cloud runner'), el('span', 'autorow__summary', !r ? 'One scheduled agent runs every automation you turn on. Set it up once.' :
       `Last sweep ${ago === null ? 'unknown' : ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}${missing.length ? ` · missing ${missing.length}` : ''}${waits ? ` · ${waits} to approve` : ''}`));
     const tile = el('span', 'autocard__icon'); tile.append(svgIcon('refresh-cw')); tile.setAttribute('aria-hidden', 'true');
     const open = el('button', 'autorow__open runnerbox__open'); open.type = 'button'; open.append(tile, text, el('span', `ui-pill ui-pill--${tone} runnerbox__state`, label), svgIcon('chevron-right'));
@@ -4794,18 +4794,18 @@ if (typeof window !== 'undefined') (() => {
   function runnerSheet() {
     const data = autoCache || {}, r = data.runner, c = cfg(), wrap = el('article', 'autocard autocard--sheet runnersheet');
     const head = el('div', 'autocard__head'), tile = el('span', 'autocard__icon'); tile.append(svgIcon('refresh-cw')); tile.setAttribute('aria-hidden', 'true');
-    const name = el('div', 'autocard__name'); name.append(el('h3', null, 'Cloud runner'), el('span', 'autocard__scope', 'One routine for every automation'));
+    const name = el('div', 'autocard__name'); name.append(el('h3', null, 'Cloud runner'), el('span', 'autocard__scope', 'One scheduled agent for every automation'));
     head.append(tile, name); wrap.append(head);
-    wrap.append(el('p', 'autocard__summary', 'A Claude routine on this repo sweeps on a schedule, starts each automation that is on and due, and only when its cheap check finds something new. It holds the connectors and secrets the automations need; this board stores only their names.'));
+    wrap.append(el('p', 'autocard__summary', 'A scheduled agent session on this repo (a Claude routine, a Codex or Cursor scheduled task, or any agent that can run on a schedule) sweeps, starts each automation that is on and due, and only when its cheap check finds something new. It holds the connectors and secrets the automations need; this board stores only their names.'));
     const ago = r && r.at ? (Date.now() - r.at) / 3600000 : null, list = el('div', 'runnercheck');
     const item = (ok, title, fix) => list.append(ui.check({ state: ok ? 'ok' : 'warn', text: title, fix: ok ? null : fix }));
-    item(!!r && ago !== null && ago < RUNNER_FRESH_H, !r ? 'A routine runs the automations' : ago === null ? 'The routine has not said when it swept' : ago < RUNNER_FRESH_H ? 'The routine is sweeping' : 'The routine has not swept for a day',
-      'Create one Claude routine on this repo that runs relay’s dispatcher (relay/prompts/dispatcher-loader.md) at least daily. Ask my assistant below to set it up.');
+    item(!!r && ago !== null && ago < RUNNER_FRESH_H, !r ? 'A scheduled agent runs the automations' : ago === null ? 'The runner has not said when it swept' : ago < RUNNER_FRESH_H ? 'The runner is sweeping' : 'The runner has not swept for a day',
+      'Schedule one agent session on this repo, at least daily, that runs relay’s dispatcher (relay/prompts/dispatcher-loader.md). A runner that cannot give each automation exactly its approved connectors runs only automations that need none. Ask my assistant below to set it up.');
     const need = new Map(); autoOnPacks().forEach(p => { const n = autoCloudNeeds(p.m); n.connectors.forEach(v => need.set('c:' + v, v)); n.secrets.forEach(v => need.set('s:' + v, v)); });
     [...need].forEach(([k, v]) => {
       const held = !!r && (k[0] === 'c' ? r.connectors.includes(v) : r.secrets.includes(v));
-      item(held, k[0] === 'c' ? `${own(AUTO_CONNECTORS, v) || v} connector on the routine` : `${v} in the routine’s environment`,
-        (k[0] === 'c' ? `Add the ${own(AUTO_CONNECTORS, v) || v} connector to the routine in its claude.ai settings.` : `Add the secret ${v} to the routine’s environment (claude.ai → the routine’s environment → secrets). Its value never goes in the repo.`)
+      item(held, k[0] === 'c' ? `${own(AUTO_CONNECTORS, v) || v} connector on the runner` : `${v} in the runner’s environment`,
+        (k[0] === 'c' ? `Give the runner the ${own(AUTO_CONNECTORS, v) || v} connector (for a Claude routine: its connectors in claude.ai).` : `Add the secret ${v} to the runner’s environment (for a Claude routine: its environment’s secrets in claude.ai). Its value never goes in the repo.`)
           + ' The runner reports it only once your allowlist entry for the automation that needs it names it.');
     });
     const me = (autoItems && autoItems.me) || '', waits = autoWaits(me);
@@ -4814,14 +4814,14 @@ if (typeof window !== 'undefined') (() => {
       `Its register says it is on under your name, at digest ${w.digest.slice(0, 12)}…. Anyone who can write this board can write a register, so check that you turned it on and what the pack does. Relay runs it only once your entry in relay/registry/automations.yaml approves that digest. Ask my assistant below to open that PR; you merge it.`));
     wrap.append(list);
     const row = el('div', 'autocard__actions'), ask = elI('button', 'small primary', 'bot', 'Ask my assistant'); ask.type = 'button';
-    ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one Claude routine that runs relay's dispatcher and the board's automations.`,
+    ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one scheduled agent session that runs relay's dispatcher and the board's automations. Ask me which agent I want to use (a Claude routine, a Codex or Cursor scheduled task, or another that can run on a schedule, clone this repo and push to it). If it cannot start each automation with exactly the connectors its entry approves, it may run only automations that need no connectors.`,
       'Read relay/README.md (Automations) and relay/prompts/dispatcher-loader.md in the board repo first.',
       `It must hold these connectors: ${[...need].filter(([k]) => k[0] === 'c').map(([, v]) => v).join(', ') || 'none'}; and these secret names in its environment: ${[...need].filter(([k]) => k[0] === 's').map(([, v]) => v).join(', ') || 'none'}.`,
       ...(waits.length ? [`The board says these automations are on under my name, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
         ...waits.map(w => `- ${w.slug} (${w.p.folder}, register automation/routines/auto-${w.slug}-${me}.json), digest ${w.digest}, needs: ${waitNeeds(w).join(', ') || 'nothing beyond the board'}`),
         'For each one, first show me its files, its manifest needs and the git log of its folder and of its register (author, committer and signature), confirm with me that I turned it on, and check its digest matches the one above (python3 board/keeptrack.py automation show <slug>). Add an entry only after I say yes to that pack, with only the connectors and secret names it needs, pinned to that digest. Open it as a PR for me to merge.'] : []),
-      'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the routine.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
-    const link = el('a', 'autocard__link', 'Routines on claude.ai ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the scheduled session.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
+    const link = el('a', 'autocard__link', 'Claude routines ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';
     row.append(ask, link); uiBtns(row); wrap.append(row);
     return wrap;
   }
@@ -4861,6 +4861,8 @@ if (typeof window !== 'undefined') (() => {
     body.classList.add('autocard--sheet');
     if (autoSwitchable(x)) {   // the switch, and why it cannot be turned on yet
       const head = body.querySelector('.autocard__head'); if (head) head.append(autoSwitchEl(x));
+      const pill = head && head.querySelector('.autocard__state');   // the switch already says on or off, as on the rows
+      if (pill && /ui-pill--(neutral|ok)\b/.test(pill.className)) pill.remove();
       const mine = autoMine(x.installs, x.p.slug, autoItems.me), why = mine && mine.status === 'active' ? '' : autoBlocked(x.p, autoCache.runner);
       const wait = !why && mine && mine.status === 'active' && autoAwaiting(x.p, autoItems.me) ? 'On, but it waits for your approval in relay/registry/automations.yaml. Open the cloud runner to add it.' : '';
       if (why || wait) { const n = ui.banner({ tone: 'warn', text: why || wait }); n.classList.add('autocard__blocked'); head ? head.after(n) : body.prepend(n); }
