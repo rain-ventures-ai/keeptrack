@@ -546,20 +546,28 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(page.api.puts.length, 1);
       const reg2 = JSON.parse(Buffer.from(page.api.puts[0].body.content, 'base64').toString());
       assert.equal(reg2.owner, 'alex'); assert.notEqual(reg2.automation.install_id, 'planted', 'another owner\'s register is not reused');
+      assert.equal(reg2.board_path, 'board/tasks.json', 'the register names the board on screen');
       assert.equal(reg2.automation.network_granted, true, 'the network grant was confirmed');
       assert.equal(Object.hasOwn(reg2.automation.config, 'planted'), false, 'only settings the pack declares');
       assert.notEqual(reg2.automation.config.lookback_days, 999, 'and the pack defaults, not the planted values');
       // relay 0.9.35 split by risk: the runner reports an install that is on but waits for the owner's allowlist entry.
       page.api.extra['/contents/automation/routines/auto-email-to-tasks-alex.json'] = reg2;
-      page.api.extra['/contents/automation/runner.json'] = { ...page.api.extra['/contents/automation/runner.json'], awaiting_approval: [{ slug: 'email-to-tasks', owner: 'alex' }, { slug: 'bad slug!', owner: 'alex' }] };
+      page.api.extra['/contents/automation/runner.json'] = { ...page.api.extra['/contents/automation/runner.json'], awaiting_approval: [{ slug: 'email-to-tasks', owner: 'alex' }, { slug: 'bad slug!', owner: 'alex' }, { slug: 'stale-cards-nudge', owner: 'alex' }] };
       await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
       await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
-      assert.match(await page.locator('.runnerbox').textContent(), /1 to approve/, 'the runner panel counts installs to approve (a bad slug is dropped)');
+      assert.match(await page.locator('.runnerbox').textContent(), /1 to approve/, 'the runner panel counts installs to approve: a bad slug, and a pack alex never turned on (a forged runner.json line), are dropped');
+      assert.doesNotMatch(await page.locator('.autorow[data-slug="stale-cards-nudge"]').textContent(), /Needs approval/);
       await page.locator('.autorow[data-slug="email-to-tasks"] .autorow__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
       assert.match(await page.locator('#dlgAuto .autocard__blocked').textContent(), /waits for your approval/);
       await page.locator('#auClose').click();
       await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
-      assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve email-to-tasks for the runner/);
+      assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve .* for the runner \(built-in/);
+      assert.doesNotMatch(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve Stale/);
+      await page.evaluate(() => { window.__copied = ''; document.execCommand = () => { window.__copied = document.activeElement ? document.activeElement.value : ''; return true; };
+        if (navigator.clipboard) navigator.clipboard.writeText = t => { window.__copied = t; return Promise.resolve(); }; });
+      await page.locator('#dlgAuto .runnersheet button', { hasText: 'Ask my assistant' }).click(); await page.waitForTimeout(200);
+      const prompt = await page.evaluate(() => window.__copied);
+      assert.ok(prompt, 'the prompt was copied'); { assert.ok(prompt.includes(reg2.automation.digest), 'the prompt pins the install\'s own digest'); assert.match(prompt, /show me its files/); assert.match(prompt, /after I say yes/); }
       await page.waitForTimeout(350); await shot(page, 'automation-runner-approval'); await page.locator('#auClose').click();
       assert.deepEqual(page.errors, []); await page.close();
     }

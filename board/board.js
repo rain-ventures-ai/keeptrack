@@ -4483,9 +4483,10 @@ if (typeof window !== 'undefined') (() => {
     return { owner: autoStr(o.owner, 40), status: autoStr(o.status, 20), board_repo: autoStr(o.board_repo), branch: autoStr(o.branch), board_path: autoStr(o.board_path),
       last_successful_run_at: autoStr(o.last_successful_run_at, 40), last_run: last && { status: autoStr(last.status, 20), summary: autoStr(last.summary) },
       current_run: o.current_run ? { started_at: autoStr(cur.started_at, 40) } : null,
-      automation: { slug: autoStr(a.slug, 63), every: autoStr(a.every, 10), setup: { notes: Array.isArray(setup.notes) ? setup.notes.slice(0, 10).map(x => autoStr(x, 40)) : [] } } };
+      automation: { slug: autoStr(a.slug, 63), every: autoStr(a.every, 10), digest: AUTO_DIGEST.test(String(a.digest || '')) ? a.digest : '', setup: { notes: Array.isArray(setup.notes) ? setup.notes.slice(0, 10).map(x => autoStr(x, 40)) : [] } } };
   }
   let autoCache = null, autoGen = 0;
+  const AUTO_DIGEST = /^[0-9a-f]{64}$/;
   async function autoKitPacks() {   // the packs this page's own kit ships (board/kit/manifest.json): the demo, and boards without packs yet
     const r = await fetch('kit/manifest.json', { cache: 'no-store' }); if (!r.ok) return [];
     const files = Object.keys((await r.json()).files || {}), slugs = [...new Set(files.map(f => (/^board\/automations\/([a-z0-9-]+)\/manifest\.json$/.exec(f) || [])[1]).filter(s => s && AUTO_SLUG.test(s)))];
@@ -4497,7 +4498,10 @@ if (typeof window !== 'undefined') (() => {
     const readFile = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (!r.ok) throw new Error(String(r.status)); const j = await r.json(); return { data: JSON.parse(b64d(j.content)), sha: j.sha }; };
     const readJson = async p => (await readFile(p)).data;
     const listDir = async p => { const r = await ghGet(`/repos/${c.repo}/contents/${enc(p)}${ref}`, null, c); if (r.status === 404) return []; if (!r.ok) throw new Error('Cannot read the automation packs. Check repository access in Settings → Connection.'); const d = await r.json(); return Array.isArray(d) ? d : []; };
-    const [kit, mine, regs] = await Promise.all([listDir('board/automations'), listDir('automations'), listDir('automation/routines')]);
+    // The runner's own report (relay's dispatcher writes it each sweep) is read alongside: connectors it holds, secret NAMES set,
+    // installs waiting for the owner's allowlist entry, last sweep.
+    const [kit, mine, regs, runner] = await Promise.all([listDir('board/automations'), listDir('automations'), listDir('automation/routines'),
+      readJson('automation/runner.json').then(autoRunnerInfo).catch(() => null)]);
     const packs = await Promise.all([...kit.map(x => ['kit', x]), ...mine.map(x => ['own', x])].filter(([, x]) => x.type === 'dir' && AUTO_SLUG.test(x.name)).map(async ([source, x]) => {
       const folder = (source === 'kit' ? 'board/automations/' : 'automations/') + x.name;
       try { const m = await readJson(folder + '/manifest.json'); return { source, folder, slug: x.name, m: m && typeof m === 'object' && !Array.isArray(m) ? m : null }; }
@@ -4507,8 +4511,6 @@ if (typeof window !== 'undefined') (() => {
     const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readFile('automation/routines/' + x.name).then(f => { raws[x.name] = f; return { ...f.data, __file: x.name }; }).catch(() => null))))
       .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object').map(r => ({ ...autoInstall(r), file: r.__file })).filter(r => AUTO_SLUG.test(r.automation.slug));
     if (!packs.length && !installs.length) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: 'upgrade' };
-    // The runner's own report (relay's dispatcher writes it each sweep): connectors it holds, secret NAMES set, last sweep.
-    const runner = await readJson('automation/runner.json').then(autoRunnerInfo).catch(() => null);
     return { packs, installs, raws, runner };
   }
   async function loadAutomations() {
@@ -4584,7 +4586,18 @@ if (typeof window !== 'undefined') (() => {
   // relay 0.9.35 splits the approval by risk: the switch alone runs a built-in pack that needs no connectors and no secrets;
   // any other pack also needs the owner's entry in relay/registry/automations.yaml. The runner reports those still waiting.
   const autoNeedsEntry = (p, m) => { const n = autoCloudNeeds(m || {}); return p.source !== 'kit' || n.connectors.length > 0 || n.secrets.length > 0; };
-  const autoAwaiting = (p, me) => !!(autoCache && autoCache.runner && autoCache.runner.waits.some(w => w.slug === p.slug && w.owner === me));
+  // A wait counts only for this person's own active install of a pack this page lists: runner.json is a file any board
+  // writer can edit, so it can never put a pack in front of the owner that they did not turn on themselves.
+  function autoWaits(me) {
+    const r = autoCache && autoCache.runner, items = (autoItems && autoItems.items) || [];
+    if (!r || !me) return [];
+    return r.waits.filter(w => w.owner === me).map(w => {
+      const x = items.find(i => i.p.slug === w.slug && i.p.m && !i.p.preview && !i.clash);
+      const mine = x && x.installs.find(i => String(i.owner || '').toLowerCase() === me && i.status === 'active');
+      return mine && AUTO_DIGEST.test(String(mine.automation.digest || '')) ? { slug: w.slug, p: x.p, digest: mine.automation.digest } : null;
+    }).filter(Boolean);
+  }
+  const autoAwaiting = (p, me) => autoWaits(me).some(w => w.slug === p.slug);
   function autoCloudNeeds(m) {   // keeptrack.py _auto_needs(m, "cloud"): what one cloud install of this pack needs
     const req = autoObj(m.requires), over = autoObj(req.cloud), pick = (k, re) => (Array.isArray(over[k]) ? over[k] : Array.isArray(req[k]) ? req[k] : []).filter(x => typeof x === 'string' && re.test(x));
     return { runner: autoStr(req.runner, 10) || 'any', connectors: pick('connectors', AUTO_NAME).map(x => x.toLowerCase()), secrets: pick('secrets', AUTO_SECRET) };
@@ -4604,7 +4617,7 @@ if (typeof window !== 'undefined') (() => {
   // NUL, bytes), every file of the pack folder except its top-level tests/. Read from git, so it matches a fresh clone.
   // Returns { digest, manifest }: the manifest read from the same files that were hashed, so what the switch grants is what
   // the dispatcher will run. Blobs are read in parallel; a pack's tree sha names its exact files, so the result is cached.
-  const autoDigests = new Map();
+  const autoDigests = new Map(), AUTO_PACK_FILES = 200, AUTO_PACK_BYTES = 4 << 20;
   async function autoDigest(c, folder) {
     const r = await ghGet(`/repos/${c.repo}/git/trees/${encodeURIComponent(c.branch + ':' + folder)}?recursive=1`, null, c);
     if (!r.ok) throw new Error('Cannot read the pack files.');
@@ -4612,10 +4625,14 @@ if (typeof window !== 'undefined') (() => {
     if ((t.tree || []).some(e => e.mode === '120000' || e.type === 'commit')) throw new Error('The pack holds a symlink or submodule.');
     if (t.sha && autoDigests.has(t.sha)) return autoDigests.get(t.sha);
     const files = (t.tree || []).filter(e => e.type === 'blob' && !/^tests\//.test(e.path)).sort((x, y) => x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
-    const raws = await Promise.all(files.map(async f => {
+    if (files.length > AUTO_PACK_FILES || files.reduce((n, f) => n + (Number(f.size) || 0), 0) > AUTO_PACK_BYTES) throw new Error('The pack is too large to turn on from the page.');
+    const raws = new Array(files.length); let next = 0;   // at most 8 blob reads at a time
+    const worker = async () => { while (next < files.length) { const i = next++, f = files[i];
       const b = await ghGet(`/repos/${c.repo}/git/blobs/${f.sha}`, null, c); if (!b.ok) throw new Error('Cannot read the pack files.');
-      return Uint8Array.from(atob(String((await b.json()).content || '').replace(/\s/g, '')), ch => ch.charCodeAt(0));
-    }));
+      const bin = atob(String((await b.json()).content || '').replace(/\s/g, '')), u = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k);
+      raws[i] = u; } };
+    await Promise.all(Array.from({ length: Math.min(8, files.length) }, worker));
     const enc = new TextEncoder(), parts = [];
     files.forEach((f, i) => parts.push(enc.encode(f.path), new Uint8Array([0]), enc.encode(String(raws[i].length)), new Uint8Array([0]), raws[i]));
     const all = new Uint8Array(parts.reduce((n, x) => n + x.length, 0)); let at = 0; parts.forEach(x => { all.set(x, at); at += x.length; });
@@ -4628,29 +4645,41 @@ if (typeof window !== 'undefined') (() => {
   const autoStamp = () => new Date().toISOString().replace(/\.(\d{3})\d*Z$/, '.$1Z');
   // The register an install, a cloud setup and an enable would leave (keeptrack.py cmd_automation), kept install_id and
   // run history when the same pack is turned on again.
+  // The register an install, a cloud setup and an enable would leave (keeptrack.py cmd_automation). Anyone who can write the board
+  // can write a register file, so an old one is never copied: a fresh register is built from the board on screen and the pack's
+  // hashed manifest, and only its run history, install_id and settings that pass the pack's declared types are carried over, and
+  // only when it is this person's, for this binding and board, not retired, and for the same pack files.
+  const autoTyped = (v, kind) => ((kind === 'string' || kind === 'path') && typeof v === 'string' && !v.includes('\0'))
+    || (kind === 'int' && Number.isInteger(v)) || (kind === 'bool' && typeof v === 'boolean');   // keeptrack.py _auto_config_type
+  const autoSameBoard = (r, c) => !!r && r.board_repo === c.repo && r.branch === c.branch && r.board_path === c.path;
   function autoRegister(p, m, me, c, digest, old) {   // m: the manifest from the hashed files (autoDigest)
     const binding = `auto-${p.slug}-${me}`, now = autoStamp();
-    // An old register is reused (its install_id, settings and run history) only when it is this person's, for this binding,
-    // not retired, and for the same pack files; anything else starts a fresh install.
-    const same = !!old && typeof old === 'object' && String(old.owner || '').toLowerCase() === me && old.id === binding && old.status !== 'retired' && autoObj(old.automation).digest === digest;
+    const same = !!old && typeof old === 'object' && String(old.owner || '').toLowerCase() === me && old.id === binding && old.status !== 'retired'
+      && autoSameBoard(old, c) && autoObj(old.automation).digest === digest;
     const spec = m.config && typeof m.config === 'object' && !Array.isArray(m.config) ? m.config : {}, config = {};
     Object.entries(spec).forEach(([k, v]) => { if (v && 'default' in v) config[k] = v.default; });
-    if (same) { const kept = autoObj(autoObj(old.automation).config); Object.keys(spec).forEach(k => { if (Object.hasOwn(kept, k)) config[k] = kept[k]; }); }   // only settings the pack declares
-    const needs = (Array.isArray(m.needs) ? m.needs : []).map(n => n && n.id).filter(x => typeof x === 'string');
     const prev = same ? autoObj(old.automation) : {};
-    const reg = same ? JSON.parse(JSON.stringify(old)) : { version: 1, id: binding, owner: me, board_repo: c.repo, branch: c.branch, board_path: c.path, status: 'paused', connections: needs.map(need => ({ need })), current_run: null };
+    if (same) { const kept = autoObj(prev.config); Object.entries(spec).forEach(([k, v]) => { if (Object.hasOwn(kept, k) && v && autoTyped(kept[k], v.type)) config[k] = kept[k]; }); }
+    const needs = (Array.isArray(m.needs) ? m.needs : []).map(n => n && n.id).filter(x => typeof x === 'string');
+    const reg = { version: 1, id: binding, owner: me, board_repo: c.repo, branch: c.branch, board_path: c.path, status: 'active',
+      connections: needs.map(need => ({ need })), current_run: null };
+    if (same) {   // run history only, so the throttle and the board's last-run line carry on
+      ['last_run', 'last_successful_run_at', 'last_started_at'].forEach(k => { if (Object.hasOwn(old, k)) reg[k] = old[k]; });
+      if (Array.isArray(old.runs)) reg.runs = old.runs.slice(-50);
+      if (prev.runner === 'cloud' && old.current_run) reg.current_run = old.current_run;   // a live cloud run stays the lock
+    }
     reg.automation = { schema: 'keeptrack-automation-install/1', slug: p.slug, source: p.source, pack_path: p.folder, pack_version: m.version, digest,
-      install_id: prev.install_id || ([...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join('')),
+      install_id: /^[0-9a-f]{32}$/.test(String(prev.install_id || '')) ? prev.install_id : [...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join(''),
       writes: 'proposals', every: own(AUTO_EVERY, prev.every) ? prev.every : m.every, config, network_granted: !!(m.check && m.check.network), runner: 'cloud',
       setup: { status: 'ready-cloud', runtime: 'claude', runner: 'cloud', checked_at: now, digest, notes: [], confirmed: needs } };
-    reg.status = 'active';
     return reg;
   }
   let autoBusy = '';
   async function autoSwitch(x, on) {
+    if (!autoCache || !autoItems || autoBusy) { render(); return; }   // a stale switch (the page is reloading): redraw, never act
     const c = cfg(), me = autoItems.me, p = x.p, mine = x.installs.find(r => String(r.owner || '').toLowerCase() === me);
     const file = `auto-${p.slug}-${me}.json`, raw = (autoCache.raws || {})[file], path = 'automation/routines/' + file;
-    if (autoBusy || ro || !c.token || !me) return;
+    if (ro || !c.token || !me) { render(); return; }
     autoBusy = p.slug; render();
     try {
       let next;
@@ -4659,14 +4688,18 @@ if (typeof window !== 'undefined') (() => {
         const { digest, manifest } = await autoDigest(c, p.folder);
         if (autoBlocked({ ...p, m: manifest }, autoCache.runner)) throw new Error('The pack changed since the page loaded. Refresh and try again.');
         const reads = (Array.isArray(manifest.needs) ? manifest.needs : []).map(n => n && n.id).filter(id => typeof id === 'string' && id !== 'board.read');
-        const secrets = autoCloudNeeds(manifest).secrets;
-        if (reads.length || secrets.length || (manifest.check && manifest.check.network)) {   // never grant access silently: say what it reads, uses and holds
+        const { secrets, connectors } = autoCloudNeeds(manifest);
+        if (reads.length || secrets.length || connectors.length || (manifest.check && manifest.check.network)) {   // never grant access silently: say what it reads, uses and holds
           const lines = [...reads.map(id => 'Reads ' + ((own(AUTO_NEEDS, id) || [id])[0])), ...(manifest.check && manifest.check.network ? ['Uses the network for its check'] : []),
+            ...connectors.map(v => `Uses the ${own(AUTO_CONNECTORS, v) || v} connector on your runner`),
             ...(secrets.length ? ['Uses the runner secret ' + secrets.join(', ')] : [])];
           const entry = autoNeedsEntry(p, manifest) ? ' It runs only after you also approve it in relay/registry/automations.yaml: the runner setup shows how.' : '';
           if (!(await ui.confirm({ title: `Turn on ${autoStr(manifest.name, 80) || p.slug}?`, body: lines.join('. ') + '. It only proposes changes for your Review Inbox.' + entry, confirmLabel: 'Turn on' }))) { autoBusy = ''; render(); return; }
         }
-        next = autoRegister(p, manifest, me, c, digest, raw && raw.data);
+        const old = raw && raw.data && typeof raw.data === 'object' ? raw.data : null;
+        if (old && old.status !== 'retired' && typeof old.board_repo === 'string' && !autoSameBoard(old, c)) throw new Error('This automation is installed for another board in this repo. Uninstall it there first.');
+        if (old && old.current_run && autoObj(old.automation).runner !== 'cloud') throw new Error('It has a run in progress on another runner. Let it finish first.');   // as keeptrack.py setup
+        next = autoRegister(p, manifest, me, c, digest, old);
       } else {
         if (!raw || !mine) throw new Error('It is not on.');
         next = JSON.parse(JSON.stringify(raw.data)); next.status = 'paused';
@@ -4688,15 +4721,15 @@ if (typeof window !== 'undefined') (() => {
     return b;
   }
   function runnerPanel(data, packs) {
-    const r = data.runner, box = el('div', 'runnerbox'), ago = r && r.at ? Math.round((Date.now() - r.at) / 60000) : null;
+    const r = data.runner, box = el('div', 'runnerbox'), ago = r && r.at ? Math.max(0, Math.round((Date.now() - r.at) / 60000)) : null;
     const fresh = ago !== null && ago < RUNNER_FRESH_H * 60;
     const need = new Set(); packs.forEach(x => { if (x.p.m && !x.p.preview) { const n = autoCloudNeeds(x.p.m); n.connectors.forEach(v => need.add('c:' + v)); n.secrets.forEach(v => need.add('s:' + v)); } });
     const missing = r ? [...need].filter(k => k[0] === 'c' ? !r.connectors.includes(k.slice(2)) : !r.secrets.includes(k.slice(2))) : [];
-    const waits = r ? r.waits.filter(w => w.owner === autoItems.me).length : 0;
+    const waits = autoWaits(autoItems.me).length;
     const [label, tone] = !r ? ['Not set up', 'warn'] : !fresh ? ['Not sweeping', 'danger'] : missing.length || waits ? ['Ready, with gaps', 'warn'] : ['Ready', 'ok'];
     const text = el('span', 'autorow__text');
     text.append(el('h3', null, 'Cloud runner'), el('span', 'autorow__summary', !r ? 'One routine runs every automation you turn on. Set it up once.' :
-      `Last sweep ${ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}${missing.length ? ` · missing ${missing.length}` : ''}${waits ? ` · ${waits} to approve` : ''}`));
+      `Last sweep ${ago === null ? 'unknown' : ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}${missing.length ? ` · missing ${missing.length}` : ''}${waits ? ` · ${waits} to approve` : ''}`));
     const tile = el('span', 'autocard__icon'); tile.append(svgIcon('refresh-cw')); tile.setAttribute('aria-hidden', 'true');
     const open = el('button', 'autorow__open runnerbox__open'); open.type = 'button'; open.append(tile, text, el('span', `ui-pill ui-pill--${tone} runnerbox__state`, label), svgIcon('chevron-right'));
     open.setAttribute('aria-label', `Cloud runner: ${label}. Open setup`); open.onclick = () => openRunner(); box.append(roKeep(open));
@@ -4711,7 +4744,7 @@ if (typeof window !== 'undefined') (() => {
     wrap.append(el('p', 'autocard__summary', 'A Claude routine on this repo sweeps on a schedule, starts each automation that is on and due, and only when its cheap check finds something new. It holds the connectors and secrets the automations need; this board stores only their names.'));
     const ago = r && r.at ? (Date.now() - r.at) / 3600000 : null, list = el('div', 'runnercheck');
     const item = (ok, title, fix) => list.append(ui.check({ state: ok ? 'ok' : 'warn', text: title, fix: ok ? null : fix }));
-    item(!!r && ago < RUNNER_FRESH_H, r ? (ago < RUNNER_FRESH_H ? 'The routine is sweeping' : 'The routine has not swept for a day') : 'A routine runs the automations',
+    item(!!r && ago !== null && ago < RUNNER_FRESH_H, !r ? 'A routine runs the automations' : ago === null ? 'The routine has not said when it swept' : ago < RUNNER_FRESH_H ? 'The routine is sweeping' : 'The routine has not swept for a day',
       'Create one Claude routine on this repo that runs relay’s dispatcher (relay/prompts/dispatcher-loader.md) at least daily. Ask my assistant below to set it up.');
     const need = new Map(); (data.packs || []).forEach(p => { if (p.m) { const n = autoCloudNeeds(p.m); n.connectors.forEach(v => need.set('c:' + v, v)); n.secrets.forEach(v => need.set('s:' + v, v)); } });
     [...need].forEach(([k, v]) => {
@@ -4719,14 +4752,18 @@ if (typeof window !== 'undefined') (() => {
       item(held, k[0] === 'c' ? `${own(AUTO_CONNECTORS, v) || v} connector on the routine` : `${v} in the routine’s environment`,
         k[0] === 'c' ? `Add the ${own(AUTO_CONNECTORS, v) || v} connector to the routine in its claude.ai settings.` : `Add the secret ${v} to the routine’s environment (claude.ai → the routine’s environment → secrets). Its value never goes in the repo.`);
     });
-    const me = (autoItems && autoItems.me) || '', waits = r ? r.waits.filter(w => w.owner === me) : [];
-    waits.forEach(w => item(false, `Approve ${w.slug} for the runner`, `It uses connectors or secrets, is your own pack, or is on a board that is not your relay home, so relay also needs your entry in relay/registry/automations.yaml (board, slug, owner, the pack's digest, runner, connectors, secrets). Ask my assistant below to open that PR; you merge it.`));
+    const me = (autoItems && autoItems.me) || '', waits = autoWaits(me);
+    const waitNeeds = w => { const n = autoCloudNeeds(w.p.m); return [...n.connectors.map(v => (own(AUTO_CONNECTORS, v) || v) + ' connector'), ...n.secrets]; };
+    waits.forEach(w => item(false, `Approve ${autoStr(w.p.m.name, 80) || w.slug} for the runner (${w.p.source === 'kit' ? 'built-in' : 'your board’s own pack'}${waitNeeds(w).length ? ', uses ' + waitNeeds(w).join(', ') : ''})`,
+      `You turned it on, but it uses connectors or secrets, is the board's own pack, or is on a board that is not your relay home, so relay also needs your entry in relay/registry/automations.yaml for digest ${w.digest.slice(0, 12)}…. Check the pack's files and who changed them before you approve. Ask my assistant below to open that PR; you merge it.`));
     wrap.append(list);
     const row = el('div', 'autocard__actions'), ask = elI('button', 'small primary', 'bot', 'Ask my assistant'); ask.type = 'button';
     ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one Claude routine that runs relay's dispatcher and the board's automations.`,
       'Read relay/README.md (Automations) and relay/prompts/dispatcher-loader.md in the board repo first.',
       `It must hold these connectors: ${[...need].filter(([k]) => k[0] === 'c').map(([, v]) => v).join(', ') || 'none'}; and these secret names in its environment: ${[...need].filter(([k]) => k[0] === 's').map(([, v]) => v).join(', ') || 'none'}.`,
-      ...(waits.length ? [`Also add an entry to relay/registry/automations.yaml for each of these, as @${me}, with runner cloud, pinned to the digest \`python3 board/keeptrack.py automation show <slug>\` prints, and only the connectors and secret names the pack needs: ${waits.map(w => w.slug).join(', ')}. Open it as a PR for me to merge.`] : []),
+      ...(waits.length ? [`I turned on these automations, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
+        ...waits.map(w => `- ${w.slug} (${w.p.folder}), digest ${w.digest}, needs: ${waitNeeds(w).join(', ') || 'nothing beyond the board'}`),
+        'For each one, first show me its files, its manifest needs and the git log of its folder, and check its digest matches the one above (python3 board/keeptrack.py automation show <slug>). Add an entry only after I say yes to that pack, with only the connectors and secret names it needs, pinned to that digest. Open it as a PR for me to merge.'] : []),
       'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the routine.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
     const link = el('a', 'autocard__link', 'Routines on claude.ai ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';
     row.append(ask, link); uiBtns(row); wrap.append(row);
@@ -4758,7 +4795,7 @@ if (typeof window !== 'undefined') (() => {
     if (toggles) row.append(autoSwitchEl(x));
     return row;
   }
-  const autoSwitchable = x => !DEMO && !x.p.preview && !!x.p.m && x.p.source !== 'missing' && !!autoItems.me && !!cfg().token;
+  const autoSwitchable = x => !DEMO && !x.p.preview && !!x.p.m && x.p.source !== 'missing' && !x.clash && !!autoItems.me && !!cfg().token;   // a slug clash stops every automation command
   function openAuto(slug) { autoOpenSlug = slug; fillAuto(); if (!$('dlgAuto').open) $('dlgAuto').showModal(); $('auBody').scrollTop = 0; }
   function fillAuto() {
     if (autoOpenSlug === ':runner') { $('auBody').replaceChildren(runnerSheet()); return; }
