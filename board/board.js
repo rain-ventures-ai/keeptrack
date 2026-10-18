@@ -4483,7 +4483,7 @@ if (typeof window !== 'undefined') (() => {
     return { id: autoStr(o.id, 120), owner: autoStr(o.owner, 40), status: autoStr(o.status, 20), board_repo: autoStr(o.board_repo), branch: autoStr(o.branch), board_path: autoStr(o.board_path),
       last_successful_run_at: autoStr(o.last_successful_run_at, 40), last_run: last && { status: autoStr(last.status, 20), summary: autoStr(last.summary) },
       current_run: o.current_run ? { started_at: autoStr(cur.started_at, 40) } : null,
-      automation: { slug: autoStr(a.slug, 63), every: autoStr(a.every, 10), digest: AUTO_DIGEST.test(String(a.digest || '')) ? a.digest : '', setup: { notes: Array.isArray(setup.notes) ? setup.notes.slice(0, 10).map(x => autoStr(x, 40)) : [] } } };
+      automation: { slug: autoStr(a.slug, 63), every: autoStr(a.every, 10), runner: a.runner === 'cloud' ? 'cloud' : 'local', digest: AUTO_DIGEST.test(String(a.digest || '')) ? a.digest : '', setup: { notes: Array.isArray(setup.notes) ? setup.notes.slice(0, 10).map(x => autoStr(x, 40)) : [] } } };
   }
   let autoCache = null, autoGen = 0;
   // This person's install of a pack: only the register at its own binding (automation/routines/auto-<slug>-<login>.json, id the
@@ -4593,15 +4593,17 @@ if (typeof window !== 'undefined') (() => {
   function autoAllowlist(text) {
     const out = [], lines = String(text || '').split('\n').map(l => l.replace(/\s+#.*$|^#.*$/, '').replace(/\s+$/, ''));
     const scalar = v => { const m = /^"([^"\\]*)"$|^'([^']*)'$|^([^\s"'\[\]{},][^"'\[\]{},]*)$/.exec(v); return m ? (m[1] ?? m[2] ?? m[3]) : null; };
-    let inside = false, cur = null, listKey = null, bad = false;
-    const close = () => { if (cur && !bad) out.push(cur); cur = null; listKey = null; bad = false; };
+    let inside = false, seen = false, cur = null, listKey = null, bad = false, broken = false;
+    const names = new Set();
+    const close = () => { if (cur && (bad || (listKey && !cur[listKey].length))) broken = true; else if (cur) out.push(cur); cur = null; listKey = null; bad = false; };
     for (const line of lines) {
       if (!line) continue;
-      if (/^automations:$/.test(line)) { inside = true; continue; }
+      if (/^---|^\.\.\./.test(line)) { broken = true; break; }   // one document only, as relay reads it
+      if (/^automations:$/.test(line)) { if (seen) { broken = true; break; } inside = seen = true; continue; }
       if (!/^\s/.test(line)) { close(); inside = false; continue; }
       if (!inside) continue;
       let m;
-      if ((m = /^  ([A-Za-z0-9_.-]+):$/.exec(line))) { close(); cur = { connectors: [], secrets: [] }; continue; }
+      if ((m = /^  ([A-Za-z0-9_.-]+):$/.exec(line))) { close(); if (names.has(m[1])) { broken = true; break; } names.add(m[1]); cur = { connectors: [], secrets: [] }; continue; }
       if (!cur) continue;
       if (listKey && (m = /^      - (.+)$/.exec(line))) { const v = scalar(m[1]); if (v === null) bad = true; else cur[listKey].push(v); continue; }
       listKey = null;
@@ -4615,11 +4617,13 @@ if (typeof window !== 'undefined') (() => {
         } else { const x = scalar(v); if (x === null) bad = true; else cur[k] = x; }
         continue;
       }
-      bad = true;   // an unknown field or shape: this entry approves nothing
+      bad = true;   // an unknown field or shape
     }
     close();
-    return out.filter(e => typeof e.board === 'string' && AUTO_SLUG.test(e.slug || '') && typeof e.owner === 'string' && AUTO_DIGEST.test(e.digest || '') && (e.runner === 'cloud' || e.runner === 'local')
+    if (broken) return [];   // relay.py check refuses the whole file for any bad entry, so nothing in it is approved here either
+    const ok = out.filter(e => typeof e.board === 'string' && AUTO_SLUG.test(e.slug || '') && typeof e.owner === 'string' && AUTO_DIGEST.test(e.digest || '') && (e.runner === 'cloud' || e.runner === 'local')
       && e.connectors.every(x => AUTO_CONN.test(x)) && e.secrets.every(x => AUTO_SECRET.test(x)));
+    return ok.length === out.length ? ok : [];
   }
   // Is this person's install of this pack approved for the cloud runner: an allowlist entry for this board, slug, owner and
   // runner, at the install's digest, that names every connector and secret the pack needs (as relay's automation-pick).
@@ -4637,7 +4641,7 @@ if (typeof window !== 'undefined') (() => {
     if (!me) return [];
     return items.filter(x => x.p.m && !x.p.preview && !x.clash).map(x => {
       const mine = autoMine(x.installs, x.p.slug, me);
-      return mine && mine.status === 'active' && AUTO_DIGEST.test(String(mine.automation.digest || '')) && !autoApproved(x.p, mine, me)
+      return mine && mine.status === 'active' && mine.automation.runner === 'cloud' && AUTO_DIGEST.test(String(mine.automation.digest || '')) && !autoApproved(x.p, mine, me)
         ? { slug: x.p.slug, p: x.p, digest: mine.automation.digest } : null;
     }).filter(Boolean);
   }
@@ -4743,6 +4747,7 @@ if (typeof window !== 'undefined') (() => {
           if (!(await ui.confirm({ title: `Turn on ${autoStr(manifest.name, 80) || p.slug}?`, body: lines.join('. ') + '. It only proposes changes for your Review Inbox.' + entry, confirmLabel: 'Turn on' }))) { autoBusy = ''; render(); return; }
         }
         let old = raw && raw.data && typeof raw.data === 'object' ? raw.data : null;
+        if (old && old.status !== 'retired' && (String(old.owner || '').toLowerCase() !== me || autoObj(old.automation).slug !== p.slug)) throw new Error('This register belongs to another install (another person or pack shares its file name). Uninstall that one first.');   // as keeptrack.py install
         if (old && old.status !== 'retired' && typeof old.board_repo === 'string' && !autoSameBoard(old, c)) throw new Error('This automation is installed for another board in this repo. Uninstall it there first.');
         if (old && old.current_run && (autoObj(old.automation).runner !== 'cloud' || autoObj(old.automation).digest !== digest)) throw new Error('It has a run in progress. Let it finish first.');   // as keeptrack.py setup; a changed pack never drops a live run's lock
         next = autoRegister(p, manifest, me, c, digest, old);
@@ -4784,7 +4789,7 @@ if (typeof window !== 'undefined') (() => {
   // The packs this person has on: the runner reports only the connectors and secret names their approved entries name, so
   // the checklist asks only about what an automation that is on needs.
   const autoOnPacks = () => ((autoItems && autoItems.items) || []).filter(x => { const mine = x.p.m && !x.p.preview && autoMine(x.installs, x.p.slug, autoItems.me);
-    return mine && mine.status === 'active' && autoApproved(x.p, mine, autoItems.me); }).map(x => x.p);   // on AND approved: only these may ask for a connector or secret
+    return mine && mine.status === 'active' && mine.automation.runner === 'cloud' && autoApproved(x.p, mine, autoItems.me); }).map(x => x.p);   // on AND approved: only these may ask for a connector or secret
   function openRunner() { autoOpenSlug = ':runner'; fillAuto(); if (!$('dlgAuto').open) $('dlgAuto').showModal(); $('auBody').scrollTop = 0; }
   function runnerSheet() {
     const data = autoCache || {}, r = data.runner, c = cfg(), wrap = el('article', 'autocard autocard--sheet runnersheet');

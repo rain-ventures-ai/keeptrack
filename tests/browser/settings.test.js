@@ -528,7 +528,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       page.api.extra['/contents/automation/runner.json'] = { schema: 'keeptrack-runner/1', updated_at: new Date().toISOString(), relay: '0.9.35',
         connectors: cloud.connectors || need.connectors || [], secrets: cloud.secrets || need.secrets || [] };
       page.api.extra['/contents/automation/routines'] = [{ type: 'file', name: 'auto-email-to-tasks-alex.json' }];
-      page.api.extra['/contents/automation/routines/auto-email-to-tasks-alex.json'] = { id: 'auto-email-to-tasks-alex', owner: 'mallory', status: 'paused',
+      page.api.extra['/contents/automation/routines/auto-email-to-tasks-alex.json'] = { id: 'auto-email-to-tasks-alex', owner: 'alex', status: 'paused',
         automation: { slug: 'email-to-tasks', digest: 'x', install_id: 'planted', config: { lookback_days: 999, planted: 'yes' }, setup: {} } };
       page.api.puts = [];
       await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
@@ -544,7 +544,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await (async () => { for (let i = 0; i < 50 && page.api.puts.length < 1; i++) await page.waitForTimeout(100); })();
       assert.equal(page.api.puts.length, 1);
       const reg2 = JSON.parse(Buffer.from(page.api.puts[0].body.content, 'base64').toString());
-      assert.equal(reg2.owner, 'alex'); assert.notEqual(reg2.automation.install_id, 'planted', 'another owner\'s register is not reused');
+      assert.equal(reg2.owner, 'alex'); assert.notEqual(reg2.automation.install_id, 'planted', 'a register for other pack files is not reused');
       assert.equal(reg2.board_path, 'board/tasks.json', 'the register names the board on screen');
       assert.equal(reg2.automation.network_granted, true, 'the network grant was confirmed');
       assert.equal(Object.hasOwn(reg2.automation.config, 'planted'), false, 'only settings the pack declares');
@@ -581,6 +581,9 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       page.api.raw['/contents/relay/registry/automations.yaml'] = yml(entry().replace(reg2.automation.digest, 'f'.repeat(64)));
       await page.locator('.autos__tools button', { hasText: 'Refresh' }).click(); await page.waitForTimeout(300);
       await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
+      page.api.raw['/contents/relay/registry/automations.yaml'] = yml(entry() + 'automations:\n  other:\n    board: acme/board\n');
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click(); await page.waitForTimeout(300);
+      await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));   // a second block: relay refuses the file, so nothing is approved
       page.api.raw['/contents/relay/registry/automations.yaml'] = yml(entry());
       await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
       await page.waitForFunction(() => { const r = document.querySelector('.autorow[data-slug="email-to-tasks"]'); return r && !/Needs approval/.test(r.textContent) && r.querySelector('.autoswitch'); });
@@ -589,6 +592,17 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       if (conns.length || secs.length) assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), / connector on the routine| in the routine’s environment/, 'an approved install lists what the routine must hold');
       assert.doesNotMatch(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve /);
       await page.locator('#auClose').click();
+      // A local install is never a cloud wait; a register under this binding that belongs to someone else is never overwritten.
+      page.api.extra['/contents/automation/routines'] = [{ type: 'file', name: 'auto-email-to-tasks-alex.json' }, { type: 'file', name: 'auto-stale-cards-nudge-alex.json' }];
+      page.api.extra['/contents/automation/routines/auto-stale-cards-nudge-alex.json'] = { ...reg, automation: { ...reg.automation, runner: 'local', setup: { ...reg.automation.setup, status: 'ready', runner: 'local' } } };
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
+      await page.waitForFunction(() => { const r = document.querySelector('.autorow[data-slug="stale-cards-nudge"] .autoswitch'); return r; });
+      assert.doesNotMatch(await page.locator('.autorow[data-slug="stale-cards-nudge"]').textContent(), /Needs approval/, 'a local install is not a cloud install waiting for approval');
+      page.api.extra['/contents/automation/routines/auto-stale-cards-nudge-alex.json'] = { ...reg, owner: 'c', status: 'active', automation: { ...reg.automation, slug: 'other' } };
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
+      await page.waitForFunction(() => { const b = document.querySelector('.autorow[data-slug="stale-cards-nudge"] .autoswitch'); return b && !b.disabled && b.getAttribute('aria-checked') === 'false'; });
+      page.api.puts = []; await sw('stale-cards-nudge').click(); await page.waitForTimeout(800);
+      assert.equal(page.api.puts.length, 0, 'a register under this file name that belongs to another person or pack is never overwritten');
       assert.deepEqual(page.errors, []); await page.close();
     }
     // 17. The routine register leaves automation installs to the Automations page; the old Settings deep link opens a button to it.
