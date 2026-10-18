@@ -100,6 +100,50 @@ a fresh clone cannot run the same automation again within one interval once the 
 `last_started_at` more than five minutes in the future is ignored, so a bad edit cannot stop an automation for good.
 Before kit v73 an install has no runner: it is `local`.
 
+## The board page: one runner, a switch per automation (kit v74)
+
+The Automations page lists one row per pack: icon, name, a one-line summary and a switch. Tapping a row opens its
+details in a drawer (the flow, what it reads, the Never list, the last run). The panel at the top is the **cloud
+runner**: one Claude routine, relay's dispatcher, that runs every automation that is on. Its setup sheet lists what
+the runner still lacks (a connector, a secret NAME) and how to add it.
+
+**The runner's report.** Each dispatcher run writes `automation/runner.json` (relay 0.9.35, `relay.py runner-status
+--write`), and commits it when it changed or is 12 hours old:
+
+```json
+{"schema": "keeptrack-runner/1", "updated_at": "2026-10-17T12:00:00.000Z", "relay": "0.9.35",
+ "connectors": ["gmail"], "secrets": ["GOG_HOME_ARCHIVE"],
+ "awaiting_approval": [{"slug": "email-to-tasks", "owner": "alexdemo"}]}
+```
+
+`connectors` and `secrets` are the claude.ai connector names and secret NAMES the owner's entries for this board approve
+that the routine holds and has set (never the routine's other connectors, never a name a manifest guessed, never a
+value). `awaiting_approval` lists the person's installs that are on but that no entry approves (below). The runner
+checklist asks only about what an automation that is on needs. A runner that has not swept for 26 hours shows as not sweeping.
+
+**The switch.** Turning an automation on writes its install register as the person, as `automation install --runner
+cloud`, `setup --runtime claude --runner cloud` and `enable` would: the pack digest is computed in the browser from the
+pack's files in git (the same rule as `_auto_pack`: every file but the top-level `tests/`, sorted), and the network
+grant and the confirmed needs come from the manifest in those same files. A pack that reads more than the board, uses
+the network, needs a connector or needs a secret asks first. A pack that runs only locally, has no cloud route for
+something it reads, or needs a setting cannot be turned on from the page, and says why. An old register
+is reused (its install_id, settings and run history) only when it is the same person's, for the same binding, not
+retired, and for the same pack files. Turning it off sets the install to `paused`.
+
+**The switch turns it on; the allowlist approves it** (relay 0.9.35). Every run also needs the owner's entry in
+`relay/registry/automations.yaml`, pinned to the pack's digest (relay's README, Automations). Anyone who can write the
+board can write a register or a pack folder, and a commit's author is an email anyone can set, so the page never says
+who wrote a register: it says what the register says, and the merge-gated entry is the approval. The page reads
+`relay/registry/automations.yaml` itself (never `runner.json` or a register; the file relay itself trusts, so it is as
+safe as write access to the relay home, with master-alarm's P0 on any direct push: relay's README, Automations) to
+decide what is approved: an entry for
+this board, slug, owner and the cloud runner, at the install's digest, naming every connector and secret the pack
+needs. Until an install has one, its row says "Needs approval", the runner checklist asks for no connector or secret
+for it, and the runner setup lists it
+with a prompt for the owner's assistant: show the pack's files and the git log of its folder and its register,
+confirm with the owner, then open the entry's PR for the owner to merge. The confirm dialog and the "on" message say
+so too.
+
 ## Included packs
 
 - stale-cards-nudge: local board attention logic, a nudge proposal per card per ISO week; no external access.

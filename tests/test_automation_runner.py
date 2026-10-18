@@ -647,9 +647,14 @@ class Runner(unittest.TestCase):
 class Docs(unittest.TestCase):
     def read(self, rel): return (KIT / rel).read_text(encoding='utf-8')
 
-    def test_kit_is_v73_with_an_upgrade_note_and_changelog(self):
-        self.assertEqual(kt.KIT_VERSION, 73)
-        self.assertEqual(json.loads(self.read('manifest.json'))['version'], 73)
+    def test_kit_is_v74_with_upgrade_notes_and_changelog(self):
+        self.assertEqual(kt.KIT_VERSION, 74)
+        self.assertEqual(json.loads(self.read('manifest.json'))['version'], 74)
+        v74 = self.read('UPGRADING.md').split('### v74 (schema 4)', 1)[1].split('### v73', 1)[0]
+        for words in ('kit-update', 'automation/runner.json', 'relay/registry/automations.yaml', '0.9.35'): self.assertIn(words, v74)
+        self.assertIn('Kit v74', (KIT.parents[1] / 'CHANGELOG.md').read_text(encoding='utf-8'))
+        guide = self.read('AUTOMATIONS.md')
+        for words in ('awaiting_approval', 'the allowlist approves it', 'relay/registry/automations.yaml'): self.assertIn(words, guide)
         v73 = self.read('UPGRADING.md').split('### v73 (schema 4)', 1)[1].split('### v72', 1)[0]
         for words in ('--runner cloud', '--connectors', 'automation setup', 'GOG_HOME_ARCHIVE'): self.assertIn(words, v73)
         self.assertIn('Kit v73', (KIT.parents[1] / 'CHANGELOG.md').read_text(encoding='utf-8'))

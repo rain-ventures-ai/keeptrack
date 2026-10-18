@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <!-- Content-Security-Policy: this origin and the catalogue script below (by hash; tests/test_web_page.py checks it). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-U4FzqztHJ/JIae9zYioL+f8nkvM/cCTWwwB/UihKGkI='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-e0aRgsFQuezKgie7vA4S8TBPGaXW363IqQ5yHAeG9YQ='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Keeptrack UI components</title>
 <script src="theme.js"></script>
@@ -190,6 +190,11 @@
     s.append(row(b1, b2, b3));
   });
 
+  demo('toggle', 'ui.toggle({checked, label, onChange, disabled, title})', s => {
+    s.append(row(ui.toggle({ label: 'Stale cards nudge', onChange: v => log('toggle ' + v) }), ui.toggle({ label: 'Email to tasks', checked: true }),
+      ui.toggle({ label: 'Notes to tasks', disabled: true, title: 'Needs Gmail on your runner.' })));
+    s.querySelector('.ui-toggle').id = 'catToggle';
+  });
   demo('banner', 'ui.banner({tone, text, action, onDismiss})', s => {
     s.append(ui.banner({ tone: 'info', text: 'Board tools v19 are available.', action: { label: 'Upgrade', onClick: () => log('banner upgrade') } }),
       ui.banner({ tone: 'ok', text: 'Connected to acme/board.' }),

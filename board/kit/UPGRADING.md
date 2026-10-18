@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v74 (schema 4)
+The Automations page gets one cloud runner panel and an on/off switch per automation; a row opens its details in a
+drawer. The switch commits the person's install register (`automation/routines/auto-<slug>-<login>.json`) with the
+GitHub token the page already uses. No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v74, and the Automations page loads and shows the runner panel.
+- Upgrade relay to 0.9.35 too, and let the dispatcher run once: it writes `automation/runner.json`, which the panel
+  reads. Until then the panel says "Not set up" and the switches stay off.
+- Every automation you switch on also needs your entry in `relay/registry/automations.yaml`, pinned to its digest,
+  before it runs. The runner panel lists those and copies a prompt for your assistant to open the entry's PR.
+
 ### v73 (schema 4)
 Automations learn where they run. A pack manifest may carry an optional `requires` object (runner, claude.ai
 connectors, secret NAMES, and a `script` or `model` check); the three built-in packs declare theirs (pack version
