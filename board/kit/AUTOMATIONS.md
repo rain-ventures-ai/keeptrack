@@ -134,7 +134,9 @@ retired, and for the same pack files. Turning it off sets the install to `paused
 `relay/registry/automations.yaml`, pinned to the pack's digest (relay's README, Automations). Anyone who can write the
 board can write a register or a pack folder, and a commit's author is an email anyone can set, so the page never says
 who wrote a register: it says what the register says, and the merge-gated entry is the approval. The page reads
-`relay/registry/automations.yaml` itself (never `runner.json` or a register) to decide what is approved: an entry for
+`relay/registry/automations.yaml` itself (never `runner.json` or a register; the file relay itself trusts, so it is as
+safe as write access to the relay home, with master-alarm's P0 on any direct push: relay's README, Automations) to
+decide what is approved: an entry for
 this board, slug, owner and the cloud runner, at the install's digest, naming every connector and secret the pack
 needs. Until an install has one, its row says "Needs approval", the runner checklist asks for no connector or secret
 for it, and the runner setup lists it
