@@ -493,14 +493,13 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await page.evaluate(() => document.getElementById('btnAutos').click());
       await page.waitForFunction(() => document.querySelectorAll('.autorow').length === 2);
       assert.match(await page.locator('.runnerbox').textContent(), /Last sweep 12 min ago/, 'the runner panel says when it last swept');
-      assert.match(await page.locator('.runnerbox').textContent(), /Ready, with gaps/, 'email-to-tasks needs Gmail or a secret the runner lacks');
+      assert.match(await page.locator('.runnerbox').textContent(), /Ready/, 'nothing is on yet, so the runner lacks nothing');
       const sw = slug => page.locator(`.autorow[data-slug="${slug}"] .autoswitch`);
-      assert.equal(await sw('email-to-tasks').isDisabled(), true, 'a pack whose needs the runner lacks cannot be turned on');
-      assert.match(await sw('email-to-tasks').getAttribute('title'), /on your runner/);
+      assert.equal(await sw('email-to-tasks').isDisabled(), false, 'the runner reports only approved names, so a pack is never blocked on them: it can be turned on and then approved');
       assert.equal(await sw('stale-cards-nudge').getAttribute('aria-checked'), 'false');
       await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
       assert.match(await page.locator('#dlgAuto .runnersheet').textContent(), /The routine is sweeping/);
-      assert.ok(await page.locator('#dlgAuto .runnercheck .ui-check--warn').count() >= 1, 'the checklist lists what the runner lacks');
+      assert.equal(await page.locator('#dlgAuto .runnercheck .ui-check--warn').count(), 0, 'nothing is on, so the checklist asks for nothing');
       await page.waitForTimeout(350); await shot(page, 'automation-runner'); await page.locator('#auClose').click();
       await sw('stale-cards-nudge').click();
       await page.waitForFunction(() => window.__lastPut || true); await page.waitForTimeout(400);
@@ -552,16 +551,6 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.notEqual(reg2.automation.config.lookback_days, 999, 'and the pack defaults, not the planted values');
       // relay 0.9.35 split by risk: the runner reports an install that is on but waits for the owner's allowlist entry.
       page.api.extra['/contents/automation/routines/auto-email-to-tasks-alex.json'] = reg2;
-      // The last commit claims alex as author (an email anyone can set) but is not signed: not offered for approval.
-      page.api.raw['/commits'] = [{ author: { login: 'alex' }, committer: { login: 'mallory' }, commit: { verification: { verified: false } } }];
-      page.api.extra['/contents/automation/runner.json'] = { ...page.api.extra['/contents/automation/runner.json'], awaiting_approval: [{ slug: 'email-to-tasks', owner: 'alex' }] };
-      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
-      await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
-      await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
-      assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), /someone else last changed your install/, 'a register someone else committed last is flagged, not offered');
-      assert.doesNotMatch(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve /);
-      await page.locator('#auClose').click();
-      page.api.raw['/commits'] = [{ author: { login: 'Alex' }, committer: { login: 'web-flow' }, commit: { verification: { verified: true } } }];
       page.api.extra['/contents/automation/runner.json'] = { ...page.api.extra['/contents/automation/runner.json'], awaiting_approval: [{ slug: 'email-to-tasks', owner: 'alex' }, { slug: 'bad slug!', owner: 'alex' }, { slug: 'stale-cards-nudge', owner: 'alex' }] };
       await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
       await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));

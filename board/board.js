@@ -4489,19 +4489,6 @@ if (typeof window !== 'undefined') (() => {
   // This person's install of a pack: only the register at its own binding (automation/routines/auto-<slug>-<login>.json, id the
   // same), never one that merely says it is theirs. Any board writer can write a register file under any name.
   const autoMine = (installs, slug, me) => !me ? undefined : installs.find(r => r.file === `auto-${slug}-${me}.json` && r.id === `auto-${slug}-${me}` && String(r.owner || '').toLowerCase() === me);
-  // Whether this person made the last commit to a register file: { yours, by }. A commit's author is only an email anyone can set,
-  // so it counts as theirs only when GitHub verified the commit's signature and both its author and its committer are them (or
-  // GitHub's own web-flow committer, as for the page's and the CLI's API writes). `by`: the login GitHub shows, for the warning.
-  // The switch and the approval list trust a register's content only when it is `yours`; anything else fails closed.
-  async function autoLastAuthor(c, file) {
-    const r = await ghGet(`/repos/${c.repo}/commits?path=${encodeURIComponent('automation/routines/' + file)}&sha=${encodeURIComponent(c.branch)}&per_page=1`, null, c).catch(() => null);
-    const me = (c.me || '').replace(/^@/, '').toLowerCase();
-    if (!r || !r.ok) return { yours: false, by: '' };
-    const j = await r.json().catch(() => null), x = Array.isArray(j) && j[0] && typeof j[0] === 'object' ? j[0] : {};
-    const login = v => v && typeof v.login === 'string' ? v.login.toLowerCase() : '', by = login(x.author), cm = login(x.committer);
-    const verified = !!(x.commit && x.commit.verification && x.commit.verification.verified === true);
-    return { yours: !!me && verified && by === me && (cm === me || cm === 'web-flow'), by };
-  }
   const AUTO_DIGEST = /^[0-9a-f]{64}$/;
   async function autoKitPacks() {   // the packs this page's own kit ships (board/kit/manifest.json): the demo, and boards without packs yet
     const r = await fetch('kit/manifest.json', { cache: 'no-store' }); if (!r.ok) return [];
@@ -4527,11 +4514,7 @@ if (typeof window !== 'undefined') (() => {
     const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readFile('automation/routines/' + x.name).then(f => { raws[x.name] = f; return { ...f.data, __file: x.name }; }).catch(() => null))))
       .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object').map(r => ({ ...autoInstall(r), file: r.__file })).filter(r => AUTO_SLUG.test(r.automation.slug));
     if (!packs.length && !installs.length) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: 'upgrade' };
-    // A wait the runner reports is only offered for approval when this person made the last commit to their own register.
-    const me = (c.me || '').replace(/^@/, '').toLowerCase(), authored = new Set();
-    if (runner && me) await Promise.all(runner.waits.filter(w => w.owner === me && raws[`auto-${w.slug}-${me}.json`]).slice(0, 10)
-      .map(async w => { if ((await autoLastAuthor(c, `auto-${w.slug}-${me}.json`)).yours) authored.add(w.slug); }));
-    return { packs, installs, raws, runner, authored };
+    return { packs, installs, raws, runner };
   }
   async function loadAutomations() {
     const c = cfg(), key = autoKey(c), gen = ++autoGen;
@@ -4603,12 +4586,11 @@ if (typeof window !== 'undefined') (() => {
       .filter(w => AUTO_NAME.test(autoStr(w.slug, 64)) && autoStr(w.owner, 40)).map(w => ({ slug: w.slug, owner: String(w.owner).toLowerCase() }));
     return { at: Number.isFinite(t) ? t : 0, connectors: list(o.connectors, AUTO_NAME).map(x => x.toLowerCase()), secrets: list(o.secrets, AUTO_SECRET), relay: autoStr(o.relay, 20), waits };
   }
-  // relay 0.9.35 splits the approval by risk: the switch alone runs a built-in pack that needs no connectors and no secrets;
-  // any other pack also needs the owner's entry in relay/registry/automations.yaml. The runner reports those still waiting.
-  const autoNeedsEntry = (p, m) => { const n = autoCloudNeeds(m || {}); return p.source !== 'kit' || n.connectors.length > 0 || n.secrets.length > 0; };
-  // A wait counts only for this person's own active install (their binding's register) of a pack this page lists: runner.json
-  // and register files are files any board writer can edit. `yours`: the register's last commit is this person's, the only
-  // case the page calls it theirs or offers it for approval.
+  // relay 0.9.35: the switch turns an install on; every run also needs the owner's entry in relay/registry/automations.yaml,
+  // pinned to the pack's digest. A wait the runner reports counts only for this person's install at their own binding, of a
+  // pack this page lists. runner.json and register files can be written by anyone who can write the board, and nothing in
+  // the repo proves who wrote one (a commit's author is an email anyone can set), so the page only says what the register
+  // says: the owner's own check, and their merge of the entry, are the approval.
   function autoWaits(me) {
     const r = autoCache && autoCache.runner, items = (autoItems && autoItems.items) || [];
     if (!r || !me) return [];
@@ -4616,7 +4598,7 @@ if (typeof window !== 'undefined') (() => {
       const x = items.find(i => i.p.slug === w.slug && i.p.m && !i.p.preview && !i.clash);
       const mine = x && autoMine(x.installs, x.p.slug, me);
       return mine && mine.status === 'active' && AUTO_DIGEST.test(String(mine.automation.digest || ''))
-        ? { slug: w.slug, p: x.p, digest: mine.automation.digest, yours: !!(autoCache.authored && autoCache.authored.has(w.slug)) } : null;
+        ? { slug: w.slug, p: x.p, digest: mine.automation.digest } : null;
     }).filter(Boolean);
   }
   const autoAwaiting = (p, me) => autoWaits(me).some(w => w.slug === p.slug);
@@ -4630,9 +4612,7 @@ if (typeof window !== 'undefined') (() => {
     if (needs.runner === 'local') return 'Runs only on a computer, not in the cloud.';
     if ((Array.isArray(m.needs) ? m.needs : []).some(n => !n || !Array.isArray(n.routes) || !n.routes.some(r => r && r.runtime === 'claude'))) return 'Has no cloud route for something it reads.';
     if (cfgs.some(([, v]) => v && v.required && !('default' in v))) return 'Needs a setting first: use Ask my assistant.';
-    if (!runner) return 'Set up your runner first.';
-    const miss = [...needs.connectors.filter(x => !runner.connectors.includes(x)).map(x => own(AUTO_CONNECTORS, x) || x), ...needs.secrets.filter(x => !runner.secrets.includes(x))];
-    return miss.length ? 'Needs ' + miss.join(', ') + ' on your runner.' : '';
+    return runner ? '' : 'Set up your runner first.';   // what the runner holds shows in its checklist once an entry approves the pack
   }
   const AUTO_CONNECTORS = { gmail: 'Gmail', 'google-drive': 'Google Drive', drive: 'Google Drive', calendar: 'Google Calendar', github: 'GitHub', slack: 'Slack' };
   // The pack digest, as keeptrack.py _auto_pack computes it: sha256 over each file (sorted relative path, NUL, byte length,
@@ -4704,7 +4684,6 @@ if (typeof window !== 'undefined') (() => {
     const file = `auto-${p.slug}-${me}.json`, raw = (autoCache.raws || {})[file], path = 'automation/routines/' + file;
     if (ro || !c.token || !me) { render(); return; }
     autoBusy = p.slug; render();
-    let needsEntry = false;
     try {
       let next;
       if (on) {
@@ -4717,29 +4696,22 @@ if (typeof window !== 'undefined') (() => {
           const lines = [...reads.map(id => 'Reads ' + ((own(AUTO_NEEDS, id) || [id])[0])), ...(manifest.check && manifest.check.network ? ['Uses the network for its check'] : []),
             ...connectors.map(v => `Uses the ${own(AUTO_CONNECTORS, v) || v} connector on your runner`),
             ...(secrets.length ? ['Uses the runner secret ' + secrets.join(', ')] : [])];
-          const entry = (needsEntry = autoNeedsEntry(p, manifest)) ? ' It runs only after you also approve it in relay/registry/automations.yaml: the runner setup shows how.' : '';
+          const entry = ' It runs once you also approve it in relay/registry/automations.yaml: the runner setup shows how.';
           if (!(await ui.confirm({ title: `Turn on ${autoStr(manifest.name, 80) || p.slug}?`, body: lines.join('. ') + '. It only proposes changes for your Review Inbox.' + entry, confirmLabel: 'Turn on' }))) { autoBusy = ''; render(); return; }
         }
         let old = raw && raw.data && typeof raw.data === 'object' ? raw.data : null;
         if (old && old.status !== 'retired' && typeof old.board_repo === 'string' && !autoSameBoard(old, c)) throw new Error('This automation is installed for another board in this repo. Uninstall it there first.');
         if (old && old.current_run && (autoObj(old.automation).runner !== 'cloud' || autoObj(old.automation).digest !== digest)) throw new Error('It has a run in progress. Let it finish first.');   // as keeptrack.py setup; a changed pack never drops a live run's lock
-        needsEntry = autoNeedsEntry(p, manifest);
-        if (old && !(await autoLastAuthor(c, file)).yours) old = null;   // not verifiably theirs: start a fresh install over it
         next = autoRegister(p, manifest, me, c, digest, old);
       } else {
         if (!raw || !mine) throw new Error('It is not on.');
-        if ((await autoLastAuthor(c, file)).yours || !p.m) { next = JSON.parse(JSON.stringify(raw.data)); next.status = 'paused'; }   // as keeptrack.py disable
-        else {   // never re-commit content someone else wrote under this person's name: a fresh install, paused
-          const { digest, manifest } = await autoDigest(c, p.folder);
-          next = autoRegister(p, manifest, me, c, digest, null); next.status = 'paused';
-          if (raw.data && raw.data.current_run) next.current_run = raw.data.current_run;   // a live run keeps its lock
-        }
+        next = JSON.parse(JSON.stringify(raw.data)); next.status = 'paused';   // as keeptrack.py disable
       }
       const res = await githubContents('PUT', { message: `Automation ${p.slug}: ${on ? 'on' : 'off'} for @${me} (board page)`, content: b64e(JSON.stringify(next, null, 2) + '\n'),
         branch: c.branch, ...(raw ? { sha: raw.sha } : {}) }, false, { path });
       if (res.status === 409 || res.status === 422) throw new Error('It changed on GitHub meanwhile. Refresh and try again.');
       if (!res.ok) throw new Error(res.status === 403 || res.status === 404 ? 'Your token cannot write this repo.' : 'GitHub said ' + res.status + '.');
-      toast(on ? `${autoStr(p.m && p.m.name, 80) || p.slug} is on. ${needsEntry ? 'It also needs your approval: the runner setup shows how.' : 'The next runner sweep starts it.'}` : `${autoStr(p.m && p.m.name, 80) || p.slug} is off.`);
+      toast(on ? `${autoStr(p.m && p.m.name, 80) || p.slug} is on. It runs once you approve it: the runner setup shows how.` : `${autoStr(p.m && p.m.name, 80) || p.slug} is off.`);
     } catch (err) { toast(err.message || 'The switch did not save.', true); }
     autoBusy = ''; autoCache = null; render();
   }
@@ -4754,7 +4726,7 @@ if (typeof window !== 'undefined') (() => {
   function runnerPanel(data, packs) {
     const r = data.runner, box = el('div', 'runnerbox'), ago = r && r.at ? Math.max(0, Math.round((Date.now() - r.at) / 60000)) : null;
     const fresh = ago !== null && ago < RUNNER_FRESH_H * 60;
-    const need = new Set(); packs.forEach(x => { if (x.p.m && !x.p.preview) { const n = autoCloudNeeds(x.p.m); n.connectors.forEach(v => need.add('c:' + v)); n.secrets.forEach(v => need.add('s:' + v)); } });
+    const need = new Set(); autoOnPacks().forEach(p => { const n = autoCloudNeeds(p.m); n.connectors.forEach(v => need.add('c:' + v)); n.secrets.forEach(v => need.add('s:' + v)); });
     const missing = r ? [...need].filter(k => k[0] === 'c' ? !r.connectors.includes(k.slice(2)) : !r.secrets.includes(k.slice(2))) : [];
     const waits = autoWaits(autoItems.me).length;
     const [label, tone] = !r ? ['Not set up', 'warn'] : !fresh ? ['Not sweeping', 'danger'] : missing.length || waits ? ['Ready, with gaps', 'warn'] : ['Ready', 'ok'];
@@ -4766,6 +4738,9 @@ if (typeof window !== 'undefined') (() => {
     open.setAttribute('aria-label', `Cloud runner: ${label}. Open setup`); open.onclick = () => openRunner(); box.append(roKeep(open));
     return box;
   }
+  // The packs this person has on: the runner reports only the connectors and secret names their approved entries name, so
+  // the checklist asks only about what an automation that is on needs.
+  const autoOnPacks = () => ((autoItems && autoItems.items) || []).filter(x => x.p.m && !x.p.preview && (autoMine(x.installs, x.p.slug, autoItems.me) || {}).status === 'active').map(x => x.p);
   function openRunner() { autoOpenSlug = ':runner'; fillAuto(); if (!$('dlgAuto').open) $('dlgAuto').showModal(); $('auBody').scrollTop = 0; }
   function runnerSheet() {
     const data = autoCache || {}, r = data.runner, c = cfg(), wrap = el('article', 'autocard autocard--sheet runnersheet');
@@ -4777,25 +4752,24 @@ if (typeof window !== 'undefined') (() => {
     const item = (ok, title, fix) => list.append(ui.check({ state: ok ? 'ok' : 'warn', text: title, fix: ok ? null : fix }));
     item(!!r && ago !== null && ago < RUNNER_FRESH_H, !r ? 'A routine runs the automations' : ago === null ? 'The routine has not said when it swept' : ago < RUNNER_FRESH_H ? 'The routine is sweeping' : 'The routine has not swept for a day',
       'Create one Claude routine on this repo that runs relay’s dispatcher (relay/prompts/dispatcher-loader.md) at least daily. Ask my assistant below to set it up.');
-    const need = new Map(); (data.packs || []).forEach(p => { if (p.m) { const n = autoCloudNeeds(p.m); n.connectors.forEach(v => need.set('c:' + v, v)); n.secrets.forEach(v => need.set('s:' + v, v)); } });
+    const need = new Map(); autoOnPacks().forEach(p => { const n = autoCloudNeeds(p.m); n.connectors.forEach(v => need.set('c:' + v, v)); n.secrets.forEach(v => need.set('s:' + v, v)); });
     [...need].forEach(([k, v]) => {
       const held = !!r && (k[0] === 'c' ? r.connectors.includes(v) : r.secrets.includes(v));
       item(held, k[0] === 'c' ? `${own(AUTO_CONNECTORS, v) || v} connector on the routine` : `${v} in the routine’s environment`,
-        k[0] === 'c' ? `Add the ${own(AUTO_CONNECTORS, v) || v} connector to the routine in its claude.ai settings.` : `Add the secret ${v} to the routine’s environment (claude.ai → the routine’s environment → secrets). Its value never goes in the repo.`);
+        (k[0] === 'c' ? `Add the ${own(AUTO_CONNECTORS, v) || v} connector to the routine in its claude.ai settings.` : `Add the secret ${v} to the routine’s environment (claude.ai → the routine’s environment → secrets). Its value never goes in the repo.`)
+          + ' The runner reports it only once your allowlist entry for the automation that needs it names it.');
     });
     const me = (autoItems && autoItems.me) || '', waits = autoWaits(me);
     const waitNeeds = w => { const n = autoCloudNeeds(w.p.m); return [...n.connectors.map(v => (own(AUTO_CONNECTORS, v) || v) + ' connector'), ...n.secrets]; };
-    waits.filter(w => !w.yours).forEach(w => item(false, `Check ${autoStr(w.p.m.name, 80) || w.slug}: someone else last changed your install of it`,
-      'Its register says it is yours and on, but its last commit is not a verified commit of yours (an agent’s command-line enable counts as someone else). Turn it off and on here if you meant it; otherwise check that commit before you approve anything for it.'));
-    waits.filter(w => w.yours).forEach(w => item(false, `Approve ${autoStr(w.p.m.name, 80) || w.slug} for the runner (${w.p.source === 'kit' ? 'built-in' : 'your board’s own pack'}${waitNeeds(w).length ? ', uses ' + waitNeeds(w).join(', ') : ''})`,
-      `Its register is on under your name (your verified commit), but it uses connectors or secrets, is the board's own pack, or is on a board that is not your relay home, so relay also needs your entry in relay/registry/automations.yaml for digest ${w.digest.slice(0, 12)}…. Check the pack's files and who changed them before you approve. Ask my assistant below to open that PR; you merge it.`));
+    waits.forEach(w => item(false, `Approve ${autoStr(w.p.m.name, 80) || w.slug} for the runner (${w.p.source === 'kit' ? 'built-in' : 'this board’s own pack'}${waitNeeds(w).length ? ', uses ' + waitNeeds(w).join(', ') : ''})`,
+      `Its register says it is on under your name, at digest ${w.digest.slice(0, 12)}…. Anyone who can write this board can write a register, so check that you turned it on and what the pack does. Relay runs it only once your entry in relay/registry/automations.yaml approves that digest. Ask my assistant below to open that PR; you merge it.`));
     wrap.append(list);
     const row = el('div', 'autocard__actions'), ask = elI('button', 'small primary', 'bot', 'Ask my assistant'); ask.type = 'button';
     ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one Claude routine that runs relay's dispatcher and the board's automations.`,
       'Read relay/README.md (Automations) and relay/prompts/dispatcher-loader.md in the board repo first.',
       `It must hold these connectors: ${[...need].filter(([k]) => k[0] === 'c').map(([, v]) => v).join(', ') || 'none'}; and these secret names in its environment: ${[...need].filter(([k]) => k[0] === 's').map(([, v]) => v).join(', ') || 'none'}.`,
-      ...(waits.some(w => w.yours) ? [`The board says these automations are on under my name, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
-        ...waits.filter(w => w.yours).map(w => `- ${w.slug} (${w.p.folder}, register automation/routines/auto-${w.slug}-${me}.json), digest ${w.digest}, needs: ${waitNeeds(w).join(', ') || 'nothing beyond the board'}`),
+      ...(waits.length ? [`The board says these automations are on under my name, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
+        ...waits.map(w => `- ${w.slug} (${w.p.folder}, register automation/routines/auto-${w.slug}-${me}.json), digest ${w.digest}, needs: ${waitNeeds(w).join(', ') || 'nothing beyond the board'}`),
         'For each one, first show me its files, its manifest needs and the git log of its folder and of its register (author, committer and signature), confirm with me that I turned it on, and check its digest matches the one above (python3 board/keeptrack.py automation show <slug>). Add an entry only after I say yes to that pack, with only the connectors and secret names it needs, pinned to that digest. Open it as a PR for me to merge.'] : []),
       'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the routine.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
     const link = el('a', 'autocard__link', 'Routines on claude.ai ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';

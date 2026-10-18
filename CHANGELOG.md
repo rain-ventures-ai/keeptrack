@@ -10,11 +10,11 @@ Kit v74: one runner, a switch per automation (card #180; `board/kit/AUTOMATIONS.
 Automations page lists one row per pack with an on/off switch; a row opens its details in a drawer, as a card does.
 The switch writes the install register as the person (as `automation install --runner cloud`, `setup --runtime claude
 --runner cloud` and `enable` would), with the pack digest computed in the browser from the pack's files in git; it asks
-before it grants a read beyond the board, the network or a secret, and never reuses another person's or another pack's
-old register. The panel at the top is the cloud runner: it reads `automation/runner.json` (relay 0.9.35's
+before it grants a read beyond the board, the network, a connector or a secret, and never reuses another person's or
+another pack's old register. The panel at the top is the cloud runner: it reads `automation/runner.json` (relay 0.9.35's
 `runner-status`) and shows a guided checklist of what the routine still lacks, including installs that wait for the
-owner's allowlist entry (relay 0.9.35 splits the approval by risk: the switch alone runs only a built-in pack with
-no connectors and no secrets on the relay home's board). New shared component `ui.toggle` (a labelled
+owner's allowlist entry (relay 0.9.35: the switch turns an automation on, and the owner's merge-gated entry,
+pinned to the pack's digest, approves every run). New shared component `ui.toggle` (a labelled
 switch). Review Inbox: a proposal's Markdown fields render as Markdown. No schema or data change.
 
 Kit v73: automations learn where they run (`board/kit/AUTOMATIONS.md`, "Runners and needs"). A pack manifest may carry

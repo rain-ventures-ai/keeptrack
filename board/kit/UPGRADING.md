@@ -32,9 +32,8 @@ GitHub token the page already uses. No migration and no data change.
 - Run `kit-update` only. Check: `kit-check` says v74, and the Automations page loads and shows the runner panel.
 - Upgrade relay to 0.9.35 too, and let the dispatcher run once: it writes `automation/runner.json`, which the panel
   reads. Until then the panel says "Not set up" and the switches stay off.
-- On your relay home's board, a built-in pack with no connectors and no secrets runs once switched on. Any other pack,
-  and any automation on another board, also needs an entry in `relay/registry/automations.yaml`; the runner panel
-  lists those and copies a prompt for your assistant.
+- Every automation you switch on also needs your entry in `relay/registry/automations.yaml`, pinned to its digest,
+  before it runs. The runner panel lists those and copies a prompt for your assistant to open the entry's PR.
 
 ### v73 (schema 4)
 Automations learn where they run. A pack manifest may carry an optional `requires` object (runner, claude.ai
