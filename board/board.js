@@ -4480,12 +4480,23 @@ if (typeof window !== 'undefined') (() => {
   const autoObj = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
   function autoInstall(r) {   // a register entry as plain strings: repo data can hold any JSON, and the page must never throw on it
     const o = autoObj(r), a = autoObj(o.automation), setup = autoObj(a.setup), last = o.last_run && typeof o.last_run === 'object' ? autoObj(o.last_run) : null, cur = autoObj(o.current_run);
-    return { owner: autoStr(o.owner, 40), status: autoStr(o.status, 20), board_repo: autoStr(o.board_repo), branch: autoStr(o.branch), board_path: autoStr(o.board_path),
+    return { id: autoStr(o.id, 120), owner: autoStr(o.owner, 40), status: autoStr(o.status, 20), board_repo: autoStr(o.board_repo), branch: autoStr(o.branch), board_path: autoStr(o.board_path),
       last_successful_run_at: autoStr(o.last_successful_run_at, 40), last_run: last && { status: autoStr(last.status, 20), summary: autoStr(last.summary) },
       current_run: o.current_run ? { started_at: autoStr(cur.started_at, 40) } : null,
       automation: { slug: autoStr(a.slug, 63), every: autoStr(a.every, 10), digest: AUTO_DIGEST.test(String(a.digest || '')) ? a.digest : '', setup: { notes: Array.isArray(setup.notes) ? setup.notes.slice(0, 10).map(x => autoStr(x, 40)) : [] } } };
   }
   let autoCache = null, autoGen = 0;
+  // This person's install of a pack: only the register at its own binding (automation/routines/auto-<slug>-<login>.json, id the
+  // same), never one that merely says it is theirs. Any board writer can write a register file under any name.
+  const autoMine = (installs, slug, me) => !me ? undefined : installs.find(r => r.file === `auto-${slug}-${me}.json` && r.id === `auto-${slug}-${me}` && String(r.owner || '').toLowerCase() === me);
+  // Who made the last commit to a register file (GitHub login, lower case; '' when it can't be told). The switch and the approval
+  // list trust a register's content only when its last commit is this person's own.
+  async function autoLastAuthor(c, file) {
+    const r = await ghGet(`/repos/${c.repo}/commits?path=${encodeURIComponent('automation/routines/' + file)}&sha=${encodeURIComponent(c.branch)}&per_page=1`, null, c).catch(() => null);
+    if (!r || !r.ok) return '';
+    const j = await r.json().catch(() => null), a = Array.isArray(j) && j[0] && j[0].author;
+    return a && typeof a.login === 'string' ? a.login.toLowerCase() : '';
+  }
   const AUTO_DIGEST = /^[0-9a-f]{64}$/;
   async function autoKitPacks() {   // the packs this page's own kit ships (board/kit/manifest.json): the demo, and boards without packs yet
     const r = await fetch('kit/manifest.json', { cache: 'no-store' }); if (!r.ok) return [];
@@ -4511,7 +4522,11 @@ if (typeof window !== 'undefined') (() => {
     const installs = (await Promise.all(regs.filter(x => x.type === 'file' && /^auto-[a-z0-9-]+\.json$/.test(x.name)).map(x => readFile('automation/routines/' + x.name).then(f => { raws[x.name] = f; return { ...f.data, __file: x.name }; }).catch(() => null))))
       .filter(r => r && typeof r === 'object' && !Array.isArray(r) && r.automation && typeof r.automation === 'object').map(r => ({ ...autoInstall(r), file: r.__file })).filter(r => AUTO_SLUG.test(r.automation.slug));
     if (!packs.length && !installs.length) return { packs: await autoKitPacks().catch(() => []), installs: [], preview: 'upgrade' };
-    return { packs, installs, raws, runner };
+    // A wait the runner reports is only offered for approval when this person made the last commit to their own register.
+    const me = (c.me || '').replace(/^@/, '').toLowerCase(), authored = new Set();
+    if (runner && me) await Promise.all(runner.waits.filter(w => w.owner === me && raws[`auto-${w.slug}-${me}.json`]).slice(0, 10)
+      .map(async w => { if (await autoLastAuthor(c, `auto-${w.slug}-${me}.json`) === me) authored.add(w.slug); }));
+    return { packs, installs, raws, runner, authored };
   }
   async function loadAutomations() {
     const c = cfg(), key = autoKey(c), gen = ++autoGen;
@@ -4586,15 +4601,17 @@ if (typeof window !== 'undefined') (() => {
   // relay 0.9.35 splits the approval by risk: the switch alone runs a built-in pack that needs no connectors and no secrets;
   // any other pack also needs the owner's entry in relay/registry/automations.yaml. The runner reports those still waiting.
   const autoNeedsEntry = (p, m) => { const n = autoCloudNeeds(m || {}); return p.source !== 'kit' || n.connectors.length > 0 || n.secrets.length > 0; };
-  // A wait counts only for this person's own active install of a pack this page lists: runner.json is a file any board
-  // writer can edit, so it can never put a pack in front of the owner that they did not turn on themselves.
+  // A wait counts only for this person's own active install (their binding's register) of a pack this page lists: runner.json
+  // and register files are files any board writer can edit. `yours`: the register's last commit is this person's, the only
+  // case the page calls it theirs or offers it for approval.
   function autoWaits(me) {
     const r = autoCache && autoCache.runner, items = (autoItems && autoItems.items) || [];
     if (!r || !me) return [];
     return r.waits.filter(w => w.owner === me).map(w => {
       const x = items.find(i => i.p.slug === w.slug && i.p.m && !i.p.preview && !i.clash);
-      const mine = x && x.installs.find(i => String(i.owner || '').toLowerCase() === me && i.status === 'active');
-      return mine && AUTO_DIGEST.test(String(mine.automation.digest || '')) ? { slug: w.slug, p: x.p, digest: mine.automation.digest } : null;
+      const mine = x && autoMine(x.installs, x.p.slug, me);
+      return mine && mine.status === 'active' && AUTO_DIGEST.test(String(mine.automation.digest || ''))
+        ? { slug: w.slug, p: x.p, digest: mine.automation.digest, yours: !!(autoCache.authored && autoCache.authored.has(w.slug)) } : null;
     }).filter(Boolean);
   }
   const autoAwaiting = (p, me) => autoWaits(me).some(w => w.slug === p.slug);
@@ -4626,9 +4643,9 @@ if (typeof window !== 'undefined') (() => {
     if (t.sha && autoDigests.has(t.sha)) return autoDigests.get(t.sha);
     const files = (t.tree || []).filter(e => e.type === 'blob' && !/^tests\//.test(e.path)).sort((x, y) => x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
     if (files.length > AUTO_PACK_FILES || files.reduce((n, f) => n + (Number(f.size) || 0), 0) > AUTO_PACK_BYTES) throw new Error('The pack is too large to turn on from the page.');
-    const raws = new Array(files.length); let next = 0;   // at most 8 blob reads at a time
-    const worker = async () => { while (next < files.length) { const i = next++, f = files[i];
-      const b = await ghGet(`/repos/${c.repo}/git/blobs/${f.sha}`, null, c); if (!b.ok) throw new Error('Cannot read the pack files.');
+    const raws = new Array(files.length); let next = 0, failed = false;   // at most 8 blob reads at a time; the first failure stops them all
+    const worker = async () => { while (next < files.length && !failed) { const i = next++, f = files[i];
+      const b = await ghGet(`/repos/${c.repo}/git/blobs/${f.sha}`, null, c); if (!b.ok) { failed = true; throw new Error('Cannot read the pack files.'); }
       const bin = atob(String((await b.json()).content || '').replace(/\s/g, '')), u = new Uint8Array(bin.length);
       for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k);
       raws[i] = u; } };
@@ -4651,7 +4668,7 @@ if (typeof window !== 'undefined') (() => {
   // only when it is this person's, for this binding and board, not retired, and for the same pack files.
   const autoTyped = (v, kind) => ((kind === 'string' || kind === 'path') && typeof v === 'string' && !v.includes('\0'))
     || (kind === 'int' && Number.isInteger(v)) || (kind === 'bool' && typeof v === 'boolean');   // keeptrack.py _auto_config_type
-  const autoSameBoard = (r, c) => !!r && r.board_repo === c.repo && r.branch === c.branch && r.board_path === c.path;
+  const autoSameBoard = (r, c) => !!r && String(r.board_repo || '').toLowerCase() === String(c.repo || '').toLowerCase() && r.branch === c.branch && r.board_path === c.path;
   function autoRegister(p, m, me, c, digest, old) {   // m: the manifest from the hashed files (autoDigest)
     const binding = `auto-${p.slug}-${me}`, now = autoStamp();
     const same = !!old && typeof old === 'object' && String(old.owner || '').toLowerCase() === me && old.id === binding && old.status !== 'retired'
@@ -4667,6 +4684,7 @@ if (typeof window !== 'undefined') (() => {
       ['last_run', 'last_successful_run_at', 'last_started_at'].forEach(k => { if (Object.hasOwn(old, k)) reg[k] = old[k]; });
       if (Array.isArray(old.runs)) reg.runs = old.runs.slice(-50);
       if (prev.runner === 'cloud' && old.current_run) reg.current_run = old.current_run;   // a live cloud run stays the lock
+      if (prev.runner === 'cloud' && Object.hasOwn(old, 'scan_cursor')) reg.scan_cursor = old.scan_cursor;   // as disable + enable keep it
     }
     reg.automation = { schema: 'keeptrack-automation-install/1', slug: p.slug, source: p.source, pack_path: p.folder, pack_version: m.version, digest,
       install_id: /^[0-9a-f]{32}$/.test(String(prev.install_id || '')) ? prev.install_id : [...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join(''),
@@ -4677,10 +4695,11 @@ if (typeof window !== 'undefined') (() => {
   let autoBusy = '';
   async function autoSwitch(x, on) {
     if (!autoCache || !autoItems || autoBusy) { render(); return; }   // a stale switch (the page is reloading): redraw, never act
-    const c = cfg(), me = autoItems.me, p = x.p, mine = x.installs.find(r => String(r.owner || '').toLowerCase() === me);
+    const c = cfg(), me = autoItems.me, p = x.p, mine = autoMine(x.installs, x.p.slug, me);
     const file = `auto-${p.slug}-${me}.json`, raw = (autoCache.raws || {})[file], path = 'automation/routines/' + file;
     if (ro || !c.token || !me) { render(); return; }
     autoBusy = p.slug; render();
+    let needsEntry = false;
     try {
       let next;
       if (on) {
@@ -4693,12 +4712,14 @@ if (typeof window !== 'undefined') (() => {
           const lines = [...reads.map(id => 'Reads ' + ((own(AUTO_NEEDS, id) || [id])[0])), ...(manifest.check && manifest.check.network ? ['Uses the network for its check'] : []),
             ...connectors.map(v => `Uses the ${own(AUTO_CONNECTORS, v) || v} connector on your runner`),
             ...(secrets.length ? ['Uses the runner secret ' + secrets.join(', ')] : [])];
-          const entry = autoNeedsEntry(p, manifest) ? ' It runs only after you also approve it in relay/registry/automations.yaml: the runner setup shows how.' : '';
+          const entry = (needsEntry = autoNeedsEntry(p, manifest)) ? ' It runs only after you also approve it in relay/registry/automations.yaml: the runner setup shows how.' : '';
           if (!(await ui.confirm({ title: `Turn on ${autoStr(manifest.name, 80) || p.slug}?`, body: lines.join('. ') + '. It only proposes changes for your Review Inbox.' + entry, confirmLabel: 'Turn on' }))) { autoBusy = ''; render(); return; }
         }
-        const old = raw && raw.data && typeof raw.data === 'object' ? raw.data : null;
+        let old = raw && raw.data && typeof raw.data === 'object' ? raw.data : null;
         if (old && old.status !== 'retired' && typeof old.board_repo === 'string' && !autoSameBoard(old, c)) throw new Error('This automation is installed for another board in this repo. Uninstall it there first.');
-        if (old && old.current_run && autoObj(old.automation).runner !== 'cloud') throw new Error('It has a run in progress on another runner. Let it finish first.');   // as keeptrack.py setup
+        if (old && old.current_run && (autoObj(old.automation).runner !== 'cloud' || autoObj(old.automation).digest !== digest)) throw new Error('It has a run in progress. Let it finish first.');   // as keeptrack.py setup; a changed pack never drops a live run's lock
+        needsEntry = autoNeedsEntry(p, manifest);
+        if (old && await autoLastAuthor(c, file) !== me) old = null;   // someone else wrote it last: start a fresh install over it
         next = autoRegister(p, manifest, me, c, digest, old);
       } else {
         if (!raw || !mine) throw new Error('It is not on.');
@@ -4708,12 +4729,12 @@ if (typeof window !== 'undefined') (() => {
         branch: c.branch, ...(raw ? { sha: raw.sha } : {}) }, false, { path });
       if (res.status === 409 || res.status === 422) throw new Error('It changed on GitHub meanwhile. Refresh and try again.');
       if (!res.ok) throw new Error(res.status === 403 || res.status === 404 ? 'Your token cannot write this repo.' : 'GitHub said ' + res.status + '.');
-      toast(on ? `${autoStr(p.m && p.m.name, 80) || p.slug} is on. The next runner sweep starts it.` : `${autoStr(p.m && p.m.name, 80) || p.slug} is off.`);
+      toast(on ? `${autoStr(p.m && p.m.name, 80) || p.slug} is on. ${needsEntry ? 'It also needs your approval: the runner setup shows how.' : 'The next runner sweep starts it.'}` : `${autoStr(p.m && p.m.name, 80) || p.slug} is off.`);
     } catch (err) { toast(err.message || 'The switch did not save.', true); }
     autoBusy = ''; autoCache = null; render();
   }
   function autoSwitchEl(x) {
-    const { p, installs } = x, me = autoItems.me, mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
+    const { p, installs } = x, me = autoItems.me, mine = autoMine(installs, p.slug, me);
     const on = !!mine && mine.status === 'active', why = on ? '' : autoBlocked(p, autoCache.runner);
     const b = ui.toggle({ checked: on, label: `${autoStr(p.m && p.m.name, 80) || p.slug}: ${on ? 'on' : 'off'}`, title: why || (on ? 'Turn it off' : 'Turn it on'),
       disabled: ro || !cfg().token || !me || !!autoBusy || (!on && !!why), onChange: v => autoSwitch(x, v) });
@@ -4754,16 +4775,18 @@ if (typeof window !== 'undefined') (() => {
     });
     const me = (autoItems && autoItems.me) || '', waits = autoWaits(me);
     const waitNeeds = w => { const n = autoCloudNeeds(w.p.m); return [...n.connectors.map(v => (own(AUTO_CONNECTORS, v) || v) + ' connector'), ...n.secrets]; };
-    waits.forEach(w => item(false, `Approve ${autoStr(w.p.m.name, 80) || w.slug} for the runner (${w.p.source === 'kit' ? 'built-in' : 'your board’s own pack'}${waitNeeds(w).length ? ', uses ' + waitNeeds(w).join(', ') : ''})`,
+    waits.filter(w => !w.yours).forEach(w => item(false, `Check ${autoStr(w.p.m.name, 80) || w.slug}: someone else last changed your install of it`,
+      'Its register says it is yours and on, but its last commit is not yours. Turn it off, and check that commit before you approve anything for it.'));
+    waits.filter(w => w.yours).forEach(w => item(false, `Approve ${autoStr(w.p.m.name, 80) || w.slug} for the runner (${w.p.source === 'kit' ? 'built-in' : 'your board’s own pack'}${waitNeeds(w).length ? ', uses ' + waitNeeds(w).join(', ') : ''})`,
       `You turned it on, but it uses connectors or secrets, is the board's own pack, or is on a board that is not your relay home, so relay also needs your entry in relay/registry/automations.yaml for digest ${w.digest.slice(0, 12)}…. Check the pack's files and who changed them before you approve. Ask my assistant below to open that PR; you merge it.`));
     wrap.append(list);
     const row = el('div', 'autocard__actions'), ask = elI('button', 'small primary', 'bot', 'Ask my assistant'); ask.type = 'button';
     ask.onclick = () => copyText([`Help me set up the cloud runner for my Keeptrack board ${c.repo}: one Claude routine that runs relay's dispatcher and the board's automations.`,
       'Read relay/README.md (Automations) and relay/prompts/dispatcher-loader.md in the board repo first.',
       `It must hold these connectors: ${[...need].filter(([k]) => k[0] === 'c').map(([, v]) => v).join(', ') || 'none'}; and these secret names in its environment: ${[...need].filter(([k]) => k[0] === 's').map(([, v]) => v).join(', ') || 'none'}.`,
-      ...(waits.length ? [`I turned on these automations, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
-        ...waits.map(w => `- ${w.slug} (${w.p.folder}), digest ${w.digest}, needs: ${waitNeeds(w).join(', ') || 'nothing beyond the board'}`),
-        'For each one, first show me its files, its manifest needs and the git log of its folder, and check its digest matches the one above (python3 board/keeptrack.py automation show <slug>). Add an entry only after I say yes to that pack, with only the connectors and secret names it needs, pinned to that digest. Open it as a PR for me to merge.'] : []),
+      ...(waits.some(w => w.yours) ? [`I turned on these automations, and relay needs my approval for them in relay/registry/automations.yaml (board ${c.repo}, owner ${me}, runner cloud):`,
+        ...waits.filter(w => w.yours).map(w => `- ${w.slug} (${w.p.folder}, register automation/routines/auto-${w.slug}-${me}.json), digest ${w.digest}, needs: ${waitNeeds(w).join(', ') || 'nothing beyond the board'}`),
+        'For each one, first show me its files, its manifest needs and the git log of its folder and of its register, and check its digest matches the one above (python3 board/keeptrack.py automation show <slug>). Add an entry only after I say yes to that pack, with only the connectors and secret names it needs, pinned to that digest. Open it as a PR for me to merge.'] : []),
       'Never put a token, key or secret value in the repo or in chat. Ask me before you create or change the routine.'].join('\n'), 'Prompt copied. Paste it into your board-aware assistant.');
     const link = el('a', 'autocard__link', 'Routines on claude.ai ↗'); link.href = 'https://claude.ai/code/routines'; link.target = '_blank'; link.rel = 'noopener noreferrer';
     row.append(ask, link); uiBtns(row); wrap.append(row);
@@ -4782,7 +4805,7 @@ if (typeof window !== 'undefined') (() => {
     const tile = el('span', 'autocard__icon'); tile.append(svgIcon(((needs.map(n => own(AUTO_NEEDS, n.id)).find(x => x && x[1] !== 'square-kanban')) || ['', 'bot'])[1])); tile.setAttribute('aria-hidden', 'true'); return tile;
   }
   function safeRow(x) {
-    const { p, installs } = x, m = p.m || {}, mine = installs.find(r => String(r.owner || '').toLowerCase() === autoItems.me);
+    const { p, installs } = x, m = p.m || {}, mine = autoMine(installs, p.slug, autoItems.me);
     const row = el('div', 'autorow'); row.dataset.slug = p.slug; row.setAttribute('role', 'listitem');
     const open = el('button', 'autorow__open'); open.type = 'button';
     let name = p.slug, label = 'Pack has a problem', tone = 'danger', summary = '';
@@ -4805,7 +4828,7 @@ if (typeof window !== 'undefined') (() => {
     body.classList.add('autocard--sheet');
     if (autoSwitchable(x)) {   // the switch, and why it cannot be turned on yet
       const head = body.querySelector('.autocard__head'); if (head) head.append(autoSwitchEl(x));
-      const mine = x.installs.find(r => String(r.owner || '').toLowerCase() === autoItems.me), why = mine && mine.status === 'active' ? '' : autoBlocked(x.p, autoCache.runner);
+      const mine = autoMine(x.installs, x.p.slug, autoItems.me), why = mine && mine.status === 'active' ? '' : autoBlocked(x.p, autoCache.runner);
       const wait = !why && mine && mine.status === 'active' && autoAwaiting(x.p, autoItems.me) ? 'On, but it waits for your approval in relay/registry/automations.yaml. Open the cloud runner to add it.' : '';
       if (why || wait) { const n = ui.banner({ tone: 'warn', text: why || wait }); n.classList.add('autocard__blocked'); head ? head.after(n) : body.prepend(n); }
     }
@@ -4815,7 +4838,7 @@ if (typeof window !== 'undefined') (() => {
   function autoCard(p, installs, me, clash, c) {
     const m = p.m || {}, item = el('article', 'autocard'), head = el('div', 'autocard__head'); item.dataset.slug = p.slug;
     const network = !!(m.check && m.check.network), needs = Array.isArray(m.needs) ? m.needs.filter(n => n && typeof n === 'object').slice(0, 8) : [];
-    const mine = installs.find(r => String(r.owner || '').toLowerCase() === me);
+    const mine = autoMine(installs, p.slug, me);
     const [label, tone] = autoState(p, mine);
     const tile = autoIcon(m);
     const name = el('div', 'autocard__name'); name.append(el('h3', null, autoStr(m.name, 80) || p.slug), el('span', 'autocard__scope', `${p.source === 'kit' ? 'Built-in' : p.source === 'own' ? 'Your own' : 'Installed, but its pack is gone'} · ${p.slug}`));
