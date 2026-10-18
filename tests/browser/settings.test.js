@@ -502,7 +502,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(await page.locator('#dlgAuto .runnercheck .ui-check--warn').count(), 0, 'nothing is on, so the checklist asks for nothing');
       await page.waitForTimeout(350); await shot(page, 'automation-runner'); await page.locator('#auClose').click();
       await sw('stale-cards-nudge').click();
-      await page.waitForFunction(() => window.__lastPut || true); await page.waitForTimeout(400);
+      await page.waitForFunction(() => true); await (async () => { for (let i = 0; i < 50 && page.api.puts.length < 1; i++) await page.waitForTimeout(100); })();
       assert.equal(page.api.puts.length, 1, 'the switch writes one file');
       const put = page.api.puts[0]; assert.equal(put.path, '/contents/automation/routines/auto-stale-cards-nudge-alex.json');
       assert.match(put.body.message, /stale-cards-nudge: on for @alex/);
@@ -541,7 +541,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(page.api.puts.length, 0, 'Cancel writes nothing');
       await page.waitForFunction(() => { const b = document.querySelector('.autorow[data-slug="email-to-tasks"] .autoswitch'); return b && !b.disabled; });
       await sw('email-to-tasks').click(); await page.getByRole('alertdialog').getByRole('button', { name: 'Turn on' }).click();
-      await page.waitForFunction(() => true); await page.waitForTimeout(500);
+      await (async () => { for (let i = 0; i < 50 && page.api.puts.length < 1; i++) await page.waitForTimeout(100); })();
       assert.equal(page.api.puts.length, 1);
       const reg2 = JSON.parse(Buffer.from(page.api.puts[0].body.content, 'base64').toString());
       assert.equal(reg2.owner, 'alex'); assert.notEqual(reg2.automation.install_id, 'planted', 'another owner\'s register is not reused');
@@ -568,6 +568,27 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       const prompt = await page.evaluate(() => window.__copied);
       assert.ok(prompt, 'the prompt was copied'); { assert.ok(prompt.includes(reg2.automation.digest), 'the prompt pins the install\'s own digest'); assert.match(prompt, /show me its files/); assert.match(prompt, /after I say yes/); }
       await page.waitForTimeout(350); await shot(page, 'automation-runner-approval'); await page.locator('#auClose').click();
+      // The page decides approval from relay/registry/automations.yaml itself, never from runner.json or a register.
+      const yml = e => ({ content: Buffer.from(e).toString('base64') });
+      const conns = (cloud.connectors || need.connectors || []), secs = (cloud.secrets || need.secrets || []);
+      assert.doesNotMatch(await (async () => { await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+        const t = await page.locator('#dlgAuto .runnercheck').textContent(); await page.locator('#auClose').click(); return t; })(), / connector on the routine| in the routine’s environment/,
+        'an install no entry approves never asks for a connector or secret on the routine (a forged register could)');
+      const entry = (extra = '') => `# owner-only\nautomations:\n  mail:                 # note\n    board: acme/board\n    slug: email-to-tasks\n    owner: alex\n    digest: "${reg2.automation.digest}"\n    runner: cloud\n    connectors: [${conns.join(', ')}]\n    secrets:\n${secs.map(x => '      - ' + x + '\n').join('')}${extra}`;
+      page.api.raw['/contents/relay/registry/automations.yaml'] = yml(entry('    run_as: mallory\n'));
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
+      await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
+      page.api.raw['/contents/relay/registry/automations.yaml'] = yml(entry().replace(reg2.automation.digest, 'f'.repeat(64)));
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click(); await page.waitForTimeout(300);
+      await page.waitForFunction(() => /Needs approval/.test((document.querySelector('.autorow[data-slug="email-to-tasks"]') || {}).textContent || ''));
+      page.api.raw['/contents/relay/registry/automations.yaml'] = yml(entry());
+      await page.locator('.autos__tools button', { hasText: 'Refresh' }).click();
+      await page.waitForFunction(() => { const r = document.querySelector('.autorow[data-slug="email-to-tasks"]'); return r && !/Needs approval/.test(r.textContent) && r.querySelector('.autoswitch'); });
+      assert.equal(await sw('email-to-tasks').getAttribute('aria-checked'), 'true', 'an entry at the install digest that names its needs approves it: just On');
+      await page.locator('.runnerbox__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
+      if (conns.length || secs.length) assert.match(await page.locator('#dlgAuto .runnercheck').textContent(), / connector on the routine| in the routine’s environment/, 'an approved install lists what the routine must hold');
+      assert.doesNotMatch(await page.locator('#dlgAuto .runnercheck').textContent(), /Approve /);
+      await page.locator('#auClose').click();
       assert.deepEqual(page.errors, []); await page.close();
     }
     // 17. The routine register leaves automation installs to the Automations page; the old Settings deep link opens a button to it.

@@ -133,8 +133,11 @@ retired, and for the same pack files. Turning it off sets the install to `paused
 **The switch turns it on; the allowlist approves it** (relay 0.9.35). Every run also needs the owner's entry in
 `relay/registry/automations.yaml`, pinned to the pack's digest (relay's README, Automations). Anyone who can write the
 board can write a register or a pack folder, and a commit's author is an email anyone can set, so the page never says
-who wrote a register: it says what the register says, and the merge-gated entry is the approval. Until an install has
-its entry, the runner lists it in `awaiting_approval`, its row says "Needs approval", and the runner setup lists it
+who wrote a register: it says what the register says, and the merge-gated entry is the approval. The page reads
+`relay/registry/automations.yaml` itself (never `runner.json` or a register) to decide what is approved: an entry for
+this board, slug, owner and the cloud runner, at the install's digest, naming every connector and secret the pack
+needs. Until an install has one, its row says "Needs approval", the runner checklist asks for no connector or secret
+for it, and the runner setup lists it
 with a prompt for the owner's assistant: show the pack's files and the git log of its folder and its register,
 confirm with the owner, then open the entry's PR for the owner to merge. The confirm dialog and the "on" message say
 so too.
