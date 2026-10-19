@@ -36,6 +36,9 @@ jobs:
       - name: Playwright split-storage tests
         working-directory: tests/browser
         run: npm test
+      - name: Hosted adapter (strict CSP, shared markup and synthetic storage)
+        working-directory: tests/browser
+        run: node hosted-adapter.test.js
       - name: Save queue (order, waiting status, failures, timeouts, undo)
         working-directory: tests/browser
         run: node save-queue.test.js

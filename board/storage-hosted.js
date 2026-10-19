@@ -13,19 +13,49 @@
         !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) throw new Error('Phase 0 requires a loopback API/Auth URL');
     return u.href.replace(/\/$/, '');
   }
+  // The hosted entry has no inline selector/bootstrap. This parser-blocking, same-origin script
+  // installs its sole policy before any other asset or application script can run.
+  const hostedPage = typeof document !== 'undefined' && document.documentElement.dataset.hosted === 'true';
+  let pageAPI, connectionOrigins;
+  if (hostedPage) {
+    const query = new URLSearchParams(location.search);
+    try { pageAPI = localURL(query.get('api') || 'http://localhost:3000'); } catch { pageAPI = location.origin; }
+    connectionOrigins = new Set([location.origin, new URL(pageAPI).origin]);
+    const policy = document.getElementById('hostedPolicy').content.querySelector('meta').cloneNode(true);
+    policy.content = policy.content.replace("connect-src 'self'", "connect-src 'self'" +
+      (new URL(pageAPI).origin === location.origin ? '' : ' ' + new URL(pageAPI).origin));
+    document.head.append(policy);
+    window.kbMarkup = Number(document.documentElement.dataset.kbMarkup);
+    // board.js refuses mismatched markup before doing any work. Also catch a missing/older script.
+    document.addEventListener('DOMContentLoaded', () => {
+      if (window.kbBoardMarkup !== window.kbMarkup) {
+        if (typeof window.kbStalePage === 'function') window.kbStalePage();
+        else { document.getElementById('board').textContent = 'A new version of the board is being published. Reload in a minute.'; }
+      }
+      document.documentElement.classList.add('ready');
+    });
+  }
+  function connectionURL(value) {
+    const url = localURL(value);
+    if (connectionOrigins && !connectionOrigins.has(new URL(url).origin)) {
+      throw new Error('Hosted connections require the page or configured API origin. Use an auth proxy there, or reload with the new ?api= URL.');
+    }
+    return url;
+  }
   class HostedAdapter {
     kind = 'hosted';
     capabilities = { casWrites: true, atomicMultiFile: true, changeFeed: true };
     #token = '';
+    #hydrating = new WeakMap();
     constructor({ api, board, fetch: transport = globalThis.fetch.bind(globalThis) }) {
-      this.apiURL = localURL(api);
+      this.apiURL = connectionURL(api);
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(board)) throw new Error('A board UUID is required');
       this.board = board; this.transport = transport; this.files = new Map(); this.identity = null; this.cursor = null; this.claims = []; this.generation = 0;
     }
     async signIn({ auth, key, email, password }) {
       this.logout();
       const generation = this.generation;
-      const endpoint = localURL(auth);
+      const endpoint = connectionURL(auth);
       const r = await this.transport(endpoint + '/auth/v1/token?grant_type=password', {
         method: 'POST', redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store',
         headers: { apikey: key, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password })
@@ -75,7 +105,10 @@
       if (snap.unchanged) return snap;
       if (snap.board_id !== this.board) throw new Error('Snapshot board mismatch');
       const files = new Map([['tasks.json', copy(snap.root)]]);
-      for (const entity of snap.entities) files.set(`${prefixes[entity.kind]}/${entity.body.id}.json`, copy(entity));
+      for (const entity of snap.entities) {
+        const path = `${prefixes[entity.kind]}/${entity.body.id}.json`, cached = this.files.get(path);
+        files.set(path, cached?.rev === entity.rev && !cached.omitted?.length ? cached : copy(entity));
+      }
       this.files = files; this.cursor = snap.cursor; this.claims = copy(snap.claims); this.serverCapabilities = snap.capabilities;
       return snap;
     }
@@ -84,11 +117,23 @@
       if (rev !== undefined && full.rev !== rev) throw new HostedError(412, { code: 'revision_conflict', message: 'File changed during hydration; reload' });
       return full;
     }
-    async hydrate() {
-      // Capture the revision. A newer full file must never be paired with an older base revision.
-      const full = new Map(this.files);
-      for (const [path, file] of full) if (file.omitted?.length) full.set(path, await this.read(path, file.rev));
-      this.files = full; return this.model();
+    async hydrate(paths, entries = this.files) {
+      // Explicit demand only. Capture every entry before reading and publish the batch atomically.
+      const captured = [...new Set(paths)].map(path => [path, entries.get(path)]).filter(([, file]) => file?.omitted?.length);
+      const full = await Promise.all(captured.map(async ([path, file]) => {
+        let pending = this.#hydrating.get(file);
+        if (!pending) {
+          pending = this.read(path, file.rev); this.#hydrating.set(file, pending);
+          pending.catch(() => { this.#hydrating.delete(file); });
+        }
+        return [path, await pending];
+      }));
+      if (captured.some(([path, file]) => this.files.get(path) !== file && this.files.get(path)?.rev !== file.rev)) {
+        throw new HostedError(412, { code: 'revision_conflict', message: 'File changed during hydration; reload' });
+      }
+      const files = new Map(this.files);
+      for (const [path, file] of full) files.set(path, file);
+      this.files = files; return this.model();
     }
     model() {
       if (!this.files.has('tasks.json')) throw new Error('Load a snapshot first');
@@ -135,7 +180,7 @@
     contents() { throw new Error('capability_unavailable: GitHub Contents is disabled in hosted mode'); }
     api() { throw new Error('capability_unavailable: GitHub API is disabled in hosted mode'); }
   }
-  const exports = { HostedAdapter, HostedError, localURL };
+  const exports = { HostedAdapter, HostedError, localURL, pageAPI };
   if (typeof module !== 'undefined' && module.exports) module.exports = exports;
   else root.KeeptrackHosted = exports;
 })(globalThis);

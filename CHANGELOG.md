@@ -22,6 +22,9 @@ session and named the item); the keeptrack skills' chat flow ("accept the ones I
 label, the owner must be a board member (stored as the member's own login; the hosted handle in hosted mode), and
 `proposal-result` gives `relayed`.
 
+Board page: search lists people in their own section above tasks (a number query still puts the numbered card
+first).
+
 Kit v76: the manual keeptrack-email skill reads mail the way email-to-tasks does (card #185). New `keeptrack.py
 email-view` runs the automation's cleaner (`safe_view.py`, loaded by path through the pack's `resolve.py`, never a
 copy) on one message: `gog gmail get <id> --json | keeptrack.py email-view` prints the canonical `rfc822:` key,
