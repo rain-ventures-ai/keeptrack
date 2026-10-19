@@ -7679,6 +7679,22 @@ if (typeof window !== 'undefined') (() => {
     }
     return actions;
   }
+  // Clients and projects match on their name: each query word starts a word of the name ("hurst col" finds "Hurst College"),
+  // or, from three letters, appears anywhere in it ("onic" finds "THE ICONIC")
+  const nameParts = text => String(text || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  function searchPlaces(query) {
+    const words = nameParts(query); if (!words.length) return { list: [], more: false };
+    const matches = name => { const low = String(name || '').toLowerCase(), parts = nameParts(name); return words.every(w => parts.some(p => p.startsWith(w)) || (w.length >= 3 && low.includes(w))); };
+    const dc = doneColId(), plural = (n, one, many) => `${n} ${n === 1 ? one : many}`, contacts = state.contacts || [];
+    const named = new Set([...state.clients, ...state.tasks.map(t => t.client)].filter(Boolean));   // the board's clients; other names are CRM companies
+    const names = [...new Set([...named, ...contacts.map(p => p.company), ...projectsOf().map(p => p.client)].filter(Boolean))].filter(matches).sort((a, b) => a.localeCompare(b));
+    const prs = sortedProjects().filter(p => matches(p.name)), CAP = 12;
+    const clients = names.slice(0, CAP).map(n => {
+      const open = state.tasks.filter(t => t.client === n && t.column !== dc).length, people = contacts.filter(p => p.company === n).length, np = projectsForClient(n).length;
+      return { icon: 'building-2', title: n, sub: [named.has(n) ? 'Client' : 'Company', plural(open, 'open task', 'open tasks'), people ? plural(people, 'person', 'people') : '', np ? plural(np, 'project', 'projects') : ''].filter(Boolean).join(' · '), open: () => openClient(n) }; });
+    const projects = prs.slice(0, CAP).map(p => ({ icon: 'folder', title: p.name, sub: ['Project', p.client, p.status].filter(Boolean).join(' · '), open: () => openProject(p.id) }));
+    return { list: [...clients, ...projects], more: names.length > CAP || prs.length > CAP };
+  }
   async function runSearch() {
     const q = $('qQ').value.trim(), withArch = $('qArch').checked, res = $('qRes'); let info = '';
     if (withArch && !archived && archYears().length) { $('qInfo').textContent = 'Loading the archive…'; try { await loadArchived(); } catch (e) { info = 'Could not load the archive: ' + (e.message || e); } }
@@ -7698,8 +7714,14 @@ if (typeof window !== 'undefined') (() => {
     if (!q) { $('qInfo').textContent = info || `${msIndex.documentCount} people and tasks` + (matchMedia('(pointer: fine)').matches ? ' · press / anywhere to search' : ''); if (res.firstElementChild) res.querySelector('.qhit').classList.add('first'); return; }
     // A number ("26" or "#26") puts that card first, then cards whose number starts with it, then the other hits (sort is stable)
     const numQ = (q.match(/^#?(\d+)$/) || [])[1], numRank = h => !numQ || !h.num ? 2 : h.num === numQ ? 0 : h.num.startsWith(numQ) ? 1 : 2;
+    // A number query is about a card number, so it shows no clients or projects and Enter still opens the numbered card
+    const { list: places, more: morePlaces } = numQ ? { list: [], more: false } : searchPlaces(q);
+    if (places.length) { res.append(el('div', 'qhead', 'Clients and projects'));
+      places.forEach(x => { const b = el('button', 'qhit qplace'); b.type = 'button'; b.append(elI('span', 'qic', x.icon), el('span', 'qt', x.title), el('span', 'qsub', x.sub));
+        b.onclick = () => { $('dlgSearch').close(); x.open(); }; res.append(b); }); }
     const hits = msIndex.search(q).sort((a, b) => numRank(a) - numRank(b)).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
-    $('qInfo').textContent = info || (hits.length ? `${hits.length}${hits.length === 60 ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
+    const found = hits.length + places.length;
+    $('qInfo').textContent = info || (found ? `${found}${hits.length === 60 || morePlaces ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
     hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
       b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
         else if (h.kind === 'task') openCard(h.ref); else openContact(h.ref); };

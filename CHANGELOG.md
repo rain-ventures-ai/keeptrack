@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Board page: search finds clients and projects by name, in a new "Clients and projects" section above people and
+tasks ("hurst col" finds the client, not only its cards). A result opens the client or project details.
+
 Kit v75: email-to-tasks reads only what a person would see (card #182; pack 1.4.0). Phishing mail now hides
 instructions for the AI that reads it: HTML comments, CSS-invisible text, encoded blobs, zero-width and Unicode tag
 characters. `resolve.py --save` now keeps each message's headers only (`<id>.json`, no body) and writes a cleaned view

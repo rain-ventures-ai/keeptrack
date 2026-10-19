@@ -22,8 +22,11 @@ const server = http.createServer((req, res) => {
     const HOUR = 60 * 60 * 1000, DAY = 24 * HOUR;
     const before = ms => new Date(Date.now() - ms).toISOString();
     const makeTask = (id, num, title, created, updated, extra = {}) => ({ id, num, title, column: 'todo', priority: 'medium', assignees: [], labels: [], comments: [], todos: [], history: [], links: [], created, updated, ...extra });
-    const board = { version: 3, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [], contacts: [], clients: [], agents: [], labels: [], settings: {},
-      tasks: [makeTask('t_search', 1, 'Search example card', before(800 * DAY), before(90 * DAY)),
+    const board = { version: 3, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [], clients: ['Acme School'], agents: [], labels: [], settings: {},
+      contacts: [{ id: 'c_pat', name: 'Pat Lee', company: 'Acme School', stage: 'lead', notes: '', next: '', comments: [], history: [], links: [] },
+        { id: 'c_kim', name: 'Kim Roe', company: 'Globex Ltd', stage: 'lead', notes: '', next: '', comments: [], history: [], links: [] }],
+      projects: [{ id: 'pr_wifi', name: 'Campus wifi rollout', client: 'Acme School', status: 'active', people: [] }, { id: 'pr_26', name: 'Phase 26', client: 'Acme School', status: 'active', people: [] }],
+      tasks: [makeTask('t_search', 1, 'Search example card', before(800 * DAY), before(90 * DAY), { client: 'Acme School' }),
         makeTask('t_new_1', 2, 'Research: personal AI benchmark for testing new models', before(22 * DAY), before(3 * HOUR)),
         makeTask('t_new_2', 3, 'Review new follow-ups from the latest Keeptrack release and record reads', before(20 * DAY), before(8 * DAY), { comments: [{ by: 'ollie', at: before(2 * HOUR), text: 'Latest note' }] }),
         makeTask('t_new_3', 4, 'Prepare a new proposal with the full heartbeat and feature plan', before(90 * DAY), before(15 * DAY)),
@@ -90,6 +93,18 @@ const server = http.createServer((req, res) => {
       assert.deepEqual((await page.locator('#qRes .qhit:not(.qgo):not(.qaction) .qt').allTextContents()).slice(0, 3), ['Number target card', 'Number prefix card', 'Order 26 chairs'], query); }
     await page.locator('#qQ').press('Enter'); assert.equal(await page.locator('#dlgCard').evaluate(dialog => dialog.open), true, 'Enter opens the numbered card');
     await page.locator('#dlgCard').evaluate(dialog => dialog.close());
+    // A client or project name finds the client or project itself, above its cards and people
+    await search('acme sch');
+    assert.deepEqual(await page.locator('#qRes .qhead').allTextContents(), ['Clients and projects', 'People and tasks']);
+    assert.deepEqual(await page.locator('#qRes .qplace .qt').allTextContents(), ['Acme School']);
+    assert.match(await page.locator('#qRes .qplace .qsub').first().textContent(), /Client · 1 open task · 1 person · 2 projects/);
+    await page.locator('#qQ').press('Enter'); assert.equal(await page.locator('#dlgClient').evaluate(dialog => dialog.open), true, 'Enter opens the client');
+    await page.locator('#dlgClient').evaluate(dialog => dialog.close());
+    await search('chool'); assert.deepEqual(await page.locator('#qRes .qplace .qt').allTextContents(), ['Acme School'], 'three letters match inside a name');
+    await search('globex'); assert.match(await page.locator('#qRes .qplace .qsub').first().textContent(), /^Company · 0 open tasks · 1 person$/, 'a CRM-only company is not called a client');
+    await search('wifi'); await page.getByRole('button', { name: /Campus wifi rollout/ }).click();
+    assert.equal(await page.locator('#dlgProject').evaluate(dialog => dialog.open), true, 'a project result opens the project');
+    await page.locator('#dlgProject').evaluate(dialog => dialog.close());
     await search('example card'); await page.getByRole('button', { name: /Search example card/ }).click();
     assert.equal(await page.locator('#dlgCard').evaluate(dialog => dialog.open), true);
     assert.equal(writes, 0); assert.deepEqual(errors, []);
