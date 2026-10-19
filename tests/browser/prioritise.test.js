@@ -234,13 +234,15 @@ let base;
     assert.equal(await page.locator('#fStatus').inputValue(), 'review', 'closing drawer restores filters');
     // A link from another browser may reference a client/status absent in the
     // cached board. Keep it until the fresh snapshot arrives, not silently All.
-    // Leave the live page first: it polls the board, and seeing the changed board below it could reload itself and
-    // abort the navigation to the link (CI saw net::ERR_ABORTED here).
-    const leaving = page.url(); await page.goto(new URL('/board/manifest.json', leaving).href);   // same origin, no board app
+    // The live page can start a navigation of its own (a reload after it sees the changed board), which aborts ours
+    // (CI saw net::ERR_ABORTED). Let that navigation settle and go again, at most three times.
+    const goSettled = async url => { for (let i = 0; ; i++) { try { return await page.goto(url); } catch (e) {
+      if (i >= 2 || !/ERR_ABORTED/.test(String(e))) throw e; await page.waitForLoadState('load').catch(() => {}); } } };
+    const leaving = page.url();
     const futureRoot = JSON.parse(api.files['tasks.json']); futureRoot.clients.push('Future client'); futureRoot.columns.push({ id: 'future', name: 'Future status' }); api.files['tasks.json'] = text(futureRoot);
     const futureCard = JSON.parse(api.files['cards/t_35.json']); futureCard.client = 'Future client'; futureCard.column = 'future'; api.files['cards/t_35.json'] = text(futureCard); api.head = 'future-status-head'; api.delayRead = 40;
     const futureLink = new URL(leaving); futureLink.searchParams.set('client', 'Future client'); futureLink.searchParams.set('status', 'future'); futureLink.hash = '#view=list';
-    await page.goto(futureLink.href); await page.locator('#listPrioritise').waitFor();
+    await goSettled(futureLink.href); await page.locator('#listPrioritise').waitFor();
     assert.equal(new URL(page.url()).searchParams.get('client'), 'Future client', 'stale cache must not erase unseen client');
     await page.waitForFunction(() => document.getElementById('fStatus').value === 'future' && document.getElementById('fClient').selectedOptions[0]?.value === 'Future client');
     assert.deepEqual(await order(), ['t_35']); api.delayRead = 0;
