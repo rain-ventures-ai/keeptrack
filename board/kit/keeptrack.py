@@ -7865,7 +7865,7 @@ def _edit_change(proposal, path):
 def cmd_proposal_accept(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "accepted"); _agent_decides(proposal, "accept")
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "accepted"); _agent_decides(proposal, "accept", a)
         change, edited = _edit_change(proposal, a.edit)
         kind = proposal["kind"]
         target = _check_proposal_base(data, proposal)
@@ -7904,7 +7904,7 @@ def _append_unique(record, field, values):
 def cmd_proposal_merge(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "merged"); _agent_decides(proposal, "merge"); check_stored_change(proposal)
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "merged"); _agent_decides(proposal, "merge", a); check_stored_change(proposal)
         _check_proposal_base(data, proposal)
         target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
         record = _target_record(data, target); before = copy.deepcopy(record)
@@ -7944,20 +7944,23 @@ def _acting_user():
     return os.environ.get("BOARD_USER", "").strip()
 
 
-def agent_unattended():
-    """An agent run that no person is driving (BOARD_AGENT set, BOARD_ATTENDED not): it never decides an Inbox item."""
-    return agent_run() and os.environ.get("BOARD_ATTENDED", "").strip().lower() not in ("1", "true", "yes")
+def agent_unattended(a=None):
+    """An agent run (BOARD_AGENT set, or a hosted agent identity) without this command's own --attended flag: it never
+    decides the owner's Inbox items. A flag, never an environment variable (BOARD_ATTENDED is for heartbeats only), so
+    an unattended routine, worker or connector can never inherit it. Self-declared: it guards well-behaved unattended
+    runs, not a prompt-injected agent in a chat."""
+    return agent_run() and not getattr(a, "attended", False)
 
 
-def _agent_decides(proposal, verb):
+def _agent_decides(proposal, verb, a=None):
     """kit v77: an unattended agent never accepts or merges a proposal, and ignores only one it added itself (createdBy,
-    always stamped by proposal-add). A person, or an agent in a session a person drives (BOARD_ATTENDED=1, the chat
-    flow of the keeptrack skills), decides as before."""
-    if not agent_unattended():
+    always stamped by proposal-add). A person, or an agent whose command carries --attended (a person drives the session
+    and named these items: the keeptrack skills' chat flow), decides as before."""
+    if not agent_unattended(a):
         return
     if verb in ("accept", "merge"):
         proposal_error(f"an agent never {verb}s a Review Inbox proposal: the owner does, on the board (or in a session "
-                       "they drive, with BOARD_ATTENDED=1)")
+                       "they drive and name it: --attended)")
     if proposal.get("createdBy") != who_am_i():
         proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy') or 'someone else'}; an agent ignores only "
                        f"items it added itself ({who_am_i()}). The owner decides it on the board.")
@@ -8013,7 +8016,7 @@ def cmd_proposal_ignore(a):
             proposal["history"].append({"at": now(), "by": who_am_i(), "text": "ignored: " + reason})
             print(f"withdrew {proposal['id']} {_relay_words(rel)}: {reason}")
             return
-        _agent_decides(proposal, "ignore"); _ask_person(proposal, "dismiss", own_ok=True)
+        _agent_decides(proposal, "ignore", a); _ask_person(proposal, "dismiss", own_ok=True)
         _decide(proposal, "ignore")
         if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": "ignored: " + _one_line(a.reason, "ignore reason", 300)})
         print(f"ignored {proposal['id']}")
@@ -8028,9 +8031,11 @@ def cmd_proposal_reopen(a):
         if not proposal.get("change"):
             proposal_error("this decided proposal was slimmed after 30 days and no longer has change detail to reopen")
         old = proposal.get("decision") or {}
-        if agent_unattended() and proposal.get("createdBy") != who_am_i():   # kit v77: never reverse the owner's decision
-            proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy') or 'someone else'}; an agent reopens only "
-                           f"items it added itself ({who_am_i()}). The owner reopens it on the board.")
+        if agent_unattended(a) and (proposal.get("createdBy") != who_am_i() or old.get("by") != who_am_i()):
+            # kit v77: never reverse the owner's decision; an agent reopens only its own withdrawal of its own item
+            proposal_error(f"{proposal['id']}: an agent reopens only an item it added and itself withdrew ({who_am_i()}); "
+                           f"this one was added by {proposal.get('createdBy') or 'someone else'} and decided by "
+                           f"{old.get('by') or 'someone'}. The owner reopens it on the board.")
         _ask_person(proposal, "reopen")
         if proposal["status"] == "answered":
             if old.get("done"): proposal_conflict(f"not reopened: the answer was already {_done_word(old['done'])} by {old['done'].get('by', 'someone')}")
@@ -8044,9 +8049,9 @@ def cmd_proposal_undo(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id)
-        if agent_unattended():   # kit v77: an undo can delete a card the owner accepted; only the owner undoes
+        if agent_unattended(a):   # kit v77: an undo can delete a card the owner accepted; only the owner undoes
             proposal_error("an agent never undoes an accepted proposal: the owner does, on the board (or in a session they "
-                           "drive, with BOARD_ATTENDED=1)")
+                           "drive and name it: --attended)")
         decision = proposal.get("decision") or {}; undo = decision.get("undo") or {}
         if proposal.get("status") != "accepted" or not decision.get("result") or not undo:
             proposal_error("only an accepted proposal with an undo record can be undone")
@@ -9991,18 +9996,19 @@ def main():
     s.add_argument("id"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposal_show)
     s = sub.add_parser("proposal-accept", help="accept one pending proposal")
     s.add_argument("id"); s.add_argument("--edit", help="JSON object containing replacement proposed fields"); s.add_argument("--json", action="store_true")
-    s.set_defaults(f=cmd_proposal_accept)
+    s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and named this item (kit v77)"); s.set_defaults(f=cmd_proposal_accept)
     s = sub.add_parser("proposal-merge", help="merge one pending proposal into an existing task or person")
     s.add_argument("id"); s.add_argument("--into", required=True); s.add_argument("--fields", help="comma-separated scalar fields to set")
-    s.set_defaults(f=cmd_proposal_merge)
+    s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and named this item (kit v77)"); s.set_defaults(f=cmd_proposal_merge)
     s = sub.add_parser("proposal-ignore", help="ignore one pending proposal")
     s.add_argument("id"); s.add_argument("--reason")
     s.add_argument("--via", metavar="WHERE", help="agents: withdraw an item this agent added because the owner said so in WHERE (needs --reason)")
+    s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and named this item (kit v77)")
     s.set_defaults(f=cmd_proposal_ignore)
     s = sub.add_parser("proposal-reopen", help="return an ignored proposal, or an answered question not yet acted on, to pending")
-    s.add_argument("id"); s.set_defaults(f=cmd_proposal_reopen)
+    s.add_argument("id"); s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and named this item (kit v77)"); s.set_defaults(f=cmd_proposal_reopen)
     s = sub.add_parser("proposal-undo", help="undo an unchanged accepted proposal result")
-    s.add_argument("id"); s.set_defaults(f=cmd_proposal_undo)
+    s.add_argument("id"); s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and named this item (kit v77)"); s.set_defaults(f=cmd_proposal_undo)
     s = sub.add_parser("proposal-answer", help="a person answers a question (ask.choose, ask.approve, ask.question)")
     s.add_argument("id"); g = s.add_mutually_exclusive_group()
     g.add_argument("--choose", metavar="KEY"); g.add_argument("--other", metavar="TEXT"); g.add_argument("--approve", action="store_true")

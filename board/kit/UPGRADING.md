@@ -32,12 +32,16 @@ An agent closes its own Review Inbox items when the owner answered or declined t
 ignored by the agent, without the "for @owner" words.
 - Run `kit-update` only. Check: `kit-check` says v77, and `python3 board/keeptrack.py proposals --by connector-claude`
   lists only the items the Claude connector added (or `(no proposals)`).
-- Behaviour change for agents: an agent run that no person drives (`BOARD_AGENT` set, or a hosted identity with an
-  agent id) may no longer `proposal-accept`, `proposal-merge` or `proposal-undo`, nor `proposal-ignore` or
-  `proposal-reopen` an item it did not add. A chat where the person names the proposals to accept runs those commands
-  with `BOARD_ATTENDED=1` (the keeptrack skills say so). Scheduled routines never decided proposals, so they are not
-  affected.
-- What `BOARD_ATTENDED` guards: it is self-declared, so it keeps well-behaved unattended runs (cloud routines, workers, automations, the relay connector) from deciding for the owner; it does not stop a prompt-injected agent, or any agent on a machine whose environment sets `BOARD_ATTENDED=1` for every session. Set it per session the person drives, never machine-wide.
+- Behaviour change for agents: an agent run (`BOARD_AGENT` set, or a hosted identity with an agent id) may no
+  longer `proposal-accept`, `proposal-merge` or `proposal-undo`, nor `proposal-ignore` an item it did not add, nor
+  `proposal-reopen` anything but its own withdrawal of its own item, unless the command carries `--attended` (a person
+  drives the session and named the item; the keeptrack skills pass it in a chat). Scheduled routines never decided
+  proposals, so they are not affected.
+- `--attended` on these commands is a flag, not `BOARD_ATTENDED`: a `BOARD_ATTENDED=1` set in a shell profile or
+  settings for heartbeats does not let an agent decide Inbox items. It is self-declared:
+  it guards well-behaved unattended runs, not a prompt-injected agent in a chat.
+- A hosted agent identity (an `agent_id` from `/v1/me`) now counts as an agent run everywhere `BOARD_AGENT` did:
+  waits and their release, Inbox questions (answer, dismiss, reopen), and these Inbox decisions.
 - `proposal-add` now drops a `createdBy` in the payload and stamps the run's own `BOARD_AGENT@BOARD_USER` on every
   proposal, since `createdBy` decides who may withdraw it.
 - Relay 0.9.38's connector tools `list_inbox` and `resolve_inbox_item` need this kit on the board; on an older board

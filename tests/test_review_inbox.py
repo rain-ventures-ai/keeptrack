@@ -135,13 +135,12 @@ class ReviewInbox(unittest.TestCase):
         with open(path, "w") as dst: json.dump(card, dst)
         ident = self.add(proposal(kind="task.update", change={"column": "done"},
                                   target={"type": "task", "id": "t_first", "base": {"column": card["column"]}}))
-        old = {k: os.environ.get(k) for k in ("BOARD_AGENT", "BOARD_ATTENDED")}; os.environ["BOARD_AGENT"] = "claude"
-        os.environ.pop("BOARD_ATTENDED", None)
+        old = {k: os.environ.get(k) for k in ("BOARD_AGENT",)}; os.environ["BOARD_AGENT"] = "claude"
         try:
-            with self.assertRaises(SystemExit):   # kit v77: an agent no person drives never merges
+            with self.assertRaises(SystemExit):   # kit v77: an agent never merges without --attended
                 self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column"))
-            os.environ["BOARD_ATTENDED"] = "1"   # the agent in a session the person drives, on their word
-            self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column"))
+            # --attended: the person drives the session and named this item
+            self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column", attended=True))
         finally:
             for k, v in old.items():
                 if v is None: os.environ.pop(k, None)

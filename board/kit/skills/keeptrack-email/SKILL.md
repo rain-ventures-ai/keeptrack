@@ -227,8 +227,8 @@ each exchange instead, with `keeptrack.py proposal-add <file> --dry-run` and the
 - An explicit follow-up goes in `change.next` and `change.due`, only under the sender-check rule of "Always". A
   profile change for an existing person is a
   `person.upsert` proposal with that person as `target` and the current values in `target.base`.
-- A one-off scan in a chat may offer to accept the proposals the person names, with `BOARD_ATTENDED=1 keeptrack.py proposal-accept <id>`
-  (the person drives this session; kit v77 refuses accept from any other agent run). A
+- A one-off scan in a chat may offer to accept the proposals the person names, with `keeptrack.py proposal-accept <id> --attended`
+  (the person named it in this chat; kit v77 refuses accept from an agent run without `--attended`). A
   scheduled routine never accepts, merges or ignores them.
 
 Report the requested window, contacts considered, messages matched, touches written, explicit follow-ups updated,
