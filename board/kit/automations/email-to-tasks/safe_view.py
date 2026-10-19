@@ -27,37 +27,97 @@ BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "tabl
 WHITE = {"#fff", "#ffffff", "white", "rgb(255,255,255)", "rgba(255,255,255,1)", "#fefefe", "#fdfdfd"}
 
 
+def _decls(text):
+    """CSS declarations as {property: value}, lower case, spaces and !important removed."""
+    out = {}
+    for d in (text or "").split(";"):
+        if ":" in d:
+            k, v = d.split(":", 1)
+            out[k.strip().lower()] = re.sub(r"!\s*important", "", v.strip().lower()).replace(" ", "")
+    return out
+
+
 def _style(attrs):
-    return {k.strip().lower(): v.strip().lower().replace(" ", "") for k, v in
-            (d.split(":", 1) for d in (dict(attrs).get("style") or "").split(";") if ":" in d)}
+    return _decls(dict(attrs).get("style") or "")
 
 
-def _hidden(tag, attrs, inherited_bg):
-    a = {k.lower(): (v or "") for k, v in attrs}
-    if "hidden" in a or a.get("aria-hidden", "").lower() == "true":
+def _num(v):
+    m = re.match(r"^(-?[0-9]*\.?[0-9]+)(px|pt|em|rem|%|)$", v or "")
+    return (float(m.group(1)), m.group(2)) if m else None
+
+
+def _hides(s, color="", bg=""):
+    """Does this set of declarations hide its text from a reader?"""
+    if s.get("display") == "none" or s.get("visibility") in ("hidden", "collapse") or s.get("mso-hide") == "all":
         return True
-    s = _style(attrs)
-    if s.get("display") == "none" or s.get("visibility") in ("hidden", "collapse") or s.get("opacity") in ("0", "0.0"):
+    op = _num(s.get("opacity"))
+    if op and op[0] <= 0.05:
         return True
-    zero = lambda v: re.fullmatch(r"0(\.0+)?(px|pt|em|rem|%)?(!important)?", v or "x") is not None
-    if zero(s.get("font-size")):
-        return True
+    fs = _num(s.get("font-size"))
+    if fs and (fs[0] <= 0 or (fs[1] in ("px", "pt", "") and fs[0] < 2) or (fs[1] in ("em", "rem") and fs[0] < 0.2)):
+        return True   # zero or unreadably small text
     clipped = "hidden" in s.get("overflow", "")
-    if any(zero(s.get(k)) for k in ("max-height", "max-width")) or (clipped and any(zero(s.get(k)) for k in ("height", "width"))):
+    for k in ("max-height", "max-width") + (("height", "width") if clipped else ()):
+        n = _num(s.get(k))
+        if n and n[0] <= 0:
+            return True
+    if re.match(r"rect\(0", s.get("clip", "")) or re.search(r"inset\(50%|inset\(100%|circle\(0", s.get("clip-path", "")):
         return True
-    color = s.get("color") or (a.get("color", "").lower() if tag == "font" else "")
-    bg = s.get("background-color") or s.get("background") or a.get("bgcolor", "").lower() or inherited_bg
-    if color and bg and color.replace("!important", "") == bg.replace("!important", ""):
+    if s.get("position") in ("absolute", "fixed"):
+        for k in ("left", "top", "right", "bottom", "text-indent"):
+            n = _num(s.get(k))
+            if n and n[0] <= -500:
+                return True   # moved off the screen
+    ti = _num(s.get("text-indent"))
+    if ti and ti[0] <= -500:
+        return True
+    if re.search(r"scale\(0[,)]|scale\(0\.0", s.get("transform", "")):
+        return True
+    c = s.get("color") or color
+    b = s.get("background-color") or s.get("background") or bg
+    if c in ("transparent",) or re.fullmatch(r"rgba\([^)]*,0(\.0+)?\)", c or "") or re.fullmatch(r"#[0-9a-f]{6}00|#[0-9a-f]{3}0", c or ""):
+        return True
+    if c and b and c == b:
         return True   # text the same colour as its background
-    if color.replace("!important", "") in WHITE and (not bg or bg.replace("!important", "") in WHITE):
+    if c in WHITE and (not b or b in WHITE):
         return True   # white text on a white (default) page
     return False
 
 
+def _hidden(tag, attrs, inherited_bg, hidden_selectors=frozenset()):
+    a = {k.lower(): (v or "") for k, v in attrs}
+    if "hidden" in a or a.get("aria-hidden", "").lower() == "true":
+        return True
+    if tag in hidden_selectors or ("#" + a.get("id", "").strip().lower()) in hidden_selectors:
+        return True
+    if any(("." + c.lower()) in hidden_selectors for c in a.get("class", "").split()):
+        return True
+    color = a.get("color", "").lower() if tag == "font" else ""
+    bg = a.get("bgcolor", "").lower() or inherited_bg
+    return _hides(_style(attrs), color, bg)
+
+
+def _hidden_selectors(markup):
+    """Simple selectors (.class, #id, tag) that a <style> block hides: `.x{display:none}` and the like."""
+    found = set()
+    for block in re.findall(r"<style[^>]*>(.*?)</style>", markup, flags=re.S | re.I):
+        block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+        for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", block):
+            if _hides(_decls(body)):
+                for one in sel.split(","):
+                    last = one.strip().split()[-1] if one.strip() else ""
+                    m = re.fullmatch(r"([a-z0-9]*)((?:[.#][a-z0-9_-]+)*)", last.lower())
+                    if m:
+                        parts = re.findall(r"[.#][a-z0-9_-]+", m.group(2))
+                        found.update(parts or ([m.group(1)] if m.group(1) else []))
+    return frozenset(found)
+
+
 class _Visible(html.parser.HTMLParser):
-    def __init__(self):
+    def __init__(self, hidden_selectors=frozenset()):
         super().__init__(convert_charrefs=True)
         self.out, self.stack, self.removed = [], [], {"html_comments": 0, "hidden_elements": 0}
+        self.hidden_selectors = hidden_selectors
 
     def _bg(self):
         for _, _, bg in reversed(self.stack):
@@ -75,7 +135,7 @@ class _Visible(html.parser.HTMLParser):
             return
         s = _style(attrs)
         bg = s.get("background-color") or s.get("background") or dict(attrs).get("bgcolor", "") or ""
-        hide = tag in SKIP_TAGS or _hidden(tag, attrs, self._bg())
+        hide = tag in SKIP_TAGS or _hidden(tag, attrs, self._bg(), self.hidden_selectors)
         if hide and tag not in SKIP_TAGS and not self._hidden_now():
             self.removed["hidden_elements"] += 1
         self.stack.append((tag, hide, bg.lower()))
@@ -104,7 +164,7 @@ class _Visible(html.parser.HTMLParser):
 
 def visible_text(markup):
     """(text, removed) for an HTML body: only what a person sees."""
-    p = _Visible()
+    p = _Visible(_hidden_selectors(markup))
     try:
         p.feed(markup); p.close()
     except Exception:   # malformed beyond the parser: keep nothing rather than the raw markup
@@ -169,7 +229,8 @@ def _headers(node, depth=0, out=None):
 def _auth(results):
     """spf/dkim/dmarc results from Authentication-Results (the receiving server's, Gmail's), or "none"."""
     found = {}
-    for line in results:
+    ours = [l for l in results if l.strip().lower().startswith("mx.google.com")][:1]   # a sender can add its own
+    for line in ours:
         for mech in ("spf", "dkim", "dmarc"):
             m = re.search(r"\b" + mech + r"=([a-z]+)", line.lower())
             if m and mech not in found:
@@ -196,27 +257,46 @@ def view(message):
     hdr = _headers(message)
     parts = _parts(message)
     removed = {"html_comments": 0, "hidden_elements": 0, "invisible_characters": 0, "encoded_blobs": 0}
+    # HTML first: it is what mail clients show. A plain-text part sits behind it unseen, so text only it carries is
+    # exactly where an instruction for the AI hides; plain text is read only when the message has no HTML.
+    htmls = [t for m, t in parts if m.startswith("text/html")]
     plain = [t for m, t in parts if m.startswith("text/plain")]
-    if plain:
-        text = plain[0]
-        if re.search(r"<!--|<[a-zA-Z][^>]*>", text):   # "plain" that carries markup is cleaned as HTML
-            text, r = visible_text(text); removed.update({k: removed[k] + v for k, v in r.items()})
+    if htmls:
+        text, r = visible_text(htmls[0])
+    elif plain:
+        text, r = (visible_text(plain[0]) if re.search(r"<!--|<[a-zA-Z][^>]*>", plain[0]) else (plain[0], {}))
     else:
-        htmls = [t for m, t in parts if m.startswith("text/html")]
-        text, r = visible_text(htmls[0]) if htmls else ("", {})
-        removed.update({k: removed[k] + v for k, v in r.items()})
+        text, r = "", {}
+    for k, v in r.items():
+        removed[k] += v
     text = clean(text, removed)
     truncated = len(text) > MAX_TEXT
-    return {"headers": {k: clean(" ".join(v), {})[:500] for k, v in hdr.items() if k != "authentication-results"},
+    return {"headers": {k: one_line(" ".join(v)) for k, v in hdr.items() if k != "authentication-results"},
             "auth": _auth(hdr.get("authentication-results", [])), "text": text[:MAX_TEXT], "removed": removed,
             "truncated": truncated}
 
 
+SAVE_HEADERS = ("from", "to", "cc", "date", "subject", "message-id")
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def one_line(value, limit=500):
+    """A header value as one line: control characters (CR, LF, tabs) and invisible characters become spaces."""
+    return re.sub(r" +", " ", CONTROL.sub(" ", INVISIBLE.sub("", str(value)))).strip()[:limit]
+
+
 def headers_only(message):
-    """The saved message without any body: the agent reads the body only through view()."""
+    """What --save keeps of a message: its ids and the headers step 3 needs, nothing else (no body, no other
+    header). The Message-ID is kept as sent (the resolver alone hashes it); the others as one line each."""
+    keep = []
+    for name, values in _headers(message).items():
+        if name in SAVE_HEADERS:
+            for v in values[:3]:
+                keep.append({"name": name.title() if name != "message-id" else "Message-ID",
+                             "value": v if name == "message-id" else one_line(v)})
+    out = {"payload": {"headers": keep}}
     if isinstance(message, dict):
-        return {k: headers_only(v) for k, v in message.items() if k not in ("body", "parts", "raw", "text", "html",
-                                                                              "textBody", "htmlBody", "plain", "snippet")}
-    if isinstance(message, list):
-        return [headers_only(v) for v in message]
-    return message
+        for k in ("id", "threadId"):
+            if isinstance(message.get(k), str):
+                out[k] = one_line(message[k], 64)
+    return out
