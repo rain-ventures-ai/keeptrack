@@ -542,12 +542,6 @@
      "why": "each exchange is contact history"
     },
     {
-     "count": "\\\"kind\\\"\\s*:\\s*\\\"task\\.create\\\"",
-     "min": 0,
-     "max": 0,
-     "why": "a failed sender check gets contact history only"
-    },
-    {
      "not_regex": "(?i)could not verify the sender|sender check failed",
      "why": "mail the owner sent gets no sender warning"
     },

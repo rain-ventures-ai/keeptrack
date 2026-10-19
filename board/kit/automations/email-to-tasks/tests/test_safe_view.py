@@ -94,7 +94,7 @@ class HiddenInstructions(unittest.TestCase):
         self.assertIn("casey@example.com", saved)
 
     def test_more_hiding_styles(self):
-        for style in ("display:none !important", "color:transparent", "color:rgba(0,0,0,0)", "mso-hide:all",
+        for style in ("display:none !important", "color:transparent", "color:rgba(0,0,0,0)",
                       "font-size:1px", "position:absolute;left:-9999px", "clip:rect(0,0,0,0);position:absolute",
                       "clip-path:inset(50%)", "text-indent:-9999px", "opacity:0.01", "transform:scale(0)"):
             with self.subTest(style=style):
@@ -161,7 +161,9 @@ class HiddenInstructions(unittest.TestCase):
     def test_crafted_style_block_is_quick(self):
         import time
         t = time.monotonic()
-        sv.view(msg(html="<style>" + "a{" * 50000 + "</style>" + "<style>" + "/*" * 50000 + "</style><p>x</p>"))
+        with self.assertRaises(sv.TooComplex):   # nested too deep: refused quickly
+            sv.view(msg(html="<style>" + "a{" * 50000 + "</style><p>x</p>"))
+        sv.view(msg(html="<style>" + "/*" * 50000 + "</style><p>x</p>"))
         sv.view(msg(html="<style>" + ("." + "a" * 500 + " ") * 200 + "{display:none}</style><p>x</p>"))
         with self.assertRaises(sv.TooComplex):   # over the cap: refused quickly, never partly read
             sv.view(msg(html="<style>" + ("." + "a" * 500 + " ") * 2000 + "{display:none}</style><p>x</p>"))
@@ -203,7 +205,8 @@ class HiddenInstructions(unittest.TestCase):
         self.seen(f'<style>/* never closed</style><style>.x{{display:none}}</style><div class="x">{ORDER}</div>')
         self.seen(f'<style>.x{{display:none}} /* <style> */ p{{color:#333}}</style><div class="x">{ORDER}</div>')
         self.seen(f'<style>.x{{display:none}} p::before{{content:"<style>"}}</style><div class="x">{ORDER}</div>')
-        self.seen(f'<style>div > p.x:hover, [data-a] .y::after {{display:none}}</style><p class="y">{ORDER}</p>')
+        v = sv.view(msg(html='<style>p.x:hover, .y::after {display:none}</style><p class="x y">Visible at rest</p>'))
+        self.assertIn("Visible at rest", v["text"], "hover and pseudo-element rules hide nothing a reader sees")
         self.seen(f'<style>.{"a" * 300}{{display:none}}</style><p class="{"a" * 300}">{ORDER}</p>')
 
     def test_style_self_closing_and_odd_comments(self):
@@ -258,6 +261,58 @@ class HiddenInstructions(unittest.TestCase):
             sv.view(msg(html=f'<style>[data-x]{{display:none}}</style><p data-x="1">{ORDER}</p>'))
         v = sv.view(msg(html='<div style="color:#fff;background:#003366"><p>Welcome aboard</p></div>'))
         self.assertIn("Welcome aboard", v["text"])
+
+    def test_ordinary_tool_made_mail_is_not_flagged(self):
+        """Outlook, MJML and newsletter markup: all of its text kept and nothing counted as hidden."""
+        outlook = ('<html><head><meta charset="utf-8"><title>Re: SOW</title><style><!-- /* Font Definitions */ '
+                   '@font-face {font-family:Calibri;} p.MsoNormal {margin:0cm; font-size:11.0pt;} --></style>'
+                   '<!--[if gte mso 9]><xml><o:shapedefaults v:ext="edit" spidmax="1026" /></xml><![endif]-->'
+                   '<!--[if !mso]><style>v\\:* {behavior:url(#default#VML);}</style><![endif]--></head>'
+                   '<body><div class="WordSection1"><p class="MsoNormal">Can you send the SOW by Friday?</p></div></body></html>')
+        mjml = ('<head><!--[if !mso]><!--><meta http-equiv="X-UA-Compatible" content="IE=edge"><!--<![endif]-->'
+                '<style>@media only screen and (min-width:480px){.mj-column-per-100{width:100% !important;}}'
+                '@media (prefers-color-scheme:dark){.text{color:#ffffff !important;}}'
+                '@media only screen and (max-width:480px){td[class="hide"]{display:none !important;}.desktop{display:none}}'
+                '[data-ogsc] .text{color:#ffffff !important;}</style></head><body>'
+                '<div style="font-size:0px;"><div class="mj-column-per-100 desktop" style="font-size:0px;">'
+                '<table><tr><td class="hide" style="font-size:0px;"><div class="text" style="font-size:13px;color:#333">'
+                'Your invoice is ready.</div></td></tr></table></div></div>'
+                '<table bgcolor="#003366"><tr><td><a style="color:#ffffff;mso-hide:all">Pay now</a></td></tr></table>'
+                '<div style="background-image:url(hero.png);color:#ffffff">Spring sale</div></body>')
+        for name, markup in (("outlook", outlook), ("mjml", mjml)):
+            with self.subTest(name):
+                v = sv.view(msg(html=markup))
+                self.assertEqual((v["removed"]["hidden_elements"], v["removed"]["html_comments"]), (0, 0), v)
+        self.assertIn("Can you send the SOW by Friday?", sv.view(msg(html=outlook))["text"])
+        t = sv.view(msg(html=mjml))["text"]
+        for want in ("Your invoice is ready.", "Pay now", "Spring sale"):
+            self.assertIn(want, t)
+
+    def test_class_colour_and_size_still_hide(self):
+        self.seen(f'<style>.n{{font-size:0}} .w{{color:#fff}}</style><p class="n">{ORDER}</p>')
+        self.seen(f'<style>.w{{color:#fff}}</style><p class="w">{ORDER}</p>')
+        self.seen(f'<style>@media screen{{.x{{display:none}}}}</style><p class="x">{ORDER}</p>')
+        self.seen(f'<style>@media (max-width:99999px){{.x{{display:none}}}}</style><p class="x">{ORDER}</p>')
+        self.seen(f'<div style="font-size:0"><span>{ORDER}</span></div>')
+
+    def test_sent_mail_drops_the_quoted_reply(self):
+        m = msg(html='<div>I will send the quote Friday.</div><div class="gmail_quote">On Tue, Sam wrote:'
+                     f'<blockquote>{ORDER}</blockquote></div>')
+        m["labelIds"] = ["SENT"]
+        v = sv.view(m)
+        self.assertEqual(v["text"], "I will send the quote Friday."); self.assertTrue(v["quoted_reply_removed"])
+        self.assertEqual(v["removed"]["hidden_elements"], 0)
+        p = msg(plain=f"Will do.\n\nOn Tue, 14 Oct 2026, Sam <sam@example.com> wrote:\n> {ORDER}"); p["labelIds"] = ["SENT"]
+        self.assertEqual(sv.view(p)["text"], "Will do.")
+
+    def test_charset_and_links(self):
+        m = msg(plain="x")
+        m["payload"]["parts"][0] = {"mimeType": "text/plain", "headers": [{"name": "Content-Type", "value": "text/plain; charset=iso-8859-1"}],
+                                    "body": {"data": base64.urlsafe_b64encode("Café à Paris".encode("latin-1")).decode()}}
+        self.assertEqual(sv.view(m)["text"], "Café à Paris")
+        link = "https://github.com/acme/widgets/commit/" + "0123456789abcdef" * 5 + "/files?diff=split"
+        v = sv.view(msg(plain="See " + link))
+        self.assertIn(link, v["text"]); self.assertEqual(v["removed"]["encoded_blobs"], 0)
 
 
 if __name__ == "__main__":

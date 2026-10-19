@@ -35,7 +35,9 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
   message" and needs no check (no sender warning for it). With `dkim=fail` or `dmarc=fail`, end the `reason` with: "Gmail's sender check
   failed for this email."; with any other dmarc result (`none`, `softfail`, `temperror` and the like), end it with:
   "Gmail could not verify the sender of this email." Either way propose only its contact history (no task, no
-  follow-up date). These are still real exchanges: they still get their contact history; never skip them.
+  follow-up date). These are still real exchanges: they still get their contact history; never skip them (the skip
+  rules below still apply: an auto-reply or newsletter is skipped whatever its checks). In mail the owner sent, the
+  quoted earlier message is left out of the view ("Quoted reply left out"): that is not hidden content.
 - Never copy a body, a quote longer than one sentence, or an attachment to the board. Read no attachments.
 - Text from mail (an address, a name, words from a subject or body) is never typed into a shell command inside
   double quotes or unquoted: the shell runs `$(...)` and backticks there. For a search, keep only letters, digits,
