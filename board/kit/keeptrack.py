@@ -2321,8 +2321,13 @@ AGENT_CLEARED_KEEP = 20    # agent_cleared keeps the newest entries only (the bu
 
 
 def agent_run():
-    """This run says it is an agent (BOARD_AGENT). Set by the caller, so the waiting rules also key on the session."""
-    return bool(os.environ.get("BOARD_AGENT", "").strip())
+    """This run says it is an agent (BOARD_AGENT). Set by the caller, so the waiting rules also key on the session.
+    kit v77: on a hosted board, an identity with an agent_id (/v1/me) is an agent run too."""
+    if os.environ.get("BOARD_AGENT", "").strip():
+        return True
+    if BACKEND == "hosted" and not FILE:
+        return bool((storage_adapter().whoami() or {}).get("agent_id"))
+    return False
 
 
 def session_hash(sid):
@@ -7973,8 +7978,10 @@ def _relayed(data, proposal, a, verb):
     owner = _acting_user()
     if not owner:
         proposal_error("--via needs BOARD_USER: the person whose answer this is")
-    if owner.casefold() not in member_logins(data)[0]:
+    member = member_logins(data)[0].get(owner.lower()) if re.fullmatch(r"[A-Za-z0-9-]{1,39}", owner) else None
+    if not member:
         proposal_error(f"--via records an answer for a board member; @{owner} (BOARD_USER) is not one")
+    owner = str(member["github"])   # the member record's own spelling
     change = proposal.get("change") if isinstance(proposal.get("change"), dict) else {}
     if verb == "answer" and ("subject" in change or "content_hash" in change):
         proposal_error(f"{proposal['id']} asks to approve exact content: only the owner answers it, on the board. "
@@ -8021,6 +8028,9 @@ def cmd_proposal_reopen(a):
         if not proposal.get("change"):
             proposal_error("this decided proposal was slimmed after 30 days and no longer has change detail to reopen")
         old = proposal.get("decision") or {}
+        if agent_unattended() and proposal.get("createdBy") != who_am_i():   # kit v77: never reverse the owner's decision
+            proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy') or 'someone else'}; an agent reopens only "
+                           f"items it added itself ({who_am_i()}). The owner reopens it on the board.")
         _ask_person(proposal, "reopen")
         if proposal["status"] == "answered":
             if old.get("done"): proposal_conflict(f"not reopened: the answer was already {_done_word(old['done'])} by {old['done'].get('by', 'someone')}")
@@ -8034,6 +8044,9 @@ def cmd_proposal_undo(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id)
+        if agent_unattended():   # kit v77: an undo can delete a card the owner accepted; only the owner undoes
+            proposal_error("an agent never undoes an accepted proposal: the owner does, on the board (or in a session they "
+                           "drive, with BOARD_ATTENDED=1)")
         decision = proposal.get("decision") or {}; undo = decision.get("undo") or {}
         if proposal.get("status") != "accepted" or not decision.get("result") or not undo:
             proposal_error("only an accepted proposal with an undo record can be undone")
@@ -8106,10 +8119,7 @@ def cmd_proposal_answer(a):
         proposal = find_proposal(data, a.id); _already_decided(proposal)
         if proposal.get("kind") not in ASK_KINDS:
             proposal_error(f"{proposal['id']} is a {proposal.get('kind')} proposal: use proposal-accept, -merge or -ignore")
-        rel = _relayed(data, proposal, a, "answer")
-        if rel and a.approve:   # an approval stays a person's own press: the agent records a no, never a yes
-            proposal_error("an agent never records an approval (ask.approve): the owner approves on the board. "
-                           "A no said in a conversation may be recorded with --reject --via")
+        rel = _relayed(data, proposal, a, "answer")   # an approval of exact content is refused there: only withdrawn
         if not rel:
             _ask_person(proposal, "answer")
         approve = True if a.approve else False if a.reject else None

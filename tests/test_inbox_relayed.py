@@ -156,6 +156,11 @@ class Relayed(unittest.TestCase):
         self.assertNotEqual(0, self.kt("proposal-answer", ids["q1"], "--text", "x", "--via", "chat", env=only, ok=False).returncode,
                             "automations still only write proposals")
 
+    def test_owner_is_stored_as_the_members_own_login(self):
+        rid = self.add(question("q1", "Budget?"), env=dict(self.agent, BOARD_USER="ALEX"))["q1"]
+        self.kt("proposal-answer", rid, "--text", "12k", "--via", "chat", env=dict(self.agent, BOARD_USER="ALEX"))
+        self.assertEqual({"for": "alex", "via": "chat"}, self.item(rid)["decision"]["relayed"])
+
     def test_owner_must_be_a_board_member(self):
         rid = self.add(question("q1", "Budget?"), env=dict(self.agent, BOARD_USER="jo"))["q1"]
         p = self.kt("proposal-answer", rid, "--text", "12k", "--via", "chat", env=dict(self.agent, BOARD_USER="jo"), ok=False)
@@ -181,9 +186,30 @@ class Relayed(unittest.TestCase):
         attended = dict(self.agent, BOARD_ATTENDED="1")   # the person drives the session (the skills' chat flow)
         self.kt("proposal-accept", ids["c1"], env=attended)
         self.assertEqual("accepted", self.item(ids["c1"])["status"])
+        made = self.cards()
+        # round 2: the owner's decisions cannot be reversed by an unattended agent either
+        self.assertEqual(2, self.kt("proposal-undo", ids["c1"], env=self.agent, ok=False).returncode, "undo would delete the card")
+        self.assertEqual(made, self.cards())
         self.kt("proposal-ignore", ids["c2"], env=attended)
+        self.assertEqual(2, self.kt("proposal-reopen", ids["c2"], env=self.agent, ok=False).returncode, "not its item")
+        self.assertEqual("ignored", self.item(ids["c2"])["status"])
+        self.kt("proposal-reopen", own, env=self.agent)   # its own withdrawn item: allowed
         self.kt("proposal-reopen", ids["c2"])   # a person, no agent
         self.kt("proposal-merge", ids["c2"], "--into", "t_first", "--fields", "title")
+        self.kt("proposal-undo", ids["c1"], env=attended)
+        self.assertEqual("pending", self.item(ids["c1"])["status"])
+
+    def test_hosted_agent_identity_is_an_agent_run(self):
+        spec = importlib.util.spec_from_file_location("kt_hosted_agent", KT); kt = importlib.util.module_from_spec(spec); spec.loader.exec_module(kt)
+        old = os.environ.pop("BOARD_AGENT", None)
+        try:
+            kt.BACKEND, kt.FILE = "hosted", None
+            for ident, want in (({"agent_id": "20000000-0000-4000-8000-000000000001", "user_id": "u"}, True),
+                                ({"agent_id": None, "user_id": "u"}, False)):
+                kt.storage_adapter = lambda ident=ident: type("A", (), {"whoami": lambda self: ident})()
+                self.assertIs(want, kt.agent_run())
+        finally:
+            if old is not None: os.environ["BOARD_AGENT"] = old
 
     def test_slimming_keeps_who_and_where_but_drops_the_reason(self):
         spec = importlib.util.spec_from_file_location("kt_relayed", KT); kt = importlib.util.module_from_spec(spec); spec.loader.exec_module(kt)

@@ -11,16 +11,16 @@ Kit v77: an agent closes its own Review Inbox items once the owner settled them 
 agent part). `proposal-answer <id> --via "<where>"` records the owner's answer to a question the same agent identity
 asked; `proposal-ignore <id> --via "<where>" --reason "<one line>"` withdraws an item it added (a card proposal the
 owner declined, a question no longer needed). Both are refused on an item another agent or a person added, on a
-question whose `decider` is someone other than `BOARD_USER`, and without `BOARD_AGENT`; an agent never records an
-approval, only a no, and never accepts a card. The item records `decision.relayed` (`for`, `via`, and the withdraw
+question whose `decider` is someone other than `BOARD_USER`, and without `BOARD_AGENT`; an approval of exact content
+is never answered through `--via` (only withdrawn), and an agent never accepts a card. The item records `decision.relayed` (`for`, `via`, and the withdraw
 `reason`, which the 30-day slim removes), the history says who it was for and where they said it, and the board page
 shows "Answered by … for @owner, as they said in …" or "Withdrawn by … : reason". A person undoes either with Reopen
-(`proposal-reopen`). The guarantee also holds without `--via`: an agent run no person drives (no `BOARD_ATTENDED=1`)
-can no longer accept or merge any proposal, nor ignore one another agent or a person added; the keeptrack skills'
-chat flow ("accept the ones I name") now runs with `BOARD_ATTENDED=1`. `createdBy` is always this run (a payload
-value is dropped). `--via` is a plain label, the owner must be a board member (the hosted handle in hosted mode),
-an approval of exact content is never answered through `--via` (only withdrawn), and `proposal-result` gives
-`relayed`.
+(`proposal-reopen`). Without `--via`, an agent run that no person drives (`BOARD_AGENT` set, or a hosted identity with
+an agent id, and no `BOARD_ATTENDED=1`) can no longer accept, merge or undo any proposal, nor ignore or reopen one
+another agent or a person added; the keeptrack skills' chat flow ("accept the ones I name") runs with
+`BOARD_ATTENDED=1`. `BOARD_ATTENDED` is self-declared: it keeps well-behaved unattended runs (cloud routines, workers, automations, the relay connector) from deciding for the owner; it does not stop a prompt-injected agent, or any agent on a machine whose environment sets `BOARD_ATTENDED=1` for every session. Set it per session the person drives, never machine-wide. `createdBy` is always this run (a payload value is dropped). `--via` is a plain
+label, the owner must be a board member (stored as the member's own login; the hosted handle in hosted mode), and
+`proposal-result` gives `relayed`.
 
 Kit v76: the manual keeptrack-email skill reads mail the way email-to-tasks does (card #185). New `keeptrack.py
 email-view` runs the automation's cleaner (`safe_view.py`, loaded by path through the pack's `resolve.py`, never a
