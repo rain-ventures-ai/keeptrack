@@ -874,9 +874,15 @@ def _kept(text, i, ch):
     return False
 
 
+LINE_BREAKS = re.compile("[\u2028\u2029\u0085\x1c\x1d\x1e]")
+
+
 def clean(text, removed):
     # No entity decoding here: the HTML parser already turned entities into what a reader sees, and plain text shows
     # `&#8203;` as those characters, so decoding it again would make text no one saw.
+    # Characters a reader or a model may take as a line break (Unicode line and paragraph separators, NEL, the
+    # file/group/record separators) become a real one, so the view's `| ` prefix starts every line a reader sees.
+    text = LINE_BREAKS.sub("\n", text)
     count = [0]
 
     def drop(m):
@@ -961,7 +967,7 @@ def view(message):
 
 
 SAVE_HEADERS = ("from", "to", "cc", "date", "subject", "message-id")
-CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")   # C0/C1 controls and the Unicode line and paragraph separators
 
 
 def one_line(value, limit=500):

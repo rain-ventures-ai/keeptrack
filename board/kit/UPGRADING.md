@@ -25,6 +25,24 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v76 (schema 4)
+The keeptrack-email skill searches Gmail with the new `keeptrack.py email-search` (ids and dates only, no mail text)
+and reads message bodies only through the new `keeptrack.py email-view` (the email-to-tasks cleaner, `safe_view.py`),
+follows the automation's "Always" rules word for word, and treats all mail read through a connector only, sent mail
+included, as unverified (contact history, no follow-up date). The skill gains behaviour evals
+(`board/keeptrack-email/evals/cases.json`). No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v76, and
+  `gog gmail get '<a message id>' --json | python3 board/keeptrack.py email-view` prints `Message key:` and
+  `Sender checks (from Gmail):` lines.
+- A scheduled contact-email routine (`contact-email-sync-<owner>`) reads the skill each run, so it picks up the new
+  rules with no prompt change. If it reads mail through a connector only, it now treats all of it, sent mail
+  included, as unverified and sets no follow-up dates from it; to keep them, give it a read-only gog login with
+  `email-search` and the `email-view` pipe.
+- The email-to-tasks pack changed (pack 1.4.1): `resolve.py` builds the view text in one shared function, and
+  `safe_view.py` turns Unicode line and paragraph separators into real line breaks, so its digest changed. If you installed it: reinstall and set it up again as in v73, and update
+  its entry in `relay/registry/automations.yaml` to the new digest
+  (`python3 board/keeptrack.py automation show email-to-tasks`). The other packs are unchanged.
+
 ### v75 (schema 4)
 email-to-tasks reads only a cleaned view of each message (pack 1.4.0): hidden instructions in mail (HTML comments,
 invisible text, encoded blobs, zero-width characters) no longer reach the AI, payment or access changes become a

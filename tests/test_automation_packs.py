@@ -187,6 +187,44 @@ class PackEvals(unittest.TestCase):
         self.assertTrue(case_problems({"cases": [good]}, prefix, ok), "one case is too few")
 
 
+# Skills with behaviour evals (kit v76): same case rules, prompts under the board copy of the skill.
+SKILL_EVALS = {"keeptrack-email": "board/keeptrack-email/"}
+
+
+class SkillEvals(unittest.TestCase):
+    def test_skill_evals_are_valid(self):
+        for skill, board_dir in SKILL_EVALS.items():
+            with self.subTest(skill=skill):
+                folder = os.path.join(KIT, "skills", skill)
+                doc = json.loads(read(os.path.join(folder, "evals", "cases.json")))
+                errs = case_problems(doc, BOARD_PREFIX + board_dir,
+                                     lambda rel: os.path.isfile(os.path.join(folder, *rel.split("/"))))
+                self.assertEqual(errs, [])
+
+    def test_skill_eval_names_are_unique_and_addresses_invented(self):
+        seen = {c["name"] for slug in packs() for c in json.loads(read(os.path.join(PACKS, slug, "evals", "cases.json")))["cases"]}
+        for skill in SKILL_EVALS:
+            text = read(os.path.join(KIT, "skills", skill, "evals", "cases.json"))
+            for c in json.loads(text)["cases"]:
+                self.assertNotIn(c["name"], seen)
+                seen.add(c["name"])
+            for m in EMAIL_RE.finditer(text):
+                self.assertIn(m.group(0).rsplit("@", 1)[1].lower(), ("example.com", "example.org"))
+
+    def test_skill_evals_ship_beside_the_board_copy(self):
+        files = json.loads(read(os.path.join(KIT, "manifest.json")))["files"]
+        for skill, board_dir in SKILL_EVALS.items():
+            self.assertEqual(files.get(board_dir + "SKILL.md"), f"skills/{skill}/SKILL.md")
+            self.assertEqual(files.get(board_dir + "evals/cases.json"), f"skills/{skill}/evals/cases.json")
+
+    def test_email_skill_cases_cover_the_lure_and_the_sender_checks(self):
+        cases = json.loads(read(os.path.join(KIT, "skills", "keeptrack-email", "evals", "cases.json")))["cases"]
+        text = json.dumps(cases)
+        for words in ("Possible fraud|possible fraud", "sender check failed", "could not verify the sender",
+                      "hidden content was removed", "email-view"):
+            self.assertRegex(text, words)
+
+
 class PackDocs(unittest.TestCase):
     def test_skill_is_substantive(self):
         for slug in packs():

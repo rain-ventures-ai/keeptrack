@@ -504,12 +504,14 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       await page.waitForTimeout(350); await shot(page, 'automation-runner'); await page.locator('#auClose').click();
       // The switch keeps its own size at phone width (the board gives dialog and header buttons a 44px min-height).
       await page.waitForFunction(() => !document.getElementById('dlgAuto').open);
-      // Wait until the switch is laid out again (the closing dialog can leave it unmeasured for a frame).
-      await page.waitForFunction(() => { const r = document.querySelector('.autorow[data-slug="stale-cards-nudge"] .autoswitch')?.getBoundingClientRect(); return r && r.width > 0; });
-      const box = await sw('stale-cards-nudge').boundingBox();
+      // Measure inside the page, in the same step that waits for layout: closing the dialog re-renders the row, so a
+      // separate wait-then-measure can measure the new switch before it is laid out (CI saw null boxes).
+      const measure = sel => page.waitForFunction(s => { const r = document.querySelector(s)?.getBoundingClientRect();
+        return r && r.width > 0 && r.height > 0 ? { width: r.width, height: r.height } : false; }, sel).then(h => h.jsonValue());
+      const box = await measure('.autorow[data-slug="stale-cards-nudge"] .autoswitch');
       assert.ok(box && Math.abs(box.width - 44) <= 1 && Math.abs(box.height - 26) <= 1, `the switch is 44x26, got ${box && box.width}x${box && box.height}`);
       await page.locator('.autorow[data-slug="stale-cards-nudge"] .autorow__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
-      const dbox = await page.locator('#dlgAuto .autoswitch').boundingBox();
+      const dbox = await measure('#dlgAuto .autoswitch');
       assert.ok(dbox && Math.abs(dbox.height - 26) <= 1, `the drawer switch keeps its size, got ${dbox && dbox.height}`);
       assert.equal(await page.locator('#dlgAuto .autocard__state').count(), 0, 'with a switch, the drawer shows no Not installed pill');
       await page.waitForTimeout(350); await shot(page, 'automation-drawer-switch'); await page.locator('#auClose').click();

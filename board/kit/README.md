@@ -249,6 +249,13 @@ For imported contact events, `touch` accepts `--at <ISO timestamp with timezone>
 event time, and `--source-id email:<16-to-64 hex characters>` so retries do not create duplicates. Hash provider
 message/thread identifiers before using them; never put an email address or message text in the source id. Recurring
 mailbox reconciliation is defined by the `keeptrack-email` skill and keeps its last-run checkpoint outside `board/`.
+`email-view` (kit v76) prints one message's cleaned view from gog's JSON on stdin (`gog gmail get <id> --json |
+keeptrack.py email-view`): the canonical `rfc822:` key, Gmail's sender checks, what hidden content was removed, and
+the visible text in an untrusted fence. It is the email-to-tasks automation's own cleaner (`safe_view.py`), and the
+`keeptrack-email` skill reads message bodies only through it; anything it cannot read prints only `Unreadable:`.
+`email-search --address <board address> --start YYYY-MM-DD --end YYYY-MM-DD` runs the Gmail search through gog and
+prints only `<id> <thread id> <date> sent|received` per message (`sent` is Gmail's SENT label id), never mail text;
+a page token it cannot pass back prints `page-token-unusable` (exit 3), never `end`.
 
 Person `links` are profile or reference pages about that person/company. Task `links` are supporting resources and
 references for that task: for example Drive/Dropbox files, issues, PRs, source pages or a local working path.

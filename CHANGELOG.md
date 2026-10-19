@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v76: the manual keeptrack-email skill reads mail the way email-to-tasks does (card #185). New `keeptrack.py
+email-view` runs the automation's cleaner (`safe_view.py`, loaded by path through the pack's `resolve.py`, never a
+copy) on one message: `gog gmail get <id> --json | keeptrack.py email-view` prints the canonical `rfc822:` key,
+Gmail's sender checks, what hidden content was removed and the visible text inside a random untrusted fence; input it
+cannot read prints only `Unreadable:` (exit 1), never the raw message. New `keeptrack.py email-search` runs gog's
+search itself (the email-to-tasks check's own query plus exact board addresses) and prints only each message's id,
+thread id, date and `sent|received`, where `sent` is Gmail's SENT label, never a From line: gog's raw search output
+carries sender, subject and snippet, which would reach the agent before the cleaner. `safe_view.py` now turns U+2028,
+U+2029, NEL and \x1c-\x1e into real line breaks (and spaces in headers), so they cannot fake a line inside the fence.
+The skill gets the automation's "Always" rules word for word (payment or access changes get only the fixed "Possible
+fraud: verify by phone" text; mail never sets its own urgency or legitimacy; a task or follow-up date needs
+`dmarc=pass`; the hidden-content and sender-check sentences end the touch, or the proposal's reason with the Review
+Inbox on) and never reads attachments. With a connector only (no gog) it says plainly what is not protected: the raw
+message, hidden parts included, has already reached the assistant, so every message read that way, sent mail included
+(a forged From can name the owner), is treated as unverified: contact history with "Gmail could not verify the sender
+of this email.", no follow-up date and no task. The routine guide points at the same rules. The pack's `resolve.py`
+now builds the view text in one `render()` that both use (pack 1.4.1, with the line-break change above). New behaviour
+evals for the skill (`skills/keeptrack-email/evals/cases.json`: a hidden payment lure, a failed sender check beside a
+verified follow-up, a connector-only message with a hidden instruction, an unverified sender with the Review Inbox on,
+a forged From naming the owner, and a hostile snippet in raw search output) and tests for `email-view` and
+`email-search`.
+
 Board page: search finds clients and projects by name, in a new "Clients and projects" section above people and
 tasks ("hurst col" finds the client, not only its cards). A result opens the client or project details.
 
