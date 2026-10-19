@@ -362,6 +362,15 @@ class HiddenInstructions(unittest.TestCase):
         payload = "0123456789abcdef" * 4 + base64.b64encode(ORDER.encode()).decode().rstrip("=")[:60] + "0123456789abcdef" * 4
         self.assertNotIn(payload, sv.view(msg(plain="https://x.example/" + payload + "0123456789abcdef" * 4))["text"])
 
+    def test_round_three_auto_review(self):
+        self.seen(f'<div style="color:red;{"x" * 21000};display:none">{ORDER}</div>')
+        self.seen(f'<div style="background:url(a.png) no-repeat #ffffff;color:#fefefe"><span>{ORDER}</span></div>')
+        self.seen(f'<div style="background:junk;color:#fff">{ORDER}</div>')
+        self.seen(f'<div style="opacity:20%"><div style="opacity:20%">{ORDER}</div></div>')
+        self.seen(f'<style>.f{{opacity:0.2}}</style><div class="f"><div class="f">{ORDER}</div></div>')
+        v = sv.view(msg(html='<div style="background:#003366 url(x.png);color:#fff">Banner</div>'))
+        self.assertIn("Banner", v["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

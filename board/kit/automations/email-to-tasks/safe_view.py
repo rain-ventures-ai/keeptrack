@@ -92,23 +92,39 @@ def _unescape_css(text):
 
 
 def _decls(text):
-    """CSS declarations as {property: value}: comments and escapes resolved, lower case, spaces only between words.
-    An !important declaration beats a later normal one for the same property, as in a browser. Values are cut at
-    1000 characters (no real one is longer) so no pattern runs long on them."""
+    """CSS declarations as {property: value}. The text is split into declarations, and `!important` read, on the raw
+    text; escapes are decoded only inside a name or value afterwards, so an escaped `;`, `:` or `!` never becomes
+    syntax. An !important declaration beats a later normal one, as in a browser. A style over 20000 characters or
+    a value over 1000 is not cut: it counts as `display:none` (when unsure, hide more)."""
+    text = _strip_comments(text or "")
+    if len(text) > 20000:
+        return {"display": "none"}
     out, imp = {}, set()
-    text = _unescape_css(_strip_comments((text or "")[:20000]))
     for d in text.split(";"):
+        if ":" not in d:
+            continue
+        k, v = d.split(":", 1)
+        important = bool(re.search(r"!\s*important\s*$", v, re.I))
+        v = re.sub(r"!\s*important\s*$", "", v, flags=re.I)
+        k, v = _unescape_css(k).strip().lower(), _unescape_css(v).strip().lower()
+        if len(v) > 1000:
+            return {"display": "none"}
+        if k in imp and not important:
+            continue
+        if important:
+            imp.add(k)
+        out[k] = re.sub(r"\s+", " ", re.sub(r"\s*([,()/])\s*", r"\1", v)).strip()
+    return out
+
+
+def _important(text):
+    """The properties a declaration block marks !important, read the same way as _decls."""
+    out = set()
+    for d in _strip_comments(text or "")[:20000].split(";"):
         if ":" in d:
             k, v = d.split(":", 1)
-            k = k.strip().lower()
-            v = v.strip().lower()[:1000]
-            important = bool(re.search(r"!\s*important\s*$", v))
-            v = re.sub(r"!\s*important", "", v)
-            if k in imp and not important:
-                continue
-            if important:
-                imp.add(k)
-            out[k] = re.sub(r"\s+", " ", re.sub(r"\s*([,()/])\s*", r"\1", v)).strip()
+            if re.search(r"!\s*important\s*$", v, re.I):
+                out.add(_unescape_css(k).strip().lower())
     return out
 
 
@@ -177,8 +193,8 @@ def _invisible(color, bg, px):
     if bg == "image":
         return False
     rb = _rgba(bg) if bg else None
-    if bg and rb is None:
-        return False   # a background this cannot read: judge the text on its own colour only
+    if rb is None:
+        bg = ""   # no background, or one this cannot read: judge the text against a white page
     if rb and max(abs(x - y) for x, y in zip(rc[:3], rb[:3])) <= 16:
         return True   # text all but the same colour as its background
     return min(rc[:3]) >= 0xF0 and (not bg or (rb is not None and min(rb[:3]) >= 0xF0))   # white on a white page
@@ -231,11 +247,15 @@ def _bg_of(d):
     """The background a declaration set gives: a colour, "image" for a picture, or "" for none."""
     image = d.get("background-image", "")
     b = d.get("background-color") or d.get("background") or ""
+    if b.strip() == "inherit":
+        return "inherit"
+    for tok in re.findall(r"#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^()]{0,80}\)|[a-z]+",
+                          re.sub(r"(?:url|[a-z-]*gradient)\([^()]{0,1000}\)", " ", b[:1000])):
+        if tok != "transparent" and _rgba(tok) is not None:
+            return tok   # the colour, also in a shorthand such as `url(x) no-repeat #003366`: judged against it
     if "url(" in image or "url(" in b or "gradient(" in image or "gradient(" in b:
-        return "image"
-    m = re.search(r"#[0-9a-f]{3,8}\b|rgba?\([^)]*\)|\b[a-z]+\b", b)
-    v = m.group(0) if m else ""
-    return "" if v in ("none", "transparent", "inherit", "initial", "unset", "no") else v
+        return "image"   # a picture with no colour: its colour is unknown
+    return ""
 
 
 class TooComplex(ValueError):
@@ -446,11 +466,10 @@ def _style_rules(markup):
             if not applies:
                 continue
             d = _decls(body)
-            important = {k.strip().lower() for k, v in (x.split(":", 1) for x in body.split(";") if ":" in x)
-                         if re.search(r"!\s*important", v, re.I)}
+            important = _important(body)
             hides = _hard_hides(d)
             props = {k: v for k, v in (("color", d.get("color", "")), ("bg", _bg_of(d)),
-                                       ("fs", d.get("font-size", ""))) if v}
+                                       ("fs", d.get("font-size", "")), ("op", d.get("opacity", ""))) if v}
             if not hides and not props:
                 continue
             for one in prelude.split(","):
@@ -559,8 +578,12 @@ class _Visible(html.parser.HTMLParser):
         bg = props.get("bg", "")
         bg = parent["bg"] if bg in ("", "inherit") else bg
         px = _px(props.get("fs", ""), parent["px"])
-        op = _num(inline.get("opacity"))
-        opacity = parent.get("opacity", 1.0) * (op[0] if op and op[1] == "" else 1.0)
+        own_op = 1.0
+        for v in [self.soft.get(k, {}).get("op", "") for k in keys] + [inline.get("opacity", "")]:
+            n = _num(v)
+            if n:
+                own_op = min(own_op, n[0] / 100 if n[1] == "%" else n[0])
+        opacity = parent.get("opacity", 1.0) * own_op
         quote = self.strip_quotes and any(k in QUOTE_KEYS for k in keys)
         self.quoted = self.quoted or quote
         hard = tag in SKIP_TAGS or "hidden" in a or a.get("aria-hidden", "").lower() == "true" or \
