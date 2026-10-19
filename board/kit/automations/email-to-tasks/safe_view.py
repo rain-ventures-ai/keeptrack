@@ -29,11 +29,14 @@ BLOB = re.compile(r"[A-Za-z0-9+/=_-]{80,}")
 WRAPPED = re.compile(r"(?m)(?:^[ \t]*[A-Za-z0-9+/=_-]{40,}[ \t]*(?:\n|\Z)){2,}")
 HEX_PAIRS = re.compile(r"(?i)(?:[0-9a-f]{2}[ :]){30,}[0-9a-f]{2}")
 MAX_MARKUP = 400_000   # longer HTML is cut before reading its text: the view keeps 8000 characters anyway
-MAX_SCAN = 5_000_000   # HTML scanned whole for hiding rules (a style block may come last); longer is TooComplex
+MAX_SCAN = 5_000_000   # longer HTML is TooComplex; a <style> past MAX_MARKUP is TooComplex too
 MAX_STYLE = 300_000    # style text read for hiding rules, and at most MAX_RULES rules: over either, the message is
 MAX_RULES = 6000       # reported unreadable (TooComplex), never read with some rules skipped
 CODE_TAGS = {"script", "style", "title"}   # hidden by nature; text in them is code or a tab title, not removed content
-SKIP_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg", "object", "iframe"}
+SKIP_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg", "object", "iframe", "textarea", "xmp",
+             "noembed", "noframes"}
+# Elements a browser reads as raw text (a `</div>` inside is text, not an end tag): parsed the same way here.
+RAW_TEXT = ("script", "style", "textarea", "xmp", "noembed", "noframes", "iframe", "noscript")
 VOID = {"br", "img", "hr", "meta", "link", "input", "wbr", "area", "base", "col", "embed", "source", "track", "param"}
 TABLE = {"table", "tr", "td", "th", "thead", "tbody", "tfoot"}
 BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote", "pre", "section"}
@@ -41,12 +44,13 @@ NAMED = {"white": (255, 255, 255), "snow": (255, 250, 250), "ivory": (255, 255, 
 
 
 def _decls(text):
-    """CSS declarations as {property: value}, lower case, spaces and !important removed."""
+    """CSS declarations as {property: value}, lower case, !important removed, spaces only between words."""
     out = {}
     for d in (text or "").split(";"):
         if ":" in d:
             k, v = d.split(":", 1)
-            out[k.strip().lower()] = re.sub(r"!\s*important", "", v.strip().lower()).replace(" ", "")
+            v = re.sub(r"!\s*important", "", v.strip().lower())
+            out[k.strip().lower()] = re.sub(r"\s+", " ", re.sub(r"\s*([,()/])\s*", r"\1", v)).strip()
     return out
 
 
@@ -77,6 +81,11 @@ def _hides(s, color="", bg=""):
     w, h = _num(s.get("width")), _num(s.get("height"))
     if w and h and w[0] <= 0 and h[0] <= 0:
         return True   # a box with no size
+    if clipped and w and h and w[0] <= 1 and h[0] <= 1 and w[1] in ("px", "") and h[1] in ("px", ""):
+        return True   # the 1px box: text clipped to a dot
+    for v in re.findall(r"translate[xy]?\(([^)]*)\)", s.get("transform", "")):
+        if any(n and n[0] <= -500 for n in map(_num, v.split(","))):
+            return True   # moved off the screen
     if re.match(r"rect\(0", s.get("clip", "")) or re.search(r"inset\(50%|inset\(100%|circle\(0", s.get("clip-path", "")):
         return True
     if s.get("position") in ("absolute", "fixed"):
@@ -91,7 +100,7 @@ def _hides(s, color="", bg=""):
         return True
     c = s.get("color") or color
     b = s.get("background-color") or s.get("background") or bg
-    if c in ("transparent",) or re.fullmatch(r"rgba\([^)]*,0(\.0+)?\)", c or "") or re.fullmatch(r"#[0-9a-f]{6}00|#[0-9a-f]{3}0", c or ""):
+    if c in ("transparent",) or re.fullmatch(r"rgba?\([^)]*[,/]0(\.0+)?%?\)", c or "") or re.fullmatch(r"#[0-9a-f]{6}00|#[0-9a-f]{3}0", c or ""):
         return True
     if c and b and c == b:
         return True   # text the same colour as its background
@@ -112,11 +121,11 @@ def _rgb(c):
     if m:
         h = m.group(1)
         return tuple(int(h[i] * 2, 16) for i in range(3)) if len(h) == 3 else tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-    m = re.fullmatch(r"rgba?\(([0-9]{1,3}),([0-9]{1,3}),([0-9]{1,3})(?:,[0-9.]+)?\)", c)
+    m = re.fullmatch(r"rgba?\(([0-9]{1,3})[, ]([0-9]{1,3})[, ]([0-9]{1,3})(?:[,/][0-9.]+%?)?\)", c)
     return tuple(min(255, int(x)) for x in m.groups()) if m else None
 
 
-def _hidden(tag, attrs, inherited_bg, hidden_selectors=frozenset()):
+def _hidden(tag, attrs, inherited_bg, hidden_selectors=frozenset(), inherited_color=""):
     a = {k.lower(): (v or "") for k, v in attrs}
     if "hidden" in a or a.get("aria-hidden", "").lower() == "true":
         return True
@@ -124,7 +133,7 @@ def _hidden(tag, attrs, inherited_bg, hidden_selectors=frozenset()):
         return True
     if any(("." + c.lower()) in hidden_selectors for c in a.get("class", "").split()):
         return True
-    color = a.get("color", "").lower() if tag == "font" else ""
+    color = (a.get("color", "").lower() if tag == "font" else "") or inherited_color
     bg = a.get("bgcolor", "").lower() or inherited_bg
     return _hides(_style(attrs), color, bg)
 
@@ -203,18 +212,20 @@ def _ambiguous_comment(markup):
             return True
         if e < 0:
             return False
+        if re.search(r"--\s+>", markup[a + 4:e]):
+            return True   # older Python ends the comment at `-- >`, a browser does not
         pos = e + 3
 
 
 def _style_text(markup):
-    """The CSS of every <style> block, comments removed per block, found two ways and joined: the HTML parser's own
-    reading (on the part the text is read from, so both agree) and a string scan of the whole message (a style
-    block may come last). A rule either finds hides its text: more is hidden, never less. Over MAX_STYLE or
-    MAX_SCAN, or comment forms browsers and this parser read differently, raises TooComplex."""
+    """The CSS of every <style> block in the part the text is read from (MAX_MARKUP), comments removed per block,
+    found two ways and joined: the HTML parser's own reading and a string scan. A rule either finds hides its text:
+    more is hidden, never less. A <style> past MAX_MARKUP, style over MAX_STYLE, markup over MAX_SCAN, or comment
+    forms browsers and this parser read differently raise TooComplex."""
     if len(markup) > MAX_SCAN:
         raise TooComplex("markup over MAX_SCAN")
-    if _ambiguous_comment(markup):
-        raise TooComplex("ambiguous comment")
+    if _ambiguous_comment(markup) or "<plaintext" in markup.lower():
+        raise TooComplex("ambiguous comment or <plaintext>")
     p = _Styles()
     try:
         p.feed(markup[:MAX_MARKUP]); p.close()
@@ -222,7 +233,10 @@ def _style_text(markup):
         raise
     except Exception as e:   # the text parser would fail on it too; never read it with rules unknown
         raise TooComplex("unparsable markup") from e
-    blocks = ["".join(b) for b in p.blocks] + _scan_styles(markup)
+    if "<style" in markup[MAX_MARKUP - 8:].lower():
+        raise TooComplex("a style block past MAX_MARKUP")   # its rules would be read by no tokenizer that agrees
+    # The parser's blocks are what a browser reads; the string scan can only add rules, so more is hidden, never less.
+    blocks = ["".join(b) for b in p.blocks] + _scan_styles(markup[:MAX_MARKUP])
     return "}".join(_strip_comments(b) for b in blocks)
 
 
@@ -242,11 +256,17 @@ def _hidden_selectors(markup):
             last = re.split(r"[\s>+~<]+", one.strip())[-1]
             parts = re.findall(r"[.#][a-z0-9_-]+", last)
             tag = re.match(r"[a-z][a-z0-9]*", last)
-            found.update(parts or ([tag.group(0)] if tag else []))
+            if not parts and not tag:
+                if last.startswith("@") or not last:
+                    continue
+                raise TooComplex("a hiding rule for elements this cleaner cannot name")   # `[data-x]`, `*`
+            found.update(parts or [tag.group(0)])
     return frozenset(found)
 
 
 class _Visible(html.parser.HTMLParser):
+    CDATA_CONTENT_ELEMENTS = RAW_TEXT
+
     def __init__(self, hidden_selectors=frozenset()):
         super().__init__(convert_charrefs=True)
         self.out, self.stack, self.removed = [], [], {"html_comments": 0, "hidden_elements": 0}
@@ -261,6 +281,12 @@ class _Visible(html.parser.HTMLParser):
     def _hidden_now(self):
         return any(e[1] for e in self.stack)
 
+    def _color(self):
+        for e in reversed(self.stack):
+            if e[4]:
+                return e[4]
+        return ""
+
     def handle_starttag(self, tag, attrs):
         if tag in BLOCK:
             self.out.append("\n")
@@ -268,11 +294,12 @@ class _Visible(html.parser.HTMLParser):
             return
         s = _style(attrs)
         bg = s.get("background-color") or s.get("background") or dict(attrs).get("bgcolor", "") or ""
-        hide = tag in SKIP_TAGS or _hidden(tag, attrs, self._bg(), self.hidden_selectors)
+        color = s.get("color") or (dict(attrs).get("color", "") if tag == "font" else "") or ""
+        hide = tag in SKIP_TAGS or _hidden(tag, attrs, self._bg(), self.hidden_selectors, self._color())
         if hide and tag not in SKIP_TAGS and not self._hidden_now():
             self.removed["hidden_elements"] += 1
-        # [tag, hides, background, text in it already counted as removed]
-        self.stack.append([tag, hide, bg.lower(), tag not in SKIP_TAGS or tag in CODE_TAGS])
+        # [tag, hides, background, text in it already counted as removed, colour]
+        self.stack.append([tag, hide, bg.lower(), tag not in SKIP_TAGS or tag in CODE_TAGS, color.lower()])
 
     def handle_endtag(self, tag):
         # Close the nearest open tag of this name (mail HTML is sloppy), but never across a table cell, row or table:
@@ -340,15 +367,30 @@ def _decode(data):
     return raw.decode("utf-8", errors="replace")
 
 
-def _parts(node, depth=0, out=None):
-    """(mimeType, decoded text) for each body part in Gmail API shape, and any decoded body string gog adds."""
+def _parts(node, depth=0, out=None, skipped=None):
+    """(mimeType, decoded text) for each body part in Gmail API shape, and any decoded body string gog adds. In a
+    multipart/alternative only the last alternative with text is read, as a mail client shows it; `skipped` counts
+    alternatives passed over that held HTML (a second HTML version is where text for the AI alone can sit)."""
     out = [] if out is None else out
+    skipped = {"html": 0} if skipped is None else skipped
     if depth > 12:
         return out
     if isinstance(node, dict):
         mime = str(node.get("mimeType") or node.get("mime_type") or "").lower()
         if (isinstance(node.get("filename"), str) and node["filename"].strip()) or mime == "message/rfc822":
             return out   # an attachment or a forwarded message inside this one: never read
+        kids = node.get("parts")
+        if mime == "multipart/alternative" and isinstance(kids, list):
+            chosen = []
+            for kid in reversed(kids):
+                got = _parts(kid, depth + 1, None, skipped)
+                if not chosen and got:
+                    chosen = got
+                elif got and any(m.startswith("text/html") for m, _ in got) and \
+                        any(m.startswith("text/html") for m, _ in chosen):
+                    skipped["html"] += 1
+            out.extend(chosen)
+            return out
         body = node.get("body")
         if isinstance(body, dict) and isinstance(body.get("data"), str) and mime.startswith("text/"):
             text = _decode(body["data"])
@@ -360,45 +402,54 @@ def _parts(node, depth=0, out=None):
                 out.append(("text/html" if key in ("html", "htmlBody") or "<" in v else "text/plain", v))
         for k, v in node.items():
             if k not in ("headers",) and isinstance(v, (dict, list)):
-                _parts(v, depth + 1, out)
+                _parts(v, depth + 1, out, skipped)
     elif isinstance(node, list):
         for v in node:
-            _parts(v, depth + 1, out)
+            _parts(v, depth + 1, out, skipped)
     return out
 
 
-def _headers(node, depth=0, out=None):
-    out = {} if out is None else out
-    if depth > 8:
-        return out
-    if isinstance(node, dict):
-        name, value = node.get("name"), node.get("value")
-        if isinstance(name, str) and isinstance(value, str):
-            n = name.lower()
-            if n in HEADERS or n == "authentication-results":
-                out.setdefault(n, []).append(value)
-        for k, v in node.items():
-            if isinstance(k, str) and isinstance(v, str) and k.lower() in HEADERS and k.lower() not in out:
+def _message(node):
+    """The message object itself: gog prints it as is, or wrapped as {"message": {...}}."""
+    if isinstance(node, dict) and "payload" not in node and isinstance(node.get("message"), dict):
+        return node["message"]
+    return node if isinstance(node, dict) else {}
+
+
+def _top_headers(message):
+    """The message's own header list (payload.headers, or a flat top-level headers list): never a part's headers,
+    which the sender writes and which would let a part's `Cc:` pose as the message's own."""
+    m = _message(message)
+    payload = m.get("payload")
+    hs = payload.get("headers") if isinstance(payload, dict) else m.get("headers")
+    return [h for h in hs if isinstance(h, dict) and isinstance(h.get("name"), str) and isinstance(h.get("value"), str)] \
+        if isinstance(hs, list) else []
+
+
+def _headers(message):
+    """{lower-case name: [values]} for HEADERS, from the message's own headers, or gog's flat top-level fields."""
+    out = {}
+    for h in _top_headers(message):
+        n = h["name"].lower()
+        if n in HEADERS:
+            out.setdefault(n, []).append(h["value"])
+    if not out:
+        for k, v in _message(message).items():
+            if isinstance(k, str) and isinstance(v, str) and k.lower() in HEADERS:
                 out[k.lower()] = [v]
-            elif isinstance(v, (dict, list)):
-                _headers(v, depth + 1, out)
-    elif isinstance(node, list):
-        for v in node:
-            _headers(v, depth + 1, out)
     return out
 
 
 def _top_auth_results(message):
-    """Authentication-Results values from the message's own header list, in order: never from a part inside it (a
-    sender writes those). Gmail API shape (payload.headers) or a flat headers list; anything else gives none."""
-    hs = None
-    if isinstance(message, dict):
-        payload = message.get("payload")
-        hs = payload.get("headers") if isinstance(payload, dict) else message.get("headers")
-    if not isinstance(hs, list):
-        return []
-    return [h["value"] for h in hs if isinstance(h, dict) and isinstance(h.get("name"), str)
-            and h["name"].lower() == "authentication-results" and isinstance(h.get("value"), str)]
+    """Authentication-Results values from the message's own header list, in order: never from a part inside it."""
+    return [h["value"] for h in _top_headers(message) if h["name"].lower() == "authentication-results"]
+
+
+def sent_by_owner(message):
+    """True when Gmail labels the message SENT: the owner wrote it, so there is no sender check to read. The label is
+    Gmail's own, never a header the sender writes."""
+    labels = _message(message).get("labelIds")
+    return isinstance(labels, list) and "SENT" in {str(x).upper() for x in labels}
 
 
 def _auth(results):
@@ -443,11 +494,16 @@ def clean(text, removed):
 
 def view(message):
     hdr = _headers(message)
-    parts = _parts(message)
+    skipped = {"html": 0}
+    parts = _parts(_message(message), 0, None, skipped)
     removed = {"html_comments": 0, "hidden_elements": 0, "invisible_characters": 0, "encoded_blobs": 0}
+    if skipped["html"]:
+        removed["hidden_elements"] += skipped["html"]   # an HTML alternative no client shows
     # HTML first: it is what mail clients show. A plain-text part sits behind it unseen, so text only it carries is
     # exactly where an instruction for the AI hides; plain text is read only when the message has no HTML.
     htmls = [t for m, t in parts if m.startswith("text/html")]
+    if len(htmls) > 1:   # several HTML parts side by side (multipart/mixed): a client shows them all, in order
+        htmls = ["\n".join(htmls)]
     plain = [t for m, t in parts if m.startswith("text/plain")]
     if htmls:
         text, r = visible_text(htmls[0])
@@ -460,7 +516,8 @@ def view(message):
     text = clean(text, removed)
     truncated = len(text) > MAX_TEXT
     return {"headers": {k: one_line(" ".join(v)) for k, v in hdr.items() if k != "authentication-results"},
-            "auth": _auth(_top_auth_results(message)), "text": text[:MAX_TEXT], "removed": removed,
+            "auth": ({m: "sent" for m in ("spf", "dkim", "dmarc")} if sent_by_owner(message)
+                     else _auth(_top_auth_results(message))), "text": text[:MAX_TEXT], "removed": removed,
             "truncated": truncated}
 
 
@@ -483,8 +540,8 @@ def headers_only(message):
                 keep.append({"name": name.title() if name != "message-id" else "Message-ID",
                              "value": v if name == "message-id" else one_line(v)})
     out = {"payload": {"headers": keep}}
-    if isinstance(message, dict):
-        for k in ("id", "threadId"):
-            if isinstance(message.get(k), str):
-                out[k] = one_line(message[k], 64)
+    m = _message(message)
+    for k in ("id", "threadId"):
+        if isinstance(m.get(k), str):
+            out[k] = one_line(m[k], 64)
     return out

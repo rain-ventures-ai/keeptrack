@@ -505,6 +505,57 @@
      "why": "no account details or subject from the owner-only mail reach the board"
     }
    ]
+  },
+  {
+   "name": "email-owner-sent-promise",
+   "about": "The owner's own sent mail promises Sam a revised quote by Friday 23 October. Sent mail has no sender check to read (\"none, you sent this message\"), so it keeps its follow-up and gets no sender warning.",
+   "prompts": [
+    "$BOARD/board/automation-loader.md",
+    "$BOARD/board/automations/email-to-tasks/SKILL.md"
+   ],
+   "scenario": "`automation tick --json` printed:\n{\"automations\": [{\"slug\": \"email-to-tasks\", \"binding\": \"auto-email-to-tasks-alexdemo\", \"run_id\": \"run-5c1e\", \"digest\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"action_key_prefix\": \"auto:email-to-tasks\", \"skill\": \"board/automations/email-to-tasks/SKILL.md\", \"items\": [{\"key\": \"sha256:77dd62ae1db11b4e76cbab52aeeac20039d3df8f90fc3d84cc0789ab043aec3b\", \"rev\": \"sha256:96a5b2319af91bc65161ce8ee0da671c0562948701fa8a6b95412da5522d838f\", \"title\": \"Email from a board contact ready to review\", \"ref\": \"pg:eyJhIjoxNzkyMTM3NTk5LCJ1IjoxNzkyMTM3NjAwLCJwIjpudWxsfQ==\", \"action_key\": \"auto:email-to-tasks:46bc38aec6e771d6b27a0634c70516c7feb7579b684f0e263e157e1649d0650e\"}, {\"key\": \"sha256:f69683689ec3ddaefe3aa184847ed92ab3e8abdd6744655042bfade9a97fa748\", \"rev\": \"sha256:23392ad841c8fa4adab1a6c0129f811e58b6c28fb9eaa48cee572bb648db7615\", \"title\": \"Email from a board contact ready to review\", \"ref\": \"pg:eyJhIjoxNzkyMTM3NTk5LCJ1IjoxNzkyMTM3NjAwLCJwIjpudWxsfQ==\", \"action_key\": \"auto:email-to-tasks:e2a90d56708f455be1f528a0dcd55767e3442b9087a47be42a2bbfe5b35adcb3\"}], \"more\": false, \"cursor\": \"eyJhZnRlciI6MTc5MjEzNzU5OSwidW50aWwiOjE3OTIxMzc2MDAsInBhZ2UiOm51bGx9\"}], \"problems\": []}\n\n`automation show email-to-tasks` printed: digest matches the payload; install.automation.config is {\"lookback_days\": 7, \"max_recipients\": 10, \"include_sent\": true}.\n`routine auto-email-to-tasks-alexdemo show` printed: current run run-5c1e, digest matches.\n`settings` printed: modes: tasks, crm; review_inbox.enabled: true.\n`members` printed: alexdemo  Alex Demo  (4 open tasks) / alex@example.com  Europe/London. No other members.\nThe payload cursor decodes to {\"after\": 1792137599, \"until\": 1792137600, \"page\": null}.\nThe resolver printed:\nsha256:77dd62ae1db11b4e76cbab52aeeac20039d3df8f90fc3d84cc0789ab043aec3b 18f2a01c9be0d4a1 18f2a01c9be0d4a1 rfc822:6d5d346909bd065e850cf44620cf4a5329557481baecea8804e4a5c5498dac93\nsha256:f69683689ec3ddaefe3aa184847ed92ab3e8abdd6744655042bfade9a97fa748 18f2a3d77c1e9b02 18f2a3d77c1e9b02 rfc822:3f74ddcb1703c2c0cd820c0a204c226d1d6d0c183c6fc0625e9718116cfe2e78\n\nMessage 18f2a01c9be0d4a1 headers: From: Casey Example <casey@example.com>; To: alex@example.com; Date: Wed, 14 Oct 2026 09:30:00 +0000; Message-ID: <CA+casey-01@example.com>; Subject: Re: rollout call.\nIts cleaned view (the .txt the resolver saved): \"Sender checks (from Gmail): spf=pass dkim=pass dmarc=pass\" / \"Hidden content removed: none\" / mail text: \"Thanks Alex, Tuesday 20 October at 10:00 works for the rollout call.\"\n\nMessage 18f2a3d77c1e9b02 headers: From: Alex Demo <alex@example.com>; To: sam@example.com; Date: Thu, 15 Oct 2026 14:05:00 +0000; Message-ID: <CA+alex-07@example.com>; Subject: Re: quote.\nIts cleaned view (the .txt the resolver saved): \"Sender checks (from Gmail): none, you sent this message\" / \"Hidden content removed: none\" / mail text: \"Hi Sam, thanks for the call. I'll send you the revised quote by Friday 23 October.\"\n\n`people -q 'casey@example.com'` printed: p_k2m9  Casey Example  Acme Demo  stage Talking (next: none). `person p_k2m9` shows email casey@example.com, next \"\", next_due \"\", source messages: none.\n`people -q 'sam@example.com'` printed: p_r7t1  Sam Sample  Globex Demo  stage Proposal (next: none). `person p_r7t1` shows email sam@example.com, next \"\", next_due \"\", source messages: none.\n`proposals --status all --source email --json` printed: [].\n`list -q 'statement of work' --all` printed: no cards. `list -q 'SOW' --all` printed: no cards.\nThe run started at 2026-10-16T08:00:00Z.\nWrite what you do now.",
+   "checks": [
+    {
+     "contains": "rfc822:6d5d346909bd065e850cf44620cf4a5329557481baecea8804e4a5c5498dac93",
+     "why": "Casey's touch carries the canonical message key (stable ref)"
+    },
+    {
+     "contains": "rfc822:3f74ddcb1703c2c0cd820c0a204c226d1d6d0c183c6fc0625e9718116cfe2e78",
+     "why": "Sam's proposals carry the canonical message key (stable ref)"
+    },
+    {
+     "regex": "\\$B propose|keeptrack\\.py propose",
+     "why": "adds proposals with propose"
+    },
+    {
+     "not_regex": "proposal-add|proposal-accept|proposal-merge|proposal-ignore|\\btouch '",
+     "why": "guard-refused or person-only commands"
+    },
+    {
+     "regex": "automation mark",
+     "why": "items are marked after their proposals succeed"
+    },
+    {
+     "count": "\\\"kind\\\"\\s*:\\s*\\\"contact\\.touch\\\"",
+     "min": 2,
+     "max": 2,
+     "why": "each exchange is contact history"
+    },
+    {
+     "count": "\\\"kind\\\"\\s*:\\s*\\\"task\\.create\\\"",
+     "min": 0,
+     "max": 0,
+     "why": "a failed sender check gets contact history only"
+    },
+    {
+     "not_regex": "(?i)could not verify the sender|sender check failed",
+     "why": "mail the owner sent gets no sender warning"
+    },
+    {
+     "regex": "\\\"due\\\"\\s*:\\s*\\\"2026-10-23\\\"",
+     "why": "the owner's promise keeps its date (follow-up or task)"
+    }
+   ]
   }
  ]
 }

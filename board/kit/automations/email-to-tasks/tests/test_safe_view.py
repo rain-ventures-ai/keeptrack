@@ -188,10 +188,10 @@ class HiddenInstructions(unittest.TestCase):
         with self.assertRaises(sv.TooComplex):
             sv.view(msg(html="<style>/*" + " " * sv.MAX_STYLE + "*/</style><p>x</p>"))
 
-    def test_style_block_after_the_markup_cap_still_hides(self):
+    def test_style_block_after_the_markup_cap_is_unreadable(self):
         pad = "<p>" + "word " * (sv.MAX_MARKUP // 5) + "</p>"
-        v = sv.view(msg(html=f'<div class="x">{ORDER}</div>' + pad + "<style>.x{display:none}</style>"))
-        self.assertNotIn("vendor", v["text"])
+        with self.assertRaises(sv.TooComplex):
+            sv.view(msg(html=f'<div class="x">{ORDER}</div>' + pad + "<style>.x{display:none}</style>"))
 
     def test_auth_in_a_part_never_counts(self):
         m = msg(plain="x")
@@ -213,6 +213,51 @@ class HiddenInstructions(unittest.TestCase):
                 sv.view(msg(html=f"<p>Hi</p>{odd}<p>{ORDER}</p>"))
         v = self.seen('<!--[if !mso]><!--><p>Web view</p><!--<![endif]-->')
         self.assertIn("Web view", v["text"])
+
+    def test_a_parts_headers_never_pose_as_the_messages(self):
+        m = msg(plain="x")
+        m["payload"]["parts"][0]["headers"] = [{"name": "Cc", "value": "jordan@example.com"},
+                                               {"name": "From", "value": "boss@example.com"}]
+        v = sv.view(m)
+        self.assertNotIn("cc", v["headers"]); self.assertEqual(v["headers"]["from"], "Casey <casey@example.com>")
+        self.assertNotIn("jordan", json.dumps(sv.headers_only(m)))
+        self.assertEqual(sv.view({"message": msg(plain="x")})["headers"]["subject"], "Invoice")
+
+    def test_mail_the_owner_sent_has_no_sender_check(self):
+        m = msg(plain="I'll send the SOW Friday."); m["labelIds"] = ["SENT"]
+        self.assertEqual(sv.view(m)["auth"], {"spf": "sent", "dkim": "sent", "dmarc": "sent"})
+        m["payload"]["headers"].append({"name": "X-Gmail-Labels", "value": "SENT"})
+        del m["labelIds"]
+        self.assertEqual(sv.view(m)["auth"]["dmarc"], "none", "only Gmail's own label counts")
+
+    def test_the_last_alternative_is_read(self):
+        b = lambda t: base64.urlsafe_b64encode(t.encode()).decode()
+        m = msg(plain="x")
+        m["payload"]["parts"] = [{"mimeType": "text/html", "body": {"data": b("<p>" + ORDER + "</p>")}},
+                                 {"mimeType": "text/html", "body": {"data": b("<p>Thanks for the call.</p>")}}]
+        v = sv.view(m)
+        self.assertEqual(v["text"], "Thanks for the call."); self.assertEqual(v["removed"]["hidden_elements"], 1)
+        m["payload"]["mimeType"] = "multipart/mixed"   # side by side: a client shows both
+        self.assertIn("vendor", sv.view(m)["text"])
+
+    def test_raw_text_elements_and_old_comment_ends(self):
+        self.seen(f'<div style="display:none"><textarea></div>{ORDER}</textarea></div>')
+        self.seen(f'<div style="display:none"><xmp></div>{ORDER}</xmp></div>')
+        for bad in (f"<!-- -- >{ORDER} -->", f"<plaintext>{ORDER}"):
+            with self.subTest(bad=bad), self.assertRaises(sv.TooComplex):
+                sv.view(msg(html="<p>Hi</p>" + bad))
+
+    def test_more_hiding_found_by_review(self):
+        for html_ in (f'<div style="width:1px;height:1px;overflow:hidden">{ORDER}</div>',
+                      f'<div style="color:#fff;background:#000"><span style="background:#fff">{ORDER}</span></div>',
+                      f'<div style="color:rgb(255 255 255)">{ORDER}</div>',
+                      f'<div style="transform:translate(-9999px)">{ORDER}</div>'):
+            with self.subTest(html=html_):
+                self.seen(html_)
+        with self.assertRaises(sv.TooComplex):
+            sv.view(msg(html=f'<style>[data-x]{{display:none}}</style><p data-x="1">{ORDER}</p>'))
+        v = sv.view(msg(html='<div style="color:#fff;background:#003366"><p>Welcome aboard</p></div>'))
+        self.assertIn("Welcome aboard", v["text"])
 
 
 if __name__ == "__main__":
