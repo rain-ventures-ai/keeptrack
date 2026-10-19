@@ -28,8 +28,8 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v75 (schema 4)
 email-to-tasks reads only a cleaned view of each message (pack 1.4.0): hidden instructions in mail (HTML comments,
 invisible text, encoded blobs, zero-width characters) no longer reach the AI, payment or access changes become a
-"possible fraud" contact note instead of a task, and proposals say when hidden content was removed or Gmail's sender
-check failed. See [AUTOMATIONS.md](AUTOMATIONS.md), "Included packs". No migration and no data change.
+"possible fraud" contact note instead of a task, a task needs Gmail's DMARC check to pass, and proposals say when
+hidden content was removed or Gmail's sender check failed or gave no result. See [AUTOMATIONS.md](AUTOMATIONS.md), "Included packs". No migration and no data change.
 - Run `kit-update` only. Check: `kit-check` says v75, and `automation validate board/automations/email-to-tasks` says
   valid.
 - The email-to-tasks pack files changed, so its digest changed. If you installed it: reinstall and set it up again as

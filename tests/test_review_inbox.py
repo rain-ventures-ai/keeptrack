@@ -248,6 +248,16 @@ class ReviewInbox(unittest.TestCase):
         bad = copy.deepcopy(meta); bad["title"] = "Re: confidential budget"; refused(bad)
         bad = copy.deepcopy(meta); bad["source"]["title"] = "Re: confidential budget"; refused(bad)
         bad = copy.deepcopy(meta); bad["reason"] = "Casey wrote about the budget."; refused(bad)
+        # The fixed safety sentences (no mail text) are allowed without it: a warning must reach the owner anyway.
+        warn = copy.deepcopy(meta); warn["reason"] = "Hidden content was removed from this email. Gmail's sender check failed for this email."
+        warn["change"]["text"] = kt.EMAIL_FRAUD_TEXT
+        self.assertEqual(False, kt.validate_proposal_input(warn, False)["source"]["recipients_confirmed"])
+        warn["reason"] = "Gmail could not verify the sender of this email."
+        self.assertEqual(False, kt.validate_proposal_input(warn, False)["source"]["recipients_confirmed"])
+        for r in ("Hidden content was removed from this email. Budget is 40k.", "Hidden content was removed from this email. Hidden content was removed from this email.",
+                  "Gmail's sender check failed for this email. Casey"):
+            bad = copy.deepcopy(meta); bad["reason"] = r; refused(bad)
+        bad = copy.deepcopy(meta); bad["change"]["text"] = kt.EMAIL_FRAUD_TEXT + " Account 4192."; refused(bad)
         ok = copy.deepcopy(meta); ok["change"]["text"] = "Confirmed Friday."; ok["reason"] = "Both readers got it."
         self.assertEqual(True, kt.validate_proposal_input(ok, True)["source"]["recipients_confirmed"])
         for field in ("body", "text", "transcript"):

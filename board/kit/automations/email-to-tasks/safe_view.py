@@ -6,25 +6,37 @@ never sees them (HTML comments, text styled invisible, zero-width or Unicode tag
 
     {"headers": {...}, "auth": {"spf": .., "dkim": .., "dmarc": ..}, "text": "...", "removed": {...}, "truncated": bool}
 
-`text` is what a person would see: text/plain when the message has it, else the HTML with hidden parts removed.
+`text` is what a person would see: the HTML part with hidden parts removed, or text/plain when there is no HTML.
+Attachments and forwarded messages inside it are never read. Input is capped (MAX_MARKUP, MAX_STYLE) and no regex
+runs over a style block, so crafted markup cannot make the cleaner run for long.
 `removed` counts what was taken out, so the skill can say so in a proposal ("hidden content removed"). Standard
 library only. Nothing here decides what is true; it only keeps the invisible out of the agent's input.
 """
 import base64
 import binascii
-import html
 import html.parser
 import re
 
 MAX_TEXT = 8000
 HEADERS = ("from", "to", "cc", "date", "subject", "reply-to", "message-id")
-# Characters a reader never sees: zero-width, joiners, bidi controls and isolates, soft hyphen, BOM, Unicode tags.
-INVISIBLE = re.compile("[­؜᠎​-‏‪-‮⁠-⁤⁦-⁩﻿\U000e0000-\U000e007f]")
+# Characters a reader never sees: zero-width, joiners, bidi controls and isolates, soft hyphen, BOM, blank fillers
+# (Hangul, Braille, Khmer), variation selectors, interlinear annotation marks and Unicode tags.
+INVISIBLE = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e"
+                       "\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb"
+                       "\U000e0000-\U000e007f\U000e0100-\U000e01ef]")
 BLOB = re.compile(r"[A-Za-z0-9+/=_-]{80,}")
+# Base64 wrapped at 76 columns (two or more full lines in a row) and hex written in spaced or colon-separated pairs.
+WRAPPED = re.compile(r"(?m)(?:^[ \t]*[A-Za-z0-9+/=_-]{40,}[ \t]*(?:\n|\Z)){2,}")
+HEX_PAIRS = re.compile(r"(?i)(?:[0-9a-f]{2}[ :]){30,}[0-9a-f]{2}")
+MAX_MARKUP = 400_000   # longer HTML is cut before parsing: the view keeps 8000 characters anyway
+MAX_STYLE = 100_000    # style text read for hiding rules, and at most MAX_RULES rules
+MAX_RULES = 2000
+CODE_TAGS = {"script", "style", "title"}   # hidden by nature; text in them is code or a tab title, not removed content
 SKIP_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg", "object", "iframe"}
 VOID = {"br", "img", "hr", "meta", "link", "input", "wbr", "area", "base", "col", "embed", "source", "track", "param"}
+TABLE = {"table", "tr", "td", "th", "thead", "tbody", "tfoot"}
 BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote", "pre", "section"}
-WHITE = {"#fff", "#ffffff", "white", "rgb(255,255,255)", "rgba(255,255,255,1)", "#fefefe", "#fdfdfd"}
+NAMED = {"white": (255, 255, 255), "snow": (255, 250, 250), "ivory": (255, 255, 240), "black": (0, 0, 0)}
 
 
 def _decls(text):
@@ -61,6 +73,9 @@ def _hides(s, color="", bg=""):
         n = _num(s.get(k))
         if n and n[0] <= 0:
             return True
+    w, h = _num(s.get("width")), _num(s.get("height"))
+    if w and h and w[0] <= 0 and h[0] <= 0:
+        return True   # a box with no size
     if re.match(r"rect\(0", s.get("clip", "")) or re.search(r"inset\(50%|inset\(100%|circle\(0", s.get("clip-path", "")):
         return True
     if s.get("position") in ("absolute", "fixed"):
@@ -79,9 +94,25 @@ def _hides(s, color="", bg=""):
         return True
     if c and b and c == b:
         return True   # text the same colour as its background
-    if c in WHITE and (not b or b in WHITE):
-        return True   # white text on a white (default) page
+    rc, rb = _rgb(c), _rgb(b)
+    if rc and rb and max(abs(x - y) for x, y in zip(rc, rb)) <= 16:
+        return True   # text all but the same colour as its background
+    if rc and min(rc) >= 0xF0 and (not b or (rb and min(rb) >= 0xF0)):
+        return True   # white or near-white text on a white (default) page
     return False
+
+
+def _rgb(c):
+    """(r, g, b) for #rgb, #rrggbb, rgb()/rgba() and a few names; None for anything else."""
+    c = (c or "").strip()
+    if c in NAMED:
+        return NAMED[c]
+    m = re.fullmatch(r"#([0-9a-f]{3}|[0-9a-f]{6})(?:[0-9a-f]{1,2})?", c)
+    if m:
+        h = m.group(1)
+        return tuple(int(h[i] * 2, 16) for i in range(3)) if len(h) == 3 else tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    m = re.fullmatch(r"rgba?\(([0-9]{1,3}),([0-9]{1,3}),([0-9]{1,3})(?:,[0-9.]+)?\)", c)
+    return tuple(min(255, int(x)) for x in m.groups()) if m else None
 
 
 def _hidden(tag, attrs, inherited_bg, hidden_selectors=frozenset()):
@@ -97,19 +128,39 @@ def _hidden(tag, attrs, inherited_bg, hidden_selectors=frozenset()):
     return _hides(_style(attrs), color, bg)
 
 
+def _style_text(markup):
+    """The text of every <style> block, found with plain string search (no regex over mail), at most MAX_STYLE."""
+    low, out, pos, size = markup.lower(), [], 0, 0
+    while size < MAX_STYLE:
+        a = low.find("<style", pos)
+        if a < 0:
+            break
+        b = low.find(">", a)
+        e = low.find("</style", b + 1) if b >= 0 else -1
+        if b < 0 or e < 0:
+            break
+        out.append(markup[b + 1:e]); size += e - b; pos = e + 7
+    text = "".join(out)[:MAX_STYLE]
+    while "/*" in text:   # drop CSS comments
+        a = text.find("/*"); e = text.find("*/", a + 2)
+        text = text[:a] + (text[e + 2:] if e >= 0 else "")
+    return text
+
+
 def _hidden_selectors(markup):
     """Simple selectors (.class, #id, tag) that a <style> block hides: `.x{display:none}` and the like."""
     found = set()
-    for block in re.findall(r"<style[^>]*>(.*?)</style>", markup, flags=re.S | re.I):
-        block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
-        for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", block):
-            if _hides(_decls(body)):
-                for one in sel.split(","):
-                    last = one.strip().split()[-1] if one.strip() else ""
-                    m = re.fullmatch(r"([a-z0-9]*)((?:[.#][a-z0-9_-]+)*)", last.lower())
-                    if m:
-                        parts = re.findall(r"[.#][a-z0-9_-]+", m.group(2))
-                        found.update(parts or ([m.group(1)] if m.group(1) else []))
+    for rule in _style_text(markup).split("}")[:MAX_RULES]:
+        sel, brace, body = rule.rpartition("{")
+        if not brace or not _hides(_decls(body)):
+            continue
+        sel = sel.rpartition("{")[2]   # inside @media: the inner selector
+        for one in sel.split(","):
+            last = one.strip().split()[-1].lower() if one.strip() else ""
+            m = re.fullmatch(r"([a-z0-9]*)((?:[.#][a-z0-9_-]+)*)", last[:200])
+            if m:
+                parts = re.findall(r"[.#][a-z0-9_-]+", m.group(2))
+                found.update(parts or ([m.group(1)] if m.group(1) else []))
     return frozenset(found)
 
 
@@ -120,13 +171,13 @@ class _Visible(html.parser.HTMLParser):
         self.hidden_selectors = hidden_selectors
 
     def _bg(self):
-        for _, _, bg in reversed(self.stack):
-            if bg:
-                return bg
+        for e in reversed(self.stack):
+            if e[2]:
+                return e[2]
         return ""
 
     def _hidden_now(self):
-        return any(h for _, h, _ in self.stack)
+        return any(e[1] for e in self.stack)
 
     def handle_starttag(self, tag, attrs):
         if tag in BLOCK:
@@ -138,12 +189,17 @@ class _Visible(html.parser.HTMLParser):
         hide = tag in SKIP_TAGS or _hidden(tag, attrs, self._bg(), self.hidden_selectors)
         if hide and tag not in SKIP_TAGS and not self._hidden_now():
             self.removed["hidden_elements"] += 1
-        self.stack.append((tag, hide, bg.lower()))
+        # [tag, hides, background, text in it already counted as removed]
+        self.stack.append([tag, hide, bg.lower(), tag not in SKIP_TAGS or tag in CODE_TAGS])
 
     def handle_endtag(self, tag):
-        for i in range(len(self.stack) - 1, -1, -1):   # close the nearest open tag of this name (mail HTML is sloppy)
+        # Close the nearest open tag of this name (mail HTML is sloppy), but never across a table cell, row or table:
+        # a browser ignores `</div>` inside a cell whose div opened outside it, so a hidden block stays hidden.
+        for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == tag:
                 del self.stack[i:]
+                break
+            if self.stack[i][0] in TABLE and tag not in TABLE:
                 break
         if tag in BLOCK:
             self.out.append("\n")
@@ -151,19 +207,40 @@ class _Visible(html.parser.HTMLParser):
     def handle_data(self, data):
         if not self._hidden_now():
             self.out.append(data)
+        elif data.strip():
+            # Text inside a tag a page never shows (noscript, template, svg, an iframe's fallback, text in <head>)
+            # is counted once per tag, so the proposal says hidden content was removed.
+            for e in self.stack:
+                if e[1] and e[0] in SKIP_TAGS:
+                    if not e[3]:
+                        e[3] = True; self.removed["hidden_elements"] += 1
+                    break
 
     def handle_comment(self, data):
-        self.removed["html_comments"] += 1
+        if not _conditional(data):
+            self.removed["html_comments"] += 1
 
     def handle_pi(self, data):
         self.removed["html_comments"] += 1
 
     def unknown_decl(self, data):
-        self.removed["html_comments"] += 1
+        if not _conditional(data):
+            self.removed["html_comments"] += 1
+
+
+def _conditional(data):
+    """Outlook's `<!--[if mso]>..<![endif]-->` wrappers holding only markup: in almost every mail a tool writes, so
+    not counted. One that holds text (shown only in Outlook) is dropped and counted like any comment."""
+    d = data.strip().lower()
+    if not d.startswith(("[if", "if ", "endif", "[endif")) or len(d) > 20000:
+        return False
+    inner = d.split("]", 1)[1] if "]" in d else ""
+    return not re.sub(r"<[^<>]*>|<!\[endif\]|&nbsp;", "", inner).strip(" >\t\r\n")
 
 
 def visible_text(markup):
     """(text, removed) for an HTML body: only what a person sees."""
+    markup = markup[:MAX_MARKUP]
     p = _Visible(_hidden_selectors(markup))
     try:
         p.feed(markup); p.close()
@@ -187,6 +264,8 @@ def _parts(node, depth=0, out=None):
         return out
     if isinstance(node, dict):
         mime = str(node.get("mimeType") or node.get("mime_type") or "").lower()
+        if (isinstance(node.get("filename"), str) and node["filename"].strip()) or mime == "message/rfc822":
+            return out   # an attachment or a forwarded message inside this one: never read
         body = node.get("body")
         if isinstance(body, dict) and isinstance(body.get("data"), str) and mime.startswith("text/"):
             text = _decode(body["data"])
@@ -227,23 +306,36 @@ def _headers(node, depth=0, out=None):
 
 
 def _auth(results):
-    """spf/dkim/dmarc results from Authentication-Results (the receiving server's, Gmail's), or "none"."""
+    """spf/dkim/dmarc from Gmail's own Authentication-Results, or "none". Gmail adds its line on top of any the
+    sender wrote, so only the topmost header counts, and only when it is Gmail's. `(...)` comments are dropped and
+    only each result's own word is read; any failing DKIM signature makes dkim "fail"."""
     found = {}
-    ours = [l for l in results if l.strip().lower().startswith("mx.google.com")][:1]   # a sender can add its own
-    for line in ours:
-        for mech in ("spf", "dkim", "dmarc"):
-            m = re.search(r"\b" + mech + r"=([a-z]+)", line.lower())
-            if m and mech not in found:
-                found[mech] = m.group(1)
+    top = results[0].lower()[:4000] if results else ""
+    if not top.strip().startswith("mx.google.com"):
+        return {mech: "none" for mech in ("spf", "dkim", "dmarc")}
+    for _ in range(5):   # nested comments, innermost first
+        top = re.sub(r"\([^()]*\)", " ", top)
+    for part in top.split(";"):
+        m = re.match(r"\s*(spf|dkim|dmarc)\s*=\s*([a-z]+)", part)
+        if m:
+            mech, res = m.groups()
+            if mech not in found or (mech == "dkim" and res == "fail"):
+                found[mech] = res
     return {mech: found.get(mech, "none") for mech in ("spf", "dkim", "dmarc")}
 
 
 def clean(text, removed):
-    text = html.unescape(text) if "&" in text else text
+    # No entity decoding here: the HTML parser already turned entities into what a reader sees, and plain text shows
+    # `&#8203;` as those characters, so decoding it again would make text no one saw.
     n = len(INVISIBLE.findall(text))
     if n:
         removed["invisible_characters"] = removed.get("invisible_characters", 0) + n
         text = INVISIBLE.sub("", text)
+    for rx in (WRAPPED, HEX_PAIRS):
+        hits = rx.findall(text)
+        if hits:
+            removed["encoded_blobs"] = removed.get("encoded_blobs", 0) + len(hits)
+            text = rx.sub("[encoded text removed]\n", text)
     blobs = BLOB.findall(text)
     if blobs:
         removed["encoded_blobs"] = removed.get("encoded_blobs", 0) + len(blobs)

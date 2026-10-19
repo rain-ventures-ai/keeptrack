@@ -124,6 +124,61 @@ class HiddenInstructions(unittest.TestCase):
         v = sv.view(msg(html="<div style='display:none'>" + ORDER + "<<<>>>"))
         self.assertNotIn("vendor", v["text"])
 
+    def test_more_invisible_characters(self):
+        hidden = "\u034f\u115f\u1160\u180b\u2065\u2800\u3164\ufe0f\uffa0\ufff9" + chr(0xE0100)
+        self.assertEqual(sv.view(msg(plain="See you" + hidden + " Tuesday."))["text"], "See you Tuesday.")
+
+    def test_wrapped_base64_and_hex(self):
+        blob = base64.encodebytes(ORDER.encode() * 3).decode()   # wrapped at 76 columns
+        v = sv.view(msg(plain="Report attached.\n" + blob + "Thanks."))
+        self.assertNotIn(blob.splitlines()[0], v["text"]); self.assertIn("Thanks.", v["text"])
+        hexed = " ".join(f"{b:02x}" for b in ORDER.encode())
+        self.assertNotIn(hexed[:30], sv.view(msg(plain="Ref: " + hexed))["text"])
+
+    def test_entities_are_not_decoded_twice(self):
+        v = sv.view(msg(plain="a &#8203;&lt;b&gt;"))
+        self.assertEqual(v["removed"]["invisible_characters"], 0); self.assertIn("&lt;b&gt;", v["text"])
+
+    def test_text_in_never_shown_tags_is_counted(self):
+        v = self.seen(f"<noscript>{ORDER}</noscript>")
+        self.assertEqual(v["removed"]["hidden_elements"], 1)
+        v = self.seen("<style>p{color:#333}</style><script>var a=1</script>")
+        self.assertEqual(v["removed"]["hidden_elements"], 0)
+
+    def test_outlook_conditional_markup_is_not_counted(self):
+        v = self.seen('<!--[if mso]><table><tr><td><![endif]--><p>Hi</p><!--[if mso]></td></tr></table><![endif]-->')
+        self.assertEqual(v["removed"]["html_comments"], 0)
+        self.assertEqual(self.seen(f"<!--[if mso]><p>{ORDER}</p><![endif]-->")["removed"]["html_comments"], 1)
+
+    def test_end_tag_does_not_cross_a_table_cell(self):
+        self.seen(f'<div style="display:none"><table><tr><td></div>{ORDER}</td></tr></table></div>')
+
+    def test_zero_box_and_near_white(self):
+        for style in ("width:0;height:0", "color:#f7f7f7", "color:rgb(250,250,250)", "color:#111;background:#121212"):
+            with self.subTest(style=style):
+                self.seen(f'<div style="{style}">{ORDER}</div>')
+
+    def test_crafted_style_block_is_quick(self):
+        import time
+        t = time.monotonic()
+        sv.view(msg(html="<style>" + "a{" * 50000 + "</style>" + "<style>" + "/*" * 50000 + "</style><p>x</p>"))
+        sv.view(msg(html="<style>" + ("." + "a" * 500 + " ") * 2000 + "{display:none}</style><p>x</p>"))
+        self.assertLess(time.monotonic() - t, 5)
+
+    def test_attachments_and_forwarded_mail_are_not_read(self):
+        m = msg(html="<p>Hi</p>")
+        b = base64.urlsafe_b64encode(ORDER.encode()).decode()
+        m["payload"]["parts"] = [{"mimeType": "text/plain", "filename": "note.txt", "body": {"data": b}},
+                                 {"mimeType": "message/rfc822", "parts": [{"mimeType": "text/plain", "body": {"data": b}}]}]
+        self.assertNotIn("vendor", sv.view(m)["text"])
+
+    def test_auth_reads_only_the_result_word(self):
+        a = "mx.google.com; dkim=pass (comment dmarc=pass) header.i=@a.example; dkim=fail header.i=@b.example; spf=softfail (x); dmarc=fail (p=NONE sp=NONE dis=NONE)"
+        self.assertEqual(sv.view(msg(plain="x", auth=a))["auth"], {"spf": "softfail", "dkim": "fail", "dmarc": "fail"})
+        m = msg(plain="x", auth="mx.google.com; dmarc=fail")
+        m["payload"]["headers"].insert(0, {"name": "Authentication-Results", "value": "evil.example; dmarc=pass"})
+        self.assertEqual(sv.view(m)["auth"]["dmarc"], "none", "only the topmost header, and only when it is Gmail's")
+
 
 if __name__ == "__main__":
     unittest.main()
