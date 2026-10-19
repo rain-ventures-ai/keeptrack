@@ -529,8 +529,10 @@ def _px(v, parent):
     return {"px": n[0], "": n[0], "pt": n[0] * 4 / 3, "em": n[0] * parent, "rem": n[0] * 16, "%": n[0] * parent / 100}[n[1]]
 
 
-QUOTE_KEYS = (".gmail_quote", ".gmail_quote_container", ".yahoo_quoted", "#divrplyfwdmsg", "#appendonsend",
-              ".moz-cite-prefix", "blockquote")
+QUOTE_KEYS = (".gmail_quote", ".gmail_quote_container", ".yahoo_quoted", ".moz-cite-prefix", "blockquote")
+QUOTE_REST = ("#divrplyfwdmsg", "#appendonsend")   # Outlook: the quote follows these, to the end of the message
+HEAD_TAGS = {"head", "meta", "link", "style", "title", "script", "base", "noscript", "template", "xml", "o:officedocumentsettings"}
+MAX_DEPTH = 256   # deeper nesting is TooComplex: no real mail needs it, and it keeps every step cheap
 
 
 class _Visible(html.parser.HTMLParser):
@@ -540,13 +542,24 @@ class _Visible(html.parser.HTMLParser):
         super().__init__(convert_charrefs=True)
         self.out, self.stack, self.removed = [], [], {"html_comments": 0, "hidden_elements": 0}
         self.hard, self.soft = rules
-        self.strip_quotes, self.quoted = strip_quotes, False
+        self.strip_quotes, self.quoted, self.drop_rest = strip_quotes, False, False
+        self.open = {}   # tag -> how many are open: an end tag with none open costs nothing
+
+    def _pop_to(self, i):
+        for e in self.stack[i:]:
+            self.open[e["tag"]] -= 1
+        del self.stack[i:]
 
     def handle_starttag(self, tag, attrs):
         if tag in BLOCK:
             self.out.append("\n")
+        if self.open.get("head") and tag not in HEAD_TAGS:
+            # `</head>` may be left out: a browser ends <head> at <body> or the first tag that belongs in the body.
+            self._pop_to(next(i for i, e in enumerate(self.stack) if e["tag"] == "head"))
         if tag in VOID:
             return
+        if len(self.stack) >= MAX_DEPTH:
+            raise TooComplex("elements nested too deep")
         a = {k.lower(): (v or "") for k, v in attrs}
         ident = a.get("id", "").strip().lower()
         keys = [tag] + (["#" + ident] if ident else []) + ["." + c.lower() for c in a.get("class", "").split()]
@@ -571,7 +584,8 @@ class _Visible(html.parser.HTMLParser):
         for prop, v in own.items():
             if prop not in locked:
                 props[prop] = v
-        parent = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0, "opacity": 1.0}
+        parent = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0, "opacity": 1.0, "inside": False,
+                                                    "in_quote": False}
         color = props.get("color", "")
         color = parent["color"] if color in ("", "inherit", "currentcolor", "unset", "revert") else \
             ("" if color == "initial" else color)
@@ -585,13 +599,17 @@ class _Visible(html.parser.HTMLParser):
                 own_op = min(own_op, n[0] / 100 if n[1] == "%" else n[0])
         opacity = parent.get("opacity", 1.0) * own_op
         quote = self.strip_quotes and any(k in QUOTE_KEYS for k in keys)
-        self.quoted = self.quoted or quote
+        if self.strip_quotes and any(k in QUOTE_REST for k in keys):
+            self.drop_rest = True   # Outlook puts the quoted message after this header, not inside it
         hard = tag in SKIP_TAGS or "hidden" in a or a.get("aria-hidden", "").lower() == "true" or \
-            any(k in self.hard for k in keys) or _hard_hides(inline) or quote or opacity <= 0.05
-        if hard and not quote and tag not in SKIP_TAGS and not any(e["hard"] for e in self.stack):
+            any(k in self.hard for k in keys) or _hard_hides(inline) or opacity <= 0.05
+        if hard and tag not in SKIP_TAGS and not parent["inside"]:
             self.removed["hidden_elements"] += 1
+        # Everything a text node needs is worked out here, once, so each piece of text costs the same at any depth.
         self.stack.append({"tag": tag, "hard": hard, "color": color, "bg": bg, "px": px, "opacity": opacity,
+                           "inside": parent["inside"] or hard, "in_quote": parent["in_quote"] or quote,
                            "counted": tag not in SKIP_TAGS or tag in CODE_TAGS})
+        self.open[tag] = self.open.get(tag, 0) + 1
 
     def handle_startendtag(self, tag, attrs):
         # A browser ignores the `/` of `<div/>`: the element stays open, so what follows is inside it.
@@ -600,17 +618,22 @@ class _Visible(html.parser.HTMLParser):
     def handle_endtag(self, tag):
         # Close the nearest open tag of this name (mail HTML is sloppy), but never across a table cell, row or table:
         # a browser ignores `</div>` inside a cell whose div opened outside it, so a hidden block stays hidden.
-        for i in range(len(self.stack) - 1, -1, -1):
-            if self.stack[i]["tag"] == tag:
-                del self.stack[i:]
-                break
-            if self.stack[i]["tag"] in SCOPE and tag not in SCOPE:
-                break
+        if self.open.get(tag):
+            for i in range(len(self.stack) - 1, -1, -1):
+                if self.stack[i]["tag"] == tag:
+                    self._pop_to(i)
+                    break
+                if self.stack[i]["tag"] in SCOPE and tag not in SCOPE:
+                    break
         if tag in BLOCK:
             self.out.append("\n")
 
     def handle_data(self, data):
-        if any(e["hard"] for e in self.stack):
+        top = self.stack[-1] if self.stack else None
+        if top and top["in_quote"] or self.drop_rest:
+            self.quoted = self.quoted or bool(data.strip())   # said only when quoted text was really left out
+            return
+        if top and top["inside"]:
             if data.strip():
                 # Text in a tag a page never shows (noscript, template, svg, text loose in <head>) is counted once
                 # per tag; the innermost such tag decides, so a <style> or <title> in <head> counts nothing.
@@ -620,9 +643,7 @@ class _Visible(html.parser.HTMLParser):
                             e["counted"] = True; self.removed["hidden_elements"] += 1
                         break
             return
-        top = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0}
-        if data.strip() and _invisible(top["color"], top["bg"], top["px"]):
-            top = self.stack[-1] if self.stack else None
+        if data.strip() and _invisible(*((top["color"], top["bg"], top["px"]) if top else ("", "", 16.0))):
             if top is not None and not top.get("soft_counted"):
                 top["soft_counted"] = True; self.removed["hidden_elements"] += 1
             return
@@ -633,7 +654,8 @@ class _Visible(html.parser.HTMLParser):
             self.removed["html_comments"] += 1
 
     def handle_pi(self, data):
-        self.removed["html_comments"] += 1
+        if not data.lower().startswith("xml"):   # `<?xml version..?>` heads XHTML templates
+            self.removed["html_comments"] += 1
 
     def unknown_decl(self, data):
         if not _conditional(data):
@@ -673,6 +695,8 @@ def visible_text(markup, strip_quotes=False):
     p = _Visible(rules, strip_quotes)
     try:
         p.feed(markup); p.close()
+    except TooComplex:
+        raise
     except Exception:   # malformed beyond the parser: keep nothing rather than the raw markup
         return "", {"html_comments": 0, "hidden_elements": 1}
     text = "".join(p.out)
@@ -781,6 +805,17 @@ def _top_auth_results(message):
     return [h["value"] for h in _top_headers(message) if h["name"].lower() == "authentication-results"]
 
 
+def bulk_or_automatic(message):
+    """True when the message's own headers mark it as list or automatic mail (List-Unsubscribe, List-Id,
+    Precedence bulk/list/junk, or Auto-Submitted other than "no"): the skill's skip rule reads this."""
+    for h in _top_headers(message):
+        n, v = h["name"].lower(), h["value"].strip().lower()
+        if n in ("list-unsubscribe", "list-id") or (n == "precedence" and v in ("bulk", "list", "junk")) \
+                or (n == "auto-submitted" and v and v != "no"):
+            return True
+    return False
+
+
 def sent_by_owner(message):
     """True when Gmail labels the message SENT: the owner wrote it, so there is no sender check to read. The label is
     Gmail's own, never a header the sender writes."""
@@ -807,13 +842,40 @@ def _auth(results):
     return {mech: found.get(mech, "none") for mech in ("spf", "dkim", "dmarc")}
 
 
+def _pictographic(ch):
+    o = ord(ch)
+    return 0x1F000 <= o <= 0x1FAFF or 0x2190 <= o <= 0x2BFF or 0x2300 <= o <= 0x23FF or o in (0x00A9, 0x00AE, 0x20E3) \
+        or ch.isdigit() or ch in "#*"
+
+
+def _kept(text, i, ch):
+    """Characters that are invisible but part of ordinary writing stay and are not counted: an emoji's variation
+    selector (❤️) or a joiner between two emoji (family and flag sequences); a direction mark or ZWNJ between letters
+    (Hebrew, Arabic, Persian). Anywhere else, or in a run, they are removed and counted."""
+    prev = text[i - 1] if i else ""
+    nxt = text[i + 1] if i + 1 < len(text) else ""
+    if ch in "\ufe0e\ufe0f":
+        return bool(prev) and _pictographic(prev)
+    if ch == "\u200d":
+        return bool(prev) and bool(nxt) and (_pictographic(prev) or prev == "\ufe0f") and _pictographic(nxt)
+    if ch in "\u200c\u200e\u200f":
+        return prev.isalpha() and (nxt.isalpha() or nxt in " .,!?") or (prev in " .,!?" and nxt.isalpha())
+    return False
+
+
 def clean(text, removed):
     # No entity decoding here: the HTML parser already turned entities into what a reader sees, and plain text shows
     # `&#8203;` as those characters, so decoding it again would make text no one saw.
-    n = len(INVISIBLE.findall(text))
-    if n:
-        removed["invisible_characters"] = removed.get("invisible_characters", 0) + n
-        text = INVISIBLE.sub("", text)
+    count = [0]
+
+    def drop(m):
+        if _kept(text, m.start(), m.group(0)):
+            return m.group(0)
+        count[0] += 1
+        return ""
+    text = INVISIBLE.sub(drop, text)
+    if count[0]:
+        removed["invisible_characters"] = removed.get("invisible_characters", 0) + count[0]
     for rx in (WRAPPED, HEX_PAIRS):
         hits = rx.findall(text)
         if hits:
@@ -872,7 +934,7 @@ def view(message):
         if sent:
             body, quoted = _plain_without_quote(body)
         body = body[:MAX_MARKUP]
-        text, r = (visible_text(body, strip_quotes=sent) if re.search(r"<!--|<[a-zA-Z]", body) else (body, {}))
+        text, r = (visible_text(body, strip_quotes=sent) if re.search(r"<!--|</?(?:html|body|head|div|p|br|span|table|td|tr|font|style|img|b|i|u|a\s)\b", body, re.I) else (body, {}))
     else:
         text, r = "", {}
     quoted = quoted or bool(r.pop("quoted_reply", 0))
@@ -883,7 +945,8 @@ def view(message):
     return {"headers": {k: one_line(" ".join(v), 4000 if k in ("to", "cc") else 500)
                         for k, v in hdr.items() if k != "authentication-results"},
             "auth": ({m: "sent" for m in ("spf", "dkim", "dmarc")} if sent else _auth(_top_auth_results(message))),
-            "text": text[:MAX_TEXT], "removed": removed, "truncated": truncated, "quoted_reply_removed": quoted}
+            "text": text[:MAX_TEXT], "removed": removed, "truncated": truncated, "quoted_reply_removed": quoted,
+            "bulk": bulk_or_automatic(message)}
 
 
 SAVE_HEADERS = ("from", "to", "cc", "date", "subject", "message-id")
