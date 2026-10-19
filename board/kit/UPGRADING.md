@@ -26,9 +26,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Versions
 ### v76 (schema 4)
-The keeptrack-email skill reads message bodies only through the new `keeptrack.py email-view` (the email-to-tasks
-cleaner, `safe_view.py`), follows the automation's "Always" rules word for word, and treats mail read through a
-connector only as unverified (contact history, no follow-up date). The skill gains behaviour evals
+The keeptrack-email skill searches Gmail with the new `keeptrack.py email-search` (ids and dates only, no mail text)
+and reads message bodies only through the new `keeptrack.py email-view` (the email-to-tasks cleaner, `safe_view.py`),
+follows the automation's "Always" rules word for word, and treats all mail read through a connector only, sent mail
+included, as unverified (contact history, no follow-up date). The skill gains behaviour evals
 (`board/keeptrack-email/evals/cases.json`). No migration and no data change.
 - Run `kit-update` only. Check: `kit-check` says v76, and
   `gog gmail get '<a message id>' --json | python3 board/keeptrack.py email-view` prints `Message key:` and
@@ -36,8 +37,8 @@ connector only as unverified (contact history, no follow-up date). The skill gai
 - A scheduled contact-email routine (`contact-email-sync-<owner>`) reads the skill each run, so it picks up the new
   rules with no prompt change. If it reads mail through a connector only, it now treats received mail as unverified
   and sets no follow-up dates from it; to keep them, give it a read-only gog login and the `email-view` pipe.
-- The email-to-tasks pack's `resolve.py` changed (pack 1.4.1: the view text is built in one shared function, no
-  behaviour change), so its digest changed. If you installed it: reinstall and set it up again as in v73, and update
+- The email-to-tasks pack changed (pack 1.4.1): `resolve.py` builds the view text in one shared function, and
+  `safe_view.py` turns Unicode line and paragraph separators into real line breaks, so its digest changed. If you installed it: reinstall and set it up again as in v73, and update
   its entry in `relay/registry/automations.yaml` to the new digest
   (`python3 board/keeptrack.py automation show email-to-tasks`). The other packs are unchanged.
 

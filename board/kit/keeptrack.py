@@ -4922,7 +4922,7 @@ HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
-    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-view", "touch", "touch-source", "sent"],
+    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
@@ -5169,8 +5169,8 @@ def _email_pack_resolver():
     """The email-to-tasks pack's resolve.py, which ships beside this file (board/automations/ in a board repo,
     automations/ in the plugin and the kit). Its render() and safe_view.py are the one cleaner: never a copy."""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "automations", "email-to-tasks", "resolve.py")
-    if not os.path.isfile(path) or not os.path.isfile(os.path.join(os.path.dirname(path), "safe_view.py")):
-        sys.exit("email-view needs automations/email-to-tasks/resolve.py and safe_view.py beside keeptrack.py (kit v76): run kit-update")
+    if not all(os.path.isfile(os.path.join(os.path.dirname(path), f)) for f in ("resolve.py", "check.py", "safe_view.py")):
+        sys.exit("email-view and email-search need automations/email-to-tasks/resolve.py, check.py and safe_view.py beside keeptrack.py (kit v76): run kit-update")
     import importlib.util
     flag, sys.dont_write_bytecode = sys.dont_write_bytecode, True
     try:
@@ -5205,6 +5205,68 @@ def cmd_email_view(a):
     except Exception:   # never fall back to the raw message
         sys.stdout.write(resolver.UNREADABLE); sys.stdout.flush(); sys.exit(1)
     sys.stdout.write("Message key: " + (key or "none (no usable Message-ID)") + "\n" + text)
+
+
+EMAIL_SEARCH_ADDRESS = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,8}")
+EMAIL_SEARCH_PAGE = re.compile(r"[0-9A-Za-z_-]{1,200}")
+
+
+def _search_day(message):
+    """YYYY-MM-DD of a search result: Gmail's own internalDate (ms) when present, else the Date field reduced to a
+    date (digits only, never its text), else '-'."""
+    try:
+        ms = message.get("internalDate")
+        if ms is not None and str(ms).isdigit():
+            return dt.datetime.fromtimestamp(int(ms) / 1000, dt.timezone.utc).strftime("%Y-%m-%d")
+        import email.utils
+        when = email.utils.parsedate_to_datetime(str(message.get("date") or message.get("Date") or ""))
+        return (when if when.tzinfo else when.replace(tzinfo=dt.timezone.utc)).astimezone(dt.timezone.utc).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "-"
+
+
+def cmd_email_search(a):
+    """Gmail search for exact board addresses through gog, printing only ids, never mail text: one line per message,
+    `<gmail id> <thread id> <YYYY-MM-DD> sent|received`, then `next-page <token>` or `end`. `sent` only when Gmail
+    labels the message SENT (a From header is the sender's to write). The query is the email-to-tasks check's own
+    window query (check.query) with the addresses; gog runs through the pack's resolver, so its time limits and
+    error codes apply: a gog failure prints `gog-error` or `gog-timeout` and exits 3."""
+    addresses = list(dict.fromkeys(x.strip().lower() for x in a.address))
+    if not addresses or len(addresses) > 20 or any(not EMAIL_SEARCH_ADDRESS.fullmatch(x) for x in addresses):
+        sys.exit("email-search: give 1 to 20 --address values, each one plain address from the board (name@example.com)")
+    try:
+        start = dt.datetime.strptime(a.start, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
+        end = dt.datetime.strptime(a.end, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc) + dt.timedelta(days=1)
+    except ValueError:
+        sys.exit("email-search: --start and --end are dates, YYYY-MM-DD (both included)")
+    if end <= start or (end - start).days > 400:
+        sys.exit("email-search: --end must be on or after --start, at most 400 days later")
+    if a.page is not None and not EMAIL_SEARCH_PAGE.fullmatch(a.page):
+        sys.exit("email-search: --page takes the token a previous email-search printed after next-page")
+    resolver = _email_pack_resolver()
+    terms = " ".join(f"from:{x} to:{x} cc:{x}" for x in addresses)
+    query = resolver._check().query(int(start.timestamp()), int(end.timestamp())) + " {" + terms + "}"
+    resolver._DEADLINE[0] = time.monotonic() + resolver.DEADLINE_SECONDS
+    try:
+        messages, token = resolver.search(query, a.page)
+    except resolver.GogFailed as failed:
+        print(str(failed)); sys.exit(3)
+    finally:
+        resolver._DEADLINE[0] = None
+    lines, skipped = [], 0
+    for m in messages:
+        mid = str(m.get("id")) if isinstance(m, dict) and isinstance(m.get("id"), (str, int)) else ""
+        thread = str(m.get("threadId") or "") if isinstance(m, dict) else ""
+        if not resolver.GMAIL_ID.fullmatch(mid):
+            skipped += 1; continue
+        labels = m.get("labelIds", m.get("labels")) or []
+        sent = isinstance(labels, list) and "SENT" in {str(x).upper() for x in labels}
+        lines.append(" ".join((mid, thread if resolver.GMAIL_ID.fullmatch(thread) else "-", _search_day(m),
+                               "sent" if sent else "received")))
+    if skipped:
+        lines.append(f"skipped {skipped} without a usable id")
+    lines.append("next-page " + token if isinstance(token, str) and EMAIL_SEARCH_PAGE.fullmatch(token) else "end")
+    print("\n".join(lines))
 
 
 def cmd_touch_source(a):
@@ -9707,6 +9769,10 @@ def main():
     s = sub.add_parser("email-key", help="hash an RFC822 Message-ID without storing the raw header")
     s.add_argument("message_id", nargs="?", help="header as one non-shell argv value; never interpolate it into shell text")
     s.add_argument("--stdin", action="store_true", help="read the header value safely from stdin (bounded; no shell substitution)"); s.set_defaults(f=cmd_email_key)
+    s = sub.add_parser("email-search", help="search Gmail (through gog) for exact board addresses; prints ids, dates and sent/received only, never mail text")
+    s.add_argument("--address", action="append", required=True, help="an exact address from the board (repeat, at most 20)")
+    s.add_argument("--start", required=True, help="first day, YYYY-MM-DD"); s.add_argument("--end", required=True, help="last day, YYYY-MM-DD (included)")
+    s.add_argument("--page", help="the token after next-page from the previous call"); s.set_defaults(f=cmd_email_search)
     s = sub.add_parser("email-view", help="print one message's cleaned view (hidden content removed, sender checks) from gog's JSON on stdin")
     s.add_argument("path", nargs="?", help="a saved message JSON file; omit or - for stdin (pipe `gog gmail get <id> --json` in)"); s.set_defaults(f=cmd_email_view)
     s = sub.add_parser("touch-source", help="bind verified message keys to an existing email touch"); s.add_argument("ref"); s.add_argument("touch_id")

@@ -253,6 +253,8 @@ mailbox reconciliation is defined by the `keeptrack-email` skill and keeps its l
 keeptrack.py email-view`): the canonical `rfc822:` key, Gmail's sender checks, what hidden content was removed, and
 the visible text in an untrusted fence. It is the email-to-tasks automation's own cleaner (`safe_view.py`), and the
 `keeptrack-email` skill reads message bodies only through it; anything it cannot read prints only `Unreadable:`.
+`email-search --address <board address> --start YYYY-MM-DD --end YYYY-MM-DD` runs the Gmail search through gog and
+prints only `<id> <thread id> <date> sent|received` per message (`sent` is Gmail's SENT label), never mail text.
 
 Person `links` are profile or reference pages about that person/company. Task `links` are supporting resources and
 references for that task: for example Drive/Dropbox files, issues, PRs, source pages or a local working path.
