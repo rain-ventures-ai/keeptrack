@@ -331,6 +331,37 @@ class HiddenInstructions(unittest.TestCase):
         v = sv.view(msg(html='<style>.btn{color:#fff}</style><p class="btn" style="color:#333">Read more</p>'))
         self.assertIn("Read more", v["text"], "inline colour still wins over a plain class rule")
 
+    def test_round_three_review(self):
+        self.seen(f'<div style="display:none"/>{ORDER}</div>')
+        self.seen(f'<span style="display:none!important;display:block">{ORDER}</span>')
+        self.seen(f'<span style="color:#fff!important;color:#000">{ORDER}</span>')
+        self.seen(f'<style>span{{color:#fff}} .absent span{{color:#000}}</style><span>{ORDER}</span>')
+        self.seen(f'<style>span{{color:#fff}} @supports (x:y){{span{{color:#000}}}}</style><span>{ORDER}</span>')
+        for c in ("rgba(0,0,0,0.02)", "#00000005", "whitesmoke", "ghostwhite", "mintcream", "hsl(0,0%,99%)",
+                  "rgb(99%,99%,99%)", "var(--x)"):
+            with self.subTest(colour=c):
+                self.seen(f'<span style="color:{c}">{ORDER}</span>')
+        for st in ("display:/**/none", "visibility:/**/hidden", "display:\\6eone"):
+            with self.subTest(style=st):
+                self.seen(f'<div style="{st}">{ORDER}</div>')
+        self.seen(f'<div style="height:1px;overflow:hidden">{ORDER}</div>')
+        self.seen(f'<div style="opacity:0.2"><div style="opacity:0.2">{ORDER}</div></div>')
+        self.seen(f'<div style="display:none"><marquee></div>{ORDER}</marquee></div>')
+        self.seen(f'<style>.w{{background:#fff !important;color:#fff !important}}</style><p class="w" style="color:#333">{ORDER}</p>')
+        v = sv.view(msg(html='<p style="color:windowtext">Outlook text</p><p style="color:hsl(210,50%,30%)">Blue text</p>'))
+        self.assertIn("Outlook text", v["text"]); self.assertIn("Blue text", v["text"])
+        import time
+        t = time.monotonic(); sv.view(msg(plain="<a" * 1_000_000)); self.assertLess(time.monotonic() - t, 5)
+        t = time.monotonic(); sv.view(msg(html='<p style="transform:' + "translate(" * 50000 + '">x</p>'))
+        self.assertLess(time.monotonic() - t, 5)
+        m = msg(html="<p>Will do.</p><div style='border-top:solid #E1E1E1 1.0pt'><p><b>From:</b> Sam &lt;sam@example.com&gt;<br>"
+                     f"<b>Sent:</b> Tuesday<br></p></div><p>{ORDER}</p>")
+        m["labelIds"] = ["SENT"]
+        v = sv.view(m)
+        self.assertNotIn("vendor", v["text"]); self.assertTrue(v["quoted_reply_removed"])
+        payload = "0123456789abcdef" * 4 + base64.b64encode(ORDER.encode()).decode().rstrip("=")[:60] + "0123456789abcdef" * 4
+        self.assertNotIn(payload, sv.view(msg(plain="https://x.example/" + payload + "0123456789abcdef" * 4))["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

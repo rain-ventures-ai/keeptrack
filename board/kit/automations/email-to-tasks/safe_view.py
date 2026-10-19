@@ -15,6 +15,7 @@ library only. Nothing here decides what is true; it only keeps the invisible out
 import base64
 import binascii
 import codecs
+import colorsys
 import html.parser
 import re
 
@@ -41,18 +42,73 @@ SKIP_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg", 
 RAW_TEXT = ("script", "style", "textarea", "xmp", "noembed", "noframes", "iframe", "noscript")
 VOID = {"br", "img", "hr", "meta", "link", "input", "wbr", "area", "base", "col", "embed", "source", "track", "param"}
 TABLE = {"table", "tr", "td", "th", "thead", "tbody", "tfoot"}
+SCOPE = TABLE | {"caption", "marquee", "applet", "object", "template", "html"}   # an end tag never closes past these
 BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote", "pre", "section"}
-NAMED = {"white": (255, 255, 255), "snow": (255, 250, 250), "ivory": (255, 255, 240), "black": (0, 0, 0)}
+NAMED = {k: tuple(int(v[i:i + 2], 16) for i in (0, 2, 4)) for k, v in {
+    "aliceblue": "f0f8ff", "antiquewhite": "faebd7", "aqua": "00ffff", "aquamarine": "7fffd4", "azure": "f0ffff",
+    "beige": "f5f5dc", "bisque": "ffe4c4", "black": "000000", "blanchedalmond": "ffebcd", "blue": "0000ff",
+    "blueviolet": "8a2be2", "brown": "a52a2a", "burlywood": "deb887", "cadetblue": "5f9ea0", "chartreuse": "7fff00",
+    "chocolate": "d2691e", "coral": "ff7f50", "cornflowerblue": "6495ed", "cornsilk": "fff8dc", "crimson": "dc143c",
+    "cyan": "00ffff", "darkblue": "00008b", "darkcyan": "008b8b", "darkgoldenrod": "b8860b", "darkgray": "a9a9a9",
+    "darkgreen": "006400", "darkgrey": "a9a9a9", "darkkhaki": "bdb76b", "darkmagenta": "8b008b", "darkolivegreen":
+    "556b2f", "darkorange": "ff8c00", "darkorchid": "9932cc", "darkred": "8b0000", "darksalmon": "e9967a",
+    "darkseagreen": "8fbc8f", "darkslateblue": "483d8b", "darkslategray": "2f4f4f", "darkslategrey": "2f4f4f",
+    "darkturquoise": "00ced1", "darkviolet": "9400d3", "deeppink": "ff1493", "deepskyblue": "00bfff", "dimgray":
+    "696969", "dimgrey": "696969", "dodgerblue": "1e90ff", "firebrick": "b22222", "floralwhite": "fffaf0",
+    "forestgreen": "228b22", "fuchsia": "ff00ff", "gainsboro": "dcdcdc", "ghostwhite": "f8f8ff", "gold": "ffd700",
+    "goldenrod": "daa520", "gray": "808080", "grey": "808080", "green": "008000", "greenyellow": "adff2f",
+    "honeydew": "f0fff0", "hotpink": "ff69b4", "indianred": "cd5c5c", "indigo": "4b0082", "ivory": "fffff0",
+    "khaki": "f0e68c", "lavender": "e6e6fa", "lavenderblush": "fff0f5", "lawngreen": "7cfc00", "lemonchiffon":
+    "fffacd", "lightblue": "add8e6", "lightcoral": "f08080", "lightcyan": "e0ffff", "lightgoldenrodyellow":
+    "fafad2", "lightgray": "d3d3d3", "lightgreen": "90ee90", "lightgrey": "d3d3d3", "lightpink": "ffb6c1",
+    "lightsalmon": "ffa07a", "lightseagreen": "20b2aa", "lightskyblue": "87cefa", "lightslategray": "778899",
+    "lightslategrey": "778899", "lightsteelblue": "b0c4de", "lightyellow": "ffffe0", "lime": "00ff00", "limegreen":
+    "32cd32", "linen": "faf0e6", "magenta": "ff00ff", "maroon": "800000", "mediumaquamarine": "66cdaa",
+    "mediumblue": "0000cd", "mediumorchid": "ba55d3", "mediumpurple": "9370db", "mediumseagreen": "3cb371",
+    "mediumslateblue": "7b68ee", "mediumspringgreen": "00fa9a", "mediumturquoise": "48d1cc", "mediumvioletred":
+    "c71585", "midnightblue": "191970", "mintcream": "f5fffa", "mistyrose": "ffe4e1", "moccasin": "ffe4b5",
+    "navajowhite": "ffdead", "navy": "000080", "oldlace": "fdf5e6", "olive": "808000", "olivedrab": "6b8e23",
+    "orange": "ffa500", "orangered": "ff4500", "orchid": "da70d6", "palegoldenrod": "eee8aa", "palegreen": "98fb98",
+    "paleturquoise": "afeeee", "palevioletred": "db7093", "papayawhip": "ffefd5", "peachpuff": "ffdab9", "peru":
+    "cd853f", "pink": "ffc0cb", "plum": "dda0dd", "powderblue": "b0e0e6", "purple": "800080", "rebeccapurple":
+    "663399", "red": "ff0000", "rosybrown": "bc8f8f", "royalblue": "4169e1", "saddlebrown": "8b4513", "salmon":
+    "fa8072", "sandybrown": "f4a460", "seagreen": "2e8b57", "seashell": "fff5ee", "sienna": "a0522d", "silver":
+    "c0c0c0", "skyblue": "87ceeb", "slateblue": "6a5acd", "slategray": "708090", "slategrey": "708090", "snow":
+    "fffafa", "springgreen": "00ff7f", "steelblue": "4682b4", "tan": "d2b48c", "teal": "008080", "thistle":
+    "d8bfd8", "tomato": "ff6347", "turquoise": "40e0d0", "violet": "ee82ee", "wheat": "f5deb3", "white": "ffffff",
+    "whitesmoke": "f5f5f5", "yellow": "ffff00", "yellowgreen": "9acd32", "windowtext": "000000", "buttontext":
+    "000000", "canvastext": "000000", "text": "000000", "linktext": "0000ee", "window": "ffffff", "canvas":
+    "ffffff", "buttonface": "f0f0f0"}.items()}
+
+
+def _unescape_css(text):
+    """CSS escapes decoded (`\\6e` is `n`, `\\n` is `n`), as a browser reads them."""
+    def one(m):
+        if m.group(1):
+            n = int(m.group(1), 16)
+            return chr(n) if 0 < n <= 0x10FFFF else "\ufffd"
+        return m.group(2)
+    return re.sub(r"\\([0-9a-fA-F]{1,6})[ \t\n]?|\\(.)", one, text)
 
 
 def _decls(text):
-    """CSS declarations as {property: value}, lower case, !important removed, spaces only between words."""
-    out = {}
-    for d in (text or "").split(";"):
+    """CSS declarations as {property: value}: comments and escapes resolved, lower case, spaces only between words.
+    An !important declaration beats a later normal one for the same property, as in a browser. Values are cut at
+    1000 characters (no real one is longer) so no pattern runs long on them."""
+    out, imp = {}, set()
+    text = _unescape_css(_strip_comments((text or "")[:20000]))
+    for d in text.split(";"):
         if ":" in d:
             k, v = d.split(":", 1)
-            v = re.sub(r"!\s*important", "", v.strip().lower())
-            out[k.strip().lower()] = re.sub(r"\s+", " ", re.sub(r"\s*([,()/])\s*", r"\1", v)).strip()
+            k = k.strip().lower()
+            v = v.strip().lower()[:1000]
+            important = bool(re.search(r"!\s*important\s*$", v))
+            v = re.sub(r"!\s*important", "", v)
+            if k in imp and not important:
+                continue
+            if important:
+                imp.add(k)
+            out[k] = re.sub(r"\s+", " ", re.sub(r"\s*([,()/])\s*", r"\1", v)).strip()
     return out
 
 
@@ -82,9 +138,9 @@ def _hard_hides(s):
     w, h = _num(s.get("width")), _num(s.get("height"))
     if w and h and w[0] <= 0 and h[0] <= 0:
         return True   # a box with no size
-    if clipped and w and h and w[0] <= 1 and h[0] <= 1 and w[1] in ("px", "") and h[1] in ("px", ""):
+    if clipped and any(n and n[0] <= 1 and n[1] in ("px", "") for n in (w, h)):
         return True   # the 1px box: text clipped to a dot
-    for v in re.findall(r"translate[xy]?\(([^)]*)\)", s.get("transform", "")):
+    for v in re.findall(r"translate[xy]?\(([^)]{0,200})\)", s.get("transform", "")):
         if any(n and n[0] <= -500 for n in map(_num, v.split(","))):
             return True   # moved off the screen
     if re.match(r"rect\(0", s.get("clip", "")) or re.search(r"inset\(50%|inset\(100%|circle\(0", s.get("clip-path", "")):
@@ -106,35 +162,69 @@ def _tiny(fs):
                         or (n[1] == "%" and n[0] < 20))
 
 
-def _invisible(color, bg, fs):
-    """Is text with this inherited colour, background and font size invisible to a reader? `bg` "image" means a
-    background picture: its colour is unknown, so the colour tests are skipped."""
-    if _tiny(fs):
+def _invisible(color, bg, px):
+    """Is text with this inherited colour, background and font size (in px) invisible to a reader? `bg` "image"
+    means a background picture: its colour is unknown, so the colour tests are skipped. A colour this cannot read
+    counts as invisible: when unsure, hide more."""
+    if not px >= 2:   # also catches NaN
         return True   # zero or unreadably small text
-    c = color or ""
-    if c == "transparent" or re.fullmatch(r"rgba?\([^)]*[,/]0(\.0+)?%?\)", c) or re.fullmatch(r"#[0-9a-f]{6}00|#[0-9a-f]{3}0", c):
-        return True
+    c = (color or "").strip()
+    if not c:
+        return False   # the reader's default colour
+    rc = _rgba(c)
+    if rc is None or rc[3] <= 0.2:
+        return True   # unreadable colour, or (nearly) transparent
     if bg == "image":
         return False
-    rc, rb = _rgb(c), _rgb(bg)
-    if c and bg and c == bg:
-        return True
-    if rc and rb and max(abs(x - y) for x, y in zip(rc, rb)) <= 16:
+    rb = _rgba(bg) if bg else None
+    if bg and rb is None:
+        return False   # a background this cannot read: judge the text on its own colour only
+    if rb and max(abs(x - y) for x, y in zip(rc[:3], rb[:3])) <= 16:
         return True   # text all but the same colour as its background
-    return bool(rc and min(rc) >= 0xF0 and (not bg or (rb and min(rb) >= 0xF0)))   # white on a white page
+    return min(rc[:3]) >= 0xF0 and (not bg or (rb is not None and min(rb[:3]) >= 0xF0))   # white on a white page
 
 
 def _rgb(c):
-    """(r, g, b) for #rgb, #rrggbb, rgb()/rgba() and a few names; None for anything else."""
-    c = (c or "").strip()
+    """(r, g, b) of a CSS colour, or None."""
+    v = _rgba(c)
+    return v[:3] if v else None
+
+
+def _channel(x, scale=255):
+    x = x.strip()
+    n = float(x[:-1]) * scale / 100 if x.endswith("%") else float(x)
+    return max(0.0, min(float(scale), n))
+
+
+def _rgba(c):
+    """(r, g, b, alpha) for a CSS colour (hex with alpha, every named colour, rgb()/rgba() with numbers or %,
+    hsl()/hsla(), transparent); None for anything else."""
+    c = (c or "").strip().lower()
+    if c == "transparent":
+        return (0, 0, 0, 0.0)
     if c in NAMED:
-        return NAMED[c]
-    m = re.fullmatch(r"#([0-9a-f]{3}|[0-9a-f]{6})(?:[0-9a-f]{1,2})?", c)
+        return NAMED[c] + (1.0,)
+    m = re.fullmatch(r"#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})", c)
     if m:
         h = m.group(1)
-        return tuple(int(h[i] * 2, 16) for i in range(3)) if len(h) == 3 else tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-    m = re.fullmatch(r"rgba?\(([0-9]{1,3})[, ]([0-9]{1,3})[, ]([0-9]{1,3})(?:[,/][0-9.]+%?)?\)", c)
-    return tuple(min(255, int(x)) for x in m.groups()) if m else None
+        if len(h) in (3, 4):
+            h = "".join(ch * 2 for ch in h)
+        alpha = int(h[6:8], 16) / 255 if len(h) == 8 else 1.0
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+    m = re.fullmatch(r"(rgba?|hsla?)\(([^()]{1,80})\)", c)
+    if not m:
+        return None
+    args = [x for x in re.split(r"[,/ ]+", m.group(2).strip()) if x]
+    try:
+        alpha = _channel(args[3], 1) if len(args) > 3 else 1.0
+        if m.group(1).startswith("rgb"):
+            r, g, b = (_channel(x) for x in args[:3])
+        else:
+            h = float(args[0].replace("deg", "")) % 360 / 360
+            r, g, b = (x * 255 for x in colorsys.hls_to_rgb(h, _channel(args[2], 1), _channel(args[1], 1)))
+    except (ValueError, IndexError):
+        return None
+    return (int(r), int(g), int(b), alpha)
 
 
 def _bg_of(d):
@@ -366,23 +456,26 @@ def _style_rules(markup):
             for one in prelude.split(","):
                 keys = _selector_keys(one)
                 if keys is None:
-                    if hides or _invisible(props.get("color", ""), props.get("bg", ""), props.get("fs", "")):
+                    if hides or _invisible(props.get("color", ""), props.get("bg", ""), _px(props.get("fs", ""), 16.0)):
                         raise TooComplex("a hiding rule for elements this cleaner cannot name")   # `[data-x]`, `*`
                     continue
                 for k in keys:
                     if hides:
                         hard.add(k)
                     cur = soft.setdefault(k, {})
+                    pair_hides = "color" in props and "bg" in props and \
+                        _invisible(props["color"], props["bg"], 16.0)   # the two together hide the text
                     for prop, v in props.items():
+                        imp = ("font-size" if prop == "fs" else "background" if prop == "bg" else prop) in important \
+                            or (prop == "bg" and "background-color" in important)
+                        cur["important_" + prop] = cur.get("important_" + prop) or imp
                         # A value that makes text invisible sticks: a later rule for the same key (whose specificity
                         # is not modelled) never makes the text visible again. An !important one beats inline style.
                         if cur.get("sticky_" + prop):
                             continue
                         cur[prop] = v
-                        if _hiding_value(prop, v):
+                        if _hiding_value(prop, v) or pair_hides:
                             cur["sticky_" + prop] = True
-                            cur["important_" + prop] = ("font-size" if prop == "fs" else "background" if prop == "bg"
-                                                        else prop) in important
     return frozenset(hard), soft
 
 
@@ -390,8 +483,8 @@ def _hiding_value(prop, v):
     if prop == "fs":
         return _px(v, 16.0) < 2
     if prop == "color":
-        rc = _rgb(v)
-        return v == "transparent" or bool(re.fullmatch(r"rgba?\([^)]*[,/]0(\.0+)?%?\)", v)) or bool(rc and min(rc) >= 0xF0)
+        rc = _rgba(v)
+        return rc is None or rc[3] <= 0.2 or min(rc[:3]) >= 0xF0
     return False
 
 
@@ -445,33 +538,41 @@ class _Visible(html.parser.HTMLParser):
                 if prop in rule and prop not in locked:
                     props[prop] = rule[prop]
                     if rule.get("important_" + prop):
-                        locked.add(prop)   # an !important hiding value beats the element's own style
+                        locked.add(prop)   # an !important rule beats the element's own (normal) style
         inline = _style(attrs)
         own = {}
         if tag == "font" and a.get("color"):
             own["color"] = a["color"].lower()
         if a.get("bgcolor"):
             own["bg"] = a["bgcolor"].lower()
+        if tag == "body" and a.get("text"):
+            own["color"] = a["text"].lower()
         own.update({k: v for k, v in (("color", inline.get("color", "")), ("bg", _bg_of(inline)),
                                       ("fs", inline.get("font-size", ""))) if v})
         for prop, v in own.items():
             if prop not in locked:
                 props[prop] = v
-        parent = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0}
+        parent = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0, "opacity": 1.0}
         color = props.get("color", "")
         color = parent["color"] if color in ("", "inherit", "currentcolor", "unset", "revert") else \
             ("" if color == "initial" else color)
         bg = props.get("bg", "")
         bg = parent["bg"] if bg in ("", "inherit") else bg
         px = _px(props.get("fs", ""), parent["px"])
+        op = _num(inline.get("opacity"))
+        opacity = parent.get("opacity", 1.0) * (op[0] if op and op[1] == "" else 1.0)
         quote = self.strip_quotes and any(k in QUOTE_KEYS for k in keys)
         self.quoted = self.quoted or quote
         hard = tag in SKIP_TAGS or "hidden" in a or a.get("aria-hidden", "").lower() == "true" or \
-            any(k in self.hard for k in keys) or _hard_hides(inline) or quote
+            any(k in self.hard for k in keys) or _hard_hides(inline) or quote or opacity <= 0.05
         if hard and not quote and tag not in SKIP_TAGS and not any(e["hard"] for e in self.stack):
             self.removed["hidden_elements"] += 1
-        self.stack.append({"tag": tag, "hard": hard, "color": color, "bg": bg, "px": px,
+        self.stack.append({"tag": tag, "hard": hard, "color": color, "bg": bg, "px": px, "opacity": opacity,
                            "counted": tag not in SKIP_TAGS or tag in CODE_TAGS})
+
+    def handle_startendtag(self, tag, attrs):
+        # A browser ignores the `/` of `<div/>`: the element stays open, so what follows is inside it.
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
         # Close the nearest open tag of this name (mail HTML is sloppy), but never across a table cell, row or table:
@@ -480,7 +581,7 @@ class _Visible(html.parser.HTMLParser):
             if self.stack[i]["tag"] == tag:
                 del self.stack[i:]
                 break
-            if self.stack[i]["tag"] in TABLE and tag not in TABLE:
+            if self.stack[i]["tag"] in SCOPE and tag not in SCOPE:
                 break
         if tag in BLOCK:
             self.out.append("\n")
@@ -497,7 +598,7 @@ class _Visible(html.parser.HTMLParser):
                         break
             return
         top = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0}
-        if data.strip() and _invisible(top["color"], top["bg"], f"{top['px']}px"):
+        if data.strip() and _invisible(top["color"], top["bg"], top["px"]):
             top = self.stack[-1] if self.stack else None
             if top is not None and not top.get("soft_counted"):
                 top["soft_counted"] = True; self.removed["hidden_elements"] += 1
@@ -551,9 +652,14 @@ def visible_text(markup, strip_quotes=False):
         p.feed(markup); p.close()
     except Exception:   # malformed beyond the parser: keep nothing rather than the raw markup
         return "", {"html_comments": 0, "hidden_elements": 1}
+    text = "".join(p.out)
+    if strip_quotes:   # Outlook quotes with no marker element: cut at its "From: .. Sent:" block or "On .. wrote:"
+        m = QUOTE_START.search(text) or OUTLOOK_QUOTE.search(text)
+        if m:
+            text, p.quoted = text[:m.start()], True
     if p.quoted:
         p.removed["quoted_reply"] = 1
-    return "".join(p.out), p.removed
+    return text, p.removed
 
 
 def _decode(data, charset="utf-8"):
@@ -694,7 +800,9 @@ def clean(text, removed):
     pieces = URL.split(text)
     for i, piece in enumerate(pieces):
         # In a link, hash-shaped hex (a commit id, a checksum: 32 to 64 hex digits) is not counted toward a blob.
-        is_blob = (lambda m: len(re.sub(r"[0-9a-f]{32,64}", "", m.group(0))) >= 80) if i % 2 else (lambda m: True)
+        # At most two such runs are let off, and a run of 200 or more is a blob whatever it holds.
+        is_blob = (lambda m: len(m.group(0)) >= 200 or len(re.sub(r"[0-9a-f]{32,64}", "", m.group(0), count=2)) >= 80) \
+            if i % 2 else (lambda m: True)
         hits = [m for m in BLOB.finditer(piece) if is_blob(m)]
         if hits:
             removed["encoded_blobs"] = removed.get("encoded_blobs", 0) + len(hits)
@@ -705,6 +813,7 @@ def clean(text, removed):
     return text.strip()
 
 
+OUTLOOK_QUOTE = re.compile(r"(?im)^\s*from:[^\n]{1,300}\n\s*(?:sent|date):")
 QUOTE_START = re.compile(r"(?im)^(?:on .{1,300} wrote:|-{2,} ?original message ?-{2,}|_{10,})\s*$")
 
 
@@ -739,7 +848,8 @@ def view(message):
         body = plain[0]
         if sent:
             body, quoted = _plain_without_quote(body)
-        text, r = (visible_text(body, strip_quotes=sent) if re.search(r"<!--|<[a-zA-Z][^>]*>", body) else (body, {}))
+        body = body[:MAX_MARKUP]
+        text, r = (visible_text(body, strip_quotes=sent) if re.search(r"<!--|<[a-zA-Z]", body) else (body, {}))
     else:
         text, r = "", {}
     quoted = quoted or bool(r.pop("quoted_reply", 0))
