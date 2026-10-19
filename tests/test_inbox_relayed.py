@@ -61,13 +61,15 @@ class Relayed(unittest.TestCase):
     def test_list_filters_by_title_and_by_who_added_it(self):
         self.add(question("q1", "Ask Andy: three connector decisions"), card("c1", "Write the Nango runbook"))
         self.add(question("q2", "Which logo for the deck?"), env=self.other)
-        rows = lambda *a: [p["title"] for p in json.loads(self.kt("proposals", "--json", *a).stdout)]
+        rows = lambda *a: sorted(p["title"] for p in json.loads(self.kt("proposals", "--json", *a).stdout))
         self.assertEqual(["Ask Andy: three connector decisions"], rows("-q", "ANDY"))
         self.assertEqual(["Ask Andy: three connector decisions", "Write the Nango runbook"], rows("--by", "connector-claude"))
         self.assertEqual(["Which logo for the deck?"], rows("--by", "worker@alex"))
         self.assertEqual([], rows("--by", "connector"), "the agent part matches whole, not as a prefix")
         self.assertEqual(["Write the Nango runbook"], rows("--by", "connector-claude", "-q", "nango"))
         self.assertIn("(no proposals)", self.kt("proposals", "-q", "nothing like it").stdout)
+        self.assertEqual(["Ask Andy: three connector decisions"], rows("--query=Ask"))
+        self.assertIn("(no proposals)", self.kt("proposals", "--query=--by").stdout, "a search starting with - is text")
 
     # to-dos 2 and 4: propose, the owner answers in the chat, the item closes with the answer
     def test_owner_answer_in_chat_closes_the_question_with_that_answer(self):
@@ -84,21 +86,23 @@ class Relayed(unittest.TestCase):
         self.assertEqual([], json.loads(self.kt("proposals", "--json").stdout), "no longer pending")
         res = json.loads(self.kt("proposal-result", rid, env=self.agent).stdout)
         self.assertEqual("answered", res["status"])
+        self.assertEqual({"for": "alex", "via": "Loam thread"}, res["relayed"])
         # reversible as any answer: a person reopens it, and it is pending again
         self.kt("proposal-reopen", rid)
         self.assertEqual("pending", self.item(rid)["status"])
         self.assertEqual(2, self.kt("proposal-reopen", rid, env=self.agent, ok=False).returncode)
 
-    def test_choose_answer_and_a_no_to_an_approval(self):
+    def test_choose_answer_and_approvals_stay_the_owners(self):
         ids = self.add(question("c", "Connector auth?", "ask.choose"), question("a", "Merge it?", "ask.approve"))
         self.kt("proposal-answer", ids["c"], "--choose", "o2", "--note", "said: go direct", "--via", "Claude chat", env=self.agent)
         self.assertEqual({"choice": "o2", "note": "said: go direct"}, self.item(ids["c"])["decision"]["answer"])
-        p = self.kt("proposal-answer", ids["a"], "--approve", "--via", "Claude chat", env=self.agent, ok=False)
-        self.assertEqual(2, p.returncode, "an agent never records a yes to an approval")
-        self.assertIn("never records an approval", p.stderr)
+        for answer in ("--approve", "--reject"):
+            p = self.kt("proposal-answer", ids["a"], answer, "--via", "Claude chat", env=self.agent, ok=False)
+            self.assertEqual(2, p.returncode, "an approval of exact content is answered only by the owner")
+            self.assertIn("only the owner answers it", p.stderr)
         self.assertEqual("pending", self.item(ids["a"])["status"])
-        self.kt("proposal-answer", ids["a"], "--reject", "--via", "Claude chat", env=self.agent)
-        self.assertEqual({"approved": False}, self.item(ids["a"])["decision"]["answer"])
+        self.kt("proposal-ignore", ids["a"], "--reason", "not wanted now", "--via", "Claude chat", env=self.agent)
+        self.assertEqual("ignored", self.item(ids["a"])["status"], "it can still be withdrawn")
 
     def test_withdraw_a_declined_card_with_the_reason(self):
         before = self.cards()
@@ -139,7 +143,7 @@ class Relayed(unittest.TestCase):
                          "without --via an agent still never answers")
         self.assertEqual(2, self.kt("proposal-answer", ids["q1"], "--text", "x", "--via", "chat", ok=False).returncode,
                          "a person needs no --via")
-        for via in ("two\nlines", "", "x" * 81):
+        for via in ("two\nlines", "", "x" * 81, "<b>chat</b>", "https://evil.example/x", "chat; rm", "  "):
             self.assertEqual(2, self.kt("proposal-answer", ids["q1"], "--text", "x", "--via", via, env=self.agent, ok=False).returncode)
         self.assertEqual(2, self.kt("proposal-answer", ids["c1"], "--text", "x", "--via", "chat", env=self.agent, ok=False).returncode,
                          "a card proposal is withdrawn, never answered or accepted")
@@ -151,6 +155,35 @@ class Relayed(unittest.TestCase):
         only = dict(self.agent, KEEPTRACK_PROPOSALS_ONLY="1")
         self.assertNotEqual(0, self.kt("proposal-answer", ids["q1"], "--text", "x", "--via", "chat", env=only, ok=False).returncode,
                             "automations still only write proposals")
+
+    def test_owner_must_be_a_board_member(self):
+        rid = self.add(question("q1", "Budget?"), env=dict(self.agent, BOARD_USER="jo"))["q1"]
+        p = self.kt("proposal-answer", rid, "--text", "12k", "--via", "chat", env=dict(self.agent, BOARD_USER="jo"), ok=False)
+        self.assertEqual(2, p.returncode); self.assertIn("not one", p.stderr)
+
+    def test_created_by_is_always_this_run(self):
+        ids = self.add(dict(card("c1", "A card"), createdBy="connector-claude@alex"), env=self.other)
+        self.assertEqual("worker@alex", self.item(ids["c1"])["createdBy"], "a payload cannot claim another agent's identity")
+        self.assertEqual(2, self.kt("proposal-ignore", ids["c1"], "--reason", "x", "--via", "chat", env=self.agent, ok=False).returncode)
+
+    # Review of #155: the guarantee holds without --via too.
+    def test_unattended_agent_never_accepts_or_merges_and_ignores_only_its_own(self):
+        ids = self.add(card("c1", "Another agent's card"), card("c2", "Another card"), env=self.other)
+        own = self.add(card("c3", "My own card"))["c3"]
+        before = self.cards()
+        for args in (["proposal-accept", ids["c1"]], ["proposal-accept", own], ["proposal-merge", ids["c2"], "--into", "t_first", "--fields", "title"],
+                     ["proposal-ignore", ids["c1"]], ["proposal-ignore", ids["c1"], "--reason", "dup"]):
+            p = self.kt(*args, env=self.agent, ok=False)
+            self.assertEqual(2, p.returncode, args)
+        self.assertEqual(before, self.cards())
+        self.assertEqual("pending", self.item(ids["c1"])["status"]); self.assertEqual("pending", self.item(ids["c2"])["status"])
+        self.kt("proposal-ignore", own, "--reason", "asked again", env=self.agent)   # its own: still allowed
+        attended = dict(self.agent, BOARD_ATTENDED="1")   # the person drives the session (the skills' chat flow)
+        self.kt("proposal-accept", ids["c1"], env=attended)
+        self.assertEqual("accepted", self.item(ids["c1"])["status"])
+        self.kt("proposal-ignore", ids["c2"], env=attended)
+        self.kt("proposal-reopen", ids["c2"])   # a person, no agent
+        self.kt("proposal-merge", ids["c2"], "--into", "t_first", "--fields", "title")
 
     def test_slimming_keeps_who_and_where_but_drops_the_reason(self):
         spec = importlib.util.spec_from_file_location("kt_relayed", KT); kt = importlib.util.module_from_spec(spec); spec.loader.exec_module(kt)

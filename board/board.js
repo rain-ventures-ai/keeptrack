@@ -6060,8 +6060,10 @@ if (typeof window !== 'undefined') (() => {
     return main + (a.note ? ` (${a.note})` : '');
   }
   // kit v77 (keeptrack.py proposal-answer / proposal-ignore --via): an agent recorded what its owner said in a conversation.
-  const relayedWords = d => { const r = d && d.relayed; return r && typeof r === 'object' && typeof r.for === 'string' && r.for && typeof r.via === 'string' && r.via ? ` for @${r.for}, as they said in ${r.via}` : ''; };
-  const withdrawnText = d => `Withdrawn by ${d.by || 'someone'}${relayedWords(d)} on ${whenText(d.at)}${typeof d.relayed.reason === 'string' && d.relayed.reason ? ': ' + d.relayed.reason : ''}`;
+  // Every relayed field is cut to the CLI's own limits (a hand-edited file can hold anything) and shown as text only.
+  const cut = (v, n) => { const t = String(v).replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+  const relayedWords = d => { const r = d && d.relayed; return r && typeof r === 'object' && typeof r.for === 'string' && r.for && typeof r.via === 'string' && r.via ? ` for @${cut(r.for, 39)}, as they said in ${cut(r.via, 80)}` : ''; };
+  const withdrawnText = d => `Withdrawn by ${d.by || 'someone'}${relayedWords(d)} on ${whenText(d.at)}${typeof d.relayed.reason === 'string' && d.relayed.reason ? ': ' + cut(d.relayed.reason, 300) : ''}`;
   const httpsUrl = u => typeof u === 'string' && /^https:\/\//i.test(u) ? u : '';
   function askLink(url, text) { const a = el('a', 'ask__link', text); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; }
   // The question, its options or subject, and (while pending) the answer controls.

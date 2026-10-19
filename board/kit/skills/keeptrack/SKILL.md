@@ -178,7 +178,7 @@ Run `archive` when the board file is large (the web board warns at 600 KB), or w
 ```bash
 $B proposal-add proposals.json --dry-run   # suggested changes from notes, email or a routine; never live records
 $B proposals --status pending              # what waits for a person's decision
-$B proposal-accept <id>                    # only after the user chose it; also proposal-merge / -ignore / -reopen / -undo
+$B proposal-accept <id>                    # only after the user chose it, in a session they drive (BOARD_ATTENDED=1; kit v77 refuses other agent runs); also proposal-merge / -ignore / -reopen / -undo
 $B proposal-add question.json              # ask a person: ask.choose / ask.approve / ask.question (kit v44)
 $B proposal-add question.json --recommend 2  # ask.choose: mark the option you recommend (key, number or label; kit v71)
 $B proposal-result <id>                    # the answer to your own question; "lapsed": true = unanswered too long

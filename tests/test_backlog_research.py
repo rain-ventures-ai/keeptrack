@@ -190,8 +190,12 @@ class ResearchSuggest(unittest.TestCase):
         self.assertEqual(p["kind"], "task.update"); self.assertEqual(p["change"]["client"], "Acme")
         self.assertTrue(p["change"]["project"].startswith("pr_"))
         buf = io.StringIO()
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):   # kit v77: the research agent never accepts
+            kt.cmd_proposal_accept(Args(id=p["id"], edit=None, json=False))
+        os.environ.pop("BOARD_AGENT")   # the owner accepts it
         with contextlib.redirect_stdout(buf):
             kt.cmd_proposal_accept(Args(id=p["id"], edit=None, json=False))
+        os.environ["BOARD_AGENT"] = "claude"
         data, _ = kt.load()
         card = kt.find(data, "t_second")
         self.assertEqual((card["client"], card["project"]), ("Acme", p["change"]["project"]))

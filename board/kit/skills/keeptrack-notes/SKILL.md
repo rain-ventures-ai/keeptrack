@@ -137,7 +137,8 @@ Each proposal (fictional example):
   It never re-adds it. A later meeting that repeats ignored work gets a new proposal that says it was ignored before.
 
 In a chat, show the proposals you added. If the person then says which ones to accept now, run
-`$B proposal-accept <id>` (or `proposal-merge`, `proposal-ignore`) for those only. A scheduled routine never accepts,
+`BOARD_ATTENDED=1 $B proposal-accept <id>` (or `proposal-merge`, `proposal-ignore`) for those only: from kit v77 an agent run
+that no person drives may not accept or merge, and ignores only its own proposals. A scheduled routine never accepts,
 merges or ignores proposals.
 
 ## Preview, then write

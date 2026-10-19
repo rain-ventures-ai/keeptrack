@@ -496,6 +496,8 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
         decision: { action: 'ignore', by, at, result: null, commit: null, relayed: { for: 'alex', via: 'Loam thread', reason: 'Andy owns it' } } }));
       files['proposals/r_relaywd002.json'] = text(prop('r_relaywd002', 'ask.question', 'Which day for the review?', { source: src, run: null, reason: '', createdBy: by, status: 'ignored', change: { question: 'Which day for the review?' },
         decision: { action: 'ignore', by, at, result: null, commit: null, relayed: { for: 'alex', via: 'Claude chat', reason: 'No review needed now' } } }));
+      files['proposals/r_relaylong1.json'] = text(prop('r_relaylong1', 'task.create', 'A hand-edited withdraw', { source: src, run: null, createdBy: by, status: 'ignored',
+        decision: { action: 'ignore', by, at, result: null, commit: null, relayed: { for: 'alex', via: 'chat ' + 'v'.repeat(300), reason: 'r'.repeat(900) } } }));
       const api = new Github(files), page = await openBoard(browser, api, { view: 'inbox' }); await page.waitForSelector('#board .inbox');
       await page.selectOption('[data-filter="status"]', 'answered'); await page.waitForSelector('article.prop[data-id="r_relayans01"]');
       assert.match(await propCard(page, 'r_relayans01').textContent(), /Answered by connector-claude@alex for @alex, as they said in Loam thread on .*: Keep Nango for all three/);
@@ -503,6 +505,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.match(await propCard(page, 'r_relaywd001').textContent(), /Withdrawn by connector-claude@alex for @alex, as they said in Loam thread on .*: Andy owns it/);
       assert.match(await propCard(page, 'r_relaywd002').textContent(), /Withdrawn by connector-claude@alex for @alex, as they said in Claude chat on .*: No review needed now/);
       assert.match(await propCard(page, 'r_ignored001').textContent(), /Ignored by sam/, 'an ignore with no relayed record reads as before');
+      { const t = await propCard(page, 'r_relaylong1').textContent(); assert(!t.includes('v'.repeat(80)) && !t.includes('r'.repeat(300)) && t.includes('…'), 'relayed fields are cut to the CLI limits'); }
       await clearLive(page); await propCard(page, 'r_relaywd001').locator('[data-act="reopen"]').click(); await said(page, /Reopened|pending/);
       assert.equal(api.json('proposals/r_relaywd001.json').status, 'pending', 'a withdraw is reversible the way an ignore is');
       await page.close(); }

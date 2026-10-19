@@ -7421,7 +7421,8 @@ def validate_proposal_input(raw, recipients_confirmed=False):
            "likely_duplicates": [], "decision": None, "history": [],
            # kit v71: a question's lapse clock starts when it is added; the payload cannot set it (as with createdBy below)
            "created": now() if kind in ASK_KINDS else (raw.get("created") or now()),
-           "createdBy": who_am_i() if kind in ASK_KINDS else (raw.get("createdBy") or who_am_i())}   # an answer goes back to the asker only
+           # kit v77: always this run, never the payload: createdBy decides which agent may withdraw or answer an item
+           "createdBy": who_am_i()}
     for key in ("run", "evidence", "reviewer", "decider"):
         if raw.get(key) not in (None, ""):
             out[key] = copy.deepcopy(raw[key])
@@ -7859,7 +7860,7 @@ def _edit_change(proposal, path):
 def cmd_proposal_accept(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "accepted")
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "accepted"); _agent_decides(proposal, "accept")
         change, edited = _edit_change(proposal, a.edit)
         kind = proposal["kind"]
         target = _check_proposal_base(data, proposal)
@@ -7898,7 +7899,7 @@ def _append_unique(record, field, values):
 def cmd_proposal_merge(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
-        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "merged"); check_stored_change(proposal)
+        proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "merged"); _agent_decides(proposal, "merge"); check_stored_change(proposal)
         _check_proposal_base(data, proposal)
         target = {"type": "task" if a.into.startswith(("t_", "#")) or a.into.lstrip("#").isdigit() else "person", "id": a.into, "base": {}}
         record = _target_record(data, target); before = copy.deepcopy(record)
@@ -7927,10 +7928,37 @@ def cmd_proposal_merge(a):
     mutate(fn, f"Merge proposal: {a.id}")
 
 
-RELAY_VIA_LIMIT = 80   # kit v77: where the owner said it ("Loam thread", "Claude chat"), one line
+RELAY_VIA_LIMIT = 80   # kit v77: where the owner said it ("Loam thread", "Claude chat"): a plain label
+RELAY_VIA_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:-]{0,79}")
 
 
-def _relayed(proposal, a, verb):
+def _acting_user():
+    """The person this run acts for: the board handle from the hosted backend (/v1/me), else BOARD_USER."""
+    if BACKEND == "hosted" and not FILE:
+        return default_user()
+    return os.environ.get("BOARD_USER", "").strip()
+
+
+def agent_unattended():
+    """An agent run that no person is driving (BOARD_AGENT set, BOARD_ATTENDED not): it never decides an Inbox item."""
+    return agent_run() and os.environ.get("BOARD_ATTENDED", "").strip().lower() not in ("1", "true", "yes")
+
+
+def _agent_decides(proposal, verb):
+    """kit v77: an unattended agent never accepts or merges a proposal, and ignores only one it added itself (createdBy,
+    always stamped by proposal-add). A person, or an agent in a session a person drives (BOARD_ATTENDED=1, the chat
+    flow of the keeptrack skills), decides as before."""
+    if not agent_unattended():
+        return
+    if verb in ("accept", "merge"):
+        proposal_error(f"an agent never {verb}s a Review Inbox proposal: the owner does, on the board (or in a session "
+                       "they drive, with BOARD_ATTENDED=1)")
+    if proposal.get("createdBy") != who_am_i():
+        proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy') or 'someone else'}; an agent ignores only "
+                       f"items it added itself ({who_am_i()}). The owner decides it on the board.")
+
+
+def _relayed(data, proposal, a, verb):
     """kit v77: an agent records what its owner said in a conversation (--via WHERE): only on an item this same agent
     identity added (createdBy, BOARD_AGENT@BOARD_USER), only for BOARD_USER, and never for another named decider.
     Returns {"for", "via"} for decision.relayed, or None when --via is not given. A person never needs --via."""
@@ -7940,9 +7968,17 @@ def _relayed(proposal, a, verb):
     if not agent_run():
         proposal_error("--via is for an agent recording its owner's word from a conversation; a person answers or ignores directly")
     via = _one_line(via, "--via", RELAY_VIA_LIMIT)
-    owner = os.environ.get("BOARD_USER", "").strip()
+    if not RELAY_VIA_RE.fullmatch(via):
+        proposal_error("--via is a plain label of where the owner said it: letters, digits, spaces and . _ : - only")
+    owner = _acting_user()
     if not owner:
         proposal_error("--via needs BOARD_USER: the person whose answer this is")
+    if owner.casefold() not in member_logins(data)[0]:
+        proposal_error(f"--via records an answer for a board member; @{owner} (BOARD_USER) is not one")
+    change = proposal.get("change") if isinstance(proposal.get("change"), dict) else {}
+    if verb == "answer" and ("subject" in change or "content_hash" in change):
+        proposal_error(f"{proposal['id']} asks to approve exact content: only the owner answers it, on the board. "
+                       "If they no longer want it, withdraw it with proposal-ignore --via --reason")
     if proposal.get("createdBy") != who_am_i():
         proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy') or 'someone else'}; an agent {verb}s only "
                        f"items it added itself ({who_am_i()}). The owner decides it on the board.")
@@ -7959,7 +7995,7 @@ def cmd_proposal_ignore(a):
     def fn(data):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id); _already_decided(proposal)
-        rel = _relayed(proposal, a, "withdraw")
+        rel = _relayed(data, proposal, a, "withdraw")
         if rel:   # kit v77: the agent withdraws its own item because the owner said so in a conversation
             if not a.reason:
                 proposal_error("--via needs --reason: one line saying why the owner does not want it")
@@ -7970,7 +8006,7 @@ def cmd_proposal_ignore(a):
             proposal["history"].append({"at": now(), "by": who_am_i(), "text": "ignored: " + reason})
             print(f"withdrew {proposal['id']} {_relay_words(rel)}: {reason}")
             return
-        _ask_person(proposal, "dismiss", own_ok=True)
+        _agent_decides(proposal, "ignore"); _ask_person(proposal, "dismiss", own_ok=True)
         _decide(proposal, "ignore")
         if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": "ignored: " + _one_line(a.reason, "ignore reason", 300)})
         print(f"ignored {proposal['id']}")
@@ -8070,7 +8106,7 @@ def cmd_proposal_answer(a):
         proposal = find_proposal(data, a.id); _already_decided(proposal)
         if proposal.get("kind") not in ASK_KINDS:
             proposal_error(f"{proposal['id']} is a {proposal.get('kind')} proposal: use proposal-accept, -merge or -ignore")
-        rel = _relayed(proposal, a, "answer")
+        rel = _relayed(data, proposal, a, "answer")
         if rel and a.approve:   # an approval stays a person's own press: the agent records a no, never a yes
             proposal_error("an agent never records an approval (ask.approve): the owner approves on the board. "
                            "A no said in a conversation may be recorded with --reject --via")
@@ -8106,7 +8142,7 @@ def cmd_proposal_result(a):
     d = proposal.get("decision") or {}
     out = {"id": proposal["id"], "kind": proposal.get("kind"), "status": proposal.get("status"), "decider": proposal.get("decider"),
            "answer": d.get("answer"), "answer_id": d.get("id"), "by": d.get("by"), "at": d.get("at"), "done": d.get("done"),
-           "content_hash": (proposal.get("change") or {}).get("content_hash")}
+           "content_hash": (proposal.get("change") or {}).get("content_hash"), "relayed": d.get("relayed")}
     rec = recommended_option(proposal.get("change"))
     if rec: out["recommended"] = rec.get("key")
     waited = ask_lapsed(proposal, board_today(data).isoformat(), inbox_lapse_days(data), board_timezone(data))
@@ -9939,7 +9975,7 @@ def main():
     s.add_argument("--kind", choices=sorted(PROPOSAL_KINDS)); s.add_argument("--source", choices=sorted(PROPOSAL_SOURCE_KINDS))
     s.add_argument("--lapsed", action="store_true", help="only questions unanswered for settings.inbox_lapse_days (default 14)")
     s.add_argument("--by", metavar="WHO", help="only items added by WHO: the whole createdBy (connector-claude@osouthgate) or its agent part")
-    s.add_argument("-q", metavar="TEXT", help="only items whose title (or question) holds TEXT, any case")
+    s.add_argument("-q", "--query", dest="q", metavar="TEXT", help="only items whose title (or question) holds TEXT, any case (--query=TEXT for text that starts with -)")
     s.add_argument("--run"); s.add_argument("--reviewer"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposals)
     s = sub.add_parser("proposal-show", help="show one proposal and its current target")
     s.add_argument("id"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposal_show)

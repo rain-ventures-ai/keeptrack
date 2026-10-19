@@ -32,6 +32,10 @@ An agent closes its own Review Inbox items when the owner answered or declined t
 ignored by the agent, without the "for @owner" words.
 - Run `kit-update` only. Check: `kit-check` says v77, and `python3 board/keeptrack.py proposals --by connector-claude`
   lists only the items the Claude connector added (or `(no proposals)`).
+- Behaviour change for agents: an agent run that no person drives may no longer `proposal-accept` or
+  `proposal-merge`, nor `proposal-ignore` an item it did not add. A chat where the person names the proposals to
+  accept runs those commands with `BOARD_ATTENDED=1` (the keeptrack skills say so). Scheduled routines never
+  decided proposals, so they are not affected.
 - Relay 0.9.38's connector tools `list_inbox` and `resolve_inbox_item` need this kit on the board; on an older board
   they say "board kit too old: upgrade to v77" and change nothing.
 
