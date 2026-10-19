@@ -3307,7 +3307,7 @@ def cmd_unwait(a):
         if not w:
             sys.exit(f"{t['id']} is not waiting")
         sid = session_for(a); mine = session_hash(sid)
-        agent = os.environ.get("BOARD_AGENT", "").strip()
+        agent = agent_run()   # kit v77: a hosted agent identity too, not only BOARD_AGENT
         if agent and w.get("by_session") != mine:
             sys.exit(f"refused: an agent ends only a wait it set in this session; this one was set by {clean(w.get('by') or '?', 60)}. "
                      "Comment with @the assignee and stop (--force does not change this)")
@@ -8018,6 +8018,8 @@ def cmd_proposal_ignore(a):
             return
         _agent_decides(proposal, "ignore", a); _ask_person(proposal, "dismiss", own_ok=True)
         _decide(proposal, "ignore")
+        if agent_run() and getattr(a, "attended", False):   # kit v77: the owner's word in a session they drove
+            proposal["decision"]["attended"] = True
         if a.reason: proposal["history"].append({"at": now(), "by": who_am_i(), "text": "ignored: " + _one_line(a.reason, "ignore reason", 300)})
         print(f"ignored {proposal['id']}")
     mutate(fn, f"Ignore proposal: {a.id}")
@@ -8031,6 +8033,10 @@ def cmd_proposal_reopen(a):
         if not proposal.get("change"):
             proposal_error("this decided proposal was slimmed after 30 days and no longer has change detail to reopen")
         old = proposal.get("decision") or {}
+        if agent_unattended(a) and (old.get("relayed") or old.get("attended")):
+            # kit v77: that decision records the owner's own word (--via, or an --attended ignore): only they undo it
+            proposal_error(f"{proposal['id']} was decided on the owner's word ({'relayed from a conversation' if old.get('relayed') else 'in a session they drove'}); "
+                           "only the owner reopens it, on the board (or an agent with --attended, when they say so)")
         if agent_unattended(a) and (proposal.get("createdBy") != who_am_i() or old.get("by") != who_am_i()):
             # kit v77: never reverse the owner's decision; an agent reopens only its own withdrawal of its own item
             proposal_error(f"{proposal['id']}: an agent reopens only an item it added and itself withdrew ({who_am_i()}); "

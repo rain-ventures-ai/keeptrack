@@ -34,7 +34,7 @@ ignored by the agent, without the "for @owner" words.
   lists only the items the Claude connector added (or `(no proposals)`).
 - Behaviour change for agents: an agent run (`BOARD_AGENT` set, or a hosted identity with an agent id) may no
   longer `proposal-accept`, `proposal-merge` or `proposal-undo`, nor `proposal-ignore` an item it did not add, nor
-  `proposal-reopen` anything but its own withdrawal of its own item, unless the command carries `--attended` (a person
+  `proposal-reopen` anything but its own withdrawal of its own item (never one that records the owner's word: a `--via` decision, or an ignore made with `--attended`, which is recorded as `decision.attended`), unless the command carries `--attended` (a person
   drives the session and named the item; the keeptrack skills pass it in a chat). Scheduled routines never decided
   proposals, so they are not affected.
 - `--attended` on these commands is a flag, not `BOARD_ATTENDED`: a `BOARD_ATTENDED=1` set in a shell profile or

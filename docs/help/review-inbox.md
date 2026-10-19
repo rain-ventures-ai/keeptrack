@@ -155,7 +155,7 @@ python3 board/keeptrack.py proposals --by <agent> --query=<text>       # kit v77
 A routine only adds and lists proposals. It never accepts them. From kit v77 this is enforced: an agent run
 (`BOARD_AGENT` set or a hosted agent identity) is refused for `proposal-accept`, `proposal-merge` and
 `proposal-undo`, for `proposal-ignore` on an item it did not add (`createdBy`, which `proposal-add` always stamps with
-the run), and for `proposal-reopen` of anything but its own withdrawal of its own item. In a chat where the person
+the run), and for `proposal-reopen` of anything but its own withdrawal of its own item (never one that records the owner's word: a `--via` decision, or an ignore made with `--attended`, which is recorded as `decision.attended`). In a chat where the person
 names the proposals to accept, add `--attended` to each of those commands. `--attended` is a per-command flag, never an environment variable, so an unattended routine, worker, automation or connector can never inherit it; `BOARD_ATTENDED` stays for heartbeats only and does not affect these decisions. It is still self-declared: it guards well-behaved unattended runs, not a prompt-injected agent in a chat.
 
 When the owner answered or declined, in a conversation, an item the same agent added, the agent closes it itself

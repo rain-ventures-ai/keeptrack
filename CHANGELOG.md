@@ -17,7 +17,7 @@ is never answered through `--via` (only withdrawn), and an agent never accepts a
 shows "Answered by … for @owner, as they said in …" or "Withdrawn by … : reason". A person undoes either with Reopen
 (`proposal-reopen`). Without `--via`, an agent run (`BOARD_AGENT` set, or a hosted identity with an agent id)
 can no longer accept, merge or undo any proposal, nor ignore one another agent or a person added, nor reopen anything
-but its own withdrawal of its own item, unless the command carries the new `--attended` flag (a person drives the
+but its own withdrawal of its own item (never one that records the owner's word: a `--via` decision, or an ignore made with `--attended`, which is recorded as `decision.attended`), unless the command carries the new `--attended` flag (a person drives the
 session and named the item); the keeptrack skills' chat flow ("accept the ones I name") passes it. `--attended` is a per-command flag, never an environment variable, so an unattended routine, worker, automation or connector can never inherit it; `BOARD_ATTENDED` stays for heartbeats only and does not affect these decisions. It is still self-declared: it guards well-behaved unattended runs, not a prompt-injected agent in a chat. `createdBy` is always this run (a payload value is dropped). `--via` is a plain
 label, the owner must be a board member (stored as the member's own login; the hosted handle in hosted mode), and
 `proposal-result` gives `relayed`.

@@ -104,6 +104,19 @@ class Relayed(unittest.TestCase):
         self.kt("proposal-ignore", ids["a"], "--reason", "not wanted now", "--via", "Claude chat", env=self.agent)
         self.assertEqual("ignored", self.item(ids["a"])["status"], "it can still be withdrawn")
 
+    def test_a_decision_on_the_owners_word_is_reopened_only_by_the_owner(self):
+        ids = self.add(card("c1", "Relayed withdraw"), card("c2", "Attended ignore"))
+        self.kt("proposal-ignore", ids["c1"], "--reason", "Oliver: not needed", "--via", "Loam thread", env=self.agent)
+        p = self.kt("proposal-reopen", ids["c1"], env=self.agent, ok=False)
+        self.assertEqual(2, p.returncode, "the same agent cannot undo the owner's relayed word"); self.assertIn("owner's word", p.stderr)
+        self.assertEqual("ignored", self.item(ids["c1"])["status"])
+        self.kt("proposal-ignore", ids["c2"], "--attended", env=self.agent)
+        self.assertIs(True, self.item(ids["c2"])["decision"]["attended"])
+        self.assertEqual(2, self.kt("proposal-reopen", ids["c2"], env=self.agent, ok=False).returncode)
+        self.kt("proposal-reopen", ids["c2"], "--attended", env=self.agent)   # the owner said so, in a session they drive
+        self.kt("proposal-reopen", ids["c1"])   # a person
+        self.assertEqual("pending", self.item(ids["c1"])["status"]); self.assertEqual("pending", self.item(ids["c2"])["status"])
+
     def test_withdraw_a_declined_card_with_the_reason(self):
         before = self.cards()
         rid = self.add(card("c1", "Write the Nango runbook"))["c1"]
