@@ -26,7 +26,6 @@ INVISIBLE = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f
                        "\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb"
                        "\U000e0000-\U000e007f\U000e0100-\U000e01ef]")
 BLOB = re.compile(r"[A-Za-z0-9+/=_-]{80,}")
-LONG_BLOB = re.compile(r"[A-Za-z0-9+/=_-]{200,}")
 URL = re.compile(r"(https?://[^\s<>\"']+)")
 # Base64 wrapped at 76 columns (two or more full lines in a row) and hex written in spaced or colon-separated pairs.
 WRAPPED = re.compile(r"(?m)(?:^[ \t]*[A-Za-z0-9+/=_-]{40,}[ \t]*(?:\n|\Z)){2,}")
@@ -260,8 +259,9 @@ def _at_applies(prelude):
     p = prelude.lower()
     if not p.startswith("@"):
         return True
-    if not p.startswith("@media"):
-        return p.startswith(("@supports", "@document", "@layer", "@container"))
+    if not p.startswith("@media"):   # unknown at-rules apply; only these hold no rules for elements
+        return not p.startswith(("@keyframes", "@-webkit-keyframes", "@font-face", "@page", "@counter-style",
+                                 "@property", "@font-feature-values", "@font-palette-values", "@namespace"))
     for alt in p[6:].split(","):
         alt = alt.strip()
         if alt.startswith("not ") or alt.startswith("not("):
@@ -318,10 +318,15 @@ def _selector_keys(one):
     """The keys (`.class`, `#id`, tag) an element must carry for this selector to hit it, read from its last
     compound; [] when it never applies to a reader in light mode at rest; None when it cannot be named."""
     one = one.strip().lower()
-    if not one or any(h in one for h in DARK_HOOKS):
+    if not one:
         return []
     last = re.split(r"[\s>+~]+", one)[-1]
-    if STATE.search(last):
+    if "not(" not in one and any(h in one[:len(one) - len(last)] for h in DARK_HOOKS):
+        return []   # an Outlook dark-mode hook on an ancestor: never set for a light-mode reader
+    bare = last
+    for _ in range(4):   # what sits inside :not()/:is()/:where() does not decide when the rule applies
+        bare = re.sub(r"\([^()]*\)", "", bare)
+    if STATE.search(bare):
         return []   # only on hover, focus, a pseudo-element: not the text a reader sees at rest
     keys = re.findall(r"[.#][a-z0-9_-]+", re.sub(r"\[[^\]]*\]|\([^)]*\)", "", last))
     named = True
@@ -351,6 +356,8 @@ def _style_rules(markup):
             if not applies:
                 continue
             d = _decls(body)
+            important = {k.strip().lower() for k, v in (x.split(":", 1) for x in body.split(";") if ":" in x)
+                         if re.search(r"!\s*important", v, re.I)}
             hides = _hard_hides(d)
             props = {k: v for k, v in (("color", d.get("color", "")), ("bg", _bg_of(d)),
                                        ("fs", d.get("font-size", ""))) if v}
@@ -365,8 +372,49 @@ def _style_rules(markup):
                 for k in keys:
                     if hides:
                         hard.add(k)
-                    soft.setdefault(k, {}).update(props)
+                    cur = soft.setdefault(k, {})
+                    for prop, v in props.items():
+                        # A value that makes text invisible sticks: a later rule for the same key (whose specificity
+                        # is not modelled) never makes the text visible again. An !important one beats inline style.
+                        if cur.get("sticky_" + prop):
+                            continue
+                        cur[prop] = v
+                        if _hiding_value(prop, v):
+                            cur["sticky_" + prop] = True
+                            cur["important_" + prop] = ("font-size" if prop == "fs" else "background" if prop == "bg"
+                                                        else prop) in important
     return frozenset(hard), soft
+
+
+def _hiding_value(prop, v):
+    if prop == "fs":
+        return _px(v, 16.0) < 2
+    if prop == "color":
+        rc = _rgb(v)
+        return v == "transparent" or bool(re.fullmatch(r"rgba?\([^)]*[,/]0(\.0+)?%?\)", v)) or bool(rc and min(rc) >= 0xF0)
+    return False
+
+
+SIZES = {"xx-small": 9, "x-small": 10, "small": 13, "medium": 16, "large": 18, "x-large": 24, "xx-large": 32,
+         "xxx-large": 48}
+
+
+def _px(v, parent):
+    """A font-size in px, given the parent's. inherit/unset keep the parent's; a value this cannot read counts as
+    0 (hidden), so an unreadable size never shows text a reader may not see."""
+    v = (v or "").strip()
+    if not v or v in ("inherit", "unset", "revert"):
+        return parent
+    if v == "initial":
+        return 16.0
+    if v in SIZES:
+        return float(SIZES[v])
+    if v in ("smaller", "larger"):
+        return parent / 1.2 if v == "smaller" else parent * 1.2
+    n = _num(v)
+    if not n:
+        return 0.0
+    return {"px": n[0], "": n[0], "pt": n[0] * 4 / 3, "em": n[0] * parent, "rem": n[0] * 16, "%": n[0] * parent / 100}[n[1]]
 
 
 QUOTE_KEYS = (".gmail_quote", ".gmail_quote_container", ".yahoo_quoted", "#divrplyfwdmsg", "#appendonsend",
@@ -382,12 +430,6 @@ class _Visible(html.parser.HTMLParser):
         self.hard, self.soft = rules
         self.strip_quotes, self.quoted = strip_quotes, False
 
-    def _inherited(self, key):
-        for e in reversed(self.stack):
-            if e[key]:
-                return e[key]
-        return ""
-
     def handle_starttag(self, tag, attrs):
         if tag in BLOCK:
             self.out.append("\n")
@@ -396,24 +438,40 @@ class _Visible(html.parser.HTMLParser):
         a = {k.lower(): (v or "") for k, v in attrs}
         ident = a.get("id", "").strip().lower()
         keys = [tag] + (["#" + ident] if ident else []) + ["." + c.lower() for c in a.get("class", "").split()]
-        props = {}
+        props, locked = {}, set()
         for k in keys:   # style-block rules first, then the element's own attributes and inline style
-            props.update(self.soft.get(k, {}))
+            rule = self.soft.get(k, {})
+            for prop in ("color", "bg", "fs"):
+                if prop in rule and prop not in locked:
+                    props[prop] = rule[prop]
+                    if rule.get("important_" + prop):
+                        locked.add(prop)   # an !important hiding value beats the element's own style
         inline = _style(attrs)
+        own = {}
         if tag == "font" and a.get("color"):
-            props["color"] = a["color"].lower()
+            own["color"] = a["color"].lower()
         if a.get("bgcolor"):
-            props["bg"] = a["bgcolor"].lower()
-        props.update({k: v for k, v in (("color", inline.get("color", "")), ("bg", _bg_of(inline)),
-                                        ("fs", inline.get("font-size", ""))) if v})
+            own["bg"] = a["bgcolor"].lower()
+        own.update({k: v for k, v in (("color", inline.get("color", "")), ("bg", _bg_of(inline)),
+                                      ("fs", inline.get("font-size", ""))) if v})
+        for prop, v in own.items():
+            if prop not in locked:
+                props[prop] = v
+        parent = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0}
+        color = props.get("color", "")
+        color = parent["color"] if color in ("", "inherit", "currentcolor", "unset", "revert") else \
+            ("" if color == "initial" else color)
+        bg = props.get("bg", "")
+        bg = parent["bg"] if bg in ("", "inherit") else bg
+        px = _px(props.get("fs", ""), parent["px"])
         quote = self.strip_quotes and any(k in QUOTE_KEYS for k in keys)
         self.quoted = self.quoted or quote
         hard = tag in SKIP_TAGS or "hidden" in a or a.get("aria-hidden", "").lower() == "true" or \
             any(k in self.hard for k in keys) or _hard_hides(inline) or quote
         if hard and not quote and tag not in SKIP_TAGS and not any(e["hard"] for e in self.stack):
             self.removed["hidden_elements"] += 1
-        self.stack.append({"tag": tag, "hard": hard, "color": props.get("color", ""), "bg": props.get("bg", ""),
-                           "fs": props.get("fs", ""), "counted": tag not in SKIP_TAGS or tag in CODE_TAGS})
+        self.stack.append({"tag": tag, "hard": hard, "color": color, "bg": bg, "px": px,
+                           "counted": tag not in SKIP_TAGS or tag in CODE_TAGS})
 
     def handle_endtag(self, tag):
         # Close the nearest open tag of this name (mail HTML is sloppy), but never across a table cell, row or table:
@@ -438,7 +496,8 @@ class _Visible(html.parser.HTMLParser):
                             e["counted"] = True; self.removed["hidden_elements"] += 1
                         break
             return
-        if data.strip() and _invisible(self._inherited("color"), self._inherited("bg"), self._inherited("fs")):
+        top = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0}
+        if data.strip() and _invisible(top["color"], top["bg"], f"{top['px']}px"):
             top = self.stack[-1] if self.stack else None
             if top is not None and not top.get("soft_counted"):
                 top["soft_counted"] = True; self.removed["hidden_elements"] += 1
@@ -634,11 +693,12 @@ def clean(text, removed):
     # A link's path (a commit hash, a tracking id) is not a blob; a run inside a URL is cut only when very long.
     pieces = URL.split(text)
     for i, piece in enumerate(pieces):
-        rx = LONG_BLOB if i % 2 else BLOB
-        hits = rx.findall(piece)
+        # In a link, hash-shaped hex (a commit id, a checksum: 32 to 64 hex digits) is not counted toward a blob.
+        is_blob = (lambda m: len(re.sub(r"[0-9a-f]{32,64}", "", m.group(0))) >= 80) if i % 2 else (lambda m: True)
+        hits = [m for m in BLOB.finditer(piece) if is_blob(m)]
         if hits:
             removed["encoded_blobs"] = removed.get("encoded_blobs", 0) + len(hits)
-            pieces[i] = rx.sub("[encoded text removed]", piece)
+            pieces[i] = BLOB.sub(lambda m: "[encoded text removed]" if is_blob(m) else m.group(0), piece)
     text = "".join(pieces)
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
     text = re.sub(r"\n\s*\n+", "\n\n", text)

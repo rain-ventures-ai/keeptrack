@@ -314,6 +314,23 @@ class HiddenInstructions(unittest.TestCase):
         v = sv.view(msg(plain="See " + link))
         self.assertIn(link, v["text"]); self.assertEqual(v["removed"]["encoded_blobs"], 0)
 
+    def test_cascade_tricks_found_by_review(self):
+        self.seen(f'<div style="font-size:1px"><span style="font-size:inherit">{ORDER}</span></div>')
+        self.seen(f'<div style="font-size:1px"><span style="font-size:100%">{ORDER}</span></div>')
+        self.seen(f'<div style="font-size:2px"><span style="font-size:0.5em">{ORDER}</span></div>')
+        self.seen(f'<div style="color:#fff"><span style="color:currentColor">{ORDER}</span></div>')
+        self.seen(f'<p style="font-size:calc(0px + 0px)">{ORDER}</p>')
+        self.seen(f'<style>.x:not(:hover){{display:none}}</style><p class="x">{ORDER}</p>')
+        self.seen(f'<style>[data-ogsc] .x, .x:is(p){{display:none}}</style><p class="x">{ORDER}</p>')
+        self.seen(f'<style>.x{{font-size:0}} .x{{font-size:14px}}</style><p class="x">{ORDER}</p>')
+        self.seen(f'<style>.x{{color:#fff !important}}</style><p class="x" style="color:#333">{ORDER}</p>')
+        self.seen(f'<style>@unknown-rule x {{ .x{{display:none}} }}</style><p class="x">{ORDER}</p>')
+        payload = base64.b64encode(ORDER.encode() * 2).decode()
+        v = sv.view(msg(plain="See https://example.com/r/" + payload))
+        self.assertNotIn(payload, v["text"])
+        v = sv.view(msg(html='<style>.btn{color:#fff}</style><p class="btn" style="color:#333">Read more</p>'))
+        self.assertIn("Read more", v["text"], "inline colour still wins over a plain class rule")
+
 
 if __name__ == "__main__":
     unittest.main()
