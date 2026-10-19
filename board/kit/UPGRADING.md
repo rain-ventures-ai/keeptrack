@@ -25,6 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v75 (schema 4)
+email-to-tasks reads only a cleaned view of each message (pack 1.4.0): hidden instructions in mail (HTML comments,
+invisible text, encoded blobs, zero-width characters) no longer reach the AI, payment or access changes become a
+"possible fraud" contact note instead of a task, and proposals say when hidden content was removed or Gmail's sender
+check failed. See [AUTOMATIONS.md](AUTOMATIONS.md), "Included packs". No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v75, and `automation validate board/automations/email-to-tasks` says
+  valid.
+- The email-to-tasks pack files changed, so its digest changed. If you installed it: reinstall and set it up again as
+  in v73, and update its entry in `relay/registry/automations.yaml` to the new digest
+  (`python3 board/keeptrack.py automation show email-to-tasks`). The other packs are unchanged.
+
 ### v74 (schema 4)
 The Automations page gets one cloud runner panel and an on/off switch per automation; a row opens its details in a
 drawer. The switch commits the person's install register (`automation/routines/auto-<slug>-<login>.json`) with the

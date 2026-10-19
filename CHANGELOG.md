@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v75: email-to-tasks reads only what a person would see (card #182; pack 1.4.0). Phishing mail now hides
+instructions for the AI that reads it: HTML comments, CSS-invisible text, encoded blobs, zero-width and Unicode tag
+characters. `resolve.py --save` now keeps each message's headers only (`<id>.json`, no body) and writes a cleaned view
+(`<id>.txt`, from the new `safe_view.py`): text/plain first, else the HTML with comments, scripts and hidden elements
+(display:none, visibility:hidden, zero size or opacity, hidden attributes, text the colour of its background) removed,
+invisible characters and long encoded runs dropped, capped at 8000 characters. It counts what it removed and shows
+Gmail's SPF, DKIM and DMARC results. The skill reads mail only from that view; mail never sets its own urgency or
+legitimacy; a request to change payment or access details becomes contact history with a fixed "possible fraud:
+verify by phone" line, never a task; hidden content and failed sender checks are named in the proposal. New tests
+for each hiding method and two behaviour evals (a hidden payment lure, a failed sender check); all 8 email evals pass
+3/3.
+
 Board page and AUTOMATIONS.md (no version change): the automation switch keeps its own 44x26 size on phones (dialog and header buttons get a
 44px minimum height), with a grey off track and a white knob; the details drawer drops the "Not installed" / "On" pill
 when it shows a switch, as the rows do. The cloud runner is described as any scheduled agent (a Claude routine, a

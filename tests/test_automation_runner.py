@@ -647,12 +647,14 @@ class Runner(unittest.TestCase):
 class Docs(unittest.TestCase):
     def read(self, rel): return (KIT / rel).read_text(encoding='utf-8')
 
-    def test_kit_is_v74_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(kt.KIT_VERSION, 74)
-        self.assertEqual(json.loads(self.read('manifest.json'))['version'], 74)
+    def test_kit_is_v75_with_upgrade_notes_and_changelog(self):
+        self.assertEqual(kt.KIT_VERSION, 75)
+        self.assertEqual(json.loads(self.read('manifest.json'))['version'], 75)
+        v75 = self.read('UPGRADING.md').split('### v75 (schema 4)', 1)[1].split('### v74', 1)[0]
+        for words in ('kit-update', 'email-to-tasks', 'relay/registry/automations.yaml', 'digest'): self.assertIn(words, v75)
+        self.assertIn('Kit v75', (KIT.parents[1] / 'CHANGELOG.md').read_text(encoding='utf-8'))
         v74 = self.read('UPGRADING.md').split('### v74 (schema 4)', 1)[1].split('### v73', 1)[0]
         for words in ('kit-update', 'automation/runner.json', 'relay/registry/automations.yaml', '0.9.35'): self.assertIn(words, v74)
-        self.assertIn('Kit v74', (KIT.parents[1] / 'CHANGELOG.md').read_text(encoding='utf-8'))
         guide = self.read('AUTOMATIONS.md')
         for words in ('awaiting_approval', 'the allowlist approves it', 'relay/registry/automations.yaml'): self.assertIn(words, guide)
         v73 = self.read('UPGRADING.md').split('### v73 (schema 4)', 1)[1].split('### v72', 1)[0]
