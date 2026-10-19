@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 74  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 75  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -7068,6 +7068,23 @@ ADDITIVE_FIELDS = {"comments", "todos", "links"}
 # Text that can carry what an email said. Without --recipients-confirmed an email proposal holds none of it.
 EMAIL_TEXT_FIELDS = {"title", "details", "notes", "next", "text", "comments", "todos", "links", "contacts", "value", "source"}
 EMAIL_METADATA_TITLE = re.compile(r"Email (?:from|to|with) [^\n]{1,80}")
+# Fixed safety sentences an email automation may add even to a metadata-only (unconfirmed) proposal: they carry no
+# text from the mail, and a warning must reach the owner even when the mail did not reach every board reader.
+EMAIL_SAFETY_REASONS = ("Hidden content was removed from this email.", "Gmail's sender check failed for this email.",
+                        "Gmail could not verify the sender of this email.")
+EMAIL_FRAUD_TEXT = ("Email asks to change payment or access details. Possible fraud: verify by phone on a number you "
+                    "already have, never one from this email.")
+
+
+def _email_safety_reason(reason):
+    """True when an unconfirmed email proposal's reason is only fixed safety sentences, each at most once."""
+    rest, seen = (reason or "").strip(), set()
+    while rest:
+        hit = next((x for x in EMAIL_SAFETY_REASONS if rest.startswith(x) and x not in seen), None)
+        if hit is None:
+            return False
+        seen.add(hit); rest = rest[len(hit):].lstrip()
+    return True
 
 
 def check_change_values(kind, change):
@@ -7123,10 +7140,14 @@ def check_email_privacy(proposal, confirmed):
         proposal_error("an email proposal other than contact.touch needs --recipients-confirmed (every intended board reader received that message)")
     if not EMAIL_METADATA_TITLE.fullmatch(proposal.get("title", "")):
         proposal_error("without --recipients-confirmed an email proposal title must be metadata only, e.g. 'Email from Casey Example, 9 Oct'")
-    if (proposal.get("source") or {}).get("title", "").strip() or (proposal.get("reason") or "").strip() or (proposal.get("evidence") or "").strip():
-        proposal_error("email reason/evidence/subject requires --recipients-confirmed; without it these fields must be empty")
+    if (proposal.get("source") or {}).get("title", "").strip() or (proposal.get("evidence") or "").strip() \
+            or not _email_safety_reason(proposal.get("reason")):
+        proposal_error("email reason/evidence/subject requires --recipients-confirmed; without it these fields must be empty "
+                       "(a reason may hold only the fixed safety sentences: " + " / ".join(EMAIL_SAFETY_REASONS) + ")")
     for key in EMAIL_TEXT_FIELDS:
         value = (proposal.get("change") or {}).get(key)
+        if key == "text" and value == EMAIL_FRAUD_TEXT:
+            continue   # the fixed fraud warning, no mail text
         if key != "title" and value not in (None, "", []):
             proposal_error(f"email change.{key} requires --recipients-confirmed; store metadata only without it")
 

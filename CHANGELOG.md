@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v75: email-to-tasks reads only what a person would see (card #182; pack 1.4.0). Phishing mail now hides
+instructions for the AI that reads it: HTML comments, CSS-invisible text, encoded blobs, zero-width and Unicode tag
+characters. `resolve.py --save` now keeps each message's headers only (`<id>.json`, no body) and writes a cleaned view
+(`<id>.txt`, from the new `safe_view.py`): the HTML part first (what people see; a plain part behind it can hide
+text), with comments, scripts and hidden elements (display:none, visibility:hidden, zero size or opacity, off-screen,
+clipped, tiny or near-invisible text, hidden attributes, classes a style block hides) removed, invisible characters
+(zero-width, bidi, variation selectors, blank fillers, Unicode tags) and encoded runs (long, line-wrapped base64,
+hex) dropped, capped at 8000 characters; attachments and forwarded messages are never read, and crafted markup
+cannot make it run long. It counts what it removed and shows Gmail's own SPF, DKIM and DMARC results (the topmost
+header only; a sender can add its own). The sender's headers sit inside the untrusted fence with the text. The skill reads mail only from that view; mail never sets its own urgency or
+legitimacy; a request to change payment or access details becomes contact history with a fixed "possible fraud:
+verify by phone" line, never a task; a task needs `dmarc=pass`; hidden content and failed or missing sender checks are named in the proposal with fixed
+sentences, which the board now accepts on metadata-only (unconfirmed) proposals too. New tests for each hiding method
+and four behaviour evals (a hidden payment lure, a failed and an unverified sender check, the warnings on a
+two-member board).
+
 Board page and AUTOMATIONS.md (no version change): the automation switch keeps its own 44x26 size on phones (dialog and header buttons get a
 44px minimum height), with a grey off track and a white knob; the details drawer drops the "Not installed" / "On" pill
 when it shows a switch, as the rows do. The cloud runner is described as any scheduled agent (a Claude routine, a
