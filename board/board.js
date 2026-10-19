@@ -129,8 +129,9 @@ if (typeof window !== 'undefined') (() => {
   if (window.kbMarkup !== KB_MARKUP) { kbStalePage(); return; }   // nothing below runs against markup it was not written for
   // A demo page (?demo=...) gets its own empty settings in memory: it never reads or changes this browser's boards,
   // tokens or routines. Only the look (theme, style) is shared.
-  const HOSTED = new URLSearchParams(location.search).get('backend') === 'hosted';
+  const HOSTED = document.documentElement.dataset.hosted === 'true' || new URLSearchParams(location.search).get('backend') === 'hosted';
   let hostedStorage = null, hostedIdentity = null, hostedPolling = null;
+  const hostedHistoryPending = new WeakMap(), hostedHistoryErrors = new WeakMap();
   const SANDBOX = HOSTED || new URLSearchParams(location.search).has('demo'), SHARED = /^kb_(theme|style|custom)$/, MEM = new Map();
   const LS = SANDBOX ? {
     get(k, d = '') { if (SHARED.test(k)) { try { return localStorage.getItem(k) ?? d; } catch { return d; } } return MEM.has(k) ? MEM.get(k) : d; },
@@ -1729,8 +1730,18 @@ if (typeof window !== 'undefined') (() => {
     const line = el('span', 'mnwho'), tm = el('time', null, ago2(x.at)); tm.title = x.at;
     line.append(avatar(String(x.by || '?').replace(/@.*/, '')), el('b', null, x.by || '?'), tm); return [line, el('span', 'mnbody', snippet(text, 240))];
   }
-  function openNewForYou() {
+  async function openNewForYou() {
     if (newsSheet) newsSheet.close();
+    if (HOSTED && hostedHistoryPaths().length) {
+      const body = el('p', 'hint', 'Loading history and comments…');
+      const loading = ui.sheet({ title: 'New for you', body, removeOnClose: true });
+      newsSheet = loading; loading.open();
+      const ok = await hostedDemandHistory(hostedHistoryPaths());
+      if (newsSheet !== loading || !loading.el.open) return;
+      if (ok) { loading.close(); newsSheet = null; openNewForYou(); }
+      else body.textContent = 'Could not load history and comments. Reopen to retry.';
+      return;
+    }
     const rows = newsData(), body = el('div', 'newsbody');
     if (!cfg().me) body.append(ui.empty({ text: 'Set your GitHub username in Settings to see what is new for you.', icon: 'bell' }));
     else if (!rows.length) body.append(ui.empty({ text: 'Nothing new for you. Changes by you and your own agents do not count.', icon: 'bell' }));
@@ -2208,6 +2219,7 @@ if (typeof window !== 'undefined') (() => {
   function syncHistBtn() { const b = $('cmHistBtn'); if (!b) return; const on = cmHist(); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.title = on ? 'Hide the history entries between the comments' : 'Show the card history between the comments'; b.classList.toggle('on', on); }
   function renderComments() {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
+    if (HOSTED && hostedHistoryLoading($('cmStream'), [`cards/${t.id}.json`])) { cmSig = ''; $('cmCount').textContent = ''; return; }
     const hist = cmHist() ? (t.history || []) : [], hl = hist[hist.length - 1];
     const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : ''); if (sig === cmSig) return; cmSig = sig;
     $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
@@ -2757,6 +2769,7 @@ if (typeof window !== 'undefined') (() => {
   const cardSub = t => [colName(t.column), t.client, t.assignees.map(a => '@' + a).join(' ')].filter(Boolean).join(' · ');
 
   function renderActivity() {
+    if (HOSTED && hostedHistoryLoading($('board'), hostedHistoryPaths())) return;
     const board = $('board'), wrap = el('div', 'act'), bar = el('div', 'calbar actbar');
     const seg = ui.tabs({ items: [['today', 'Today'], ['yday', 'Yesterday'], ['7d', '7 days'], ['day', 'Pick a day']].map(([value, label]) => ({ value, label })), value: actRange, label: 'Range',
       onChange: v => { actRange = v; LS.set('kb_act_range', v); actRefocus = true; render(); } });
@@ -2816,6 +2829,7 @@ if (typeof window !== 'undefined') (() => {
   const MENTIONS_MAX = 200;
   const snippet = (text, n) => { const x = String(text || '').replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1).trimEnd() + '…' : x; };
   function renderMentions() {
+    if (HOSTED && hostedHistoryLoading($('board'), hostedHistoryPaths())) return;
     const board = $('board'), wrap = el('div', 'act mentions'), rows = mentionData(), fresh = rows.filter(r => r.fresh).length;
     const bar = el('div', 'calbar actbar'); bar.append(el('span', 'spacer'), ui.button({ label: 'Copy as Markdown', icon: 'clipboard-copy', variant: 'primary', size: 'sm', onClick: copyMarkdown }));
     wrap.append(bar);
@@ -3802,7 +3816,7 @@ if (typeof window !== 'undefined') (() => {
       const filtersChanged = oldFilters.toString() !== newFilters.toString();
       const hadSnapshot = u.searchParams.get('filters') === '1';
       const clean = new URL(location.pathname, location.href);
-      ['repo', 'branch', 'path', 'demo', 'card'].forEach(k => { if (u.searchParams.has(k)) clean.searchParams.set(k, u.searchParams.get(k)); });
+      ['repo', 'branch', 'path', 'demo', 'card', ...(HOSTED ? ['backend', 'api', 'board', 'auth'] : [])].forEach(k => { if (u.searchParams.has(k)) clean.searchParams.set(k, u.searchParams.get(k)); });
       q.forEach((v, k) => clean.searchParams.append(k, v)); clean.hash = u.hash;
       if (clean.href !== u.href) history[changed && filtersChanged && hadSnapshot ? 'pushState' : 'replaceState'](history.state, '', clean);
     } catch {}
@@ -3901,6 +3915,7 @@ if (typeof window !== 'undefined') (() => {
   let backdropClicks = 0;
   function openCard(id, focus) {
     backdropClicks = 0;
+    if (HOSTED) { const file = hostedStorage?.files.get(`cards/${id}.json`); if (file) hostedHistoryErrors.delete(file); }
     const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; cmSeenFor = null; todoSig = ''; editingDesc = false; activeDraft = { title: false, details: false };
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
@@ -7697,6 +7712,14 @@ if (typeof window !== 'undefined') (() => {
   }
   async function runSearch() {
     const q = $('qQ').value.trim(), withArch = $('qArch').checked, res = $('qRes'); let info = '';
+    if (HOSTED) {
+      const paths = hostedHistoryPaths();
+      if (paths.length) {
+        $('qInfo').textContent = 'Loading comments…';
+        if (!(await hostedDemandHistory(paths))) { $('qInfo').textContent = 'Could not load comments. Reopen search to retry.'; return; }
+        if (!$('dlgSearch').open) return;
+      }
+    }
     if (withArch && !archived && archYears().length) { $('qInfo').textContent = 'Loading the archive…'; try { await loadArchived(); } catch (e) { info = 'Could not load the archive: ' + (e.message || e); } }
     let MS; try { MS = await loadMs(); } catch (e) { $('qInfo').textContent = e.message; return; }
     const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'num', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, ...MS_MATCH } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
@@ -7810,6 +7833,47 @@ if (typeof window !== 'undefined') (() => {
     a.addEventListener('click', e => { e.preventDefault(); settingsTab(name); }); sec.append(a);
   });
   // Hosted state is memory-only and belongs to this API, verified user and board.
+  function hostedHistoryPaths() {
+    return [...(hostedStorage?.files || [])].filter(([, f]) => f.omitted?.length).map(([path]) => path);
+  }
+  async function hostedDemandHistory(paths) {
+    const adapter = hostedStorage, captured = paths.map(path => [path, adapter.files.get(path)]).filter(([, f]) => f?.omitted?.length);
+    try {
+      await adapter.hydrate(paths);
+      if (busy && saving) await saving;
+      if (adapter !== hostedStorage || busy) return false;
+      for (const [path, file] of captured) {
+        const coll = path.startsWith('cards/') ? 'tasks' : 'contacts';
+        const item = state[coll].find(x => x.id === file.body.id), full = adapter.files.get(path);
+        if (item && full?.rev === file.rev) for (const key of file.omitted) if (key in full.body) item[key] = clone(full.body[key]);
+      }
+      msIndex = null; return true;
+    } catch (e) {
+      for (const [, file] of captured) hostedHistoryErrors.set(file, e);
+      if ([401, 403, 404].includes(e.status)) hostedFailure(e);
+      return false;
+    }
+  }
+  function hostedHistoryLoading(box, paths) {
+    const missing = paths.filter(path => hostedStorage?.files.get(path)?.omitted?.length);
+    if (!missing.length) return false;
+    box.textContent = '';
+    const failed = missing.some(path => hostedHistoryErrors.has(hostedStorage.files.get(path)));
+    const message = el('p', 'hint', failed ? 'Could not load history and comments.' : 'Loading history and comments…');
+    message.setAttribute('role', 'status'); box.append(message);
+    if (failed) {
+      box.append(roKeep(ui.button({ label: 'Retry', variant: 'ghost', size: 'sm', onClick: () => {
+        missing.forEach(path => hostedHistoryErrors.delete(hostedStorage.files.get(path))); render();
+      } })));
+    } else if (!missing.some(path => hostedHistoryPending.has(hostedStorage.files.get(path)))) {
+      const captured = missing.map(path => hostedStorage.files.get(path));
+      const pending = hostedDemandHistory(missing).then(() => {
+        captured.forEach(file => hostedHistoryPending.delete(file)); if (!busy) render();
+      });
+      captured.forEach(file => hostedHistoryPending.set(file, pending));
+    }
+    return true;
+  }
   function hostedModel() {
     const raw = hostedStorage.model(), claims = new Map(hostedStorage.claims.filter(c => c.live).map(c => [c.card_id, c]));
     for (const t of raw.tasks) {
@@ -7824,10 +7888,7 @@ if (typeof window !== 'undefined') (() => {
     const gen = ++loadGen;
     try {
       if (hostedPolling) await hostedPolling;
-      for (let i = 0; i < 3; i++) {
-        try { await hostedStorage.snapshot(); await hostedStorage.hydrate(); break; }
-        catch (e) { if (e.status !== 412 || i === 2) throw e; }
-      }
+      await hostedStorage.snapshot();
       if (gen !== loadGen || busy) return false;
       state = hostedModel(); lastSyncOk = true; fromSnap = false; ro = hostedStorage.identity.boards.find(b => b.id === hostedStorage.board)?.role === 'viewer' ? 'hosted' : '';
       applyRo(); render(); setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); if (location.hash) applyRoute(); return true;
@@ -7851,9 +7912,11 @@ if (typeof window !== 'undefined') (() => {
     box.append(title, el('p', null, 'Local phase 0. Reloading this page signs you out.'));
     const q = new URLSearchParams(location.search), fields = {};
     const field = (id, label, value, type = 'text') => { const lab = el('label', null, label), input = el('input'); input.id = id; input.type = type; input.value = value; input.required = true; input.autocomplete = 'off'; lab.htmlFor = id; box.append(lab, input); fields[id] = input; };
-    field('hostedApi', 'Board API URL', q.get('api') || 'http://localhost:3000');
+    field('hostedApi', 'Board API URL', window.KeeptrackHosted.pageAPI || q.get('api') || 'http://localhost:3000');
+    fields.hostedApi.readOnly = !!window.KeeptrackHosted.pageAPI;
     field('hostedBoard', 'Board ID', q.get('board') || '');
-    field('hostedAuth', 'Local Supabase URL', q.get('auth') || 'http://localhost:54321');
+    field('hostedAuth', 'Supabase URL (page or API origin)', q.get('auth') || fields.hostedApi.value);
+    box.append(el('p', 'hint', 'Sign-in needs /auth/v1/token on this page or the configured API origin. Use a proxy if Supabase runs on another origin.'));
     field('hostedKey', 'Local Supabase publishable key', '');
     field('hostedEmail', 'Email', '', 'email'); field('hostedPassword', 'Password', '', 'password');
     fields.hostedPassword.autocomplete = 'new-password';
@@ -7881,7 +7944,9 @@ if (typeof window !== 'undefined') (() => {
     for (const [coll, prefix] of [['tasks', 'cards'], ['contacts', 'people'], ['projects', 'projects']]) {
       const old = new Map(previous[coll].map(x => [x.id, x]));
       for (const item of next[coll] || []) {
-        const before = old.get(item.id), path = `${prefix}/${item.id}.json`, entry = hostedStorage.files.get(path);
+        const before = old.get(item.id), path = `${prefix}/${item.id}.json`;
+        if (before && !sameJson(before, item)) await hostedStorage.hydrate([path]);
+        const entry = hostedStorage.files.get(path);
         if (!before) {
           const body = Object.fromEntries(Object.entries(item).filter(([k]) => !ignored.has(k)));
           if (coll === 'tasks') { body.column = 'backlog'; ops.push({ kind: 'create-card', card: body }); }
@@ -7926,20 +7991,42 @@ if (typeof window !== 'undefined') (() => {
     try {
       if (commands.length) await hostedStorage.command(commands[0], crypto.randomUUID());
       else if (ops.length) await hostedStorage.commit(ops, crypto.randomUUID());
-      await hostedStorage.snapshot(); await hostedStorage.hydrate(); state = hostedModel(); return 'ok';
+      await hostedStorage.snapshot(); state = hostedModel(); return 'ok';
     } catch (e) { if (e.status === 412) return 'conflict'; throw e; }
   }
   async function hostedMutate(fn, message, targetIds, baseState, options = {}) {
     if (!hostedStorage?.signedIn || ro) { roToast(); return false; }
     if (busy) return false;
     if (options.extra) { toast('capability_unavailable: Review Inbox decisions are phase 1b', true); return false; }
-    busy = true; loadGen++; savingStatus(); const before = clone(state); let base = baseState || before, mine = clone(before);
+    busy = true; loadGen++; savingStatus(); const before = clone(state), capturedFiles = new Map(hostedStorage.files); let base = clone(baseState || before), mine = clone(before);
     try {
       if (hostedPolling) await hostedPolling;
       if (backPending) await backPending;
       fn(mine);
+      const touched = [];
+      const omitted = [];
+      for (const [coll, prefix] of [['tasks', 'cards'], ['contacts', 'people'], ['projects', 'projects']]) {
+        for (const item of before[coll]) {
+          if (!(targetIds || []).includes(item.id) && sameJson(item, mine[coll].find(x => x.id === item.id))) continue;
+          const path = `${prefix}/${item.id}.json`, entry = capturedFiles.get(path);
+          touched.push(path);
+          if (!entry?.omitted?.length) continue;
+          omitted.push({ coll, item, path, entry });
+        }
+      }
+      await hostedStorage.hydrate(touched, capturedFiles);
+      for (const { coll, item, path, entry } of omitted) {
+        const full = hostedStorage.files.get(path).body;
+        for (const key of entry.omitted) {
+          const b = base[coll].find(x => x.id === item.id);
+          if (b && sameJson(b[key], item[key])) b[key] = clone(full[key]);
+          item[key] = clone(full[key]);
+        }
+      }
+      // Re-evaluate with the captured full fields (e.g. appending comments or merging cards).
+      mine = clone(before); fn(mine);
       for (let i = 0; i < 4; i++) {
-        await hostedStorage.snapshot(); await hostedStorage.hydrate(); const pre = hostedModel();
+        await hostedStorage.snapshot(); await hostedStorage.hydrate(touched); const pre = hostedModel();
         if (options.recheck) { base = pre; mine = clone(pre); fn(mine); }
         const mg = merge3(base, mine, pre); let latest = clone(mg.merged);
         if (deletedUnderMe(base, pre, targetIds || []).length) throw new Error('That card was deleted; reload before editing');
@@ -7958,7 +8045,8 @@ if (typeof window !== 'undefined') (() => {
   async function hostedArchive(entity, year, restoring = false) {
     try {
       await hostedStorage.snapshot();
-      const prefix = entity.num ? 'cards' : 'people', file = await hostedStorage.read(`${prefix}/${entity.id}.json`);
+      const prefix = entity.num ? 'cards' : 'people', path = `${prefix}/${entity.id}.json`;
+      const file = await hostedStorage.read(path, hostedStorage.files.get(path)?.rev);
       let envelope = null;
       try { envelope = await hostedStorage.read(`archive/${year}.json`); } catch (e) { if (e.status !== 404) throw e; }
       await hostedStorage.command({ kind: restoring ? 'unarchive' : 'archive', entity_id: entity.id, baseRev: file.rev,
@@ -7978,7 +8066,7 @@ if (typeof window !== 'undefined') (() => {
       polling = true;
       const gen = loadGen;
       hostedPolling = (async () => {
-        try { if (await hostedStorage.poll()) { await hostedStorage.hydrate(); if (!busy && !saving && gen === loadGen) { state = hostedModel(); render(); } } }
+        try { if (await hostedStorage.poll()) { if (!busy && !saving && gen === loadGen) { state = hostedModel(); render(); } } }
         catch (e) { hostedFailure(e); } finally { polling = false; }
       })();
       await hostedPolling; hostedPolling = null;
