@@ -398,6 +398,14 @@ class HiddenInstructions(unittest.TestCase):
         m = msg(plain="x"); m["payload"]["headers"].append({"name": "List-Unsubscribe", "value": "<mailto:u@example.com>"})
         self.assertTrue(sv.view(m)["bulk"]); self.assertFalse(sv.view(msg(plain="x"))["bulk"])
 
+    def test_last_auto_review(self):
+        self.seen(f'<div style="display:none \\21 important">{ORDER}</div>')
+        self.seen(f'<div style="background:var(--x, #000);color:#fff">{ORDER}</div>')
+        self.seen(f'<div style="background:rgba(0,0,0,0.1);color:#fff">{ORDER}</div>')
+        self.seen(f'<style>.f{{opacity:0.2}} .f{{opacity:1}}</style><div class="f"><div class="f">{ORDER}</div></div>')
+        with self.assertRaises(sv.TooComplex):
+            sv.view(msg(html=f'<style>[data-x]{{opacity:0.01}}</style><p data-x>{ORDER}</p>'))
+
 
 if __name__ == "__main__":
     unittest.main()

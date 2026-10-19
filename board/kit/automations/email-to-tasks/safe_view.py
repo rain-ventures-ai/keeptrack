@@ -104,11 +104,11 @@ def _decls(text):
         if ":" not in d:
             continue
         k, v = d.split(":", 1)
-        important = bool(re.search(r"!\s*important\s*$", v, re.I))
-        v = re.sub(r"!\s*important\s*$", "", v, flags=re.I)
         k, v = _unescape_css(k).strip().lower(), _unescape_css(v).strip().lower()
-        if len(v) > 1000:
-            return {"display": "none"}
+        important = bool(re.search(r"!\s*important\s*$", v))
+        v = re.sub(r"!\s*important\s*$", "", v)
+        if len(v) > 1000 or "!" in v:
+            return {"display": "none"}   # a value a browser may read differently: hide more
         if k in imp and not important:
             continue
         if important:
@@ -123,7 +123,7 @@ def _important(text):
     for d in _strip_comments(text or "")[:20000].split(";"):
         if ":" in d:
             k, v = d.split(":", 1)
-            if re.search(r"!\s*important\s*$", v, re.I):
+            if re.search(r"!\s*important\s*$", _unescape_css(v), re.I):
                 out.add(_unescape_css(k).strip().lower())
     return out
 
@@ -249,10 +249,13 @@ def _bg_of(d):
     b = d.get("background-color") or d.get("background") or ""
     if b.strip() == "inherit":
         return "inherit"
+    if re.search(r"\b(?:var|env|calc|color-mix|attr|light-dark)\(", b):
+        return "?"   # a colour this cannot work out: the text is judged against a white page
     for tok in re.findall(r"#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^()]{0,80}\)|[a-z]+",
                           re.sub(r"(?:url|[a-z-]*gradient)\([^()]{0,1000}\)", " ", b[:1000])):
-        if tok != "transparent" and _rgba(tok) is not None:
-            return tok   # the colour, also in a shorthand such as `url(x) no-repeat #003366`: judged against it
+        c = _rgba(tok) if tok != "transparent" else None
+        if c is not None:
+            return tok if c[3] > 0.2 else ""   # a (nearly) transparent background shows the one behind it   # the colour, also in a shorthand such as `url(x) no-repeat #003366`: judged against it
     if "url(" in image or "url(" in b or "gradient(" in image or "gradient(" in b:
         return "image"   # a picture with no colour: its colour is unknown
     return ""
@@ -475,7 +478,9 @@ def _style_rules(markup):
             for one in prelude.split(","):
                 keys = _selector_keys(one)
                 if keys is None:
-                    if hides or _invisible(props.get("color", ""), props.get("bg", ""), _px(props.get("fs", ""), 16.0)):
+                    op = _num(props.get("op", ""))
+                    if hides or (op and op[0] < (100 if op[1] == "%" else 1)) or \
+                            _invisible(props.get("color", ""), props.get("bg", ""), _px(props.get("fs", ""), 16.0)):
                         raise TooComplex("a hiding rule for elements this cleaner cannot name")   # `[data-x]`, `*`
                     continue
                 for k in keys:
@@ -490,6 +495,12 @@ def _style_rules(markup):
                         cur["important_" + prop] = cur.get("important_" + prop) or imp
                         # A value that makes text invisible sticks: a later rule for the same key (whose specificity
                         # is not modelled) never makes the text visible again. An !important one beats inline style.
+                        if prop == "op":   # the lowest opacity any rule gives the key
+                            old, new = _num(cur.get("op", "")), _num(v)
+                            if old and new and (old[0] / (100 if old[1] == "%" else 1)) <= (new[0] / (100 if new[1] == "%" else 1)):
+                                continue
+                            cur["op"] = v
+                            continue
                         if cur.get("sticky_" + prop):
                             continue
                         cur[prop] = v
