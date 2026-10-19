@@ -257,6 +257,37 @@ class Relayed(unittest.TestCase):
         finally:
             if old is not None: os.environ["BOARD_AGENT"] = old
 
+    def test_agent_identity_that_matches_a_person_is_refused(self):
+        """Review of #155: BOARD_AGENT with a person's hosted token (who_am_i() is the person), or with no BOARD_USER
+        (who_am_i() is the bare agent name), never passes the createdBy check on the owner's items."""
+        spec = importlib.util.spec_from_file_location("kt_agent_self", KT); kt = importlib.util.module_from_spec(spec); spec.loader.exec_module(kt)
+        saved = {k: os.environ.get(k) for k in ("BOARD_AGENT", "BOARD_USER")}
+        try:
+            os.environ["BOARD_AGENT"] = "claude"
+            kt.BACKEND, kt.FILE = "hosted", None
+            kt.storage_adapter = lambda: type("A", (), {"whoami": lambda self: {"agent_id": None, "user_id": "u"}})()
+            owners = {"id": "r_hosted0002", "kind": "task.create", "status": "pending", "createdBy": "u"}
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
+                kt._agent_decides(owners, "ignore")
+            self.assertIn("agent token", err.getvalue())
+            data = {"version": 4, "layout": "split", "proposals": [dict(owners, status="ignored", change={"title": "x"},
+                                                                       decision={"action": "ignore", "by": "u"})]}
+            kt.mutate = lambda fn, msg, data=data: fn(data)
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                kt.cmd_proposal_reopen(type("A", (), {"id": "r_hosted0002", "attended": False})())
+            self.assertEqual("ignored", data["proposals"][0]["status"], "the owner's Ignore stays")
+            kt.storage_adapter = lambda: type("A", (), {"whoami": lambda self: {"agent_id": "a1", "user_id": "u"}})()
+            kt._agent_decides(dict(owners, createdBy="a1"), "ignore")   # a real agent token, its own item: allowed
+            kt.BACKEND = "github"
+            os.environ.pop("BOARD_USER", None)
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
+                kt._agent_decides(dict(owners, createdBy="claude"), "ignore")
+            self.assertIn("needs BOARD_USER", err.getvalue())
+        finally:
+            for k, v in saved.items():
+                if v is None: os.environ.pop(k, None)
+                else: os.environ[k] = v
+
     def test_slimming_keeps_who_and_where_but_drops_the_reason(self):
         spec = importlib.util.spec_from_file_location("kt_relayed", KT); kt = importlib.util.module_from_spec(spec); spec.loader.exec_module(kt)
         old = {"id": "r_with000001", "kind": "task.create", "status": "ignored", "change": {"title": "x"},

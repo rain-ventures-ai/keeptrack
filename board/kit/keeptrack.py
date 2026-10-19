@@ -2330,6 +2330,20 @@ def agent_run():
     return False
 
 
+def agent_self():
+    """kit v77: the identity an agent run compares with an item's createdBy or decision.by. Refused when that identity
+    cannot be told apart from a person's or another owner's run: a hosted board where BOARD_AGENT is set but the token
+    is a person's (no agent_id: who_am_i() is then the person), or a local run with BOARD_AGENT and no BOARD_USER
+    (who_am_i() is then the bare agent name, the same for every owner)."""
+    if BACKEND == "hosted" and not FILE:
+        if not (storage_adapter().whoami() or {}).get("agent_id"):
+            proposal_error("an agent run on a hosted board decides Inbox items only with an agent token: BOARD_AGENT is "
+                           "set, but this token is a person's, so the run cannot be told apart from them")
+    elif not os.environ.get("BOARD_USER", "").strip():
+        proposal_error("an agent run (BOARD_AGENT) needs BOARD_USER to decide or read its own Inbox items")
+    return who_am_i()
+
+
 def session_hash(sid):
     """waiting.by_session and agent_cleared[].session: the first 12 hex characters of a sha256 of the session id, so the
     raw id stays off the card once the claim ends. Not a secret and not a credential (a short id can be found by trying
@@ -7792,7 +7806,7 @@ def _ask_person(proposal, verb, own_ok=False):
     own_ok: the agent that asked may withdraw (dismiss) its own pending question, e.g. after asking again."""
     if proposal.get("kind") not in ASK_KINDS:
         return
-    if own_ok and agent_run() and proposal.get("status") == "pending" and proposal.get("createdBy") == who_am_i():
+    if own_ok and agent_run() and proposal.get("status") == "pending" and proposal.get("createdBy") == agent_self():
         return
     if agent_run():
         proposal_error(f"agents never {verb} Inbox questions; a person does, on the board or with no BOARD_AGENT set")
@@ -7961,7 +7975,7 @@ def _agent_decides(proposal, verb, a=None):
     if verb in ("accept", "merge"):
         proposal_error(f"an agent never {verb}s a Review Inbox proposal: the owner does, on the board (or in a session "
                        "they drive and name it: --attended)")
-    if proposal.get("createdBy") != who_am_i():
+    if proposal.get("createdBy") != agent_self():
         proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy') or 'someone else'}; an agent ignores only "
                        f"items it added itself ({who_am_i()}). The owner decides it on the board.")
 
@@ -7989,7 +8003,7 @@ def _relayed(data, proposal, a, verb):
     if verb == "answer" and ("subject" in change or "content_hash" in change):
         proposal_error(f"{proposal['id']} asks to approve exact content: only the owner answers it, on the board. "
                        "If they no longer want it, withdraw it with proposal-ignore --via --reason")
-    if proposal.get("createdBy") != who_am_i():
+    if proposal.get("createdBy") != agent_self():
         proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy') or 'someone else'}; an agent {verb}s only "
                        f"items it added itself ({who_am_i()}). The owner decides it on the board.")
     if proposal.get("decider") and proposal["decider"].casefold() != owner.casefold():
@@ -8037,7 +8051,7 @@ def cmd_proposal_reopen(a):
             # kit v77: that decision records the owner's own word (--via, or an --attended ignore): only they undo it
             proposal_error(f"{proposal['id']} was decided on the owner's word ({'relayed from a conversation' if old.get('relayed') else 'in a session they drove'}); "
                            "only the owner reopens it, on the board (or an agent with --attended, when they say so)")
-        if agent_unattended(a) and (proposal.get("createdBy") != who_am_i() or old.get("by") != who_am_i()):
+        if agent_unattended(a) and (proposal.get("createdBy") != agent_self() or old.get("by") != who_am_i()):
             # kit v77: never reverse the owner's decision; an agent reopens only its own withdrawal of its own item
             proposal_error(f"{proposal['id']}: an agent reopens only an item it added and itself withdrew ({who_am_i()}); "
                            f"this one was added by {proposal.get('createdBy') or 'someone else'} and decided by "
@@ -8158,7 +8172,7 @@ def _done_word(done):
 def cmd_proposal_result(a):
     """For the agent that asked: the answer, and whether someone already acted on it."""
     data, _ = load(); require_review_storage(data); proposal = find_proposal(data, a.id)
-    if agent_run() and proposal.get("createdBy") != who_am_i():
+    if agent_run() and proposal.get("createdBy") != agent_self():
         proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy')}; an agent reads only the answers to its own questions")
     d = proposal.get("decision") or {}
     out = {"id": proposal["id"], "kind": proposal.get("kind"), "status": proposal.get("status"), "decider": proposal.get("decider"),
@@ -8179,7 +8193,7 @@ def cmd_proposal_done(a):
         proposal = find_proposal(data, a.id)
         if proposal.get("kind") not in ASK_KINDS or proposal.get("status") != "answered":
             proposal_error(f"{proposal['id']} is not an answered question (status {proposal.get('status')})")
-        if agent_run() and proposal.get("createdBy") != who_am_i():
+        if agent_run() and proposal.get("createdBy") != agent_self():
             proposal_error(f"{proposal['id']} was added by {proposal.get('createdBy')}; only that agent acts on its answer")
         d = proposal["decision"]
         if a.answer_id and a.answer_id != d.get("id"):
