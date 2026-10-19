@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v77 (schema 4)
+An agent closes its own Review Inbox items when the owner answered or declined them in a conversation:
+`proposal-answer --via` and `proposal-ignore --via --reason` (own items only, recorded as `decision.relayed`), and
+`proposals -q` / `--by` to find them. No migration and no data change; an older page shows such an item as answered or
+ignored by the agent, without the "for @owner" words.
+- Run `kit-update` only. Check: `kit-check` says v77, and `python3 board/keeptrack.py proposals --by connector-claude`
+  lists only the items the Claude connector added (or `(no proposals)`).
+- Relay 0.9.38's connector tools `list_inbox` and `resolve_inbox_item` need this kit on the board; on an older board
+  they say "board kit too old: upgrade to v77" and change nothing.
+
 ### v76 (schema 4)
 The keeptrack-email skill searches Gmail with the new `keeptrack.py email-search` (ids and dates only, no mail text)
 and reads message bodies only through the new `keeptrack.py email-view` (the email-to-tasks cleaner, `safe_view.py`),

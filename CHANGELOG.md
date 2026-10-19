@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v77: an agent closes its own Review Inbox items once the owner settled them in a conversation (card #198).
+`proposals -q TEXT` and `--by WHO` find items by title (or question) and by who added them (`createdBy`, whole or its
+agent part). `proposal-answer <id> --via "<where>"` records the owner's answer to a question the same agent identity
+asked; `proposal-ignore <id> --via "<where>" --reason "<one line>"` withdraws an item it added (a card proposal the
+owner declined, a question no longer needed). Both are refused on an item another agent or a person added, on a
+question whose `decider` is someone other than `BOARD_USER`, and without `BOARD_AGENT`; an agent never records an
+approval, only a no, and never accepts a card. The item records `decision.relayed` (`for`, `via`, and the withdraw
+`reason`, which the 30-day slim removes), the history says who it was for and where they said it, and the board page
+shows "Answered by … for @owner, as they said in …" or "Withdrawn by … : reason". A person undoes either with Reopen
+(`proposal-reopen`). Without `--via` nothing changes.
+
 Kit v76: the manual keeptrack-email skill reads mail the way email-to-tasks does (card #185). New `keeptrack.py
 email-view` runs the automation's cleaner (`safe_view.py`, loaded by path through the pack's `resolve.py`, never a
 copy) on one message: `gog gmail get <id> --json | keeptrack.py email-view` prints the canonical `rfc822:` key,

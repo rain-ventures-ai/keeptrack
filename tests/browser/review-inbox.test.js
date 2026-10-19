@@ -487,6 +487,26 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.match(await propCard(page, 'r_askmail001').textContent(), /Closed without acting by claude@alex/);
       await page.close(); }
 
+    // Kit v77 (card #198): an agent recorded its owner's word from a conversation (keeptrack.py proposal-answer /
+    // proposal-ignore --via). The page says for whom and where, shows a withdraw's reason, and a person can still reopen.
+    { const files = fixture(), by = 'connector-claude@alex', at = '2026-10-19T09:00:00Z', src = { kind: 'other', id: 'connector-claude-1', revision: '2026-10-19', title: 'claude conversation', date: '2026-10-19' };
+      files['proposals/r_relayans01.json'] = text(prop('r_relayans01', 'ask.question', 'Ask Andy: three connector decisions', { source: src, run: null, reason: '', createdBy: by, status: 'answered', change: { question: 'Ask Andy: three connector decisions' },
+        decision: { action: 'answer', id: 'a_0123456789', by, at, answer: { text: 'Keep Nango for all three' }, result: null, commit: null, relayed: { for: 'alex', via: 'Loam thread' } } }));
+      files['proposals/r_relaywd001.json'] = text(prop('r_relaywd001', 'task.create', 'Write the Nango runbook', { source: src, run: null, createdBy: by, status: 'ignored',
+        decision: { action: 'ignore', by, at, result: null, commit: null, relayed: { for: 'alex', via: 'Loam thread', reason: 'Andy owns it' } } }));
+      files['proposals/r_relaywd002.json'] = text(prop('r_relaywd002', 'ask.question', 'Which day for the review?', { source: src, run: null, reason: '', createdBy: by, status: 'ignored', change: { question: 'Which day for the review?' },
+        decision: { action: 'ignore', by, at, result: null, commit: null, relayed: { for: 'alex', via: 'Claude chat', reason: 'No review needed now' } } }));
+      const api = new Github(files), page = await openBoard(browser, api, { view: 'inbox' }); await page.waitForSelector('#board .inbox');
+      await page.selectOption('[data-filter="status"]', 'answered'); await page.waitForSelector('article.prop[data-id="r_relayans01"]');
+      assert.match(await propCard(page, 'r_relayans01').textContent(), /Answered by connector-claude@alex for @alex, as they said in Loam thread on .*: Keep Nango for all three/);
+      await page.selectOption('[data-filter="status"]', 'ignored'); await page.waitForSelector('article.prop[data-id="r_relaywd001"]');
+      assert.match(await propCard(page, 'r_relaywd001').textContent(), /Withdrawn by connector-claude@alex for @alex, as they said in Loam thread on .*: Andy owns it/);
+      assert.match(await propCard(page, 'r_relaywd002').textContent(), /Withdrawn by connector-claude@alex for @alex, as they said in Claude chat on .*: No review needed now/);
+      assert.match(await propCard(page, 'r_ignored001').textContent(), /Ignored by sam/, 'an ignore with no relayed record reads as before');
+      await clearLive(page); await propCard(page, 'r_relaywd001').locator('[data-act="reopen"]').click(); await said(page, /Reopened|pending/);
+      assert.equal(api.json('proposals/r_relaywd001.json').status, 'pending', 'a withdraw is reversible the way an ignore is');
+      await page.close(); }
+
     // Kit v71 (ideas from petekp/inbox): the recommended option first and marked in words, "Accept all recommended",
     // lapsed questions (computed when read, never written) and a visible result for every press.
     { const nowIso = new Date().toISOString(), old = '2020-01-01T09:00:00Z', files = fixture();
