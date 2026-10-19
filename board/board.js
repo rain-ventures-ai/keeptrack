@@ -7719,13 +7719,15 @@ if (typeof window !== 'undefined') (() => {
     if (places.length) { res.append(el('div', 'qhead', 'Clients and projects'));
       places.forEach(x => { const b = el('button', 'qhit qplace'); b.type = 'button'; b.append(elI('span', 'qic', x.icon), el('span', 'qt', x.title), el('span', 'qsub', x.sub));
         b.onclick = () => { $('dlgSearch').close(); x.open(); }; res.append(b); }); }
-    const hits = msIndex.search(q).sort((a, b) => numRank(a) - numRank(b)).slice(0, 60); if (hits.length) res.append(el('div', 'qhead', 'People and tasks'));
+    // People come before tasks, except for a number query, where the numbered card stays first
+    const hits = msIndex.search(q).sort((a, b) => numRank(a) - numRank(b)).slice(0, 60), byKind = k => hits.filter(h => h.kind === k);
+    const groups = numQ ? [['Tasks', byKind('task')], ['People', byKind('person')]] : [['People', byKind('person')], ['Tasks', byKind('task')]];
     const found = hits.length + places.length;
     $('qInfo').textContent = info || (found ? `${found}${hits.length === 60 || morePlaces ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
-    hits.forEach((h, i) => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
+    groups.forEach(([head, list]) => { if (list.length) res.append(el('div', 'qhead', head)); list.forEach(h => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
       b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
         else if (h.kind === 'task') openCard(h.ref); else openContact(h.ref); };
-      res.append(b); });
+      res.append(b); }); });
     const first = res.querySelector('.qhit'); if (first) first.classList.add('first');
   }
   let qTimer = null;
