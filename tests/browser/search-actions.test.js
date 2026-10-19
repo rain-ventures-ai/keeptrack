@@ -95,7 +95,8 @@ const server = http.createServer((req, res) => {
     await page.locator('#dlgCard').evaluate(dialog => dialog.close());
     // A client or project name finds the client or project itself, above its cards and people
     await search('acme sch');
-    assert.deepEqual(await page.locator('#qRes .qhead').allTextContents(), ['Clients and projects', 'People and tasks']);
+    assert.deepEqual(await page.locator('#qRes .qhead').allTextContents(), ['Clients and projects', 'People', 'Tasks'], 'people come before tasks');
+    assert.deepEqual(await page.locator('#qRes .qhit:not(.qgo):not(.qaction):not(.qplace) .qt').first().textContent(), 'Pat Lee');
     assert.deepEqual(await page.locator('#qRes .qplace .qt').allTextContents(), ['Acme School']);
     assert.match(await page.locator('#qRes .qplace .qsub').first().textContent(), /Client · 1 open task · 1 person · 2 projects/);
     await page.locator('#qQ').press('Enter'); assert.equal(await page.locator('#dlgClient').evaluate(dialog => dialog.open), true, 'Enter opens the client');
