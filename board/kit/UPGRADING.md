@@ -35,8 +35,9 @@ included, as unverified (contact history, no follow-up date). The skill gains be
   `gog gmail get '<a message id>' --json | python3 board/keeptrack.py email-view` prints `Message key:` and
   `Sender checks (from Gmail):` lines.
 - A scheduled contact-email routine (`contact-email-sync-<owner>`) reads the skill each run, so it picks up the new
-  rules with no prompt change. If it reads mail through a connector only, it now treats received mail as unverified
-  and sets no follow-up dates from it; to keep them, give it a read-only gog login and the `email-view` pipe.
+  rules with no prompt change. If it reads mail through a connector only, it now treats all of it, sent mail
+  included, as unverified and sets no follow-up dates from it; to keep them, give it a read-only gog login with
+  `email-search` and the `email-view` pipe.
 - The email-to-tasks pack changed (pack 1.4.1): `resolve.py` builds the view text in one shared function, and
   `safe_view.py` turns Unicode line and paragraph separators into real line breaks, so its digest changed. If you installed it: reinstall and set it up again as in v73, and update
   its entry in `relay/registry/automations.yaml` to the new digest

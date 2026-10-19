@@ -144,8 +144,9 @@ one-click integration.
 ## Shared mailbox exchanges
 
 Each owner's checkpoint records what that owner scanned. Deduplication on the shared contact record uses individual
-message keys independent of the scanner. Prefer `keeptrack.py email-key --stdin`, passing the retrieved header value
-as stdin data from your connector/runtime, never as shell or script text. It returns
+message keys independent of the scanner. With gog, use the `Message key:` line `keeptrack.py email-view` prints (kit
+v76): the header never passes through a command. With a connector only, use `keeptrack.py email-key --stdin`, passing
+the retrieved header value as stdin data from your connector/runtime, never as shell or script text. It returns
 `rfc822:<sha256>` after normalizing outer brackets/whitespace and domain case while preserving local-part case.
 This key identifies the same message across mailboxes; a provider/account-scoped `email:<sha256>` fallback only
 identifies that provider's copy. Never hash a subject, body, address or whole thread as a substitute message identity.

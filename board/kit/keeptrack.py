@@ -5227,8 +5227,9 @@ def _search_day(message):
 
 def cmd_email_search(a):
     """Gmail search for exact board addresses through gog, printing only ids, never mail text: one line per message,
-    `<gmail id> <thread id> <YYYY-MM-DD> sent|received`, then `next-page <token>` or `end`. `sent` only when Gmail
-    labels the message SENT (a From header is the sender's to write). The query is the email-to-tasks check's own
+    `<gmail id> <thread id> <YYYY-MM-DD> sent|received`, then `next-page <token>` or `end`. `sent` only when Gmail's
+    labelIds hold SENT (a From header is the sender's to write, and a user label can be named "Sent"). A page token
+    it cannot pass back prints `page-token-unusable` and exits 3, never `end`. The query is the email-to-tasks check's own
     window query (check.query) with the addresses; gog runs through the pack's resolver, so its time limits and
     error codes apply: a gog failure prints `gog-error` or `gog-timeout` and exits 3."""
     addresses = list(dict.fromkeys(x.strip().lower() for x in a.address))
@@ -5259,13 +5260,15 @@ def cmd_email_search(a):
         thread = str(m.get("threadId") or "") if isinstance(m, dict) else ""
         if not resolver.GMAIL_ID.fullmatch(mid):
             skipped += 1; continue
-        labels = m.get("labelIds", m.get("labels")) or []
+        labels = m.get("labelIds")   # Gmail's own label ids, as safe_view.sent_by_owner reads them; never label names
         sent = isinstance(labels, list) and "SENT" in {str(x).upper() for x in labels}
         lines.append(" ".join((mid, thread if resolver.GMAIL_ID.fullmatch(thread) else "-", _search_day(m),
                                "sent" if sent else "received")))
     if skipped:
         lines.append(f"skipped {skipped} without a usable id")
-    lines.append("next-page " + token if isinstance(token, str) and EMAIL_SEARCH_PAGE.fullmatch(token) else "end")
+    if token is not None and token != "" and not (isinstance(token, str) and EMAIL_SEARCH_PAGE.fullmatch(token)):
+        print("page-token-unusable"); sys.exit(3)   # more pages exist but cannot be asked for: never claim the end
+    lines.append("next-page " + token if token else "end")
     print("\n".join(lines))
 
 

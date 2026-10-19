@@ -200,6 +200,10 @@
     {
      "not_regex": "proposal-add|keeptrack\\.py add ",
      "why": "no task from unverified mail"
+    },
+    {
+     "not_regex": "--next\\s+['\"]",
+     "why": "no next step from unverified mail either"
     }
    ]
   },
@@ -236,7 +240,7 @@
      "why": "gog's own search prints mail text; email-search prints ids only"
     },
     {
-     "not_regex": "(?im)gog gmail get[^|\\n]*$",
+     "not_regex": "(?im)^\\s*gog gmail get[^|\\n]*$",
      "why": "a message is never fetched without the email-view pipe"
     }
    ]

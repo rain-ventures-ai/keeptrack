@@ -34,7 +34,7 @@ where they name a sentence: the owner learns to recognise those sentences, and t
   received needs `dmarc=pass` in its sender checks; mail the owner sent shows "none, you sent this message" and
   needs no check (no sender warning for it). With `dmarc=fail`, or `dkim=fail` without `dmarc=pass`, end the touch
   with: "Gmail's sender check failed for this email."; with any other result short of `dmarc=pass` (`none`,
-  `softfail`, `temperror` and the like, and every received message read without the cleaned view), end it with:
+  `softfail`, `temperror` and the like, and every message read without the cleaned view, sent mail included), end it with:
   "Gmail could not verify the sender of this email." (`dmarc=pass` with a broken extra DKIM signature, common after
   a mailing list, is a pass.) Either way log only its contact history (no task, no follow-up date). These are still
   real exchanges: they still get their contact history; never skip them (the rules in "Match safely" still apply: an
@@ -79,10 +79,12 @@ python3 board/keeptrack.py email-search --address 'casey@example.com' --address 
 ```
 
 It prints one line per message, `<gmail id> <thread id> <YYYY-MM-DD> sent|received`, then `next-page <token>` (run it
-again with `--page '<token>'` for the rest) or `end`. `sent` means Gmail labels the message SENT; it is never judged
-from a From line, which the sender writes. Give it only addresses stored on the board (at most 20 a call), single
-quoted. `gog-error` or `gog-timeout` (exit 3) means Gmail failed: stop and report it. Then read one message at a time,
-always through the pipe:
+again with `--page '<token>'` for the rest) or `end`. `sent` means Gmail's own label ids hold SENT; it is never
+judged from a From line, which the sender writes, or from a label's name. Give it only addresses stored on the board
+(at most 20 a call), single quoted. `gog-error`, `gog-timeout` or `page-token-unusable` (exit 3) means Gmail failed or
+more results cannot be fetched: stop, never treat the window as complete, and report it. Then read each hit once,
+one at a time, always through the pipe; its fenced headers show whether one of the exact board addresses is really
+in From, To or Cc, and only for such an exact match do you use its text:
 
 ```sh
 gog gmail get '<gmail id>' --json | python3 board/keeptrack.py email-view
@@ -138,9 +140,10 @@ and the hidden content and sender checks are counted rather than guessed.
    message" in the view); never because its From line names the owner.
 2. Use the time window the person supplied. If a one-off request has no window, ask for one; never search the entire
    mailbox silently. Recurring runs use the checkpoint rules in the routine guide.
-3. Search sent and received mail by exact address (with gog: `email-search`). Read headers first. Read message text only for an already matched
-   contact when it is needed for a concise factual summary, and only through the cleaned view (above). Never read
-   attachments, even when the person asks: say that this workflow does not read them.
+3. Search sent and received mail by exact address (with gog: `email-search`). With gog, read each hit once through
+   `email-view`: check the exact address in its fenced headers first, and use its text only for an exact match whose
+   touch needs a concise factual summary. With a connector only, read headers first and fetch a body only for an
+   exact match. Never read attachments, even when the person asks: say that this workflow does not read them.
 4. Match only an exact email address already stored on one current Keeptrack person. Do not guess from a display name,
    signature, domain, similar spelling or forwarded content. Report unmatched or ambiguous addresses for review.
 5. Ignore automated mail, newsletters, receipts, bulk mail and messages where the contact was only copied into a large

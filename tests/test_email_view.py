@@ -204,6 +204,28 @@ class EmailSearch(unittest.TestCase):
                 self.assertNotEqual(0, r.returncode)
                 self.assertFalse(os.path.exists(self.log), "gog never runs on refused input")
 
+    def test_sent_comes_from_label_ids_only(self):
+        page = {"messages": [{"id": "18f2a01c9be0d4a1", "threadId": "t1", "labels": ["Sent", "INBOX"]},
+                             {"id": "18f2a01c9be0d4a2", "threadId": "t2", "labelIds": ["INBOX"], "labels": ["SENT"]},
+                             {"id": "18f2a01c9be0d4a3", "threadId": "t3", "labelIds": ["SENT"]}]}
+        r = self.search(page, "--address", "casey@example.com", "--start", "2026-10-09", "--end", "2026-10-16")
+        self.assertEqual(["18f2a01c9be0d4a1 t1 - received", "18f2a01c9be0d4a2 t2 - received",
+                          "18f2a01c9be0d4a3 t3 - sent", "end"], r.stdout.decode().splitlines())
+
+    def test_an_unusable_page_token_never_reads_as_the_end(self):
+        one = [{"id": "18f2a01c9be0d4a1", "threadId": "t1", "labelIds": ["INBOX"]}]
+        for token in ("x" * 201, "abc def", "tok$(id)", 12345, ["0987"], {"p": 1}):
+            with self.subTest(token=token):
+                r = self.search({"messages": one, "nextPageToken": token}, "--address", "casey@example.com",
+                                "--start", "2026-10-09", "--end", "2026-10-16")
+                self.assertEqual(3, r.returncode)
+                self.assertEqual("page-token-unusable", r.stdout.decode().strip())
+        for token in (None, ""):
+            r = self.search({"messages": one, "nextPageToken": token}, "--address", "casey@example.com",
+                            "--start", "2026-10-09", "--end", "2026-10-16")
+            self.assertEqual(0, r.returncode)
+            self.assertEqual("end", r.stdout.decode().splitlines()[-1])
+
     def test_a_gog_failure_is_a_fixed_code(self):
         r = self.search({}, "--address", "casey@example.com", "--start", "2026-10-09", "--end", "2026-10-16",
                         FAKE_GOG_FAIL=ORDER)
