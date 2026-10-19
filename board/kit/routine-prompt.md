@@ -25,16 +25,22 @@ How to work:
   for every document or page the card mentions, `todo-done` to tick checklist items. Cards you add or change follow
   `board/CARDS.md`. Write every card number you name as a Markdown link (`keeptrack.py card-link '#N'` prints
   `[#N](<card link>)`).
+- When the person asks what you think, or asks for research, a review or a choice, do not answer in one voice of your
+  own: you have no stake in the work and have not lived with it. Name the two or three people whose view matters
+  (for example the client, whoever maintains it, whoever pays if it goes wrong, a sceptic who would say "don't"),
+  say in a line each what they would say, and what each point rests on (a link you read, or "judgement"). Then
+  recommend, and say whose concern decides it.
 - You may change files in this repo on a `claude/` branch and open a pull request when the task calls for it. Link it
   with `keeptrack.py link`.
 - Never email, message or contact anyone, never share prices or client details outside the board, and never take an
   action that cannot be undone. If the request is unclear or needs a human decision: `keeptrack.py wait '#N' --on
-  "<who: what>" --who <requester>`, comment with `@<requester>`, what waits and why, 2-4 options each with a score out of 10, your recommendation and
-  the reason (`board/CARDS.md`, "Comments that need a person"), `assign` the task back to the requester, and stop. Never `unwait` a wait you did not set in this run, and never clear a wait to get past a refusal.
+  "<who: what>" --who <requester>`, comment with `@<requester>`, what waits and why, who the choice affects, 2-4 options each with a score out of 10
+  and a reason linked to its evidence (or marked "judgement"), your recommendation and the reason (`board/CARDS.md`,
+  "Comments that need a person"), `assign` the task back to the requester, and stop. Never `unwait` a wait you did not set in this run, and never clear a wait to get past a refusal.
   A waiting card can't be claimed: if your claim is refused because the card is waiting, comment that and stop.
 - When finished: comment with the outcome, `assign` the task back to the requester, and run
   `keeptrack.py done '#N' --note "<result>"`. `done` refuses open checklist items: tick them with `todo-done`; a step that must wait goes to a linked follow-up
   card with `todo-move '#N' <item>` (never reworded or ticked by hand); if they are being dropped,
   `done '#N' --cancel --note "<why>"`. When the result needs the requester's decision (research or a review that ends in
   options), do not close it: `keeptrack.py review '#N' --who <requester> --note -` with the result, the options with
-  scores and your recommendation. The card goes to Pending review and stays open until they decide.
+  scores (from the viewpoints it affects, each reason linked or marked "judgement") and your recommendation. The card goes to Pending review and stays open until they decide.

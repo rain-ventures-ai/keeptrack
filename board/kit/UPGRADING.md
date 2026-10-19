@@ -25,6 +25,118 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v76 (schema 4)
+The keeptrack-email skill searches Gmail with the new `keeptrack.py email-search` (ids and dates only, no mail text)
+and reads message bodies only through the new `keeptrack.py email-view` (the email-to-tasks cleaner, `safe_view.py`),
+follows the automation's "Always" rules word for word, and treats all mail read through a connector only, sent mail
+included, as unverified (contact history, no follow-up date). The skill gains behaviour evals
+(`board/keeptrack-email/evals/cases.json`). No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v76, and
+  `gog gmail get '<a message id>' --json | python3 board/keeptrack.py email-view` prints `Message key:` and
+  `Sender checks (from Gmail):` lines.
+- A scheduled contact-email routine (`contact-email-sync-<owner>`) reads the skill each run, so it picks up the new
+  rules with no prompt change. If it reads mail through a connector only, it now treats all of it, sent mail
+  included, as unverified and sets no follow-up dates from it; to keep them, give it a read-only gog login with
+  `email-search` and the `email-view` pipe.
+- The email-to-tasks pack changed (pack 1.4.1): `resolve.py` builds the view text in one shared function, and
+  `safe_view.py` turns Unicode line and paragraph separators into real line breaks, so its digest changed. If you installed it: reinstall and set it up again as in v73, and update
+  its entry in `relay/registry/automations.yaml` to the new digest
+  (`python3 board/keeptrack.py automation show email-to-tasks`). The other packs are unchanged.
+
+### v75 (schema 4)
+email-to-tasks reads only a cleaned view of each message (pack 1.4.0): hidden instructions in mail (HTML comments,
+invisible text, encoded blobs, zero-width characters) no longer reach the AI, payment or access changes become a
+"possible fraud" contact note instead of a task, a task needs Gmail's DMARC check to pass, and proposals say when
+hidden content was removed or Gmail's sender check failed or gave no result. See [AUTOMATIONS.md](AUTOMATIONS.md), "Included packs". No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v75, and `automation validate board/automations/email-to-tasks` says
+  valid.
+- The email-to-tasks pack files changed, so its digest changed. If you installed it: reinstall and set it up again as
+  in v73, and update its entry in `relay/registry/automations.yaml` to the new digest
+  (`python3 board/keeptrack.py automation show email-to-tasks`). The other packs are unchanged.
+
+### v74 (schema 4)
+The Automations page gets one cloud runner panel and an on/off switch per automation; a row opens its details in a
+drawer. The switch commits the person's install register (`automation/routines/auto-<slug>-<login>.json`) with the
+GitHub token the page already uses. No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v74, and the Automations page loads and shows the runner panel.
+- Upgrade relay to 0.9.35 too, and let the dispatcher run once: it writes `automation/runner.json`, which the panel
+  reads. Until then the panel says "Not set up" and the switches stay off.
+- Every automation you switch on also needs your entry in `relay/registry/automations.yaml`, pinned to its digest,
+  before it runs. The runner panel lists those and copies a prompt for your assistant to open the entry's PR.
+
+### v73 (schema 4)
+Automations learn where they run. A pack manifest may carry an optional `requires` object (runner, claude.ai
+connectors, secret NAMES, and a `script` or `model` check); the three built-in packs declare theirs (pack version
+1.3.0). An install records its runner, `local` (the board's own loader, the default) or `cloud` (the relay
+dispatcher). New read-only commands `automation due --json` and `automation needs --json`, and
+`automation tick --only <slug> [--runner R] [--digest D]`, let the relay start one cloud worker per due automation.
+A plain `automation tick` now runs `local` installs only, and the throttle also honours the committed
+`last_started_at`, so two runners cannot run one automation twice in one interval. Pack fixes (card #174):
+email-to-tasks `resolve.py` tries the next page and then the item's window before `not-found`, re-runs the window
+search for an overlong page token, has one deadline for the whole run and keeps what it fetched for step 3
+(`--save`); notes-folder-to-tasks `resolve.py` prints each note's text as one JSON string; the email evals use
+`@example.com` addresses only. See [AUTOMATIONS.md](AUTOMATIONS.md), "Runners and needs". No migration and no data
+change.
+- Run `kit-update` only. Check: `kit-check` says v73, and `automation validate board/automations/email-to-tasks`
+  says valid.
+- The built-in pack files changed, so their digests changed. Each owner reinstalls each installed built-in pack and
+  runs setup again, as in v72: `python3 board/keeptrack.py automation uninstall <slug>`, then
+  `automation install <slug> [--every ..] [--set k=v] [--allow-network]`, then
+  `automation setup <slug> --runtime local|claude|chatgpt|grok`, then `automation enable <slug>`. Seen state is kept.
+- An install the relay dispatcher should run in the cloud: install with `--runner cloud`, and run
+  `automation setup <slug> --runtime claude --runner cloud --connectors <the routine's connectors, comma list>` in
+  the routine (or set `KEEPTRACK_CONNECTORS` there). Each secret the pack names must be set in that environment:
+  email-to-tasks needs `GOG_HOME_ARCHIVE` in the cloud (its SETUP.md). An existing install can move with
+  `automation setup <slug> --runtime claude --runner cloud ...`, then `automation enable <slug>` again.
+  Check, after `automation enable <slug>` (`needs` counts active installs only):
+  `automation needs --json --runner cloud` lists what the routine must hold, and
+  `automation due --json --runner cloud` lists it when due.
+- A cloud install's setup status is `ready-cloud`, not `ready`. A kit before v73 knows no runner, so it treats a
+  cloud install as not set up and never runs it next to the relay's worker (it reports it as `changed`). Upgrade
+  every copy of `keeptrack.py` that ticks this board.
+- Installs made before v73 have no runner and stay `local`: the board's own loader runs them as before.
+
+### v72 (schema 4)
+The three built-in automation packs are rebuilt (pack version 1.2.0): clearer SKILL.md steps, a SETUP.md with a
+verify command for each need, stricter checks, and a new `evals/cases.json` of behaviour tests in each pack (see
+[AUTOMATIONS.md](AUTOMATIONS.md), "Behaviour tests"). `automation install`, `setup`, `enable`, `disable`,
+`uninstall`, `check`, `tick`, `mark` and `dry-run` now refuse an `--owner` that is not the person running the command
+(the match ignores case). No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v72, and `automation validate board/automations/stale-cards-nudge`
+  says valid.
+- The built-in pack files changed, so their digests changed. An install of a built-in pack made before v72 is refused
+  until each owner reinstalls it and runs setup again. For each installed built-in pack:
+  `python3 board/keeptrack.py automation uninstall <slug>`, then
+  `python3 board/keeptrack.py automation install <slug> [--every ..] [--set k=v] [--allow-network]` (the same
+  settings as before), then `python3 board/keeptrack.py automation setup <slug> --runtime local|claude|chatgpt|grok`
+  (with `--confirm <need-id>` for each need on an agent route), then `python3 board/keeptrack.py automation enable <slug>`.
+  Seen state is kept. Check with `automation list --installed`.
+- New optional pack settings: `lookback_days` (notes-folder-to-tasks, email-to-tasks), `max_recipients` and
+  `include_sent` (email-to-tasks). email-to-tasks now blocks with `setup-missing:board-contacts` when no board
+  contact has an address, and `setup-missing:crm-mode` when CRM mode is off. notes-folder-to-tasks blocks with
+  `setup-missing:notes-dir` when no folder is set, and `setup-missing:notes-dir-too-large` when the folder cannot be
+  listed within the check's time.
+- notes-folder-to-tasks dates a never-imported note by its mtime, or by its last commit when the folder is a git
+  checkout (a cloned notes repo), not by when the file arrived: a note restored, synced or cloned with an old date is
+  outside `lookback_days`. To import such a note, edit it, or reinstall with `--set lookback_days=0` for one run.
+- A script or routine that ran `automation ... --owner <someone else>` now stops with "is not you". That person
+  runs the command themselves. There is no admin override.
+
+### v71 (schema 4)
+`CARDS.md` ("Comments that need a person") and `routine-prompt.md` ask agents to say who a choice affects and what each
+reason rests on (a link, or "judgement"). The Review Inbox gains two optional fields and one read-time rule: an
+`ask.choose` may carry `change.recommended` (an option key), `settings.inbox_lapse_days` (default 14, 0 = never) sets when
+an unanswered question shows as lapsed, and a lapse is computed when the board is read, never written. A new question's
+`created` is always the time it is added (a payload value is ignored), and a reopened question's wait starts again from
+the reopen, so the lapse clock cannot be set by the asker. One-line fields (titles, option labels) now refuse the rarer
+line breaks too (`\v`, `\f`, `\x1c`-`\x1e`, `\x85`, `\u2028`, `\u2029`), not only `\n` and `\r`. The web board
+shows each press's result. No migration and no data change: existing proposals and settings stay as they are, and
+`settings.min_kit` does not rise (an older page or `keeptrack.py` reads the new field and setting without harm, but an
+older `keeptrack.py` refuses to add a question with `recommended`).
+- Run `kit-update` only. Check: `kit-check` says v71, `board/CARDS.md` has "Who it affects" and "Review Inbox questions:
+  recommended and lapsed", and `keeptrack.py settings` shows `inbox_lapse_days`.
+- Optional: change the lapse with `keeptrack.py settings-set --inbox-lapse-days N`. Nothing else to do.
+
 ### v70 (schema 4)
 Automation manifests may carry an optional `flow` that the web board draws on its new Automations page. The three
 built-in packs get plain-words summaries and a flow (pack version 1.1.0). No migration.

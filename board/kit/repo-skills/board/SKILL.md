@@ -127,8 +127,11 @@ To change a task after it exists (title, details, priority, due, labels, client,
 `unlink`. To change the board's labels, clients, members or settings, use the `board-admin` skill. Never edit JSON.
 
 ## Checking on others
-`python3 board/keeptrack.py list --attention` lists stale, stuck and blocked claims, waiting cards due for a chase and
-cards where an agent run cleared or overrode a wait this week. `today` shows a CHASE NOW group.
+`python3 board/keeptrack.py list --attention` lists stale, stuck and blocked claims, waiting cards due for a chase,
+cards where an agent run cleared or overrode a wait this week, and Review Inbox questions that have lapsed (unanswered
+for `settings.inbox_lapse_days`, default 14; questions belong to no project, so a card filter or this repo's default
+project hides them: add `--all`). Do not ask a lapsed question again unless the person brings it up
+(`board/CARDS.md`, "Review Inbox questions: recommended and lapsed"). `today` shows a CHASE NOW group.
 
 ## Check the board
 Run `python3 board/keeptrack.py doctor` after a migration or when the board shows an error. Use the `board-doctor` skill before you run `doctor --fix`.

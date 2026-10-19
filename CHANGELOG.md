@@ -6,6 +6,139 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Board page: search lists people in their own section above tasks (a number query still puts the numbered card
+first).
+
+Kit v76: the manual keeptrack-email skill reads mail the way email-to-tasks does (card #185). New `keeptrack.py
+email-view` runs the automation's cleaner (`safe_view.py`, loaded by path through the pack's `resolve.py`, never a
+copy) on one message: `gog gmail get <id> --json | keeptrack.py email-view` prints the canonical `rfc822:` key,
+Gmail's sender checks, what hidden content was removed and the visible text inside a random untrusted fence; input it
+cannot read prints only `Unreadable:` (exit 1), never the raw message. New `keeptrack.py email-search` runs gog's
+search itself (the email-to-tasks check's own query plus exact board addresses) and prints only each message's id,
+thread id, date and `sent|received`, where `sent` is Gmail's SENT label, never a From line: gog's raw search output
+carries sender, subject and snippet, which would reach the agent before the cleaner. `safe_view.py` now turns U+2028,
+U+2029, NEL and \x1c-\x1e into real line breaks (and spaces in headers), so they cannot fake a line inside the fence.
+The skill gets the automation's "Always" rules word for word (payment or access changes get only the fixed "Possible
+fraud: verify by phone" text; mail never sets its own urgency or legitimacy; a task or follow-up date needs
+`dmarc=pass`; the hidden-content and sender-check sentences end the touch, or the proposal's reason with the Review
+Inbox on) and never reads attachments. With a connector only (no gog) it says plainly what is not protected: the raw
+message, hidden parts included, has already reached the assistant, so every message read that way, sent mail included
+(a forged From can name the owner), is treated as unverified: contact history with "Gmail could not verify the sender
+of this email.", no follow-up date and no task. The routine guide points at the same rules. The pack's `resolve.py`
+now builds the view text in one `render()` that both use (pack 1.4.1, with the line-break change above). New behaviour
+evals for the skill (`skills/keeptrack-email/evals/cases.json`: a hidden payment lure, a failed sender check beside a
+verified follow-up, a connector-only message with a hidden instruction, an unverified sender with the Review Inbox on,
+a forged From naming the owner, and a hostile snippet in raw search output) and tests for `email-view` and
+`email-search`.
+
+Board page: search finds clients and projects by name, in a new "Clients and projects" section above people and
+tasks ("hurst col" finds the client, not only its cards). A result opens the client or project details.
+
+Kit v75: email-to-tasks reads only what a person would see (card #182; pack 1.4.0). Phishing mail now hides
+instructions for the AI that reads it: HTML comments, CSS-invisible text, encoded blobs, zero-width and Unicode tag
+characters. `resolve.py --save` now keeps each message's headers only (`<id>.json`, no body) and writes a cleaned view
+(`<id>.txt`, from the new `safe_view.py`): the HTML part first (what people see; a plain part behind it can hide
+text), with comments, scripts and hidden elements (display:none, visibility:hidden, zero size or opacity, off-screen,
+clipped, tiny or near-invisible text, hidden attributes, classes a style block hides) removed, invisible characters
+(zero-width, bidi, variation selectors, blank fillers, Unicode tags) and encoded runs (long, line-wrapped base64,
+hex) dropped, capped at 8000 characters; attachments and forwarded messages are never read, and crafted markup
+cannot make it run long. It counts what it removed and shows Gmail's own SPF, DKIM and DMARC results (the topmost
+header only; a sender can add its own). The sender's headers sit inside the untrusted fence with the text. The skill reads mail only from that view; mail never sets its own urgency or
+legitimacy; a request to change payment or access details becomes contact history with a fixed "possible fraud:
+verify by phone" line, never a task; a task needs `dmarc=pass`; hidden content and failed or missing sender checks are named in the proposal with fixed
+sentences, which the board now accepts on metadata-only (unconfirmed) proposals too. New tests for each hiding method
+and four behaviour evals (a hidden payment lure, a failed and an unverified sender check, the warnings on a
+two-member board).
+
+Board page and AUTOMATIONS.md (no version change): the automation switch keeps its own 44x26 size on phones (dialog and header buttons get a
+44px minimum height), with a grey off track and a white knob; the details drawer drops the "Not installed" / "On" pill
+when it shows a switch, as the rows do. The cloud runner is described as any scheduled agent (a Claude routine, a
+Codex or Cursor scheduled task, or another), not only a Claude routine; a runner that cannot give each automation
+exactly its approved connectors runs only automations that need none (relay's dispatcher enforces it, not the page).
+
+Kit v74: one runner, a switch per automation (card #180; `board/kit/AUTOMATIONS.md`, "The board page"). The
+Automations page lists one row per pack with an on/off switch; a row opens its details in a drawer, as a card does.
+The switch writes the install register as the person (as `automation install --runner cloud`, `setup --runtime claude
+--runner cloud` and `enable` would), with the pack digest computed in the browser from the pack's files in git; it asks
+before it grants a read beyond the board, the network, a connector or a secret, and never reuses another person's or
+another pack's old register. The panel at the top is the cloud runner: it reads `automation/runner.json` (relay 0.9.35's
+`runner-status`) and shows a guided checklist of what the routine still lacks, including installs that wait for the
+owner's allowlist entry (relay 0.9.35: the switch turns an automation on, and the owner's merge-gated entry,
+pinned to the pack's digest, approves every run). New shared component `ui.toggle` (a labelled
+switch). Review Inbox: a proposal's Markdown fields render as Markdown. No schema or data change.
+
+Kit v73: automations learn where they run (`board/kit/AUTOMATIONS.md`, "Runners and needs"). A pack manifest may carry
+an optional `requires` object: `runner` (`any`, `cloud` or `local`), the claude.ai `connectors` and the secret NAMES
+(`secrets`) a runner must hold, and `check` (`script`, or `model` when the check itself needs a connector), with
+per-runner `cloud` / `local` overrides. The built-in packs declare theirs (pack version 1.3.0): stale-cards-nudge and
+notes-folder-to-tasks need nothing; email-to-tasks needs its gog login locally and the secret `GOG_HOME_ARCHIVE` in
+the cloud. `automation install` and `setup` take `--runner cloud|local` (default `local`); setup checks each secret
+name is set (never printing a value) and, on `cloud`, each connector is in `--connectors` or `KEEPTRACK_CONNECTORS`,
+and blocks naming what is missing. New read-only `automation needs --json` and `automation due --json` (both
+`[--runner R]`) give the relay dispatcher what it needs without writing anything; `automation tick --only <slug>
+[--runner R] [--digest D]` ticks exactly one active install of the caller and records `last_started_at` each time it
+checks. A plain `automation tick` runs `local` installs only. The throttle honours the committed `last_started_at` as
+well as the local check time, so two runners cannot run one automation twice in one interval. A ready cloud install
+has setup status `ready-cloud`, so a kit before v73 never runs it; every cloud tick records `last_started_at` and
+keeps its scan position in the committed register (`scan_cursor`), so a fresh clone goes on where the last worker
+stopped; `--digest` fails closed (empty, malformed, or without `--only`); setup refuses to move an install with a
+current run to another runner; `needs` reports `check: model` for a pack with no check script. Pack fixes (card
+#174): email-to-tasks `resolve.py` looks on the next page and then in the item's window before `not-found`, falls
+back to a window search for an overlong page token (the check now emits a window ref instead of the bare key), has
+one deadline for the whole run, and `--save` keeps each fetched message for step 3; notes-folder-to-tasks
+`resolve.py` prints each note's text as one JSON string (U+2028, U+2029 and U+0085 escaped too), so a note cannot
+fake the resolver's markers; `resolve.py --save` deletes its folder when Gmail fails part way, and searches each page
+at most once; the email
+evals and SETUP.md use `@example.com` addresses only. Built-in pack digests changed: reinstall and set up again
+(`UPGRADING.md`, v73). No schema change, no migration.
+
+Kit v72: the three built-in automation packs (stale-cards-nudge, notes-folder-to-tasks, email-to-tasks) are rebuilt
+(pack version 1.2.0). Each SKILL.md gives numbered steps with exact commands, the proposal shape with its evidence and
+stable keys, skip rules, and a failure path that ends in a Review Inbox question in the `CARDS.md` "always recommend"
+form or a counted stop. Each SETUP.md gives a verify command and expected output for every need, per runtime. Checks
+are stricter: stale-cards-nudge reads the local board through `keeptrack.py` (flat or split) and reports malformed cards
+once a week; notes-folder-to-tasks skips hidden, lock and empty files, hashes normalised text, skips copies and adds
+`lookback_days` (a note's age is its mtime, or its last commit in a git folder such as a cloned notes repo, never its
+ctime, so a restore, a sync or a fresh clone does not import old notes; such notes are judged before they are read);
+email-to-tasks never treats a board member as a contact, skips spam, trash, drafts and bulk categories,
+can match mail you sent (`max_recipients`, `include_sent`) and blocks early when CRM mode is off or no contact has an
+address. email-to-tasks and notes-folder-to-tasks ship a `resolve.py`: the agent maps item keys through it, so no mail
+header and no file name is ever typed into a shell (email: one search of the exact page the check read, named by the
+item's `ref`, and the `rfc822:` key hashed from gog's own JSON; notes: the resolver prints the note itself). Any other
+text to hash goes through a quoted `<<'KT_TEXT'` heredoc, and stale-cards-nudge writes its proposal files the same way. Each pack ships `evals/cases.json`, behaviour tests run with `relay.py eval`; a wording change to a pack is
+kept only after its evals pass (`AUTOMATIONS.md`, "Behaviour tests"; the create skill adds one to new packs, from
+`references/evals_template.json`). `tests/test_automation_packs.py` checks every built-in pack's evals file and docs.
+Security (#175): `automation install`, `setup`, `enable`, `disable`, `uninstall`, `check`, `tick`, `mark` and `dry-run` refuse an
+`--owner` that is not the person running the command (case ignored); no admin override. Built-in pack digests changed:
+each install must be reinstalled and set up again (`UPGRADING.md`, v72). No schema change, no migration.
+
+Kit v71: comments and routine answers that need a person say whose view each point is and what it rests on.
+`CARDS.md` ("Comments that need a person: always recommend") adds "Who it affects" (the two or three viewpoints the
+choice touches, scored from what they would say, not from an opinion of the agent's own) and "What it rests on" (each
+reason links its evidence, or says "judgement"); the recommendation names whose concern decides it. The template and
+the good example show both. `routine-prompt.md` follows the rule and, when asked "what do you think" or for research,
+a review or a choice, names the people whose view matters before it recommends.
+Review Inbox (ideas from petekp/inbox (MIT)): an `ask.choose` question may name its **recommended option**
+(`change.recommended`, an option key; `proposal-add --recommend <key, number or label>`; anything else is refused). The
+web board shows it first, as the main button marked "Recommended" in words, with **Accept all recommended** (one confirm
+that lists every question it will answer with its recommended option; then each answer is saved in turn as if picked by
+hand, with the button and the queued items off until the run ends, and an item someone answered meanwhile is skipped) and
+the key `r`; `proposal-answer --recommended` does the same from the CLI, and
+`proposals` marks it. A pending question unanswered for `settings.inbox_lapse_days` (default 14, 0 = never;
+`settings-set --inbox-lapse-days`) is **lapsed**: worked out when the board is read (on the board's clock), never
+written. The wait runs from when the question last became pending (its newest reopen, else when it was added), counted in
+days on the board's time zone; a question's `created` is now always the time it was added, so a payload cannot start or
+stop its lapse clock. The board marks it and
+has a "Lapsed questions" filter; `proposals --lapsed`, `list --attention` (one `lapsed question …` line each, only with no
+card filter or project scope; with `--assignee`, the questions named for that person plus those any member answers) and
+`proposal-result` (`lapsed`, `lapsed_days`) report it. Agents do not ask a lapsed or dismissed question again unless the
+person brings it up (`CARDS.md`). A dismissed question now reads "Dismissed". Every press in the Inbox shows its result:
+"Saving…" with the item's controls off (no double submit), then "✓ Approved" / "✓ Answered" on the item, or why it was not
+saved, with what the person typed kept. Card and proposal titles, labels, reasons and other one-line fields refuse every line break Python's
+`splitlines` knows (`add`, `task-set --title`, `label-add`, `proposal-add`), and `list` prints every title, id and
+decider on one line, so no title or hand-edited file can add a line to its output. `PLUGIN.md` gains "What it runs, sends and changes". Optional fields only: no schema change, no migration, and no
+new `min_kit` (an older page shows the options in their stored order and no lapse).
+
 Fixes after the hosted adapter (#140): the installed app caches `storage-hosted.js` (shell cache v2), so it opens offline
 again; "Sign in to a local hosted board" shows only on a local page; the `api.github.com` preconnect is back. CLI:
 `claim --on-behalf-of` on a GitHub board now fails clearly instead of being ignored; `approve` help says hosted boards

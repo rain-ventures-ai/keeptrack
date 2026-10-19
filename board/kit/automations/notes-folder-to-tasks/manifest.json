@@ -3,7 +3,7 @@
   "slug": "notes-folder-to-tasks",
   "name": "Notes folder to tasks",
   "summary": "Turn new or changed meeting notes in a folder into proposed tasks and follow-ups.",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "needs": [
     {
       "id": "files.read",
@@ -33,6 +33,12 @@
       ]
     }
   ],
+  "requires": {
+    "runner": "any",
+    "connectors": [],
+    "secrets": [],
+    "check": "script"
+  },
   "writes": [
     "proposals"
   ],
@@ -58,12 +64,12 @@
     {
       "kind": "check",
       "title": "Find new or changed notes",
-      "text": "A small script compares file fingerprints with what it saw before. No AI is used."
+      "text": "A small script compares note fingerprints with what it imported before and skips copies, empty and hidden files. No AI is used."
     },
     {
       "kind": "agent",
       "title": "Pull out actions",
-      "text": "An agent reads each note and matches people and cards already on the board."
+      "text": "An agent reads each note, matches people, cards and earlier imports, and asks you when a note is unclear."
     },
     {
       "kind": "output",
@@ -81,6 +87,12 @@
       "type": "path",
       "required": true,
       "help": "Folder containing Markdown or text notes"
+    },
+    "lookback_days": {
+      "type": "int",
+      "required": false,
+      "default": 7,
+      "help": "Days back to look for notes never imported before; 0 = the whole folder. Changed notes are always checked."
     }
   }
 }

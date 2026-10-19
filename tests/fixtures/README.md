@@ -19,6 +19,7 @@ Small, hand-checked boards used by `tests/test_fixture_boards.py` and browser te
 | `v4_kit44/` | v4 split with Review Inbox questions (answered and acted on, pending approval), a proposal and an old `review_inbox` off setting | kit v44 | Frozen always-on Inbox and question preservation fixture |
 | `v4_kit46/` | v4 split with the v44 Review Inbox questions and a rank with a random tail (`a1Qx`) | kit v46 | Frozen appended-rank, question and no-new-`min_kit` fixture |
 | `v4_kit48/` | v4 split with questions and an appended rank; unchanged data shape | kit v48 | Frozen checkpoint-release board preservation fixture |
+| `v4_kit72/` | v4 split, unchanged data shape (a copy of `v4_kit71`) | kit v72 | Frozen board before automation runners (`requires`, `due`, `tick --only`); kit-update 72 to 73 keeps every record |
 
 **When you bump schema or kit:** add a row here, add a frozen directory under `tests/fixtures/`, extend the fixture tests, and add entries to the repo root `CHANGELOG.md` and `board/kit/UPGRADING.md`. The live `demo/` board stays the current showcase only.
 
@@ -32,3 +33,9 @@ Each fixture may include `fixture.json` with expected entity counts and the kit 
 
 `v4_kit69` freezes unchanged split data before automations (kit v68 → v69).
 `v4_kit70` freezes unchanged split data before automation flows (kit v69 → v70).
+`v4_kit71` adds a pending `ask.choose` with `change.recommended`, an old unanswered question and
+`settings.inbox_lapse_days` (kit v70 → v71). A lapse is computed when read, so the files never change.
+
+`inbox-rules-cases.json` is not a board: it holds the Review Inbox read-time rules (the lapse setting, the recommended
+option, when a question has lapsed) that `tests/test_inbox_rules_parity.py` runs through `keeptrack.py` and `board.js`.
+Add a case there when either changes.

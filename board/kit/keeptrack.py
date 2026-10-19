@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 70  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 76  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1288,8 +1288,10 @@ def hosted_dispatch(a):
             if a.column and a.column != "backlog":
                 sys.exit("ineligible: hosted cards are created in Backlog; approve separately")
             card = {"id": "t_" + secrets.token_hex(8), "title": a.title, "assignees": a.assign or [], "column": "backlog"}
-            if not a.title.strip():
-                sys.exit("invalid_schema: a task needs a title")
+            if not a.title.strip() or _has_break(a.title):
+                sys.exit("invalid_schema: a task needs a title on one line")
+            for name in a.label or []:
+                check_label_name(name)
             for k in ("details", "client", "priority"):
                 if getattr(a, k, None) is not None:
                     card[k] = getattr(a, k)
@@ -2639,14 +2641,26 @@ def _age(mins):
     return "?" if mins is None else f"{int(mins)}m" if mins < 120 else f"{int(mins // 60)}h" if mins < 48 * 60 else f"{int(mins // 1440)}d"
 
 
+def _flat(value):
+    """Text printed as part of one output line: printable characters only, words joined by single spaces. relay and
+    routines read `list` output one item per line, so a title can never print as a second, forged line."""
+    return " ".join("".join(c if c.isprintable() else " " for c in str(value or "")).split())
+
+
+def _has_break(value):
+    """True when text holds a line break of any kind str.splitlines knows (\v \f \x1c-\x1e \x85 \u2028 \u2029 too)."""
+    return "".join(str(value).splitlines()) != str(value)
+
+
 def line(data, t, wait_suffix="list", today=None):
     cs = claim_state(data, t.get("claim"))
-    who = ",".join("@" + a for a in t.get("assignees", [])) or "-"
+    # every field from the card file is flattened: a hand-edited file can't make this one line two (relay reads lines)
+    who = ",".join("@" + _flat(a) for a in t.get("assignees", [])) or "-"
     c = t.get("claim") or {}
     if c.get("blocked_by_wait") and cs == "blocked":   # never goes stale, so show how old its last heartbeat is
-        cl = f"  [{c.get('agent')}:blocked by wait, beat {_age(minutes_since(c.get('heartbeat_at') or c.get('claimed_at')))} ago]"
+        cl = f"  [{_flat(c.get('agent'))}:blocked by wait, beat {_age(minutes_since(c.get('heartbeat_at') or c.get('claimed_at')))} ago]"
     else:
-        cl = f"  [{c.get('agent')}:{cs}]" if c else ""
+        cl = f"  [{_flat(c.get('agent'))}:{cs}]" if c else ""
     td = t.get("todos") or []
     pr = f"  [{sum(1 for d in td if d.get('done'))}/{len(td)}]" if td else ""
     cm = f"  \U0001F4AC{len(t['comments'])}" if t.get("comments") else ""
@@ -2660,7 +2674,10 @@ def line(data, t, wait_suffix="list", today=None):
     if after_ids(t) and t.get("column") != "done":   # the links on the board not done yet (show ID reads the archive)
         todo = [after_ref(x) for x in after_links(data, t) if x["state"] not in ("done", "missing")]
         af = f"  [after {', '.join(todo)}]" if todo else ""
-    return f"#{t.get('num', '?'):<4}{t['id']}  {t['column']:<11} {who:<22} {t['title']}{pr}{cm}{wt}{af}{cl}"
+    out = (f"#{_flat(t.get('num', '?')):<4}{_flat(t['id'])}  {_flat(t['column']):<11} {who:<22} {_flat(t['title'])}"
+           f"{pr}{cm}{wt}{af}{cl}")
+    # last guard over the whole line (after refs, wait text and anything added later): no break or control character
+    return "".join(c if c.isprintable() else " " for c in out)
 
 
 def _default_scope(a, data=None):
@@ -2732,6 +2749,19 @@ def cmd_list(a):
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
         print(line(data, t, today=today) + cleared + scoring + url)
+    card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "waiting", "project", "client", "label", "bare")) or query or wait_on
+    if a.attention and not getattr(a, "json", False) and not card_filter:
+        # kit v71: Review Inbox questions nobody answered in settings.inbox_lapse_days. One self-contained line each (relay
+        # reads every line as an item). An agent does not ask a lapsed question again unless the person brings it up.
+        # Questions belong to no project, so a filtered or project-scoped run (the repo's default scope too) lists none;
+        # with --assignee, only the questions that person is named to answer.
+        for p, waited in lapsed_questions(data, today):
+            # a question with no decider is one any member answers, so it stays in an --assignee run
+            if a.assignee and p.get("decider") and str(p.get("decider")).lower() != a.assignee.lower():
+                continue
+            who = f", for @{_flat(p['decider'])}" if p.get("decider") else ""
+            print(f"lapsed question {_flat(p.get('id'))} ({_flat(p.get('kind'))}{who}, unanswered {waited} days): "
+                  f"{_flat(p.get('title', ''))}")   # every field flattened: a hand-edited file can't add a line
 
     if getattr(a, "json", False): print(json.dumps(json_items))
 
@@ -3600,6 +3630,8 @@ def cmd_auto_heartbeat(a):
 
 def cmd_add(a):
     _default_scope(a)
+    if not str(a.title or "").strip() or _has_break(a.title):
+        sys.exit("a task needs a title on one line")
     def fn(data):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
@@ -4890,7 +4922,7 @@ HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
-    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
+    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
@@ -5128,6 +5160,116 @@ def cmd_email_key(a):
     if stdin and len(value) > 1000:
         sys.exit("Message-ID input is too long (maximum header value: 998 characters)")
     print(email_key(value))
+
+
+EMAIL_VIEW_MAX = 25_000_000   # bytes of one message's JSON; a longer input is reported unreadable, never cut and read
+
+
+def _email_pack_resolver():
+    """The email-to-tasks pack's resolve.py, which ships beside this file (board/automations/ in a board repo,
+    automations/ in the plugin and the kit). Its render() and safe_view.py are the one cleaner: never a copy."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "automations", "email-to-tasks", "resolve.py")
+    if not all(os.path.isfile(os.path.join(os.path.dirname(path), f)) for f in ("resolve.py", "check.py", "safe_view.py")):
+        sys.exit("email-view and email-search need automations/email-to-tasks/resolve.py, check.py and safe_view.py beside keeptrack.py (kit v76): run kit-update")
+    import importlib.util
+    flag, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        spec = importlib.util.spec_from_file_location("keeptrack_email_resolve", path)
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+    finally:
+        sys.dont_write_bytecode = flag
+
+
+def cmd_email_view(a):
+    """One message's JSON (Gmail API shape, as `gog gmail get <id> --json` prints it) in; the cleaned view out: the
+    canonical message key, Gmail's sender checks, what hidden content was removed, then the headers and visible text
+    inside a random untrusted fence. The same view email-to-tasks reads. Anything it cannot read prints only the
+    Unreadable line (exit 1), never the raw message."""
+    resolver = _email_pack_resolver()
+    try:
+        if a.path in (None, "-"):
+            raw = sys.stdin.buffer.read(EMAIL_VIEW_MAX + 1)
+        else:
+            with open(a.path, "rb") as f:
+                raw = f.read(EMAIL_VIEW_MAX + 1)
+    except OSError as e:
+        sys.exit("email-view: cannot read " + a.path + ": " + (e.strerror or "error"))
+    try:
+        if not raw.strip() or len(raw) > EMAIL_VIEW_MAX:
+            raise ValueError("no message, or too long")
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("not a message object")
+        key = resolver.rfc822(resolver.message_id(data))
+        text = resolver.render(resolver._safe_view().view(data))
+    except Exception:   # never fall back to the raw message
+        sys.stdout.write(resolver.UNREADABLE); sys.stdout.flush(); sys.exit(1)
+    sys.stdout.write("Message key: " + (key or "none (no usable Message-ID)") + "\n" + text)
+
+
+EMAIL_SEARCH_ADDRESS = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,8}")
+EMAIL_SEARCH_PAGE = re.compile(r"[0-9A-Za-z_-]{1,200}")
+
+
+def _search_day(message):
+    """YYYY-MM-DD of a search result: Gmail's own internalDate (ms) when present, else the Date field reduced to a
+    date (digits only, never its text), else '-'."""
+    try:
+        ms = message.get("internalDate")
+        if ms is not None and str(ms).isdigit():
+            return dt.datetime.fromtimestamp(int(ms) / 1000, dt.timezone.utc).strftime("%Y-%m-%d")
+        import email.utils
+        when = email.utils.parsedate_to_datetime(str(message.get("date") or message.get("Date") or ""))
+        return (when if when.tzinfo else when.replace(tzinfo=dt.timezone.utc)).astimezone(dt.timezone.utc).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "-"
+
+
+def cmd_email_search(a):
+    """Gmail search for exact board addresses through gog, printing only ids, never mail text: one line per message,
+    `<gmail id> <thread id> <YYYY-MM-DD> sent|received`, then `next-page <token>` or `end`. `sent` only when Gmail's
+    labelIds hold SENT (a From header is the sender's to write, and a user label can be named "Sent"). A page token
+    it cannot pass back prints `page-token-unusable` and exits 3, never `end`. The query is the email-to-tasks check's own
+    window query (check.query) with the addresses; gog runs through the pack's resolver, so its time limits and
+    error codes apply: a gog failure prints `gog-error` or `gog-timeout` and exits 3."""
+    addresses = list(dict.fromkeys(x.strip().lower() for x in a.address))
+    if not addresses or len(addresses) > 20 or any(not EMAIL_SEARCH_ADDRESS.fullmatch(x) for x in addresses):
+        sys.exit("email-search: give 1 to 20 --address values, each one plain address from the board (name@example.com)")
+    try:
+        start = dt.datetime.strptime(a.start, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
+        end = dt.datetime.strptime(a.end, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc) + dt.timedelta(days=1)
+    except ValueError:
+        sys.exit("email-search: --start and --end are dates, YYYY-MM-DD (both included)")
+    if end <= start or (end - start).days > 400:
+        sys.exit("email-search: --end must be on or after --start, at most 400 days later")
+    if a.page is not None and not EMAIL_SEARCH_PAGE.fullmatch(a.page):
+        sys.exit("email-search: --page takes the token a previous email-search printed after next-page")
+    resolver = _email_pack_resolver()
+    terms = " ".join(f"from:{x} to:{x} cc:{x}" for x in addresses)
+    query = resolver._check().query(int(start.timestamp()), int(end.timestamp())) + " {" + terms + "}"
+    resolver._DEADLINE[0] = time.monotonic() + resolver.DEADLINE_SECONDS
+    try:
+        messages, token = resolver.search(query, a.page)
+    except resolver.GogFailed as failed:
+        print(str(failed)); sys.exit(3)
+    finally:
+        resolver._DEADLINE[0] = None
+    lines, skipped = [], 0
+    for m in messages:
+        mid = str(m.get("id")) if isinstance(m, dict) and isinstance(m.get("id"), (str, int)) else ""
+        thread = str(m.get("threadId") or "") if isinstance(m, dict) else ""
+        if not resolver.GMAIL_ID.fullmatch(mid):
+            skipped += 1; continue
+        labels = m.get("labelIds")   # Gmail's own label ids, as safe_view.sent_by_owner reads them; never label names
+        sent = isinstance(labels, list) and "SENT" in {str(x).upper() for x in labels}
+        lines.append(" ".join((mid, thread if resolver.GMAIL_ID.fullmatch(thread) else "-", _search_day(m),
+                               "sent" if sent else "received")))
+    if skipped:
+        lines.append(f"skipped {skipped} without a usable id")
+    if token is not None and token != "" and not (isinstance(token, str) and EMAIL_SEARCH_PAGE.fullmatch(token)):
+        print("page-token-unusable"); sys.exit(3)   # more pages exist but cannot be asked for: never claim the end
+    lines.append("next-page " + token if token else "end")
+    print("\n".join(lines))
 
 
 def cmd_touch_source(a):
@@ -5692,8 +5834,8 @@ def cmd_task_set(a):
         if a.contact is not None and a.contact != t.get("contact", ""):
             t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
         if getattr(a, "title", None) is not None:
-            if not a.title.strip():
-                sys.exit("a task needs a title")
+            if not a.title.strip() or _has_break(a.title):
+                sys.exit("a task needs a title on one line")
             if a.title != t.get("title"):
                 t["title"] = a.title; changed.append(f"title: {a.title}")
         if getattr(a, "details", None) is not None and getattr(a, "add_details", None) is not None:
@@ -5788,7 +5930,7 @@ def check_color(c):
 
 def check_label_name(name):
     name = (name or "").strip()
-    if not name or len(name) > 40 or any(ch in name for ch in ",\n"):
+    if not name or len(name) > 40 or "," in name or _has_break(name):
         sys.exit("a label name must be 1-40 characters with no comma or line break")
     return name
 
@@ -6408,6 +6550,7 @@ def cmd_settings(a):
     # From kit v44 the Review Inbox is always on for split boards; the line keeps its v42 shape for older skill copies.
     print("review_inbox.enabled: " + ("true" if review_storage_ok(data) else "false (needs split storage: keeptrack.py migrate --to 4)"))
     print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
+    print(f"inbox_lapse_days: {inbox_lapse_days(data) or 'off (questions never lapse)'}")
     br = backlog_research(data)
     print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
     print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
@@ -6440,6 +6583,11 @@ def cmd_settings_set(a):
             if not 0 <= a.waiting_days <= 365:
                 sys.exit("waiting days must be between 0 (no automatic chase) and 365")
             st["waiting_days"] = a.waiting_days; print(f"waiting_days: {a.waiting_days or 'off (no automatic chase)'}")
+        if getattr(a, "inbox_lapse_days", None) is not None:
+            if not 0 <= a.inbox_lapse_days <= 365:
+                sys.exit("inbox lapse days must be between 0 (questions never lapse) and 365")
+            st["inbox_lapse_days"] = a.inbox_lapse_days
+            print(f"inbox_lapse_days: {a.inbox_lapse_days or 'off (questions never lapse)'}")
         if getattr(a, "min_kit", None) is not None:
             cur = st.get("min_kit") if isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) else 0
             if cur > KIT_VERSION:   # a typo that locks every tool out: it may come down, to a kit this one is, never below the content
@@ -6451,7 +6599,7 @@ def cmd_settings_set(a):
                              + ", so it is not lowered (only a value above the published kit is a typo). Upgrade the board tools: "
                              "python3 board/keeptrack.py kit-update")
                 needed = min_kit_needed(data)[0]
-                if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "max_agent_claims",
+                if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
                                                                   "rename_stage", "stages", "backlog_research", "research_per_run")):
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
@@ -6890,10 +7038,88 @@ TASK_CHANGE_FIELDS = {"title", "column", "client", "project", "contact", "priori
 PERSON_CHANGE_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "github", "emails", "phones",
                         "stage", "value", "source", "notes", "next", "due", "next_due", "links", "comments"}
 TOUCH_CHANGE_FIELDS = {"text", "channel", "at", "source_id", "source_message_ids", "next", "due", "next_due"}
-ASK_CHANGE_FIELDS = {"ask.choose": {"question", "options", "allow_other", "task", "links"},
+ASK_CHANGE_FIELDS = {"ask.choose": {"question", "options", "allow_other", "recommended", "task", "links"},
                      "ask.approve": {"question", "subject", "content_hash", "task", "links"},
                      "ask.question": {"question", "task", "links"}}
 ASK_SUBJECT_TYPES = {"email", "message", "pr", "document", "other"}
+INBOX_LAPSE_DAYS = 14      # settings.inbox_lapse_days default: a question unanswered this many days shows as lapsed (0 = never)
+DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def inbox_lapse_days(data):
+    """settings.inbox_lapse_days as a whole number 0-365 (0 = questions never lapse), else the default 14."""
+    v = (data.get("settings") or {}).get("inbox_lapse_days")
+    if isinstance(v, float) and v.is_integer():   # 30.0 in the JSON is 30, as the web page reads it
+        v = int(v)
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 365 else INBOX_LAPSE_DAYS
+
+
+def recommended_option(change):
+    """The option an ask.choose recommends ({key, label, ...}), or None. Same rule as board.js recommendedOption."""
+    c = change if isinstance(change, dict) else {}
+    rec, options = c.get("recommended"), c.get("options")
+    if not isinstance(rec, str) or not isinstance(options, list):
+        return None
+    return next((o for o in options if isinstance(o, dict) and o.get("key") == rec), None)
+
+
+def ask_pending_since(proposal):
+    """When a question last became pending: the newest "reopened" history entry's time, else `created`."""
+    p = proposal if isinstance(proposal, dict) else {}
+    for h in reversed(p.get("history") if isinstance(p.get("history"), list) else []):
+        if isinstance(h, dict) and str(h.get("text") or "").startswith("reopened") and isinstance(h.get("at"), str):
+            return h["at"]
+    return str(p.get("created") or "")
+
+
+TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?")
+
+
+def stamp_day(value, zone=None):
+    """The YYYY-MM-DD a timestamp falls on in `zone` (a time zone name or tzinfo; none: the date as written), or ""."""
+    m = TIMESTAMP_RE.fullmatch(str(value or ""))
+    if not m:
+        return ""
+    try:
+        day = dt.date.fromisoformat(m.group(1))
+        if not zone or m.group(2) is None:
+            return day.isoformat()
+        if isinstance(zone, str):
+            import zoneinfo
+            zone = zoneinfo.ZoneInfo(zone)
+        off = m.group(5) or "Z"
+        tz = dt.timezone.utc if off == "Z" else dt.timezone(dt.timedelta(hours=int(off[1:3]), minutes=int(off[4:6])) * (1 if off[0] == "+" else -1))
+        at = dt.datetime(day.year, day.month, day.day, int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), tzinfo=tz)
+        return at.astimezone(zone).date().isoformat()
+    except (ValueError, OverflowError, LookupError, OSError):
+        return ""
+
+
+def ask_lapsed(proposal, today, days, zone=None):
+    """Days a pending question has waited, when that is `days` or more (it has lapsed); else 0. Computed when the board is
+    read, never written: a lapsed question stays pending and a person can still answer it. Same rule as board.js askLapsed.
+    The wait starts when it last became pending (ask_pending_since), on that day in `zone` (the board's time zone).
+    today: YYYY-MM-DD on the board's clock; days: inbox_lapse_days(data)."""
+    p = proposal if isinstance(proposal, dict) else {}
+    if p.get("kind") not in ASK_KINDS or p.get("status") != "pending" or not isinstance(days, int) or isinstance(days, bool) or days <= 0:
+        return 0
+    since = stamp_day(ask_pending_since(p), zone)
+    if not since or not DAY_RE.fullmatch(str(today or "")):
+        return 0
+    try:
+        waited = (dt.date.fromisoformat(str(today)) - dt.date.fromisoformat(since)).days
+    except ValueError:
+        return 0
+    return waited if waited >= days else 0
+
+
+def lapsed_questions(data, today=None):
+    """[(proposal, days waited)] for every pending question that has lapsed, oldest first."""
+    if not review_storage_ok(data):
+        return []
+    days, today, zone = inbox_lapse_days(data), today or board_today(data).isoformat(), board_timezone(data)
+    out = [(p, ask_lapsed(p, today, days, zone)) for p in data.get("proposals", []) or [] if isinstance(p, dict)]
+    return sorted([x for x in out if x[1]], key=lambda x: (-x[1], x[0].get("id", "")))
 
 
 def proposal_error(message):
@@ -6924,7 +7150,8 @@ def find_proposal(data, ref):
 
 
 def _one_line(value, label, limit=None):
-    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+    # every line break str.splitlines knows (\v \f \x1c-\x1e \x85 \u2028 \u2029 too), so a value can never make a second line
+    if not isinstance(value, str) or not value.strip() or "".join(value.splitlines()) != value:
         proposal_error(f"{label} must be one non-empty line")
     value = value.strip()
     if limit is not None and len(value) > limit:
@@ -6951,6 +7178,23 @@ ADDITIVE_FIELDS = {"comments", "todos", "links"}
 # Text that can carry what an email said. Without --recipients-confirmed an email proposal holds none of it.
 EMAIL_TEXT_FIELDS = {"title", "details", "notes", "next", "text", "comments", "todos", "links", "contacts", "value", "source"}
 EMAIL_METADATA_TITLE = re.compile(r"Email (?:from|to|with) [^\n]{1,80}")
+# Fixed safety sentences an email automation may add even to a metadata-only (unconfirmed) proposal: they carry no
+# text from the mail, and a warning must reach the owner even when the mail did not reach every board reader.
+EMAIL_SAFETY_REASONS = ("Hidden content was removed from this email.", "Gmail's sender check failed for this email.",
+                        "Gmail could not verify the sender of this email.")
+EMAIL_FRAUD_TEXT = ("Email asks to change payment or access details. Possible fraud: verify by phone on a number you "
+                    "already have, never one from this email.")
+
+
+def _email_safety_reason(reason):
+    """True when an unconfirmed email proposal's reason is only fixed safety sentences, each at most once."""
+    rest, seen = (reason or "").strip(), set()
+    while rest:
+        hit = next((x for x in EMAIL_SAFETY_REASONS if rest.startswith(x) and x not in seen), None)
+        if hit is None:
+            return False
+        seen.add(hit); rest = rest[len(hit):].lstrip()
+    return True
 
 
 def check_change_values(kind, change):
@@ -6958,6 +7202,8 @@ def check_change_values(kind, change):
     for key, value in change.items():
         if key in STR_FIELDS and not (key == "value" and kind.startswith("task.")) and not isinstance(value, str):
             proposal_error(f"change.{key} must be text")
+        if key == "title" and _has_break(value):
+            proposal_error("change.title must be one line")
         if key in DATE_FIELDS and (not isinstance(value, str) or (value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))):
             proposal_error(f"change.{key} must be a YYYY-MM-DD date or empty")
         if key in STR_LIST_FIELDS and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
@@ -7004,10 +7250,14 @@ def check_email_privacy(proposal, confirmed):
         proposal_error("an email proposal other than contact.touch needs --recipients-confirmed (every intended board reader received that message)")
     if not EMAIL_METADATA_TITLE.fullmatch(proposal.get("title", "")):
         proposal_error("without --recipients-confirmed an email proposal title must be metadata only, e.g. 'Email from Casey Example, 9 Oct'")
-    if (proposal.get("source") or {}).get("title", "").strip() or (proposal.get("reason") or "").strip() or (proposal.get("evidence") or "").strip():
-        proposal_error("email reason/evidence/subject requires --recipients-confirmed; without it these fields must be empty")
+    if (proposal.get("source") or {}).get("title", "").strip() or (proposal.get("evidence") or "").strip() \
+            or not _email_safety_reason(proposal.get("reason")):
+        proposal_error("email reason/evidence/subject requires --recipients-confirmed; without it these fields must be empty "
+                       "(a reason may hold only the fixed safety sentences: " + " / ".join(EMAIL_SAFETY_REASONS) + ")")
     for key in EMAIL_TEXT_FIELDS:
         value = (proposal.get("change") or {}).get(key)
+        if key == "text" and value == EMAIL_FRAUD_TEXT:
+            continue   # the fixed fraud warning, no mail text
         if key != "title" and value not in (None, "", []):
             proposal_error(f"email change.{key} requires --recipients-confirmed; store metadata only without it")
 
@@ -7044,6 +7294,8 @@ def check_ask_change(kind, change):
             if "note" in o: _one_line(o["note"], "option note", PROPOSAL_DETAIL_LIMIT)
         if "allow_other" in change and not isinstance(change["allow_other"], bool):
             proposal_error("change.allow_other must be true or false")
+        if "recommended" in change and (not isinstance(change["recommended"], str) or change["recommended"] not in keys):   # kit v71: the option the agent recommends
+            proposal_error("change.recommended must be the key of one of the options (" + ", ".join(o["key"] for o in options) + ")")
     if kind == "ask.approve":
         subject = change.get("subject")
         if not isinstance(subject, dict) or set(subject) - {"type", "url", "summary"} or subject.get("type") not in ASK_SUBJECT_TYPES:
@@ -7052,6 +7304,24 @@ def check_ask_change(kind, change):
         if "summary" in subject: _one_line(subject["summary"], "change.subject.summary", PROPOSAL_DETAIL_LIMIT)
         if not isinstance(change.get("content_hash"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", change["content_hash"]):
             proposal_error("ask.approve needs change.content_hash: sha256: and 64 lower-case hex digits of the exact content approved")
+
+
+def resolve_recommend(change, ref):
+    """--recommend: an option key, its number in the list (1 = first) or its label (any case). An exact key wins, then the
+    number, then the label; when these name different options the reference is ambiguous and refused."""
+    options = [o for o in (change.get("options") if isinstance(change.get("options"), list) else []) if isinstance(o, dict)]
+    ref = str(ref or "").strip()
+    listing = "; ".join(f"{i}. {o.get('label')} ({o.get('key')})" for i, o in enumerate(options, 1))
+    by_key = [o.get("key") for o in options if ref == o.get("key")]
+    by_pos = [options[int(ref) - 1].get("key")] if ref.isdigit() and 1 <= int(ref) <= len(options) else []
+    by_label = [o.get("key") for o in options if ref.casefold() == str(o.get("label", "")).strip().casefold()]
+    named = list(dict.fromkeys(by_key + by_pos + by_label))
+    if len(named) > 1:
+        proposal_error(f"--recommend {ref!r} is ambiguous: it names options " + ", ".join(named)
+                       + f" (by key, number or label). Options: {listing}. Give a key that names one option only.")
+    if named:
+        return named[0]
+    proposal_error(f"--recommend {ref!r} matches none of the options: {listing or '(none)'}. Give a key, a number or a label.")
 
 
 def validate_proposal_input(raw, recipients_confirmed=False):
@@ -7084,7 +7354,7 @@ def validate_proposal_input(raw, recipients_confirmed=False):
     reason = raw.get("reason", "")
     evidence = raw.get("evidence", "")
     for label, value in (("reason", reason), ("evidence", evidence)):
-        if not isinstance(value, str) or "\n" in value or "\r" in value or len(value) > PROPOSAL_DETAIL_LIMIT:
+        if not isinstance(value, str) or _has_break(value) or len(value) > PROPOSAL_DETAIL_LIMIT:
             proposal_error(f"{label} must be one line of at most {PROPOSAL_DETAIL_LIMIT} characters")
     change = raw.get("change")
     if not isinstance(change, dict) or not change:
@@ -7149,7 +7419,8 @@ def validate_proposal_input(raw, recipients_confirmed=False):
            "source": clean_source, "action_key": action_key, "work_key": work_key,
            "reason": reason.strip(), "target": copy.deepcopy(target), "change": copy.deepcopy(change),
            "likely_duplicates": [], "decision": None, "history": [],
-           "created": raw.get("created") or now(),
+           # kit v71: a question's lapse clock starts when it is added; the payload cannot set it (as with createdBy below)
+           "created": now() if kind in ASK_KINDS else (raw.get("created") or now()),
            "createdBy": who_am_i() if kind in ASK_KINDS else (raw.get("createdBy") or who_am_i())}   # an answer goes back to the asker only
     for key in ("run", "evidence", "reviewer", "decider"):
         if raw.get(key) not in (None, ""):
@@ -7312,6 +7583,14 @@ def cmd_research_suggest(a):
 
 def cmd_proposal_add(a):
     values = _read_proposal_payload(a.path)
+    if getattr(a, "recommend", None) is not None:   # kit v71: mark the recommended option of the one ask.choose in the payload
+        chooses = [v for v in values if isinstance(v, dict) and v.get("kind") == "ask.choose"]
+        if len(values) != 1 or len(chooses) != 1:
+            proposal_error("--recommend needs exactly one ask.choose question in the payload; for a list, set change.recommended in each")
+        change = chooses[0].get("change")
+        if not isinstance(change, dict):
+            proposal_error("change must be a non-empty object")
+        change["recommended"] = resolve_recommend(change, a.recommend)
     if a.dry_run:
         data, _ = load(); before = copy.deepcopy(data)
         _, lines = _prepare_proposals(data, values, a.recipients_confirmed, True)
@@ -7337,10 +7616,15 @@ def cmd_proposals(a):
     if a.reviewer: rows = [p for p in rows if p.get("reviewer") == a.reviewer]
     if a.mine: rows = [p for p in rows if p.get("createdBy") == who_am_i()]
     rows = sorted(rows, key=lambda p: (p.get("created", ""), p.get("id", "")))
+    days, today = inbox_lapse_days(data), board_today(data).isoformat()
+    zone = board_timezone(data)
+    if getattr(a, "lapsed", False): rows = [p for p in rows if ask_lapsed(p, today, days, zone)]
     if a.json:
         print(json.dumps(rows, indent=2, ensure_ascii=False)); return
     for p in rows:
-        print(f"{p['id']}  {p['status']:<8} {p['kind']:<13} {p['title']}")
+        rec, waited = recommended_option(p.get("change")), ask_lapsed(p, today, days, zone)
+        marks = (f"  (recommended: {_flat(rec.get('label') or rec.get('key'))})" if rec else "") + (f"  [lapsed: unanswered {waited} days]" if waited else "")
+        print(f"{_flat(p['id'])}  {_flat(p['status']):<8} {_flat(p['kind']):<13} {_flat(p['title'])}{marks}")
     if not rows: print("(no proposals)")
 
 
@@ -7740,7 +8024,13 @@ def cmd_proposal_answer(a):
             proposal_error(f"{proposal['id']} is a {proposal.get('kind')} proposal: use proposal-accept, -merge or -ignore")
         _ask_person(proposal, "answer")
         approve = True if a.approve else False if a.reject else None
-        answer = ask_answer(proposal, a.choose, a.other, approve, a.text, a.note)
+        choose = a.choose
+        if getattr(a, "recommended", False):   # kit v71: the same answer as --choose <the recommended key>
+            rec = recommended_option(proposal.get("change")) if proposal.get("kind") == "ask.choose" else None
+            if not rec:
+                proposal_error(f"{proposal['id']} has no recommended option; answer with --choose KEY")
+            choose = rec["key"]
+        answer = ask_answer(proposal, choose, a.other, approve, a.text, a.note)
         ts, by = now(), who_am_i()
         proposal["status"] = "answered"
         proposal["decision"] = {"action": "answer", "id": "a_" + uuid.uuid4().hex[:10], "by": by, "at": ts, "answer": answer,
@@ -7763,6 +8053,11 @@ def cmd_proposal_result(a):
     out = {"id": proposal["id"], "kind": proposal.get("kind"), "status": proposal.get("status"), "decider": proposal.get("decider"),
            "answer": d.get("answer"), "answer_id": d.get("id"), "by": d.get("by"), "at": d.get("at"), "done": d.get("done"),
            "content_hash": (proposal.get("change") or {}).get("content_hash")}
+    rec = recommended_option(proposal.get("change"))
+    if rec: out["recommended"] = rec.get("key")
+    waited = ask_lapsed(proposal, board_today(data).isoformat(), inbox_lapse_days(data), board_timezone(data))
+    out["lapsed"] = bool(waited)   # kit v71: unanswered for settings.inbox_lapse_days; do not ask again unless the person raises it
+    if waited: out["lapsed_days"] = waited
     print(json.dumps(out, indent=2, ensure_ascii=False))
 
 
@@ -8264,7 +8559,7 @@ def cmd_checkpoint(a):
             if not isinstance(data, dict) or data.get("version") != 1: sys.exit("unsupported checkpoint version")
             if a.action == "show":
                 print(json.dumps({"sha256": digest, "checkpoint": data}, indent=2)); return
-            if register.get("owner", "").lower() != default_user().strip().lower(): sys.exit("checkpoint can only be updated by the registered owner")
+            if str(register.get("owner") or "").lower() != default_user().strip().lower(): sys.exit("checkpoint can only be updated by the registered owner")
             current = register.get("current_run") or {}
             if not a.run_id or current.get("id") != a.run_id: sys.exit("run id does not match the running attempt")
             if not a.expect_sha or digest != a.expect_sha: sys.exit("checkpoint changed; reread and regroup before saving")
@@ -8399,6 +8694,55 @@ _AUTO_NEEDS = {"board.read", "files.read", "gmail.read", "drive.read", "github.r
 _AUTO_NEVER = {"send-email", "delete", "spend", "external-post", "edit-contacts"}
 _AUTO_FLOW = {"trigger", "read", "check", "agent", "output", "step"}   # node kinds for the web board's flow diagram
 _AUTO_RUNTIMES = {"claude", "chatgpt", "grok", "local"}
+# Kit v73: where an install runs. "local" is a person's own machine or scheduler; "cloud" is a claude.ai routine
+# started by the relay dispatcher. A pack's optional `requires` says which runners it allows and what each needs.
+_AUTO_RUNNERS = ("cloud", "local")
+# The setup status that makes an install ready, per runner. A cloud install is "ready-cloud" so that a kit before v73,
+# which knows no runner and accepts only "ready", never runs it next to the relay's cloud worker.
+_AUTO_READY = {"local": "ready", "cloud": "ready-cloud"}
+_AUTO_CONNECTOR = re.compile(r"[a-z][a-z0-9_-]{0,39}")     # a claude.ai connector name, such as gmail
+_AUTO_SECRET = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")  # an environment variable NAME with an underscore; never a value
+
+
+def _auto_requires(req, has_script, errors):
+    """Validate the optional manifest `requires` object (kit v73) into `errors`."""
+    def names(value, pattern, label):
+        ok = isinstance(value, list) and len(value) <= 16 and all(isinstance(x, str) and len(x) <= 64 and pattern.fullmatch(x) for x in value)
+        if not ok: errors.append("requires: invalid " + label)
+        elif len(set(value)) != len(value): errors.append("requires: duplicate " + label)
+    if not isinstance(req, dict):
+        errors.append("requires: expected object"); return
+    if set(req) - {"runner", "connectors", "secrets", "check", "cloud", "local"}: errors.append("requires: unknown keys")
+    runner = req.get("runner", "any")
+    if runner not in ("any",) + _AUTO_RUNNERS: errors.append("requires: runner must be any, cloud or local")
+    if req.get("check", "script") not in ("script", "model"): errors.append("requires: check must be script or model")
+    if req.get("check") == "model" and has_script: errors.append("requires: a model check has no check script")
+    if req.get("check") == "script" and not has_script: errors.append("requires: a script check needs a check script")
+    names(req.get("connectors", []), _AUTO_CONNECTOR, "connectors")
+    names(req.get("secrets", []), _AUTO_SECRET, "secrets")
+    for where in _AUTO_RUNNERS:
+        if where not in req: continue
+        override = req[where]
+        if not isinstance(override, dict) or set(override) - {"connectors", "secrets"}:
+            errors.append("requires: " + where + " may set only connectors and secrets"); continue
+        if runner not in ("any", where): errors.append("requires: " + where + " needs for a pack that never runs there")
+        names(override.get("connectors", []), _AUTO_CONNECTOR, "connectors")
+        names(override.get("secrets", []), _AUTO_SECRET, "secrets")
+
+
+def _auto_needs(m, runner):
+    """What one install of pack manifest `m` needs on `runner`: the contract's needs object, resolved."""
+    req = m.get("requires") or {}
+    override = req.get(runner) or {} if runner in _AUTO_RUNNERS else {}
+    return dict(runner=req.get("runner", "any"),
+                connectors=list(override.get("connectors", req.get("connectors", []))),
+                secrets=list(override.get("secrets", req.get("secrets", []))),
+                check=req.get("check", "script" if m.get("check") else "model"))   # no script: the agent runs every interval
+
+
+def _auto_runner_allowed(m, slug, runner):
+    allowed = (m.get("requires") or {}).get("runner", "any")
+    if allowed not in ("any", runner): sys.exit("automation " + slug + " runs only on a " + allowed + " runner")
 
 
 def _auto_json(path, default=None):
@@ -8440,7 +8784,7 @@ def _auto_pack(path):
         for name in dirs + files: require(not os.path.islink(os.path.join(root, name)), "pack must not contain symlinks")
     try: m = _auto_json(os.path.join(path, "manifest.json"))
     except (OSError, ValueError): m = None
-    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix flow".split(),
+    m = obj(m, "schema slug name summary version needs writes never every check config action_key_prefix flow requires".split(),
             "schema slug name summary version needs writes never every".split(), "manifest")
     require(m.get("schema") == "keeptrack-automation/1", "unsupported manifest schema")
     slug = m.get("slug")
@@ -8493,6 +8837,7 @@ def _auto_pack(path):
             require(isinstance(step.get("kind"), str) and step["kind"] in _AUTO_FLOW, "unknown flow step kind")
             require(text(step.get("title"), 40), "invalid flow step title")
             if "text" in step: require(text(step["text"], 160), "invalid flow step text")
+    if "requires" in m: _auto_requires(m["requires"], "check" in m, errors)
     if "action_key_prefix" in m:
         try: _auto_token(m["action_key_prefix"])
         except ValueError: errors.append("invalid action_key_prefix")
@@ -8646,8 +8991,9 @@ def _auto_result(value):
 
 
 def _auto_ready(register, digest):
-    a = register["automation"]; setup = a.get("setup", {})
-    return a.get("digest") == digest == setup.get("digest") and setup.get("status") == "ready"
+    a = register["automation"]; setup = a.get("setup", {}); runner = _auto_runner(a)
+    return (a.get("digest") == digest == setup.get("digest") and setup.get("status") == _AUTO_READY[runner]
+            and setup.get("runner", "local") == runner)
 
 
 def _auto_seen_state(register):
@@ -8702,7 +9048,7 @@ def _auto_state(*, write=True):
 def _auto_identity(register):
     install = register.get("automation", {})
     return dict(digest=install.get("digest"), install_id=install.get("install_id"),
-                owner=register.get("owner", "").lower())
+                owner=str(register.get("owner") or "").lower())
 
 
 def _auto_local_entry(state, register):
@@ -8744,7 +9090,79 @@ def _auto_payload(path, m, r, result, run_id):
                 action_key_prefix=prefix, skill=os.path.join(path, "SKILL.md"), items=items, more=result["more"], cursor=result["cursor"])
 
 
+def _auto_epoch(value):
+    """A register's committed last_started_at as epoch seconds; 0 for a missing or unreadable time.
+    A time more than 5 minutes ahead (a worker whose clock runs fast) is clamped to now, so it counts as just started
+    and cannot cause an early second run. A time more than the longest interval ahead cannot come from clock skew: it
+    is a bad edit, and counts as 0 so it cannot block an automation for good."""
+    if not isinstance(value, str): return 0
+    try:
+        when = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if when.tzinfo is None: when = when.replace(tzinfo=dt.timezone.utc)
+        when = when.timestamp()
+    except (ValueError, OverflowError, OSError): return 0
+    current = time.time()
+    if when > current + max(_AUTO_INTERVALS.values()): return 0
+    return current if when > current + 300 else when
+
+
+def _auto_runner(install):
+    return install.get("runner") if install.get("runner") in _AUTO_RUNNERS else "local"   # installs before v73 are local
+
+
+def _auto_digest_pin(a):
+    """tick --digest: None, or the approved digest as 64 lowercase hex. Fails closed: an empty or malformed value, or
+    --digest without --only, is refused rather than ignored."""
+    pin = getattr(a, "digest", None)
+    if pin is None: return None
+    if getattr(a, "only", None) is None: sys.exit("automation tick: --digest needs --only <slug>")
+    match = re.fullmatch(r"(?:sha256:)?([0-9a-f]{64})", pin) if isinstance(pin, str) else None
+    if not match: sys.exit("automation tick --digest: expected the approved digest, 64 lowercase hex characters")
+    return match.group(1)
+
+
+def _auto_cloud_cursor(r):
+    """A cloud install's committed scan continuation (fresh clones have no local state); None when unreadable."""
+    try: return _auto_token(r["scan_cursor"]) if r.get("scan_cursor") is not None else None
+    except ValueError: return None
+
+
+def _auto_keep_cloud_cursor(r, result):
+    """The same continuation rules as _auto_record_check, kept in the committed register for a cloud install."""
+    if result["items"]:
+        if _auto_cloud_cursor(r) is None and result.get("start_cursor") is not None: r["scan_cursor"] = result["start_cursor"]
+    elif result["cursor"] is not None: r["scan_cursor"] = result["cursor"]
+    else: r.pop("scan_cursor", None)
+
+
+def _auto_only(a, packs, owner, runner, pin=None):
+    """tick --only: refuse anything but this owner's active install of exactly this slug on this runner."""
+    slug = a.only
+    if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", slug): sys.exit("automation tick --only: invalid slug")
+    _, rp = _auto_binding(slug, owner)
+    try: r = _auto_json(rp, {})
+    except (ValueError, OSError, UnicodeDecodeError): sys.exit("automation tick --only " + slug + ": register unreadable")
+    install = r.get("automation") if isinstance(r, dict) else None
+    if not isinstance(install, dict) or install.get("slug") != slug or r.get("status") == "retired":
+        sys.exit("automation tick --only " + slug + ": not installed for " + owner)
+    if str(r.get("owner") or "").lower() != owner.lower(): sys.exit("automation owner mismatch")
+    if r.get("status") != "active": sys.exit("automation tick --only " + slug + ": not active (status " + str(r.get("status")) + ")")
+    if _auto_runner(install) != runner:
+        sys.exit("automation tick --only " + slug + ": installed for the " + _auto_runner(install) + " runner, not " + runner)
+    if pin is not None and pin != install.get("digest"):
+        sys.exit("automation tick --only " + slug + ": approved digest does not match --digest")
+    if slug not in packs: sys.exit("automation pack not found: " + slug)
+    return os.path.basename(rp)
+
+
 def _auto_tick(a, packs, owner):
+    runner = getattr(a, "runner", None) or "local"
+    if runner not in _AUTO_RUNNERS: sys.exit("--runner must be cloud or local")
+    pin = _auto_digest_pin(a)
+    only = _auto_only(a, packs, owner, runner, pin) if getattr(a, "only", None) is not None else None
+    # Every cloud check is recorded in the committed register, work or not: a cloud worker is a fresh clone, so
+    # local state is lost and `due` reads only the register.
+    commit_start = only is not None or runner == "cloud"
     _auto_local(); payloads = []; problems = []; reservations = []
     # Validate parent directories before opening the shared, non-JSON tick lock.
     lock_path = os.path.join(os.path.dirname(_automation_path("automation/tick.json")), ".tick.lock")
@@ -8752,13 +9170,16 @@ def _auto_tick(a, packs, owner):
     try:
         with _auto_lock(lock_path, True) as acquired:
             if not acquired: print("automation tick busy", file=sys.stderr); return
+            only_seen = False
             register_dir = os.path.dirname(_auto_binding("placeholder", owner)[1])
             for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) else []:
                 if not name.endswith(".json"): continue
+                if only is not None and name != only: continue
                 if not re.fullmatch(r"[a-zA-Z0-9_-]+\.json", name):
                     if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
                     continue
                 rp = _automation_path("automation/routines/" + name)
+                if only is not None: only_seen = True
                 with _auto_lock(rp + ".lock"):
                     # One unreadable register (a merge conflict, another routine's file) must not stop other bindings.
                     try:
@@ -8770,8 +9191,18 @@ def _auto_tick(a, packs, owner):
                     except (ValueError, OSError, UnicodeDecodeError):
                         if name.startswith("auto-"): problems.append({"slug": name[:-5], "code": "register-invalid"})
                         continue
-                    if not install or r.get("owner", "").lower() != owner.lower() or r.get("status") != "active": continue
-                    slug = install["slug"]; binding = r["id"]; reserved = False
+                    if only is not None:   # re-checked under the lock: the file may have changed since _auto_only read it
+                        # Checked before the skips below, so a register disabled, handed over or moved to another
+                        # runner since the first check is reported (exit 3), never skipped silently (exit 0).
+                        if (not install or install.get("slug") != a.only or r.get("id") != name[:-5]
+                                or str(r.get("owner") or "").lower() != owner.lower() or r.get("status") != "active"
+                                or _auto_runner(install) != runner):
+                            problems.append({"slug": a.only, "code": "register-changed"}); continue
+                        if pin is not None and install.get("digest") != pin:
+                            problems.append({"slug": a.only, "code": "digest-mismatch"}); continue
+                    if not install or str(r.get("owner") or "").lower() != owner.lower() or r.get("status") != "active": continue
+                    if _auto_runner(install) != runner: continue   # another runner's install: never run it here
+                    slug = install["slug"]; binding = r["id"]; reserved = False; started = None
                     try:
                         if slug not in packs: raise ValueError("pack-missing")
                         _, path = packs[slug]; m, digest = _auto_pack(path)
@@ -8780,26 +9211,39 @@ def _auto_tick(a, packs, owner):
                             problems.append({"slug": slug, "code": "busy"}); continue
                         with _auto_state(write=False) as local:
                             previous = _auto_local_entry(local, r).copy()
-                        if time.time() - previous.get("time", 0) < _AUTO_INTERVALS[install["every"]]:
+                        # Both this clone's last check and the committed last_started_at throttle, so a second
+                        # runner with a fresh clone cannot run the same automation again within one interval.
+                        if time.time() - max(previous.get("time", 0), _auto_epoch(r.get("last_started_at"))) < _AUTO_INTERVALS[install["every"]]:
                             if previous.get("result") not in (None, "ok"): problems.append({"slug": slug, "code": previous["result"]})
+                            if only is not None: print("automation " + slug + ": not due yet", file=sys.stderr)
                             continue
-                        result = _auto_check(path, m, r, previous.get("scan_cursor"))
+                        started = now()
+                        cloud = runner == "cloud"
+                        result = _auto_check(path, m, r, _auto_cloud_cursor(r) if cloud else previous.get("scan_cursor"))
                         # A changed file during the subprocess must never yield a reservation.
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
+                        if cloud: _auto_keep_cloud_cursor(r, result)
                         if result["items"]:
                             run_id = "tick-" + uuid.uuid4().hex
-                            r["last_started_at"] = now()
+                            r["last_started_at"] = started
                             r["current_run"] = dict(id=run_id, started_at=r["last_started_at"], status="running", digest=digest,
                                 batch=dict(items=[{k: i[k] for k in ("key", "rev")} for i in result["items"]], cursor=result["cursor"]))
                             reserved = True
                             _auto_write(rp, r)
                             reservations.append((rp, run_id))
                             payloads.append(_auto_payload(path, m, r, result, run_id))
+                        elif commit_start:
+                            # tick --only and every cloud tick record each checked start, work or not; the worker commits it.
+                            r["last_started_at"] = started; _auto_write(rp, r)
                         _auto_save_check(binding, result=result, register=r)
                     except (ValueError, OSError, SystemExit) as error:
                         if reserved: raise
+                        if commit_start and started is not None:
+                            r["last_started_at"] = started; _auto_write(rp, r)
                         code = _auto_save_check(binding, error=error, register=r)
                         problems.append({"slug": slug, "code": code})
+            if only is not None and not only_seen:   # the register was removed after the first check
+                problems.append({"slug": a.only, "code": "register-changed"})
         if payloads: print(json.dumps({"schema": "keeptrack-tick/1", "automations": payloads, "problems": problems}), flush=True)
         elif problems:
             print(json.dumps(problems), file=sys.stderr); return 3
@@ -8818,18 +9262,98 @@ def _auto_tick(a, packs, owner):
         raise
 
 
+def _auto_active(owner, packs, runner=None):
+    """This owner's active installs, read only: no lock, no local state and no git exclude are written."""
+    register_dir = os.path.join(ROOT, "automation", "routines")
+    for name in sorted(os.listdir(register_dir)) if os.path.isdir(register_dir) and not os.path.islink(register_dir) else []:
+        if not re.fullmatch(r"auto-[a-zA-Z0-9_-]+\.json", name): continue
+        path = os.path.join(register_dir, name)
+        if os.path.islink(path): continue
+        try: r = _auto_json(path, {})
+        except (ValueError, OSError, UnicodeDecodeError): continue
+        install = r.get("automation") if isinstance(r, dict) else None
+        if not isinstance(install, dict) or not isinstance(install.get("slug"), str) or r.get("status") != "active": continue
+        if str(r.get("owner") or "").lower() != owner.lower() or r.get("id") != name[:-5]: continue
+        if runner and _auto_runner(install) != runner: continue
+        if install["slug"] not in packs: continue
+        try: m, digest = _auto_pack(packs[install["slug"]][1])
+        except (ValueError, OSError, SystemExit): continue
+        yield r, install, m, digest
+
+
+def _auto_view_runner(a):
+    runner = getattr(a, "runner", None)
+    if runner is not None and runner not in _AUTO_RUNNERS: sys.exit("--runner must be cloud or local")
+    return runner
+
+
+def _auto_needs_cmd(a, packs, owner):
+    """automation needs --json: the connectors and secret names this owner's active installs need."""
+    by_slug = {}
+    for r, install, m, _ in _auto_active(owner, packs, _auto_view_runner(a)):
+        by_slug[install["slug"]] = _auto_needs(m, _auto_runner(install))
+    print(json.dumps(dict(connectors=sorted({c for n in by_slug.values() for c in n["connectors"]}),
+                          secrets=sorted({s for n in by_slug.values() for s in n["secrets"]}), by_slug=by_slug)))
+
+
+def _auto_due(a, packs, owner):
+    """automation due --json: active, approved, idle installs whose interval has passed. Reserves and writes nothing."""
+    try: local = _auto_json(_automation_path("automation/.local/tick-state.json"), {})
+    except (ValueError, OSError, UnicodeDecodeError): local = {}
+    if not isinstance(local, dict): local = {}
+    due = []
+    for r, install, m, digest in _auto_active(owner, packs, _auto_view_runner(a)):
+        if not _auto_ready(r, digest) or r.get("current_run"): continue
+        every = install.get("every")
+        if every not in _AUTO_INTERVALS: continue
+        last = _auto_local_entry(local, r).get("time", 0)
+        if time.time() - max(last if isinstance(last, (int, float)) else 0, _auto_epoch(r.get("last_started_at"))) < _AUTO_INTERVALS[every]: continue
+        due.append(dict(slug=install["slug"], owner=str(r["owner"]).lower(), binding=r["id"], digest=install["digest"],
+                        runner=_auto_runner(install), needs=_auto_needs(m, _auto_runner(install)), every=every,
+                        last_started_at=r.get("last_started_at")))
+    print(json.dumps(dict(board=REPO or None, due=due)))
+
+
+def _auto_held_connectors(a):
+    raw = getattr(a, "connectors", None)
+    if raw is None: raw = os.environ.get("KEEPTRACK_CONNECTORS", "")
+    held = [x.strip().lower() for x in raw.split(",") if x.strip()]
+    for name in held:
+        if not _AUTO_CONNECTOR.fullmatch(name): sys.exit("invalid connector name in --connectors or KEEPTRACK_CONNECTORS")
+    return held
+
+
+# Actions that create, change, run or record work for one owner's binding. Only that owner may run them:
+# --owner must name the person running the command (default_user(), case-insensitive). There is no admin
+# override; another person's binding is installed, set up, enabled, ticked or retired by that person.
+# dry-run is here too: it runs that owner's installed check, under their network grant and seen state.
+_AUTO_OWNER_ACTIONS = ("install", "setup", "enable", "disable", "uninstall", "check", "tick", "mark", "dry-run")
+
+
+def _auto_owner(a):
+    """The owner this command acts for; refuses an --owner that is not the person running a changing action."""
+    asked = (getattr(a, "owner", None) or "").strip().lower()
+    if asked and a.action not in _AUTO_OWNER_ACTIONS:
+        return asked                     # a read-only look at someone's automations: no login lookup needed
+    runner = (default_user() or "").strip().lower()
+    if a.action in _AUTO_OWNER_ACTIONS and asked and asked != runner:
+        if not runner: sys.exit("automation " + a.action + ": cannot tell who is running this; set BOARD_USER to your GitHub login")
+        sys.exit("automation " + a.action + ": --owner " + asked + " is not you (" + runner + "); only the owner can " + a.action + " their own automations")
+    return asked or runner
+
+
 def cmd_automation(a):
     action = a.action
     if action == "validate":
         _auto_pack(a.path); print("valid"); return
-    owner = (getattr(a, "owner", None) or default_user()).strip().lower()
+    owner = _auto_owner(a)
     slug = getattr(a, "slug", None)
     if action in ("disable", "uninstall"):
         binding, rp = _auto_binding(slug, owner)
         with _auto_lock(rp + ".lock"):
             r = _auto_json(rp)
             if not r: sys.exit("automation is not installed")
-            if r.get("owner", "").lower() != owner: sys.exit("automation owner mismatch")
+            if str(r.get("owner") or "").lower() != owner: sys.exit("automation owner mismatch")
             if r.get("status") == "retired": sys.exit("automation is not installed")
             if action == "uninstall":
                 if r.get("status") == "retired": sys.exit("automation is not installed")
@@ -8843,6 +9367,8 @@ def cmd_automation(a):
         print(slug + ": " + r["status"]); return
     packs = _auto_packs()
     if action == "tick": return _auto_tick(a, packs, owner)
+    if action == "due": return _auto_due(a, packs, owner)
+    if action == "needs": return _auto_needs_cmd(a, packs, owner)
     if action == "list":
         out = []
         listed = dict(packs)
@@ -8914,6 +9440,8 @@ def cmd_automation(a):
             if r and r.get("status") != "retired": sys.exit("automation already installed")
             network = m.get("check", {}).get("network", False)
             if bool(a.allow_network) != network: sys.exit("network check requires --allow-network; grant refused for offline checks")
+            runner = getattr(a, "runner", None) or "local"
+            _auto_runner_allowed(m, slug, runner)
             config = {k: v["default"] for k, v in m.get("config", {}).items() if "default" in v}
             for pair in a.set:
                 k, sep, v = pair.partition("=")
@@ -8930,11 +9458,11 @@ def cmd_automation(a):
                      status="unverified", connections=[{"need": n["id"]} for n in m["needs"]], current_run=None,
                      automation=dict(schema="keeptrack-automation-install/1", slug=slug, source=source,
                                      pack_path=os.path.relpath(path, ROOT), pack_version=m["version"], digest=digest, install_id=uuid.uuid4().hex,
-                                     writes="proposals", every=a.every or m["every"], config=config, network_granted=network,
+                                     writes="proposals", every=a.every or m["every"], config=config, network_granted=network, runner=runner,
                                      setup=dict(status="blocked", digest=digest, runtime=None, checked_at=now(), notes=[])))
         else:
             if not r or r.get("status") == "retired": sys.exit("automation is not installed")
-            if r.get("owner") != owner: sys.exit("automation owner mismatch")
+            if str(r.get("owner") or "").lower() != owner: sys.exit("automation owner mismatch")
             install = r["automation"]
             if action == "enable":
                 if not _auto_ready(r, digest): sys.exit("setup is not ready for current pack digest; reinstall and setup")
@@ -8942,6 +9470,12 @@ def cmd_automation(a):
             elif action == "setup":
                 if digest != install["digest"]: sys.exit("pack changed; uninstall and reinstall before setup")
                 setup = install["setup"]
+                runner = getattr(a, "runner", None) or _auto_runner(install)
+                _auto_runner_allowed(m, slug, runner)
+                if runner != _auto_runner(install):
+                    if r.get("current_run"): sys.exit("automation has a current run; finish it before moving it to another runner")
+                    r.pop("scan_cursor", None)   # a cloud continuation belongs to the cloud runner
+                held = _auto_held_connectors(a) if runner == "cloud" else []
                 runtime = a.runtime or setup.get("runtime")
                 if runtime not in _AUTO_RUNTIMES: sys.exit("setup needs --runtime")
                 confirmed = setup.get("confirmed", []) if runtime == setup.get("runtime") else []
@@ -8963,10 +9497,22 @@ def cmd_automation(a):
                     elif need["id"] not in confirmed:
                         print("Confirm read-only access to " + need["id"] + ": " + route["how"])
                         notes.append("confirmation-needed")
+                # Kit v73: the runner's needs. Only secret NAMES are checked for presence; a value is never read out.
+                needs = _auto_needs(m, runner); missing = []
+                for name in needs["secrets"]:
+                    if not os.environ.get(name):
+                        notes.append("secret-missing:" + name)
+                        missing.append("missing secret " + name + ": set it in this runner's environment (only its name is checked)")
+                for name in needs["connectors"] if runner == "cloud" else []:
+                    if name not in held:
+                        notes.append("connector-missing:" + name)
+                        missing.append("missing connector " + name + ": give the routine this connector, then pass --connectors or KEEPTRACK_CONNECTORS")
                 ready = not notes
-                install["setup"] = dict(status="ready" if ready else "blocked", runtime=runtime, checked_at=now(), digest=digest, notes=notes, confirmed=confirmed)
+                install["runner"] = runner
+                install["setup"] = dict(status=_AUTO_READY[runner] if ready else "blocked", runtime=runtime, runner=runner, checked_at=now(), digest=digest, notes=notes, confirmed=confirmed)
                 r["status"] = "paused" if ready else "unverified"
-                print(("ready" if ready else "blocked") + "; network isolation " + ("available" if _auto_isolation() else "unavailable"))
+                print(("ready" if ready else "blocked") + "; runner " + runner + "; network isolation " + ("available" if _auto_isolation() else "unavailable"))
+                for line in missing: print(line)
                 print(os.path.join(path, "SETUP.md"))
                 if runtime != "local": print(open(os.path.join(path, "SETUP.md")).read())
             elif action in ("check", "dry-run"):
@@ -8990,7 +9536,7 @@ def cmd_automation(a):
                     print(open(os.path.join(path, "SKILL.md")).read())
                 return
             elif action == "mark":
-                if r.get("owner", "").lower() != default_user().strip().lower(): sys.exit("mark requires the registered owner")
+                if str(r.get("owner") or "").lower() != default_user().strip().lower(): sys.exit("mark requires the registered owner")
                 current = r.get("current_run") or {}
                 if current.get("id") != a.run_id: sys.exit("run id does not match the running attempt")
                 if digest != install["digest"] or current.get("digest") != digest: sys.exit("pack digest changed since reservation")
@@ -9023,6 +9569,7 @@ def cmd_automation(a):
                         entry = dict(_auto_local_entry(local, r))
                         entry.pop("scan_cursor", None)
                         local[binding] = entry
+                    if r.pop("scan_cursor", None) is not None: _auto_write(rp, r)   # the committed seen cursor now leads
                 print("marked " + str(len(completed))); return
         _auto_write(rp, r)
         if action == "install":
@@ -9034,12 +9581,21 @@ def cmd_automation(a):
 def _automation_parser(sub):
     s = sub.add_parser("automation", help="install and run digest-pinned proposal automations")
     commands = s.add_subparsers(dest="action", required=True)
-    for name in ("list", "show", "validate", "install", "setup", "enable", "disable", "check", "tick", "dry-run", "mark", "fork", "test", "uninstall"):
+    for name in ("list", "show", "validate", "install", "setup", "enable", "disable", "check", "tick", "dry-run", "mark", "fork", "test", "uninstall", "needs", "due"):
         p = commands.add_parser(name); p.set_defaults(f=cmd_automation)
         if name == "validate": p.add_argument("path"); continue
+        if name in ("needs", "due"):
+            p.add_argument("--json", action="store_true", help="print JSON (the only output format)")
+            p.add_argument("--runner", choices=_AUTO_RUNNERS, help="only installs for this runner"); continue
         p.add_argument("--owner")
         if name not in ("list", "tick"): p.add_argument("slug")
         if name in ("list", "tick"): p.add_argument("--json", action="store_true")
+        if name in ("install", "setup", "tick"):
+            p.add_argument("--runner", choices=_AUTO_RUNNERS, help="where this runs: local (default) or cloud")
+        if name == "setup": p.add_argument("--connectors", help="comma list of connectors this routine holds (cloud), else KEEPTRACK_CONNECTORS")
+        if name == "tick":
+            p.add_argument("--only", metavar="SLUG", help="tick exactly this automation (relay workers)")
+            p.add_argument("--digest", help="with --only: refuse unless the approved digest is this one")
         if name == "list": p.add_argument("--installed", action="store_true")
         if name == "install":
             p.add_argument("--every", choices=sorted(_AUTO_INTERVALS)); p.add_argument("--set", action="append", default=[])
@@ -9057,7 +9613,7 @@ def _proposals_only(a):
     if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
     # Fail closed: new commands must be deliberately classified before loader use.
     reads = {"list", "show", "people", "person", "projects", "project", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
-    allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
+    allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
 
 
@@ -9216,6 +9772,12 @@ def main():
     s = sub.add_parser("email-key", help="hash an RFC822 Message-ID without storing the raw header")
     s.add_argument("message_id", nargs="?", help="header as one non-shell argv value; never interpolate it into shell text")
     s.add_argument("--stdin", action="store_true", help="read the header value safely from stdin (bounded; no shell substitution)"); s.set_defaults(f=cmd_email_key)
+    s = sub.add_parser("email-search", help="search Gmail (through gog) for exact board addresses; prints ids, dates and sent/received only, never mail text")
+    s.add_argument("--address", action="append", required=True, help="an exact address from the board (repeat, at most 20)")
+    s.add_argument("--start", required=True, help="first day, YYYY-MM-DD"); s.add_argument("--end", required=True, help="last day, YYYY-MM-DD (included)")
+    s.add_argument("--page", help="the token after next-page from the previous call"); s.set_defaults(f=cmd_email_search)
+    s = sub.add_parser("email-view", help="print one message's cleaned view (hidden content removed, sender checks) from gog's JSON on stdin")
+    s.add_argument("path", nargs="?", help="a saved message JSON file; omit or - for stdin (pipe `gog gmail get <id> --json` in)"); s.set_defaults(f=cmd_email_view)
     s = sub.add_parser("touch-source", help="bind verified message keys to an existing email touch"); s.add_argument("ref"); s.add_argument("touch_id")
     s.add_argument("--source-message-id", action="append", required=True); s.set_defaults(f=cmd_touch_source)
     s = sub.add_parser("touch", help="log a contact; --draft for a message that is not sent yet"); s.add_argument("ref"); s.add_argument("text")
@@ -9303,6 +9865,8 @@ def main():
     s.add_argument("--research-per-run", dest="research_per_run", type=int, help="bare Backlog cards one dispatcher run researches (1-10, default 2)")
     s.add_argument("--waiting-days", dest="waiting_days", type=int,
                    help="days after which a wait with no nudge date is due for a chase (default 7; 0 = no automatic chase)")
+    s.add_argument("--inbox-lapse-days", dest="inbox_lapse_days", type=int,
+                   help="days after which an unanswered Review Inbox question shows as lapsed (default 14; 0 = never)")
     s.add_argument("--min-kit", dest="min_kit", type=int,
                    help="the oldest board kit that may write this board; only between the stored value and this kit's version "
                         "(a stored value above the published kit, a typo, may come down to it)")
@@ -9310,11 +9874,14 @@ def main():
     s = sub.add_parser("proposal-add", aliases=["propose"], help="add one proposal, or a JSON list, to the Review Inbox")
     s.add_argument("path", help="JSON file, or - for stdin"); s.add_argument("--dry-run", action="store_true")
     s.add_argument("--recipients-confirmed", action="store_true", help="every intended board reader received this specific email")
+    s.add_argument("--recommend", metavar="OPTION",
+                   help="the recommended option of the one ask.choose in the payload: its key, number (1 = first) or label")
     s.set_defaults(f=cmd_proposal_add)
     s = sub.add_parser("proposals", help="list Review Inbox proposals")
     s.add_argument("--status", choices=["pending", "accepted", "answered", "ignored", "all"], default="pending")
     s.add_argument("--mine", action="store_true", help="only items this BOARD_AGENT@BOARD_USER added")
     s.add_argument("--kind", choices=sorted(PROPOSAL_KINDS)); s.add_argument("--source", choices=sorted(PROPOSAL_SOURCE_KINDS))
+    s.add_argument("--lapsed", action="store_true", help="only questions unanswered for settings.inbox_lapse_days (default 14)")
     s.add_argument("--run"); s.add_argument("--reviewer"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposals)
     s = sub.add_parser("proposal-show", help="show one proposal and its current target")
     s.add_argument("id"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposal_show)
@@ -9333,7 +9900,9 @@ def main():
     s = sub.add_parser("proposal-answer", help="a person answers a question (ask.choose, ask.approve, ask.question)")
     s.add_argument("id"); g = s.add_mutually_exclusive_group()
     g.add_argument("--choose", metavar="KEY"); g.add_argument("--other", metavar="TEXT"); g.add_argument("--approve", action="store_true")
-    g.add_argument("--reject", action="store_true"); g.add_argument("--text"); s.add_argument("--note"); s.set_defaults(f=cmd_proposal_answer)
+    g.add_argument("--reject", action="store_true"); g.add_argument("--text")
+    g.add_argument("--recommended", action="store_true", help="choose the option the question recommends (ask.choose)")
+    s.add_argument("--note"); s.set_defaults(f=cmd_proposal_answer)
     s = sub.add_parser("proposal-result", help="the answer to a question, for the agent that asked")
     s.add_argument("id"); s.set_defaults(f=cmd_proposal_result)
     s = sub.add_parser("proposal-done", help="the asking agent marks an answer as acted on (once; run it just before acting)")
