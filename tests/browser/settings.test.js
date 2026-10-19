@@ -503,7 +503,9 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(await page.locator('#dlgAuto .runnercheck .ui-check--warn').count(), 0, 'nothing is on, so the checklist asks for nothing');
       await page.waitForTimeout(350); await shot(page, 'automation-runner'); await page.locator('#auClose').click();
       // The switch keeps its own size at phone width (the board gives dialog and header buttons a 44px min-height).
-      await page.waitForFunction(() => !document.getElementById('dlgAuto').open); await sw('stale-cards-nudge').waitFor();
+      await page.waitForFunction(() => !document.getElementById('dlgAuto').open);
+      // Wait until the switch is laid out again (the closing dialog can leave it unmeasured for a frame).
+      await page.waitForFunction(() => { const r = document.querySelector('.autorow[data-slug="stale-cards-nudge"] .autoswitch')?.getBoundingClientRect(); return r && r.width > 0; });
       const box = await sw('stale-cards-nudge').boundingBox();
       assert.ok(box && Math.abs(box.width - 44) <= 1 && Math.abs(box.height - 26) <= 1, `the switch is 44x26, got ${box && box.width}x${box && box.height}`);
       await page.locator('.autorow[data-slug="stale-cards-nudge"] .autorow__open').click(); await page.waitForFunction(() => document.getElementById('dlgAuto').open);
