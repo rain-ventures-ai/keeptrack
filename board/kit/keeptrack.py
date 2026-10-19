@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 75  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 76  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -4922,7 +4922,7 @@ HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
-    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "touch", "touch-source", "sent"],
+    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-view", "touch", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
@@ -5160,6 +5160,51 @@ def cmd_email_key(a):
     if stdin and len(value) > 1000:
         sys.exit("Message-ID input is too long (maximum header value: 998 characters)")
     print(email_key(value))
+
+
+EMAIL_VIEW_MAX = 25_000_000   # bytes of one message's JSON; a longer input is reported unreadable, never cut and read
+
+
+def _email_pack_resolver():
+    """The email-to-tasks pack's resolve.py, which ships beside this file (board/automations/ in a board repo,
+    automations/ in the plugin and the kit). Its render() and safe_view.py are the one cleaner: never a copy."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "automations", "email-to-tasks", "resolve.py")
+    if not os.path.isfile(path) or not os.path.isfile(os.path.join(os.path.dirname(path), "safe_view.py")):
+        sys.exit("email-view needs automations/email-to-tasks/resolve.py and safe_view.py beside keeptrack.py (kit v76): run kit-update")
+    import importlib.util
+    flag, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        spec = importlib.util.spec_from_file_location("keeptrack_email_resolve", path)
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+    finally:
+        sys.dont_write_bytecode = flag
+
+
+def cmd_email_view(a):
+    """One message's JSON (Gmail API shape, as `gog gmail get <id> --json` prints it) in; the cleaned view out: the
+    canonical message key, Gmail's sender checks, what hidden content was removed, then the headers and visible text
+    inside a random untrusted fence. The same view email-to-tasks reads. Anything it cannot read prints only the
+    Unreadable line (exit 1), never the raw message."""
+    resolver = _email_pack_resolver()
+    try:
+        if a.path in (None, "-"):
+            raw = sys.stdin.buffer.read(EMAIL_VIEW_MAX + 1)
+        else:
+            with open(a.path, "rb") as f:
+                raw = f.read(EMAIL_VIEW_MAX + 1)
+    except OSError as e:
+        sys.exit("email-view: cannot read " + a.path + ": " + (e.strerror or "error"))
+    try:
+        if not raw.strip() or len(raw) > EMAIL_VIEW_MAX:
+            raise ValueError("no message, or too long")
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("not a message object")
+        key = resolver.rfc822(resolver.message_id(data))
+        text = resolver.render(resolver._safe_view().view(data))
+    except Exception:   # never fall back to the raw message
+        sys.stdout.write(resolver.UNREADABLE); sys.stdout.flush(); sys.exit(1)
+    sys.stdout.write("Message key: " + (key or "none (no usable Message-ID)") + "\n" + text)
 
 
 def cmd_touch_source(a):
@@ -9662,6 +9707,8 @@ def main():
     s = sub.add_parser("email-key", help="hash an RFC822 Message-ID without storing the raw header")
     s.add_argument("message_id", nargs="?", help="header as one non-shell argv value; never interpolate it into shell text")
     s.add_argument("--stdin", action="store_true", help="read the header value safely from stdin (bounded; no shell substitution)"); s.set_defaults(f=cmd_email_key)
+    s = sub.add_parser("email-view", help="print one message's cleaned view (hidden content removed, sender checks) from gog's JSON on stdin")
+    s.add_argument("path", nargs="?", help="a saved message JSON file; omit or - for stdin (pipe `gog gmail get <id> --json` in)"); s.set_defaults(f=cmd_email_view)
     s = sub.add_parser("touch-source", help="bind verified message keys to an existing email touch"); s.add_argument("ref"); s.add_argument("touch_id")
     s.add_argument("--source-message-id", action="append", required=True); s.set_defaults(f=cmd_touch_source)
     s = sub.add_parser("touch", help="log a contact; --draft for a message that is not sent yet"); s.add_argument("ref"); s.add_argument("text")

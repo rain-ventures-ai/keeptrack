@@ -158,6 +158,7 @@ so too.
   The agent reads each message only through a cleaned view (`safe_view.py`, kit v75): what a person would see, with
   HTML comments, hidden elements, invisible characters and long encoded runs removed and counted, and Gmail's sender
   checks. A request to change payment or access details is only ever a "possible fraud: verify by phone" note.
+  The manual keeptrack-email skill reads mail through the same cleaner, `keeptrack.py email-view` (kit v76).
   Runner any. Local: the gog login only. Cloud: the secret named `GOG_HOME_ARCHIVE`, which the environment's
   setup script uses to restore a read-only gog login under `HOME` before the tick (see its SETUP.md). The check
   and `resolve.py` read mail through gog, so a Gmail connector with a `model` check is not offered: that would be
