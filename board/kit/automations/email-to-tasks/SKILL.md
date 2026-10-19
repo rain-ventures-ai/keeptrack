@@ -99,7 +99,7 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
    - `confirmed.json`: proposals built only from confirmed messages. Run `$B propose confirmed.json --dry-run`,
      then `$B propose confirmed.json --recipients-confirmed`.
    - `unconfirmed.json`: metadata-only touches for unconfirmed messages (no text, reason, evidence, next or
-     subject; see "Proposal shape"). Run `$B propose unconfirmed.json --dry-run`, then `$B propose unconfirmed.json`
+     subject, except the fixed warning sentences of step 6; see "Proposal shape"). Run `$B propose unconfirmed.json --dry-run`, then `$B propose unconfirmed.json`
      with no flag.
    One-member board: every message is confirmed.
    Write each file once, as literal JSON in a `<<'EOF'` heredoc with every proposal and field written out (never
@@ -158,7 +158,11 @@ Good (one-member board, so `--recipients-confirmed`):
   so `propose` answers `exists`.
 - Evidence: the stable `source.id` key, the `source_message_ids`, and one quoted sentence of at most 120 characters.
   `reason` names who it affects: the owner, the contact and their company. Without `--recipients-confirmed`,
-  `reason`, `evidence`, `text`, `next` and the subject stay empty and the title is only `Email from <name>, <d Mon>`.
+  `reason`, `evidence`, `text`, `next` and the subject stay empty and the title is only `Email from <name>, <d Mon>`,
+  with one exception: the fixed warnings of step 6 still go in. `reason` holds only the warning sentences that apply
+  (or stays empty), and a payment or access change's `text` is exactly the "Possible fraud" text. They hold nothing
+  from the mail, and the board accepts them without the flag, so the owner is warned even when a member did not get
+  the mail.
 
 Bad: `"title": "Re: Re: FW: pricing"`, a pasted body in `text`, `"evidence": "see thread"`, a new `action_key`
 on each retry, a task for "thanks, got it", or a touch for mail the person already has in `source messages`.

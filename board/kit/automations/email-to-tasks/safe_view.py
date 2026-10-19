@@ -29,8 +29,8 @@ BLOB = re.compile(r"[A-Za-z0-9+/=_-]{80,}")
 WRAPPED = re.compile(r"(?m)(?:^[ \t]*[A-Za-z0-9+/=_-]{40,}[ \t]*(?:\n|\Z)){2,}")
 HEX_PAIRS = re.compile(r"(?i)(?:[0-9a-f]{2}[ :]){30,}[0-9a-f]{2}")
 MAX_MARKUP = 400_000   # longer HTML is cut before parsing: the view keeps 8000 characters anyway
-MAX_STYLE = 100_000    # style text read for hiding rules, and at most MAX_RULES rules
-MAX_RULES = 2000
+MAX_STYLE = 300_000    # style text read for hiding rules, and at most MAX_RULES rules: over either, the message is
+MAX_RULES = 6000       # reported unreadable (TooComplex), never read with some rules skipped
 CODE_TAGS = {"script", "style", "title"}   # hidden by nature; text in them is code or a tab title, not removed content
 SKIP_TAGS = {"script", "style", "head", "title", "template", "noscript", "svg", "object", "iframe"}
 VOID = {"br", "img", "hr", "meta", "link", "input", "wbr", "area", "base", "col", "embed", "source", "track", "param"}
@@ -128,10 +128,15 @@ def _hidden(tag, attrs, inherited_bg, hidden_selectors=frozenset()):
     return _hides(_style(attrs), color, bg)
 
 
+class TooComplex(ValueError):
+    """The style text is over the caps: the message is reported unreadable, never read with some rules unread."""
+
+
 def _style_text(markup):
-    """The text of every <style> block, found with plain string search (no regex over mail), at most MAX_STYLE."""
+    """The text of every <style> block, found with plain string search (no regex over mail), comments removed.
+    Over MAX_STYLE raises TooComplex: a cut would leave a hiding rule unread and its hidden text shown."""
     low, out, pos, size = markup.lower(), [], 0, 0
-    while size < MAX_STYLE:
+    while True:
         a = low.find("<style", pos)
         if a < 0:
             break
@@ -139,25 +144,36 @@ def _style_text(markup):
         e = low.find("</style", b + 1) if b >= 0 else -1
         if b < 0 or e < 0:
             break
-        out.append(markup[b + 1:e]); size += e - b; pos = e + 7
-    text = "".join(out)[:MAX_STYLE]
-    while "/*" in text:   # drop CSS comments
-        a = text.find("/*"); e = text.find("*/", a + 2)
-        text = text[:a] + (text[e + 2:] if e >= 0 else "")
-    return text
+        size += e - b
+        if size > MAX_STYLE:
+            raise TooComplex("style blocks over MAX_STYLE")
+        out.append(markup[b + 1:e]); pos = e + 7
+    text, kept, i = "".join(out), [], 0
+    while True:   # drop CSS comments, in one pass
+        a = text.find("/*", i)
+        if a < 0:
+            kept.append(text[i:]); break
+        kept.append(text[i:a]); e = text.find("*/", a + 2)
+        if e < 0:
+            break
+        i = e + 2
+    return "".join(kept)
 
 
 def _hidden_selectors(markup):
     """Simple selectors (.class, #id, tag) that a <style> block hides: `.x{display:none}` and the like."""
     found = set()
-    for rule in _style_text(markup).split("}")[:MAX_RULES]:
+    rules = _style_text(markup).split("}")
+    if len(rules) > MAX_RULES:
+        raise TooComplex("style rules over MAX_RULES")
+    for rule in rules:
         sel, brace, body = rule.rpartition("{")
         if not brace or not _hides(_decls(body)):
             continue
         sel = sel.rpartition("{")[2]   # inside @media: the inner selector
         for one in sel.split(","):
             last = one.strip().split()[-1].lower() if one.strip() else ""
-            m = re.fullmatch(r"([a-z0-9]*)((?:[.#][a-z0-9_-]+)*)", last[:200])
+            m = re.fullmatch(r"([a-z0-9]*)((?:[.#][a-z0-9_-]+)*)", last) if len(last) <= 200 else None
             if m:
                 parts = re.findall(r"[.#][a-z0-9_-]+", m.group(2))
                 found.update(parts or ([m.group(1)] if m.group(1) else []))
@@ -240,8 +256,9 @@ def _conditional(data):
 
 def visible_text(markup):
     """(text, removed) for an HTML body: only what a person sees."""
-    markup = markup[:MAX_MARKUP]
-    p = _Visible(_hidden_selectors(markup))
+    hidden = _hidden_selectors(markup)   # from the whole message (a style block may come last); TooComplex goes up
+    markup = markup[:MAX_MARKUP]          # text past the cut is dropped, never shown
+    p = _Visible(hidden)
     try:
         p.feed(markup); p.close()
     except Exception:   # malformed beyond the parser: keep nothing rather than the raw markup
@@ -305,6 +322,19 @@ def _headers(node, depth=0, out=None):
     return out
 
 
+def _top_auth_results(message):
+    """Authentication-Results values from the message's own header list, in order: never from a part inside it (a
+    sender writes those). Gmail API shape (payload.headers) or a flat headers list; anything else gives none."""
+    hs = None
+    if isinstance(message, dict):
+        payload = message.get("payload")
+        hs = payload.get("headers") if isinstance(payload, dict) else message.get("headers")
+    if not isinstance(hs, list):
+        return []
+    return [h["value"] for h in hs if isinstance(h, dict) and isinstance(h.get("name"), str)
+            and h["name"].lower() == "authentication-results" and isinstance(h.get("value"), str)]
+
+
 def _auth(results):
     """spf/dkim/dmarc from Gmail's own Authentication-Results, or "none". Gmail adds its line on top of any the
     sender wrote, so only the topmost header counts, and only when it is Gmail's. `(...)` comments are dropped and
@@ -364,7 +394,7 @@ def view(message):
     text = clean(text, removed)
     truncated = len(text) > MAX_TEXT
     return {"headers": {k: one_line(" ".join(v)) for k, v in hdr.items() if k != "authentication-results"},
-            "auth": _auth(hdr.get("authentication-results", [])), "text": text[:MAX_TEXT], "removed": removed,
+            "auth": _auth(_top_auth_results(message)), "text": text[:MAX_TEXT], "removed": removed,
             "truncated": truncated}
 
 

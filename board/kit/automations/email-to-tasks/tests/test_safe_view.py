@@ -162,7 +162,9 @@ class HiddenInstructions(unittest.TestCase):
         import time
         t = time.monotonic()
         sv.view(msg(html="<style>" + "a{" * 50000 + "</style>" + "<style>" + "/*" * 50000 + "</style><p>x</p>"))
-        sv.view(msg(html="<style>" + ("." + "a" * 500 + " ") * 2000 + "{display:none}</style><p>x</p>"))
+        sv.view(msg(html="<style>" + ("." + "a" * 500 + " ") * 200 + "{display:none}</style><p>x</p>"))
+        with self.assertRaises(sv.TooComplex):   # over the cap: refused quickly, never partly read
+            sv.view(msg(html="<style>" + ("." + "a" * 500 + " ") * 2000 + "{display:none}</style><p>x</p>"))
         self.assertLess(time.monotonic() - t, 5)
 
     def test_attachments_and_forwarded_mail_are_not_read(self):
@@ -178,6 +180,23 @@ class HiddenInstructions(unittest.TestCase):
         m = msg(plain="x", auth="mx.google.com; dmarc=fail")
         m["payload"]["headers"].insert(0, {"name": "Authentication-Results", "value": "evil.example; dmarc=pass"})
         self.assertEqual(sv.view(m)["auth"]["dmarc"], "none", "only the topmost header, and only when it is Gmail's")
+
+    def test_style_over_the_caps_is_unreadable_not_partly_read(self):
+        many = "<style>" + "p{color:#333}" * (sv.MAX_RULES + 1) + ".x{display:none}</style>"
+        with self.assertRaises(sv.TooComplex):
+            sv.view(msg(html=many + f'<div class="x">{ORDER}</div>'))
+        with self.assertRaises(sv.TooComplex):
+            sv.view(msg(html="<style>/*" + " " * sv.MAX_STYLE + "*/</style><p>x</p>"))
+
+    def test_style_block_after_the_markup_cap_still_hides(self):
+        pad = "<p>" + "word " * (sv.MAX_MARKUP // 5) + "</p>"
+        v = sv.view(msg(html=f'<div class="x">{ORDER}</div>' + pad + "<style>.x{display:none}</style>"))
+        self.assertNotIn("vendor", v["text"])
+
+    def test_auth_in_a_part_never_counts(self):
+        m = msg(plain="x")
+        m["payload"]["parts"][0]["headers"] = [{"name": "Authentication-Results", "value": "mx.google.com; spf=pass dkim=pass dmarc=pass"}]
+        self.assertEqual(sv.view(m)["auth"]["dmarc"], "none")
 
 
 if __name__ == "__main__":
