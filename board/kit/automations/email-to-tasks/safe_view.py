@@ -28,7 +28,8 @@ BLOB = re.compile(r"[A-Za-z0-9+/=_-]{80,}")
 # Base64 wrapped at 76 columns (two or more full lines in a row) and hex written in spaced or colon-separated pairs.
 WRAPPED = re.compile(r"(?m)(?:^[ \t]*[A-Za-z0-9+/=_-]{40,}[ \t]*(?:\n|\Z)){2,}")
 HEX_PAIRS = re.compile(r"(?i)(?:[0-9a-f]{2}[ :]){30,}[0-9a-f]{2}")
-MAX_MARKUP = 400_000   # longer HTML is cut before parsing: the view keeps 8000 characters anyway
+MAX_MARKUP = 400_000   # longer HTML is cut before reading its text: the view keeps 8000 characters anyway
+MAX_SCAN = 5_000_000   # HTML scanned whole for hiding rules (a style block may come last); longer is TooComplex
 MAX_STYLE = 300_000    # style text read for hiding rules, and at most MAX_RULES rules: over either, the message is
 MAX_RULES = 6000       # reported unreadable (TooComplex), never read with some rules skipped
 CODE_TAGS = {"script", "style", "title"}   # hidden by nature; text in them is code or a tab title, not removed content
@@ -145,25 +146,42 @@ def _strip_comments(css):
         i = e + 2
 
 
+class _Styles(html.parser.HTMLParser):
+    """Collects each <style> block's CSS with the same tokenizer that reads the text, so both agree on where a block
+    starts and ends (comments, `<style>` written inside CSS or inside an HTML comment)."""
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.blocks, self.inside, self.size = [], False, 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "style":
+            self.inside = True; self.blocks.append([])
+
+    def handle_endtag(self, tag):
+        if tag == "style":
+            self.inside = False
+
+    def handle_data(self, data):
+        if self.inside:
+            self.size += len(data)
+            if self.size > MAX_STYLE:
+                raise TooComplex("style blocks over MAX_STYLE")
+            self.blocks[-1].append(data)
+
+
 def _style_text(markup):
-    """The CSS of every <style> block, found with plain string search (no regex over mail), comments removed per
-    block. A block starts at the last `<style` before its end tag, so a `<style>` an HTML comment hid cannot swallow
-    a real one. Over MAX_STYLE raises TooComplex: a cut would leave a hiding rule unread and its hidden text shown."""
-    low, out, pos, size = markup.lower(), [], 0, 0
-    while True:
-        e = low.find("</style", pos)
-        if e < 0:
-            break
-        a = low.rfind("<style", pos, e)
-        b = low.find(">", a, e) if a >= 0 else -1
-        pos = e + 7
-        if b < 0:
-            continue
-        size += e - b
-        if size > MAX_STYLE:
-            raise TooComplex("style blocks over MAX_STYLE")
-        out.append(_strip_comments(markup[b + 1:e]))
-    return "}".join(out)
+    """The CSS of every <style> block, comments removed per block. Over MAX_STYLE, or markup over MAX_SCAN, raises
+    TooComplex: a cut would leave a hiding rule unread and its hidden text shown."""
+    if len(markup) > MAX_SCAN:
+        raise TooComplex("markup over MAX_SCAN")
+    p = _Styles()
+    try:
+        p.feed(markup); p.close()
+    except TooComplex:
+        raise
+    except Exception as e:   # the text parser would fail on it too; never read it with rules unknown
+        raise TooComplex("unparsable markup") from e
+    return "}".join(_strip_comments("".join(b)) for b in p.blocks)
 
 
 def _hidden_selectors(markup):

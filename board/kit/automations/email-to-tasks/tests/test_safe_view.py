@@ -201,6 +201,8 @@ class HiddenInstructions(unittest.TestCase):
     def test_style_tricks_never_hide_a_hiding_rule(self):
         self.seen(f'<!-- <style>/* --> <style>.x{{display:none}}</style><div class="x">{ORDER}</div>')
         self.seen(f'<style>/* never closed</style><style>.x{{display:none}}</style><div class="x">{ORDER}</div>')
+        self.seen(f'<style>.x{{display:none}} /* <style> */ p{{color:#333}}</style><div class="x">{ORDER}</div>')
+        self.seen(f'<style>.x{{display:none}} p::before{{content:"<style>"}}</style><div class="x">{ORDER}</div>')
         self.seen(f'<style>div > p.x:hover, [data-a] .y::after {{display:none}}</style><p class="y">{ORDER}</p>')
         self.seen(f'<style>.{"a" * 300}{{display:none}}</style><p class="{"a" * 300}">{ORDER}</p>')
 
