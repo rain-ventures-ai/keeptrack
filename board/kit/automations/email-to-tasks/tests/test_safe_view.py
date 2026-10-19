@@ -206,6 +206,14 @@ class HiddenInstructions(unittest.TestCase):
         self.seen(f'<style>div > p.x:hover, [data-a] .y::after {{display:none}}</style><p class="y">{ORDER}</p>')
         self.seen(f'<style>.{"a" * 300}{{display:none}}</style><p class="{"a" * 300}">{ORDER}</p>')
 
+    def test_style_self_closing_and_odd_comments(self):
+        self.seen(f'<style/>.x{{display:none}}</style><div class="x">{ORDER}</div>')
+        for odd in ("<!-->", "<!--->", "<!-- note --!>"):
+            with self.subTest(odd=odd), self.assertRaises(sv.TooComplex):
+                sv.view(msg(html=f"<p>Hi</p>{odd}<p>{ORDER}</p>"))
+        v = self.seen('<!--[if !mso]><!--><p>Web view</p><!--<![endif]-->')
+        self.assertIn("Web view", v["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -169,19 +169,61 @@ class _Styles(html.parser.HTMLParser):
             self.blocks[-1].append(data)
 
 
+def _scan_styles(markup):
+    """Every `<style` to the next `</style`, by plain string search over the whole message (linear time)."""
+    low, out, pos, size = markup.lower(), [], 0, 0
+    while True:
+        a = low.find("<style", pos)
+        if a < 0:
+            break
+        b = low.find(">", a)
+        e = low.find("</style", b + 1) if b >= 0 else -1
+        if e < 0:
+            break
+        size += e - b
+        if size > MAX_STYLE:
+            raise TooComplex("style blocks over MAX_STYLE")
+        out.append(markup[b + 1:e]); pos = e + 7
+    return out
+
+
+def _ambiguous_comment(markup):
+    """A comment browsers and this parser may end in different places: one opened as `<!-->` or `<!--->`, or one
+    closed with `--!>`. Walks comment to comment (linear time); `<!--[if !mso]><!-->` is an ordinary comment."""
+    pos = 0
+    while True:
+        a = markup.find("<!--", pos)
+        if a < 0:
+            return False
+        if markup.startswith((">", "->"), a + 4):
+            return True
+        e = markup.find("-->", a + 4)
+        bang = markup.find("--!>", a + 4)
+        if bang >= 0 and (e < 0 or bang < e):
+            return True
+        if e < 0:
+            return False
+        pos = e + 3
+
+
 def _style_text(markup):
-    """The CSS of every <style> block, comments removed per block. Over MAX_STYLE, or markup over MAX_SCAN, raises
-    TooComplex: a cut would leave a hiding rule unread and its hidden text shown."""
+    """The CSS of every <style> block, comments removed per block, found two ways and joined: the HTML parser's own
+    reading (on the part the text is read from, so both agree) and a string scan of the whole message (a style
+    block may come last). A rule either finds hides its text: more is hidden, never less. Over MAX_STYLE or
+    MAX_SCAN, or comment forms browsers and this parser read differently, raises TooComplex."""
     if len(markup) > MAX_SCAN:
         raise TooComplex("markup over MAX_SCAN")
+    if _ambiguous_comment(markup):
+        raise TooComplex("ambiguous comment")
     p = _Styles()
     try:
-        p.feed(markup); p.close()
+        p.feed(markup[:MAX_MARKUP]); p.close()
     except TooComplex:
         raise
     except Exception as e:   # the text parser would fail on it too; never read it with rules unknown
         raise TooComplex("unparsable markup") from e
-    return "}".join(_strip_comments("".join(b)) for b in p.blocks)
+    blocks = ["".join(b) for b in p.blocks] + _scan_styles(markup)
+    return "}".join(_strip_comments(b) for b in blocks)
 
 
 def _hidden_selectors(markup):
