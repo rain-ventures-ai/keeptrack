@@ -132,36 +132,43 @@ class TooComplex(ValueError):
     """The style text is over the caps: the message is reported unreadable, never read with some rules unread."""
 
 
+def _strip_comments(css):
+    """CSS comments removed in one pass; an unterminated `/*` runs to the end of its own block, as in a browser."""
+    kept, i = [], 0
+    while True:
+        a = css.find("/*", i)
+        if a < 0:
+            return "".join(kept + [css[i:]])
+        kept.append(css[i:a]); e = css.find("*/", a + 2)
+        if e < 0:
+            return "".join(kept)
+        i = e + 2
+
+
 def _style_text(markup):
-    """The text of every <style> block, found with plain string search (no regex over mail), comments removed.
-    Over MAX_STYLE raises TooComplex: a cut would leave a hiding rule unread and its hidden text shown."""
+    """The CSS of every <style> block, found with plain string search (no regex over mail), comments removed per
+    block. A block starts at the last `<style` before its end tag, so a `<style>` an HTML comment hid cannot swallow
+    a real one. Over MAX_STYLE raises TooComplex: a cut would leave a hiding rule unread and its hidden text shown."""
     low, out, pos, size = markup.lower(), [], 0, 0
     while True:
-        a = low.find("<style", pos)
-        if a < 0:
+        e = low.find("</style", pos)
+        if e < 0:
             break
-        b = low.find(">", a)
-        e = low.find("</style", b + 1) if b >= 0 else -1
-        if b < 0 or e < 0:
-            break
+        a = low.rfind("<style", pos, e)
+        b = low.find(">", a, e) if a >= 0 else -1
+        pos = e + 7
+        if b < 0:
+            continue
         size += e - b
         if size > MAX_STYLE:
             raise TooComplex("style blocks over MAX_STYLE")
-        out.append(markup[b + 1:e]); pos = e + 7
-    text, kept, i = "".join(out), [], 0
-    while True:   # drop CSS comments, in one pass
-        a = text.find("/*", i)
-        if a < 0:
-            kept.append(text[i:]); break
-        kept.append(text[i:a]); e = text.find("*/", a + 2)
-        if e < 0:
-            break
-        i = e + 2
-    return "".join(kept)
+        out.append(_strip_comments(markup[b + 1:e]))
+    return "}".join(out)
 
 
 def _hidden_selectors(markup):
-    """Simple selectors (.class, #id, tag) that a <style> block hides: `.x{display:none}` and the like."""
+    """Classes, ids and tags that a <style> block hides: `.x{display:none}` and the like. Any selector counts, read
+    by its last compound (`div > p.x:hover` hides `.x`): when unsure, more is hidden, never less."""
     found = set()
     rules = _style_text(markup).split("}")
     if len(rules) > MAX_RULES:
@@ -171,12 +178,11 @@ def _hidden_selectors(markup):
         if not brace or not _hides(_decls(body)):
             continue
         sel = sel.rpartition("{")[2]   # inside @media: the inner selector
-        for one in sel.split(","):
-            last = one.strip().split()[-1].lower() if one.strip() else ""
-            m = re.fullmatch(r"([a-z0-9]*)((?:[.#][a-z0-9_-]+)*)", last) if len(last) <= 200 else None
-            if m:
-                parts = re.findall(r"[.#][a-z0-9_-]+", m.group(2))
-                found.update(parts or ([m.group(1)] if m.group(1) else []))
+        for one in sel.lower().split(","):
+            last = re.split(r"[\s>+~<]+", one.strip())[-1]
+            parts = re.findall(r"[.#][a-z0-9_-]+", last)
+            tag = re.match(r"[a-z][a-z0-9]*", last)
+            found.update(parts or ([tag.group(0)] if tag else []))
     return frozenset(found)
 
 

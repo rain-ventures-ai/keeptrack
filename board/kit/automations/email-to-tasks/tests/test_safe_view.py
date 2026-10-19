@@ -198,6 +198,12 @@ class HiddenInstructions(unittest.TestCase):
         m["payload"]["parts"][0]["headers"] = [{"name": "Authentication-Results", "value": "mx.google.com; spf=pass dkim=pass dmarc=pass"}]
         self.assertEqual(sv.view(m)["auth"]["dmarc"], "none")
 
+    def test_style_tricks_never_hide_a_hiding_rule(self):
+        self.seen(f'<!-- <style>/* --> <style>.x{{display:none}}</style><div class="x">{ORDER}</div>')
+        self.seen(f'<style>/* never closed</style><style>.x{{display:none}}</style><div class="x">{ORDER}</div>')
+        self.seen(f'<style>div > p.x:hover, [data-a] .y::after {{display:none}}</style><p class="y">{ORDER}</p>')
+        self.seen(f'<style>.{"a" * 300}{{display:none}}</style><p class="{"a" * 300}">{ORDER}</p>')
+
 
 if __name__ == "__main__":
     unittest.main()
