@@ -44,7 +44,10 @@ ignored by the agent, without the "for @owner" words.
   waits and their release, Inbox questions (answer, dismiss, reopen), and these Inbox decisions.
 - `proposal-add` now drops a `createdBy` in the payload and stamps the run's own `BOARD_AGENT@BOARD_USER` on every
   proposal, since `createdBy` decides who may withdraw it.
-- Relay 0.9.38's connector tools `list_inbox` and `resolve_inbox_item` need this kit on the board; on an older board
+- An agent run must be told apart from a person to decide, reopen, read the result of or mark done its own items:
+  `BOARD_AGENT` with no `BOARD_USER`, or `BOARD_AGENT` with a person's hosted token (no agent id), is refused. Set
+  `BOARD_USER` (or use an agent token on a hosted board).
+- Relay 0.9.40's connector tools `list_inbox` and `resolve_inbox_item` need this kit on the board; on an older board
   they say "board kit too old: upgrade to v77" and change nothing.
 
 ### v76 (schema 4)
