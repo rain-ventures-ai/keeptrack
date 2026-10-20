@@ -196,6 +196,9 @@ Add a link each time the card names or depends on one of these:
 | A local folder on one computer | `link '#12' ~/work/acme/notes --title "Notes folder (Sam's laptop)"` |
 | Another card | `relate '#12' '#31'`, or `task-set '#12' --after '#31'` when this card must wait for it |
 
+Several at once, in one save: `add "Title" --link <url> "<title>" --link <url> "<title>"` on a new card (with its
+`--todo` steps in the same command), or `link '#12' -` with one `URL<tab>title` per line on stdin for an existing card.
+
 Rules:
 - Use the full URL, not a short reference. `#481` means a card number on the board, not a pull request.
 - Give each link a title that says what it is and why it matters ("PR #481: the change that raised these questions").

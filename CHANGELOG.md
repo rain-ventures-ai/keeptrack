@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Kit v78: email-to-tasks reads several mailboxes, locally or in the cloud (pack 1.5.0, private-tasks card #232; spec
+Kit v79: email-to-tasks reads several mailboxes, locally or in the cloud (pack 1.5.0, private-tasks card #232; spec
 `docs/specs/email-to-tasks-sources.md`). New config `sources`: up to three gog account aliases, in order. Before any
 read the check proves each one (the alias is set on this runner, its login has `gmail.readonly` and no scope that can
 change, send or delete mail), and every gog call names that one address with gog's `--readonly`, `--gmail-no-send`,
@@ -16,6 +16,12 @@ mailbox an item's ref names, and refuses a ref whose mailbox the board's own ins
 set to `work` never reads Personal mail. New blocked codes: `setup-missing:sources`, `setup-missing:gog-aliases`,
 `setup-missing:account-<alias>`, `setup-missing:readonly-<alias>`. The skill reports `source_<alias>=N`. An install
 without `sources` behaves as 1.4.1.
+
+Kit v78: a card's links and to-dos in one command (card #233). `add --link URL [TITLE]` (repeatable) puts links on a
+new card in the same save as its `--todo` items; `todo-add ID -` and
+`link ID -` read one item per line from stdin (a link line is the URL, a tab, then the title). Every item is checked
+before anything is written, each command is one board commit with a history line per item, and a lost race still
+merges three-way. The `board` skill, `CARDS.md` and the README say to build a card in one call.
 
 Kit v77: an agent closes its own Review Inbox items once the owner settled them in a conversation (card #198).
 `proposals -q TEXT` and `--by WHO` find items by title (or question) and by who added them (`createdBy`, whole or its

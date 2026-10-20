@@ -169,7 +169,7 @@ Fixture tests for `check.py`, `resolve.py` and the gateway adapter:
 ## Build order
 
 1. Sources, identity check and per-source windows in `check.py` and `resolve.py` (gog only). Done: pack 1.5.0,
-   kit v78, tests in `tests/test_sources.py`.
+   kit v79, tests in `tests/test_sources.py`.
 2. Committed per-source cursor, `runner: any`, `--force`, `idle_backstop_hours` in `keeptrack.py`.
 3. Skill changes: rfc822-based `action_key`, `match_tasks`, source lines in the report.
 4. Gateway: not built (owner chose gog everywhere, 2026-10-20).
