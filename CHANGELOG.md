@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v82: the email cleaner's last known gaps and false flags (email-to-tasks pack 1.5.1, private-tasks card #184).
+`safe_view.py` models a hiding rule's sibling combinator (`img.g-img + div` hides only the `div` after that image),
+counts an Outlook conditional comment only when its text is not also shown outside it, and orders rules by importance,
+specificity and source order, so a later rule that surely hits an element wins and ordinary templates are not flagged.
+A hiding rule under `@media` counts at 1440px and 1920px as well as 1200px; a phone-only rule still hides nothing. A
+`var()`, `light-dark()` or `calc()` background is judged against every colour it may resolve to (custom properties
+from style blocks and inline styles), and a colour it cannot work out (`color-mix()`, `oklch()`, `rgb(calc())`) makes
+the message TooComplex. The `font` shorthand size, `-webkit-text-fill-color` and `zoom` are read; `filter`, `mask`,
+`content-visibility`, `mix-blend-mode`, `-webkit-text-security`, `font-size-adjust`, `scale`, `translate`, matrix
+transforms and large negative margins hide when their value may hide text. A `<dialog>` without `open`, `<datalist>`,
+`<rp>` and a closed `<details>` (all but its `<summary>`) are hidden. Authentication-Results: quoted strings and comments
+never hold a result, the authserv-id must be exactly `mx.google.com`, and a result is read only where it starts.
+
 Kit v81: the minor findings from the kit v71 reviews (private-tasks card #176). `list --sort score` and `list --links`
 pass the whole printed line through the one-line guard, and a card link flattens a hand-edited number. The guard now
 removes only control characters, line and paragraph separators, lone surrogates and bidi embeddings, overrides and

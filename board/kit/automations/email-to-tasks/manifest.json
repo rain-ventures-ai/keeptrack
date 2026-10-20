@@ -3,7 +3,7 @@
   "slug": "email-to-tasks",
   "name": "Email to tasks",
   "summary": "Read new email to and from people on your board and propose contact notes and follow-up tasks.",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "needs": [
     {
       "id": "gmail.read",
