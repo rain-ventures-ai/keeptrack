@@ -33,7 +33,7 @@ Goals on the board (consulting card #189). No migration: a board without goals l
 - keeptrack.py: `goals`, `goal REF`, `goal-add TITLE --metric M --target T --end DATE [--current C]`, `goal-set`,
   `goal-remove`, `add --goal`, `task-set --goal REF|none`, `list --goal REF|none`. `doctor` warns (GOAL, GOAL_MISSING)
   and never stops the board for a goal.
-- Web board: the Goals bar above the Kanban and List views, Goals in the board menus and "Edit goals" on the bar (add and edit), a Goal field on the card
+- Web board: the Goals bar above the Kanban and List views, Goals in Filters and the board menus, and "Edit goals" on the bar (add and edit), a Goal field on the card
   and a Goal filter.
 - Run `kit-update` only. Check: `kit-check` says v83, and `python3 board/keeptrack.py goals` prints `(no goals)` or
   the board's goals.

@@ -143,6 +143,11 @@ const cardCount = page => page.locator('#board .card').count();
     { const p = await open(browser, base, { goals: false }); await p.waitForSelector('#board .card');
       assert.equal(await p.locator('#goalBar').isHidden(), true); assert.equal(await p.locator('#fGoalWrap').isHidden(), true);
       await p.evaluate(() => { location.hash = '#2'; }); await p.locator('#dlgCard[open]').waitFor(); assert.equal(await p.locator('#cGoalRow').isHidden(), true);
+      await p.locator('#cClose').click(); await p.locator('#dlgCard').waitFor({ state: 'hidden' });
+      await p.locator('#btnFilter').click(); await p.locator('#fGoals').click(); await p.locator('#dlgGoals[open]').waitFor();   // the first goal: reachable on a wide screen
+      await p.locator('#goalAdd').click(); await p.locator('#goalTitle').fill('First'); await p.locator('#goalMetric').fill('m'); await p.locator('#goalTarget').fill('1'); await p.locator('#goalEnd').fill('2099-01-01');
+      await p.locator('#goalSave').click(); await p.waitForFunction(() => document.querySelectorAll('#dlgGoals .goalrow').length === 1);
+      assert.equal(JSON.parse(p.api.files['tasks.json']).goals[0].title, 'First');
       assert.deepEqual(p.errors, []); await p.close(); }
     console.log('goals: all checks passed');
   } finally { await browser.close(); server.close(); }

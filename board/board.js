@@ -1610,13 +1610,15 @@ if (typeof window !== 'undefined') (() => {
         field('Start date', f.start), field('End date', f.end), field('Status', status));
       const err = el('p', 'goalerr'); err.id = 'goalErr'; err.setAttribute('role', 'alert'); err.hidden = true;
       const save = ui.button({ label: g.id ? 'Save goal' : 'Add goal', variant: 'primary', onClick: async () => {
+        if (state.goals != null && !Array.isArray(state.goals)) { err.textContent = 'The board’s goals are not a list in tasks.json; fix them by hand first (keeptrack.py doctor shows it).'; err.hidden = false; return; }
         const v = { title: f.title.value.replace(/\s+/g, ' ').trim(), metric: f.metric.value.replace(/\s+/g, ' ').trim(), target: f.target.value.replace(/\s+/g, ' ').trim(),
           current: f.current.value.replace(/\s+/g, ' ').trim(), start: f.start.value, end: f.end.value, status: status.value };
         const why = !v.title ? 'A goal needs a name.' : !v.metric ? 'Say what is measured (the metric).' : !v.target ? 'A goal needs a target.' : !/^\d{4}-\d{2}-\d{2}$/.test(v.end) ? 'A goal needs an end date.' : v.start && v.start > v.end ? 'The start date is after the end date.' : '';
         if (why) { err.textContent = why; err.hidden = false; return; }
         const id = g.id || boardId('g_'), who = me() || '';
         const ok = await mutate(n => {
-          if (!Array.isArray(n.goals)) n.goals = [];
+          if (n.goals != null && !Array.isArray(n.goals)) return;   // hand-edited: never replaced (the form refused it above)
+          if (!n.goals) n.goals = [];
           let x = n.goals.find(y => y && y.id === id); if (!x) { x = { id, created: nowIso() }; n.goals.push(x); }
           Object.assign(x, v, { updated: nowIso() }); if (who) x.updatedBy = who; if (!x.start) delete x.start;
         }, `${g.id ? 'Update' : 'Add'} goal: ${v.title}`);
@@ -1628,7 +1630,7 @@ if (typeof window !== 'undefined') (() => {
         const rm = ui.button({ label: 'Remove', variant: 'ghost', icon: 'trash-2', onClick: async () => {
           const linked = state.tasks.filter(t => t.goal === g.id).length;
           if (!(await ui.confirm({ title: 'Remove this goal?', body: (linked ? `${linked} card${linked === 1 ? '' : 's'} link to it; the link comes off ${linked === 1 ? 'it' : 'them'}. ` : '') + 'To keep the record, set its status to done or dropped instead.', confirmLabel: 'Remove goal', danger: true }))) return;
-          const ok = await mutate(n => { n.goals = (Array.isArray(n.goals) ? n.goals : []).filter(y => !(y && y.id === g.id)); n.tasks.forEach(t => { if (t.goal === g.id) { delete t.goal; t.updated = nowIso(); } }); }, `Remove goal: ${g.title}`);
+          const ok = await mutate(n => { if (!Array.isArray(n.goals)) return; n.goals = n.goals.filter(y => !(y && y.id === g.id)); n.tasks.forEach(t => { if (t.goal === g.id) { delete t.goal; t.updated = nowIso(); } }); }, `Remove goal: ${g.title}`);
           if (ok !== false && goalSheet) { if ($('fGoal').value === g.id) setGoalFilter(''); form = null; draw(); }
         } }); rm.id = 'goalRemove'; acts.append(rm);
       }
@@ -3358,7 +3360,7 @@ if (typeof window !== 'undefined') (() => {
       { label: 'Labels', icon: 'tag', value: [chips, labelAdd, labelNew, labelList] }
     ]);
     [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
-    props.children[6].id = 'cGoalRow';
+    goal.closest('.ui-props__row').id = 'cGoalRow';
     const after = el('div', 'dafter'); after.id = 'cAfter'; after.hidden = true;   // "Runs after": only on a card with after links
     $('cProps').append(props, after);
     // sections: Description, Related cards, Checklist, Links, Contacts, Activity (comments and history in one timeline)
@@ -5257,6 +5259,7 @@ if (typeof window !== 'undefined') (() => {
   $('btnInbox').onclick = () => setView('inbox');
   $('btnAutos').onclick = () => setView('automations');
   $('btnGoals').onclick = () => openGoals();
+  $('fGoals').onclick = () => openGoals();   // Filters reaches the Goals sheet on every width, also before the first goal
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
     if (/^[\w.-]+$/.test(owner)) q.set('target_name', owner);
