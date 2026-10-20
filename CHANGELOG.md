@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v81: the minor findings from the kit v71 reviews (private-tasks card #176). `list --sort score` and `list --links`
+pass the whole printed line through the one-line guard, and a card link flattens a hand-edited number. The guard now
+removes only control characters, line and paragraph separators, lone surrogates and bidi embeddings, overrides and
+isolates, so a title with an emoji ZWJ sequence, an RTL mark or a soft hyphen prints as stored. A hosted `add` stores
+the checked label names. `--recommend` with a Unicode digit (²) refuses cleanly. Hand-edited timestamps such as
+`T24:00` or `+05:99` are refused alike in keeptrack.py and board.js (no lapse either side). A hosted board's URL has its
+own variable, `BOARD_HOSTED_API`; a GitHub board refuses to send its token while a hosted board's variables are set. A
+config above a board clone is skipped only for a clone this person trusts (its own keeptrack.py runs, or `use` named its
+board); any other clone with `board/tasks.json` no longer overrides the trusted config. New `cleared-ack <id>`: a
+person marks agent-cleared flags checked, so doctor stops showing them. Web board: "Accept all recommended" answers at
+most 20 per run and leaves a question alone when its text, options or recommendation changed after the confirm; the
+Review Inbox works out the board's zone and today once per render.
+
 Kit v80: archive many Done cards without "Busy, try again" (private-tasks card #243), and a plain English section in
 the card guide (card #171). On the web board, a quick Archive click made while another archive commit runs no longer
 fails: the card leaves the board at once and waits, and every card that waited is archived in the next single commit.

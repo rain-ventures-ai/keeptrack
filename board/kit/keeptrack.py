@@ -168,6 +168,7 @@ def _untrusted(d, name):
 
 
 PARENT_CONFIG = None   # a config above a board clone, ignored so the clone's own remote decides (said by commands)
+UNTRUSTED_CLONE = None   # (a clone's owner/name, the config used instead): a clone `use` never named decides nothing
 
 
 _CLONES = {}   # {current folder: its clones}, asked once a run per folder
@@ -199,15 +200,45 @@ def _board_clones():
     return _CLONES[cwd]
 
 
+def _trusted_board_repos():
+    """The boards (owner/name, lower case) the trusted configs name: the boards this person connected with `use` on
+    this computer. Only an unchanged config counts, as in _untrusted."""
+    out = set()
+    for path, digest in _trusted_configs().items():
+        try:
+            if _digest(path) != digest:
+                continue
+            with open(path, encoding="utf-8") as f:
+                conf = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(conf, dict) and isinstance(conf.get("repo"), str) and conf["repo"]:
+            out.add(conf["repo"].lower())
+    return out
+
+
+def _own_clone(c):
+    """True when this keeptrack.py is the clone's own (c/board/keeptrack.py): running its code already trusts it."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.basename(here) == "board" and os.path.realpath(os.path.dirname(here)) == c
+
+
 def _above_a_clone(d, conf):
     """True when folder d is a parent of a board clone the current folder is in, and the config there names another
     board than that clone's own remote. Such a config (for example one `use` wrote in the home folder) must never beat
     the clone's remote: inside a clone, the clone names its board. A config naming the same board still applies (its
-    user, token_env, project)."""
+    user, token_env, project). Kit v81: only a clone this person trusts gets that say: its own keeptrack.py is running,
+    or a config `use` wrote names its board. Any other clone with a board/tasks.json (a third party's repo, say) could
+    otherwise override the trusted config; the config then applies. Returns (skip it, the untrusted clone's owner/name)."""
     d = os.path.realpath(d)
     repo = str(conf.get("repo") or "").lower()
-    return any(c != d and c.startswith(d.rstrip(os.sep) + os.sep) and repo and r and repo != r
-               for c, r in _board_clones().items())
+    below = [(c, r) for c, r in _board_clones().items() if c != d and c.startswith(d.rstrip(os.sep) + os.sep) and repo and r and repo != r]
+    if not below:
+        return False, ""
+    trusted = _trusted_board_repos()
+    if any(_own_clone(c) or r in trusted for c, r in below):
+        return True, ""
+    return False, below[0][1]
 
 
 def project_config():
@@ -216,7 +247,7 @@ def project_config():
     pre-v22 .board/config.json is still read. Environment variables still win over it. A config in a folder above a
     board clone is ignored: inside a clone its own git remote names the board (PARENT_CONFIG says which was skipped).
     Returns (project folder, settings, config folder name)."""
-    global UNTRUSTED_CONFIG, PARENT_CONFIG
+    global UNTRUSTED_CONFIG, PARENT_CONFIG, UNTRUSTED_CLONE
     d = os.getcwd()
     while True:
         for name in CONFIG_DIRS:
@@ -230,9 +261,12 @@ def project_config():
                         conf = json.load(f)
                 except (OSError, ValueError) as e:
                     sys.exit(f"cannot read {p}: {e}")
-                if isinstance(conf, dict) and _above_a_clone(d, conf):
+                skip, stranger = _above_a_clone(d, conf) if isinstance(conf, dict) else (False, "")
+                if skip:
                     PARENT_CONFIG = PARENT_CONFIG or p
                     continue
+                if stranger:
+                    UNTRUSTED_CLONE = (stranger, p)
                 return d, conf, name
         if os.path.dirname(d) == d:
             return None, {}, CONFIG_DIRS[0]
@@ -255,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 80  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 81  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -412,13 +446,48 @@ def use_http():
     return bool(os.environ.get("BOARD_TOKEN")) or not shutil.which("gh")
 
 
+HOSTED_ONLY_VARS = ("BOARD_HOSTED_API", "BOARD_ID", "BOARD_TOKEN_FILE")
+_BOARD_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+
+
+def github_api_base():
+    """The GitHub API base a GitHub board's token goes to: BOARD_API (GitHub Enterprise, a test server) or api.github.com.
+    Refused while a hosted board's variables are set (kit v81): then BOARD_BACKEND=hosted was forgotten, and BOARD_API may
+    be the hosted host, which must never get the GitHub token. BOARD_HOSTED_API always counts; BOARD_TOKEN_FILE and a
+    board UUID in BOARD_ID count only with BOARD_API set (without it the token goes to api.github.com, and other tools may
+    use BOARD_ID for their own board names)."""
+    hosted = [k for k in HOSTED_ONLY_VARS if os.environ.get(k)
+              and (k == "BOARD_HOSTED_API" or (os.environ.get("BOARD_API") and (k != "BOARD_ID" or _BOARD_UUID.fullmatch(os.environ[k]))))]
+    if hosted:
+        sys.exit(f"invalid_credential: {', '.join(hosted)} {'is' if len(hosted) == 1 else 'are'} set for a hosted board, but "
+                 "BOARD_BACKEND is not hosted, so the GitHub token is not sent anywhere. Set BOARD_BACKEND=hosted, or unset "
+                 + ("it" if len(hosted) == 1 else "them") + " for a GitHub board.")
+    return os.environ.get("BOARD_API", "https://api.github.com").rstrip("/")
+
+
+def hosted_api_url():
+    """A hosted board's API: BOARD_HOSTED_API (kit v81). BOARD_API still works in hosted mode, with a note, until
+    dispatchers move: it is also the GitHub base, so a missing BOARD_BACKEND would send the GitHub token to it."""
+    url = os.environ.get("BOARD_HOSTED_API", "")
+    if not url and os.environ.get("BOARD_API"):
+        global _HOSTED_API_NOTE
+        if not _HOSTED_API_NOTE:
+            print("note: set the hosted board's URL in BOARD_HOSTED_API; BOARD_API for a hosted board is deprecated", file=sys.stderr)
+            _HOSTED_API_NOTE = True
+        url = os.environ["BOARD_API"]
+    return url.rstrip("/")
+
+
+_HOSTED_API_NOTE = False
+
+
 def http(method, path, body=None, accept="application/vnd.github+json"):
     if BACKEND == "hosted" and not FILE:
         sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
     t = token()
     if not t:
         sys.exit("no GitHub auth: install and log in to `gh`, or set BOARD_TOKEN (fine-grained token, Contents read/write on the repo)")
-    req = urllib.request.Request(os.environ.get("BOARD_API", "https://api.github.com").rstrip("/") + "/" + path.lstrip("/"), method=method,
+    req = urllib.request.Request(github_api_base() + "/" + path.lstrip("/"), method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": f"Bearer {t}", "Accept": accept,
                                           "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "board-cli",
@@ -753,7 +822,7 @@ def cached_read(path):
         old = json.load(open(f))
     except (OSError, ValueError):
         old = None
-    url = os.environ.get("BOARD_API", "https://api.github.com").rstrip("/") + f"/repos/{REPO}/contents/{path}?ref={BRANCH}"
+    url = github_api_base() + f"/repos/{REPO}/contents/{path}?ref={BRANCH}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json",
                                                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "board-cli",
                                                **({"If-None-Match": old["etag"]} if old and old.get("etag") else {})})
@@ -1028,13 +1097,13 @@ class HostedStorageAdapter:
     capabilities = {"casWrites": True, "atomicMultiFile": True, "changeFeed": True}
 
     def __init__(self):
-        self.api = os.environ.get("BOARD_API", "").rstrip("/")
+        self.api = hosted_api_url()
         u = urllib.parse.urlsplit(self.api)
         host = (u.hostname or "").lower().rstrip(".")
         if (u.scheme not in ("http", "https") or not host or u.username or u.password or u.query or u.fragment
                 or any(host == d or host.endswith("." + d) for d in ("github.com", "githubusercontent.com", "githubassets.com", "github.io"))
                 or (u.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))):
-            sys.exit("invalid_credential: BOARD_API must be an HTTPS API or loopback HTTP URL, never a GitHub host")
+            sys.exit("invalid_credential: BOARD_HOSTED_API must be an HTTPS API or loopback HTTP URL, never a GitHub host")
         self.board = os.environ.get("BOARD_ID", "")
         if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", self.board):
             sys.exit("invalid_schema: BOARD_ID must be a board UUID")
@@ -1291,8 +1360,7 @@ def hosted_dispatch(a):
             card = {"id": "t_" + secrets.token_hex(8), "title": a.title, "assignees": a.assign or [], "column": "backlog"}
             if not a.title.strip() or _has_break(a.title):
                 sys.exit("invalid_schema: a task needs a title on one line")
-            for name in a.label or []:
-                check_label_name(name)
+            labels = list(dict.fromkeys(check_label_name(n) for n in a.label or []))   # the checked names, as local add stores
             for k in ("details", "client", "priority"):
                 if getattr(a, k, None) is not None:
                     card[k] = getattr(a, k)
@@ -1300,8 +1368,8 @@ def hosted_dispatch(a):
                 card["due"] = check_date(a.due, data) or ""
             if a.project:
                 card["project"] = find_project(data, a.project)["id"]
-            if a.label:
-                card["labels"] = a.label
+            if labels:
+                card["labels"] = labels
             if a.after:
                 card["after"] = resolve_after(data, card, a.after)
             if a.todo:
@@ -2663,10 +2731,41 @@ def _age(mins):
     return "?" if mins is None else f"{int(mins)}m" if mins < 120 else f"{int(mins // 60)}h" if mins < 48 * 60 else f"{int(mins // 1440)}d"
 
 
+_BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"   # embeddings, overrides, isolates
+                           "\u206a\u206b\u206c\u206d\u206e\u206f\ufff9\ufffa\ufffb")   # deprecated format, annotations
+
+
+def _line_safe(c):
+    """A character one output line may hold: not a control (Cc, which covers every break str.splitlines knows but
+    \u2028 and \u2029), a line or paragraph separator (Zl, Zp), a lone surrogate (Cs, which cannot be printed) or a bidi
+    embedding, override or isolate (it could reorder the line on screen). Other format characters stay, so an emoji ZWJ
+    sequence, an RTL mark or a soft hyphen keeps its shape (kit v81; before, every non-printable character went). Tag
+    characters (U+E0000-E007F, invisible text a model can still read) are unsafe too; _line_guard keeps them only in a
+    subdivision flag (U+1F3F4 then tags)."""
+    import unicodedata
+    return (c not in _BIDI_CONTROLS and not "\U000e0000" <= c <= "\U000e007f"
+            and unicodedata.category(c) not in ("Cc", "Zl", "Zp", "Cs"))
+
+
+def _line_guard(text):
+    """Every unsafe character of one output line (_line_safe) as a space; a flag's tag run (🏴 + tags) stays whole."""
+    text = str(text)
+    if text.isascii() and text.isprintable():
+        return text
+    out, flag = [], False
+    for c in text:
+        if flag and "\U000e0020" <= c <= "\U000e007f":
+            out.append(c); flag = c != "\U000e007f"   # U+E007F (cancel tag) ends the flag
+            continue
+        flag = c == "\U0001f3f4"
+        out.append(c if _line_safe(c) else " ")
+    return "".join(out)
+
+
 def _flat(value):
-    """Text printed as part of one output line: printable characters only, words joined by single spaces. relay and
-    routines read `list` output one item per line, so a title can never print as a second, forged line."""
-    return " ".join("".join(c if c.isprintable() else " " for c in str(value or "")).split())
+    """Text printed as part of one output line: safe characters only (_line_safe), words joined by single spaces. relay
+    and routines read `list` output one item per line, so a title can never print as a second, forged line."""
+    return " ".join(_line_guard(value or "").split())
 
 
 def _has_break(value):
@@ -2699,7 +2798,7 @@ def line(data, t, wait_suffix="list", today=None):
     out = (f"#{_flat(t.get('num', '?')):<4}{_flat(t['id'])}  {_flat(t['column']):<11} {who:<22} {_flat(t['title'])}"
            f"{pr}{cm}{wt}{af}{cl}")
     # last guard over the whole line (after refs, wait text and anything added later): no break or control character
-    return "".join(c if c.isprintable() else " " for c in out)
+    return _line_guard(out)
 
 
 def _default_scope(a, data=None):
@@ -2720,11 +2819,41 @@ def searchable(t):
     return out
 
 
-def recently_cleared(t, days=7):
-    """The card's newest agent_cleared entry is under `days` old (list --attention shows it for a week; doctor for AGENT_CLEARED_DAYS)."""
+def unchecked_cleared(t):
+    """The card's agent_cleared entries no person has marked checked yet (`cleared-ack`, kit v81)."""
     lst = t.get("agent_cleared") if isinstance(t.get("agent_cleared"), list) else []
-    ages = [minutes_since(x.get("at")) for x in lst if isinstance(x, dict)]
+    return [x for x in lst if isinstance(x, dict) and not x.get("checked_at")]
+
+
+def recently_cleared(t, days=7):
+    """The card has an unchecked agent_cleared entry under `days` old (list --attention shows it for a week; doctor for
+    AGENT_CLEARED_DAYS)."""
+    ages = [minutes_since(x.get("at")) for x in unchecked_cleared(t)]
     return any(m is not None and m < days * 1440 for m in ages)
+
+
+def cmd_cleared_ack(a):
+    """A person marks a card's agent_cleared entries checked (kit v81): doctor and list --attention stop showing them. The
+    entries stay on the card as the record, with who checked them and when. Agents never do this."""
+    if agent_run():
+        sys.exit("refused: agents never mark agent-cleared flags checked; a person does (the web page, or a shell without BOARD_AGENT)")
+    me = default_user()
+    if not me:
+        sys.exit("cleared-ack needs to know who you are: set BOARD_USER (or log in with gh)")
+    note = " ".join(str(a.note or "").split())
+
+    def fn(data):
+        t = find(data, a.id)
+        todo = unchecked_cleared(t)
+        if not todo:
+            print(f"#{t.get('num', '?')} has no agent-cleared flag left to check"); return   # nothing changed, so nothing is written
+        at = now()
+        for x in todo:
+            x["checked_by"] = me; x["checked_at"] = at
+        hist(t, f"checked {len(todo)} agent-cleared flag{'s' if len(todo) != 1 else ''}" + (f": {note}" if note else ""), me)
+        t["updated"] = at
+        print(f"#{t.get('num', '?')}: {len(todo)} agent-cleared flag{'s' if len(todo) != 1 else ''} marked checked by @{_flat(me)}")
+    mutate(fn, f"Agent cleared checked: {a.id}")
 
 
 def cmd_list(a):
@@ -2766,11 +2895,12 @@ def cmd_list(a):
         if getattr(a, "bare", False) and not bare_card(t): continue
         if getattr(a, "json", False):
             json_items.append(t); continue
-        cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
+        cleared = f"  [agent cleared: {len(unchecked_cleared(t))}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
-        print(line(data, t, today=today) + cleared + scoring + url)
+        # the whole printed line passes the guard: value, effort and the link come from the card file too
+        print(_line_guard(line(data, t, today=today) + cleared + scoring + url))
     card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "waiting", "project", "client", "label", "bare")) or query or wait_on
     if a.attention and not getattr(a, "json", False) and not card_filter:
         # kit v71: Review Inbox questions nobody answered in settings.inbox_lapse_days. One self-contained line each (relay
@@ -3075,15 +3205,20 @@ def cmd_release(a):
 def card_url(num, ident=None):
     """The web board's link that opens card #num (the board's own #N route); '' without a board repo (--file)."""
     if BACKEND == "hosted" and not FILE:
-        query = {"backend": "hosted", "api": os.environ.get("BOARD_API", ""), "board": os.environ.get("BOARD_ID", "")}
+        query = {"backend": "hosted", "api": hosted_api_url(), "board": os.environ.get("BOARD_ID", "")}
         if ident:
             query["card"] = ident
-        return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(query) + f"#{num}"
+        return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(query) + f"#{_url_num(num)}"
     if not REPO:
         return ""
     query = {"repo": REPO, "branch": BRANCH, "path": PATH}
     if isinstance(ident, str) and SAFE_ID.fullmatch(ident): query["card"] = ident
-    return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(query) + f"#{num}"
+    return "https://rain-ventures-ai.github.io/keeptrack/board/?" + urllib.parse.urlencode(query) + f"#{_url_num(num)}"
+
+
+def _url_num(num):
+    """The #N part of a card link: the number itself, or the flattened text of a hand-edited one, quoted for a URL."""
+    return str(num) if isinstance(num, int) and not isinstance(num, bool) else urllib.parse.quote(_flat(num), safe="")
 
 
 def card_md(num, ident=None):
@@ -4473,10 +4608,11 @@ def doctor_board(fix=False):
         if w and claim and claim.get("status") != "done" and not (claim.get("status") == "blocked" and claim.get("blocked_by_wait")):
             problem("CLAIM_BLOCKED", path, f"{claim.get('agent', '?')} holds a {claim.get('status', '?')} claim on a card that is waiting "
                     f"on {waiting_text(w)} (an older tool may have claimed it); release it, or unwait the card if the wait is over.")
-        recent = [x for x in t.get("agent_cleared") or [] if isinstance(x, dict) and (minutes_since(x.get("at")) or 0) < AGENT_CLEARED_DAYS * 1440]   # a bad `at` shows: fail toward showing
+        recent = [x for x in unchecked_cleared(t) if (minutes_since(x.get("at")) or 0) < AGENT_CLEARED_DAYS * 1440]   # a bad `at` shows: fail toward showing
         for x in recent[-3:]:   # done cards too: "done while waiting" is the case to check
             problem("AGENT_CLEARED", path, f"An agent run ({clean(x.get('by') or '?', 60)}, session {clean(x.get('session') or '?', 20)}) "
-                    f"did '{clean(x.get('what') or '?', 40)}' at {clean(x.get('at') or '?', 30)}: check it was allowed.")
+                    f"did '{clean(x.get('what') or '?', 40)}' at {clean(x.get('at') or '?', 30)}: check it was allowed, then "
+                    f"`keeptrack.py cleared-ack {clean(t.get('id', '?'), 40)}` (a person, not an agent).")
     board_modes = (data.get("settings") or {}).get("modes") or ["tasks", "crm"]
     for m in [x for x in (data.get("people") or []) if isinstance(x, dict)]:
         gh_user = m.get("github")
@@ -4997,7 +5133,7 @@ def _here(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait"],
+    "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-source", "sent"],
@@ -5070,6 +5206,8 @@ def cmd_where(a):
     print(f"config:  {os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json') if PROJECT_DIR else '(no .keeptrack/config.json found)'}")
     if PARENT_CONFIG:
         print(f"         (ignored {PARENT_CONFIG}: it is above this board clone, whose own git remote names the board)")
+    if UNTRUSTED_CLONE:
+        print(f"         (used it, not this clone of {_flat(UNTRUSTED_CLONE[0])}: `keeptrack.py use` never named that board here)")
     print(f"claims:  {CLAIM_FILE}")
 
 
@@ -7160,12 +7298,15 @@ def stamp_day(value, zone=None):
         return ""
     try:
         day = dt.date.fromisoformat(m.group(1))
+        off = m.group(5) or "Z"
+        if m.group(2) is not None and (int(m.group(2)) > 23 or int(m.group(3)) > 59 or int(m.group(4) or 0) > 59
+                                       or (off != "Z" and (int(off[1:3]) > 23 or int(off[4:6]) > 59))):
+            return ""   # T24:00, a leap second, +05:99: refused here and in board.js stampDay alike (hand-edited files)
         if not zone or m.group(2) is None:
             return day.isoformat()
         if isinstance(zone, str):
             import zoneinfo
             zone = zoneinfo.ZoneInfo(zone)
-        off = m.group(5) or "Z"
         tz = dt.timezone.utc if off == "Z" else dt.timezone(dt.timedelta(hours=int(off[1:3]), minutes=int(off[4:6])) * (1 if off[0] == "+" else -1))
         at = dt.datetime(day.year, day.month, day.day, int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), tzinfo=tz)
         return at.astimezone(zone).date().isoformat()
@@ -7391,7 +7532,7 @@ def resolve_recommend(change, ref):
     ref = str(ref or "").strip()
     listing = "; ".join(f"{i}. {o.get('label')} ({o.get('key')})" for i, o in enumerate(options, 1))
     by_key = [o.get("key") for o in options if ref == o.get("key")]
-    by_pos = [options[int(ref) - 1].get("key")] if ref.isdigit() and 1 <= int(ref) <= len(options) else []
+    by_pos = [options[int(ref) - 1].get("key")] if ref.isdecimal() and ref.isascii() and 1 <= int(ref) <= len(options) else []
     by_label = [o.get("key") for o in options if ref.casefold() == str(o.get("label", "")).strip().casefold()]
     named = list(dict.fromkeys(by_key + by_pos + by_label))
     if len(named) > 1:
@@ -9887,6 +10028,8 @@ def main():
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
     s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session")
     s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session"); s.set_defaults(f=cmd_unwait)
+    s = sub.add_parser("cleared-ack", help="a person marks a card's agent-cleared flags checked, so doctor and list --attention stop showing them")
+    s.add_argument("id"); s.add_argument("--note", help="what you checked"); s.set_defaults(f=cmd_cleared_ack)
     s = sub.add_parser("todo-add", help="add a checklist item; - reads one per line from stdin, all in one save")
     s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_todo_add)
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
@@ -10120,8 +10263,14 @@ def main():
         print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
               "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",
               file=sys.stderr)
+    if UNTRUSTED_CLONE and not getattr(a, "hook", False) and a.f is not cmd_use:
+        print(f"note: this folder is in a clone of {_flat(UNTRUSTED_CLONE[0])}, a board you never connected with `keeptrack.py use`, "
+              f"so {_flat(UNTRUSTED_CLONE[1])} still decides the board. If the clone is yours, run "
+              f"`keeptrack.py use {_flat(UNTRUSTED_CLONE[0])}` in it.", file=sys.stderr)
     if BACKEND not in ("github", "hosted"):
         sys.exit(f"unknown BOARD_BACKEND {BACKEND!r}: use github (the default) or hosted, or unset it")
+    if BACKEND == "github" and not FILE:
+        github_api_base()   # kit v81: a hosted board's variables on a GitHub board stop every transport, `gh` too
     if not FILE and BACKEND != "github":
         return hosted_dispatch(a) or 0
     return a.f(a) or 0

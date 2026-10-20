@@ -103,7 +103,10 @@ Facts from the code, so you can decide what to allow. File names are in `rain-ve
 - `kit-check`, `kit-update` and the `min_kit` check read the published kit: `git ls-remote` of
   `https://github.com/rain-ventures-ai/keeptrack` (or the latest commit from `api.github.com` when git can't), then
   files from `raw.githubusercontent.com` (or a shallow `git clone` when that is blocked), or `BOARD_KIT_URL` when set. These requests carry no token and no board data.
-- A hosted board (`BOARD_BACKEND=hosted`) talks only to its `BOARD_API`, never to GitHub.
+- A hosted board (`BOARD_BACKEND=hosted`) talks only to its `BOARD_HOSTED_API` (kit v81; `BOARD_API` still works there,
+  with a note), never to GitHub. On a GitHub board, `BOARD_HOSTED_API` set (or `BOARD_API` with `BOARD_TOKEN_FILE`
+  or a board UUID in `BOARD_ID`) means `BOARD_BACKEND=hosted` was forgotten: the tool then stops and sends the GitHub
+  token nowhere.
 - Nothing else: no analytics, no telemetry, no model calls. Agents that run the tool send what they send themselves.
 
 **What leaves the browser (the web board, `board/board.js`).**

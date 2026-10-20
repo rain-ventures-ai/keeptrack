@@ -510,6 +510,22 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.equal(api.json('proposals/r_relaywd001.json').status, 'pending', 'a withdraw is reversible the way an ignore is');
       await page.close(); }
 
+    // Kit v81: one bulk run answers at most 20 questions, and its confirm says the rest wait for the next press.
+    { const nowIso = new Date().toISOString(), files = fixture(), ids = [];
+      for (let n = 1; n <= 22; n++) { const id = `r_capq${String(n).padStart(6, '0')}`; ids.push(id);
+        files[`proposals/${id}.json`] = text(prop(id, 'ask.choose', `Cap question ${n}?`, { source: { kind: 'other', id: 'agent-3', revision: '1', title: 'Agent picks', date: '2026-10-11' }, run: null, reason: '', created: nowIso,
+          change: { question: `Cap question ${n}?`, options: [{ key: 'a', label: 'Option A' }, { key: 'b', label: 'Option B' }], recommended: 'a' } })); }
+      const api = new Github(files), page = await openBoard(browser, api, { view: 'inbox' }); await page.waitForSelector('article.prop');
+      const bulk = page.locator('[data-act="accept-all-recommended"]'); assert.match(await bulk.textContent(), /Accept all recommended \(22\)/);
+      await bulk.click(); const dlg = page.getByRole('alertdialog'); await dlg.waitFor();
+      assert.equal(await dlg.locator('.inbox__bulklist li').count(), 20, 'a run lists and answers 20 at most');
+      assert.match(await dlg.textContent(), /Answer 20 questions with the recommended option\?/);
+      assert.match(await dlg.textContent(), /These are the first 20 of 22; press again for the rest\./);
+      await clearLive(page); await dlg.getByRole('button', { name: 'Answer them' }).click(); await said(page, /Answered 20 with the recommended option\./);
+      assert.equal(ids.filter(id => api.json(`proposals/${id}.json`).status === 'answered').length, 20);
+      assert.match(await bulk.textContent(), /Accept all recommended \(2\)/, 'the rest wait for the next press');
+      await page.close(); }
+
     // Kit v71 (ideas from petekp/inbox): the recommended option first and marked in words, "Accept all recommended",
     // lapsed questions (computed when read, never written) and a visible result for every press.
     { const nowIso = new Date().toISOString(), old = '2020-01-01T09:00:00Z', files = fixture();
@@ -558,15 +574,19 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       assert.equal(await page.getByRole('alertdialog').count(), 0, 'a second press starts no second run');
       // Someone else answers a queued item meanwhile: it is skipped, not counted as failed, and their answer stays.
       api.edit('proposals/r_recmany010.json', o => { o.status = 'answered'; o.decision = { action: 'answer', id: 'a_other00001', by: 'sam', at: '2026-10-12T09:00:00Z', answer: { choice: 'b' }, result: null, commit: null }; });
-      releaseBulk(); await said(page, /Answered 10 with the recommended option\. 1 changed meanwhile/);
+      // kit v81: someone edits a queued question meanwhile (same recommended key, another meaning): it is not answered.
+      api.edit('proposals/r_recmany009.json', o => { o.change.options[0].label = 'Option A, at twice the price'; });
+      releaseBulk(); await said(page, /Answered 9 with the recommended option\. 2 changed meanwhile/);
       await page.unroute('https://api.test/**'); await page.route('https://api.test/**', r => api.route(r));
-      for (const id of bulkIds.filter(x => x !== 'r_recmany010')) { const o = api.json(`proposals/${id}.json`); assert.equal(o.status, 'answered', id); assert.equal(o.history.filter(h => h.text === 'answered').length, 1, id + ' answered once'); }
+      assert.equal(api.json('proposals/r_recmany009.json').status, 'pending', 'an edited question is left for a person to read again');
+      assert.equal(await propCard(page, 'r_recmany009').locator('.prop__press--err').count(), 0, 'counted as changed, not as a failed save');
+      for (const id of bulkIds.filter(x => x !== 'r_recmany010' && x !== 'r_recmany009')) { const o = api.json(`proposals/${id}.json`); assert.equal(o.status, 'answered', id); assert.equal(o.history.filter(h => h.text === 'answered').length, 1, id + ' answered once'); }
       assert.deepEqual(api.json('proposals/r_recmany099.json').decision.answer, { choice: 'send' });
       assert.deepEqual(api.json('proposals/r_recmany010.json').decision.answer, { choice: 'b' }, "the other person's answer is kept");
       assert.equal(await propCard(page, 'r_recmany010').locator('.prop__press--err').count(), 0, 'no false "Not saved"');
       for (const id of ['r_recsam0001', 'r_reclaps001', 'r_plain00001']) assert.equal(api.json(`proposals/${id}.json`).status, 'pending', id + ' stays pending');
       assert.equal(api.json('proposals/r_reclaps001.json').created, old, 'a lapse is never written to the file');
-      assert.equal(await bulk.count(), 0, 'nothing left to bulk-answer');
+      assert.match(await bulk.textContent(), /Accept all recommended \(1\)/, 'only the edited question is left to bulk-answer');
       assert.match(await propCard(page, 'r_recpick001').locator('.prop__press--ok').textContent(), /✓ Answered/, 'a bulk answer shows its result on each item');
       assert.match(await propCard(page, 'r_recpick001').textContent(), /Option B \(recommended\)/, 'the answer says it was the recommended option');
       // Press: "Saving…" and every control off while the save is out; a second press writes nothing more; then "✓ Approved".

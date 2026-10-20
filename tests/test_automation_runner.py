@@ -647,9 +647,7 @@ class Runner(unittest.TestCase):
 class Docs(unittest.TestCase):
     def read(self, rel): return (KIT / rel).read_text(encoding='utf-8')
 
-    def test_kit_is_v80_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(kt.KIT_VERSION, 80)
-        self.assertEqual(json.loads(self.read('manifest.json'))['version'], 80)
+    def test_kit_v80_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v81.py
         v80 = self.read('UPGRADING.md').split('### v80 (schema 4)', 1)[1].split('### v79', 1)[0]
         for words in ('kit-update', 'Busy, try again', 'Write in plain, simple English'):
             self.assertIn(words, v80)
