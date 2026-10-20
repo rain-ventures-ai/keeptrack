@@ -272,6 +272,12 @@ class HostedCLITest(unittest.TestCase):
         body = [c[2] for c in self.server.calls if c[0] == 'POST'][0]
         self.assertNotIn('num', body['card']); self.assertEqual(body['card']['column'], 'backlog')
 
+    def test_create_carries_links(self):   # kit v78: add --link on a hosted board
+        self.run_cli('add', 'Synthetic linked', '--link', 'https://example.test/a', 'Doc A', '--link', 'https://example.test/b')
+        body = [c[2] for c in self.server.calls if c[0] == 'POST'][0]
+        self.assertEqual([{'url': 'https://example.test/a', 'title': 'Doc A'}, {'url': 'https://example.test/b', 'title': 'https://example.test/b'}],
+                         body['card']['links'])
+
     def test_holder_proofs_and_phase0_mutations(self):
         self.claim()
         proofs = list(self.state.rglob('*.json')); self.assertEqual(len(proofs), 1)
