@@ -18,6 +18,8 @@ the message TooComplex. The `font` shorthand size, `-webkit-text-fill-color` and
 transforms and large negative margins hide when their value may hide text. A `<dialog>` without `open`, `<datalist>`,
 `<rp>` and a closed `<details>` (all but its `<summary>`) are hidden. Authentication-Results: quoted strings and comments
 never hold a result, the authserv-id must be exactly `mx.google.com`, and a result is read only where it starts.
+CSS nesting and quoted strings (`content:"/*"`) are read as a browser reads them, and a style block that only the
+string scan finds (inside a comment, `<title>` or `<textarea>`) can add hiding rules but never visible ones.
 
 Kit v81: the minor findings from the kit v71 reviews (private-tasks card #176). `list --sort score` and `list --links`
 pass the whole printed line through the one-line guard, and a card link flattens a hand-edited number. The guard now

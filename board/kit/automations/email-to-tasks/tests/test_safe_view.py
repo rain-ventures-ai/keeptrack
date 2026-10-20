@@ -512,6 +512,48 @@ class Card184(unittest.TestCase):
                    'Quarterly report</p><p style="font:700 12px Georgia;zoom:1;-webkit-text-fill-color:currentcolor">Hi</p>',
                    "Quarterly report", "Hi")
 
+    def test_round_four_review(self):
+        cases = (
+            # A style block only the string scan finds (in a comment, <title> or <textarea>) adds no visible rule.
+            '<style>p.x{color:#fff}</style><!--<style>p.x{color:#000}</style>--><p class=x>%s</p>',
+            '<style>p.x{color:#fff}</style><title><style>p.x{color:#000}</style></title><p class=x>%s</p>',
+            # A selector a browser drops (not an identifier, or a list with one unreadable selector) is not trusted.
+            '<style>p.x{color:#fff} p.x.1y{color:#000 !important}</style><p class="x 1y">%s</p>',
+            '<style>p.x{color:#fff} p.x, p:bogus{color:#000}</style><p class="x">%s</p>',
+            '<style>.z{color:#fff} p#k.z{color:#000}</style><p id=" k" class=z>%s</p>',
+            '<style>.z{color:#fff} p.z.y{color:#000}</style><p class="z\u00a0y">%s</p>',
+            # A browser closes <p>, <li>, <td> where this parser nests them: an ancestor may be the previous sibling.
+            '<style>.a + .b{display:none}</style><p class=a>Hi<p class=b>%s</p>',
+            '<style>.a ~ .b{display:none}</style><ul><li class=a>Hi<li class=b>%s</ul>',
+            # A rule that may not hit the element never beats its own hiding style.
+            '<style>.a .x{color:#000 !important}</style><p class=x style="color:#fff">%s</p>',
+            '<style>.a .x{font-size:16px !important}</style><p class=x style="font-size:0">%s</p>',
+            # CSS nesting, and strings that hold comment or brace characters.
+            '<style>.x{display:none; .q{color:red}}</style><p class=x>%s</p>',
+            '<style>.x{@media screen{display:none}}</style><p class=x>%s</p>',
+            '<style>p.y{content:"/*"} p.x{color:#fff} p.z{content:"*/"}</style><p class=x>%s</p>',
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                self.seen(case % ORDER)
+        self.clean('<style>u + .body .gmail-blend-screen{background:#000;mix-blend-mode:screen}</style>'
+                   '<div class="gmail-blend-screen">Your invoice is ready</div>', "Your invoice is ready")
+        self.clean('<!--[if !mso]><!-- --><p>Hello</p><!--<![endif]-->', "Hello")
+        self.clean('<style>p.x{color:#000 !important}</style><p class=x style="color:#fff">Pinned</p>', "Pinned")
+        import time
+        t = time.monotonic()
+        rules = "".join(".k%d{background:var(--a)}" % i for i in range(1000))
+        sv.view(msg(html='<div style="' + "".join("--a:" + "zz " * 300 + ";" for _ in range(60)) + '">'
+                         "<style>" + rules + "</style><p>x</p></div>"))
+        pool = ["c%d" % i for i in range(100)]
+        css = "".join("." + ".".join(pool[(i * 7 + j) % 100] for j in range(20)) + "{color:#%03d}" % (i % 999)
+                      for i in range(1700))
+        try:
+            sv.view(msg(html="<style>" + css + "</style>" + ('<b class="' + " ".join(pool) + '">x</b>') * 700))
+        except sv.TooComplex:
+            pass
+        self.assertLess(time.monotonic() - t, 10)
+
     def test_elements_hidden_by_default(self):
         self.seen(f"<dialog>{ORDER}</dialog>")
         self.seen(f'<input list="d"><datalist id="d"><option>{ORDER}</option></datalist>')

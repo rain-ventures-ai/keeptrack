@@ -161,7 +161,7 @@ def _num(v):
 # the element (when unsure, hide more).
 OPAQUE = {"content-visibility": ("visible", "auto"), "filter": ("none",), "-webkit-filter": ("none",),
           "mask": ("none",), "mask-image": ("none",), "-webkit-mask": ("none",), "-webkit-mask-image": ("none",),
-          "-webkit-mask-box-image": ("none",), "mix-blend-mode": ("normal",), "text-security": ("none",), "-webkit-text-security": ("none",), "font-size-adjust": ("none",)}
+          "-webkit-mask-box-image": ("none",), "text-security": ("none",), "-webkit-text-security": ("none",), "font-size-adjust": ("none",)}
 
 
 def _hard_hides(s):
@@ -309,7 +309,9 @@ def _expand_vars(value, customs):
         if len(value) > 20000:
             raise TooComplex("custom properties expand too far")
         value = re.sub(r"var\(\s*--[^,()\s]+\s*,?", " ", value) + " " + \
-            " ".join(v for n in dict.fromkeys(names) for v in (customs or {}).get(n, ()))
+            " ".join(dict.fromkeys(v for n in dict.fromkeys(names) for v in (customs or {}).get(n, ())))
+        if len(value) > 20000:
+            raise TooComplex("custom properties expand too far")
     raise TooComplex("custom properties nested too deep")
 
 
@@ -350,17 +352,14 @@ class TooComplex(ValueError):
     """The style text is over the caps: the message is reported unreadable, never read with some rules unread."""
 
 
+CSS_STRING = r'"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\''
+COMMENT_OR_STRING = re.compile("(" + CSS_STRING + r")|/\*(?:[^*]|\*(?!/))*(?:\*/|\Z)", re.S)
+
+
 def _strip_comments(css):
-    """CSS comments removed in one pass; an unterminated `/*` runs to the end of its own block, as in a browser."""
-    kept, i = [], 0
-    while True:
-        a = css.find("/*", i)
-        if a < 0:
-            return "".join(kept + [css[i:]])
-        kept.append(css[i:a]); e = css.find("*/", a + 2)
-        if e < 0:
-            return "".join(kept)
-        i = e + 2
+    """CSS comments removed in one pass, never inside a quoted string (`content:"/*"` starts no comment); an
+    unterminated `/*` runs to the end of its own block, as in a browser."""
+    return COMMENT_OR_STRING.sub(lambda m: m.group(1) or "", css)
 
 
 def _customs(text, out):
@@ -441,8 +440,9 @@ def _ambiguous_comment(markup):
 
 
 def _style_text(markup):
-    """(blocks, customs): the CSS of every <style> block in the part the text is read from (MAX_MARKUP), one string
-    per block, comments removed, and the custom properties its inline styles declare. Blocks are found two ways: the HTML parser's own reading and a string scan. A rule either finds counts. A <style>
+    """(parsed, scanned, customs): the CSS of every <style> block in the part the text is read from (MAX_MARKUP), one
+    string per block, comments removed, found two ways: the HTML parser's own reading (`parsed`) and a string scan
+    (`scanned`), and the custom properties its inline styles declare. A hiding rule either finds counts. A <style>
     past MAX_MARKUP, style over MAX_STYLE, markup over MAX_SCAN, or comment forms browsers and this parser read
     differently raise TooComplex."""
     if len(markup) > MAX_SCAN:
@@ -459,8 +459,8 @@ def _style_text(markup):
     head = markup[:MAX_MARKUP].lower()
     if p.inside or "<style" in markup[MAX_MARKUP - 8:].lower() or head.rfind("<style") > head.rfind("</style"):
         raise TooComplex("a style block past MAX_MARKUP")   # its rules would be read by no tokenizer that agrees
-    blocks = ["".join(b) for b in p.blocks] + _scan_styles(markup[:MAX_MARKUP])
-    return [_strip_comments(b) for b in blocks], p.customs
+    parsed = [_strip_comments("".join(b)) for b in p.blocks]
+    return parsed, [_strip_comments(b) for b in _scan_styles(markup[:MAX_MARKUP])], p.customs
 
 
 DESKTOP = 1200   # the main reader modelled: a desktop mail client about 1200px wide, in light mode
@@ -504,30 +504,46 @@ def _at_applies(prelude):
     return out
 
 
+BRACES = re.compile("(" + CSS_STRING + "|[{}])")
+
+
 def _rules(css):
     """(widths, plain, selector, declarations) for each rule in one style block: `widths` the mask of WIDTHS at which
-    every at-rule around it applies, `plain` True when nothing is around it (it surely applies). Nested at-rules are
-    tracked; a block left open at the end is closed, as a browser does."""
-    out, stack, buf = [], [], []   # stack: (prelude, the widths at which everything around it applies)
-    for tok in re.split(r"([{}])", css):
+    every at-rule around it applies, `plain` True when nothing is around it (it surely applies). Braces inside a
+    quoted string are text. Nested at-rules are tracked, and CSS nesting is read: in a style rule, the text before a
+    nested rule's selector (up to its last `;`) is the outer rule's own declarations, and declarations written
+    straight inside an at-rule nested in a style rule (`.x{@media screen{display:none}}`) are the outer rule's too.
+    A block left open at the end is closed, as a browser does."""
+    out, stack, buf = [], [], []   # stack: [prelude, the widths at which everything around it applies, body parts]
+
+    def style_owner():   # the nearest style rule around the current point, or None
+        return next((f for f in reversed(stack) if not f[0].startswith("@")), None)
+
+    def close(frame, body):
+        prelude, widths = frame[0], (stack[-1][1] if stack else ALL)
+        if not prelude.startswith("@"):
+            out.append((widths, not stack, prelude, "".join(frame[2]) + ";" + body))
+        elif body.strip() and style_owner():
+            out.append((frame[1], False, style_owner()[0], body))
+    for tok in BRACES.split(css):
         if tok == "{":
-            prelude = "".join(buf).strip(); buf = []
+            text = "".join(buf); buf = []
+            if stack and not stack[-1][0].startswith("@") and ";" in text:
+                own, text = text.rsplit(";", 1)
+                stack[-1][2].append(own)   # the outer style rule's declarations, written before this nested rule
+            prelude = text.strip()
             outer = stack[-1][1] if stack else ALL
-            stack.append((prelude, outer & _at_applies(prelude)))
+            stack.append([prelude, outer & _at_applies(prelude), []])
             if len(stack) > 32:
                 raise TooComplex("CSS nested too deep")
         elif tok == "}":
             body, buf = "".join(buf), []
             if stack:
-                prelude, _ = stack.pop()
-                if not prelude.startswith("@"):
-                    out.append((stack[-1][1] if stack else ALL, not stack, prelude, body))
-        else:
+                close(stack.pop(), body)
+        elif tok:
             buf.append(tok)
     while stack:
-        prelude, _ = stack.pop()
-        if not prelude.startswith("@"):
-            out.append((stack[-1][1] if stack else ALL, not stack, prelude, "".join(buf)))
+        close(stack.pop(), "".join(buf))
         buf = []
     return out
 
@@ -665,28 +681,32 @@ def _cascade(slot, new):
 
 
 def _winner(slots, has):
-    """The value a property takes for an element that carries the parts `has` (its tag, and its classes and id as
-    written), from the slots of all its keys, as a browser's cascade picks it: the highest-ranked rule that surely
+    """(value, sure): the value a property takes for an element that carries the parts `has` (its tag, and its classes
+    and id as written), from the slots of all its keys, as a browser's cascade picks it, and whether that rule surely
+    hits the element: the highest-ranked rule that surely
     hits it, unless a rule that may hit it ranks higher. Then, if any such rule hides the text, the text counts as
     hidden (when unsure, hide more)."""
     exact = max((e for s in slots for n, e in s["pure"].items() if n <= has), key=_rank, default=None)
     found = ([exact] if exact else []) + [s[k] for s in slots for k in ("sticky", "loose")
                                           if s[k] and (exact is None or _rank(s[k]) > _rank(exact))]
     sticky = [f for f in found if f["sticky"]]
-    return max(sticky or found, key=_rank, default=None)
+    best = max(sticky or found, key=_rank, default=None)
+    return best, best is not None and best is exact
 
 
-SIMPLE = re.compile(r"(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[.#][a-zA-Z0-9_-]+)*")
+IDENT = r"-?[_a-zA-Z][_a-zA-Z0-9-]*"
+SIMPLE = re.compile(r"(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[.#]" + IDENT + ")*")
 
 
-def _need(one, plain):
+def _need(prelude, one, plain):
     """The parts an element must carry for a simple selector to surely hit it (tag in lower case, classes and id as
-    written), or None when the selector is not that simple or a rule around it may not apply."""
+    written), or None when the selector is not that simple, a rule around it may not apply, or any selector in its
+    list is not strictly simple (a browser drops a whole rule over one selector it cannot read: `p.x, p:bogus`)."""
     one = one.strip()
-    if not plain or not one or not SIMPLE.fullmatch(one):
+    if not plain or not one or not all(x.strip() and SIMPLE.fullmatch(x.strip()) for x in prelude.split(",")):
         return None
     tag = re.match(r"[a-zA-Z][a-zA-Z0-9]*", one)
-    return frozenset(([tag.group(0).lower()] if tag else []) + re.findall(r"[.#][a-zA-Z0-9_-]+", one))
+    return frozenset(([tag.group(0).lower()] if tag else []) + re.findall(r"[.#]" + IDENT, one))
 
 
 def _escaped(text):
@@ -703,8 +723,13 @@ def _style_rules(markup):
     """A _Rules from the message's <style> blocks. A rule that would hide text but whose elements cannot be named
     makes the message TooComplex."""
     r, count, order, sibling = _Rules(), 0, 0, 0
-    blocks, r.customs = _style_text(markup)
-    unique = list(dict.fromkeys(blocks))   # the parser and the string scan mostly find the same blocks
+    parsed, scanned, r.customs = _style_text(markup)
+    blocks = parsed + scanned
+    # The parser and the string scan mostly find the same blocks; a block only the scan finds (one inside an HTML
+    # comment, <title> or <textarea>, which a browser does not read as CSS) may add hiding rules, never visible ones.
+    unique = list(dict.fromkeys(blocks))
+    trusted = set(parsed)
+    memo = {}   # _bg_of per distinct background value: a var() one can be long to follow
     for block in blocks:
         count += len(_rules(block))
         if count > MAX_RULES:
@@ -714,6 +739,7 @@ def _style_rules(markup):
             if widths and "--" in body:
                 _customs(body, r.customs)
     for block in unique:   # a second pass, so every custom property is known before a background uses one
+        sure = block in trusted
         for widths, plain, prelude, body in _rules(block):
             if not widths:
                 continue
@@ -721,10 +747,13 @@ def _style_rules(markup):
             d = _decls(body)
             important, escaped = _important(body), _escaped(body)
             hides = _hard_hides(d)
-            try:
-                bg, unreadable = _bg_of(d, r.customs), None
-            except TooComplex as e:   # fatal only when the rule hits an element (not for `:hover` or the like)
-                bg, unreadable = "", e
+            key = (d.get("background-color"), d.get("background"), d.get("background-image"))
+            if key not in memo:
+                try:
+                    memo[key] = (_bg_of(d, r.customs), None)
+                except TooComplex as e:   # fatal only when the rule hits an element (not for `:hover` or the like)
+                    memo[key] = ("", e)
+            bg, unreadable = memo[key]
             props = {k: v for k, v in (("color", d.get("color", "")), ("fill", d.get("-webkit-text-fill-color", "")),
                                        ("bg", bg), ("fs", d.get("font-size", "")),
                                        ("op", d.get("opacity", "")), ("zoom", d.get("zoom", ""))) if v}
@@ -739,7 +768,7 @@ def _style_rules(markup):
             desk = bool(widths & DESK)
             for one in prelude.split(","):
                 keys, comb, prev = _selector_keys(one)
-                need = _need(one, plain)
+                need = _need(prelude, one, plain and sure)
                 if unreadable and keys != []:
                     raise unreadable
                 if keys is None:
@@ -772,7 +801,8 @@ def _style_rules(markup):
                         new = {"v": v, "imp": any(n in important for n in name), "rank": (_specificity(one), order),
                                "sticky": _hiding_value(prop, v) or (pair and prop in ("color", "fill", "bg")),
                                "need": None if any(n in escaped for n in name) else need}
-                        cur[prop] = _cascade(cur.get(prop), new)
+                        if sure or new["sticky"]:
+                            cur[prop] = _cascade(cur.get(prop), new)
     return r
 
 
@@ -812,6 +842,7 @@ def _px(v, parent):
 QUOTE_KEYS = (".gmail_quote", ".gmail_quote_container", ".yahoo_quoted", ".moz-cite-prefix", "blockquote")
 QUOTE_REST = ("#divrplyfwdmsg", "#appendonsend")   # Outlook: the quote follows these, to the end of the message
 HEAD_TAGS = {"head", "meta", "link", "style", "title", "script", "base", "noscript", "template", "xml", "o:officedocumentsettings"}
+MAX_CHECKS = 500_000   # simple-selector checks in one message; more is TooComplex
 MAX_DEPTH = 256   # deeper nesting is TooComplex: no real mail needs it, and it keeps every step cheap
 
 
@@ -827,6 +858,8 @@ class _Visible(html.parser.HTMLParser):
         self.top = {"prev": (), "seen": set()}   # the siblings read so far outside any element
         self.conditionals = []   # the text of Outlook conditional comments, checked against the visible text at the end
         self.bgs = {}
+        self.checks = 0   # simple-selector checks so far (MAX_CHECKS)
+        self.ancestors = {}   # key -> how many open elements carry it
 
     def _bg(self, d):
         """_bg_of for an inline style, worked out once per distinct value (a var() one can be long to follow)."""
@@ -838,6 +871,8 @@ class _Visible(html.parser.HTMLParser):
     def _pop_to(self, i):
         for e in self.stack[i:]:
             self.open[e["tag"]] -= 1
+            for k in e["keys"]:
+                self.ancestors[k] -= 1
         del self.stack[i:]
 
     def handle_starttag(self, tag, attrs):
@@ -849,12 +884,14 @@ class _Visible(html.parser.HTMLParser):
         a = {k.lower(): (v or "") for k, v in attrs}
         ident = a.get("id", "").strip().lower()
         keys = [tag] + (["#" + ident] if ident else []) + ["." + c.lower() for c in a.get("class", "").split()]
-        # Rules with a sibling combinator: `+` looks at the element just before this one, `~` at any before it.
+        # Rules with a sibling combinator: `+` looks at the element just before this one, `~` at any before it. An
+        # open ancestor counts too: a browser closes `<p>`, `<li>` or `<td>` at the next one where this parser nests
+        # it, so what looks like a parent may be the previous sibling (when unsure, hide more).
         box = self.stack[-1] if self.stack else self.top
         widths = 0
         for k in keys:
             for comb, prev, w in self.rules.sibling.get(k, ()):
-                if any(p in (box["prev"] if comb == "+" else box["seen"]) for p in prev):
+                if any(p in (box["prev"] if comb == "+" else box["seen"]) or self.ancestors.get(p) for p in prev):
                     widths |= w
         box["prev"] = keys; box["seen"].update(keys)
         if tag in VOID:
@@ -862,15 +899,23 @@ class _Visible(html.parser.HTMLParser):
         if len(self.stack) >= MAX_DEPTH:
             raise TooComplex("elements nested too deep")
         soft = self.rules.soft
-        has = frozenset([tag] + (["#" + a["id"].strip()] if a.get("id", "").strip() else []) +
-                        ["." + c for c in a.get("class", "").split()])   # its parts as written, for simple selectors
+        # Its parts exactly as a browser matches them, for simple selectors: the id as written, the classes split on
+        # ASCII white space only (a no-break space is part of a class name).
+        has = frozenset([tag] + (["#" + a["id"]] if a.get("id") else []) +
+                        ["." + c for c in re.split(r"[ \t\n\f\r]+", a.get("class", "")) if c])
         props, locked = {}, set()
         for prop in ("color", "fill", "bg", "fs"):   # style-block rules first, then the element's own attributes
-            best = _winner([soft[k][prop] for k in keys if prop in soft.get(k, {})], has)   # all its keys' rules
+            slots = [soft[k][prop] for k in keys if prop in soft.get(k, {})]
+            self.checks += sum(len(x["pure"]) for x in slots)
+            if self.checks > MAX_CHECKS:
+                raise TooComplex("style rules too costly to match")
+            best, sure = _winner(slots, has)   # all its keys' rules together
             if best:
                 props[prop] = best["v"]
-                if best["imp"]:
-                    locked.add(prop)   # an !important rule beats the element's own (normal) style
+                # An !important rule beats the element's own (normal) style, when it surely hits the element or it
+                # hides the text. One that may not hit it never makes text the element's own style hides visible.
+                if best["imp"] and (sure or best["sticky"]):
+                    locked.add(prop)
         inline = _style(attrs)
         own = {}
         if tag == "font" and a.get("color"):
@@ -923,8 +968,10 @@ class _Visible(html.parser.HTMLParser):
         self.stack.append({"tag": tag, "hard": hard, "color": color, "fill": fill, "bg": bg, "px": px,
                            "opacity": opacity, "zoom": zoom, "widths": widths, "inside": parent["inside"] or hard,
                            "in_quote": parent["in_quote"] or quote, "counted": tag not in SKIP_TAGS or tag in CODE_TAGS,
-                           "closed": tag == "details" and "open" not in a, "prev": (), "seen": set()})
+                           "closed": tag == "details" and "open" not in a, "prev": (), "seen": set(), "keys": keys})
         self.open[tag] = self.open.get(tag, 0) + 1
+        for k in keys:
+            self.ancestors[k] = self.ancestors.get(k, 0) + 1
 
     def handle_startendtag(self, tag, attrs):
         # A browser ignores the `/` of `<div/>`: the element stays open, so what follows is inside it.
@@ -986,8 +1033,14 @@ class _Visible(html.parser.HTMLParser):
         super().close()
         # An Outlook conditional that holds text (a VML "bulletproof button") is counted as a hidden comment only when
         # its text is not also shown outside it: most templates write the same button for the other clients.
+        texts = [t for t in self.conditionals if re.search(r"\w", t)]   # not `<!--[if !mso]><!-- -->`
+        distinct = set(texts)
+        if len(distinct) > 200:
+            self.removed["html_comments"] += len(texts)   # too many to check: count them all
+            return
         shown = _squash("".join(self.out))
-        self.removed["html_comments"] += sum(1 for t in self.conditionals if t not in shown)
+        hidden = {t for t in distinct if t not in shown}
+        self.removed["html_comments"] += sum(1 for t in texts if t in hidden)
 
 
 def _cut_blocks(d, tag):
