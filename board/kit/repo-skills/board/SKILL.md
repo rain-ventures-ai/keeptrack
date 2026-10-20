@@ -117,6 +117,19 @@ good example) before you add, change or propose one. Every PR, issue, document, 
 mentions goes in its links section, with a title, in the same run: `python3 board/keeptrack.py link <id> <full URL>
 --title "<what it is>"`. A bare "#481" in the text is not a link.
 
+Make a card in **one command**, so it is one save and one commit: give its links with `--link` and its to-dos with
+`--todo` on the `add` (both repeatable), and long details with `--details -` from stdin:
+```bash
+python3 board/keeptrack.py add "Title" --details - --todo "step 1" --todo "step 2" \
+  --link https://github.com/acme/app/pull/481 "PR #481: the change" --link https://example.com/spec "Spec" <<'EOF'
+## Now
+...
+EOF
+```
+To add several to an existing card in one save: `todo-add <id> "step 1" "step 2"`, or `-` to read one per line from
+stdin (`todo-add <id> - <<'EOF'`); `link <id> -` reads one link per line, the URL, a tab, then the title. Do not write
+a helper script that calls `todo-add` or `link` once per item.
+
 **Card numbers are links.** When you name a card in a reply, comment, done note, PR or issue text, brief or hand-off,
 write its number as a Markdown link to the web board, `[#12](<card link>)`, so a person can tap it.
 `python3 board/keeptrack.py card-link '#12'` prints the link with the title (`show` prints `link:`, `add` prints it,

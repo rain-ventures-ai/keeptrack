@@ -254,7 +254,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 77  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 78  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3432,14 +3432,51 @@ def cmd_assign(a):
     mutate(fn, f"Agent assign: {a.id}")
 
 
+def check_link_url(url):
+    if not (url.startswith(("http://", "https://")) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", url)):
+        sys.exit(f"resource must be an http(s) cloud URL or a local path: {url}")
+    return url
+
+
+def stdin_lines(what):
+    """`-` in place of the item reads one item per line from stdin (kit v78); blank lines are skipped."""
+    lines = [x.strip() for x in sys.stdin.buffer.read().decode("utf-8", "replace").splitlines() if x.strip()]
+    if not lines:
+        sys.exit(f"{what}: '-' reads one per line from stdin, and stdin was empty")
+    return lines
+
+
+def link_pairs(items):
+    """[(url, title)] from `URL` or `URL<TAB>title` strings, checked before anything is written."""
+    out = []
+    for x in items:
+        url, _, title = x.partition("\t")
+        out.append((check_link_url(url.strip()), title.strip()))
+    return out
+
+
+def add_links(t, pairs):
+    """Append each (url, title) the card does not have yet, with a history line each; returns how many were new."""
+    links = t.setdefault("links", []); n = 0
+    for url, title in pairs:
+        if not any(l.get("url") == url for l in links if isinstance(l, dict)):
+            links.append({"title": title or url, "url": url}); n += 1
+        hist(t, f"linked {title or url}")
+    return n
+
+
 def cmd_link(a):
+    if a.url == "-":
+        if a.title:
+            sys.exit("--title goes with one URL; with '-' put the title after a tab on each line")
+        pairs = link_pairs(stdin_lines("link"))
+    else:
+        pairs = [(check_link_url(a.url), a.title or "")]
     def fn(data):
-        t = find(data, a.id)
-        if not (a.url.startswith(("http://", "https://")) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", a.url)): sys.exit("resource must be an http(s) cloud URL or a local path")
-        links = t.setdefault("links", [])
-        if not any(l.get("url") == a.url for l in links): links.append({"title": a.title or a.url, "url": a.url})
-        hist(t, f"linked {a.title or a.url}"); t["updated"] = now(); print(f"#{t['num']} linked {a.url}")
-    mutate(fn, f"Agent link: {a.id}")
+        t = find(data, a.id); add_links(t, pairs); t["updated"] = now()
+        for url, _ in pairs:
+            print(f"#{t['num']} linked {url}")
+    mutate(fn, f"Agent link: {a.id}" + (f" ({len(pairs)} links)" if len(pairs) > 1 else ""))
 
 
 def todo_at(t, n):
@@ -3466,10 +3503,17 @@ def todo_by_identity(t, ident):
 
 
 def cmd_todo_add(a):
+    """Add one or more checklist items in one save: several texts, or `-` to read one per line from stdin (kit v78)."""
+    texts = stdin_lines("todo-add") if a.text == ["-"] else [x.strip() for x in a.text]
+    if not all(texts):
+        sys.exit("each to-do needs text")
     def fn(data):
-        t = find(data, a.id); t.setdefault("todos", []).append({"id": "d_" + uuid.uuid4().hex[:6], "text": a.text, "done": False})
-        hist(t, f"added to-do: {a.text}"); t["updated"] = now(); print(f"added to-do #{len(t['todos'])} to {t['id']}")
-    mutate(fn, f"Add to-do: {a.id}")
+        t = find(data, a.id); todos = t.setdefault("todos", [])
+        for x in texts:
+            todos.append({"id": "d_" + uuid.uuid4().hex[:6], "text": x, "done": False})
+            hist(t, f"added to-do: {x}"); print(f"added to-do #{len(todos)} to {t['id']}")
+        t["updated"] = now()
+    mutate(fn, f"Add to-do: {a.id}" + (f" ({len(texts)} items)" if len(texts) > 1 else ""))
 
 
 def cmd_todo_set(a, done):
@@ -3651,6 +3695,10 @@ def cmd_add(a):
     _default_scope(a)
     if not str(a.title or "").strip() or _has_break(a.title):
         sys.exit("a task needs a title on one line")
+    for x in getattr(a, "link", None) or []:
+        if len(x) > 2:
+            sys.exit(f"--link takes a URL and an optional title (quote a title with spaces): {' '.join(x)}")
+    links = [(check_link_url(x[0]), x[1] if len(x) > 1 else "") for x in getattr(a, "link", None) or []]
     def fn(data):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
@@ -3674,6 +3722,7 @@ def cmd_add(a):
             t["rank"] = append_rank(ranks)
         append_priority_rank(data, t)
         hist(t, "created")
+        add_links(t, links)
         data["tasks"].append(t); assign_nums(data); tid = t["id"]
         marks = [] if getattr(a, "no_check", False) else mark_similar(data, t)   # never stops the add
         _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})" + link_note(num_of(d, tid), tid)))   # the saved #number: a lost race renumbers ours
@@ -9828,7 +9877,8 @@ def main():
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
     s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session")
     s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session"); s.set_defaults(f=cmd_unwait)
-    s = sub.add_parser("todo-add"); s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_todo_add)
+    s = sub.add_parser("todo-add", help="add checklist items in one save: one or more texts, or - for one per line from stdin")
+    s.add_argument("id"); s.add_argument("text", nargs="+"); s.set_defaults(f=cmd_todo_add)
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
@@ -9842,7 +9892,8 @@ def main():
     s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); s.set_defaults(f=cmd_move)
     s = sub.add_parser("assign"); s.add_argument("id"); s.add_argument("users", nargs="+"); s.add_argument("--add", action="store_true")
     s.add_argument("--remove", action="store_true"); s.add_argument("--note"); s.set_defaults(f=cmd_assign)
-    s = sub.add_parser("link"); s.add_argument("id"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_link)
+    s = sub.add_parser("link", help="add a link to a card; - reads one per line from stdin (URL, tab, title) in one save")
+    s.add_argument("id"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_link)
     s = sub.add_parser("history"); s.add_argument("id"); s.set_defaults(f=cmd_history)
     s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
@@ -9850,6 +9901,7 @@ def main():
     s.add_argument("--priority", default="medium", choices=["high", "medium", "low"]); s.add_argument("--due")
     s.add_argument("--assign", action="append"); s.add_argument("--label", action="append"); s.add_argument("--details", help="Markdown; - reads it from stdin")
     s.add_argument("--todo", action="append", help="initial checklist item (repeatable)")
+    s.add_argument("--link", action="append", nargs="+", metavar="URL [TITLE]", help="a link for the card's links section, with an optional title (repeatable)")
     s.add_argument("--no-check", action="store_true", help="do not mark close cards as possible duplicates")
     s.add_argument("--after", action="append", metavar="REF", help="runs after this card, '#62' or an id (repeatable); a hint and a gate, never a trigger")
     s.set_defaults(f=cmd_add)
