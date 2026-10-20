@@ -5178,6 +5178,7 @@ HELP_TOPICS = {
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
+    "goals": ["goals", "goal", "goal-add", "goal-set", "goal-remove"],
     "search": ["links"],
     "board-structure": ["labels", "label-add", "label-set", "label-rm", "columns", "column-add", "column-set",
                         "column-move", "column-rm", "members", "me", "member-add", "member-set", "member-rm",

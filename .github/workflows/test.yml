@@ -90,3 +90,6 @@ jobs:
       - name: Unread bell (own agents are not news)
         working-directory: tests/browser
         run: node unread-bell.test.js
+      - name: Goals bar, Goals sheet, Goal field and filter (kit v83)
+        working-directory: tests/browser
+        run: node goals.test.js

@@ -114,7 +114,8 @@ async function assertFits(page, where) {
     assert.deepEqual(await page.evaluate(() => { const u = new URL(window.__copied); return ['repo', 'branch', 'path', 'filters', 'board_view'].map(k => u.searchParams.get(k)).concat(u.hash); }), ['acme/board', 'main', 'board/tasks.json', '1', 'board', '#1']);
     assert.equal(await page.evaluate(() => { const u = new URL(window.__copied); return u.origin === location.origin && u.pathname === location.pathname && !['token', 'pat', 'kbcfg'].some(k => u.searchParams.has(k)); }), true, 'copied task route uses this page and excludes credentials');
     assert.deepEqual(await page.locator('#cHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['Task #1, copy link', 'Undo last board change', 'Copy for agent', 'More actions', 'Close']);
-    assert.deepEqual(await page.locator('#cProps .ui-props__label').allTextContents(), ['Status', 'Priority', 'Due date', 'Waiting for', 'People', 'Client & project', 'Labels']);
+    assert.deepEqual(await page.locator('#cProps .ui-props__label:visible').allTextContents(), ['Status', 'Priority', 'Due date', 'Waiting for', 'People', 'Client & project', 'Labels']);
+    assert.equal(await page.locator('#cGoalRow').isHidden(), true, 'Goal (kit v83) shows only on a board with goals');
     const propRows = await page.locator('#cProps .ui-props__row').evaluateAll(rows => rows.map(row => { const r = row.getBoundingClientRect(); return { top: Math.round(r.top), width: Math.round(r.width) }; }));
     assert.equal(propRows[0].top, propRows[1].top, 'Status and Priority share a row');
     assert.equal(propRows[2].top, propRows[3].top, 'Due date and Waiting for share a row');
