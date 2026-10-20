@@ -136,8 +136,13 @@ write its number as a Markdown link to the web board, `[#12](<card link>)`, so a
 `list --links` adds it to each line). The web board shows `[#12](...)` as #12. Leave the to-do text that `todo-move`
 writes ("Moved to #N (t_id): ...") and link titles ("Follow-up #N") as the tools write them.
 
-To change a task after it exists (title, details, priority, due, labels, client, project, links) use `task-set` and
-`unlink`. To change the board's labels, clients, members or settings, use the `board-admin` skill. Never edit JSON.
+To change a task after it exists (title, details, priority, due, labels, client, project, goal, links) use `task-set` and
+`unlink`.
+
+**Goals (kit v83):** a board can hold goals: what the team works towards, each with a metric, a target and an end
+date (`goals`, `goal REF`). When you add or pick up a card that serves an active goal, link it (`add --goal REF`,
+`task-set ID --goal REF`). `list --goal none` lists the cards that link to no goal. Update a goal's `--current` value
+only from a figure a person gave or a source you can link; never guess it. To change the board's labels, clients, members or settings, use the `board-admin` skill. Never edit JSON.
 
 ## Checking on others
 `python3 board/keeptrack.py list --attention` lists stale, stuck and blocked claims, waiting cards due for a chase,

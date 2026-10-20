@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v83: goals on the board (consulting card #189). A board can hold goals in `tasks.json` (`goals`: a title, a metric,
+a target, the current value, a start and an end date, and a status of active, done or dropped), and a card links to one
+with `goal`. keeptrack.py: `goals`, `goal`, `goal-add`, `goal-set`, `goal-remove`, `add --goal`, `task-set --goal`,
+`list --goal REF|none`; `show` prints the card's goal; `doctor` warns about a bad goal entry (GOAL) and a card that links
+to a goal that is not on the board (GOAL_MISSING). Web board: a Goals bar above the Kanban and List views shows each
+active goal with its target, a progress bar (when the current value and the target are numbers), the days left and its
+open cards; a click filters the board to that goal, and "No goal" to the open cards that link to none. A new Goals button
+adds and edits goals, the card drawer has a Goal field, and Filters has a Goal filter. Older kits keep goals and card
+links as they are.
+
 Kit v82: the email cleaner's last known gaps and false flags (email-to-tasks pack 1.5.1, private-tasks card #184).
 `safe_view.py` models a hiding rule's sibling combinator (`img.g-img + div` hides only the `div` after that image),
 counts an Outlook conditional comment only when its text is not also shown outside it, and orders rules by importance,

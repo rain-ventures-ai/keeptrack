@@ -114,6 +114,9 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
   "client_info": { "Acme": { "north_star": "optional: what success looks like for this client", "links": [{ "title": "Drive or local folder", "url": "https://… or /local/path" }] } },   // v3: north star + working file/folder resources per client
   "projects": [{ "id": "pr_ab12cd34", "client": "Acme", "name": "Phase one rollout", "north_star": "…", "status": "active | done | paused",
                   "links": [], "people": ["name@example.com"], "created": "…", "updated": "…" }],   // optional; split v4 uses projects/<id>.json instead
+  "goals": [{ "id": "g_ab12cd34ef", "title": "Revenue", "metric": "revenue per month", "target": "£10,000", "current": "£4,200",
+               "start": "2026-08-10", "end": "2026-10-31", "status": "active | done | dropped", "created": "…", "updated": "…" }],
+                                                 // v83 optional: what the board works towards; a card links to one with "goal" (below)
   "archive": { "files": { "2025": { "tasks": 120, "contacts": 8 } }, "last_run": "…" },   // index of archive/<year>.json, written by `archive`
   "next_num": 13,                                 // next number to hand out; maintained by the web page and keeptrack.py
   "tasks": [{
@@ -123,6 +126,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
     "column": "todo",
     "client": "Acme",               // optional; empty for tasks not tied to a client
     "project": "pr_ab12cd34",       // optional; links the task to a project id (empty = unchanged behaviour)
+    "goal": "g_ab12cd34ef",         // v83 optional; the goal (tasks.json "goals") this card works towards
     "contact": "p_ab12cd34",        // optional CRM person id
     "priority": "high | medium | low",
     "due": "2026-10-20",                           // due-by date, optional
@@ -320,7 +324,8 @@ Never pass `--session` with an id you did not generate for this run, and never `
 
 | Area | Commands |
 | :-- | :-- |
-| Task fields | `task-set ID [--title] [--details] [--priority] [--due YYYY-MM-DD\|today\|+N\|""] [--label X]... [--unlabel X]... [--client] [--project] [--contact]`, `unlink ID URL` |
+| Task fields | `task-set ID [--title] [--details] [--priority] [--due YYYY-MM-DD\|today\|+N\|""] [--label X]... [--unlabel X]... [--client] [--project] [--goal REF\|none] [--contact]`, `unlink ID URL` |
+| Goals (kit v83) | `goals [--all]` (active goals with their target, days left and cards done; says how many open cards link to no goal), `goal REF` (and its open cards), `goal-add TITLE --metric M --target T --end DATE [--current C] [--start DATE]`, `goal-set REF [--title] [--metric] [--target] [--current] [--start] [--end] [--status active\|done\|dropped]`, `goal-remove REF [--clear-cards]`. A card: `add --goal REF`, `task-set ID --goal REF\|none`, `list --goal REF\|none` |
 | Several items in one save (kit v78) | `add "Title" --todo "step" --link URL "title"` (both repeatable); `todo-add ID -` (one per line from stdin); `link ID -` (stdin: URL, tab, title per line) |
 | Labels | `labels`, `label-add NAME [--color #hex]`, `label-set NAME [--rename NEW] [--color #hex]`, `label-rm NAME [--force]`. `add --label` and `task-set --label` create a missing label in grey, as the web board does |
 | Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |

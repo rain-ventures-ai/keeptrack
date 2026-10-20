@@ -25,6 +25,22 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v83 (schema 4)
+Goals on the board (consulting card #189). No migration: a board without goals looks and works as before.
+- New data, both optional: `goals` in `tasks.json` (`id`, `title`, `metric`, `target`, `current`, `start`, `end`,
+  `status` active, done or dropped) and `goal` on a card (a goal id). Older kits and older web pages keep both as they
+  are, so a board can get its first goal before every person has the new page.
+- keeptrack.py: `goals`, `goal REF`, `goal-add TITLE --metric M --target T --end DATE [--current C]`, `goal-set`,
+  `goal-remove`, `add --goal`, `task-set --goal REF|none`, `list --goal REF|none`. `doctor` warns (GOAL, GOAL_MISSING)
+  and never stops the board for a goal.
+- Web board: the Goals bar above the Kanban and List views, a Goals button (add and edit), a Goal field on the card
+  and a Goal filter.
+- Run `kit-update` only. Check: `kit-check` says v83, and `python3 board/keeptrack.py goals` prints `(no goals)` or
+  the board's goals.
+- To set the first goal: `python3 board/keeptrack.py goal-add "Revenue" --metric "revenue per month" --target "£10,000"
+  --end 2026-10-31`, or Goals, then Add a goal, on the web board. Hosted boards: the hosted server must accept the new
+  `goals` root key and the card `goal` field (it keeps unknown fields).
+
 ### v82 (schema 4)
 The email cleaner closes its last known gaps and stops flagging ordinary template markup (email-to-tasks pack 1.5.1,
 card #184 on the owner's board). No migration and no data change.

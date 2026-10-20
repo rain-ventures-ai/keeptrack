@@ -47,6 +47,7 @@
         <label>Completed by <select id="fDoneBy"></select></label>
         <label>Label <select id="fLabel"></select></label>
         <label>Project <select id="fProject"><option value="">All</option></select></label>
+        <label id="fGoalWrap" hidden>Goal <select id="fGoal"><option value="">All</option></select></label>
         <label>Priority <select id="fPrio"><option value="">All</option><option>high</option><option>medium</option><option>low</option></select></label>
         <label class="chk"><input type="checkbox" id="fAttn"> Needs attention <span id="attnCount" class="muted"></span></label>
         <label class="chk"><input type="checkbox" id="fWaiting"> Waiting</label>
@@ -74,6 +75,7 @@
 <div id="roBar" class="kbbar" hidden></div>
 <div id="sizeBar" class="kbbar" hidden></div>
 <div id="legend" class="legend" aria-label="Colour key"></div>
+<div id="goalBar" class="goalbar" role="group" aria-label="Goals" hidden></div>
 <nav id="tabs" aria-label="Columns"></nav>
 <div id="board"></div>
 <div id="tour" class="tour" hidden><div id="tourRing" class="tourring"></div><div id="tourTip" class="tourtip" role="dialog" aria-modal="true" aria-labelledby="tourTitle"><h3 id="tourTitle"></h3><p id="tourText"></p><div class="tourfoot"><span id="tourStep"></span><button type="button" id="tourSkip">Skip</button><button type="button" id="tourBack">Back</button><button type="button" id="tourNext" class="primary">Next</button></div></div></div>
