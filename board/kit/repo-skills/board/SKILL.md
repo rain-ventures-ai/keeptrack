@@ -126,8 +126,8 @@ python3 board/keeptrack.py add "Title" --details - --todo "step 1" --todo "step 
 ...
 EOF
 ```
-To add several to an existing card in one save: `todo-add <id> "step 1" "step 2"`, or `-` to read one per line from
-stdin (`todo-add <id> - <<'EOF'`); `link <id> -` reads one link per line, the URL, a tab, then the title. Do not write
+To add several to an existing card in one save, use `-` to read one per line from stdin: `todo-add <id> - <<'EOF'`
+(one to-do per line), and `link <id> -` (one link per line: the URL, a tab, then the title). Do not write
 a helper script that calls `todo-add` or `link` once per item.
 
 **Card numbers are links.** When you name a card in a reply, comment, done note, PR or issue text, brief or hand-off,
@@ -192,7 +192,7 @@ A routine run starts with a `routine-fire-payload` naming a task number (`#N`) a
 6. Finish: `comment` the outcome, `assign '#N' <user>`, `done '#N' --note "<result>"`. `done` is refused while checklist items are open: tick them, or `done '#N' --cancel --note "<why>"` when they are being dropped.
 
 ### Command cheat sheet
-`list` (`--label X` for one label, `--waiting`, `--waiting-on me`), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `wait`, `unwait`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title`, `todo-add|todo-edit|todo-done|todo-undo|todo-rm|todo-move`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members are listed by `keeptrack.py members`; CRM people are separate records.
+`list` (`--label X` for one label, `--waiting`, `--waiting-on me`), `show`, `claim`, `next`, `heartbeat`, `release`, `done`, `wait`, `unwait`, `add`, `task-set`, `unlink`, `move ID COLUMN`, `assign ID USER... [--add|--remove]`, `link ID URL --title` (`link ID -` from stdin), `todo-add|todo-edit|todo-done|todo-undo|todo-rm|todo-move`, `comment`, `comments`, `history`. `ID` may be a task number such as `'#12'`. Columns: `backlog`, `todo`, `in-progress`, `done`. Board members are listed by `keeptrack.py members`; CRM people are separate records.
 
 ## Archive (old items)
 Old done tasks, Lost people and long histories move to `board/archive/<year>.json` with `python3 board/keeptrack.py archive` (`--dry-run` first). Search them with `archived -q "<words>"`, and bring one back with `unarchive '#N'`. The board file keeps an index in `archive.files`; do not edit archive files by hand.

@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 Kit v78: a card's links and to-dos in one command (card #233). `add --link URL [TITLE]` (repeatable) puts links on a
-new card in the same save as its `--todo` items; `todo-add ID TEXT...` adds several to-dos, and `todo-add ID -` and
+new card in the same save as its `--todo` items; `todo-add ID -` and
 `link ID -` read one item per line from stdin (a link line is the URL, a tab, then the title). Every item is checked
 before anything is written, each command is one board commit with a history line per item, and a lost race still
 merges three-way. The `board` skill, `CARDS.md` and the README say to build a card in one call.

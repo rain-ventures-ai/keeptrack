@@ -27,8 +27,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ## Versions
 ### v78 (schema 4)
 A card's links and to-dos go on in one command and one save (card #233 on the owner's board). `add` takes a
-repeatable `--link URL [TITLE]` next to `--todo`; `todo-add ID TEXT...` takes several texts, or `-` to read one per
-line from stdin; `link ID -` reads one link per line from stdin (the URL, a tab, then the title). Each command is one
+repeatable `--link URL [TITLE]` next to `--todo`; `todo-add ID -` reads one to-do per line from stdin; `link ID -` reads one link per line from stdin (the URL, a tab, then the title). Each command is one
 board commit and still merges on conflict. No migration and no data change.
 - Run `kit-update` only. Check: `kit-check` says v78, and `python3 board/keeptrack.py add --help` lists `--link`.
 - The `board` skill and `board/CARDS.md` now say to create a card with its `--todo` and `--link` items in one call.

@@ -14,8 +14,9 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py release ID [--column todo]                                      # anyone may release a stale, stuck or blocked claim
   keeptrack.py done ID --note "result"  |  done ID --cancel --note "why"       # done refuses open to-dos; --cancel drops them
   keeptrack.py review ID --note "result + decision" [--who LOGIN]   # work done, a person decides: Pending review, not Done
-  keeptrack.py add "Title" [--assign osouthgate] [--label x] [--due 2026-10-20] [--client "Acme"] [--details ...] [--todo "step 1" --todo "step 2"]
-  keeptrack.py todo-add ID "text"      # add a checklist item
+  keeptrack.py add "Title" [--assign osouthgate] [--label x] [--due 2026-10-20] [--client "Acme"] [--details ...] [--todo "step 1" --todo "step 2"] [--link URL "title"]
+  keeptrack.py todo-add ID "text"      # add a checklist item; todo-add ID - reads one per line from stdin (one save)
+  keeptrack.py link ID URL --title T   # add a link; link ID - reads one "URL<tab>title" per line from stdin (one save)
   keeptrack.py todo-done ID N          # tick item N (1-based, as shown by `show`); todo-undo / todo-rm work the same way
   keeptrack.py history ID              # print the card's history log
   keeptrack.py archived-history ID     # older history lines that `archive` moved to archive/<year>.json
@@ -1305,6 +1306,8 @@ def hosted_dispatch(a):
                 card["after"] = resolve_after(data, card, a.after)
             if a.todo:
                 card["todos"] = [{"id": "d_" + secrets.token_hex(6), "text": text, "done": False} for text in a.todo]
+            if getattr(a, "link", None):
+                card["links"] = [{"url": url, "title": title or url} for url, title in add_link_args(a)]
             response = adapter.command({"kind": "create-card", "card": card})
             print(f"#{response['result']['num']} added ({response['result']['card_id']})")
             return 0
@@ -3455,6 +3458,16 @@ def link_pairs(items):
     return out
 
 
+def add_link_args(a):
+    """add --link URL [TITLE] (repeatable) as checked (url, title) pairs, before anything is written."""
+    out = []
+    for x in getattr(a, "link", None) or []:
+        if len(x) > 2:
+            sys.exit(f"--link takes a URL and an optional title (quote a title with spaces): {' '.join(x)}")
+        out.append((check_link_url(x[0]), x[1] if len(x) > 1 else ""))
+    return out
+
+
 def add_links(t, pairs):
     """Append each (url, title) the card does not have yet, with a history line each; returns how many were new."""
     links = t.setdefault("links", []); n = 0
@@ -3503,8 +3516,8 @@ def todo_by_identity(t, ident):
 
 
 def cmd_todo_add(a):
-    """Add one or more checklist items in one save: several texts, or `-` to read one per line from stdin (kit v78)."""
-    texts = stdin_lines("todo-add") if a.text == ["-"] else [x.strip() for x in a.text]
+    """Add a checklist item; `-` reads one item per line from stdin and adds them all in one save (kit v78)."""
+    texts = stdin_lines("todo-add") if a.text == "-" else [a.text.strip()]
     if not all(texts):
         sys.exit("each to-do needs text")
     def fn(data):
@@ -3695,10 +3708,7 @@ def cmd_add(a):
     _default_scope(a)
     if not str(a.title or "").strip() or _has_break(a.title):
         sys.exit("a task needs a title on one line")
-    for x in getattr(a, "link", None) or []:
-        if len(x) > 2:
-            sys.exit(f"--link takes a URL and an optional title (quote a title with spaces): {' '.join(x)}")
-    links = [(check_link_url(x[0]), x[1] if len(x) > 1 else "") for x in getattr(a, "link", None) or []]
+    links = add_link_args(a)
     def fn(data):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
@@ -5027,13 +5037,13 @@ COMMAND_HELP = {   # one line each, for commands whose parser has none
     "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo, --after '#N')",
     "move": "move a card to a column, or reorder it (--before, --after, --top); --priority",
     "assign": "hand a card to people (replaces, or --add / --remove)",
-    "link": "attach a link to a card, e.g. its pull request",
+    "link": "attach a link to a card, e.g. its pull request (- reads several from stdin)",
     "claim": "take a card for an agent session (refuses a live claim unless --force)",
     "heartbeat": "refresh your claim; --note what you are doing; --status blocked|stuck|running",
     "release": "give a card back without finishing it (--column to move it)",
     "done": "finish a claimed card (--note result and links)",
     "auto-heartbeat": "for hooks: refresh the active claim at most every 15 minutes (never for --attended claims); silent otherwise",
-    "todo-add": "add a checklist item", "todo-move": "move to-do N to a new follow-up card, linked both ways", "todo-done": "tick checklist item N", "todo-undo": "untick checklist item N",
+    "todo-add": "add a checklist item (- reads several from stdin)", "todo-move": "move to-do N to a new follow-up card, linked both ways", "todo-done": "tick checklist item N", "todo-undo": "untick checklist item N",
     "todo-rm": "remove checklist item N", "comment": "post a comment on a card", "comments": "read a card's comments",
     "history": "a card's history log",
     "init": "set up a new board repo (--person github-user:Name)",
@@ -9877,8 +9887,8 @@ def main():
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
     s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session")
     s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session"); s.set_defaults(f=cmd_unwait)
-    s = sub.add_parser("todo-add", help="add checklist items in one save: one or more texts, or - for one per line from stdin")
-    s.add_argument("id"); s.add_argument("text", nargs="+"); s.set_defaults(f=cmd_todo_add)
+    s = sub.add_parser("todo-add", help="add a checklist item; - reads one per line from stdin, all in one save")
+    s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_todo_add)
     s = sub.add_parser("todo-done"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, True))
     s = sub.add_parser("todo-undo"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=lambda a: cmd_todo_set(a, False))
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)

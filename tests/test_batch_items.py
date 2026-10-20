@@ -1,5 +1,5 @@
-"""A card's links and to-dos in one command (kit v78): add --link (repeatable, with an optional title), todo-add with
-several texts or '-' for one per line from stdin, and link ID '-' (URL, tab, title per line). Each command is one save,
+"""A card's links and to-dos in one command (kit v78): add --link (repeatable, with an optional title), todo-add '-'
+for one per line from stdin, and link ID '-' (URL, tab, title per line). Each command is one save,
 checks every item before it writes, and still merges when someone saved first. Fictional data only (the v4 fixture)."""
 import contextlib, io, json, os, re, shutil, subprocess, sys, tempfile, unittest
 from unittest import mock
@@ -75,12 +75,14 @@ class BatchItems(unittest.TestCase):
         self.assertNotEqual(0, p.returncode); self.assertIn("optional title", p.stderr)
         self.assertEqual(before, sorted(os.listdir(os.path.join(self.board, "cards"))))
 
-    def test_todo_add_several_texts_and_stdin(self):
+    def test_todo_add_one_text_or_stdin(self):
         num = self.added(self.kt("add", "Plan", "--no-check"))
-        self.kt("todo-add", f"#{num}", "One", "Two")
+        self.kt("todo-add", f"#{num}", "One")
         self.kt("todo-add", f"#{num}", "-", stdin="Three\n\n  Four  \n")
         self.kt("todo-add", f"#{num}", "- not stdin")
-        self.assertEqual(["One", "Two", "Three", "Four", "- not stdin"], [d["text"] for d in self.card(num)["todos"]])
+        self.assertEqual(["One", "Three", "Four", "- not stdin"], [d["text"] for d in self.card(num)["todos"]])
+        p = self.kt("todo-add", f"#{num}", "Fix", "the", "bug", ok=False)   # unquoted text is an error, not three to-dos
+        self.assertNotEqual(0, p.returncode)
         self.assertEqual(1, len(self.saves("todo-add", f"#{num}", "-", stdin="Five\nSix\nSeven\n")))
         p = self.kt("todo-add", f"#{num}", "-", stdin=" \n", ok=False)
         self.assertNotEqual(0, p.returncode); self.assertIn("stdin was empty", p.stderr)
