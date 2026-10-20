@@ -7501,6 +7501,7 @@ if (typeof window !== 'undefined') (() => {
       const gone = batch.filter(b => !state.tasks.some(x => x.id === b.id)).map(b => b.t), back = batch.filter(b => state.tasks.some(x => x.id === b.id)).map(b => b.t);
       if (back.length && (lastToast === said || gone.length)) toast(`Could not archive ${back.map(t => '#' + t.num).join(', ')}. ${back.length === 1 ? 'It is' : 'They are'} back on the board.`, true);   // not archived: archiveNow's own toast says why, when it gave one
       if (!gone.length) continue;
+      if (quickUndo && undoToast === quickUndo.toast) gone.unshift(...quickUndo.tasks);   // one rapid series of clicks: one Undo puts back every card of it
       hideUndo(); if (lastToast && !back.length) lastToast.dismiss(); undoAt = Date.now();
       const tt = undoToast = ui.toast(gone.length === 1 ? `Archived #${gone[0].num} ${gone[0].title}` : `Archived ${gone.length} cards: ${gone.map(t => '#' + t.num).join(', ')}`, { action: { label: 'Undo', onClick: () => { if (undoToast === tt) undoToast = null; quickUndo = null; undoQuickArchive(gone); } }, timeout: 8000 });
       quickUndo = { toast: tt, tasks: gone };
@@ -7514,9 +7515,9 @@ if (typeof window !== 'undefined') (() => {
   }
   async function archiveAllDone() {
     if (writeBlocked()) return;
-    const list = state.tasks.filter(t => t.column === doneColId() && !activeClaim(t) && !quickBusy.has(t.id));
+    const shown = state.tasks.filter(t => t.column === doneColId() && filtered(t)), list = shown.filter(t => !activeClaim(t) && !quickBusy.has(t.id));   // the cards the lane shows: filters hide the rest, and those stay
     if (!list.length) { toast('No Done cards to archive. Cards an agent holds stay on the board.'); return; }
-    const held = state.tasks.filter(t => t.column === doneColId() && activeClaim(t)).length;
+    const held = shown.filter(t => activeClaim(t)).length;
     if (!(await ask(`Archive ${list.length} Done card${list.length === 1 ? '' : 's'}?`, [`${list.length === 1 ? 'It leaves' : 'They leave'} the active board. Nothing is deleted: search with Include archive, then choose Put back on the board to restore a card.`].concat(held ? [`${held} card${held === 1 ? '' : 's'} an agent holds ${held === 1 ? 'stays' : 'stay'} on the board.`] : []), 'Archive all'))) return;
     let run = null; list.forEach(t => { run = quickArchive(t.id) || run; }); return run;
   }
@@ -7539,7 +7540,9 @@ if (typeof window !== 'undefined') (() => {
     if (HOSTED) {
       if (busy || saving || ro) return;
       if (explicitRules && pickedIds(explicitRules)) {
-        for (const id of pickedIds(explicitRules)) { const t = state.tasks.find(x => x.id === id); if (t && !(await hostedArchive(t, nowIso().slice(0, 4)))) return; } return;
+        for (const id of pickedIds(explicitRules)) { const t = state.tasks.find(x => x.id === id);
+          if (!t || activeClaim(t) || (explicitRules.onlyDone && t.column !== doneColId())) continue;   // as archivePlan: a card that left Done or got a live claim meanwhile stays
+          if (!(await hostedArchive(t, nowIso().slice(0, 4)))) return; } return;
       }
       const plan = archivePlan(clone(state), archRules());
       if (Object.values(plan).some(part => Object.keys(part.history).length)) { toast('capability_unavailable: hosted phase 0 moves whole entities; history-only trimming is unavailable', true); return; }

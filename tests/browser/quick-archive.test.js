@@ -172,25 +172,25 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       assert.equal(await doneCard('Shipped item 4').count() + await doneCard('Shipped item 5').count(), 0, 'queued cards leave the board at once');
       assert.equal(await page.locator('.ui-toast__text', { hasText: 'Busy' }).count(), 0, 'no Busy toast');
       hold();
-      await page.getByText('Archived 2 cards', { exact: false }).waitFor();
+      await page.getByText('Archived 3 cards', { exact: false }).waitFor();   // one rapid series of clicks: one toast, one Undo
       for (const id of ['t_two', 't_four', 't_five']) assert.equal(api.card(id), null, `${id} is archived`);
       assert.equal(commits, 2, 'the two waiting clicks were archived in one commit');
       const archiveFile = Object.keys(api.files).find(p => p.startsWith('archive/'));
       assert.deepEqual(JSON.parse(api.files[archiveFile]).tasks.map(t => t.id).sort(), ['t_five', 't_four', 't_two']);
-      // Undo puts both cards of the batch back
+      // Undo puts every card of the series back
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
-      for (let i = 0; i < 80 && (!api.card('t_four') || !api.card('t_five')); i++) await page.waitForTimeout(100);
-      assert.ok(api.card('t_four') && api.card('t_five'), 'Undo puts the batch back'); assert.ok(!api.card('t_two'), 'the earlier archive stays');
+      for (let i = 0; i < 120 && (!api.card('t_two') || !api.card('t_four') || !api.card('t_five')); i++) await page.waitForTimeout(100);
+      assert.ok(api.card('t_two') && api.card('t_four') && api.card('t_five'), 'Undo puts the whole series back');
       await doneCard('Shipped item 5').waitFor();
       // Archive all: asks first, Cancel does nothing, then one commit archives every Done card no agent holds
       await page.waitForTimeout(500); const before = commits;
       await page.locator('.col[data-col="done"] .harchall').click();
-      const dlg = page.locator('dialog[open]'); await dlg.waitFor(); assert.match(await dlg.innerText(), /Archive 3 Done cards\?/); assert.match(await dlg.innerText(), /1 card an agent holds stays on the board/);
+      const dlg = page.locator('dialog[open]'); await dlg.waitFor(); assert.match(await dlg.innerText(), /Archive 4 Done cards\?/); assert.match(await dlg.innerText(), /1 card an agent holds stays on the board/);
       await shot(page, 'archive-all-confirm');
       await dlg.getByRole('button', { name: 'Cancel' }).click(); await page.waitForTimeout(300); assert.equal(commits, before, 'Cancel archives nothing');
       await page.locator('.col[data-col="done"] .harchall').click(); await page.locator('dialog[open]').getByRole('button', { name: 'Archive all' }).click();
-      await page.getByText('Archived 3 cards', { exact: false }).waitFor();
-      for (const id of ['t_four', 't_five', 't_six']) assert.equal(api.card(id), null, `${id} is archived`);
+      await page.getByText('Archived 4 cards', { exact: false }).waitFor();
+      for (const id of ['t_two', 't_four', 't_five', 't_six']) assert.equal(api.card(id), null, `${id} is archived`);
       assert.ok(api.card('t_three'), 'the card an agent holds stays'); assert.equal(commits, before + 1, 'Archive all is one commit');
       assert.equal(await page.locator('.col[data-col="todo"] .harchall').count(), 0, 'only the Done lane has Archive all');
       assert.deepEqual(errors, [], 'no page errors'); await page.close(); }
