@@ -532,6 +532,11 @@ class Card184(unittest.TestCase):
             '<style>.x{display:none; .q{color:red}}</style><p class=x>%s</p>',
             '<style>.x{@media screen{display:none}}</style><p class=x>%s</p>',
             '<style>p.y{content:"/*"} p.x{color:#fff} p.z{content:"*/"}</style><p class=x>%s</p>',
+            # Second pass: an unquoted url() with a quote, an escaped newline in a string, CSS in <template>.
+            "<style>p.y{background:url(a'b)} p.x{color:#fff} .z{c:'}</style><p class=x>%s</p>",
+            '<style>p.x{color:#fff} p.y{content:"\\\n} p.x{color:#000 !important} "}</style><p class=x>%s</p>',
+            '<style>p.x{color:#fff}</style><template><style>p.x.y{color:#000}</style></template><p class="x y">%s</p>',
+            '<style>p.x{color:#fff}</style><noscript><style>p.x.y{color:#000}</style></noscript><p class="x y">%s</p>',
         )
         for case in cases:
             with self.subTest(case=case):
@@ -552,6 +557,9 @@ class Card184(unittest.TestCase):
             sv.view(msg(html="<style>" + css + "</style>" + ('<b class="' + " ".join(pool) + '">x</b>') * 700))
         except sv.TooComplex:
             pass
+        big = "." + ".".join("c%d" % i for i in range(999))
+        with self.assertRaises(sv.TooComplex):   # a selector with too many parts
+            sv.view(msg(html="<style>" + (big + "{color:#111;background:#fff;font-size:12px}") * 50 + "</style><p>x</p>"))
         self.assertLess(time.monotonic() - t, 10)
 
     def test_elements_hidden_by_default(self):

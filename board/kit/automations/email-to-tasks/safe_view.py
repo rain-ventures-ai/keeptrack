@@ -352,7 +352,9 @@ class TooComplex(ValueError):
     """The style text is over the caps: the message is reported unreadable, never read with some rules unread."""
 
 
-CSS_STRING = r'"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\''
+# A quoted string (a `\\` escapes any character, a newline too), or an unquoted url(), which a browser reads as one
+# token up to its `)` (a quote inside it, `url(a'b)`, starts no string).
+CSS_STRING = r'"(?:[^"\\\n]|\\[\s\S])*"|\'(?:[^\'\\\n]|\\[\s\S])*\'|(?i:url)\((?!\s*[\'"])[^)]*\)'
 COMMENT_OR_STRING = re.compile("(" + CSS_STRING + r")|/\*(?:[^*]|\*(?!/))*(?:\*/|\Z)", re.S)
 
 
@@ -380,10 +382,13 @@ class _Styles(html.parser.HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=False)
         self.blocks, self.inside, self.size, self.customs = [], False, 0, {}
+        self.inert = 0   # open <template> and <noscript>: a browser applies no CSS written inside them
 
     def handle_starttag(self, tag, attrs):
+        if tag in ("template", "noscript"):
+            self.inert += 1
         if tag == "style":
-            self.inside = True; self.blocks.append([])
+            self.inside = True; self.blocks.append([bool(self.inert)])
         style = dict(attrs).get("style") or ""
         if "--" in style:
             _customs(style, self.customs)
@@ -391,6 +396,8 @@ class _Styles(html.parser.HTMLParser):
     def handle_endtag(self, tag):
         if tag == "style":
             self.inside = False
+        if tag in ("template", "noscript") and self.inert:
+            self.inert -= 1
 
     def handle_data(self, data):
         if self.inside:
@@ -459,8 +466,10 @@ def _style_text(markup):
     head = markup[:MAX_MARKUP].lower()
     if p.inside or "<style" in markup[MAX_MARKUP - 8:].lower() or head.rfind("<style") > head.rfind("</style"):
         raise TooComplex("a style block past MAX_MARKUP")   # its rules would be read by no tokenizer that agrees
-    parsed = [_strip_comments("".join(b)) for b in p.blocks]
-    return parsed, [_strip_comments(b) for b in _scan_styles(markup[:MAX_MARKUP])], p.customs
+    # A block inside <template> or <noscript> is read like one only the scan finds: hiding rules only.
+    parsed = [_strip_comments("".join(b[1:])) for b in p.blocks if not b[0]]
+    inert = [_strip_comments("".join(b[1:])) for b in p.blocks if b[0]]
+    return parsed, inert + [_strip_comments(b) for b in _scan_styles(markup[:MAX_MARKUP])], p.customs
 
 
 DESKTOP = 1200   # the main reader modelled: a desktop mail client about 1200px wide, in light mode
@@ -667,9 +676,11 @@ def _cascade(slot, new):
     hits: the slot keeps the highest-ranked (important, specificity, order) such value that hides text ("sticky")
     and that does not ("loose"). A pure value that hides text is kept as sticky too, since class names may match
     whatever their case. _winner picks between them for an element."""
-    slot = slot or {"pure": {}, "sticky": None, "loose": None}
+    slot = slot or {"pure": {}, "sticky": None, "loose": None, "cost": 0}
     need = new["need"]
     if need is not None and (need in slot["pure"] or len(slot["pure"]) < MAX_PURE):
+        if need not in slot["pure"]:
+            slot["cost"] += len(need)   # what checking it against an element costs (MAX_CHECKS)
         if need not in slot["pure"] or _rank(new) >= _rank(slot["pure"][need]):
             slot["pure"][need] = new
         if not new["sticky"]:
@@ -768,7 +779,10 @@ def _style_rules(markup):
             desk = bool(widths & DESK)
             for one in prelude.split(","):
                 keys, comb, prev = _selector_keys(one)
+                if keys and len(keys) > 64 or prev and len(prev) > 64:
+                    raise TooComplex("a selector with too many parts")
                 need = _need(prelude, one, plain and sure)
+                spec = _specificity(one)
                 if unreadable and keys != []:
                     raise unreadable
                 if keys is None:
@@ -798,7 +812,7 @@ def _style_rules(markup):
                             continue
                         name = {"fs": ("font-size", "font"), "bg": ("background", "background-color"),
                                 "fill": ("-webkit-text-fill-color",)}.get(prop, (prop,))
-                        new = {"v": v, "imp": any(n in important for n in name), "rank": (_specificity(one), order),
+                        new = {"v": v, "imp": any(n in important for n in name), "rank": (spec, order),
                                "sticky": _hiding_value(prop, v) or (pair and prop in ("color", "fill", "bg")),
                                "need": None if any(n in escaped for n in name) else need}
                         if sure or new["sticky"]:
@@ -906,7 +920,7 @@ class _Visible(html.parser.HTMLParser):
         props, locked = {}, set()
         for prop in ("color", "fill", "bg", "fs"):   # style-block rules first, then the element's own attributes
             slots = [soft[k][prop] for k in keys if prop in soft.get(k, {})]
-            self.checks += sum(len(x["pure"]) for x in slots)
+            self.checks += sum(x["cost"] for x in slots)
             if self.checks > MAX_CHECKS:
                 raise TooComplex("style rules too costly to match")
             best, sure = _winner(slots, has)   # all its keys' rules together
