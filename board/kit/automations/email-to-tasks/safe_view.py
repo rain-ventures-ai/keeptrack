@@ -16,6 +16,7 @@ import base64
 import binascii
 import codecs
 import colorsys
+import html
 import html.parser
 import re
 
@@ -114,7 +115,26 @@ def _decls(text):
         if important:
             imp.add(k)
         out[k] = re.sub(r"\s+", " ", re.sub(r"\s*([,()/])\s*", r"\1", v)).strip()
+    fs = _font_size(out.get("font", ""))
+    if fs and (not out.get("font-size") or _px(fs, 16.0) < _px(out["font-size"], 16.0)):
+        out["font-size"] = fs   # the `font` shorthand sets the size too (`font:0/0 a`): the smaller of the two counts
     return out
+
+
+FONT_SIZE = re.compile(r"(?:xx?x?-small|xx?x?-large|small|medium|large|smaller|larger|-?[0-9]*\.?[0-9]+(?:px|pt|em|rem|%))"
+                       r"(?:/\S*)?|-?[0-9]*\.?[0-9]+/\S*|0")
+
+
+def _font_size(v):
+    """The font size a `font` shorthand sets, or "" when it sets none a browser would use (a system font keyword, or a
+    value with no size, which a browser drops). A size written with calc(), var() and the like counts as 0."""
+    if not v or v in ("inherit", "initial", "unset", "revert", "caption", "icon", "menu", "message-box",
+                      "small-caption", "status-bar"):
+        return ""
+    if re.search(r"\b(?:calc|var|min|max|clamp|env|attr)\(", v):
+        return "0"   # a size this cannot work out: hide more
+    sizes = [t for t in v.split(" ") if FONT_SIZE.fullmatch(t)]
+    return sizes[-1].split("/")[0] if sizes else ""
 
 
 def _important(text):
@@ -137,6 +157,13 @@ def _num(v):
     return (float(m.group(1)), m.group(2)) if m else None
 
 
+# Properties that can hide text and whose values this cleaner does not model one by one: any value but these hides
+# the element (when unsure, hide more).
+OPAQUE = {"content-visibility": ("visible", "auto"), "filter": ("none",), "-webkit-filter": ("none",),
+          "mask": ("none",), "mask-image": ("none",), "-webkit-mask": ("none",), "-webkit-mask-image": ("none",),
+          "-webkit-mask-box-image": ("none",), "text-security": ("none",), "-webkit-text-security": ("none",), "font-size-adjust": ("none",)}
+
+
 def _hard_hides(s):
     """Declarations that hide an element and everything in it, whatever its children set (display, visibility,
     opacity, no size, clipped, moved off the screen). Colour and font size are not here: a child can set its own,
@@ -156,9 +183,29 @@ def _hard_hides(s):
         return True   # a box with no size
     if clipped and any(n and n[0] <= 1 and n[1] in ("px", "") for n in (w, h)):
         return True   # the 1px box: text clipped to a dot
-    for v in re.findall(r"translate[xy]?\(([^)]{0,200})\)", s.get("transform", "")):
-        if any(n and n[0] <= -500 for n in map(_num, v.split(","))):
+    for v in re.findall(r"translate(?:[xyz]|3d)?\(([^)]{0,200})\)", s.get("transform", "")) + [s.get("translate", "")]:
+        if any(n and n[0] <= -500 for n in map(_num, re.split(r"[, ]", v))):
             return True   # moved off the screen
+    for v in re.findall(r"scale(?:[xyz]|3d)?\(([^)]{0,200})\)", s.get("transform", "")) + [s.get("scale", "")]:
+        if any(n and abs(n[0] / (100 if n[1] == "%" else 1)) <= 0.05 for n in map(_num, re.split(r"[, ]", v))):
+            return True   # shrunk to nothing
+    for v in re.findall(r"matrix(3d)?\(([^)]{0,400})\)", s.get("transform", "")):
+        try:
+            m = [float(x) for x in v[1].split(",")]
+            if abs(m[0] * m[5] - m[1] * m[4] if v[0] else m[0] * m[3] - m[1] * m[2]) <= 0.0025:
+                return True   # a matrix that flattens the text
+        except (ValueError, IndexError):
+            return True   # a matrix this cannot read: hide more
+    z = _num(s.get("zoom", "").replace("normal", "1").replace("reset", "1"))
+    if s.get("zoom") and (not z or z[1] not in ("", "%") or z[0] / (100 if z[1] == "%" else 1) <= 0.05):
+        return True   # zoomed to nothing, or a zoom this cannot read
+    for k in ("margin-left", "margin-top", "margin"):
+        if any(n and n[0] <= -500 for n in map(_num, s.get(k, "").split(" "))):
+            return True   # pulled off the screen by a large negative margin
+    for k, harmless in OPAQUE.items():
+        v = s.get(k, "")
+        if v and v not in harmless and not v.startswith(("progid:", "alpha(")):   # old IE filters: no client runs them
+            return True   # a property that can hide text, with a value this does not model: hide more
     if re.match(r"rect\(0", s.get("clip", "")) or re.search(r"inset\(50%|inset\(100%|circle\(0", s.get("clip-path", "")):
         return True
     if s.get("position") in ("absolute", "fixed"):
@@ -180,8 +227,9 @@ def _tiny(fs):
 
 def _invisible(color, bg, px):
     """Is text with this inherited colour, background and font size (in px) invisible to a reader? `bg` "image"
-    means a background picture: its colour is unknown, so the colour tests are skipped. A colour this cannot read
-    counts as invisible: when unsure, hide more."""
+    means a background picture: its colour is unknown, so the colour tests are skipped. `bg` may hold several
+    colours joined by `|` (a var() or light-dark() background): the text is invisible if it is against any of them.
+    A colour this cannot read counts as invisible: when unsure, hide more."""
     if not px >= 2:   # also catches NaN
         return True   # zero or unreadably small text
     c = (color or "").strip()
@@ -192,12 +240,14 @@ def _invisible(color, bg, px):
         return True   # unreadable colour, or (nearly) transparent
     if bg == "image":
         return False
-    rb = _rgba(bg) if bg else None
-    if rb is None:
-        bg = ""   # no background, or one this cannot read: judge the text against a white page
-    if rb and max(abs(x - y) for x, y in zip(rc[:3], rb[:3])) <= 16:
-        return True   # text all but the same colour as its background
-    return min(rc[:3]) >= 0xF0 and (not bg or (rb is not None and min(rb[:3]) >= 0xF0))   # white on a white page
+    for one in (bg or "").split("|"):
+        rb = _rgba(one) if one else None
+        if rb and max(abs(x - y) for x, y in zip(rc[:3], rb[:3])) <= 16:
+            return True   # text all but the same colour as its background
+        # No background, or one this cannot read: the text is judged against a white page.
+        if min(rc[:3]) >= 0xF0 and (rb is None or min(rb[:3]) >= 0xF0):
+            return True   # white on a white page
+    return False
 
 
 def _rgb(c):
@@ -243,20 +293,57 @@ def _rgba(c):
     return (int(r), int(g), int(b), alpha)
 
 
-def _bg_of(d):
-    """The background a declaration set gives: a colour, "image" for a picture, or "" for none."""
+COLOUR_TOKEN = re.compile(r"#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^()]{0,80}\)|[a-z]+")
+UNREADABLE_COLOUR = re.compile(r"\b(?:color-mix|color|hwb|lab|lch|oklab|oklch|device-cmyk)\(|"
+                               r"\b(?:rgba?|hsla?)\([^()]{0,80}\(")   # a colour function, or rgb(calc(..)) and the like
+MAX_CUSTOM = 5000   # custom property names (`--x: ..`) in one message, at most 100 values each; more is TooComplex
+
+
+def _expand_vars(value, customs):
+    """`value` with each var(--name, fallback) followed: the values every `--name` is given anywhere in the message
+    (the right one depends on the cascade, so all count) are added next to the fallback. Four levels deep at most."""
+    for _ in range(4):
+        names = re.findall(r"var\(\s*(--[^,()\s]+)", value)
+        if not names:
+            return value
+        if len(value) > 20000:
+            raise TooComplex("custom properties expand too far")
+        value = re.sub(r"var\(\s*--[^,()\s]+\s*,?", " ", value) + " " + \
+            " ".join(dict.fromkeys(v for n in dict.fromkeys(names) for v in (customs or {}).get(n, ())))
+        if len(value) > 20000:
+            raise TooComplex("custom properties expand too far")
+    raise TooComplex("custom properties nested too deep")
+
+
+def _bg_of(d, customs=None):
+    """The background a declaration set gives: a colour, "image" for a picture, or "" for none. A value written with
+    var(), light-dark() or calc() gives every colour it may resolve to, joined by `|`, and text is judged against
+    each of them (when unsure, hide more). A colour this cannot work out (color-mix(), lab(), rgb(calc())) makes
+    the message TooComplex: it is never judged against a guess."""
     image = d.get("background-image", "")
     b = d.get("background-color") or d.get("background") or ""
     if b.strip() == "inherit":
         return "inherit"
-    if re.search(r"\b(?:var|env|calc|color-mix|attr|light-dark)\(", b):
-        return "?"   # a colour this cannot work out: the text is judged against a white page
-    for tok in re.findall(r"#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^()]{0,80}\)|[a-z]+",
-                          re.sub(r"(?:url|[a-z-]*gradient)\([^()]{0,1000}\)", " ", b[:1000])):
-        c = _rgba(tok) if tok != "transparent" else None
-        if c is not None:
-            return tok if c[3] > 0.2 else ""   # a (nearly) transparent background shows the one behind it   # the colour, also in a shorthand such as `url(x) no-repeat #003366`: judged against it
-    if "url(" in image or "url(" in b or "gradient(" in image or "gradient(" in b:
+    b = re.sub(r"(?:url|[a-z-]*gradient)\([^()]{0,1000}\)", " ", b[:1000]) if "url(" in b or "gradient(" in b else b[:1000]
+    if not re.search(r"\b(?:var|env|calc|attr|light-dark)\(", b):
+        if UNREADABLE_COLOUR.search(b):
+            raise TooComplex("a background colour this cannot read")
+        for tok in COLOUR_TOKEN.findall(b):
+            c = _rgba(tok) if tok != "transparent" else None
+            if c is not None:
+                # The colour, also in a shorthand such as `url(x) no-repeat #003366`: judged against it. A (nearly)
+                # transparent background shows the one behind it.
+                return tok if c[3] > 0.2 else ""
+    else:
+        b = _expand_vars(b, customs)
+        if UNREADABLE_COLOUR.search(b):
+            raise TooComplex("a background colour this cannot read")
+        found = [t for t in COLOUR_TOKEN.findall(b) if t != "transparent" and (_rgba(t) or (0, 0, 0, 0))[3] > 0.2]
+        if "var(" in d.get("background-color", "") + d.get("background", "") and found:
+            found.append("white")   # a custom property may be unset or invalid where it is used: then the page shows
+        if found:
+            return "|".join(dict.fromkeys(found))
+    if "url(" in image or "url(" in d.get("background", "") or "gradient(" in image or "gradient(" in d.get("background", ""):
         return "image"   # a picture with no colour: its colour is unknown
     return ""
 
@@ -265,17 +352,28 @@ class TooComplex(ValueError):
     """The style text is over the caps: the message is reported unreadable, never read with some rules unread."""
 
 
+# A quoted string (a `\\` escapes any character, a newline too), or an unquoted url(), which a browser reads as one
+# token up to its `)` (a quote inside it, `url(a'b)`, starts no string).
+CSS_STRING = r'"(?:[^"\\\n]|\\[\s\S])*"|\'(?:[^\'\\\n]|\\[\s\S])*\'|(?i:url)\((?!\s*[\'"])[^)]*\)'
+COMMENT_OR_STRING = re.compile("(" + CSS_STRING + r")|/\*(?:[^*]|\*(?!/))*(?:\*/|\Z)", re.S)
+
+
 def _strip_comments(css):
-    """CSS comments removed in one pass; an unterminated `/*` runs to the end of its own block, as in a browser."""
-    kept, i = [], 0
-    while True:
-        a = css.find("/*", i)
-        if a < 0:
-            return "".join(kept + [css[i:]])
-        kept.append(css[i:a]); e = css.find("*/", a + 2)
-        if e < 0:
-            return "".join(kept)
-        i = e + 2
+    """CSS comments removed in one pass, never inside a quoted string (`content:"/*"` starts no comment); an
+    unterminated `/*` runs to the end of its own block, as in a browser."""
+    return COMMENT_OR_STRING.sub(lambda m: m.group(1) or "", css)
+
+
+def _customs(text, out):
+    """Adds each custom property declaration (`--x: #000`) in a declaration block to `out` ({name: [values]})."""
+    for d in _strip_comments(text)[:20000].split(";"):
+        if ":" in d:
+            k, v = d.split(":", 1)
+            k = _unescape_css(k).strip().lower()
+            if k.startswith("--"):
+                out.setdefault(k, []).append(_unescape_css(v).strip().lower()[:1000])
+                if len(out) > MAX_CUSTOM or len(out[k]) > 100:
+                    raise TooComplex("custom properties over MAX_CUSTOM")
 
 
 class _Styles(html.parser.HTMLParser):
@@ -283,15 +381,23 @@ class _Styles(html.parser.HTMLParser):
     starts and ends (comments, `<style>` written inside CSS or inside an HTML comment)."""
     def __init__(self):
         super().__init__(convert_charrefs=False)
-        self.blocks, self.inside, self.size = [], False, 0
+        self.blocks, self.inside, self.size, self.customs = [], False, 0, {}
+        self.inert = 0   # open <template> and <noscript>: a browser applies no CSS written inside them
 
     def handle_starttag(self, tag, attrs):
+        if tag in ("template", "noscript"):
+            self.inert += 1
         if tag == "style":
-            self.inside = True; self.blocks.append([])
+            self.inside = True; self.blocks.append([bool(self.inert)])
+        style = dict(attrs).get("style") or ""
+        if "--" in style:
+            _customs(style, self.customs)
 
     def handle_endtag(self, tag):
         if tag == "style":
             self.inside = False
+        if tag in ("template", "noscript") and self.inert:
+            self.inert -= 1
 
     def handle_data(self, data):
         if self.inside:
@@ -341,8 +447,9 @@ def _ambiguous_comment(markup):
 
 
 def _style_text(markup):
-    """The CSS of every <style> block in the part the text is read from (MAX_MARKUP), one string per block, comments
-    removed, found two ways: the HTML parser's own reading and a string scan. A rule either finds counts. A <style>
+    """(parsed, scanned, customs): the CSS of every <style> block in the part the text is read from (MAX_MARKUP), one
+    string per block, comments removed, found two ways: the HTML parser's own reading (`parsed`) and a string scan
+    (`scanned`), and the custom properties its inline styles declare. A hiding rule either finds counts. A <style>
     past MAX_MARKUP, style over MAX_STYLE, markup over MAX_SCAN, or comment forms browsers and this parser read
     differently raise TooComplex."""
     if len(markup) > MAX_SCAN:
@@ -359,65 +466,112 @@ def _style_text(markup):
     head = markup[:MAX_MARKUP].lower()
     if p.inside or "<style" in markup[MAX_MARKUP - 8:].lower() or head.rfind("<style") > head.rfind("</style"):
         raise TooComplex("a style block past MAX_MARKUP")   # its rules would be read by no tokenizer that agrees
-    blocks = ["".join(b) for b in p.blocks] + _scan_styles(markup[:MAX_MARKUP])
-    return [_strip_comments(b) for b in blocks]
+    # A block inside <template> or <noscript> is read like one only the scan finds: hiding rules only.
+    parsed = [_strip_comments("".join(b[1:])) for b in p.blocks if not b[0]]
+    inert = [_strip_comments("".join(b[1:])) for b in p.blocks if b[0]]
+    return parsed, inert + [_strip_comments(b) for b in _scan_styles(markup[:MAX_MARKUP])], p.customs
 
 
-DESKTOP = 1200   # the reader modelled: a desktop mail client about 1200px wide, in light mode
+DESKTOP = 1200   # the main reader modelled: a desktop mail client about 1200px wide, in light mode
+# A desktop window is not exactly 1200px wide: a hiding rule under @media counts when it applies at any of these
+# widths (a bit mask of WIDTHS), so a rule that leaves only a narrow window around 1200px open still hides. A rule for
+# phones only (`max-width:600px`) hides nothing here: a desktop reader sees that text, and responsive mail (MJML)
+# puts its main text in such blocks.
+WIDTHS = (DESKTOP, 1440, 1920)
+ALL = (1 << len(WIDTHS)) - 1
+DESK = 1 << WIDTHS.index(DESKTOP)
 
 
 def _at_applies(prelude):
-    """Does an at-rule's block apply to that reader? @media is evaluated; @keyframes, @font-face and the like hold
-    no rules for elements; any other at-rule (e.g. @supports) is taken to apply."""
+    """The widths (a mask of WIDTHS) at which an at-rule's block applies to a light-mode screen reader. @media is
+    evaluated; @keyframes, @font-face and the like hold no rules for elements (0); any other at-rule (e.g. @supports)
+    is taken to apply at every width. A media feature this cannot read is taken to apply (when unsure, hide more)."""
     p = prelude.lower()
     if not p.startswith("@"):
-        return True
+        return ALL
     if not p.startswith("@media"):   # unknown at-rules apply; only these hold no rules for elements
-        return not p.startswith(("@keyframes", "@-webkit-keyframes", "@font-face", "@page", "@counter-style",
-                                 "@property", "@font-feature-values", "@font-palette-values", "@namespace"))
+        return 0 if p.startswith(("@keyframes", "@-webkit-keyframes", "@font-face", "@page", "@counter-style",
+                                  "@property", "@font-feature-values", "@font-palette-values", "@namespace")) else ALL
+    out = 0
     for alt in p[6:].split(","):
         alt = alt.strip()
         if alt.startswith("not ") or alt.startswith("not("):
-            return True   # unsure: apply it
+            return ALL   # unsure: apply it
         if re.search(r"\b(print|speech)\b", alt) and not re.search(r"\b(screen|all)\b", alt):
             continue
-        ok = True
+        ok = ALL
         for feat, val in re.findall(r"\(\s*([a-z-]+)\s*:\s*([^()]*)\)", alt):
             n = _num(val.strip().replace(" ", ""))
+            px = n[0] * (16 if n[1] in ("em", "rem") else 1) if n and n[1] in ("px", "", "em", "rem") else None
             if feat == "prefers-color-scheme":
-                ok = ok and val.strip() != "dark"
-            elif feat in ("max-width", "max-device-width") and n and n[1] in ("px", ""):
-                ok = ok and n[0] >= DESKTOP
-            elif feat in ("min-width", "min-device-width") and n and n[1] in ("px", ""):
-                ok = ok and n[0] <= DESKTOP
-        if ok:
-            return True
+                ok = ok if val.strip() != "dark" else 0
+            elif feat in ("max-width", "max-device-width") and px is not None:
+                ok &= sum(1 << i for i, w in enumerate(WIDTHS) if w <= px)
+            elif feat in ("min-width", "min-device-width") and px is not None:
+                ok &= sum(1 << i for i, w in enumerate(WIDTHS) if w >= px)
+        out |= ok
+    return out
+
+
+BRACES = re.compile("(" + CSS_STRING + "|[{}])")
+# A function name written with an escape (`u\72l(`), outside a string: a browser decodes it first, so it may be url(
+# and change where a string or a block ends. Such CSS is TooComplex.
+NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- \\")
+
+
+def _escaped_function(css):
+    """Is a function name written with an escape? Only the name characters (at most 64) just before each `(` are
+    looked at, walking back from it: linear time."""
+    pos = css.find("(")
+    while pos >= 0:
+        i = pos
+        while i > 0 and pos - i < 64 and css[i - 1] in NAME_CHARS:
+            i -= 1
+            if css[i] == "\\":
+                return True
+        pos = css.find("(", pos + 1)
     return False
 
 
 def _rules(css):
-    """(applies, selector, declarations) for each rule in one style block, nested at-rules tracked; a block left
-    open at the end is closed, as a browser does."""
-    out, stack, buf = [], [], []   # stack: (prelude, does everything around it apply)
-    for tok in re.split(r"([{}])", css):
+    """(widths, plain, selector, declarations) for each rule in one style block: `widths` the mask of WIDTHS at which
+    every at-rule around it applies, `plain` True when nothing is around it (it surely applies). Braces inside a
+    quoted string are text. Nested at-rules are tracked, and CSS nesting is read: in a style rule, the text before a
+    nested rule's selector (up to its last `;`) is the outer rule's own declarations, and declarations written
+    straight inside an at-rule nested in a style rule (`.x{@media screen{display:none}}`) are the outer rule's too.
+    A block left open at the end is closed, as a browser does."""
+    out, stack, buf = [], [], []   # stack: [prelude, the widths at which everything around it applies, body parts]
+
+    def style_owner():   # the nearest style rule around the current point, or None
+        return next((f for f in reversed(stack) if not f[0].startswith("@")), None)
+
+    def close(frame, body):
+        prelude, widths = frame[0], (stack[-1][1] if stack else ALL)
+        if not prelude.startswith("@"):
+            out.append((widths, not stack, prelude, "".join(frame[2]) + ";" + body))
+        elif body.strip() and style_owner():
+            out.append((frame[1], False, style_owner()[0], body))
+    if "\\" in css and _escaped_function(re.sub(CSS_STRING, '""', css)):
+        raise TooComplex("a CSS function name written with an escape")
+    for tok in BRACES.split(css):
         if tok == "{":
-            prelude = "".join(buf).strip(); buf = []
-            outer = stack[-1][1] if stack else True
-            stack.append((prelude, outer and _at_applies(prelude)))
+            text = "".join(buf); buf = []
+            if stack and not stack[-1][0].startswith("@") and ";" in text:
+                own, text = text.rsplit(";", 1)
+                stack[-1][2].append(own)   # the outer style rule's declarations, written before this nested rule
+            prelude = text.strip()
+            outer = stack[-1][1] if stack else ALL
+            stack.append([prelude, outer & _at_applies(prelude), []])
             if len(stack) > 32:
                 raise TooComplex("CSS nested too deep")
         elif tok == "}":
             body, buf = "".join(buf), []
             if stack:
-                prelude, _ = stack.pop()
-                if not prelude.startswith("@"):
-                    out.append((stack[-1][1] if stack else True, prelude, body))
-        else:
+                close(stack.pop(), body)
+        elif tok:
             buf.append(tok)
     while stack:
-        prelude, _ = stack.pop()
-        if not prelude.startswith("@"):
-            out.append((stack[-1][1] if stack else True, prelude, "".join(buf)))
+        close(stack.pop(), "".join(buf))
         buf = []
     return out
 
@@ -427,15 +581,34 @@ STATE = re.compile(r"::?(?:hover|focus|focus-within|focus-visible|active|visited
 DARK_HOOKS = ("[data-ogsc]", "[data-ogsb]", "[data-outlook-cycle]", ".dark-mode", "[data-darkreader")
 
 
-def _selector_keys(one):
-    """The keys (`.class`, `#id`, tag) an element must carry for this selector to hit it, read from its last
-    compound; [] when it never applies to a reader in light mode at rest; None when it cannot be named."""
-    one = one.strip().lower()
-    if not one:
-        return []
-    last = re.split(r"[\s>+~]+", one)[-1]
-    if "not(" not in one and any(h in one[:len(one) - len(last)] for h in DARK_HOOKS):
-        return []   # an Outlook dark-mode hook on an ancestor: never set for a light-mode reader
+def _split_selector(one):
+    """(compounds, combinators) of one selector: `img.g-img + div` is (["img.g-img", "div"], ["+"]). A combinator
+    inside (), [] (`:nth-child(2n+1)`, `[title="a b"]`) is not one."""
+    comps, combs, cur, depth, pending = [], [], [], 0, None
+    for ch in one:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        if not depth and ch in " \t\n\r\f>+~":
+            if cur:
+                comps.append("".join(cur)); cur = []; pending = pending or " "
+            if ch in ">+~":
+                pending = ch
+            continue
+        if not cur and comps and pending:
+            combs.append(pending)
+        if not cur:
+            pending = None
+        cur.append(ch)
+    if cur:
+        comps.append("".join(cur))
+    return comps, combs
+
+
+def _compound_keys(last):
+    """The keys (`.class`, `#id`, tag) an element must carry to match one compound selector (any one of them counts:
+    when unsure, hide more); [] when it never matches at rest in light mode; None when it cannot be named."""
     bare = last
     for _ in range(4):   # what sits inside :not()/:is()/:where() does not decide when the rule applies
         bare = re.sub(r"\([^()]*\)", "", bare)
@@ -456,62 +629,221 @@ def _selector_keys(one):
     return None
 
 
+def _selector_keys(one):
+    """(keys, combinator, previous keys) for one selector. `keys` are read from its last compound, as _compound_keys
+    reads them ([] when the selector never applies to a reader in light mode at rest). When the last compound follows
+    a sibling combinator (`a + b`, `a ~ b`), `combinator` is that `+` or `~` and `previous keys` are the keys of the
+    compound before it, so the rule hits only an element after such a sibling; otherwise both are None."""
+    one = one.strip().lower()
+    comps, combs = _split_selector(one)
+    if not comps:
+        return [], None, None
+    head = one[:len(one) - len(comps[-1])]
+    if "not(" not in one and any(h in head for h in DARK_HOOKS):
+        return [], None, None   # an Outlook dark-mode hook on an ancestor: never set for a light-mode reader
+    keys = _compound_keys(comps[-1])
+    if keys and combs and combs[-1] in "+~":
+        prev = _compound_keys(comps[-2])
+        if prev == []:
+            return [], None, None   # the sibling only matches on hover or the like: never at rest
+        if prev:
+            return keys, combs[-1], prev
+    return keys, None, None
+
+
+def _specificity(one):
+    """A selector's specificity (ids, classes and attributes and pseudo-classes, tags), counted roughly: enough to
+    order two rules for the same element as a browser does."""
+    s = one.lower()
+    return (len(re.findall(r"#[a-z0-9_-]", s)), len(re.findall(r"\.[a-z_-]|\[|(?<!:):(?!:)[a-z]", s)),
+            len(re.findall(r"(?:^|[\s>+~(,])[a-z][a-z0-9]*", s)) + len(re.findall(r"::[a-z]", s)))
+
+
+KEYWORDS = ("inherit", "currentcolor", "initial", "unset", "revert", "revert-layer")
+MAX_SIBLING = 200   # rules with a sibling combinator (`a + b`) whose effect is modelled; more is TooComplex
+
+
+def _factor(v):
+    """An opacity or zoom value as a number (`50%` is 0.5), or None."""
+    n = _num((v or "").replace("normal", "1").replace("reset", "1"))
+    return n[0] / (100 if n[1] == "%" else 1) if n and n[1] in ("", "%") else None
+
+
+class _Rules:
+    """What the message's <style> blocks do, by key (`.class`, `#id`, tag):
+    `hard`: {key: widths} the widths (a mask of WIDTHS) at which a rule hides the element outright;
+    `sibling`: {key: [(combinator, previous keys, widths)]} the same for rules that hit an element only after a
+    sibling (`img.g-img + div`), checked against its earlier siblings as the page is read;
+    `soft`: {key: {prop: slot}} (see _cascade) the colour, text fill colour, background and font size the rules give
+    it at DESKTOP width, and `op`/`zoom` the lowest opacity and zoom any rule gives it;
+    `customs`: {name: [values]} the custom properties (`--x`) declared anywhere."""
+    def __init__(self):
+        self.hard, self.sibling, self.soft, self.customs = {}, {}, {}, {}
+
+
+def _rank(e):
+    return (e["imp"], e["rank"])
+
+
+MAX_PURE = 50   # distinct simple selectors kept per key and property; more are kept as rules that may hit
+
+
+def _cascade(slot, new):
+    """Files a rule's value for a key into its slot. A rule with a simple selector (`.b`, `p.b`, `#k.a`; written with
+    no at-rule around it and no escape in its value) surely hits an element that carries all its parts, `need`; it is
+    kept per `need` ("pure"). For any other rule (`.a .b`, `.b:first-child`, under @media) it is unknown whether it
+    hits: the slot keeps the highest-ranked (important, specificity, order) such value that hides text ("sticky")
+    and that does not ("loose"). A pure value that hides text is kept as sticky too, since class names may match
+    whatever their case. _winner picks between them for an element."""
+    slot = slot or {"pure": {}, "sticky": None, "loose": None, "cost": 0}
+    need = new["need"]
+    if need is not None and (need in slot["pure"] or len(slot["pure"]) < MAX_PURE):
+        if need not in slot["pure"]:
+            slot["cost"] += len(need)   # what checking it against an element costs (MAX_CHECKS)
+        if need not in slot["pure"] or _rank(new) >= _rank(slot["pure"][need]):
+            slot["pure"][need] = new
+        if not new["sticky"]:
+            return slot
+    kind = "sticky" if new["sticky"] else "loose"
+    if slot[kind] is None or _rank(new) >= _rank(slot[kind]):
+        slot[kind] = new
+    return slot
+
+
+def _winner(slots, has):
+    """(value, sure): the value a property takes for an element that carries the parts `has` (its tag, and its classes
+    and id as written), from the slots of all its keys, as a browser's cascade picks it, and whether that rule surely
+    hits the element: the highest-ranked rule that surely
+    hits it, unless a rule that may hit it ranks higher. Then, if any such rule hides the text, the text counts as
+    hidden (when unsure, hide more)."""
+    exact = max((e for s in slots for n, e in s["pure"].items() if n <= has), key=_rank, default=None)
+    found = ([exact] if exact else []) + [s[k] for s in slots for k in ("sticky", "loose")
+                                          if s[k] and (exact is None or _rank(s[k]) > _rank(exact))]
+    sticky = [f for f in found if f["sticky"]]
+    best = max(sticky or found, key=_rank, default=None)
+    return best, best is not None and best is exact
+
+
+IDENT = r"-?[_a-zA-Z][_a-zA-Z0-9-]*"
+SIMPLE = re.compile(r"(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[.#]" + IDENT + ")*")
+
+
+def _need(prelude, one, plain):
+    """The parts an element must carry for a simple selector to surely hit it (tag in lower case, classes and id as
+    written), or None when the selector is not that simple, a rule around it may not apply, or any selector in its
+    list is not strictly simple (a browser drops a whole rule over one selector it cannot read: `p.x, p:bogus`)."""
+    one = one.strip()
+    if not plain or not one or not all(x.strip() and SIMPLE.fullmatch(x.strip()) for x in prelude.split(",")):
+        return None
+    tag = re.match(r"[a-zA-Z][a-zA-Z0-9]*", one)
+    return frozenset(([tag.group(0).lower()] if tag else []) + re.findall(r"[.#]" + IDENT, one))
+
+
+def _escaped(text):
+    """The properties whose value a declaration block writes with a `\\` escape: a browser may read such a value
+    differently (`14px\\9` is an old IE hack), so it never surely beats another rule."""
+    out = set()
+    for d in _strip_comments(text or "")[:20000].split(";"):
+        if ":" in d and "\\" in d.split(":", 1)[1]:
+            out.add(_unescape_css(d.split(":", 1)[0]).strip().lower())
+    return out
+
+
 def _style_rules(markup):
-    """(hard, soft) from the message's <style> blocks: keys whose rules hide an element outright, and per key the
-    colour, background and font size the rules give it (later rules win). A rule that would hide text but whose
-    elements cannot be named makes the message TooComplex."""
-    hard, soft, count = set(), {}, 0
-    for block in _style_text(markup):
-        for applies, prelude, body in _rules(block):
-            count += 1
-            if count > MAX_RULES:
-                raise TooComplex("style rules over MAX_RULES")
-            if not applies:
+    """A _Rules from the message's <style> blocks. A rule that would hide text but whose elements cannot be named
+    makes the message TooComplex."""
+    r, count, order, sibling = _Rules(), 0, 0, 0
+    parsed, scanned, r.customs = _style_text(markup)
+    blocks = parsed + scanned
+    # The parser and the string scan mostly find the same blocks; a block only the scan finds (one inside an HTML
+    # comment, <title> or <textarea>, which a browser does not read as CSS) may add hiding rules, never visible ones.
+    unique = list(dict.fromkeys(blocks))
+    trusted = set(parsed)
+    memo = {}   # _bg_of per distinct background value: a var() one can be long to follow
+    for block in blocks:
+        count += len(_rules(block))
+        if count > MAX_RULES:
+            raise TooComplex("style rules over MAX_RULES")
+    for block in unique:
+        for widths, plain, prelude, body in _rules(block):
+            if widths and "--" in body:
+                _customs(body, r.customs)
+    for block in unique:   # a second pass, so every custom property is known before a background uses one
+        sure = block in trusted
+        for widths, plain, prelude, body in _rules(block):
+            if not widths:
                 continue
+            order += 1
             d = _decls(body)
-            important = _important(body)
+            important, escaped = _important(body), _escaped(body)
             hides = _hard_hides(d)
-            props = {k: v for k, v in (("color", d.get("color", "")), ("bg", _bg_of(d)),
-                                       ("fs", d.get("font-size", "")), ("op", d.get("opacity", ""))) if v}
-            if not hides and not props:
+            key = (d.get("background-color"), d.get("background"), d.get("background-image"))
+            if key not in memo:
+                try:
+                    memo[key] = (_bg_of(d, r.customs), None)
+                except TooComplex as e:   # fatal only when the rule hits an element (not for `:hover` or the like)
+                    memo[key] = ("", e)
+            bg, unreadable = memo[key]
+            props = {k: v for k, v in (("color", d.get("color", "")), ("fill", d.get("-webkit-text-fill-color", "")),
+                                       ("bg", bg), ("fs", d.get("font-size", "")),
+                                       ("op", d.get("opacity", "")), ("zoom", d.get("zoom", ""))) if v}
+            if not hides and not props and not unreadable:
                 continue
+            op = min(_factor(props.get("op")) or 1.0, 1.0) * min(_factor(props.get("zoom")) or 1.0, 1.0)
+            pair = "bg" in props and any(_invisible(props[c], props["bg"], 16.0) for c in ("color", "fill") if c in props)
+            # Hides text by itself, whatever the element inherits: a keyword (`inherit`) is not such a value.
+            real = {p: v for p, v in props.items() if v not in KEYWORDS}
+            alone = hides or op <= 0.05 or any(_hiding_value(p, real[p]) for p in ("color", "fill", "fs") if p in real) \
+                or "bg" in real and any(_invisible(real[c], real["bg"], 16.0) for c in ("color", "fill") if c in real)
+            desk = bool(widths & DESK)
             for one in prelude.split(","):
-                keys = _selector_keys(one)
+                keys, comb, prev = _selector_keys(one)
+                if keys and len(keys) > 64 or prev and len(prev) > 64:
+                    raise TooComplex("a selector with too many parts")
+                need = _need(prelude, one, plain and sure)
+                spec = _specificity(one)
+                if unreadable and keys != []:
+                    raise unreadable
                 if keys is None:
-                    op = _num(props.get("op", ""))
-                    if hides or (op and op[0] < (100 if op[1] == "%" else 1)) or \
-                            _invisible(props.get("color", ""), props.get("bg", ""), _px(props.get("fs", ""), 16.0)):
+                    if desk and (alone or op < 1 or _invisible(
+                            props.get("color", ""), props.get("bg", ""), _px(props.get("fs", ""), 16.0))):
                         raise TooComplex("a hiding rule for elements this cleaner cannot name")   # `[data-x]`, `*`
                     continue
+                # Off the desktop width, or after a sibling, a rule that hides text by itself is kept as a hiding
+                # rule for those widths or that sibling; one that only sets a colour is left out.
+                hard_mask = widths if hides or (alone and (comb or not desk)) else 0
                 for k in keys:
-                    if hides:
-                        hard.add(k)
-                    cur = soft.setdefault(k, {})
-                    pair_hides = "color" in props and "bg" in props and \
-                        _invisible(props["color"], props["bg"], 16.0)   # the two together hide the text
+                    if hard_mask and comb:
+                        sibling += 1
+                        if sibling > MAX_SIBLING:
+                            raise TooComplex("sibling rules over MAX_SIBLING")
+                        r.sibling.setdefault(k, []).append((comb, tuple(prev), hard_mask))
+                    elif hard_mask:
+                        r.hard[k] = r.hard.get(k, 0) | hard_mask
+                    if not desk or (comb and alone):
+                        continue
+                    cur = r.soft.setdefault(k, {})
                     for prop, v in props.items():
-                        imp = ("font-size" if prop == "fs" else "background" if prop == "bg" else prop) in important \
-                            or (prop == "bg" and "background-color" in important)
-                        cur["important_" + prop] = cur.get("important_" + prop) or imp
-                        # A value that makes text invisible sticks: a later rule for the same key (whose specificity
-                        # is not modelled) never makes the text visible again. An !important one beats inline style.
-                        if prop == "op":   # the lowest opacity any rule gives the key
-                            old, new = _num(cur.get("op", "")), _num(v)
-                            if old and new and (old[0] / (100 if old[1] == "%" else 1)) <= (new[0] / (100 if new[1] == "%" else 1)):
-                                continue
-                            cur["op"] = v
+                        if prop in ("op", "zoom"):   # the lowest any rule gives the key
+                            f = _factor(v)
+                            if f is not None and f < cur.get(prop, 1.0):
+                                cur[prop] = f
                             continue
-                        if cur.get("sticky_" + prop):
-                            continue
-                        cur[prop] = v
-                        if _hiding_value(prop, v) or pair_hides:
-                            cur["sticky_" + prop] = True
-    return frozenset(hard), soft
+                        name = {"fs": ("font-size", "font"), "bg": ("background", "background-color"),
+                                "fill": ("-webkit-text-fill-color",)}.get(prop, (prop,))
+                        new = {"v": v, "imp": any(n in important for n in name), "rank": (spec, order),
+                               "sticky": _hiding_value(prop, v) or (pair and prop in ("color", "fill", "bg")),
+                               "need": None if any(n in escaped for n in name) else need}
+                        if sure or new["sticky"]:
+                            cur[prop] = _cascade(cur.get(prop), new)
+    return r
 
 
 def _hiding_value(prop, v):
     if prop == "fs":
         return _px(v, 16.0) < 2
+    if prop == "fill":
+        return v not in KEYWORDS and _hiding_value("color", v)
     if prop == "color":
         rc = _rgba(v)
         return rc is None or rc[3] <= 0.2 or min(rc[:3]) >= 0xF0
@@ -543,22 +875,37 @@ def _px(v, parent):
 QUOTE_KEYS = (".gmail_quote", ".gmail_quote_container", ".yahoo_quoted", ".moz-cite-prefix", "blockquote")
 QUOTE_REST = ("#divrplyfwdmsg", "#appendonsend")   # Outlook: the quote follows these, to the end of the message
 HEAD_TAGS = {"head", "meta", "link", "style", "title", "script", "base", "noscript", "template", "xml", "o:officedocumentsettings"}
+MAX_CHECKS = 500_000   # simple-selector checks in one message; more is TooComplex
 MAX_DEPTH = 256   # deeper nesting is TooComplex: no real mail needs it, and it keeps every step cheap
 
 
 class _Visible(html.parser.HTMLParser):
     CDATA_CONTENT_ELEMENTS = RAW_TEXT
 
-    def __init__(self, rules=(frozenset(), {}), strip_quotes=False):
+    def __init__(self, rules=None, strip_quotes=False):
         super().__init__(convert_charrefs=True)
         self.out, self.stack, self.removed = [], [], {"html_comments": 0, "hidden_elements": 0}
-        self.hard, self.soft = rules
+        self.rules = rules or _Rules()
         self.strip_quotes, self.quoted, self.drop_rest = strip_quotes, False, False
         self.open = {}   # tag -> how many are open: an end tag with none open costs nothing
+        self.top = {"prev": (), "seen": set()}   # the siblings read so far outside any element
+        self.conditionals = []   # the text of Outlook conditional comments, checked against the visible text at the end
+        self.bgs = {}
+        self.checks = 0   # simple-selector checks so far (MAX_CHECKS)
+        self.ancestors = {}   # key -> how many open elements carry it
+
+    def _bg(self, d):
+        """_bg_of for an inline style, worked out once per distinct value (a var() one can be long to follow)."""
+        key = (d.get("background-color"), d.get("background"), d.get("background-image"))
+        if key not in self.bgs:
+            self.bgs[key] = _bg_of(d, self.rules.customs)
+        return self.bgs[key]
 
     def _pop_to(self, i):
         for e in self.stack[i:]:
             self.open[e["tag"]] -= 1
+            for k in e["keys"]:
+                self.ancestors[k] -= 1
         del self.stack[i:]
 
     def handle_starttag(self, tag, attrs):
@@ -567,21 +914,41 @@ class _Visible(html.parser.HTMLParser):
         if self.open.get("head") and tag not in HEAD_TAGS:
             # `</head>` may be left out: a browser ends <head> at <body> or the first tag that belongs in the body.
             self._pop_to(next(i for i, e in enumerate(self.stack) if e["tag"] == "head"))
+        a = {k.lower(): (v or "") for k, v in attrs}
+        ident = a.get("id", "").strip().lower()
+        keys = [tag] + (["#" + ident] if ident else []) + ["." + c.lower() for c in a.get("class", "").split()]
+        # Rules with a sibling combinator: `+` looks at the element just before this one, `~` at any before it. An
+        # open ancestor counts too: a browser closes `<p>`, `<li>` or `<td>` at the next one where this parser nests
+        # it, so what looks like a parent may be the previous sibling (when unsure, hide more).
+        box = self.stack[-1] if self.stack else self.top
+        widths = 0
+        for k in keys:
+            for comb, prev, w in self.rules.sibling.get(k, ()):
+                if any(p in (box["prev"] if comb == "+" else box["seen"]) or self.ancestors.get(p) for p in prev):
+                    widths |= w
+        box["prev"] = keys; box["seen"].update(keys)
         if tag in VOID:
             return
         if len(self.stack) >= MAX_DEPTH:
             raise TooComplex("elements nested too deep")
-        a = {k.lower(): (v or "") for k, v in attrs}
-        ident = a.get("id", "").strip().lower()
-        keys = [tag] + (["#" + ident] if ident else []) + ["." + c.lower() for c in a.get("class", "").split()]
+        soft = self.rules.soft
+        # Its parts exactly as a browser matches them, for simple selectors: the id as written, the classes split on
+        # ASCII white space only (a no-break space is part of a class name).
+        has = frozenset([tag] + (["#" + a["id"]] if a.get("id") else []) +
+                        ["." + c for c in re.split(r"[ \t\n\f\r]+", a.get("class", "")) if c])
         props, locked = {}, set()
-        for k in keys:   # style-block rules first, then the element's own attributes and inline style
-            rule = self.soft.get(k, {})
-            for prop in ("color", "bg", "fs"):
-                if prop in rule and prop not in locked:
-                    props[prop] = rule[prop]
-                    if rule.get("important_" + prop):
-                        locked.add(prop)   # an !important rule beats the element's own (normal) style
+        for prop in ("color", "fill", "bg", "fs"):   # style-block rules first, then the element's own attributes
+            slots = [soft[k][prop] for k in keys if prop in soft.get(k, {})]
+            self.checks += sum(x["cost"] for x in slots)
+            if self.checks > MAX_CHECKS:
+                raise TooComplex("style rules too costly to match")
+            best, sure = _winner(slots, has)   # all its keys' rules together
+            if best:
+                props[prop] = best["v"]
+                # An !important rule beats the element's own (normal) style, when it surely hits the element or it
+                # hides the text. One that may not hit it never makes text the element's own style hides visible.
+                if best["imp"] and (sure or best["sticky"]):
+                    locked.add(prop)
         inline = _style(attrs)
         own = {}
         if tag == "font" and a.get("color"):
@@ -590,37 +957,54 @@ class _Visible(html.parser.HTMLParser):
             own["bg"] = a["bgcolor"].lower()
         if tag == "body" and a.get("text"):
             own["color"] = a["text"].lower()
-        own.update({k: v for k, v in (("color", inline.get("color", "")), ("bg", _bg_of(inline)),
-                                      ("fs", inline.get("font-size", ""))) if v})
+        own.update({k: v for k, v in (("color", inline.get("color", "")), ("fill", inline.get("-webkit-text-fill-color", "")),
+                                      ("bg", self._bg(inline)), ("fs", inline.get("font-size", ""))) if v})
         for prop, v in own.items():
             if prop not in locked:
                 props[prop] = v
-        parent = self.stack[-1] if self.stack else {"color": "", "bg": "", "px": 16.0, "opacity": 1.0, "inside": False,
-                                                    "in_quote": False}
+        parent = self.stack[-1] if self.stack else {"color": "", "fill": "", "bg": "", "px": 16.0, "opacity": 1.0,
+                                                    "zoom": 1.0, "widths": 0, "inside": False, "in_quote": False}
         color = props.get("color", "")
         color = parent["color"] if color in ("", "inherit", "currentcolor", "unset", "revert") else \
             ("" if color == "initial" else color)
+        fill = props.get("fill", "")   # -webkit-text-fill-color paints the text in place of `color`, and is inherited
+        fill = parent["fill"] if fill in ("", "inherit", "unset", "revert") else \
+            ("" if fill in ("currentcolor", "initial") else fill)
         bg = props.get("bg", "")
         bg = parent["bg"] if bg in ("", "inherit") else bg
         px = _px(props.get("fs", ""), parent["px"])
-        own_op = 1.0
-        for v in [self.soft.get(k, {}).get("op", "") for k in keys] + [inline.get("opacity", "")]:
-            n = _num(v)
-            if n:
-                own_op = min(own_op, n[0] / 100 if n[1] == "%" else n[0])
-        opacity = parent.get("opacity", 1.0) * own_op
+        own_op, own_zoom = 1.0, 1.0
+        for k in keys:
+            own_op = min(own_op, soft.get(k, {}).get("op", 1.0))
+            own_zoom = min(own_zoom, soft.get(k, {}).get("zoom", 1.0))
+        own_op = min(own_op, _factor(inline.get("opacity")) or 1.0)
+        own_zoom = min(own_zoom, _factor(inline.get("zoom")) or 1.0)
+        opacity = parent["opacity"] * own_op
+        zoom = parent["zoom"] * own_zoom   # zoom shrinks everything in the element, text of any size too
         quote = self.strip_quotes and any(k in QUOTE_KEYS for k in keys)
         if self.strip_quotes and any(k in QUOTE_REST for k in keys):
             self.drop_rest = True   # Outlook puts the quoted message after this header, not inside it
+        for k in keys:
+            widths |= self.rules.hard.get(k, 0)
+        widths |= parent["widths"]   # hidden at a width by an ancestor: hidden at that width here too
+        # Elements a browser does not show unless told to: <datalist>, <rp> (ruby fallback), a <dialog> without
+        # `open`, and in a <details> without `open` everything but its first <summary>.
+        closed = parent.get("closed") and not (tag == "summary" and not parent.get("summary_seen"))
+        if parent.get("closed") and tag == "summary":
+            parent["summary_seen"] = True
         hard = tag in SKIP_TAGS or "hidden" in a or a.get("aria-hidden", "").lower() == "true" or \
-            any(k in self.hard for k in keys) or _hard_hides(inline) or opacity <= 0.05
+            _hard_hides(inline) or opacity <= 0.05 or zoom <= 0.05 or bool(widths) or \
+            tag in ("datalist", "rp") or (tag == "dialog" and "open" not in a) or bool(closed)
         if hard and tag not in SKIP_TAGS and not parent["inside"]:
             self.removed["hidden_elements"] += 1
         # Everything a text node needs is worked out here, once, so each piece of text costs the same at any depth.
-        self.stack.append({"tag": tag, "hard": hard, "color": color, "bg": bg, "px": px, "opacity": opacity,
-                           "inside": parent["inside"] or hard, "in_quote": parent["in_quote"] or quote,
-                           "counted": tag not in SKIP_TAGS or tag in CODE_TAGS})
+        self.stack.append({"tag": tag, "hard": hard, "color": color, "fill": fill, "bg": bg, "px": px,
+                           "opacity": opacity, "zoom": zoom, "widths": widths, "inside": parent["inside"] or hard,
+                           "in_quote": parent["in_quote"] or quote, "counted": tag not in SKIP_TAGS or tag in CODE_TAGS,
+                           "closed": tag == "details" and "open" not in a, "prev": (), "seen": set(), "keys": keys})
         self.open[tag] = self.open.get(tag, 0) + 1
+        for k in keys:
+            self.ancestors[k] = self.ancestors.get(k, 0) + 1
 
     def handle_startendtag(self, tag, attrs):
         # A browser ignores the `/` of `<div/>`: the element stays open, so what follows is inside it.
@@ -654,23 +1038,42 @@ class _Visible(html.parser.HTMLParser):
                             e["counted"] = True; self.removed["hidden_elements"] += 1
                         break
             return
-        if data.strip() and _invisible(*((top["color"], top["bg"], top["px"]) if top else ("", "", 16.0))):
-            if top is not None and not top.get("soft_counted"):
+        if top and data.strip() and (top["closed"] or _invisible(top["color"], top["bg"], top["px"] * top["zoom"]) or
+                                     top["fill"] and _invisible(top["fill"], top["bg"], top["px"] * top["zoom"])):
+            if not top.get("soft_counted"):
                 top["soft_counted"] = True; self.removed["hidden_elements"] += 1
             return
         self.out.append(data)
 
     def handle_comment(self, data):
-        if not _conditional(data):
+        self._comment(data)
+
+    def _comment(self, data):
+        text = _conditional(data)
+        if text is None:
             self.removed["html_comments"] += 1
+        elif text:
+            self.conditionals.append(text)
 
     def handle_pi(self, data):
         if not data.lower().startswith("xml"):   # `<?xml version..?>` heads XHTML templates
             self.removed["html_comments"] += 1
 
     def unknown_decl(self, data):
-        if not _conditional(data):
-            self.removed["html_comments"] += 1
+        self._comment(data)
+
+    def close(self):
+        super().close()
+        # An Outlook conditional that holds text (a VML "bulletproof button") is counted as a hidden comment only when
+        # its text is not also shown outside it: most templates write the same button for the other clients.
+        texts = [t for t in self.conditionals if re.search(r"\w", t)]   # not `<!--[if !mso]><!-- -->`
+        distinct = set(texts)
+        if len(distinct) > 200:
+            self.removed["html_comments"] += len(texts)   # too many to check: count them all
+            return
+        shown = _squash("".join(self.out))
+        hidden = {t for t in distinct if t not in shown}
+        self.removed["html_comments"] += sum(1 for t in texts if t in hidden)
 
 
 def _cut_blocks(d, tag):
@@ -686,16 +1089,21 @@ def _cut_blocks(d, tag):
         out.append(d[pos:a]); pos = d.find(">", e) + 1 or len(d)
 
 
+def _squash(text):
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
 def _conditional(data):
-    """Outlook's conditional comments (`<!--[if mso]>..<![endif]-->`, `<!--[if !mso]><!-->`, `<!--<![endif]-->`)
-    holding only markup, Outlook's own styles or its XML settings: in almost every mail a tool writes, so not
-    counted. One that holds text (shown only in Outlook) is dropped and counted like any comment."""
+    """Outlook's conditional comments (`<!--[if mso]>..<![endif]-->`, `<!--[if !mso]><!-->`, `<!--<![endif]-->`):
+    in almost every mail a tool writes. Returns None for any other comment; "" for a conditional holding only markup,
+    Outlook's own styles or its XML settings (not counted); else the text it holds (shown only in Outlook), which is
+    dropped and counted as a comment unless the same text is also shown outside it."""
     d = data.strip().lower()
     if len(d) > 20000 or not re.match(r"\[?(?:end)?if\b|<!\[endif\]", d):
-        return False
+        return None
     d = re.sub(r"^\[?(?:end)?if\b[^\]>]*\]?>?", "", d)
     d = _cut_blocks(_cut_blocks(d, "style"), "xml")
-    return not re.sub(r"<[^<>]*>|<!\[endif\]|<!|&nbsp;", "", d).strip(" >\t\r\n")
+    return _squash(html.unescape(re.sub(r"<[^<>]*>|<!\[endif\]|<!", " ", d)).strip(" >\t\r\n"))
 
 
 def visible_text(markup, strip_quotes=False):
@@ -834,18 +1242,45 @@ def sent_by_owner(message):
     return isinstance(labels, list) and "SENT" in {str(x).upper() for x in labels}
 
 
+def _auth_parts(value):
+    """An Authentication-Results value split at its `;` separators, as RFC 8601 reads it: a `;` inside a quoted string
+    or a `(...)` comment (nested, with `\\` escapes) is not a separator. Comments become a space; a quoted string
+    becomes `""`, so nothing inside one is ever read as a result. An unterminated quote or comment runs to the end."""
+    parts, cur, depth, quoted, i = [], [], 0, False, 0
+    while i < len(value):
+        ch = value[i]
+        if ch == "\\" and (quoted or depth):
+            i += 2
+            continue
+        if quoted:
+            quoted = ch != '"'
+        elif depth:
+            depth += {"(": 1, ")": -1}.get(ch, 0)
+            if not depth:
+                cur.append(" ")
+        elif ch == '"':
+            quoted = True; cur.append('""')
+        elif ch == "(":
+            depth = 1
+        elif ch == ";":
+            parts.append("".join(cur)); cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    return parts + ["".join(cur)]
+
+
 def _auth(results):
     """spf/dkim/dmarc from Gmail's own Authentication-Results, or "none". Gmail adds its line on top of any the
-    sender wrote, so only the topmost header counts, and only when it is Gmail's. `(...)` comments are dropped and
-    only each result's own word is read; any failing DKIM signature makes dkim "fail"."""
+    sender wrote, so only the topmost header counts, and only when its authserv-id is Gmail's own. Each result is read
+    only where a resinfo starts (`; dkim=pass`): never from a comment, a quoted string or a property value. Any failing
+    DKIM signature makes dkim "fail"."""
     found = {}
-    top = results[0].lower()[:4000] if results else ""
-    if not top.strip().startswith("mx.google.com"):
+    parts = _auth_parts(results[0].lower()[:4000]) if results else [""]
+    if parts[0].split()[:1] != ["mx.google.com"]:   # the authserv-id, then an optional version
         return {mech: "none" for mech in ("spf", "dkim", "dmarc")}
-    for _ in range(5):   # nested comments, innermost first
-        top = re.sub(r"\([^()]*\)", " ", top)
-    for part in top.split(";"):
-        m = re.match(r"\s*(spf|dkim|dmarc)\s*=\s*([a-z]+)", part)
+    for part in parts[1:]:
+        m = re.match(r"\s*(spf|dkim|dmarc)\s*=\s*([a-z]+)(?![a-z0-9.-])", part)
         if m:
             mech, res = m.groups()
             if mech not in found or (mech == "dkim" and res == "fail"):

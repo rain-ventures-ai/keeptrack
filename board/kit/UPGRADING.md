@@ -25,6 +25,26 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v82 (schema 4)
+The email cleaner closes its last known gaps and stops flagging ordinary template markup (email-to-tasks pack 1.5.1,
+card #184 on the owner's board). No migration and no data change.
+- No longer flagged: a hiding rule with a sibling combinator (`img.g-img + div`, Cerberus) hides only the element after
+  that sibling, not every `div`; an Outlook conditional (a VML "bulletproof button") counts as hidden content only when
+  its text is not also shown outside it; a later rule that surely hits an element now beats an earlier one for the
+  same element (specificity and order are modelled).
+- Now hidden: text hidden by rules that apply at desktop widths other than 1200px (1440px, 1920px); a background
+  written with `var()` or `light-dark()`, judged against every colour it may resolve to; the `font` shorthand size
+  (`font:0/0 a`), `-webkit-text-fill-color`, `zoom`, and properties that can hide text in ways the cleaner does not
+  model (`filter`, `mask`, `content-visibility` and others: any value but a harmless one hides); a `<dialog>` without
+  `open`, `<datalist>`, `<rp>` and the body of a closed `<details>`. A background colour the cleaner cannot work out
+  (`color-mix()`, `oklch()`) makes the message unreadable rather than guessed.
+- Sender checks: Gmail's Authentication-Results line is read with quoted strings and comments respected, and a result
+  only where it starts.
+- Run `kit-update` only. Check: `kit-check` says v82.
+- The pack's digest changed. If you installed it: reinstall and set it up again as in v73, and update its entry in
+  `relay/registry/automations.yaml` to the new digest (`python3 board/keeptrack.py automation show email-to-tasks`).
+  The other packs are unchanged.
+
 ### v81 (schema 4)
 Minor fixes from the kit v71 reviews (card #176 on the owner's board). No migration and no data change; `cleared-ack`
 adds `checked_by` and `checked_at` to a card's `agent_cleared` entries, which older kits keep as they are.

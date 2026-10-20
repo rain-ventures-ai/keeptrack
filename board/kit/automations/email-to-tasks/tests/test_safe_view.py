@@ -323,7 +323,7 @@ class HiddenInstructions(unittest.TestCase):
         self.seen(f'<p style="font-size:calc(0px + 0px)">{ORDER}</p>')
         self.seen(f'<style>.x:not(:hover){{display:none}}</style><p class="x">{ORDER}</p>')
         self.seen(f'<style>[data-ogsc] .x, .x:is(p){{display:none}}</style><p class="x">{ORDER}</p>')
-        self.seen(f'<style>.x{{font-size:0}} .x{{font-size:14px}}</style><p class="x">{ORDER}</p>')
+        # `.x{font-size:0} .x{font-size:14px}` shows the text, as in a browser, since kit v82 (card #184): Card184.
         self.seen(f'<style>.x{{color:#fff !important}}</style><p class="x" style="color:#333">{ORDER}</p>')
         self.seen(f'<style>@unknown-rule x {{ .x{{display:none}} }}</style><p class="x">{ORDER}</p>')
         payload = base64.b64encode(ORDER.encode() * 2).decode()
@@ -417,6 +417,161 @@ class HiddenInstructions(unittest.TestCase):
                     self.assertNotIn(ch, text)
                     self.assertIn("\n--- end of mail 0 ---", text)
                 self.assertEqual("a b", sv.one_line("a" + ch + "b"))
+
+
+class Card184(unittest.TestCase):
+    """Round 4 (private-tasks card #184): the last hiding tricks, and ordinary mail no longer flagged."""
+    seen = HiddenInstructions.seen
+
+    def clean(self, html, *shown):
+        """Ordinary template markup: everything in `shown` stays, and nothing is reported hidden."""
+        v = sv.view(msg(html="<html><body>" + html + "</body></html>"))
+        for words in shown:
+            self.assertIn(words, " ".join(v["text"].split()))
+        self.assertEqual((v["removed"]["hidden_elements"], v["removed"]["html_comments"]), (0, 0), v["removed"])
+        return v
+
+    def test_sibling_rule_hides_only_the_next_element(self):
+        # Cerberus: `img.g-img + div {display:none}` hides the div after a Gmail image, not every div.
+        css = "<style>img.g-img + div {display:none !important}</style>"
+        self.clean(css + "<div>Your order has shipped.</div><div>Track it here.</div>", "Your order has shipped.", "Track it")
+        self.seen(css + f'<img class="g-img" src="x.png"><div>{ORDER}</div>')
+        self.seen(f'<style>.a ~ p {{font-size:0}}</style><span class="a"></span><b>x</b><p>{ORDER}</p>')
+        v = sv.view(msg(html=f'<style>.a ~ p {{display:none}}</style><p>Before the marker.</p><i class="a"></i><p>{ORDER}</p>'))
+        self.assertIn("Before the marker.", v["text"]); self.assertNotIn("vendor", v["text"])
+        self.clean("<style>a:hover + div{display:none}</style><a>Link</a><div>Kept</div>", "Kept")
+
+    def test_outlook_button_in_a_conditional_is_not_hidden_content(self):
+        button = ('<!--[if mso]><v:roundrect href="https://example.com/pay" style="height:40px"><w:anchorlock/>'
+                  '<center style="color:#ffffff">Pay invoice</center></v:roundrect><![endif]-->'
+                  '<!--[if !mso]><!--><a href="https://example.com/pay" style="background:#0a6;color:#fff">Pay invoice</a>'
+                  '<!--<![endif]-->')
+        self.clean("<p>Invoice 2241 is due.</p>" + button, "Pay invoice")
+        v = sv.view(msg(html="<p>Hi</p><!--[if mso]><p>" + ORDER + "</p><![endif]-->"))
+        self.assertNotIn("vendor", v["text"]); self.assertEqual(v["removed"]["html_comments"], 1)
+
+    def test_hiding_rules_at_other_widths(self):
+        # A desktop window is not exactly 1200px: rules that leave only a narrow window around it open still hide.
+        self.seen(f"<style>@media (max-width:1100px){{.x{{display:none}}}} @media (min-width:1300px){{.x{{display:none}}}}"
+                  f'</style><div class="x">{ORDER}</div>')
+        self.seen(f'<style>@media (min-width:1201px){{.x{{display:none}}}}</style><div class="x">{ORDER}</div>')
+        self.seen(f'<style>@media (min-width:90em){{.y{{font-size:0}}}}</style><p class="y">{ORDER}</p>')
+        # A phone-only rule hides nothing: a desktop reader sees that text, and responsive mail keeps its main text
+        # in such blocks (recorded as accepted on card #184).
+        self.clean("<style>@media only screen and (max-width:600px){.desktop{display:none !important}}</style>"
+                   '<div class="desktop">Desktop menu</div><p>Hello</p>', "Desktop menu", "Hello")
+
+    def test_cascade_across_classes(self):
+        # The later rule wins for an element with both classes, whatever order the classes are written in.
+        self.seen(f'<style>.a{{color:#000}} .b{{color:#fff}}</style><p class="b a">{ORDER}</p>')
+        self.seen(f'<style>.a{{color:#000 !important}} .b{{color:#fff !important}}</style><p class="a b">{ORDER}</p>')
+        self.seen(f'<style>.b{{color:#fff}} .c .b{{color:#000}}</style><p class="b">{ORDER}</p>')   # may not hit
+        self.seen(f'<style>.b{{color:#fff}} @media screen{{.b{{color:#000}}}}</style><p class="b">{ORDER}</p>')
+        self.seen(f'<style>.x{{font-size:0}} .x{{font-size:14px\\9}}</style><p class="x">{ORDER}</p>')   # IE-only
+        self.seen(f'<style>.B{{color:#000}} .b{{color:#fff}}</style><p class="b">{ORDER}</p>')
+        self.seen(f'<style>.b{{color:#000}} .B{{color:#fff}}</style><p class="b">{ORDER}</p>')   # quirks: any case
+        # A rule that surely hits the element and ranks higher wins, as in a browser: nothing is flagged.
+        self.clean('<style>.b{color:#fff} p.a{color:#000}</style><p class="a b">Call at 3</p>', "Call at 3")
+        self.clean('<style>.b{color:#fff} #k.a{color:#222}</style><p id="k" class="b a">Meeting at 3</p>', "Meeting at 3")
+        self.clean('<style>.x{font-size:0} .x{font-size:14px}</style><p class="x">Agenda</p>', "Agenda")
+
+    def test_background_from_custom_properties(self):
+        self.seen(f'<div style="background:var(--x,#000);color:#000">{ORDER}</div>')
+        self.seen(f'<style>:root{{--bg:#123456}}</style><div style="background:var(--bg);color:#123456">{ORDER}</div>')
+        self.seen(f'<div style="--bg:#111"><div style="background-color:var(--bg);color:#121212">{ORDER}</div></div>')
+        self.seen(f'<div style="background:light-dark(#fff,#000);color:#000">{ORDER}</div>')
+        for bg in ("color-mix(in srgb,#000 50%,#fff)", "oklch(0.5 0 0)", "rgb(calc(0) 0 0)"):
+            with self.subTest(bg=bg), self.assertRaises(sv.TooComplex):
+                sv.view(msg(html=f'<div style="background:{bg};color:#808080">{ORDER}</div>'))
+        self.clean('<div style="background:var(--brand,#003366);color:#ffff00">Sale ends Friday</div>', "Sale ends Friday")
+
+    def test_authentication_results_read_only_where_a_result_starts(self):
+        auth = lambda a: sv.view(msg(plain="x", auth=a))["auth"]
+        self.assertEqual(auth('mx.google.com; dkim=fail header.i=@x.example header.b="a; dkim=pass"; spf=pass; dmarc=fail'),
+                         {"spf": "pass", "dkim": "fail", "dmarc": "fail"})
+        self.assertEqual(auth('mx.google.com; spf=fail smtp.mailfrom="x;dmarc=pass"; dmarc=fail'),
+                         {"spf": "fail", "dkim": "none", "dmarc": "fail"})
+        self.assertEqual(auth("mx.google.com; spf=fail (reason; dmarc=pass) smtp.mailfrom=x"),
+                         {"spf": "fail", "dkim": "none", "dmarc": "none"})
+        self.assertEqual(auth("mx.google.com; spf=fail smtp.helo=dmarc=pass"), {"spf": "fail", "dkim": "none", "dmarc": "none"})
+        self.assertEqual(auth("mx.google.com.attacker.example; spf=pass dkim=pass dmarc=pass"),
+                         {"spf": "none", "dkim": "none", "dmarc": "none"})
+
+    def test_more_visibility_properties(self):
+        for style in ("font:0/0 a", "font:italic bold 0px/1 Arial", "font: 1px serif", "-webkit-text-fill-color:transparent",
+                      "-webkit-text-fill-color:#fff", "zoom:0", "zoom:0.05", "zoom:1%", "content-visibility:hidden",
+                      "filter:opacity(0)", "mask-image:linear-gradient(transparent,transparent)", "transform:scaleY(0)",
+                      "transform:matrix(0,0,0,0,0,0)", "scale:0", "translate:-9999px", "margin-left:-9999px",
+                      "-webkit-text-security:disc"):
+            with self.subTest(style=style):
+                self.assertGreaterEqual(self.seen(f'<div style="{style}">{ORDER}</div>')["removed"]["hidden_elements"], 1)
+        self.seen(f'<div style="zoom:0.1"><span style="font-size:16px">{ORDER}</span></div>')
+        self.seen(f'<div style="-webkit-text-fill-color:transparent"><span style="color:#000">{ORDER}</span></div>')
+        self.seen(f'<style>.t{{-webkit-text-fill-color:#fff}}</style><p class="t" style="color:#000">{ORDER}</p>')
+        self.clean('<p style="font:bold 14px/1.4 Arial,sans-serif;filter:progid:DXImageTransform.Microsoft.gradient(x)">'
+                   'Quarterly report</p><p style="font:700 12px Georgia;zoom:1;-webkit-text-fill-color:currentcolor">Hi</p>',
+                   "Quarterly report", "Hi")
+
+    def test_round_four_review(self):
+        cases = (
+            # A style block only the string scan finds (in a comment, <title> or <textarea>) adds no visible rule.
+            '<style>p.x{color:#fff}</style><!--<style>p.x{color:#000}</style>--><p class=x>%s</p>',
+            '<style>p.x{color:#fff}</style><title><style>p.x{color:#000}</style></title><p class=x>%s</p>',
+            # A selector a browser drops (not an identifier, or a list with one unreadable selector) is not trusted.
+            '<style>p.x{color:#fff} p.x.1y{color:#000 !important}</style><p class="x 1y">%s</p>',
+            '<style>p.x{color:#fff} p.x, p:bogus{color:#000}</style><p class="x">%s</p>',
+            '<style>.z{color:#fff} p#k.z{color:#000}</style><p id=" k" class=z>%s</p>',
+            '<style>.z{color:#fff} p.z.y{color:#000}</style><p class="z\u00a0y">%s</p>',
+            # A browser closes <p>, <li>, <td> where this parser nests them: an ancestor may be the previous sibling.
+            '<style>.a + .b{display:none}</style><p class=a>Hi<p class=b>%s</p>',
+            '<style>.a ~ .b{display:none}</style><ul><li class=a>Hi<li class=b>%s</ul>',
+            # A rule that may not hit the element never beats its own hiding style.
+            '<style>.a .x{color:#000 !important}</style><p class=x style="color:#fff">%s</p>',
+            '<style>.a .x{font-size:16px !important}</style><p class=x style="font-size:0">%s</p>',
+            # CSS nesting, and strings that hold comment or brace characters.
+            '<style>.x{display:none; .q{color:red}}</style><p class=x>%s</p>',
+            '<style>.x{@media screen{display:none}}</style><p class=x>%s</p>',
+            '<style>p.y{content:"/*"} p.x{color:#fff} p.z{content:"*/"}</style><p class=x>%s</p>',
+            # Second pass: an unquoted url() with a quote, an escaped newline in a string, CSS in <template>.
+            "<style>p.y{background:url(a'b)} p.x{color:#fff} .z{c:'}</style><p class=x>%s</p>",
+            '<style>p.x{color:#fff} p.y{content:"\\\n} p.x{color:#000 !important} "}</style><p class=x>%s</p>',
+            '<style>p.x{color:#fff}</style><template><style>p.x.y{color:#000}</style></template><p class="x y">%s</p>',
+            '<style>p.x{color:#fff}</style><noscript><style>p.x.y{color:#000}</style></noscript><p class="x y">%s</p>',
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                self.seen(case % ORDER)
+        self.clean('<style>u + .body .gmail-blend-screen{background:#000;mix-blend-mode:screen}</style>'
+                   '<div class="gmail-blend-screen">Your invoice is ready</div>', "Your invoice is ready")
+        self.clean('<!--[if !mso]><!-- --><p>Hello</p><!--<![endif]-->', "Hello")
+        self.clean('<style>p.x{color:#000 !important}</style><p class=x style="color:#fff">Pinned</p>', "Pinned")
+        import time
+        t = time.monotonic()
+        rules = "".join(".k%d{background:var(--a)}" % i for i in range(1000))
+        sv.view(msg(html='<div style="' + "".join("--a:" + "zz " * 300 + ";" for _ in range(60)) + '">'
+                         "<style>" + rules + "</style><p>x</p></div>"))
+        pool = ["c%d" % i for i in range(100)]
+        css = "".join("." + ".".join(pool[(i * 7 + j) % 100] for j in range(20)) + "{color:#%03d}" % (i % 999)
+                      for i in range(1700))
+        try:
+            sv.view(msg(html="<style>" + css + "</style>" + ('<b class="' + " ".join(pool) + '">x</b>') * 700))
+        except sv.TooComplex:
+            pass
+        with self.assertRaises(sv.TooComplex):   # `u\72l(` is url( to a browser
+            sv.view(msg(html="<style>p.y{background:u\\72l(a'b)} p.x{color:#fff} .z{c:'}</style><p class=x>x</p>"))
+        big = "." + ".".join("c%d" % i for i in range(999))
+        with self.assertRaises(sv.TooComplex):   # a selector with too many parts
+            sv.view(msg(html="<style>" + (big + "{color:#111;background:#fff;font-size:12px}") * 50 + "</style><p>x</p>"))
+        self.assertLess(time.monotonic() - t, 10)
+
+    def test_elements_hidden_by_default(self):
+        self.seen(f"<dialog>{ORDER}</dialog>")
+        self.seen(f'<input list="d"><datalist id="d"><option>{ORDER}</option></datalist>')
+        self.seen(f"<ruby>X<rp>{ORDER}</rp><rt>x</rt></ruby>")
+        v = self.seen(f"<details><summary>Order summary</summary>{ORDER}<p>{ORDER}</p></details>")
+        self.assertIn("Order summary", v["text"])
+        self.clean("<dialog open>Shown dialog</dialog><details open><summary>S</summary>Open details</details>",
+                   "Shown dialog", "Open details")
 
 
 if __name__ == "__main__":
