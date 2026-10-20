@@ -209,7 +209,9 @@ person (no `BOARD_AGENT`); such a claim never goes stale, and only its own sessi
 `release --column done` is refused while the card waits: use `done` or `move ID done`, which end the wait and record it. An agent run may `unwait` only a wait it set in the same session whose `who` is empty or
 the agent itself. These rules are advisory: anything with write access to the repo can edit a card, so the kit records
 what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `CLAIM_BLOCKED`, `KIT_OLD` and
-`MIN_KIT_LOWERED`. The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.
+`MIN_KIT_LOWERED`. Once a person has checked an agent-cleared flag, `cleared-ack <id> [--note]` marks the card's
+entries checked (`checked_by`, `checked_at`; agents are refused), and doctor and `list --attention` stop showing them
+(kit v81). The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.
 
 ### Runs after (card dependencies)
 A card may carry `after`: a list of card ids it runs after (absent or `[]` when it has none). It is a hint and a gate,

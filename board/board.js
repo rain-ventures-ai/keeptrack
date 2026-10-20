@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 80;
+  const PAGE_KIT = 81;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1883,7 +1883,9 @@ if (typeof window !== 'undefined') (() => {
   // They are applied to a copy used only for this render: event handlers and saves keep reading the real state, and the
   // change itself is applied for real (and merged) when its turn comes. A card that exists only in the queue is drawn faded.
   let viewPending = new Set();
+  let renderSeq = 0;   // counts renders (kit v81: lapseContext keys on it)
   function render() {
+    renderSeq++;   // a new render: lapseContext works the board's zone and today out again, once
     if (!pendingView.length) { viewPending = new Set(); return renderNow(); }
     const real = state; let v = clone(state);
     pendingView.forEach(j => { try { j.fn(v); } catch (e) { console.error(e); } });
@@ -5674,6 +5676,8 @@ if (typeof window !== 'undefined') (() => {
     const m = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.exec(String(value || ''));
     if (!m) return '';
     const t = Date.parse(m[1] + 'T00:00:00Z'); if (Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== m[1]) return '';
+    // T24:00, a leap second, +05:99: refused here and in keeptrack.py stamp_day alike (Date.parse reads T24:00 as the next day)
+    if (m[2] !== undefined && (+m[2] > 23 || +m[3] > 59 || +(m[4] || 0) > 59 || (m[5] && m[5] !== 'Z' && (+m[5].slice(1, 3) > 23 || +m[5].slice(4, 6) > 59)))) return '';
     if (!zone || m[2] === undefined) return m[1];
     const at = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4] || '00'}${m[5] || 'Z'}`); if (Number.isNaN(at)) return '';
     try {
@@ -5698,11 +5702,12 @@ if (typeof window !== 'undefined') (() => {
     const pick = [people.find(m => me && String(m.github || '').toLowerCase() === me), people.find(m => owner && String(m.github || '').toLowerCase() === owner), people.find(m => okZone(m.timezone))].find(m => m && okZone(m.timezone));
     return pick ? pick.timezone : '';
   }
-  let lapseCtx = { at: 0, key: '', zone: '', today: '' };   // worked out once a minute (or when the members change), not per item
+  // kit v81: the zone and today are worked out once per render (render() bumps renderSeq), so every row, the bulk
+  // button and the status filter of one render share them, with nothing (cfg(), JSON) rebuilt per item.
+  let lapseCtx = { seq: -1, zone: '', today: '' };
   function lapseContext() {
-    const key = JSON.stringify([(state.people || []).map(m => m && [m.github, m.timezone]), (state.settings || {}).kit_owner, cfg().me]);
-    if (Date.now() - lapseCtx.at > 60000 || lapseCtx.key !== key) {
-      const zone = boardZone(); lapseCtx = { at: Date.now(), key, zone, today: zone ? stampDay(new Date().toISOString().slice(0, 19) + 'Z', zone) : todayIso() };
+    if (lapseCtx.seq !== renderSeq) {
+      const zone = boardZone(); lapseCtx = { seq: renderSeq, zone, today: zone ? stampDay(new Date().toISOString().slice(0, 19) + 'Z', zone) : todayIso() };
     }
     return lapseCtx;
   }
@@ -6052,7 +6057,11 @@ if (typeof window !== 'undefined') (() => {
   }
   // Answer a question (keeptrack.py proposal-answer): only the proposal file changes, in one commit on the latest head.
   const askDecider = p => p.decider && String(p.decider).toLowerCase() !== String(cfg().me || '').toLowerCase() ? p.decider : '';
-  async function answerProposal(id, answer) {
+  // What a person saw of a question when they confirmed it: its title, question, options, recommendation and why, as canonical JSON.
+  const shownAsk = p => jcanon({ question: (p.change || {}).question, options: (p.change || {}).options, recommended: (p.change || {}).recommended, title: p.title, reason: p.reason });
+  // guard (kit v81, the bulk answer): { shown: shownAsk of what the confirm listed }. The save is refused when the newest
+  // file says something else (someone edited the question meanwhile); guard.changed then says so to the caller.
+  async function answerProposal(id, answer, guard = null) {
     if (ro) { roToast(); return false; }
     let title = id;
     const ok = await mutate(() => {}, 'Answer question', [], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta) => {
@@ -6061,6 +6070,7 @@ if (typeof window !== 'undefined') (() => {
       if (cur.status !== 'pending') return { abort: alreadyMsg(cur) };
       if (!isAsk(cur)) return { abort: 'This is not a question.' };
       if (askDecider(cur)) return { abort: `Only @${cur.decider} answers this.` };
+      if (guard && shownAsk(cur) !== guard.shown) { guard.changed = true; return { abort: 'This question changed after you confirmed it, so it was not answered.' }; }
       const at = nowIso(), by = inboxMe(), x = clone(cur); title = cur.title || id;
       x.status = 'answered'; x.decision = { action: 'answer', id: 'a_' + rid6() + rid6().slice(0, 4), by, at, answer: clone(answer), result: null, commit: null };
       (x.history = Array.isArray(x.history) ? x.history : []).push({ at, by, text: 'answered' });
@@ -6287,18 +6297,21 @@ if (typeof window !== 'undefined') (() => {
   // The bulk answer runs one item at a time. Its state lives here, not on the button, because every save redraws the
   // Inbox: while it runs the button stays off with its progress, and every queued item's controls stay off.
   const inboxBulk = { running: false, done: 0, total: 0, queue: new Set() };
+  const BULK_MAX = 20;   // kit v81: one run answers at most this many (each is its own save); press again for the rest
   const bulkCandidates = () => inboxAll().filter(p => p.status === 'pending' && p.kind === 'ask.choose' && recommendedOption(p.change) && !askDecider(p) && !lapsedDays(p) && !inboxPress.busy.has(p.id));
   async function acceptAllRecommended() {
     if (ro) { roToast(); return; }
     if (inboxBulk.running) return;   // a second press while a run is out does nothing
-    const items = bulkCandidates(); if (!items.length) return;
+    const all = bulkCandidates(), items = all.slice(0, BULK_MAX); if (!items.length) return;
+    const shown = new Map(items.map(p => [p.id, shownAsk(p)]));   // what the confirm lists: a question that says anything else later is left alone
     // The confirm lists EVERY question it will answer (question text and the recommended option), and only those are answered.
     const body = el('div', 'kb-ask'), list = el('ol', 'inbox__bulklist');
     items.forEach(p => { const li = el('li'), c = p.change || {}; li.dataset.id = p.id;
       li.append(el('span', 'inbox__bulkq', c.question || p.title || p.id), el('span', 'muted', ' Recommended: ' + recommendedOption(c).label));
       const why = String(p.reason || '').replace(/\s+/g, ' ').trim(); if (why) li.append(el('span', 'inbox__bulkwhy', 'Why: ' + (why.length > 140 ? why.slice(0, 139) + '…' : why)));
       list.append(li); });
-    body.append(list, el('p', 'ui-sheet__text', 'Each answer is saved as if you picked it. Undo changes one until the agent acts on it.'));
+    body.append(list, el('p', 'ui-sheet__text', 'Each answer is saved as if you picked it. Undo changes one until the agent acts on it.'
+      + (all.length > items.length ? ` These are the first ${items.length} of ${all.length}; press again for the rest.` : '')));
     if (!(await ui.confirm({ title: `Answer ${items.length} question${items.length === 1 ? '' : 's'} with the recommended option?`, body, confirmLabel: 'Answer them' }))) return;
     if (inboxBulk.running) return;
     Object.assign(inboxBulk, { running: true, done: 0, total: items.length, queue: new Set(items.map(p => p.id)) });
@@ -6307,16 +6320,16 @@ if (typeof window !== 'undefined') (() => {
       render();
       for (const seen of items) {
         const cur = inboxAll().find(x => x.id === seen.id);
-        if (!cur || cur.status !== 'pending' || !recommendedOption(cur.change) || recommendedOption(cur.change).key !== recommendedOption(seen.change).key) skipped++;   // answered or changed meanwhile: not ours to answer
+        if (!cur || cur.status !== 'pending' || !recommendedOption(cur.change) || shownAsk(cur) !== shown.get(seen.id)) skipped++;   // answered or changed meanwhile: not ours to answer
         else {
-          const answer = { choice: recommendedOption(cur.change).key };
-          if (await pressRun(cur.id, null, () => answerProposal(cur.id, answer), answerDone(answer))) n++;
-          else { const now = inboxAll().find(x => x.id === cur.id); if (now && now.status !== 'pending') { inboxPress.err.delete(cur.id); skipped++; } else failed++; }
+          const answer = { choice: recommendedOption(cur.change).key }, guard = { shown: shown.get(seen.id), changed: false };
+          if (await pressRun(cur.id, null, () => answerProposal(cur.id, answer, guard), answerDone(answer))) n++;
+          else { const now = inboxAll().find(x => x.id === cur.id); if (guard.changed || (now && now.status !== 'pending')) { inboxPress.err.delete(cur.id); skipped++; } else failed++; }
         }
         inboxBulk.queue.delete(seen.id); inboxBulk.done++; render();
       }
     } finally { Object.assign(inboxBulk, { running: false, done: 0, total: 0 }); inboxBulk.queue.clear(); }
-    inboxSay(`Answered ${n} with the recommended option.` + (skipped ? ` ${skipped} changed meanwhile (answered, dismissed or re-asked), so left as they are.` : '') + (failed ? ` ${failed} not saved; each says why.` : ' Use Undo to change an answer.'), !!failed);
+    inboxSay(`Answered ${n} with the recommended option.` + (skipped ? ` ${skipped} changed meanwhile (answered, dismissed, re-asked or edited), so left as they are.` : '') + (failed ? ` ${failed} not saved; each says why.` : ' Use Undo to change an answer.'), !!failed);
     render();
   }
   async function inboxAct(p, act, btn) {

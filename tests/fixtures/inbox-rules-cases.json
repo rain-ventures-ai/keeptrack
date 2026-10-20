@@ -43,6 +43,13 @@
     {"name": "near midnight: the board's zone decides the day", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-03T03:00:00Z"}, "today": "2026-10-16", "days": 14, "zone": "America/Los_Angeles", "want": 14},
     {"name": "near midnight without a zone: the date as written", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-03T03:00:00Z"}, "today": "2026-10-16", "days": 14, "want": 0},
     {"name": "an offset in the timestamp", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T23:30:00-05:00"}, "today": "2026-10-17", "days": 14, "zone": "Europe/London", "want": 14},
-    {"name": "across a leap day", "p": {"kind": "ask.choose", "status": "pending", "created": "2028-02-15T00:00:00Z"}, "today": "2028-03-01", "days": 14, "want": 15}
+    {"name": "across a leap day", "p": {"kind": "ask.choose", "status": "pending", "created": "2028-02-15T00:00:00Z"}, "today": "2028-03-01", "days": 14, "want": 15},
+    {"name": "T24:00 is refused (no lapse), with a zone", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T24:00:00Z"}, "today": "2026-10-20", "days": 14, "zone": "Europe/London", "want": 0},
+    {"name": "T24:00 is refused without a zone too", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T24:00:00Z"}, "today": "2026-10-20", "days": 14, "want": 0},
+    {"name": "an offset of +05:99 is refused", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T10:00:00+05:99"}, "today": "2026-10-20", "days": 14, "zone": "Europe/London", "want": 0},
+    {"name": "an offset of +24:00 is refused", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T10:00:00+24:00"}, "today": "2026-10-20", "days": 14, "zone": "Europe/London", "want": 0},
+    {"name": "minute 60 is refused", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T10:60:00Z"}, "today": "2026-10-20", "days": 14, "zone": "Europe/London", "want": 0},
+    {"name": "a leap second is refused", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T23:59:60Z"}, "today": "2026-10-20", "days": 14, "zone": "Europe/London", "want": 0},
+    {"name": "23:59:59 at +23:59 is the most a time may say", "p": {"kind": "ask.choose", "status": "pending", "created": "2026-10-02T23:59:59+23:59"}, "today": "2026-10-20", "days": 14, "zone": "Europe/London", "want": 18}
   ]
 }

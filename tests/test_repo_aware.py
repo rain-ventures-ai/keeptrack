@@ -122,9 +122,11 @@ class ConfigAndClaimFiles(unittest.TestCase):
         return next((l for l in r.stdout.splitlines() if l.startswith("board:")), r.stdout + r.stderr)
 
     def test_a_config_above_a_board_clone_never_beats_its_remote(self):
-        """A trusted home-folder config (`use` in ~) must not send a board clone's commands to another board."""
+        """A trusted home-folder config (`use` in ~) must not send a board clone's commands to another board, when the
+        clone's board is one this person connected with `use` (kit v81)."""
         home = self.tmp.name
         config(os.path.join(home, ".board"), {"repo": "o/private"})
+        config(os.path.join(home, "elsewhere", ".keeptrack"), {"repo": "o/Consulting"})   # `use o/consulting` once, anywhere
         clone = self.board_clone(os.path.join(home, "dev", "consulting"), "o/consulting")
         os.chdir(os.path.join(clone, "board"))
         kt.PARENT_CONFIG = None
@@ -132,6 +134,31 @@ class ConfigAndClaimFiles(unittest.TestCase):
         self.assertEqual(os.path.join(home, ".board", "config.json"), kt.PARENT_CONFIG)
         self.assertIn("o/consulting", self.where(clone))                         # the plugin copy, run in the clone
         self.assertNotIn("o/private", self.where(clone))
+
+    def test_a_stranger_clone_never_beats_the_trusted_config(self):
+        """Kit v81: a clone of a board `use` never named (a third party's repo with a board/tasks.json) does not override
+        the trusted config: the config decides, and the command says why."""
+        home = self.tmp.name
+        config(os.path.join(home, ".keeptrack"), {"repo": "o/private"})
+        clone = self.board_clone(os.path.join(home, "dev", "stranger"), "x/stranger")
+        os.chdir(clone)
+        kt.UNTRUSTED_CLONE = None
+        self.assertEqual("o/private", kt.project_config()[1].get("repo"))
+        self.assertEqual(("x/stranger", os.path.join(home, ".keeptrack", "config.json")), kt.UNTRUSTED_CLONE)
+        self.assertIn("o/private", self.where(clone))                            # the plugin copy, run in the clone
+        env = {k: v for k, v in os.environ.items() if not k.startswith("BOARD_")}
+        r = subprocess.run(["python3", os.path.join(KIT, "keeptrack.py"), "where"], cwd=clone, env=env, capture_output=True, text=True)
+        self.assertIn("never connected with `keeptrack.py use`", r.stderr)
+
+    def test_a_clones_own_script_still_names_its_board(self):
+        """The clone's own keeptrack.py run inside it: its remote decides, `use` or not (its code is already trusted)."""
+        home = self.tmp.name
+        config(os.path.join(home, ".keeptrack"), {"repo": "o/private"})
+        clone = self.board_clone(os.path.join(home, "dev", "b"), "o/board")
+        script = os.path.join(clone, "board", "keeptrack.py")
+        with open(os.path.join(KIT, "keeptrack.py")) as src, open(script, "w") as dst:
+            dst.write(src.read())
+        self.assertIn("o/board", self.where(clone, script))
 
     def test_a_clones_script_run_from_another_project_keeps_that_projects_config(self):
         """The clone's own keeptrack.py run from a code repo (START.md, cloud): that repo's config still decides."""

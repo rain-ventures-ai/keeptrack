@@ -25,6 +25,32 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v81 (schema 4)
+Minor fixes from the kit v71 reviews (card #176 on the owner's board). No migration and no data change; `cleared-ack`
+adds `checked_by` and `checked_at` to a card's `agent_cleared` entries, which older kits keep as they are.
+- `list` output: every printed line passes one guard. Emoji ZWJ sequences, RTL marks and soft hyphens now print as
+  stored; control characters, line breaks and bidi overrides still become spaces.
+- `cleared-ack <id> [--note]`: a person (no `BOARD_AGENT`) marks a card's agent-cleared flags checked; doctor and
+  `list --attention` stop showing them.
+- Board config: a `.keeptrack/config.json` above a board clone is skipped only when the clone's own keeptrack.py runs or
+  `use` named the clone's board. In a clone `use` never named, the config decides and a note says so. If that is your
+  clone, run `keeptrack.py use <owner/board-repo>` in it once.
+- Web board: "Accept all recommended" answers 20 questions at most per press, and skips a question someone edited
+  after the confirm.
+- **Hosted mode** (`BOARD_BACKEND=hosted`, since the hosted adapter, keeptrack #140): the CLI talks to a hosted board's
+  HTTP API instead of GitHub. It needs `BOARD_HOSTED_API` (new in v81: the API's HTTPS URL, or loopback HTTP; never a
+  GitHub host), `BOARD_ID` (the board UUID) and `BOARD_TOKEN_FILE` (a file that holds the board token). `BOARD_API`
+  still works as the hosted URL, with a note, until dispatchers move to `BOARD_HOSTED_API`; it stays the GitHub API base
+  (GitHub Enterprise or a test server) for GitHub boards. A GitHub board now stops, and sends the GitHub token nowhere,
+  when `BOARD_HOSTED_API` is set, or `BOARD_API` is set with `BOARD_TOKEN_FILE` or a board UUID in `BOARD_ID`: then
+  `BOARD_BACKEND=hosted` was forgotten.
+  - `approve <id>` (hosted only): a person approves a card assigned to them, which moves it from Backlog to To do. On a
+    GitHub board, `move <id> todo` does that, and `approve` refuses.
+  - `claim --on-behalf-of <user UUID>` (hosted dispatcher only): the claim serves that assignee. The server checks it;
+    it is for display and audit and grants nothing. On a GitHub board it is refused: claim as `BOARD_USER`.
+- Run `kit-update` only. Hosted dispatchers: rename `BOARD_API` to `BOARD_HOSTED_API`. Check: `kit-check` says v81, and
+  `keeptrack.py help tasks` lists `cleared-ack`.
+
 ### v80 (schema 4)
 Web board: a quick Archive click made while another archive runs waits and goes in the next commit, so archiving many
 Done cards fast no longer says "Busy, try again" (card #243 on the owner's board). The Done lane has an **Archive

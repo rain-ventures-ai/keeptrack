@@ -242,7 +242,7 @@ class HostedCLITest(unittest.TestCase):
         gh.write_text('#!/bin/sh\necho forbidden >> "$HOSTED_GH_TRAP"\nexit 99\n'); gh.chmod(0o700)
         self.server = MockBoard(); self.addCleanup(self.server.close); self.addCleanup(self.temp.cleanup)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(('BOARD_', 'GH_', 'GITHUB_'))}
-        self.env.update(BOARD_BACKEND='hosted', BOARD_API=self.server.api, BOARD_ID=BOARD_ID, BOARD_TOKEN_FILE=str(self.token),
+        self.env.update(BOARD_BACKEND='hosted', BOARD_HOSTED_API=self.server.api, BOARD_ID=BOARD_ID, BOARD_TOKEN_FILE=str(self.token),
                         BOARD_USER='forged-user', BOARD_AGENT='forged-agent', BOARD_SESSION='synthetic-session',
                         XDG_STATE_HOME=str(self.state), PATH=str(self.bin) + os.pathsep + self.env.get('PATH', ''), HOSTED_GH_TRAP=str(self.root/'gh-called'))
 
@@ -277,6 +277,16 @@ class HostedCLITest(unittest.TestCase):
         body = [c[2] for c in self.server.calls if c[0] == 'POST'][0]
         self.assertEqual([{'url': 'https://example.test/a', 'title': 'Doc A'}, {'url': 'https://example.test/b', 'title': 'https://example.test/b'}],
                          body['card']['links'])
+
+    def test_create_stores_the_checked_labels(self):   # kit v81: a trailing break passes the check only once stripped
+        self.run_cli('add', 'Synthetic labelled', '--label', 'ops\x85', '--label', ' ops', '--label', 'web')
+        body = [c[2] for c in self.server.calls if c[0] == 'POST'][0]
+        self.assertEqual(['ops', 'web'], body['card']['labels'])
+
+    def test_legacy_board_api_still_works_with_a_note(self):   # kit v81: BOARD_HOSTED_API is the hosted URL now
+        self.env['BOARD_API'] = self.env.pop('BOARD_HOSTED_API')
+        p = self.run_cli('list', '--assignee', 'synthetic-a')
+        self.assertIn('Synthetic contract sample', p.stdout); self.assertIn('BOARD_HOSTED_API', p.stderr)
 
     def test_holder_proofs_and_phase0_mutations(self):
         self.claim()
@@ -393,10 +403,10 @@ class HostedCLITest(unittest.TestCase):
 
     def test_credential_is_never_forwarded_to_github(self):
         for api in ('https://api.github.com', 'https://gist.github.com', 'https://rain-ventures-ai.github.io'):
-            self.env['BOARD_API'] = api
+            self.env['BOARD_HOSTED_API'] = api
             p = self.run_cli('list', code=1); self.assertIn('never a GitHub host', p.stderr)
             self.assertEqual(self.server.calls, [])
-        self.env['BOARD_API'] = self.server.api; self.server.redirect = True
+        self.env['BOARD_HOSTED_API'] = self.server.api; self.server.redirect = True
         self.run_cli('list', code=1)
         self.assertEqual(len(self.server.calls), 1)
 
