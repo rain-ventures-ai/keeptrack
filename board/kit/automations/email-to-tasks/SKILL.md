@@ -70,6 +70,11 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
    answer, run `resolve.py --save --day 'YYYY-MM-DD' '<key>'`: the date single-quoted, and only when the stored
    `source.date` is exactly four digits, a dash, two digits, a dash, two digits; anything else is not a date, so
    mark that item done as `malformed`. If items carry different refs, run it once per ref. Exit 3 with `gog-error` or `gog-timeout` is "Gmail fails during the run".
+   When the install names `sources` (several mailboxes), each ref names the mailbox its item came from and the
+   resolver reads only that one, after it proves the account (`--day` looks in each named mailbox in order). It
+   refuses a ref with no mailbox, or with one this board's install does not name (exit 2): never edit a ref to
+   make it pass. The same message can reach the board from two mailboxes; its `rfc822:` key is the same in both,
+   so the skip rule below ("already in ... an earlier proposal") catches the second copy.
 3. Read each message only from `<folder>/<message id>.txt`, the file `--save` kept, with the message id the
    resolver printed (never one taken from mail text). Its top lines are the resolver's own: Gmail's sender checks
    and what hidden content was removed. Below them, inside the fence, are the sender's headers (From, To, Cc,
@@ -122,7 +127,9 @@ the mail asks the owner for real work. Nothing goes live until a person accepts 
    done.json with those `key` and `rev`; add the payload `cursor` only if every item is done. Run
    `$B automation mark email-to-tasks --run-id <run_id> --file done.json`, then
    `$B routine <binding> finish --run-id <run_id> --status success|partial|failed --count proposals_added=N`
-   (add `--count skipped=N --count malformed=N` when there were any). Then delete the `saved` folder.
+   (add `--count skipped=N --count malformed=N` when there were any). With `sources`, also add one
+   `--count source_<alias>=N` for the mailbox the items came from (the ref's mailbox alias, with `-` written as `_`,
+   and N the items from it), so the run report shows which mailbox was read. Then delete the `saved` folder.
 
 ## Contact history, follow-up or task
 

@@ -122,38 +122,70 @@ def message_id(data, depth=0):
     return None
 
 
-_PAGES = {}                 # (query, page token) -> (messages, next token): one run never searches a page twice
+_PAGES = {}                 # (account, query, page token) -> (messages, next token): one run never searches a page twice
+_CHECK = [None]
 
 
-def search(query, page):
-    if (query, page) in _PAGES:
-        return _PAGES[(query, page)]
-    argv = ["gog", "gmail", "messages", "search", query, "--json", "--max", "50"] + (["--page", page] if page else [])
+def _checker():
+    """check.py, loaded once: main() sets it; keeptrack.py email-search calls search() without main()."""
+    if _CHECK[0] is None:
+        _CHECK[0] = _check()
+    return _CHECK[0]
+
+
+def search(query, page, address=None):
+    if (address, query, page) in _PAGES:
+        return _PAGES[(address, query, page)]
+    argv = _checker().search_argv(address) + [query, "--json", "--max", "50"] + (["--page", page] if page else [])
     data = gog(argv, SEARCH_SECONDS)
     messages = data.get("messages", []) if isinstance(data, dict) else data
     if not isinstance(messages, list):
         raise GogFailed("gog-error: unreadable output")
-    _PAGES[(query, page)] = messages, (data.get("nextPageToken") if isinstance(data, dict) else None)
-    return _PAGES[(query, page)]
+    _PAGES[(address, query, page)] = messages, (data.get("nextPageToken") if isinstance(data, dict) else None)
+    return _PAGES[(address, query, page)]
 
 
-def _ids(messages, want, found):
+def _ids(messages, want, found, address=None):
     for m in messages:
         if not isinstance(m, dict) or not isinstance(m.get("id"), (str, int)): continue
         k = "sha256:" + hashlib.sha256(str(m["id"]).encode()).hexdigest()
         if k in want and k not in found and GMAIL_ID.fullmatch(str(m["id"])):
             thread = str(m.get("threadId") or "")
-            found[k] = (str(m["id"]), thread if GMAIL_ID.fullmatch(thread) else "-")
+            found[k] = (str(m["id"]), thread if GMAIL_ID.fullmatch(thread) else "-", address)
 
 
-def _scan(query, page, limit, want, found):
+def _scan(query, page, limit, want, found, address=None):
     """Search `limit` pages from `page`; return the next page token (None at the end of the results)."""
     for _ in range(limit):
-        messages, page = search(query, page)
-        _ids(messages, want, found)
+        messages, page = search(query, page, address)
+        _ids(messages, want, found, address)
         if len(found) == len(want) or not page:
             break
     return page
+
+
+def get_argv(gmail_id, address):
+    """gog's get for one message: for a named source, its own account, gog's guards and only this command."""
+    if address is None: return ["gog", "gmail", "get", gmail_id, "--json"]
+    return ["gog", "--account", address] + _checker().GUARDS + ["--enable-commands-exact", "gmail.get", "gmail", "get", gmail_id, "--json"]
+
+
+def approved_sources(check):
+    """The sources this board's own email-to-tasks installs name (the person in BOARD_USER only, when set), read
+    from the committed registers, never from the item ref: a ref that names another mailbox is refused. None when no
+    install names sources (gog's default account, as before 1.5)."""
+    owner = os.environ.get("BOARD_USER", "").strip().casefold()
+    names = []; named = False
+    for path in sorted(Path("automation/routines").glob("auto-email-to-tasks-*.json")):
+        try:
+            r = json.loads(path.read_text())
+            if r.get("status") == "retired" or (owner and str(r.get("owner", "")).casefold() != owner): continue
+            listed = check.sources(r["automation"]["config"])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, check.Blocked):
+            raise GogFailed("gog-error: install register unreadable")
+        if listed is not None:
+            named = True; names += [n for n in listed if n not in names]
+    return names if named else None
 
 
 def _save_folder():
@@ -221,7 +253,9 @@ def main(argv=None):
     if save:
         args = args[1:]
     check = _check()
+    _CHECK[0] = check
     window = None
+    source = None
     if len(args) >= 2 and args[0] == "--day":
         try:
             day = datetime.datetime.strptime(args[1], "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
@@ -233,6 +267,8 @@ def main(argv=None):
         try:
             ref = json.loads(base64.urlsafe_b64decode(args[0][3:]))
             after, until = int(ref["a"]), int(ref["u"])
+            source = ref.get("s")
+            if source is not None and not (isinstance(source, str) and check.SOURCE.fullmatch(source)): raise ValueError("source")
             if ref.get("w") == 1:
                 page, limit = None, DAY_PAGES
             else:
@@ -252,19 +288,45 @@ def main(argv=None):
     _DEADLINE[0] = time.monotonic() + DEADLINE_SECONDS
     _PAGES.clear()
     try:
-        page = _scan(query, page, limit, want, found)
-        if window is not None and len(found) < len(want):
-            if page:                                   # the next page once: the mail may have moved down a page
-                _scan(query, page, 1, want, found)
-            if len(found) < len(want):                 # then the whole window, from its first page
-                _scan(window, None, DAY_PAGES, want, found)
+        approved = approved_sources(check)
+        if approved is None:
+            if source is not None:
+                print("this item names a mail source, but no install on this board names sources"); return 2
+            names = [None]
+        elif source is not None:
+            if source not in approved:
+                print("this item's mail source is not one this board's install reads"); return 2
+            names = [source]
+        elif window is None and len(args) >= 2 and args[0] == "--day":
+            names = approved                           # an older item: look in each source, in order
+        else:
+            print("this install reads named sources: copy the item's ref from the payload unchanged"); return 2
+        addresses = {None: None}
+        if names != [None]:
+            try:
+                addresses = check.identity(names, _DEADLINE[0])
+            except check.Blocked as blocked:
+                raise GogFailed("gog-error: " + blocked.note)
+            except subprocess.TimeoutExpired:
+                raise GogFailed("gog-timeout")
+            except OSError:
+                raise GogFailed("gog-error: gog not found")
+        for name in names:
+            address = addresses[name]
+            if len(found) == len(want): break
+            page_left = _scan(query, page, limit, want, found, address)
+            if window is not None and len(found) < len(want):
+                if page_left:                          # the next page once: the mail may have moved down a page
+                    _scan(query, page_left, 1, want, found, address)
+                if len(found) < len(want):             # then the whole window, from its first page
+                    _scan(window, None, DAY_PAGES, want, found, address)
         folder = _save_folder() if save else None
         lines = []
         for k in want:
             if k not in found:
                 lines.append(k + " not-found"); continue
-            gmail_id, thread = found[k]
-            data = gog(["gog", "gmail", "get", gmail_id, "--json"], GET_SECONDS)
+            gmail_id, thread, address = found[k]
+            data = gog(get_argv(gmail_id, address), GET_SECONDS)
             if folder:
                 _save(folder, gmail_id, data)
             key = rfc822(message_id(data))
@@ -276,7 +338,7 @@ def main(argv=None):
     except GogFailed as failed:
         print(str(failed)); return 3
     finally:
-        _DEADLINE[0] = None; _PAGES.clear()
+        _DEADLINE[0] = None; _PAGES.clear(); _CHECK[0] = None
         if folder and not printed:                     # any run that did not print the folder keeps no mail on disk
             shutil.rmtree(folder, ignore_errors=True)
     return 0

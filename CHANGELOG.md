@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v78: email-to-tasks reads several mailboxes, locally or in the cloud (pack 1.5.0, private-tasks card #232; spec
+`docs/specs/email-to-tasks-sources.md`). New config `sources`: up to three gog account aliases, in order. Before any
+read the check proves each one (the alias is set on this runner, its login has `gmail.readonly` and no scope that can
+change, send or delete mail), and every gog call names that one address with gog's `--readonly`, `--gmail-no-send`,
+`--no-input` and an exact command allowlist. Each source keeps its own window in a v2 cursor; a run starts with the
+source after the last one that had items, so one busy mailbox never starves another. `resolve.py` reads only the
+mailbox an item's ref names, and refuses a ref whose mailbox the board's own install does not name, so a team board
+set to `work` never reads Personal mail. New blocked codes: `setup-missing:sources`, `setup-missing:gog-aliases`,
+`setup-missing:account-<alias>`, `setup-missing:readonly-<alias>`. The skill reports `source_<alias>=N`. An install
+without `sources` behaves as 1.4.1.
+
 Kit v77: an agent closes its own Review Inbox items once the owner settled them in a conversation (card #198).
 `proposals -q TEXT` and `--by WHO` find items by title (or question) and by who added them (`createdBy`, whole or its
 agent part). `proposal-answer <id> --via "<where>"` records the owner's answer to a question the same agent identity

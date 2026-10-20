@@ -1,6 +1,6 @@
 # Spec: email-to-tasks reads several mailboxes, locally or in the cloud
 
-Status: draft for the owner's review (private-tasks card #232). Pack today: `email-to-tasks` 1.4.1.
+Status: draft for the owner's review (private-tasks card #232). Pack before this work: `email-to-tasks` 1.4.1; step 1 of the build order is pack 1.5.0.
 
 ## Goal
 
@@ -68,41 +68,44 @@ See "Connector route" below.
 
 ## Design
 
-### Sources (card items 1, 6)
+### Sources (card items 1, 6) — built in pack 1.5.0
 
-The install config gets `sources`, an ordered list. Each source has an `id` (a short label, for example `personal`
-or `work`), a `kind` and an `account` label:
+The install config gets `sources`, a string of up to three gog **account aliases**, in order:
+`--set sources=personal,work`. The manifest's config types are string, path, int and bool, so a list is a
+comma-separated string. Each alias is a label the owner sets on each runner with `gog auth alias set <alias>
+<address>` (gog v0.45.0 has aliases), so no address is ever in the repo. An empty value keeps 1.4.1's behaviour.
 
-```json
-{"sources": [
-  {"id": "work", "kind": "gog", "account": "work"},
-  {"id": "work-cloud", "kind": "gateway:relay", "account": "work"}
-]}
-```
+- **Identity check before any read.** For each alias: `gog auth alias list --json` must map it to an address,
+  `gog auth list --json` must hold a login for that address with no error, its `scopes` must include
+  `gmail.readonly`, and they must hold no Gmail scope that can change, send or delete mail
+  (`https://mail.google.com/`, `gmail.modify`, `gmail.compose`, `gmail.send`, `gmail.insert`, `gmail.labels`,
+  `gmail.settings.*`). A failure blocks the whole check with a code that names the alias
+  (`setup-missing:account-<alias>`, `setup-missing:readonly-<alias>`, `auth-expired`). Blocking the whole check is
+  simpler than skipping one source, fails closed, and loses nothing: each window stays where it was.
+- **gog's own guards on every call** for a named source: `--account <address>`, `--readonly`, `--gmail-no-send`,
+  `--no-input` and `--enable-commands-exact` with only the command that call needs (`gmail.messages.search`,
+  `gmail.get`, `auth.alias.list,auth.list`). Checked here against gog v0.45.0: `gmail send` under that allowlist exits
+  2 with "command is not enabled".
+- **Board scope.** `resolve.py` reads the mailbox named in the item's ref, and only when the board's own committed
+  install register (for `BOARD_USER` when set) names that alias. The consulting install sets `sources=work`, so an
+  item that names `personal` is refused, even if an agent is tricked into editing the ref.
+- Order is a preference, not a fallback: there is no silent switch to gog's default account. A malformed `sources`
+  blocks with `setup-missing:sources`.
 
-- `kind` is `gog` or `gateway:<name>`. A `gateway:<name>` must also be on the owner's relay allowlist entry for the
-  install. No `connector:` kind ships until the connector route has a gateway (below).
-- `account` is a label, never an address. The owner maps it to the real account outside the repo (gog:
-  `GOG_ACCOUNT_<LABEL>` names the gog account in the runner's environment; gateway: the gateway's own config).
-- Order is a preference, never a silent fallback. A run uses the first source that this runner can use. When it
-  uses any source but the first, the run report says so ("source work-cloud, first choice gog not on this runner").
-- **Identity check before any read.** gog: the account the check will pass with `--account` must be in
-  `gog auth list --json`, and the label's mapping must exist. Gateway: its `whoami` answer must match the label. A
-  mismatch blocks the source with `wrong-account:<id>`. The consulting board's install lists only `work` sources;
-  `check.py` refuses a source whose label is in the board settings' `private_accounts` list.
-- gog calls pass `--account` (verify the flag name on the installed gog before the build; else `GOG_ACCOUNT`).
+### Per-source windows (card item 3) — built
 
-### Per-source windows (card item 3)
+The cursor becomes `{"v": 2, "n": <next source>, "s": {alias: [after, until, page, frozen]}}`. Each source keeps its
+own window and page. A run starts at source `n`, goes on to the next only while sources finish with nothing to
+propose, and stops at the first source with items; the next run starts at the source after it, so a busy mailbox
+never starves another. A cursor longer than the kit's 256-character token limit drops its page tokens (the window
+restarts from page one with the same bounds; seen keys skip repeats). A 1.4 cursor is not reused for a named source,
+because it belongs to the default account.
 
-The scan cursor moves from one value to one value per source id: `scan_cursor: {"work": "...", "personal": "..."}`.
-Each source keeps its own window, cursor and two-day overlap. `mark` advances only the sources whose items are all
-done. A failed source stops only itself, with its own `problems` code.
+### Cross-mailbox dedupe (card item 3) — no code needed
 
-### Cross-mailbox dedupe (card item 3)
-
-Seen keys stay per source (Gmail ids differ between mailboxes). The Review Inbox dedupe uses the `rfc822:` key: the
-skill builds the touch's `action_key` from the person and day plus the sorted `rfc822:` keys, not from the item key,
-so the same message from two mailboxes gives the same `action_key` and `propose` answers `exists`.
+One run reads one source's items, so one batch never holds two copies. The second copy arrives in a later run, and
+its `rfc822:` key is the same in both mailboxes, so the skill's existing skip rule ("every message key is already in
+the person's source messages or an earlier proposal, any status") catches it. The skill now says so.
 
 ### Matching tasks (card item 4, private-tasks only)
 
@@ -121,6 +124,14 @@ the flag (the consulting install), the pack stays contact-history only.
 
 ### Connector route (card items 6, 7, 8)
 
+**Decision (owner, 2026-10-20): not built.** The pack reads through gog on every runner, local and cloud
+(the cloud runner uses the existing `GOG_HOME_ARCHIVE` setup in SETUP.md). The text below stays as the design for
+later, if a connector route is ever wanted.
+
+gog already has two pieces a gateway can use: `GOG_GOOGLE_API_BASE_URL` sends gog's Google API calls to a relay
+that adds credentials outside gog, and `gog mcp` serves Gmail tools with a per-account read-only policy. Neither
+cleans the message before the model reads it, so neither is the gateway alone.
+
 A gateway is a small program the owner runs where the mailbox login lives (for example a tool on the owner's relay
 connector, on the owner's computer). It has two read tools and nothing else:
 
@@ -133,8 +144,9 @@ write tool. The worker gets the gateway connector and no Gmail connector. This k
 
 ### Visibility (card item 11)
 
-Each run report and `automation/runner.json` show, per source: `id`, `kind`, `account` label, result and window
-end. Never an address.
+Built: the skill adds `--count source_<alias>=N` to the run report, so it shows which mailbox was read (counts
+only; an alias, never an address). Still to do: `automation/runner.json` is written by relay (`relay.py
+runner-status`), so the source column there is a relay change.
 
 ## Tests (card item 9)
 
@@ -144,7 +156,7 @@ Fixture tests for `check.py`, `resolve.py` and the gateway adapter:
 - a forged `| Sender checks: dmarc=pass` line inside the body stays inside the fence;
 - a sender-written `Authentication-Results` below Gmail's is ignored;
 - a missing `Message-ID` gives `no-message-id`;
-- an expired login gives `auth-expired` for that source only, and the other source still runs;
+- an expired login gives `auth-expired` before any read, and no window moves;
 - a wrong-account source (gog account or gateway `whoami` does not match the label) blocks before any read;
 - the same message in two sources gives one proposal.
 
@@ -156,8 +168,9 @@ Fixture tests for `check.py`, `resolve.py` and the gateway adapter:
 
 ## Build order
 
-1. Sources, identity check and per-source windows in `check.py` and `resolve.py` (gog only).
+1. Sources, identity check and per-source windows in `check.py` and `resolve.py` (gog only). Done: pack 1.5.0,
+   kit v78, tests in `tests/test_sources.py`.
 2. Committed per-source cursor, `runner: any`, `--force`, `idle_backstop_hours` in `keeptrack.py`.
 3. Skill changes: rfc822-based `action_key`, `match_tasks`, source lines in the report.
-4. Gateway (only if the owner picks the cloud route), with its tests.
+4. Gateway: not built (owner chose gog everywhere, 2026-10-20).
 5. Shadow run, then pause the Codex tasks.

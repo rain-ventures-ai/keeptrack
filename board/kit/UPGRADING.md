@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v78 (schema 4)
+email-to-tasks reads several mailboxes (pack 1.5.0, private-tasks card #232). The new `sources` setting names up to
+three gog account aliases (for example `personal,work`); each one is proved before any read (alias set, read-only
+scope, no wider Gmail scope) and keeps its own window. No migration and no data change: an install without
+`sources` reads gog's default account as before.
+- Run `kit-update` only. Check: `kit-check` says v78.
+- The pack's digest changed. If you installed it: reinstall and set it up again as in v73, and update its entry in
+  `relay/registry/automations.yaml` to the new digest (`python3 board/keeptrack.py automation show email-to-tasks`).
+  To read several mailboxes, follow "Several mailboxes" in the pack's SETUP.md. The other packs are unchanged.
+
 ### v77 (schema 4)
 An agent closes its own Review Inbox items when the owner answered or declined them in a conversation:
 `proposal-answer --via` and `proposal-ignore --via --reason` (own items only, recorded as `decision.relayed`), and
