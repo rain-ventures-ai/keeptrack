@@ -12,13 +12,7 @@ import keeptrack  # noqa: E402
 
 
 class Docs(unittest.TestCase):
-    def test_kit_is_v82_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(82, keeptrack.KIT_VERSION)
-        with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(82, json.load(f)["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            with open(os.path.join(KIT, plugin, "plugin.json"), encoding="utf-8") as f:
-                self.assertEqual("0.82.0", json.load(f)["version"], plugin)
+    def test_kit_v82_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v83.py
         with open(os.path.join(KIT, "automations", "email-to-tasks", "manifest.json"), encoding="utf-8") as f:
             self.assertEqual("1.5.1", json.load(f)["version"])
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
@@ -28,8 +22,6 @@ class Docs(unittest.TestCase):
             self.assertIn(words, v82)
         with open(os.path.join(HERE, "..", "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v82", f.read())
-        with open(os.path.join(HERE, "..", "board", "board.js"), encoding="utf-8") as f:
-            self.assertIn("const PAGE_KIT = 82;", f.read())
 
 
 if __name__ == "__main__":

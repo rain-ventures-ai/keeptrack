@@ -289,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 82  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 83  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2872,6 +2872,9 @@ def cmd_list(a):
         wait_on = default_user().lower()
         if not wait_on:
             sys.exit("--waiting-on me needs to know who you are: set BOARD_USER (or log in with gh)")
+    goal_ref, goal_ids = None, {g.get("id") for g in goal_list(data)}
+    if getattr(a, "goal", None) and a.goal.strip().lower() != "none":   # 'none': cards that link to no goal on the board
+        goal_ref = find_goal(data, a.goal)["id"]
     json_items = []
     for t in ordered:
         if query and query not in json.dumps(searchable(t), ensure_ascii=False).casefold(): continue   # never a substring oracle for a session id
@@ -2891,6 +2894,7 @@ def cmd_list(a):
             if t.get("project") != pref:
                 continue
         if getattr(a, "client", None) and t.get("client") != a.client: continue
+        if getattr(a, "goal", None) and (card_goal(t) != goal_ref if goal_ref else card_goal(t) in goal_ids): continue
         if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
         if getattr(a, "bare", False) and not bare_card(t): continue
         if getattr(a, "json", False):
@@ -2901,7 +2905,7 @@ def cmd_list(a):
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
         # the whole printed line passes the guard: value, effort and the link come from the card file too
         print(_line_guard(line(data, t, today=today) + cleared + scoring + url))
-    card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "waiting", "project", "client", "label", "bare")) or query or wait_on
+    card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "waiting", "project", "client", "goal", "label", "bare")) or query or wait_on
     if a.attention and not getattr(a, "json", False) and not card_filter:
         # kit v71: Review Inbox questions nobody answered in settings.inbox_lapse_days. One self-contained line each (relay
         # reads every line as an item). An agent does not ask a lapsed question again unless the person brings it up.
@@ -2939,6 +2943,9 @@ def cmd_show(a):
         if why.endswith(")") and " (session " in why:
             why = why.rsplit(" (session ", 1)[0]
         print("\noutcome: cancelled" + (f" ({why})" if why else ""))
+    if t.get("goal"):   # kit v83: the goal this card works towards
+        g = next((x for x in goal_list(data) if x.get("id") == card_goal(t)), None)
+        print("\ngoal: " + (goal_line(data, g) if g else f"{_flat(t['goal'])} (not on the board)"))
     if links:
         waiting_on = [x for x in links if x["state"] != "done"]
         print("\nafter: " + after_text(links) + ("" if waiting_on else "; all done"))
@@ -3746,7 +3753,7 @@ def cmd_todo_move(a):
 def read_stdin_args(a):
     """`-` as a comment's text, --details or --add-details reads the text from stdin (kit v62), so an agent can write
     multi-line Markdown (a heading, a list of options, a table) without shell quoting: `comment '#N' - <<'EOF'`."""
-    if a.f not in (cmd_comment, cmd_add, cmd_task_set, cmd_review):
+    if a.f not in (cmd_comment, cmd_add, cmd_task_set, cmd_review, cmd_goal_add, cmd_goal_set):
         return
     keys = [k for k in ("text", "details", "add_details", "note") if getattr(a, k, None) == "-"]
     if len(keys) > 1:
@@ -3857,6 +3864,8 @@ def cmd_add(a):
             t["project"] = pr["id"]   # store the id, not the typed name or prefix
             if not t["client"] and pr.get("client"):
                 t["client"] = pr["client"]
+        if getattr(a, "goal", None):
+            t["goal"] = find_goal(data, a.goal)["id"]
         for x in ensure_labels(data, a.label or []):
             print(f"created label {x}")
         t["labels"] = list(dict.fromkeys(check_label_name(x) for x in a.label or []))
@@ -4600,6 +4609,35 @@ def doctor_board(fix=False):
     if needed > min_kit:
         problem("MIN_KIT_LOWERED", "tasks.json", f"{what}, which needs kit v{needed}, but settings.min_kit is "
                 f"{raw_min if raw_min is not None else 'not set'}; set it back: keeptrack.py settings-set --min-kit {needed}.")
+    # goals (kit v83): reported, never stopping the board; a card that links to a missing goal still works
+    raw_goals, goal_ids = data.get("goals"), set()
+    if raw_goals is not None and not isinstance(raw_goals, list):
+        problem("GOAL", "tasks.json", "`goals` must be a list.")
+    for g in raw_goals if isinstance(raw_goals, list) else []:
+        gid = g.get("id") if isinstance(g, dict) else None
+        gpath = f"goal {clean(str(gid), 40) if gid else '?'}"
+        if not isinstance(g, dict) or not isinstance(gid, str) or not SAFE_ID.fullmatch(gid):
+            problem("GOAL", gpath, "A goal needs an `id` (letters, digits, - and _ only); fix it by hand.")
+            continue
+        if gid in goal_ids:
+            problem("GOAL", gpath, "Two goals share this id.")
+        goal_ids.add(gid)
+        if not str(g.get("title") or "").strip():
+            problem("GOAL", gpath, "The goal has no title.")
+        if g.get("status", "active") not in GOAL_STATUSES:
+            problem("GOAL", gpath, f"Status {g.get('status')!r} must be one of: {', '.join(GOAL_STATUSES)}.")
+        for k in ("start", "end"):
+            v = g.get(k)
+            if v in (None, "") and k == "start":
+                continue
+            try:
+                dt.date.fromisoformat(str(v))
+            except ValueError:
+                problem("GOAL", gpath, f"`{k}` {v!r} must be a date (YYYY-MM-DD).")
+    for t in tasks:
+        if t.get("goal") and (not isinstance(t["goal"], str) or t["goal"] not in goal_ids):
+            problem("GOAL_MISSING", f"card {t.get('id', '?')}", f"The card links to goal {clean(str(t['goal']), 40)!r}, "
+                    "which is not on the board; link it to another goal or clear it (task-set ID --goal none).")
     for t in tasks:
         path = f"card {t.get('id', '?')}"
         w, claim = open_waiting(t), t.get("claim") or {}
@@ -5140,6 +5178,7 @@ HELP_TOPICS = {
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
+    "goals": ["goals", "goal", "goal-add", "goal-set", "goal-remove"],
     "search": ["links"],
     "board-structure": ["labels", "label-add", "label-set", "label-rm", "columns", "column-add", "column-set",
                         "column-move", "column-rm", "members", "me", "member-add", "member-set", "member-rm",
@@ -5218,7 +5257,7 @@ CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
 DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS",
                              "KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "AGENT_CLEARED", "WAITING", "RELATED",
-                             "AFTER_MISSING"})   # v43: detect, never stop the board; a missing after card is tolerated
+                             "AFTER_MISSING", "GOAL", "GOAL_MISSING"})   # v43: detect, never stop the board; a missing after card is tolerated
 
 
 def person_for_github(data, github):
@@ -5953,6 +5992,193 @@ def cmd_project_person(a):
     mutate(fn, f"Project people: {a.ref}")
 
 
+# ---- goals (kit v83): what the board works towards, with a target, a metric and an end date; cards link to one -------
+# Stored in tasks.json as "goals": [{id, title, metric, target, current, start, end, status, created, updated}]. A card
+# links to a goal with "goal": "<goal id>". Older kits keep both as they are (unknown keys pass through every writer).
+GOAL_STATUSES = ["active", "done", "dropped"]
+
+
+def goal_list(data):
+    """The goals a tool can use: entries with a string id (doctor reports the others; they stay in the file)."""
+    goals = data.get("goals")
+    return [g for g in goals if isinstance(g, dict) and isinstance(g.get("id"), str) and g["id"]] if isinstance(goals, list) else []
+
+
+def card_goal(t):
+    """The goal id a card links to, or "" (a hand-edited value that is not a string counts as no goal)."""
+    g = t.get("goal")
+    return g if isinstance(g, str) else ""
+
+
+def find_goal(data, ref, allow_missing=False):
+    """Resolve a goal by id, id prefix or title (exact, then contains). Exits unless allow_missing and nothing matches."""
+    goals, ref = goal_list(data), str(ref or "").strip()
+    m = [g for g in goals if g.get("id") == ref] or [g for g in goals if ref and str(g.get("id", "")).startswith(ref)]
+    if not m and ref:
+        r = ref.casefold()
+        m = [g for g in goals if str(g.get("title", "")).casefold() == r] or [g for g in goals if r in str(g.get("title", "")).casefold()]
+    if len(m) != 1:
+        if allow_missing and not m:
+            return None
+        sys.exit(f"no goal matches '{ref}' (keeptrack.py goals --all lists them)" if not m else
+                 f"'{ref}' matches several goals: " + "; ".join(f"{_flat(g.get('id'))} {_flat(g.get('title'))}" for g in m))
+    return m[0]
+
+
+def check_goal_status(s):
+    if s is None:
+        return None
+    for x in GOAL_STATUSES:
+        if x == str(s).lower():
+            return x
+    sys.exit(f"unknown goal status '{s}'; use: {', '.join(GOAL_STATUSES)}")
+
+
+def check_goal_date(d, data, what):
+    d = check_date(d, data)
+    if d:
+        try:
+            dt.date.fromisoformat(d)
+        except ValueError:
+            sys.exit(f"{what} '{d}' is not a real date")
+    return d
+
+
+def goal_cards(data, g):
+    """(open, done) cards on the board that link to this goal."""
+    dc = done_col(data)
+    linked = [t for t in data.get("tasks", []) if card_goal(t) == g.get("id")]
+    return [t for t in linked if t.get("column") != dc], [t for t in linked if t.get("column") == dc]
+
+
+def unlinked_open(data):
+    """Open cards that link to no goal (or to a goal that is not on the board)."""
+    ids, dc = {g.get("id") for g in goal_list(data)}, done_col(data)
+    return [t for t in data.get("tasks", []) if t.get("column") != dc and card_goal(t) not in ids]
+
+
+def goal_line(data, g, today=None):
+    today = today or board_today(data)
+    parts = [_flat(g.get("id")), _flat(g.get("title"))]
+    cur, tgt, metric = _flat(g.get("current") or ""), _flat(g.get("target") or ""), _flat(g.get("metric") or "")
+    if tgt:
+        parts.append(f"target {tgt}" + (f" {metric}" if metric else "") + (f" (now {cur})" if cur else ""))
+    elif metric:
+        parts.append(f"metric {metric}")
+    end = str(g.get("end") or "")
+    if end:
+        try:
+            left = (dt.date.fromisoformat(end) - today).days
+            parts.append(f"ends {end} ({left} days left)" if left >= 0 else f"ended {end}")
+        except ValueError:
+            parts.append(f"ends {_flat(end)}")
+    open_cards, done_cards = goal_cards(data, g)
+    parts.append(f"[{_flat(g.get('status') or 'active')}] cards {len(done_cards)}/{len(open_cards) + len(done_cards)} done")
+    return _line_guard("  ".join(parts))
+
+
+def cmd_goals(a):
+    data, _ = load()
+    today = board_today(data)
+    goals = [g for g in goal_list(data) if a.all or (g.get("status") or "active") == "active"]
+    for g in sorted(goals, key=lambda g: (GOAL_STATUSES.index(g.get("status")) if g.get("status") in GOAL_STATUSES else 0,
+                                          str(g.get("end") or "9999"), str(g.get("title") or ""))):
+        print(goal_line(data, g, today))
+    if not goals:
+        print("(no goals)" if a.all or not goal_list(data) else "(no active goals; --all lists the others)")
+    n = len(unlinked_open(data))
+    if goal_list(data) and n:
+        print(f"{n} open card(s) link to no goal: keeptrack.py list --goal none")
+
+
+def cmd_goal(a):
+    data, _ = load()
+    g = find_goal(data, a.ref)
+    print(goal_line(data, g))
+    for k in ("metric", "target", "current", "start", "end"):
+        if g.get(k):
+            print(f"  {k}: {_flat(g[k])}")
+    if str(g.get("details") or "").strip():
+        print("\n" + str(g["details"]).strip())
+    open_cards, _ = goal_cards(data, g)
+    if open_cards:
+        print("\nopen cards:")
+        for t in sorted(open_cards, key=task_order_key):
+            print("  " + line(data, t))
+
+
+def _goal_fields(g, a, data):
+    """Apply the --title/--metric/--target/--current/--start/--end/--status/--details flags. Returns what changed."""
+    changed = []
+    for k in ("title", "metric", "target", "current", "details"):
+        v = getattr(a, k, None)
+        if v is None:
+            continue
+        v = v if k == "details" else v.strip()
+        if k != "details" and _has_break(v):
+            sys.exit(f"a goal's {k} must be one line")
+        if k == "title" and not v:
+            sys.exit("a goal needs a title")
+        if v != g.get(k, ""):
+            g[k] = v; changed.append(k)
+    for k in ("start", "end"):
+        v = getattr(a, k, None)
+        if v is not None:
+            v = check_goal_date(v, data, k) or ""
+            if k == "end" and not v:
+                sys.exit("a goal needs an end date")
+            if v != g.get(k, ""):
+                g[k] = v; changed.append(k)
+    if g.get("start") and g.get("end") and g["start"] > g["end"]:
+        sys.exit(f"the goal starts ({g['start']}) after it ends ({g['end']})")
+    st = check_goal_status(getattr(a, "status", None))
+    if st and st != g.get("status"):
+        g["status"] = st; changed.append("status")
+    return changed
+
+
+def cmd_goal_add(a):
+    def fn(data):
+        goals = data.setdefault("goals", [])
+        if not isinstance(goals, list):
+            sys.exit("`goals` in tasks.json is not a list; fix it by hand first (keeptrack.py doctor shows it)")
+        g = {"id": new_id("g_", {x.get("id") for x in goal_list(data)}), "title": "", "metric": "", "target": "",
+             "current": "", "end": "", "status": "active"}
+        a.status = a.status or "active"
+        _goal_fields(g, a, data)
+        g["created"] = g["updated"] = now(); g["updatedBy"] = who_am_i()
+        goals.append(g)
+        print(f"added goal {goal_line(data, g)}")
+    mutate(fn, f"Add goal: {a.title}")
+
+
+def cmd_goal_set(a):
+    def fn(data):
+        g = find_goal(data, a.ref)
+        changed = _goal_fields(g, a, data)
+        if not changed:
+            print(f"{g['id']} unchanged"); return
+        g["updated"] = now(); g["updatedBy"] = who_am_i()
+        print(f"{g['id']} updated: {', '.join(changed)}")
+        print(goal_line(data, g))
+    mutate(fn, f"Update goal: {a.ref}")
+
+
+def cmd_goal_remove(a):
+    """Remove a goal. Cards that link to it keep working; --clear-cards also takes the link off them."""
+    def fn(data):
+        g = find_goal(data, a.ref)
+        linked = [t for t in data.get("tasks", []) if card_goal(t) == g["id"]]
+        if linked and not a.clear_cards:
+            sys.exit(f"{len(linked)} card(s) link to {g['id']}; set its status to done or dropped instead "
+                     f"(goal-set {g['id']} --status done), or use --clear-cards to take the link off them")
+        for t in linked:
+            t.pop("goal", None); hist(t, f"goal cleared: {g.get('title', g['id'])} removed"); t["updated"] = now()
+        data["goals"] = [x for x in data.get("goals", []) if not (isinstance(x, dict) and x.get("id") == g["id"])]
+        print(f"removed goal {g['id']} {_flat(g.get('title'))}" + (f"; cleared it on {len(linked)} card(s)" if linked else ""))
+    mutate(fn, f"Remove goal: {a.ref}")
+
+
 EFFORT_WEIGHTS = {"XS": 1, "S": 2, "M": 3, "L": 5, "XL": 8}
 
 
@@ -6047,6 +6273,14 @@ def cmd_task_set(a):
             pid = find_project(data, a.project)["id"] if a.project else ""   # store the id, not the typed name or prefix
             if pid != t.get("project", ""):
                 t["project"] = pid; changed.append(f"project: {pid or 'cleared'}")
+        if getattr(a, "goal", None) is not None:
+            g = None if a.goal.strip().lower() in ("", "none") else find_goal(data, a.goal)   # store the id, not the typed title
+            if (g or {}).get("id", "") != card_goal(t) or ("goal" in t and not g and not card_goal(t)):
+                if g:
+                    t["goal"] = g["id"]
+                else:
+                    t.pop("goal", None)
+                changed.append(f"goal: {_flat(g.get('title')) if g else 'cleared'}")
         if a.contact is not None and a.contact != t.get("contact", ""):
             t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
         if getattr(a, "title", None) is not None:
@@ -9981,6 +10215,7 @@ def main():
     s.add_argument("--waiting-on", dest="waiting_on", metavar="WHO", help="only cards waiting on WHO: me, a GitHub login or a p_ person id")
     s.add_argument("--project", help="project id or name prefix"); s.add_argument("--client", help="client name")
     s.add_argument("--label", help="label name, exactly as on the card (the web board's label filter)")
+    s.add_argument("--goal", help="goal id, id prefix or title; 'none' lists the cards that link to no goal")
     s.add_argument("--all", action="store_true", help="ignore this repo's default project")
     s.add_argument("--sort", choices=["score", "priority"], help="score descending (unscored last), or board-wide priority order; reading never changes ranks")
     s.add_argument("--links", action="store_true", help="end each line with the card's web board link")
@@ -10057,6 +10292,7 @@ def main():
     s.add_argument("--link", action="append", nargs="+", metavar="URL [TITLE]", help="a link for the card's links section, with an optional title (repeatable)")
     s.add_argument("--no-check", action="store_true", help="do not mark close cards as possible duplicates")
     s.add_argument("--after", action="append", metavar="REF", help="runs after this card, '#62' or an id (repeatable); a hint and a gate, never a trigger")
+    s.add_argument("--goal", help="the goal this card works towards: goal id, id prefix or title")
     s.set_defaults(f=cmd_add)
     s = sub.add_parser("similar", help="open cards and Inbox items with a close title (before or after an add)")
     s.add_argument("title"); s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_similar)
@@ -10144,13 +10380,32 @@ def main():
     s = sub.add_parser("project-unlink", help="remove a link from a project"); s.add_argument("ref"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_project_unlink)
     s = sub.add_parser("project-person", help="add or remove a person on a project by email"); s.add_argument("ref"); s.add_argument("email"); s.add_argument("--remove", action="store_true"); s.set_defaults(f=cmd_project_person)
     s = sub.add_parser("project-remove", help="remove a project"); s.add_argument("ref"); s.add_argument("--clear-project", action="store_true", help="clear task.project on tasks that referenced this project"); s.set_defaults(f=cmd_project_remove)
-    s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project, contact or after")
+    s = sub.add_parser("goals", help="list the board's goals (active ones; --all for done and dropped)"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_goals)
+    s = sub.add_parser("goal", help="show one goal and its open cards"); s.add_argument("ref"); s.set_defaults(f=cmd_goal)
+    for name, fn_, hlp in (("goal-add", cmd_goal_add, "add a goal: what the board works towards, with a target, a metric and an end date"),
+                           ("goal-set", cmd_goal_set, "change a goal (title, metric, target, current value, dates, status)")):
+        s = sub.add_parser(name, help=hlp)
+        s.add_argument("title" if name == "goal-add" else "ref")
+        if name == "goal-set":
+            s.add_argument("--title")
+        req = name == "goal-add"
+        s.add_argument("--metric", required=req, help="what is measured, e.g. 'revenue per month'")
+        s.add_argument("--target", required=req, help="the value to reach, e.g. '£10,000'")
+        s.add_argument("--end", required=req, help="end date: YYYY-MM-DD, today or +N")
+        s.add_argument("--current", help="where it stands now, e.g. '£4,200'")
+        s.add_argument("--start", help="start date: YYYY-MM-DD, today or +N")
+        s.add_argument("--status", choices=GOAL_STATUSES); s.add_argument("--details", help="Markdown; - reads it from stdin")
+        s.set_defaults(f=fn_)
+    s = sub.add_parser("goal-remove", help="remove a goal (a goal that cards link to: --clear-cards, or set its status instead)")
+    s.add_argument("ref"); s.add_argument("--clear-cards", dest="clear_cards", action="store_true", help="also take the link off the cards"); s.set_defaults(f=cmd_goal_remove)
+    s = sub.add_parser("task-set", help="change a task: title, details, priority, due, labels, client, project, goal, contact or after")
     s.add_argument("id"); s.add_argument("--title"); s.add_argument("--details", help="replace the details (Markdown); - reads them from stdin")
     s.add_argument("--add-details", dest="add_details", help="add text below the current details (a blank line between); never replaces them; - reads stdin")
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
     s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s.add_argument("--goal", help="goal id, id prefix or title; empty or 'none' clears")
     s.add_argument("--value", choices=["", "1", "2", "3", "4", "5"], help="optional value 1–5; empty clears")
     s.add_argument("--effort", choices=["", *EFFORT_WEIGHTS], help="optional effort size; empty clears")
     s.add_argument("--after", action="append", metavar="REF", help="add a card this one runs after: '#62' or an id (repeatable); refuses itself and loops")

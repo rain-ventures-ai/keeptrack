@@ -240,14 +240,14 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       const more = await page.locator('.cpill.more'); if (await more.count()) { await more.click(); assert.equal(await page.locator('#clientPop').isVisible(), true); await page.locator('#btnFilter').click(); assert.equal(await page.locator('#clientPop').isHidden(), true, 'the filters close the client list'); await page.keyboard.press('Escape'); }
       assert.deepEqual(page.errors, []); await page.done();
       const narrow = await open(browser, { view: 'board', viewport: { width: 700, height: 800 } });
-      await narrow.locator('#btnMore').click(); assert.deepEqual((await narrow.locator('#morePop button:not([data-head-action="btnInbox"])').allTextContents()).map(s => s.trim()), ['Undo last change', 'Automations', 'Pull requests', 'Copy board', 'Refresh board', 'Install this board', 'Help', 'Show me around', 'Settings'], 'More lists the header actions');
+      await narrow.locator('#btnMore').click(); assert.deepEqual((await narrow.locator('#morePop button:not([data-head-action="btnInbox"])').allTextContents()).map(s => s.trim()), ['Undo last change', 'Automations', 'Pull requests', 'Goals', 'Copy board', 'Refresh board', 'Install this board', 'Help', 'Show me around', 'Settings'], 'More lists the header actions');
       assert.equal(await narrow.locator('#morePop [data-head-action="btnInbox"]').isHidden(), true, 'the Review Inbox item shows only when the board turns the Inbox on');
       assert.equal(await narrow.locator('#morePop [data-head-action="btnUndo"]').isDisabled(), true, 'Undo is disabled when there is nothing to undo');
       await narrow.locator('#btnFilter').click(); assert.equal(await narrow.locator('#morePop').isHidden(), true); assert.equal(await narrow.locator('#filterPop').isVisible(), true);
       await narrow.keyboard.press('Escape'); assert.equal(await narrow.locator('#filterPop').isHidden(), true); await narrow.done();
       const dock = await open(browser, { view: 'board', viewport: PHONE, layout: 'dock' });
       await dock.locator('#dockMenu').click(); assert.equal(await dock.locator('#dockPop').isVisible(), true);
-      assert.deepEqual((await dock.locator('#dockPop button:not([data-head-action="btnInbox"])').allTextContents()).map(s => s.trim()), ['Undo last change', 'Automations', 'Pull requests', 'Copy board', 'Refresh board', 'Install this board', 'Help', 'Show me around', 'Settings'], 'the dock menu has the same items');
+      assert.deepEqual((await dock.locator('#dockPop button:not([data-head-action="btnInbox"])').allTextContents()).map(s => s.trim()), ['Undo last change', 'Automations', 'Pull requests', 'Goals', 'Copy board', 'Refresh board', 'Install this board', 'Help', 'Show me around', 'Settings'], 'the dock menu has the same items');
       assert.equal(await dock.locator('#dockPop [data-head-action="btnInbox"]').isHidden(), true, 'and keeps the Review Inbox hidden while it is off');
       assert.equal(await dock.locator('#dockPop [data-head-action="btnUndo"]').isDisabled(), true, 'mobile Undo is disabled when there is nothing to undo');
       await dock.locator('#btnFilter').click(); assert.equal(await dock.locator('#dockPop').isHidden(), true, 'filters close the dock menu');

@@ -1,7 +1,7 @@
 // Markup handshake: the ids and page structure this file needs from index.html. index.html sets window.kbMarkup to the
 // version it carries (and its loader reads this line before running the file). Bump both together whenever board.js
 // starts to need markup an older index.html does not have, or index.html drops markup an older board.js needs.
-const KB_MARKUP = 4;
+const KB_MARKUP = 5;
 // Fractional ranks. This is the same algorithm as board/kit/keeptrack.py.
 // Keep it outside the browser closure so the Python parity test can load it in Node.
 const RANK_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 82;
+  const PAGE_KIT = 83;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -303,6 +303,7 @@ if (typeof window !== 'undefined') (() => {
     { id: 'btnInbox', icon: 'inbox', menu: 'Review Inbox', title: 'Review Inbox' },
     { id: 'btnAutos', icon: 'zap', short: 'Automations', menu: 'Automations', title: 'Automations: jobs that suggest work for you' },
     { id: 'btnPrs', icon: 'git-pull-request', short: 'PRs', menu: 'Pull requests', title: 'Pull requests linked on cards' },   // shown only when a card links a pull request   // shown only when the board turns the Inbox on
+    { id: 'btnGoals', icon: 'target', short: 'Goals', menu: 'Goals', title: 'Goals: what the board works towards', menuOnly: true },   // the menus only: the wide header keeps its room for the client pills
     { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
     { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
     { id: 'btnInstall', icon: 'download', short: 'Install', menu: 'Install this board', title: 'Install this board' },
@@ -315,7 +316,7 @@ if (typeof window !== 'undefined') (() => {
     if (utils) HEAD_ACTIONS.filter(a => a.id).forEach(a => {
       if ($(a.id)) return;   // Undo is already in the wide header; its menu copies still come from HEAD_ACTIONS.
       const b = el('button'); b.type = 'button'; b.id = a.id; b.title = a.title; b.setAttribute('aria-label', a.aria || a.title);
-      const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); utils.append(b);
+      const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); if (a.menuOnly) b.hidden = true; utils.append(b);
     });
     ['morePop', 'dockPop'].forEach(id => {
       const pop = $(id); if (!pop || pop.querySelector('[data-head-action], [data-tour-start]')) return;
@@ -1538,6 +1539,106 @@ if (typeof window !== 'undefined') (() => {
   const projectStatusOrder = st => ({ active: 0, paused: 1, done: 2 }[st || 'active'] ?? 0);
   const projectPickerLabel = p => { const st = p.status || 'active', mark = st === 'done' ? ' · done' : st === 'paused' ? ' · paused' : ''; return `${p.name}${p.client ? ' · ' + p.client : ''}${mark}`; };
   const sortedProjects = () => [...(state.projects || [])].sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || String(a.client || '').localeCompare(b.client || '') || String(a.name || '').localeCompare(b.name || ''));
+  // ---- goals (kit v83): what the board works towards. tasks.json "goals": [{ id, title, metric, target, current, start, end, status }],
+  // and a card links to one with "goal" (keeptrack.py goal-add / task-set --goal). The bar above the board shows the active goals with
+  // their progress and open cards; a click filters the board to that goal's cards, "No goal" to the cards that link to none.
+  const GOAL_STATUSES = ['active', 'done', 'dropped'];
+  const goalList = () => (Array.isArray(state.goals) ? state.goals : []).filter(g => g && typeof g === 'object' && typeof g.id === 'string' && g.id);
+  const goalById = id => (id && goalList().find(g => g.id === id)) || null;
+  const goalStatus = g => GOAL_STATUSES.includes(g.status) ? g.status : 'active';
+  const byGoalEnd = (a, b) => GOAL_STATUSES.indexOf(goalStatus(a)) - GOAL_STATUSES.indexOf(goalStatus(b)) || String(a.end || '9999').localeCompare(String(b.end || '9999')) || String(a.title || '').localeCompare(String(b.title || ''));
+  const activeGoals = () => goalList().filter(g => goalStatus(g) === 'active').sort(byGoalEnd);
+  // "£4,200", "10k", "£10,000 a month": the first number, with a k or m after it. Progress shows only when both values read as numbers.
+  const goalNumber = s => { const m = /(\d[\d,]*(?:\.\d+)?)\s*([km])?(?![a-z])/i.exec(String(s || '')); if (!m) return null; const n = parseFloat(m[1].replace(/,/g, '')); return Number.isFinite(n) ? n * ({ k: 1e3, m: 1e6 }[(m[2] || '').toLowerCase()] || 1) : null; };
+  const goalProgress = g => { const c = goalNumber(g.current), t = goalNumber(g.target); return c != null && t ? Math.max(0, Math.min(1, c / t)) : null; };
+  const goalDaysLeft = g => /^\d{4}-\d{2}-\d{2}$/.test(g.end || '') && !Number.isNaN(Date.parse(g.end)) ? Math.round((Date.parse(g.end + 'T00:00:00Z') - Date.parse(todayIso() + 'T00:00:00Z')) / 864e5) : null;
+  const goalMeasure = g => g.target ? (g.current ? `${g.current} of ${g.target}` : `Target ${g.target}`) + (g.metric ? ' ' + g.metric : '') : (g.metric || '');
+  const goalWhen = g => { const d = goalDaysLeft(g); return d == null ? '' : goalStatus(g) !== 'active' ? 'Ended ' + g.end : d > 60 ? 'Ends ' + g.end : d > 1 ? `${d} days left` : d === 1 ? '1 day left' : d === 0 ? 'Ends today' : 'Ended ' + g.end; };
+  const goalCards = g => { const dc = doneColId(), cards = state.tasks.filter(t => t.goal === g.id); return { open: cards.filter(t => t.column !== dc).length, done: cards.filter(t => t.column === dc).length }; };
+  const goalPickerLabel = g => (g.title || 'Untitled goal') + (goalStatus(g) !== 'active' ? ' · ' + goalStatus(g) : '');
+  const setGoalFilter = v => { deferredFilterRoute.delete('goal'); $('fGoal').value = v; closePops(); render(); };
+  function renderGoalBar() {
+    const box = $('goalBar'); if (!box) return; box.textContent = '';
+    const goals = activeGoals(), fg = $('fGoal').value, show = (view === 'board' || view === 'list') && (goals.length > 0 || !!fg);
+    box.hidden = !show; if (!show) return;
+    box.append(el('span', 'goalbar__label', 'Goals'));
+    goals.forEach(g => {
+      const on = fg === g.id, c = goalCards(g), p = goalProgress(g), d = goalDaysLeft(g), b = el('button', 'goalchip' + (on ? ' on' : '')); b.type = 'button';
+      b.dataset.goal = g.id; b.setAttribute('aria-pressed', String(on));
+      b.title = [g.title, goalMeasure(g), g.end ? 'Ends ' + g.end : '', `${c.open} open, ${c.done} done`, on ? 'Click to show every card' : 'Click to show only this goal’s cards'].filter(Boolean).join('\n');
+      b.append(el('strong', 'goalchip__title', g.title || 'Untitled goal'));
+      const meta = el('span', 'goalchip__meta'); meta.append(document.createTextNode([goalMeasure(g), goalWhen(g), `${c.open} open`].filter(Boolean).join(' · '))); b.append(meta);
+      if (p != null) { const bar = el('span', 'goalchip__bar'), fill = el('span'); fill.style.width = Math.round(p * 100) + '%'; bar.append(fill); bar.setAttribute('aria-hidden', 'true'); b.append(bar); }
+      if (d != null && d <= 7 && (p == null || p < 1)) b.classList.add('soon');
+      b.onclick = () => setGoalFilter(on ? '' : g.id); box.append(b);
+    });
+    const ended = goalById(fg); if (ended && goalStatus(ended) !== 'active') { const b = el('button', 'goalchip on', goalPickerLabel(ended)); b.type = 'button'; b.setAttribute('aria-pressed', 'true'); b.onclick = () => setGoalFilter(''); box.append(b); }
+    const dc = doneColId(), none = state.tasks.filter(t => t.column !== dc && !goalById(t.goal)).length;
+    if (none || fg === '__none') {
+      const b = el('button', 'goalchip goalchip--none' + (fg === '__none' ? ' on' : '')); b.type = 'button'; b.dataset.goal = '__none'; b.setAttribute('aria-pressed', String(fg === '__none'));
+      b.title = 'Open cards that link to no goal: link each one to a goal, or ask why it is on the board';
+      b.append(el('strong', 'goalchip__title', 'No goal'), el('span', 'goalchip__meta', `${none} open`)); b.onclick = () => setGoalFilter(fg === '__none' ? '' : '__none'); box.append(b);
+    }
+    const edit = ui.button({ label: 'Edit goals', icon: 'pencil', variant: 'ghost', size: 'sm', onClick: () => openGoals() }); edit.id = 'goalEdit'; roKeep(edit); box.append(edit);
+  }
+  let goalSheet = null;
+  function openGoals() {
+    closePops(); if (goalSheet) goalSheet.close();
+    const body = el('div', 'goalsheet'); let form = null;
+    const input = (id, value, type, placeholder) => { const i = el('input', 'ui-input'); i.id = id; i.type = type || 'text'; i.value = value || ''; if (placeholder) i.placeholder = placeholder; return i; };
+    const field = (label, control, hint) => { const l = el('label', 'goalfield'); l.append(el('span', 'goalfield__label', label), control); if (hint) l.append(el('span', 'hint', hint)); return l; };
+    const draw = () => { body.textContent = ''; if (form) drawForm(form); else drawList(); };
+    function drawList() {
+      body.append(el('p', 'hint', 'A goal is what the board works towards: a metric, a target and an end date. Link a card to a goal on the card (Goal). The bar above the board shows the active goals; click one to see its cards, or "No goal" for the open cards that link to none.'));
+      const goals = goalList().slice().sort(byGoalEnd);
+      if (!goals.length) body.append(el('p', 'muted', 'No goals yet.'));
+      goals.forEach(g => {
+        const row = el('div', 'goalrow'), text = el('div', 'goalrow__text'), c = goalCards(g); row.dataset.goal = g.id;
+        text.append(el('strong', null, g.title || 'Untitled goal'), el('span', 'muted', [goalMeasure(g), g.end ? 'ends ' + g.end : '', `${c.open} open, ${c.done} done`].filter(Boolean).join(' · ')));
+        const st = goalStatus(g), pill = ui.pill({ text: st, tone: st === 'active' ? 'accent' : st === 'done' ? 'ok' : 'neutral' });
+        const eb = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm', onClick: () => { form = { ...g }; draw(); } });
+        row.append(text, pill); if (!ro) row.append(eb); body.append(row);
+      });
+      const add = ui.button({ label: 'Add a goal', icon: 'plus', variant: 'primary', onClick: () => { form = { id: '', title: '', metric: '', target: '', current: '', start: '', end: '', status: 'active' }; draw(); } });
+      add.id = 'goalAdd'; if (!ro) body.append(add); else body.append(el('p', 'muted', 'This board is read-only here, so goals cannot be changed.'));
+    }
+    function drawForm(g) {
+      const f = { title: input('goalTitle', g.title, 'text', 'Revenue'), metric: input('goalMetric', g.metric, 'text', 'revenue per month'), target: input('goalTarget', g.target, 'text', '£10,000'),
+        current: input('goalCurrent', g.current, 'text', '£4,200'), start: input('goalStart', g.start, 'date'), end: input('goalEnd', g.end, 'date') };
+      const status = el('select', 'ui-input'); status.id = 'goalStatus'; GOAL_STATUSES.forEach(s => { const o = el('option', null, s[0].toUpperCase() + s.slice(1)); o.value = s; status.append(o); }); status.value = goalStatus(g);
+      body.append(field('Goal', f.title), field('Metric', f.metric, 'What is measured.'), field('Target', f.target), field('Now at', f.current, 'Where it stands today. A number in Now at and Target shows a progress bar.'),
+        field('Start date', f.start), field('End date', f.end), field('Status', status));
+      const err = el('p', 'goalerr'); err.id = 'goalErr'; err.setAttribute('role', 'alert'); err.hidden = true;
+      const save = ui.button({ label: g.id ? 'Save goal' : 'Add goal', variant: 'primary', onClick: async () => {
+        if (state.goals != null && !Array.isArray(state.goals)) { err.textContent = 'The board’s goals are not a list in tasks.json; fix them by hand first (keeptrack.py doctor shows it).'; err.hidden = false; return; }
+        const v = { title: f.title.value.replace(/\s+/g, ' ').trim(), metric: f.metric.value.replace(/\s+/g, ' ').trim(), target: f.target.value.replace(/\s+/g, ' ').trim(),
+          current: f.current.value.replace(/\s+/g, ' ').trim(), start: f.start.value, end: f.end.value, status: status.value };
+        const why = !v.title ? 'A goal needs a name.' : !v.metric ? 'Say what is measured (the metric).' : !v.target ? 'A goal needs a target.' : !/^\d{4}-\d{2}-\d{2}$/.test(v.end) ? 'A goal needs an end date.' : v.start && v.start > v.end ? 'The start date is after the end date.' : '';
+        if (why) { err.textContent = why; err.hidden = false; return; }
+        const id = g.id || boardId('g_'), who = me() || '';
+        const ok = await mutate(n => {
+          if (n.goals != null && !Array.isArray(n.goals)) return;   // hand-edited: never replaced (the form refused it above)
+          if (!n.goals) n.goals = [];
+          let x = n.goals.find(y => y && y.id === id); if (!x) { x = { id, created: nowIso() }; n.goals.push(x); }
+          Object.assign(x, v, { updated: nowIso() }); if (who) x.updatedBy = who; if (!x.start) delete x.start;
+        }, `${g.id ? 'Update' : 'Add'} goal: ${v.title}`);
+        if (ok !== false && goalSheet) { form = null; draw(); }
+      } }); save.id = 'goalSave';
+      const cancel = ui.button({ label: 'Cancel', onClick: () => { form = null; draw(); } });
+      const acts = el('div', 'goalacts'); acts.append(cancel);
+      if (g.id) {
+        const rm = ui.button({ label: 'Remove', variant: 'ghost', icon: 'trash-2', onClick: async () => {
+          const linked = state.tasks.filter(t => t.goal === g.id).length;
+          if (!(await ui.confirm({ title: 'Remove this goal?', body: (linked ? `${linked} card${linked === 1 ? '' : 's'} link to it; the link comes off ${linked === 1 ? 'it' : 'them'}. ` : '') + 'To keep the record, set its status to done or dropped instead.', confirmLabel: 'Remove goal', danger: true }))) return;
+          const ok = await mutate(n => { if (!Array.isArray(n.goals)) return; n.goals = n.goals.filter(y => !(y && y.id === g.id)); n.tasks.forEach(t => { if (t.goal === g.id) { delete t.goal; t.updated = nowIso(); } }); }, `Remove goal: ${g.title}`);
+          if (ok !== false && goalSheet) { if ($('fGoal').value === g.id) setGoalFilter(''); form = null; draw(); }
+        } }); rm.id = 'goalRemove'; acts.append(rm);
+      }
+      acts.append(el('span', 'spacer'), save); body.append(err, acts); f.title.focus();
+    }
+    goalSheet = ui.sheet({ title: 'Goals', body, removeOnClose: true, onClose: () => { goalSheet = null; } });
+    goalSheet.el.id = 'dlgGoals'; draw(); goalSheet.open();
+  }
   // ---- colour: a card's left edge is its client, its right edge is its urgency -------------------------------
   // Known clients are spaced by the golden angle (137.5 degrees) past the first six; the first six clients get hand-picked hues that
   // avoid the urgency colours. Unknown text falls back to ui.hueFor, the one text-to-colour hash (avatars, stages and board badges use it too).
@@ -1785,6 +1886,8 @@ if (typeof window !== 'undefined') (() => {
     const fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fprio = $('fPrio').value, fproj = $('fProject').value;
     if (fc.length && !fc.includes(t.client)) return false;
     if (fproj && t.project !== fproj) return false;
+    const fgoal = $('fGoal').value;
+    if (fgoal === '__none' ? !!goalById(t.goal) || isDoneTask(t) : fgoal && t.goal !== fgoal) return false;   // No goal: the open cards, as the bar counts them
     if (fw === '__none' && t.assignees.length) return false;
     if (fw === '__agent' && !activeClaim(t)) return false;
     if (fw.startsWith('__agent:') && (!activeClaim(t) || agentFilterValue(activeClaim(t)) !== fw)) return false;
@@ -1903,6 +2006,7 @@ if (typeof window !== 'undefined') (() => {
     fillSelect($('fDoneBy'), completionOptions().map(x => [completionFilterValue(x), x.label]), 'Anyone');
     fillSelect($('fLabel'), state.labels.map(l => [l.name, l.name]), 'All');
     fillProjectSelect(sortedProjects().map(p => [p.id, projectPickerLabel(p)]));
+    fillSelect($('fGoal'), [...goalList().slice().sort(byGoalEnd).map(g => [g.id, goalPickerLabel(g)]), ['__none', 'No goal']], 'All'); $('fGoalWrap').hidden = !goalList().length && !$('fGoal').value;
     syncStatusFilter();
     restoreFilterRoute();
     writeFilterRoute();
@@ -1914,7 +2018,7 @@ if (typeof window !== 'undefined') (() => {
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderStats();
+      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
@@ -1951,7 +2055,7 @@ if (typeof window !== 'undefined') (() => {
       add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = open; board.append(c);
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
-    renderLegend(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
+    renderLegend(); renderGoalBar(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
@@ -2086,7 +2190,7 @@ if (typeof window !== 'undefined') (() => {
     bd.textContent = fresh > 99 ? '99+' : String(fresh); bd.hidden = !fresh; bell.classList.toggle('on', freshOnly);
     bell.title = fresh ? `${fresh} card${fresh > 1 ? 's' : ''} with new comments or changes from others (click to see them)` : (cfg().me ? 'Nothing new' : 'Set your GitHub username in Settings to see unread markers');
     document.title = (fresh ? `(${fresh}) ` : '') + (state.settings.title || 'Keeptrack');
-    const nf = ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fPrio', 'fProject'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fWaiting').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
+    const nf = ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fPrio', 'fProject', 'fGoal'].filter(id => $(id).value).length + ($('fAttn').checked ? 1 : 0) + ($('fWaiting').checked ? 1 : 0) + ($('fHideDone').checked ? 1 : 0) + (freshOnly ? 1 : 0), fb = $('filterBadge');
     fb.textContent = String(nf); fb.hidden = !nf; $('btnFilter').title = nf ? `Filters (${nf} on)` : 'Filters'; renderTopbar();
   }
 
@@ -3240,6 +3344,7 @@ if (typeof window !== 'undefined') (() => {
     const who = el('span', 'dval'); who.id = 'cWho';
     const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
     const work = el('button', 'dworkpick'); work.type = 'button'; work.id = 'cWorkPick'; work.onclick = openTaskWorkPicker;
+    const goal = drawerSelect('cGoal', 'Goal');
     const chips = el('span', 'dval'); chips.id = 'cLabelChips';
     const labelAdd = ghostAdd('cLabelAdd', 'Add', 'Add a label', () => { labelAdd.hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); });
     const labelNew = el('input', 'ui-input dlabelnew'); labelNew.id = 'cLabelNew'; labelNew.setAttribute('list', 'labelList'); labelNew.placeholder = 'Label name'; labelNew.setAttribute('aria-label', 'New label name'); labelNew.hidden = true;
@@ -3251,9 +3356,11 @@ if (typeof window !== 'undefined') (() => {
       { label: 'Waiting for', icon: 'alarm-clock', value: wait },
       { label: 'People', icon: 'users', value: [who, whoAdd] },
       { label: 'Client & project', icon: 'building-2', value: work },
+      { label: 'Goal', icon: 'target', value: goal },
       { label: 'Labels', icon: 'tag', value: [chips, labelAdd, labelNew, labelList] }
     ]);
     [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
+    goal.closest('.ui-props__row').id = 'cGoalRow';
     const after = el('div', 'dafter'); after.id = 'cAfter'; after.hidden = true;   // "Runs after": only on a card with after links
     $('cProps').append(props, after);
     // sections: Description, Related cards, Checklist, Links, Contacts, Activity (comments and history in one timeline)
@@ -3359,6 +3466,7 @@ if (typeof window !== 'undefined') (() => {
 
   $('cCol').onchange = e => { const id = editing, v = e.target.value; saveField(n => { place(n, id, v, null); }, `Move: ${titleOf(id)}`); };
   function syncPrio(v) { const w = $('cPrio').parentElement; ['danger', 'warn', 'ok'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + ui.priorityTone(v)); }
+  $('cGoal').onchange = e => { const v = e.target.value; edit(editing, t => { if (v) t.goal = v; else delete t.goal; }, `Goal: ${titleOf(editing)}`); };
   $('cPrio').onchange = e => { const v = e.target.value; syncPrio(v); edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
   function renderTaskWork(t) {
     const b = $('cWorkPick'), pr = projectById(t.project); b.textContent = '';
@@ -3731,6 +3839,12 @@ if (typeof window !== 'undefined') (() => {
     { const who = completionOf(t), old = $('cCompletedBy'); if (old) old.remove();
       if (who) { const p = ui.pill({ text: 'Completed by ' + who.label, icon: 'circle-check', tone: who.agent ? 'accent' : 'ok' }); p.id = 'cCompletedBy'; p.title = who.at ? fmtStamp(who.at) : ''; $('cStatusVal').append(p); } }
     syncPrio($('cPrio').value); syncDue($('cDue').value, t);
+    if (force || document.activeElement !== $('cGoal')) {   // active goals, plus the card's own goal when it ended or is gone
+      const own = goalById(t.goal), items = activeGoals().map(g => [g.id, goalPickerLabel(g)]);
+      if (t.goal && !items.some(([v]) => v === t.goal)) items.push([t.goal, own ? goalPickerLabel(own) : 'A goal that is not on the board']);
+      fillSelect($('cGoal'), items, 'No goal'); $('cGoal').value = t.goal || '';
+    }
+    $('cGoalRow').hidden = !goalList().length && !t.goal;
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
     renderWaiting(t); renderAfter(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); syncSections(t); syncAgentBtn(t);
@@ -3754,7 +3868,7 @@ if (typeof window !== 'undefined') (() => {
   let routeApplying = false, settingsRoute = 'prefs';
   // A complete, explicit snapshot. Empty selections override old browser preferences;
   // only this allowlist is copied to navigation links (never tokens or setup payloads).
-  const FILTER_SELECTS = { who: 'fWho', status: 'fStatus', completed: 'fDoneBy', label: 'fLabel', project: 'fProject', priority: 'fPrio' };
+  const FILTER_SELECTS = { who: 'fWho', status: 'fStatus', completed: 'fDoneBy', label: 'fLabel', project: 'fProject', goal: 'fGoal', priority: 'fPrio' };
   const FILTER_CHECKS = { attention: 'fAttn', waiting: 'fWaiting', hide_done: 'fHideDone' };
   const FILTER_KEYS = ['filters', 'client', ...Object.keys(FILTER_SELECTS), ...Object.keys(FILTER_CHECKS), 'unread', 'sort', 'layout', 'order', 'board_view', 'people_query', 'stage', 'activity_range', 'activity_day', 'activity_who', 'activity_agents', 'inbox_status', 'inbox_kind', 'inbox_source', 'inbox_reviewer'];
   let pendingFilterRoute = new URLSearchParams(location.search), filterRouteReady = false;
@@ -5144,6 +5258,8 @@ if (typeof window !== 'undefined') (() => {
   if ($('sResearch') && $('sResearchN')) $('sResearch').onchange = $('sResearchN').onchange = saveResearchSettings;
   $('btnInbox').onclick = () => setView('inbox');
   $('btnAutos').onclick = () => setView('automations');
+  $('btnGoals').onclick = () => openGoals();
+  $('fGoals').onclick = () => openGoals();   // Filters reaches the Goals sheet on every width, also before the first goal
   const patUrl = () => { const owner = ($('sRepo').value.trim().split('/')[0] || '');
     const q = new URLSearchParams({ name: 'Keeptrack ' + (($('sRepo').value.trim().split('/')[1]) || 'board'), description: 'Keeptrack: read and write board/tasks.json and create issues', expires_in: '90', contents: 'write', issues: 'write' });
     if (/^[\w.-]+$/.test(owner)) q.set('target_name', owner);
@@ -5336,14 +5452,14 @@ if (typeof window !== 'undefined') (() => {
   $('clientPop').addEventListener('click', e => e.stopPropagation()); POPS.add($('clientPop'));
   document.addEventListener('click', () => closePops()); document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (popOpen) { closePops(true); return; } if (cinemaCol && !document.querySelector('dialog[open]')) { cinemaCol = ''; render(); } } });
   $('btnAttn').onclick = () => { $('fAttn').checked = !$('fAttn').checked; render(); };
-  $('fClear').onclick = () => { deferredFilterRoute.clear(); setClientValues([]); ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fWaiting').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
+  $('fClear').onclick = () => { deferredFilterRoute.clear(); setClientValues([]); ['fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fGoal', 'fPrio'].forEach(id => { $(id).value = ''; }); $('fAttn').checked = false; $('fWaiting').checked = false; $('fHideDone').checked = false; freshOnly = false; closePops(); render(); };
   // re-fit the client pills whenever their available width changes (window resize, avatars/status/labels in the header changing, fonts loading)
   { let rz = null, lastW = 0; const refit = () => { clearTimeout(rz); rz = setTimeout(() => { renderTopbar(); layoutCinemaCards(); }, 60); };
     window.addEventListener('resize', refit);
     const wrap = document.querySelector('.clientwrap');
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
-  ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { deferredFilterRoute.delete(i === 'fClient' ? 'client' : Object.keys(FILTER_SELECTS).find(k => FILTER_SELECTS[k] === i)); if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
+  ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fGoal', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { deferredFilterRoute.delete(i === 'fClient' ? 'client' : Object.keys(FILTER_SELECTS).find(k => FILTER_SELECTS[k] === i)); if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again
