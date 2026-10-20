@@ -25,6 +25,27 @@ A good card passes all five. A bad card fails one or more.
    panel reads (for PRs), and what `keeptrack-search` and `links` search.
 5. **Nothing secret is in the card.** Link to where confidential material lives. Do not copy it into the card.
 
+## Write in plain, simple English
+
+Write cards, comments and agent replies in a simplified technical English, in the spirit of ASD-STE100. A reader who
+skims, or who reads English as a second language, must get the meaning the first time.
+
+- **One idea in each sentence.** Keep a sentence to about 20 words, and an instruction to one action.
+- **Active voice.** Say who does the action: "Jez sends the invoice", not "the invoice will be sent".
+- **Common words, one meaning each.** Use "use", not "leverage"; "start", not "kick off". When you choose a word for a
+  thing, use the same word every time.
+- **Say the fact.** Give the number, the date, the file or the name. Do not add filler ("just", "simply",
+  "basically", "in order to") or soft hedges ("it might be worth considering").
+- **Lists for steps and choices.** Number the steps that must be done in order.
+
+Remove these signs of machine-written text before you save:
+
+- Openers and closers that say nothing: "Great question", "I hope this helps", "Let me know if you need anything".
+- Puffed-up words: "robust", "seamless", "comprehensive", "delve", "crucial", "game-changer".
+- Groups of three adjectives, and "not only X but also Y" patterns.
+- A summary that repeats what the text above already said.
+- Dashes used to join clauses: write two sentences.
+
 ## Format the text (Markdown)
 
 The web board shows card details and comments as Markdown (kit v62). A reader can press **Raw** to see the saved text.
@@ -292,6 +313,8 @@ Why it is good:
   comment.
 - Keep the card short. Put long content in a document and link it.
 - Write details and comments in Markdown (see "Format the text"). Use `-` and stdin for multi-line text.
+- Write in plain, simple English (see "Write in plain, simple English"): short active sentences, common words,
+  no filler.
 - When a comment needs a person, give options with a score out of 10, scored from the viewpoints the choice affects,
   each reason linked to its evidence or marked "judgement", your recommendation and the reason, and the next step
   (see "Comments that need a person: always recommend").

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v80: archive many Done cards without "Busy, try again" (private-tasks card #243), and a plain English section in
+the card guide (card #171). On the web board, a quick Archive click made while another archive commit runs no longer
+fails: the card leaves the board at once and waits, and every card that waited is archived in the next single commit.
+The Undo toast puts back all the cards of that commit, and Ctrl+Z does the same. The Done lane has a new **Archive
+all** button in its header: after a confirm step it archives every Done card that no agent holds, in one commit.
+`board/CARDS.md` has a new section, "Write in plain, simple English": short active sentences in the spirit of
+ASD-STE100, and a list of machine-written signs to remove.
+
 Kit v79: email-to-tasks reads several mailboxes, locally or in the cloud (pack 1.5.0, private-tasks card #232; spec
 `docs/specs/email-to-tasks-sources.md`). New config `sources`: up to three gog account aliases, in order. Before any
 read the check proves each one (the alias is set on this runner, its login has `gmail.readonly` and no scope that can

@@ -647,9 +647,14 @@ class Runner(unittest.TestCase):
 class Docs(unittest.TestCase):
     def read(self, rel): return (KIT / rel).read_text(encoding='utf-8')
 
-    def test_kit_is_v79_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(kt.KIT_VERSION, 79)
-        self.assertEqual(json.loads(self.read('manifest.json'))['version'], 79)
+    def test_kit_is_v80_with_upgrade_notes_and_changelog(self):
+        self.assertEqual(kt.KIT_VERSION, 80)
+        self.assertEqual(json.loads(self.read('manifest.json'))['version'], 80)
+        v80 = self.read('UPGRADING.md').split('### v80 (schema 4)', 1)[1].split('### v79', 1)[0]
+        for words in ('kit-update', 'Busy, try again', 'Write in plain, simple English'):
+            self.assertIn(words, v80)
+        self.assertIn('Kit v80', (KIT.parents[1] / 'CHANGELOG.md').read_text(encoding='utf-8'))
+        self.assertIn('## Write in plain, simple English', self.read('CARDS.md'))
         v79 = self.read('UPGRADING.md').split('### v79 (schema 4)', 1)[1].split('### v78', 1)[0]
         for words in ('kit-update', 'email-to-tasks', 'sources', 'relay/registry/automations.yaml', 'digest'):
             self.assertIn(words, v79)

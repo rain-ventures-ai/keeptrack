@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v80 (schema 4)
+Web board: a quick Archive click made while another archive runs waits and goes in the next commit, so archiving many
+Done cards fast no longer says "Busy, try again" (card #243 on the owner's board). The Done lane has an **Archive
+all** button (with a confirm step). `board/CARDS.md` has a new section, "Write in plain, simple English". No migration
+and no data change.
+- Run `kit-update` only. Check: `kit-check` says v80, and `board/CARDS.md` has "Write in plain, simple English".
+
 ### v79 (schema 4)
 email-to-tasks reads several mailboxes (pack 1.5.0, private-tasks card #232). The new `sources` setting names up to
 three gog account aliases (for example `personal,work`); each one is proved before any read (alias set, read-only
