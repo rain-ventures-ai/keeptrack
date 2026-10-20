@@ -111,10 +111,14 @@ SOURCE = re.compile(r"[a-z][a-z0-9-]{0,19}")
 MAX_SOURCES = 3
 # gog's own guards on every call for a named source: no write request, no send, no prompt, and only these commands.
 GUARDS = ["--readonly", "--gmail-no-send", "--no-input"]
-# Gmail scopes wider than read: a token with any of them is refused, so read-only holds at Google too.
-WIDE_SCOPES = {"https://mail.google.com/"} | {"https://www.googleapis.com/auth/gmail." + s for s in
-               ("modify", "compose", "send", "insert", "labels", "settings.basic", "settings.sharing")}
+# Gmail scopes a source's login may hold: an allowlist, so any other Gmail scope (modify, send, an add-on action)
+# is refused and read-only holds at Google too. Scopes for other Google services are not Gmail's and are ignored.
 READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_OK = {READ_SCOPE, "https://www.googleapis.com/auth/gmail.metadata"}
+
+
+def gmail_scope(scope):
+    return isinstance(scope, str) and (scope.startswith("https://mail.google.com/") or scope.startswith("https://www.googleapis.com/auth/gmail."))
 
 
 class Blocked(Exception):
@@ -160,7 +164,7 @@ def identity(names, deadline):
         account = by_address.get(address.strip().casefold())
         if account is None or account.get("error"): raise Blocked("auth-expired")
         scopes = account.get("scopes")
-        if not isinstance(scopes, list) or READ_SCOPE not in scopes or WIDE_SCOPES & set(scopes):
+        if not isinstance(scopes, list) or READ_SCOPE not in scopes or any(gmail_scope(s) and s not in GMAIL_OK for s in scopes):
             raise Blocked("setup-missing:readonly-" + name)
         found[name] = address.strip()
     return found
@@ -272,8 +276,12 @@ def main_sources(names, cfg, contacts, own, max_recipients, include_sent, budget
     def pack(n, values, frozen):
         windows = {name: [v["after"], v["until"], v["page"], frozen] for name, v in values.items()}
         out = token(dict(v=2, n=n, s=windows))
-        if len(out) > 256:   # long page tokens: restart those windows from their first page (seen keys skip repeats)
-            out = token(dict(v=2, n=n, s={name: [w[0], w[1], None, True] for name, w in windows.items()}))
+        # Too long for the kit's token: restart windows from their first page, longest page token first, until it
+        # fits (same bounds, frozen; seen keys skip repeats).
+        for name in sorted((k for k, w in windows.items() if w[2]), key=lambda k: -len(windows[k][2])):
+            if len(out) <= 256: break
+            windows[name] = [windows[name][0], windows[name][1], None, True]
+            out = token(dict(v=2, n=n, s=windows))
         return out
 
     start_cursor = pack(first, progress, True)

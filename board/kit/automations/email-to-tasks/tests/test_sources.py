@@ -137,6 +137,12 @@ class SourcesTest(Base):
         self.assertEqual((code, value["note"]), (2, "setup-missing:readonly-work"))
         gog = FakeGog({"alex@work.invalid": [[]]}, self.aliases, scopes={"alex@work.invalid": ["https://mail.google.com/", READ]})
         self.assertEqual(self.run_check(gog, {"sources": "work"})[1]["note"], "setup-missing:readonly-work")
+        gog = FakeGog({"alex@work.invalid": [[]]}, self.aliases,
+                      scopes={"alex@work.invalid": [READ, "https://www.googleapis.com/auth/gmail.addons.current.action.compose"]})
+        self.assertEqual(self.run_check(gog, {"sources": "work"})[1]["note"], "setup-missing:readonly-work")
+        gog = FakeGog({"alex@work.invalid": [[]]}, self.aliases,
+                      scopes={"alex@work.invalid": [READ, "https://www.googleapis.com/auth/calendar.readonly", "openid"]})
+        self.assertEqual(self.run_check(gog, {"sources": "work"})[0], 0)   # other services' scopes are not Gmail's
         gog = FakeGog({"alex@work.invalid": [[]]}, self.aliases, scopes={"alex@work.invalid": []})
         self.assertEqual(self.run_check(gog, {"sources": "work"})[1]["note"], "setup-missing:readonly-work")
         self.assertEqual(self.searches(gog), [])
@@ -243,6 +249,23 @@ class ResolveSourcesTest(Base):
         with patch.dict(os.environ, BOARD_USER="alexdemo"):
             code, _ = self.resolve_run(gog, self.ref("personal"), key("h1"))
         self.assertEqual(code, 2)
+
+    def test_several_installs_need_board_user(self):
+        self.install("work"); self.install("work,personal", owner="jodemo")
+        gog = self.boxes()
+        with patch.dict(os.environ, {"BOARD_USER": ""}):
+            code, _ = self.resolve_run(gog, self.ref("work"), key("w1"))
+            self.assertEqual(code, 2)
+            code, _ = self.resolve_run(gog, "--day", "2026-10-14", key("w1"))
+            self.assertEqual(code, 2)
+        self.assertEqual(gog.calls, [])
+
+    def test_no_install_for_board_user_never_falls_back_to_the_default_account(self):
+        self.install("work")
+        gog = self.boxes()
+        with patch.dict(os.environ, BOARD_USER="alexdemo-typo"):
+            code, _ = self.resolve_run(gog, "--day", "2026-10-14", key("w1"))
+        self.assertEqual(code, 2); self.assertEqual(gog.calls, [])
 
 
 if __name__ == "__main__":

@@ -170,22 +170,34 @@ def get_argv(gmail_id, address):
     return ["gog", "--account", address] + _checker().GUARDS + ["--enable-commands-exact", "gmail.get", "gmail", "get", gmail_id, "--json"]
 
 
+class Refused(Exception):
+    pass
+
+
 def approved_sources(check):
-    """The sources this board's own email-to-tasks installs name (the person in BOARD_USER only, when set), read
-    from the committed registers, never from the item ref: a ref that names another mailbox is refused. None when no
-    install names sources (gog's default account, as before 1.5)."""
+    """The sources the run's own email-to-tasks install names, read from its committed register, never from the
+    item ref: a ref that names another mailbox is refused. The install is the one for BOARD_USER; without
+    BOARD_USER, the board's only install. None (gog's default account, as before 1.5) only when no install is on
+    this board at all, or the run's own install names no sources. Several installs and no BOARD_USER, or no install
+    for BOARD_USER, is refused: the run never guesses whose mailboxes it may read."""
     owner = os.environ.get("BOARD_USER", "").strip().casefold()
-    names = []; named = False
+    registers = []
     for path in sorted(Path("automation/routines").glob("auto-email-to-tasks-*.json")):
         try:
             r = json.loads(path.read_text())
-            if r.get("status") == "retired" or (owner and str(r.get("owner", "")).casefold() != owner): continue
-            listed = check.sources(r["automation"]["config"])
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, check.Blocked):
+            if not isinstance(r, dict): raise ValueError("register")
+        except (OSError, ValueError):
             raise GogFailed("gog-error: install register unreadable")
-        if listed is not None:
-            named = True; names += [n for n in listed if n not in names]
-    return names if named else None
+        if r.get("status") != "retired": registers.append(r)
+    if not registers:
+        return None
+    mine = [r for r in registers if str(r.get("owner", "")).casefold() == owner] if owner else registers
+    if len(mine) != 1:
+        raise Refused("set BOARD_USER to the install's owner: the resolver reads only that install's mailboxes")
+    try:
+        return check.sources(mine[0]["automation"]["config"])
+    except (KeyError, TypeError, AttributeError, check.Blocked):
+        raise GogFailed("gog-error: install register unreadable")
 
 
 def _save_folder():
@@ -288,7 +300,10 @@ def main(argv=None):
     _DEADLINE[0] = time.monotonic() + DEADLINE_SECONDS
     _PAGES.clear()
     try:
-        approved = approved_sources(check)
+        try:
+            approved = approved_sources(check)
+        except Refused as refused:
+            print(str(refused)); return 2
         if approved is None:
             if source is not None:
                 print("this item names a mail source, but no install on this board names sources"); return 2
