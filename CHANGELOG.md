@@ -12,9 +12,9 @@ with `goal`. keeptrack.py: `goals`, `goal`, `goal-add`, `goal-set`, `goal-remove
 `list --goal REF|none`; `show` prints the card's goal; `doctor` warns about a bad goal entry (GOAL) and a card that links
 to a goal that is not on the board (GOAL_MISSING). Web board: a Goals bar above the Kanban and List views shows each
 active goal with its target, a progress bar (when the current value and the target are numbers), the days left and its
-open cards; a click filters the board to that goal, and "No goal" to the open cards that link to none. A new Goals button
+open cards; a click filters the board to that goal, and "No goal" to the open cards that link to none. Goals in the board menus
 adds and edits goals, the card drawer has a Goal field, and Filters has a Goal filter. Older kits keep goals and card
-links as they are.
+links as they are. The page markup version is now 5 (new ids), so a cached older page reloads itself.
 
 Kit v82: the email cleaner's last known gaps and false flags (email-to-tasks pack 1.5.1, private-tasks card #184).
 `safe_view.py` models a hiding rule's sibling combinator (`img.g-img + div` hides only the `div` after that image),

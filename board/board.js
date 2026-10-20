@@ -1,7 +1,7 @@
 // Markup handshake: the ids and page structure this file needs from index.html. index.html sets window.kbMarkup to the
 // version it carries (and its loader reads this line before running the file). Bump both together whenever board.js
 // starts to need markup an older index.html does not have, or index.html drops markup an older board.js needs.
-const KB_MARKUP = 4;
+const KB_MARKUP = 5;
 // Fractional ranks. This is the same algorithm as board/kit/keeptrack.py.
 // Keep it outside the browser closure so the Python parity test can load it in Node.
 const RANK_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -303,7 +303,7 @@ if (typeof window !== 'undefined') (() => {
     { id: 'btnInbox', icon: 'inbox', menu: 'Review Inbox', title: 'Review Inbox' },
     { id: 'btnAutos', icon: 'zap', short: 'Automations', menu: 'Automations', title: 'Automations: jobs that suggest work for you' },
     { id: 'btnPrs', icon: 'git-pull-request', short: 'PRs', menu: 'Pull requests', title: 'Pull requests linked on cards' },   // shown only when a card links a pull request   // shown only when the board turns the Inbox on
-    { id: 'btnGoals', icon: 'target', short: 'Goals', menu: 'Goals', title: 'Goals: what the board works towards' },
+    { id: 'btnGoals', icon: 'target', short: 'Goals', menu: 'Goals', title: 'Goals: what the board works towards', menuOnly: true },   // the menus only: the wide header keeps its room for the client pills
     { id: 'btnCopy', icon: 'copy', short: 'Copy', menu: 'Copy board', title: 'Copy board' },
     { id: 'btnRefresh', icon: 'refresh-cw', short: 'Refresh', menu: 'Refresh board', title: 'Reload from GitHub', aria: 'Refresh' },
     { id: 'btnInstall', icon: 'download', short: 'Install', menu: 'Install this board', title: 'Install this board' },
@@ -316,7 +316,7 @@ if (typeof window !== 'undefined') (() => {
     if (utils) HEAD_ACTIONS.filter(a => a.id).forEach(a => {
       if ($(a.id)) return;   // Undo is already in the wide header; its menu copies still come from HEAD_ACTIONS.
       const b = el('button'); b.type = 'button'; b.id = a.id; b.title = a.title; b.setAttribute('aria-label', a.aria || a.title);
-      const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); utils.append(b);
+      const ic = el('span', 'ic'); ic.append(svgIcon(a.icon)); b.append(ic, el('span', 'tx', ' ' + a.short)); if (a.menuOnly) b.hidden = true; utils.append(b);
     });
     ['morePop', 'dockPop'].forEach(id => {
       const pop = $(id); if (!pop || pop.querySelector('[data-head-action], [data-tour-start]')) return;
@@ -1597,10 +1597,10 @@ if (typeof window !== 'undefined') (() => {
         text.append(el('strong', null, g.title || 'Untitled goal'), el('span', 'muted', [goalMeasure(g), g.end ? 'ends ' + g.end : '', `${c.open} open, ${c.done} done`].filter(Boolean).join(' · ')));
         const st = goalStatus(g), pill = ui.pill({ text: st, tone: st === 'active' ? 'accent' : st === 'done' ? 'ok' : 'neutral' });
         const eb = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm', onClick: () => { form = { ...g }; draw(); } });
-        row.append(text, pill, eb); body.append(row);
+        row.append(text, pill); if (!ro) row.append(eb); body.append(row);
       });
       const add = ui.button({ label: 'Add a goal', icon: 'plus', variant: 'primary', onClick: () => { form = { id: '', title: '', metric: '', target: '', current: '', start: '', end: '', status: 'active' }; draw(); } });
-      add.id = 'goalAdd'; body.append(add);
+      add.id = 'goalAdd'; if (!ro) body.append(add); else body.append(el('p', 'muted', 'This board is read-only here, so goals cannot be changed.'));
     }
     function drawForm(g) {
       const f = { title: input('goalTitle', g.title, 'text', 'Revenue'), metric: input('goalMetric', g.metric, 'text', 'revenue per month'), target: input('goalTarget', g.target, 'text', '£10,000'),
@@ -1885,7 +1885,7 @@ if (typeof window !== 'undefined') (() => {
     if (fc.length && !fc.includes(t.client)) return false;
     if (fproj && t.project !== fproj) return false;
     const fgoal = $('fGoal').value;
-    if (fgoal === '__none' ? !!goalById(t.goal) : fgoal && t.goal !== fgoal) return false;
+    if (fgoal === '__none' ? !!goalById(t.goal) || isDoneTask(t) : fgoal && t.goal !== fgoal) return false;   // No goal: the open cards, as the bar counts them
     if (fw === '__none' && t.assignees.length) return false;
     if (fw === '__agent' && !activeClaim(t)) return false;
     if (fw.startsWith('__agent:') && (!activeClaim(t) || agentFilterValue(activeClaim(t)) !== fw)) return false;

@@ -2894,7 +2894,7 @@ def cmd_list(a):
             if t.get("project") != pref:
                 continue
         if getattr(a, "client", None) and t.get("client") != a.client: continue
-        if getattr(a, "goal", None) and (t.get("goal") != goal_ref if goal_ref else t.get("goal") in goal_ids): continue
+        if getattr(a, "goal", None) and (card_goal(t) != goal_ref if goal_ref else card_goal(t) in goal_ids): continue
         if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
         if getattr(a, "bare", False) and not bare_card(t): continue
         if getattr(a, "json", False):
@@ -2944,7 +2944,7 @@ def cmd_show(a):
             why = why.rsplit(" (session ", 1)[0]
         print("\noutcome: cancelled" + (f" ({why})" if why else ""))
     if t.get("goal"):   # kit v83: the goal this card works towards
-        g = next((x for x in goal_list(data) if x.get("id") == t["goal"]), None)
+        g = next((x for x in goal_list(data) if x.get("id") == card_goal(t)), None)
         print("\ngoal: " + (goal_line(data, g) if g else f"{_flat(t['goal'])} (not on the board)"))
     if links:
         waiting_on = [x for x in links if x["state"] != "done"]
@@ -4635,7 +4635,7 @@ def doctor_board(fix=False):
             except ValueError:
                 problem("GOAL", gpath, f"`{k}` {v!r} must be a date (YYYY-MM-DD).")
     for t in tasks:
-        if t.get("goal") and t.get("goal") not in goal_ids:
+        if t.get("goal") and (not isinstance(t["goal"], str) or t["goal"] not in goal_ids):
             problem("GOAL_MISSING", f"card {t.get('id', '?')}", f"The card links to goal {clean(str(t['goal']), 40)!r}, "
                     "which is not on the board; link it to another goal or clear it (task-set ID --goal none).")
     for t in tasks:
@@ -5999,8 +5999,15 @@ GOAL_STATUSES = ["active", "done", "dropped"]
 
 
 def goal_list(data):
+    """The goals a tool can use: entries with a string id (doctor reports the others; they stay in the file)."""
     goals = data.get("goals")
-    return [g for g in goals if isinstance(g, dict)] if isinstance(goals, list) else []
+    return [g for g in goals if isinstance(g, dict) and isinstance(g.get("id"), str) and g["id"]] if isinstance(goals, list) else []
+
+
+def card_goal(t):
+    """The goal id a card links to, or "" (a hand-edited value that is not a string counts as no goal)."""
+    g = t.get("goal")
+    return g if isinstance(g, str) else ""
 
 
 def find_goal(data, ref, allow_missing=False):
@@ -6040,14 +6047,14 @@ def check_goal_date(d, data, what):
 def goal_cards(data, g):
     """(open, done) cards on the board that link to this goal."""
     dc = done_col(data)
-    linked = [t for t in data.get("tasks", []) if t.get("goal") == g.get("id")]
+    linked = [t for t in data.get("tasks", []) if card_goal(t) == g.get("id")]
     return [t for t in linked if t.get("column") != dc], [t for t in linked if t.get("column") == dc]
 
 
 def unlinked_open(data):
     """Open cards that link to no goal (or to a goal that is not on the board)."""
     ids, dc = {g.get("id") for g in goal_list(data)}, done_col(data)
-    return [t for t in data.get("tasks", []) if t.get("column") != dc and t.get("goal") not in ids]
+    return [t for t in data.get("tasks", []) if t.get("column") != dc and card_goal(t) not in ids]
 
 
 def goal_line(data, g, today=None):
@@ -6091,7 +6098,7 @@ def cmd_goal(a):
     for k in ("metric", "target", "current", "start", "end"):
         if g.get(k):
             print(f"  {k}: {_flat(g[k])}")
-    if (g.get("details") or "").strip():
+    if str(g.get("details") or "").strip():
         print("\n" + str(g["details"]).strip())
     open_cards, _ = goal_cards(data, g)
     if open_cards:
@@ -6132,9 +6139,9 @@ def _goal_fields(g, a, data):
 
 def cmd_goal_add(a):
     def fn(data):
-        goals = data.get("goals")
+        goals = data.setdefault("goals", [])
         if not isinstance(goals, list):
-            goals = data["goals"] = []
+            sys.exit("`goals` in tasks.json is not a list; fix it by hand first (keeptrack.py doctor shows it)")
         g = {"id": new_id("g_", {x.get("id") for x in goal_list(data)}), "title": "", "metric": "", "target": "",
              "current": "", "end": "", "status": "active"}
         a.status = a.status or "active"
@@ -6161,7 +6168,7 @@ def cmd_goal_remove(a):
     """Remove a goal. Cards that link to it keep working; --clear-cards also takes the link off them."""
     def fn(data):
         g = find_goal(data, a.ref)
-        linked = [t for t in data.get("tasks", []) if t.get("goal") == g["id"]]
+        linked = [t for t in data.get("tasks", []) if card_goal(t) == g["id"]]
         if linked and not a.clear_cards:
             sys.exit(f"{len(linked)} card(s) link to {g['id']}; set its status to done or dropped instead "
                      f"(goal-set {g['id']} --status done), or use --clear-cards to take the link off them")
@@ -6268,7 +6275,7 @@ def cmd_task_set(a):
                 t["project"] = pid; changed.append(f"project: {pid or 'cleared'}")
         if getattr(a, "goal", None) is not None:
             g = None if a.goal.strip().lower() in ("", "none") else find_goal(data, a.goal)   # store the id, not the typed title
-            if (g or {}).get("id", "") != t.get("goal", ""):
+            if (g or {}).get("id", "") != card_goal(t) or ("goal" in t and not g and not card_goal(t)):
                 if g:
                     t["goal"] = g["id"]
                 else:

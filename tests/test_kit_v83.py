@@ -121,6 +121,32 @@ class Board(unittest.TestCase):
         self.assertFalse({"GOAL", "GOAL_MISSING"} & {x["code"] for x in report["issues"] if x not in report["warnings"]})
         self.assertIn("not on the board", self.kt("show", f"#{n}").stdout)
 
+    def test_hand_edited_goals_never_crash_a_command(self):
+        gid = self.add_goal(); n = self.first_num()
+        root = self.root(); root["goals"] += [{"id": ["x"], "title": "list id"}, {"title": "no id"}, "text"]
+        root["goals"][0]["details"] = 5
+        with open(self.file, "w", encoding="utf-8") as f:
+            json.dump(root, f)
+        card = self.card(n); card["goal"] = {"a": 1}
+        with open(os.path.join(self.dir, "cards", card["id"] + ".json"), "w", encoding="utf-8") as f:
+            json.dump(card, f)
+        self.kt("list", "--all"); self.kt("goals"); self.kt("goal", gid)
+        self.assertIn(f"#{n} ", self.kt("list", "--all", "--goal", "none").stdout, "a goal that is not a string is no goal")
+        codes = {x["code"] for x in json.loads(self.kt("doctor", "--json", ok=False).stdout)["issues"]}
+        self.assertTrue({"GOAL", "GOAL_MISSING"} <= codes)
+        self.kt("task-set", f"#{n}", "--goal", gid)
+        self.assertEqual(gid, self.card(n)["goal"])
+
+    def test_goals_that_are_not_a_list_are_not_overwritten(self):
+        root = self.root(); root["goals"] = {"oops": 1}
+        with open(self.file, "w", encoding="utf-8") as f:
+            json.dump(root, f)
+        self.assertIn("fix it by hand", self.add_goal_raw().stderr)
+        self.assertEqual({"oops": 1}, self.root()["goals"])
+
+    def add_goal_raw(self):
+        return self.kt("goal-add", "X", "--metric", "m", "--target", "1", "--end", "2030-01-01", ok=False)
+
     def test_details_from_stdin(self):
         gid = self.add_goal()
         self.kt("goal-set", gid, "--details", "-", stdin="## Why\n- cash\n")

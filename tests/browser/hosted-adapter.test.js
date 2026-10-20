@@ -366,7 +366,7 @@ const server = http.createServer(async (req, res) => {
 
     const stale = await browser.newPage();
     await stale.addInitScript(() => sessionStorage.setItem('kb_markup_reload', String(Date.now())));
-    await stale.route('**/board/hosted.html*', async route => route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(ROOT, 'board/hosted.html'), 'utf8').replace('data-kb-markup="4"', 'data-kb-markup="999"') }));
+    await stale.route('**/board/hosted.html*', async route => route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(ROOT, 'board/hosted.html'), 'utf8').replace(/data-kb-markup="\d+"/, 'data-kb-markup="999"') }));
     await stale.goto(`${base}/board/hosted.html?api=${encodeURIComponent(base)}`);
     await stale.locator('#kbStale').waitFor(); assert.equal(await stale.locator('#hostedSignIn').count(), 0);
     await stale.close(); ok('hosted markup mismatch refuses application initialisation');
