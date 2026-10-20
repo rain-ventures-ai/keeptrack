@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 79;
+  const PAGE_KIT = 80;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1305,7 +1305,7 @@ if (typeof window !== 'undefined') (() => {
     }
   }
   async function undoLast(target) {   // target: the entry a toast's Undo button belongs to; Ctrl+Z and the Undo buttons pass none (the newest)
-    if (!target && quickUndo && undoToast === quickUndo.toast) { const t = quickUndo.task; hideUndo(); quickUndo = null; undoQuickArchive(t); return; }   // the newest change is a Done-lane archive: put that card back
+    if (!target && quickUndo && undoToast === quickUndo.toast) { const ts = quickUndo.tasks; hideUndo(); quickUndo = null; undoQuickArchive(ts); return; }   // the newest change is a Done-lane archive: put those cards back
     hideUndo();
     // A save still in flight is the newest change: let it finish and record its own entry, then take back the newest one.
     // (Reading the stack first would undo the change before it, and the pop below would then drop the wrong entry.)
@@ -1931,7 +1931,8 @@ if (typeof window !== 'undefined') (() => {
       const c = el('section', 'col' + (col.id === activeCol() ? ' active' : '') + (focused ? ' cinema-col' : '')); c.dataset.col = col.id; const h = colHead(col.name, items.length);
       if (focused) h.append(el('span', 'cinemaorder', 'High → low · Esc to exit'));
       const full = elI('button', 'hcinema', focused ? 'minimize-2' : 'maximize-2'); full.type = 'button'; full.title = focused ? 'Exit cinema mode' : `Show only ${col.name} in cinema mode`; full.setAttribute('aria-label', full.title);
-      const hb = el('button', 'hadd', '＋'); hb.type = 'button'; hb.title = 'Add a task to ' + col.name; hb.setAttribute('aria-label', 'Add a task to ' + col.name); h.append(full, hb); c.append(h);
+      const hb = el('button', 'hadd', '＋'); hb.type = 'button'; hb.title = 'Add a task to ' + col.name; hb.setAttribute('aria-label', 'Add a task to ' + col.name);
+      { const a = col.id === doneColId() && items.length ? archiveAllBtn() : null; if (a) h.append(a); } h.append(full, hb); c.append(h);
       const cards = el('div', 'cards');
       cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
       cards.addEventListener('dragleave', () => c.classList.remove('over'));
@@ -7371,6 +7372,11 @@ if (typeof window !== 'undefined') (() => {
       const y = todayIso().slice(0, 4); d.tasks = d.tasks.filter(x => x.id !== t.id);
       return { [y]: { tasks: [t], contacts: [], history: {} } };
     }
+    if (rules.taskIds) {   // a batch (quick archives queued while one ran, or Archive all): a card that left Done, went away or got a live claim meanwhile stays on the board
+      const ids = new Set(rules.taskIds), dc = (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id, take = [];
+      d.tasks = d.tasks.filter(t => { if (!ids.has(t.id) || (t.claim && t.claim.status !== 'done') || (rules.onlyDone && t.column !== dc)) return true; take.push(t); return false; });
+      return take.length ? { [todayIso().slice(0, 4)]: { tasks: take, contacts: [], history: {} } } : {};
+    }
     const cutT = dayIso(rules.done_days), cutP = dayIso(rules.lost_days), today = todayIso(), plan = {}, stamp = x => x.updated || x.created || today;
     const dc = (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id;
     const part = y => plan[y] || (plan[y] = { tasks: [], contacts: [], history: {} });
@@ -7430,15 +7436,18 @@ if (typeof window !== 'undefined') (() => {
   function archiveCounts() { const p = archivePlan(clone(state), archRules()), v = Object.values(p);
     return { tasks: v.reduce((n, x) => n + x.tasks.length, 0), contacts: v.reduce((n, x) => n + x.contacts.length, 0), history: v.reduce((n, x) => n + Object.values(x.history).reduce((m, h) => m + h.length, 0), 0) }; }
   async function completeArchiveHistory(plan, rules, fresh, meta) {
-    if (!rules.taskId) return;
-    const t = Object.values(plan)[0].tasks[0], older = [];
+    if (!pickedIds(rules)) return;
+    const files = [];
     for (const y of Object.keys((fresh.archive || {}).files || {}).sort()) {
       const entry = meta && meta.files.get(`archive/${y}.json`);
-      const data = meta ? entry && entry.obj : (await readArchive(y)).data;
-      older.push(...((data && data.history || {})[t.id] || []));
+      files.push(meta ? entry && entry.obj : (await readArchive(y)).data);
     }
-    const seen = new Set(); t.history = older.concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; });
+    Object.values(plan).forEach(part => part.tasks.forEach(t => { const older = [], seen = new Set();
+      files.forEach(data => older.push(...((data && data.history || {})[t.id] || [])));
+      t.history = older.concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; }); }));
   }
+  const batchWhat = k => `${k} task${k === 1 ? '' : 's'}; nothing deleted, search Include archive to restore`;
+  const pickedIds = rules => rules.taskIds || (rules.taskId ? [rules.taskId] : null);   // the cards a card-level archive moves; null: the rules-based clean-up
   async function archiveSplitNow(rules, what) {
     const message = 'Archive board items'; setStatus('Archiving…');
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -7447,17 +7456,17 @@ if (typeof window !== 'undefined') (() => {
         if (minKitOf(got.data)) { setKitRo(got.data); setStatus(''); roToast(); return; }   // these saves skip mutate: the same kit check here
         const fresh = normalise(got.data), plan = archivePlan(clone(fresh), rules), years = Object.keys(plan);
         await completeArchiveHistory(plan, rules, fresh, got.meta);
-        if (!years.length) { setStatus(''); toast('Nothing to archive yet'); return; }
+        if (!years.length) { setStatus(''); toast(rules.taskIds ? 'Nothing archived: those cards left Done or an agent took them.' : 'Nothing to archive yet'); return; }
         const extras = {}, gone = new Set(), histories = {}, counts = {};
         years.forEach(y => { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           extras[rel] = jsonText(merged); counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length };
-          if (rules.taskId) { delete merged.history[rules.taskId]; extras[rel] = jsonText(merged); }
+          if (pickedIds(rules)) { pickedIds(rules).forEach(id => delete merged.history[id]); extras[rel] = jsonText(merged); }
           plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); }); });
         fresh.tasks = fresh.tasks.filter(x => !gone.has(x.id)); fresh.contacts = fresh.contacts.filter(x => !gone.has(x.id));
         [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
         fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, counts); fresh.archive.last_run = nowIso();
         const out = await save(fresh, message, got.meta, extras);
-        if (out === 'ok') { archived = null; archivedSig = ''; snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); toast('Archived ' + what + '.'); return; }
+        if (out === 'ok') { archived = null; archivedSig = ''; snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); toast('Archived ' + (rules.taskIds ? batchWhat(gone.size) : what) + '.'); return; }
         if (out !== 'conflict') throw new Error(out); setStatus('Someone else changed the board, retrying…', 'err');
       } catch (e) { console.error(e); setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     }
@@ -7470,24 +7479,54 @@ if (typeof window !== 'undefined') (() => {
     const b = elI('button', 'ico quickarch', 'archive'); b.type = 'button'; b.title = `Archive #${t.num}`; b.setAttribute('aria-label', `Archive task #${t.num}`);
     b.onclick = e => { e.stopPropagation(); quickArchive(t.id); }; return b;
   }
-  const quickBusy = new Set(); let quickUndo = null;   // quickUndo: { toast, task } while the last quick archive's Undo toast shows (Ctrl+Z uses it too)
-  async function quickArchive(id) {
-    const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked() || quickBusy.has(id)) return;   // a second click while the first runs does nothing
-    // The card leaves the board at once (a pending view change, like a queued save) while the archive commit runs;
-    // if the archive does not happen, it comes back and the toast says so.
+  // Quick archives queue: a click while an archive commit runs no longer fails with "Busy, try again". The card leaves the
+  // board at once (a pending view change, like a queued save); clicks made while one archive runs are archived together in
+  // the next commit. If a card is not archived, it comes back and the toast says so.
+  const quickBusy = new Set(), quickQueue = []; let quickUndo = null, quickRun = null;   // quickUndo: { toast, tasks } while the last quick archive's Undo toast shows (Ctrl+Z uses it too)
+  function quickArchive(id) {
+    const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked() || quickBusy.has(id)) return quickRun;   // a second click on the same card does nothing
     const hide = { fn: v => { v.tasks = v.tasks.filter(x => x.id !== id); } }; pendingView.push(hide); render();
-    const said = lastToast;
-    quickBusy.add(id); try { await archiveNow({ taskId: id, onlyDone: true }); } finally { quickBusy.delete(id); const i = pendingView.indexOf(hide); if (i >= 0) pendingView.splice(i, 1); render(); }
-    if (state.tasks.some(x => x.id === id)) { if (lastToast === said) toast(`Could not archive #${t.num}. It is back on the board.`, true); return; }   // not archived: archiveNow's own toast says why, when it gave one
-    hideUndo(); if (lastToast) lastToast.dismiss(); undoAt = Date.now();
-    const tt = undoToast = ui.toast(`Archived #${t.num} ${t.title}`, { action: { label: 'Undo', onClick: () => { if (undoToast === tt) undoToast = null; quickUndo = null; undoQuickArchive(t); } }, timeout: 8000 });
-    quickUndo = { toast: tt, task: t };
+    quickBusy.add(id); quickQueue.push({ id, t, hide });
+    if (!quickRun) quickRun = flushQuickArchives().finally(() => { quickRun = null; });
+    return quickRun;
   }
-  async function undoQuickArchive(t) {   // the archived copy, not t: it holds the history lines the archive took
-    try { archived = null; archivedSig = ''; const a = await loadArchived(), hit = a.tasks.find(x => x.item.id === t.id);
-      if (!hit) { toast(`#${t.num} is not in the archive. Search with Include archive to find it.`, true); return; }
-      await restoreArchived('task', hit.item, hit.year, false);
-    } catch (e) { console.error(e); toast('Could not put the card back: ' + (e.message || e), true); }
+  async function flushQuickArchives() {
+    while (quickQueue.length) {
+      await null;   // let the clicks of this same task (Archive all) join the batch
+      for (let i = 0; i < 600 && (busy || saving); i++) await new Promise(r => setTimeout(r, 100));   // archiveNow refuses while a save runs: wait for it, then take every click made meanwhile
+      const batch = quickQueue.splice(0), said = lastToast;
+      try { await archiveNow(batch.length === 1 ? { taskId: batch[0].id, onlyDone: true } : { taskIds: batch.map(b => b.id), onlyDone: true }); }
+      catch (e) { console.error(e); }
+      finally { batch.forEach(b => { quickBusy.delete(b.id); const i = pendingView.indexOf(b.hide); if (i >= 0) pendingView.splice(i, 1); }); render(); }
+      const gone = batch.filter(b => !state.tasks.some(x => x.id === b.id)).map(b => b.t), back = batch.filter(b => state.tasks.some(x => x.id === b.id)).map(b => b.t);
+      if (back.length && (lastToast === said || gone.length)) toast(`Could not archive ${back.map(t => '#' + t.num).join(', ')}. ${back.length === 1 ? 'It is' : 'They are'} back on the board.`, true);   // not archived: archiveNow's own toast says why, when it gave one
+      if (!gone.length) continue;
+      hideUndo(); if (lastToast && !back.length) lastToast.dismiss(); undoAt = Date.now();
+      const tt = undoToast = ui.toast(gone.length === 1 ? `Archived #${gone[0].num} ${gone[0].title}` : `Archived ${gone.length} cards: ${gone.map(t => '#' + t.num).join(', ')}`, { action: { label: 'Undo', onClick: () => { if (undoToast === tt) undoToast = null; quickUndo = null; undoQuickArchive(gone); } }, timeout: 8000 });
+      quickUndo = { toast: tt, tasks: gone };
+    }
+  }
+  // Archive all: the Done lane's header button archives every Done card no agent holds, in one commit, after a confirm step.
+  function archiveAllBtn() {
+    if (ro) return null;
+    const b = elI('button', 'harchall', 'archive'); b.type = 'button'; b.title = 'Archive all Done cards'; b.setAttribute('aria-label', b.title);
+    b.onclick = e => { e.stopPropagation(); archiveAllDone(); }; return b;
+  }
+  async function archiveAllDone() {
+    if (writeBlocked()) return;
+    const list = state.tasks.filter(t => t.column === doneColId() && !activeClaim(t) && !quickBusy.has(t.id));
+    if (!list.length) { toast('No Done cards to archive. Cards an agent holds stay on the board.'); return; }
+    const held = state.tasks.filter(t => t.column === doneColId() && activeClaim(t)).length;
+    if (!(await ask(`Archive ${list.length} Done card${list.length === 1 ? '' : 's'}?`, [`${list.length === 1 ? 'It leaves' : 'They leave'} the active board. Nothing is deleted: search with Include archive, then choose Put back on the board to restore a card.`].concat(held ? [`${held} card${held === 1 ? '' : 's'} an agent holds ${held === 1 ? 'stays' : 'stay'} on the board.`] : []), 'Archive all'))) return;
+    let run = null; list.forEach(t => { run = quickArchive(t.id) || run; }); return run;
+  }
+  async function undoQuickArchive(tasks) {   // the archived copies, not tasks: they hold the history lines the archive took
+    for (const t of tasks) {
+      try { archived = null; archivedSig = ''; const a = await loadArchived(), hit = a.tasks.find(x => x.item.id === t.id);
+        if (!hit) { toast(`#${t.num} is not in the archive. Search with Include archive to find it.`, true); continue; }
+        await restoreArchived('task', hit.item, hit.year, false);
+      } catch (e) { console.error(e); toast('Could not put the card back: ' + (e.message || e), true); }
+    }
   }
   async function archiveTask(id = editing) {
     const t = state.tasks.find(x => x.id === id); if (!t || writeBlocked()) return;
@@ -7499,8 +7538,8 @@ if (typeof window !== 'undefined') (() => {
   async function archiveNow(explicitRules) {
     if (HOSTED) {
       if (busy || saving || ro) return;
-      if (explicitRules?.taskId) {
-        const t = state.tasks.find(x => x.id === explicitRules.taskId); if (t) await hostedArchive(t, nowIso().slice(0, 4)); return;
+      if (explicitRules && pickedIds(explicitRules)) {
+        for (const id of pickedIds(explicitRules)) { const t = state.tasks.find(x => x.id === id); if (t && !(await hostedArchive(t, nowIso().slice(0, 4)))) return; } return;
       }
       const plan = archivePlan(clone(state), archRules());
       if (Object.values(plan).some(part => Object.keys(part.history).length)) { toast('capability_unavailable: hosted phase 0 moves whole entities; history-only trimming is unavailable', true); return; }
@@ -7511,9 +7550,9 @@ if (typeof window !== 'undefined') (() => {
       return;
     }
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }
-    const rules = explicitRules && explicitRules.taskId ? explicitRules : archRules(); let n = rules.taskId ? { tasks: 1, contacts: 0, history: 0 } : archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
-    const what = rules.taskId ? '1 task; nothing deleted, search Include archive to restore' : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
-    if (!rules.taskId && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
+    const rules = explicitRules && pickedIds(explicitRules) ? explicitRules : archRules(), ids = pickedIds(rules); let n = ids ? { tasks: ids.length, contacts: 0, history: 0 } : archiveCounts(); if (!n.tasks && !n.contacts && !n.history) { toast('Nothing to archive yet'); return; }
+    const what = ids ? batchWhat(ids.length) : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
+    if (!ids && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
     if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
@@ -7526,16 +7565,17 @@ if (typeof window !== 'undefined') (() => {
       fresh = normalise(raw);
     } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     let plan; try { plan = archivePlan(clone(fresh), rules); } catch (e) { setStatus('Archive failed', 'err'); toast(e.message, true); return; }
-    const years = Object.keys(plan); if (!years.length) { setStatus(''); toast('Nothing to archive yet'); return; }
+    const years = Object.keys(plan); if (!years.length) { setStatus(''); toast(rules.taskIds ? 'Nothing archived: those cards left Done or an agent took them.' : 'Nothing to archive yet'); return; }
+    if (rules.taskIds) n = { tasks: years.reduce((k, y) => k + plan[y].tasks.length, 0), contacts: 0, history: 0 };
     const msg = `Archive ${n.tasks} tasks, ${n.contacts} people`, moved = new Map(), hist = {}, counts = {};
     try {
       await completeArchiveHistory(plan, rules, fresh);
       for (const y of years) {   // archive files first: if the board save fails after this, the items are in both places and the board copy wins
         for (let i = 0; i < 3; i++) { const { data, sha } = await readArchive(y), merged = archiveMerge(data ? clone(data) : null, plan[y], y);
-          if (rules.taskId) { const t = merged.tasks.find(x => x.id === rules.taskId), seen = new Set(); t.history = (merged.history[rules.taskId] || []).concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; }); delete merged.history[rules.taskId]; }
+          if (ids) plan[y].tasks.forEach(({ id }) => { const t = merged.tasks.find(x => x.id === id), seen = new Set(); t.history = (merged.history[id] || []).concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; }); delete merged.history[id]; });
           if (await writeArchive(y, merged, sha, msg)) { counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; break; }
           delete archMem[archKey(y)]; if (i === 2) throw new Error('could not save ' + archPath(y)); }
-        plan[y].tasks.concat(plan[y].contacts).forEach(x => moved.set(x.id, JSON.stringify(rules.taskId ? fresh.tasks.find(t => t.id === x.id) : x))); Object.assign(hist, plan[y].history);
+        plan[y].tasks.concat(plan[y].contacts).forEach(x => moved.set(x.id, JSON.stringify(ids ? fresh.tasks.find(t => t.id === x.id) : x))); Object.assign(hist, plan[y].history);
       }
     } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     let kept = 0;   // changed since the read above: it stays on the board (the next run archives it again, replacing the copy by id)
@@ -7547,7 +7587,7 @@ if (typeof window !== 'undefined') (() => {
     }, msg, [], fresh, { recheckArchive: true });
     archived = null; renderArchiveBox();
     if (!ok) { toast('The archive files were written, but the board was not saved. Nothing was removed from the board; run Archive again.', true); return; }
-    toast(`Archived ${what}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : ''));
+    toast(`Archived ${rules.taskIds ? batchWhat(n.tasks - kept) : what}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : ''));
   }
   async function restoreArchived(kind, item, y, open = true) {
     if (HOSTED) { const ok = await hostedArchive(item, y, true); if (ok && open && kind === 'task') openCard(item.id); return; }   // open: show the restored card or person afterwards

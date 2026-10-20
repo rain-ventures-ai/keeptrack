@@ -629,6 +629,7 @@ header .badge { top: -6px; right: -6px; }
 /* ---- add-task discoverability ------------------------------------------------ */
 .col h2 .hadd { border: 0; background: var(--card); color: var(--accent); width: 24px; height: 24px; min-height: 0; padding: 0; border-radius: 50%; font-size: var(--fs-lg); line-height: 1; cursor: pointer; display: inline-grid; place-items: center; font-weight: 700; } .col h2 .hadd:hover { background: var(--accent); color: var(--on-accent); }
 .col h2 .hcinema { display: inline-grid; place-items: center; width: 26px; height: 26px; min-width: 26px; min-height: 0; padding: var(--sp-1); border-radius: var(--r-md); background: var(--card); color: var(--muted); } .col h2 .hcinema:hover { color: var(--accent); }
+.col h2 .harchall { display: inline-grid; place-items: center; width: 26px; height: 26px; min-width: 26px; min-height: 0; padding: var(--sp-1); border-radius: var(--r-md); background: var(--card); color: var(--muted); } .col h2 .harchall:hover { color: var(--accent); }
 .ladd { margin: var(--sp-1) 14px var(--sp-3); } .ladd input { border: 1px dashed var(--border); border-radius: var(--r-lg); padding: 9px var(--sp-5); color: var(--accent); font-weight: 600; } .ladd input::placeholder { color: var(--accent); opacity: .9; } .ladd input:focus { border-style: solid; border-color: var(--accent); }
 .fab { display: none; position: fixed; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); z-index: var(--z-dock); width: 54px; height: 54px; min-height: 0; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--on-accent); font-size: 30px; line-height: 1; box-shadow: 0 6px 18px rgba(0,0,0,.3); cursor: pointer; }
 @media (max-width: 760px) { body[data-view="board"] .fab, body[data-view="list"] .fab { display: grid; place-items: center; } body:has(dialog[open]) .fab { display: none !important; } }
@@ -1011,7 +1012,7 @@ dialog.help { max-width: 860px; }
 @media (max-width: 760px) { .kbbar { padding: var(--sp-2) var(--sp-3) 0; } }
 .kb-ask .ui-sheet__text { white-space: pre-line; }   /* "From: …\nTo: …" keeps its line break */
 /* read-only: no add boxes or delete buttons; drawer fields are disabled by JS */
-body.ro .add, body.ro .ladd, body.ro .hadd, body.ro .padd, body.ro .fab { display: none !important; }
+body.ro .add, body.ro .ladd, body.ro .hadd, body.ro .harchall, body.ro .padd, body.ro .fab { display: none !important; }
 body.ro .card, body.ro .pcard { cursor: pointer; }
 
 /* search */
