@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v77: an agent closes its own Review Inbox items once the owner settled them in a conversation (card #198).
+`proposals -q TEXT` and `--by WHO` find items by title (or question) and by who added them (`createdBy`, whole or its
+agent part). `proposal-answer <id> --via "<where>"` records the owner's answer to a question the same agent identity
+asked; `proposal-ignore <id> --via "<where>" --reason "<one line>"` withdraws an item it added (a card proposal the
+owner declined, a question no longer needed). Both are refused on an item another agent or a person added, on a
+question whose `decider` is someone other than `BOARD_USER`, and without `BOARD_AGENT`; an approval of exact content
+is never answered through `--via` (only withdrawn), and an agent never accepts a card. The item records `decision.relayed` (`for`, `via`, and the withdraw
+`reason`, which the 30-day slim removes), the history says who it was for and where they said it, and the board page
+shows "Answered by … for @owner, as they said in …" or "Withdrawn by … : reason". A person undoes either with Reopen
+(`proposal-reopen`). Without `--via`, an agent run (`BOARD_AGENT` set, or a hosted identity with an agent id)
+can no longer accept, merge or undo any proposal, nor ignore one another agent or a person added, nor reopen anything
+but its own withdrawal of its own item (never one that records the owner's word: a `--via` decision, or an ignore made with `--attended`, which is recorded as `decision.attended`), unless the command carries the new `--attended` flag (a person drives the
+session and named the item); the keeptrack skills' chat flow ("accept the ones I name") passes it. `--attended` is a per-command flag, never an environment variable, so an unattended routine, worker, automation or connector can never inherit it; `BOARD_ATTENDED` stays for heartbeats only and does not affect these decisions. It is still self-declared: it guards well-behaved unattended runs, not a prompt-injected agent in a chat. `createdBy` is always this run (a payload value is dropped). An agent run whose identity cannot be told apart from a person's is refused for these decisions: `BOARD_AGENT` with a person's hosted token (no agent id), or `BOARD_AGENT` with no `BOARD_USER`. `--via` is a plain
+label, the owner must be a board member (stored as the member's own login; the hosted handle in hosted mode), and
+`proposal-result` gives `relayed`.
+
 Board page: search lists people in their own section above tasks (a number query still puts the numbered card
 first).
 

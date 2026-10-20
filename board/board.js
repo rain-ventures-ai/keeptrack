@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 76;
+  const PAGE_KIT = 77;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -6074,6 +6074,11 @@ if (typeof window !== 'undefined') (() => {
     const main = opt || a.other || ('approved' in a ? (a.approved ? 'Approved' : 'Not approved') : a.text || '');
     return main + (a.note ? ` (${a.note})` : '');
   }
+  // kit v77 (keeptrack.py proposal-answer / proposal-ignore --via): an agent recorded what its owner said in a conversation.
+  // Every relayed field is cut to the CLI's own limits (a hand-edited file can hold anything) and shown as text only.
+  const cut = (v, n) => { const t = String(v).replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+  const relayedWords = d => { const r = d && d.relayed; return r && typeof r === 'object' && typeof r.for === 'string' && r.for && typeof r.via === 'string' && r.via ? ` for @${cut(r.for, 39)}, as they said in ${cut(r.via, 80)}` : ''; };
+  const withdrawnText = d => `Withdrawn by ${d.by || 'someone'}${relayedWords(d)} on ${whenText(d.at)}${typeof d.relayed.reason === 'string' && d.relayed.reason ? ': ' + cut(d.relayed.reason, 300) : ''}`;
   const httpsUrl = u => typeof u === 'string' && /^https:\/\//i.test(u) ? u : '';
   function askLink(url, text) { const a = el('a', 'ask__link', text); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; }
   // The question, its options or subject, and (while pending) the answer controls.
@@ -6092,7 +6097,8 @@ if (typeof window !== 'undefined') (() => {
     if (links.children.length) wrap.append(links);
     if (p.status !== 'pending') {
       const d = p.decision || {};
-      if (p.status === 'answered') wrap.append(el('p', 'prop__decision', `Answered by ${d.by || 'someone'} on ${whenText(d.at)}: ${answerText(p)}`));
+      if (p.status === 'answered') wrap.append(el('p', 'prop__decision', `Answered by ${d.by || 'someone'}${relayedWords(d)} on ${whenText(d.at)}: ${answerText(p)}`));
+      else if (p.status === 'ignored' && relayedWords(d)) wrap.append(el('p', 'prop__decision muted', withdrawnText(d)));
       if (d.done) wrap.append(el('p', 'prop__decision muted', `${d.done.acted === false ? 'Closed without acting by' : 'Acted on by'} ${d.done.by || 'someone'} on ${whenText(d.done.at)}${d.done.note ? ': ' + d.done.note : ''}`));
       return wrap;
     }
@@ -6375,7 +6381,7 @@ if (typeof window !== 'undefined') (() => {
     if (p.previously_ignored) flags.append(el('li', 'propflag', `You ignored this on ${String(p.previously_ignored.at || '').slice(0, 10) || 'an earlier date'} (${p.previously_ignored.proposal}).`));
     if (flags.children.length) art.append(flags);
     art.append(proposalChange(p));
-    if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
+    if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', d.action === 'ignore' && relayedWords(d) ? withdrawnText(d) : `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
     const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: e => options.today ? todayInboxAct(p, act, undefined, e.currentTarget) : inboxAct(p, act, e.currentTarget) }); b.dataset.act = b.dataset.press = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).some(d => d.type !== 'proposal'))))) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata

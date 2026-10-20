@@ -135,12 +135,16 @@ class ReviewInbox(unittest.TestCase):
         with open(path, "w") as dst: json.dump(card, dst)
         ident = self.add(proposal(kind="task.update", change={"column": "done"},
                                   target={"type": "task", "id": "t_first", "base": {"column": card["column"]}}))
-        old_agent = os.environ.get("BOARD_AGENT"); os.environ["BOARD_AGENT"] = "claude"
+        old = {k: os.environ.get(k) for k in ("BOARD_AGENT",)}; os.environ["BOARD_AGENT"] = "claude"
         try:
-            self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column"))
+            with self.assertRaises(SystemExit):   # kit v77: an agent never merges without --attended
+                self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column"))
+            # --attended: the person drives the session and named this item
+            self.quiet(kt.cmd_proposal_merge, Args(id=ident, into="t_first", fields="column", attended=True))
         finally:
-            if old_agent is None: os.environ.pop("BOARD_AGENT", None)
-            else: os.environ["BOARD_AGENT"] = old_agent
+            for k, v in old.items():
+                if v is None: os.environ.pop(k, None)
+                else: os.environ[k] = v
         with open(path) as src: card = json.load(src)
         self.assertEqual("done", card["column"]); self.assertIsNone(card["waiting"])
         self.assertEqual(["proposal to done while waiting"], [x["what"] for x in card["agent_cleared"]])

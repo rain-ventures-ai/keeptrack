@@ -260,6 +260,15 @@ class Waiting(unittest.TestCase):
         self.assertTrue(self.card(2)["history"][-1]["text"].startswith("unwait: approved (was waiting on Acme finance"))
         self.assertFalse(self.card(2).get("agent_cleared"))
 
+    def test_unwait_uses_agent_run_so_a_hosted_agent_identity_counts(self):
+        self.wait(1, session="person")
+        from unittest import mock
+        with mock.patch.object(kt, "agent_run", lambda: True):   # kit v77: e.g. a hosted agent identity, no BOARD_AGENT
+            self.assertIn("set in this session", self.refusal(self.unwait, 1, session="s1"))
+        self.assertIsNotNone(self.card(1)["waiting"])
+        self.unwait(1)
+        self.assertIsNone(self.card(1)["waiting"])
+
     def test_an_agent_cant_move_its_own_wait_off_another_party(self):
         with self.agent():
             self.wait(1, session="s1", who="JezHub")

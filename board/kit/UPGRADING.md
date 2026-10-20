@@ -25,6 +25,31 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v77 (schema 4)
+An agent closes its own Review Inbox items when the owner answered or declined them in a conversation:
+`proposal-answer --via` and `proposal-ignore --via --reason` (own items only, recorded as `decision.relayed`), and
+`proposals -q` / `--by` to find them. No migration and no data change; an older page shows such an item as answered or
+ignored by the agent, without the "for @owner" words.
+- Run `kit-update` only. Check: `kit-check` says v77, and `python3 board/keeptrack.py proposals --by connector-claude`
+  lists only the items the Claude connector added (or `(no proposals)`).
+- Behaviour change for agents: an agent run (`BOARD_AGENT` set, or a hosted identity with an agent id) may no
+  longer `proposal-accept`, `proposal-merge` or `proposal-undo`, nor `proposal-ignore` an item it did not add, nor
+  `proposal-reopen` anything but its own withdrawal of its own item (never one that records the owner's word: a `--via` decision, or an ignore made with `--attended`, which is recorded as `decision.attended`), unless the command carries `--attended` (a person
+  drives the session and named the item; the keeptrack skills pass it in a chat). Scheduled routines never decided
+  proposals, so they are not affected.
+- `--attended` on these commands is a flag, not `BOARD_ATTENDED`: a `BOARD_ATTENDED=1` set in a shell profile or
+  settings for heartbeats does not let an agent decide Inbox items. It is self-declared:
+  it guards well-behaved unattended runs, not a prompt-injected agent in a chat.
+- A hosted agent identity (an `agent_id` from `/v1/me`) now counts as an agent run everywhere `BOARD_AGENT` did:
+  waits and their release, Inbox questions (answer, dismiss, reopen), and these Inbox decisions.
+- `proposal-add` now drops a `createdBy` in the payload and stamps the run's own `BOARD_AGENT@BOARD_USER` on every
+  proposal, since `createdBy` decides who may withdraw it.
+- An agent run must be told apart from a person to decide, reopen, read the result of or mark done its own items:
+  `BOARD_AGENT` with no `BOARD_USER`, or `BOARD_AGENT` with a person's hosted token (no agent id), is refused. Set
+  `BOARD_USER` (or use an agent token on a hosted board).
+- Relay 0.9.40's connector tools `list_inbox` and `resolve_inbox_item` need this kit on the board; on an older board
+  they say "board kit too old: upgrade to v77" and change nothing.
+
 ### v76 (schema 4)
 The keeptrack-email skill searches Gmail with the new `keeptrack.py email-search` (ids and dates only, no mail text)
 and reads message bodies only through the new `keeptrack.py email-view` (the email-to-tasks cleaner, `safe_view.py`),
