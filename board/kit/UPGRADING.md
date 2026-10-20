@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v79 (schema 4)
+email-to-tasks reads several mailboxes (pack 1.5.0, private-tasks card #232). The new `sources` setting names up to
+three gog account aliases (for example `personal,work`); each one is proved before any read (alias set, read-only
+scope, no wider Gmail scope) and keeps its own window. No migration and no data change: an install without
+`sources` reads gog's default account as before.
+- Run `kit-update` only. Check: `kit-check` says v79.
+- The pack's digest changed. If you installed it: reinstall and set it up again as in v73, and update its entry in
+  `relay/registry/automations.yaml` to the new digest (`python3 board/keeptrack.py automation show email-to-tasks`).
+  To read several mailboxes, follow "Several mailboxes" in the pack's SETUP.md. The other packs are unchanged.
+
 ### v78 (schema 4)
 A card's links and to-dos go on in one command and one save (card #233 on the owner's board). `add` takes a
 repeatable `--link URL [TITLE]` next to `--todo`; `todo-add ID -` reads one to-do per line from stdin; `link ID -` reads one link per line from stdin (the URL, a tab, then the title). Each command is one

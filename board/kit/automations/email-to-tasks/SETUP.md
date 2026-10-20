@@ -34,6 +34,26 @@ Optional settings, at install time with `--set` (they are part of the install, s
 - `include_sent=true`: also find mail you sent to a person on the board. Your gog must list To and Cc
   (`--include-recipients`); if it cannot, the check blocks with `setup-missing:gog-recipients`.
 
+## Several mailboxes (pack 1.5)
+
+One install can read up to three mailboxes, for example Personal and Work. Each one is a gog **account alias**: a
+short label you set on each computer or container that runs the pack, so no address is ever in the repo.
+
+| Need | Set it up | Verify it works | Expected output |
+|---|---|---|---|
+| A gog with aliases and safety flags | gog v0.45.0 or newer | `gog --readonly --gmail-no-send --no-input --enable-commands-exact auth.alias.list auth alias list --json` | JSON with an `aliases` object, exit 0 |
+| A read-only login per mailbox | `gog auth add <address> --services gmail --gmail-scope readonly` | `gog auth list --json` | each address, with `gmail.readonly` in `scopes` and no wider Gmail scope |
+| An alias per mailbox | `gog auth alias set work <work address>`, `gog auth alias set personal <personal address>` | `gog auth alias list --json` | `{"aliases": {"personal": "...", "work": "..."}}` |
+| The install names them | `$B automation install email-to-tasks --owner alexdemo --allow-network --set sources=personal,work` | `$B automation show email-to-tasks` | `"sources": "personal,work"` in the config |
+
+Before any mail is read, the check proves each mailbox: the alias must exist on this runner, its address must have a
+stored login with the Gmail read-only scope, and the login must have no scope that can change, send or delete mail.
+Every gog call then names that one address and runs with gog's `--readonly`, `--gmail-no-send` and an exact command
+allowlist. Each mailbox keeps its own window, so a busy mailbox never holds another back.
+
+A board must read only the mail meant for it. On a team board (for example consulting), name only the work alias:
+`--set sources=work`. The resolver refuses any item from a mailbox the board's own install does not name.
+
 ## Local Claude Code
 
 1. Open Claude Code in the board repo. Do the table above.
@@ -103,5 +123,9 @@ and `resolve.py` need gog. The pack offers no connector-only (`model` check) way
 | `setup-missing:board-contacts` | no person on the board has an email that is not yours | add addresses to people; `$B people` |
 | `setup-missing:crm-mode` | the board's `modes` leave out crm | turn CRM on in the web board's Settings; `$B settings` |
 | `source-error` | gog printed something the check cannot read | update gog; run the search line above by hand |
+| `setup-missing:sources` | `sources` is not a list of one to three aliases (lower-case letters, digits, `-`) | reinstall with a valid `--set sources=...` |
+| `setup-missing:gog-aliases` | your gog has no account aliases or safety flags | update gog (v0.45.0 or newer); the first line of "Several mailboxes" |
+| `setup-missing:account-<alias>` | that alias is not set on this runner | `gog auth alias set <alias> <address>`; `gog auth alias list --json` |
+| `setup-missing:readonly-<alias>` | that login lacks the read-only scope or has a wider Gmail scope | `gog auth add <address> --services gmail --gmail-scope readonly --force-consent` |
 
 Changing any pack file needs `automation uninstall`, `install` and `setup` again before it runs.

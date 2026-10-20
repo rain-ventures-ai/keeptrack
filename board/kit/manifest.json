@@ -1,5 +1,5 @@
 {
-  "version": 78,
+  "version": 79,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -53,6 +53,7 @@
     "board/automations/email-to-tasks/safe_view.py": "automations/email-to-tasks/safe_view.py",
     "board/automations/email-to-tasks/tests/test_check.py": "automations/email-to-tasks/tests/test_check.py",
     "board/automations/email-to-tasks/tests/test_resolve.py": "automations/email-to-tasks/tests/test_resolve.py",
+    "board/automations/email-to-tasks/tests/test_sources.py": "automations/email-to-tasks/tests/test_sources.py",
     "board/automations/email-to-tasks/tests/test_safe_view.py": "automations/email-to-tasks/tests/test_safe_view.py",
     "board/automations/notes-folder-to-tasks/SETUP.md": "automations/notes-folder-to-tasks/SETUP.md",
     "board/automations/notes-folder-to-tasks/SKILL.md": "automations/notes-folder-to-tasks/SKILL.md",

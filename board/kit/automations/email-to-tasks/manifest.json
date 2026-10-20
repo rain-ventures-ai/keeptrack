@@ -3,7 +3,7 @@
   "slug": "email-to-tasks",
   "name": "Email to tasks",
   "summary": "Read new email to and from people on your board and propose contact notes and follow-up tasks.",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "needs": [
     {
       "id": "gmail.read",
@@ -64,7 +64,7 @@
     {
       "kind": "read",
       "title": "Read Gmail",
-      "text": "Read only, through your gog login. Only exact addresses of board contacts; your own addresses are never contacts."
+      "text": "Read only, through your gog login, one or more named mailboxes. Only exact addresses of board contacts."
     },
     {
       "kind": "check",
@@ -101,6 +101,12 @@
       "required": false,
       "default": 10,
       "help": "Mail you sent to more people than this (To and Cc) counts as a list, not a personal exchange (1 to 100)."
+    },
+    "sources": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "help": "gog account aliases to read, in order, comma-separated (e.g. personal,work; at most 3). Empty: gog's default account."
     },
     "include_sent": {
       "type": "bool",
