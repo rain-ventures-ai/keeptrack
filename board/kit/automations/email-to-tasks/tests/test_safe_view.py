@@ -557,6 +557,8 @@ class Card184(unittest.TestCase):
             sv.view(msg(html="<style>" + css + "</style>" + ('<b class="' + " ".join(pool) + '">x</b>') * 700))
         except sv.TooComplex:
             pass
+        with self.assertRaises(sv.TooComplex):   # `u\72l(` is url( to a browser
+            sv.view(msg(html="<style>p.y{background:u\\72l(a'b)} p.x{color:#fff} .z{c:'}</style><p class=x>x</p>"))
         big = "." + ".".join("c%d" % i for i in range(999))
         with self.assertRaises(sv.TooComplex):   # a selector with too many parts
             sv.view(msg(html="<style>" + (big + "{color:#111;background:#fff;font-size:12px}") * 50 + "</style><p>x</p>"))

@@ -514,6 +514,9 @@ def _at_applies(prelude):
 
 
 BRACES = re.compile("(" + CSS_STRING + "|[{}])")
+# A function name written with an escape (`u\72l(`), outside a string: a browser decodes it first, so it may be url(
+# and change where a string or a block ends. Such CSS is TooComplex.
+ESCAPED_FUNCTION = re.compile(r"\\(?:[0-9a-fA-F]{1,6}\s?|[^\n0-9a-fA-F])[\w\\-]*\(")
 
 
 def _rules(css):
@@ -534,6 +537,8 @@ def _rules(css):
             out.append((widths, not stack, prelude, "".join(frame[2]) + ";" + body))
         elif body.strip() and style_owner():
             out.append((frame[1], False, style_owner()[0], body))
+    if "\\" in css and ESCAPED_FUNCTION.search(re.sub(CSS_STRING, '""', css)):
+        raise TooComplex("a CSS function name written with an escape")
     for tok in BRACES.split(css):
         if tok == "{":
             text = "".join(buf); buf = []
