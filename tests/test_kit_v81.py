@@ -60,6 +60,11 @@ class KitV81(unittest.TestCase):
         out = self.kt("list").stdout
         self.assertIn(title, out)                 # ZWJ emoji, RTL marks and a soft hyphen keep their shape
         self.assertNotIn("‮", out)           # a bidi override still goes: it could reorder the line on screen
+        self.assertNotIn("\U000E0049", keeptrack._flat("a \U000E0049\U000E0047 b"))   # hidden tag text goes
+        self.assertNotIn("￹", keeptrack._line_guard("x￹y"))
+        england = "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
+        self.assertEqual(f"go {england} team", keeptrack._line_guard(f"go {england} team"))   # a subdivision flag stays
+        self.assertNotIn("\U000E0049", keeptrack._line_guard(f"{england}\U000E0049"))     # tags after the cancel tag go
         for ch in "\n\x0b\x0c\x1c\x1d\x1e\x85  \x00\x1b":
             with self.subTest(ch=repr(ch)):
                 self.assertNotIn(ch, keeptrack._flat(f"a{ch}b"))
@@ -105,6 +110,11 @@ class KitV81(unittest.TestCase):
         finally:
             os.environ.clear(); os.environ.update(old)
 
+    def test_github_board_stops_before_any_transport_gh_too(self):
+        p = self.kt("list", file=False, ok=False, env=dict(self.env, BOARD_REPO="o/board", BOARD_HOSTED_API="https://hosted.example.test"))
+        self.assertNotEqual(0, p.returncode)
+        self.assertIn("BOARD_BACKEND is not hosted", p.stderr)
+
     def test_github_board_keeps_board_api_without_hosted_variables(self):
         old = dict(os.environ)
         try:
@@ -122,7 +132,7 @@ class KitV81(unittest.TestCase):
     def test_cleared_ack_stops_doctor_and_attention_showing_the_flag(self):
         self.cleared()
         self.assertIn("AGENT_CLEARED", self.kt("doctor", ok=False).stdout)
-        self.assertIn("agent cleared", self.kt("list", "--attention").stdout)
+        self.assertIn("[agent cleared: 1]", self.kt("list", "--attention").stdout)
         out = self.kt("cleared-ack", "t_first", "--note", "checked with Sam").stdout
         self.assertIn("1 agent-cleared flag marked checked by @alex", out)
         _, c = self.card()

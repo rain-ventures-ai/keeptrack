@@ -6302,6 +6302,7 @@ if (typeof window !== 'undefined') (() => {
   async function acceptAllRecommended() {
     if (ro) { roToast(); return; }
     if (inboxBulk.running) return;   // a second press while a run is out does nothing
+    renderSeq++;   // the zone and today as of this press, not the last render (a lapse can start at midnight)
     const all = bulkCandidates(), items = all.slice(0, BULK_MAX); if (!items.length) return;
     const shown = new Map(items.map(p => [p.id, shownAsk(p)]));   // what the confirm lists: a question that says anything else later is left alone
     // The confirm lists EVERY question it will answer (question text and the recommended option), and only those are answered.

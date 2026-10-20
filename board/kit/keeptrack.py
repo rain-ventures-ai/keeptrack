@@ -2731,22 +2731,35 @@ def _age(mins):
     return "?" if mins is None else f"{int(mins)}m" if mins < 120 else f"{int(mins // 60)}h" if mins < 48 * 60 else f"{int(mins // 1440)}d"
 
 
-_BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")   # embeddings, overrides, isolates
+_BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"   # embeddings, overrides, isolates
+                           "\u206a\u206b\u206c\u206d\u206e\u206f\ufff9\ufffa\ufffb")   # deprecated format, annotations
 
 
 def _line_safe(c):
     """A character one output line may hold: not a control (Cc, which covers every break str.splitlines knows but
     \u2028 and \u2029), a line or paragraph separator (Zl, Zp), a lone surrogate (Cs, which cannot be printed) or a bidi
     embedding, override or isolate (it could reorder the line on screen). Other format characters stay, so an emoji ZWJ
-    sequence, an RTL mark or a soft hyphen keeps its shape (kit v81; before, every non-printable character went)."""
+    sequence, an RTL mark or a soft hyphen keeps its shape (kit v81; before, every non-printable character went). Tag
+    characters (U+E0000-E007F, invisible text a model can still read) are unsafe too; _line_guard keeps them only in a
+    subdivision flag (U+1F3F4 then tags)."""
     import unicodedata
-    return c not in _BIDI_CONTROLS and unicodedata.category(c) not in ("Cc", "Zl", "Zp", "Cs")
+    return (c not in _BIDI_CONTROLS and not "\U000e0000" <= c <= "\U000e007f"
+            and unicodedata.category(c) not in ("Cc", "Zl", "Zp", "Cs"))
 
 
 def _line_guard(text):
-    """Every unsafe character of one output line (_line_safe) as a space."""
+    """Every unsafe character of one output line (_line_safe) as a space; a flag's tag run (🏴 + tags) stays whole."""
     text = str(text)
-    return text if text.isascii() and text.isprintable() else "".join(c if _line_safe(c) else " " for c in text)
+    if text.isascii() and text.isprintable():
+        return text
+    out, flag = [], False
+    for c in text:
+        if flag and "\U000e0020" <= c <= "\U000e007f":
+            out.append(c); flag = c != "\U000e007f"   # U+E007F (cancel tag) ends the flag
+            continue
+        flag = c == "\U0001f3f4"
+        out.append(c if _line_safe(c) else " ")
+    return "".join(out)
 
 
 def _flat(value):
@@ -2882,7 +2895,7 @@ def cmd_list(a):
         if getattr(a, "bare", False) and not bare_card(t): continue
         if getattr(a, "json", False):
             json_items.append(t); continue
-        cleared = f"  [agent cleared: {len(t['agent_cleared'])}]" if a.attention and recently_cleared(t) else ""
+        cleared = f"  [agent cleared: {len(unchecked_cleared(t))}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
@@ -10256,6 +10269,8 @@ def main():
               f"`keeptrack.py use {_flat(UNTRUSTED_CLONE[0])}` in it.", file=sys.stderr)
     if BACKEND not in ("github", "hosted"):
         sys.exit(f"unknown BOARD_BACKEND {BACKEND!r}: use github (the default) or hosted, or unset it")
+    if BACKEND == "github" and not FILE:
+        github_api_base()   # kit v81: a hosted board's variables on a GitHub board stop every transport, `gh` too
     if not FILE and BACKEND != "github":
         return hosted_dispatch(a) or 0
     return a.f(a) or 0
