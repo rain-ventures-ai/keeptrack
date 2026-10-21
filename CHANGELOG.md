@@ -11,8 +11,9 @@ Kit v86: an archive file has its own size limit (private-tasks card #284). `doct
 archive year file now has its own limit: `doctor` warns (`ARCHIVE_SIZE`) from 700 KB and fails (`FILE_SIZE`) above
 900 KB, and `keeptrack.py archive` and the web board's Archive (also the Done-lane button) check each year file before writing, on
 every layout: a year that would pass 900 KB is held back (its items stay on the board, the other years are archived,
-the message names what stayed), and past 700 KB the archive is written with a warning; `archive` exits non-zero only
-when nothing was written, and `--dry-run` reports the same. `atomic_write` no longer turns `\n` into `\r\n` on Windows. Archive files load with
+the message names what stayed), and past 700 KB the archive is written with a warning; `archive` exits 1 when no archive year was
+written (everything was held back; a run that only saved proposal slimming says so and still exits 1), and `--dry-run` reports the same. A rename
+(label, client, stage) that would push an archive year over 900 KB is refused with nothing written. `atomic_write` no longer turns `\n` into `\r\n` on Windows. Archive files load with
 the board like every other file (cached by blob sha, downloaded again after each archive change); 900 KB is a chosen
 margin (the real archive was 578 KB), not a GitHub limit, and the 5 MB board total still caps load cost. Only
 `archive/<year>.json` gets the higher limit; any other file in `archive/` keeps 200 KB, and the web board's size bar no

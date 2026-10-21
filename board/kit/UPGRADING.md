@@ -33,8 +33,9 @@ Archive files get their own size limit (private-tasks card #284). No migration, 
   to write, on every layout (a one-file board is protected too, for a later migration to split). A year that would pass
   900 KB is held back: its items stay on the board, every other year is archived, and the message names what stayed and
   the next step (tell the board owner; splitting a year is a follow-up card). Past 700 KB the archive is written and the
-  warning is printed (stderr) or toasted. `archive` exits non-zero only when nothing it meant to write was written;
-  `--dry-run` reports the same. History lines of a held year stay on their items.
+  warning is printed (stderr) or toasted. `archive` exits 1 when no archive year was written (everything was held back; a run that
+  only saved proposal slimming says so and still exits 1); `--dry-run` reports the same. A label, client or stage rename
+  that would push an archive year over 900 KB is refused and writes nothing. History lines of a held year stay on their items.
   Cards, people, projects, `tasks.json` and any other file in `archive/` keep the 200 KB limit. The 5 MB board total still counts the archive.
 - Archive files are not lazy: they load with the board (cached by blob sha, downloaded again after each archive change).
   900 KB is a chosen margin, not a GitHub limit.

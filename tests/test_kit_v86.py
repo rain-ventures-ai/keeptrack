@@ -194,6 +194,105 @@ class ArchiveCommand(unittest.TestCase):
         self.assertIn("held back", r.stdout + r.stderr)
         self.assertEqual(before, snapshot(self.dir))
 
+    def done_card(self, name, year, **extra):
+        path = os.path.join(self.dir, "cards", name + ".json")
+        card = json.load(open(path, encoding="utf-8"))
+        card.update(column="done", updated=year + "-01-05T09:00:00.000Z", **extra); card.pop("claim", None); card.pop("waiting", None)
+        json.dump(card, open(path, "w", encoding="utf-8"), indent=2)
+        return card
+
+    def test_history_only_year_held_says_history_not_zero_items(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        path = os.path.join(self.dir, "cards", "t_second.json")
+        card = json.load(open(path, encoding="utf-8"))
+        card["history"] = [{"at": "2026-09-01T08:00:%02d.000Z" % i, "by": "alex", "text": "step %d" % i} for i in range(40)]
+        json.dump(card, open(path, "w", encoding="utf-8"), indent=2)
+        self.prefill(self.year, 905)
+        before = snapshot(self.dir)
+        r = self.kt("archive")
+        out = r.stdout + r.stderr
+        self.assertNotEqual(0, r.returncode)
+        self.assertNotIn("held back 0", out)
+        self.assertRegex(out, r"kept 20 old history line\(s\) on the board: archive/%s\.json" % self.year)
+        self.assertEqual(before, snapshot(self.dir))
+
+    def test_held_names_are_cleaned_and_a_non_string_contact_name_does_not_crash(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        self.done_card("t_second", "2025", title="Evil \x1b[31mred\x07 title")
+        person = {"id": "p_lost", "name": 12345, "company": "Zed", "stage": "Lost", "updated": "2025-01-05T09:00:00.000Z",
+                  "created": "2025-01-05T09:00:00.000Z", "comments": [], "history": []}
+        json.dump(person, open(os.path.join(self.dir, "people", "p_lost.json"), "w", encoding="utf-8"), indent=2)
+        self.prefill("2025", 905)
+        r = self.kt("archive")
+        out = r.stdout + r.stderr
+        self.assertNotIn("Traceback", out)
+        self.assertNotIn("\x1b", out); self.assertNotIn("\x07", out)
+        self.assertIn("held back 2 item(s) from archive/2025.json", out)
+        self.assertIn("12345", out)
+        d = self.kt("archive", "--dry-run")
+        self.assertNotIn("Traceback", d.stdout + d.stderr)
+        self.assertNotIn("\x1b", d.stdout + d.stderr)
+
+    def test_one_card_is_measured_without_counting_its_archived_history_twice(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        ref = self.unclaimed_card()
+        os.makedirs(os.path.join(self.dir, "archive"), exist_ok=True)
+        big = [{"at": "2025-01-01T08:00:00.000Z", "by": "alex", "text": "y" * (150 * 1024)}]
+        with open(os.path.join(self.dir, "archive", self.year + ".json"), "w", encoding="utf-8") as f:
+            json.dump({"version": 3, "archive": True, "year": self.year, "tasks": [], "contacts": [], "history": {ref: big},
+                       "pad": "x" * (650 * 1024)}, f)
+        with open(self.file, encoding="utf-8") as f:
+            root = json.load(f)
+        root.setdefault("archive", {})["files"] = {self.year: {"tasks": 0, "contacts": 0}}   # listed, so the card's lines are read from it
+        with open(self.file, "w", encoding="utf-8") as f:
+            json.dump(root, f, indent=2)
+        r = self.kt("archive", ref)
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)   # written: ~800 KB, not the ~950 KB a double count gives
+        self.assertNotIn("held back", r.stdout + r.stderr)
+        written = json.load(open(os.path.join(self.dir, "archive", self.year + ".json"), encoding="utf-8"))
+        self.assertNotIn(ref, written["history"])
+        self.assertIn(ref, [t["id"] for t in written["tasks"]])
+
+    def test_slimming_saved_while_every_year_is_held_exits_one_and_says_so(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        self.done_card("t_second", "2025")
+        self.prefill("2025", 905)
+        path = os.path.join(self.dir, "proposals", "r_task000044.json")
+        p = json.load(open(path, encoding="utf-8"))
+        old = (datetime.date.today() - datetime.timedelta(days=40)).isoformat() + "T00:00:00Z"
+        p.update(status="ignored", decision={"at": old, "by": "alex"}); p["reason"] = "detail"
+        json.dump(p, open(path, "w", encoding="utf-8"), indent=2)
+        r = self.kt("archive")
+        self.assertEqual(1, r.returncode, r.stdout + r.stderr)
+        self.assertIn("slimmed 1 decided proposal(s) and saved them; no archive year was written", r.stdout)
+        self.assertIn("held back 1 item(s) from archive/2025.json", r.stderr)
+        self.assertNotIn("reason", json.load(open(path, encoding="utf-8")))
+
+    def test_rename_refuses_to_push_an_archive_year_over_the_limit(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        card = self.done_card("t_second", "2025", client="Acme")
+        os.makedirs(os.path.join(self.dir, "archive"), exist_ok=True)
+
+        def write_year(near_limit):
+            obj = {"version": 3, "archive": True, "year": "2025", "tasks": [card], "contacts": [], "history": {}, "pad": ""}
+            if near_limit:   # a few bytes under 900 KB: the rename's longer name and history line tip it over
+                obj["pad"] = "x" * (keeptrack.ARCHIVE_FILE_MAX - len(keeptrack._json_text(obj).encode()) - 20)
+            with open(os.path.join(self.dir, "archive", "2025.json"), "w", encoding="utf-8") as f:
+                f.write(keeptrack._json_text(obj))
+            root = json.load(open(self.file, encoding="utf-8")); root.setdefault("archive", {})["files"] = {"2025": {"tasks": 1, "contacts": 0}}
+            json.dump(root, open(self.file, "w", encoding="utf-8"), indent=2)
+
+        write_year(True)
+        before = snapshot(self.dir)
+        r = self.kt("client-rename", "Acme", "Acme Holdings International Limited")
+        out = r.stdout + r.stderr
+        self.assertNotEqual(0, r.returncode, out)
+        self.assertIn("over its 900 KB limit", out); self.assertIn("nothing was written", out)
+        self.assertEqual(before, snapshot(self.dir))   # not the board, not a card, not the archive
+        write_year(False)
+        r = self.kt("client-rename", "Acme", "Acme Holdings International Limited")
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+
     def test_atomic_write_keeps_newlines_as_written(self):
         path = os.path.join(self.tmp.name, "x.json")
         with open(path, "w") as f:

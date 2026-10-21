@@ -1757,7 +1757,14 @@ def rewrite_archives(data, edit):
         cur, _ = read_archive(y, _MUT["base"])
         k = edit(cur) if cur else 0
         if k:
-            _MUT["extra"][f"archive/{y}.json"] = _json_text(cur); n += k
+            text = _json_text(cur)
+            found = archive_size_issue(f"archive/{y}.json", len(text.encode()))
+            if found and found[0] == "FILE_SIZE":
+                sys.exit(f"not saved: archive/{y}.json would be {len(text.encode()) // 1024} KB, over its {ARCHIVE_FILE_MAX // 1024} KB limit, "
+                         "so this change to the archive is refused and nothing was written. " + ARCHIVE_NEXT_STEP)
+            if found:
+                print(f"warning: archive/{y}.json: {found[1]}", file=sys.stderr)
+            _MUT["extra"][f"archive/{y}.json"] = text; n += k
     return n
 
 
@@ -8978,37 +8985,54 @@ def write_archive(year, cur, sha, message):
 
 
 def archive_check_sizes(data, plan, base, ref_orig=None):
-    """Hold back every planned year whose file would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and
-    the year leaves the plan; the other years are archived as planned. Returns (held, warnings), both lists of text.
-    Overflow history lines of an over-limit year go back to their items (on the board, or in another planned year)."""
-    held, warnings = [], []
-    for y in sorted(plan):
-        part, rel = plan[y], f"archive/{y}.json"
-        cur, _ = read_archive(y, base)
-        size = len(_json_text(archive_merge(cur, part, y)).encode())
-        found = archive_size_issue(rel, size)
-        if not found:
-            continue
-        if found[0] == "ARCHIVE_SIZE":
-            warnings.append(f"warning: {rel}: {found[1]}")
-            continue
-        names = [f"#{t.get('num')} {t.get('title', '')}".strip() for t in part["tasks"]] + [c.get("name") or c["id"] for c in part["contacts"]] \
-            + [f"proposal {x['id']}" for x in part.get("proposals", [])]
-        for t in part["tasks"]:
-            data["tasks"].append(ref_orig if ref_orig is not None and ref_orig.get("id") == t["id"] else t)
-        data["contacts"].extend(part["contacts"])
-        if part.get("proposals"):
-            data.setdefault("proposals", []).extend(part["proposals"])
-        del plan[y]
-        for ident, lines in part["history"].items():
-            owner = next((x for x in data["tasks"] + data["contacts"] if x.get("id") == ident), None) \
-                or next((x for q in plan.values() for x in q["tasks"] + q["contacts"] if x.get("id") == ident), None)
-            if owner is not None:
-                owner["history"] = list(lines) + list(owner.get("history") or [])
-        shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
-        held.append(f"held back {len(names)} item(s) from {rel}: it would be {size // 1024} KB, over the {ARCHIVE_FILE_MAX // 1024} KB limit"
-                    f" ({shown}). They stay on the board. " + ARCHIVE_NEXT_STEP.replace(" Until then do not edit the file by hand.", ""))
-    return held, warnings
+    """Build the text of every planned year file (read, merge, and for one card its history moved onto the card), and hold
+    back each year that would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and the year leaves the plan; the
+    other years are archived as planned. Returns (held, warnings, files): text lines, and {year: (archive data, sha)} for
+    the years to write, so the size checked is the text written. History lines of a held year go back to their items (on the
+    board, or in another planned year, which is then measured again)."""
+    held = []
+    while True:
+        warnings, files, again = [], {}, False
+        for y in sorted(plan):
+            part, rel = plan[y], f"archive/{y}.json"
+            cur, sha = read_archive(y, base)
+            cur = archive_merge(cur, part, y)
+            if ref_orig is not None:   # one card: the archive's lines for it move onto the card copy, as the write does
+                task = part["tasks"][0]
+                extra_history = cur.get("history", {}).pop(task["id"], [])
+                task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
+            size = len(_json_text(cur).encode())
+            found = archive_size_issue(rel, size)
+            if not found:
+                files[y] = (cur, sha); continue
+            if found[0] == "ARCHIVE_SIZE":
+                warnings.append(f"warning: {rel}: {found[1]}"); files[y] = (cur, sha); continue
+            names = [f"#{t.get('num')} {clean(t.get('title', ''), 80)}".strip() for t in part["tasks"]] \
+                + [clean(c.get("name") or c["id"], 80) for c in part["contacts"]] + [f"proposal {clean(x['id'], 80)}" for x in part.get("proposals", [])]
+            for t in part["tasks"]:
+                data["tasks"].append(ref_orig if ref_orig is not None and ref_orig.get("id") == t["id"] else t)
+            data["contacts"].extend(part["contacts"])
+            if part.get("proposals"):
+                data.setdefault("proposals", []).extend(part["proposals"])
+            del plan[y]
+            owners = {x["id"]: x for x in data["tasks"] + data["contacts"] if isinstance(x, dict) and "id" in x}
+            for q in plan.values():
+                owners.update({x["id"]: x for x in q["tasks"] + q["contacts"] if isinstance(x, dict) and x.get("id") not in owners})
+            lines_back = 0
+            for ident, lines in part["history"].items():
+                owner = owners.get(ident)
+                if owner is not None:
+                    owner["history"] = list(lines) + list(owner.get("history") or []); lines_back += len(lines)
+            if names:
+                shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+                held.append(f"held back {len(names)} item(s) from {rel}: it would be {size // 1024} KB, over the {ARCHIVE_FILE_MAX // 1024} KB limit"
+                            f" ({shown}). They stay on the board. " + ARCHIVE_NEXT_STEP.replace(" Until then do not edit the file by hand.", ""))
+            else:
+                held.append(f"kept {lines_back} old history line(s) on the board: {rel} would be {size // 1024} KB, over the {ARCHIVE_FILE_MAX // 1024} KB limit. "
+                            + ARCHIVE_NEXT_STEP.replace(" Until then do not edit the file by hand.", ""))
+            again = True; break   # the plan changed: measure the remaining years again
+        if not again:
+            return held, warnings, files
 
 
 def cmd_archive(a):
@@ -9052,13 +9076,14 @@ def _cmd_archive(a):
         else:
             proposals_before = copy.deepcopy(data.get("proposals", []))
             plan = archive_plan(data, rules)
+        held, size_warnings, files = archive_check_sizes(data, plan, base, ref_orig)   # a year over its limit: its items stay on the board
+        if not ref:   # after the check: a held proposal goes back on the board already slimmed, and that slimming is saved
             slimmed = sum(1 for old in proposals_before for new in data.get("proposals", [])
                           if old.get("id") == new.get("id") and old != new)
-        held, size_warnings = archive_check_sizes(data, plan, base, ref_orig)   # a year over its limit: its items stay on the board
         nt = sum(len(p["tasks"]) for p in plan.values()); np_ = sum(len(p["contacts"]) for p in plan.values())
         nr = sum(len(p.get("proposals", [])) for p in plan.values())
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
-        summary = f"task #{task.get('num')} ({task['title']}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
+        summary = f"task #{task.get('num')} ({clean(task['title'], 80)}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
         if not plan:
             if not ref and slimmed:
                 if a.dry_run:
@@ -9067,7 +9092,7 @@ def _cmd_archive(a):
                     if held: sys.exit(1)
                     return
                 if save_changes(data, base, f"Slim {slimmed} Review Inbox proposal(s)"):
-                    print(f"slimmed {slimmed} decided proposal(s)")
+                    print(f"slimmed {slimmed} decided proposal(s) and saved them" + ("; no archive year was written" if held else ""))
                     for line in held: print(line, file=sys.stderr)
                     if held: sys.exit(1)
                     return
@@ -9081,19 +9106,13 @@ def _cmd_archive(a):
             for line in held: print(line.replace("held back", "would hold back", 1))
             for y, p in sorted(plan.items()):
                 print(f"{archive_path(y)}: {len(p['tasks'])} tasks, {len(p['contacts'])} people, {len(p.get('proposals', []))} proposals, {sum(len(h) for h in p['history'].values())} history lines")
-                for t in p["tasks"]: print(f"  #{t.get('num')} {t['title']}")
-                for c in p["contacts"]: print(f"  {c['id']} {c['name']} ({c.get('company', '')})")
+                for t in p["tasks"]: print(f"  #{t.get('num')} {clean(t['title'], 80)}")
+                for c in p["contacts"]: print(f"  {clean(c['id'], 80)} {clean(c.get('name') or c['id'], 80)} ({clean(c.get('company', ''), 80)})")
             return
         msg = f"Archive {summary}"
         try:
-            files = {}
-            for y, p in plan.items():
-                cur, sha = read_archive(y, base)
-                cur = archive_merge(cur, p, y)
-                if ref:
-                    extra_history = cur.get("history", {}).pop(task["id"], [])
-                    task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
-                archive_index(data, y, cur); files[y] = (cur, sha)
+            for y, (cur, _) in files.items():   # the same data the size check measured
+                archive_index(data, y, cur)
             assign_nums(data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
             ok = save_changes(data, base, msg, extra=extra)

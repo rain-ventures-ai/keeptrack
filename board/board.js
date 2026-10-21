@@ -7714,9 +7714,9 @@ if (typeof window !== 'undefined') (() => {
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return true; }
     return false;
   }
-  async function writeArchive(y, data, sha, message) {
+  async function writeArchive(y, data, sha, message, text) {   // text: the already-built file text (the size check measured it), else built here
     if (fromSnap || ro || newerSchema) return false;
-    const res = await gh('PUT', { message, content: b64e(JSON.stringify(data, null, 2) + '\n'), branch: cfg().branch, ...(sha ? { sha } : {}) }, false, { path: archPath(y) });
+    const res = await gh('PUT', { message, content: b64e(text == null ? jsonText(data) : text), branch: cfg().branch, ...(sha ? { sha } : {}) }, false, { path: archPath(y) });
     if (!res.ok) return false; const out = await res.json(); archMem[archKey(y)] = { data, sha: out.content.sha, etag: null }; return true;
   }
   // the archive's card ids when the loaded copy is current, an empty set when the board has no archive, else null (not loaded)
@@ -7753,7 +7753,8 @@ if (typeof window !== 'undefined') (() => {
   const ARCH_WARN = 700 * 1024, ARCH_MAX = 900 * 1024, archBytes = s => new TextEncoder().encode(s).length;
   const archStep = 'Tell the board owner: splitting an archive year into parts is planned as a follow-up card.';
   const partCount = p => p.tasks.length + p.contacts.length + (p.proposals || []).length;
-  const heldNote = (y, n, bytes) => `Held back ${n} item${n === 1 ? '' : 's'} from ${archPath(y)}: it would be ${Math.round(bytes / 1024)} KB, over the ${ARCH_MAX / 1024} KB limit. They stay on the board. ${archStep}`;
+  const heldNote = (y, n, bytes) => n ? `Held back ${n} item${n === 1 ? '' : 's'} from ${archPath(y)}: it would be ${Math.round(bytes / 1024)} KB, over the ${ARCH_MAX / 1024} KB limit. They stay on the board. ${archStep}`
+    : `Kept the old history lines on the board: ${archPath(y)} would be ${Math.round(bytes / 1024)} KB, over the ${ARCH_MAX / 1024} KB limit. ${archStep}`;
   const warnNote = (y, bytes) => `${archPath(y)} is ${Math.round(bytes / 1024)} KB; doctor fails above ${ARCH_MAX / 1024} KB. ${archStep}`;
   let archiveNote = '';   // the size note of the last archive run, for the quick-archive toast (which replaces archiveNow's own)
   const batchWhat = k => `${k} task${k === 1 ? '' : 's'}; nothing deleted, search Include archive to restore`;
@@ -7767,11 +7768,11 @@ if (typeof window !== 'undefined') (() => {
         const fresh = normalise(got.data), plan = archivePlan(clone(fresh), rules), years = Object.keys(plan);
         await completeArchiveHistory(plan, rules, fresh, got.meta);
         if (!years.length) { setStatus(''); toast(rules.taskIds ? 'Nothing archived: those cards left Done or an agent took them.' : 'Nothing to archive yet'); return; }
-        const extras = {}, gone = new Set(), histories = {}, counts = {}, notes = [], heldIds = new Set(); let held = 0;
+        const extras = {}, gone = new Set(), histories = {}, counts = {}, notes = [], heldIds = new Set(); let held = 0, heldYears = 0;
         years.forEach(y => { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           if (pickedIds(rules)) pickedIds(rules).forEach(id => delete merged.history[id]);
           const text = jsonText(merged), bytes = archBytes(text);
-          if (bytes > ARCH_MAX) { held += partCount(plan[y]); plan[y].tasks.forEach(x => heldIds.add(x.id)); notes.push(heldNote(y, partCount(plan[y]), bytes)); delete plan[y]; return; }
+          if (bytes > ARCH_MAX) { held += partCount(plan[y]); heldYears++; plan[y].tasks.forEach(x => heldIds.add(x.id)); notes.push(heldNote(y, partCount(plan[y]), bytes)); delete plan[y]; return; }
           if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes));
           extras[rel] = text; counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length };
           plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); }); });
@@ -7780,7 +7781,7 @@ if (typeof window !== 'undefined') (() => {
         [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
         fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, counts); fresh.archive.last_run = nowIso();
         const out = await save(fresh, message, got.meta, extras);
-        if (out === 'ok') { archived = null; archivedSig = ''; snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); archiveNote = notes.join(' '); toast('Archived ' + (rules.taskIds ? batchWhat(gone.size) : what) + '.' + (notes.length ? ' ' + notes.join(' ') : ''), !!held); return; }
+        if (out === 'ok') { archived = null; archivedSig = ''; snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); archiveNote = notes.join(' '); toast('Archived ' + (rules.taskIds ? batchWhat(gone.size) : what) + '.' + (notes.length ? ' ' + notes.join(' ') : ''), !!heldYears); return; }
         if (out !== 'conflict') throw new Error(out); setStatus('Someone else changed the board, retrying…', 'err');
       } catch (e) { console.error(e); setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     }
@@ -7884,23 +7885,22 @@ if (typeof window !== 'undefined') (() => {
     let plan; try { plan = archivePlan(clone(fresh), rules); } catch (e) { setStatus('Archive failed', 'err'); toast(e.message, true); return; }
     const years = Object.keys(plan); if (!years.length) { setStatus(''); toast(rules.taskIds ? 'Nothing archived: those cards left Done or an agent took them.' : 'Nothing to archive yet'); return; }
     if (rules.taskIds) n = { tasks: years.reduce((k, y) => k + plan[y].tasks.length, 0), contacts: 0, history: 0 };
-    const msg = `Archive ${n.tasks} tasks, ${n.contacts} people`, moved = new Map(), hist = {}, counts = {}, notes = []; let held = 0;
+    const msg = `Archive ${n.tasks} tasks, ${n.contacts} people`, moved = new Map(), hist = {}, counts = {}, notes = []; let held = 0, heldYears = 0;
     try {
       await completeArchiveHistory(plan, rules, fresh);
       for (const y of years) {   // archive files first: if the board save fails after this, the items are in both places and the board copy wins
         let skip = false;
         for (let i = 0; i < 3; i++) { const { data, sha } = await readArchive(y), merged = archiveMerge(data ? clone(data) : null, plan[y], y);
           if (ids) plan[y].tasks.forEach(({ id }) => { const t = merged.tasks.find(x => x.id === id), seen = new Set(); t.history = (merged.history[id] || []).concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; }); delete merged.history[id]; });
-          const bytes = archBytes(jsonText(merged));
-          if (bytes > ARCH_MAX) { held += partCount(plan[y]); notes.push(heldNote(y, partCount(plan[y]), bytes)); skip = true; break; }   // this year's items stay on the board
-          if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes));
-          if (await writeArchive(y, merged, sha, msg)) { counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; break; }
+          const text = jsonText(merged), bytes = archBytes(text);
+          if (bytes > ARCH_MAX) { held += partCount(plan[y]); heldYears++; notes.push(heldNote(y, partCount(plan[y]), bytes)); skip = true; break; }   // this year's items stay on the board
+          if (await writeArchive(y, merged, sha, msg, text)) { counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes)); break; }   // the warning only once the file is written, not on a retry
           delete archMem[archKey(y)]; if (i === 2) throw new Error('could not save ' + archPath(y)); }
         if (skip) continue;
         plan[y].tasks.concat(plan[y].contacts).forEach(x => moved.set(x.id, JSON.stringify(ids ? fresh.tasks.find(t => t.id === x.id) : x))); Object.assign(hist, plan[y].history);
       }
     } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
-    if (!moved.size) { setStatus(''); toast('Nothing archived. ' + notes.join(' '), true); return; }   // every year was over the limit: nothing was written
+    if (!Object.keys(counts).length) { setStatus(''); toast('Nothing archived. ' + notes.join(' '), true); return; }   // every year was over the limit: nothing was written (a history-only year that was written still needs the board trimmed below)
     let kept = 0;   // changed since the read above: it stays on the board (the next run archives it again, replacing the copy by id)
     const ok = await mutate(d => { kept = 0;
       const gone = x => { if (!moved.has(x.id)) return false; if (moved.get(x.id) === JSON.stringify(x)) return true; kept++; return false; };
@@ -7911,7 +7911,9 @@ if (typeof window !== 'undefined') (() => {
     archived = null; renderArchiveBox();
     if (!ok) { toast('The archive files were written, but the board was not saved. Nothing was removed from the board; run Archive again.', true); return; }
     archiveNote = notes.join(' ');
-    toast(`Archived ${rules.taskIds ? batchWhat(n.tasks - kept - held) : what}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : '') + (notes.length ? ' ' + notes.join(' ') : ''), !!held);
+    const wrote = Object.keys(counts).map(y => plan[y]), sum = f => wrote.reduce((k, p) => k + f(p), 0),
+      said = rules.taskIds ? batchWhat(n.tasks - kept - held) : heldYears ? `${sum(p => p.tasks.length)} done task${sum(p => p.tasks.length) === 1 ? '' : 's'}, ${sum(p => p.contacts.length)} Lost ${sum(p => p.contacts.length) === 1 ? 'person' : 'people'} and ${sum(p => Object.values(p.history).reduce((m, h) => m + h.length, 0))} old history lines` : what;   // held years are not counted as archived
+    toast(`Archived ${said}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : '') + (notes.length ? ' ' + notes.join(' ') : ''), !!heldYears);
   }
   async function restoreArchived(kind, item, y, open = true) {
     if (HOSTED) { const ok = await hostedArchive(item, y, true); if (ok && open && kind === 'task') openCard(item.id); return; }   // open: show the restored card or person afterwards
