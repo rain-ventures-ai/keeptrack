@@ -7,7 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 Kit v84: companies on the board, HubSpot style (private-tasks card #281). A company is every client name and every
-person's company, once each. `client_info[<company>]` gains four optional fields: `stage` (one of `settings.stages`),
+person's company, once each; a client with no people and no company record stays a client for tasks but is left
+out of Companies and the company pipeline. `client_info[<company>]` gains four optional fields: `stage` (one of `settings.stages`),
 `owner` (a board member's login), `domain` and `notes`. Until a stage is set, a company shows the most advanced stage
 among its people (a Lost person never outranks a live one; members' own records do not count). keeptrack.py:
 `client-set NAME --stage --owner --domain --notes` (`""` clears; the stage and owner are checked), `clients` shows the

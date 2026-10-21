@@ -5676,8 +5676,8 @@ if (typeof window !== 'undefined') (() => {
   function openClientMenu(anchor) {
     const co = editingClient; if (!co) return;
     const items = [
-      { label: 'Show only this client', icon: 'eye', onSelect: () => { setClientValues([co]); $('dlgClient').close(); } },
-      { label: 'Copy client name', icon: 'copy', onSelect: () => copyText(co, 'Client name copied') }
+      { label: 'Show only this company', icon: 'eye', onSelect: () => { setClientValues([co]); $('dlgClient').close(); } },
+      { label: 'Copy company name', icon: 'copy', onSelect: () => copyText(co, 'Company name copied') }
     ];
     if (!ro && companyFacts(co).stored) items.push({ label: "Use people's stage", icon: 'users', onSelect: () => setCompanyStage(co, '') });
     ui.menu(anchor, items, { label: `Actions for ${co}` });
@@ -7241,6 +7241,10 @@ if (typeof window !== 'undefined') (() => {
       last: contacts.map(lastTouch).filter(Boolean).sort().pop() || '', value: contacts.reduce((a, p) => a + money(p.value), 0), own: companyIdentity(name) };
   }
   const companyFilter = name => { const fc = clientValues(); return !fc.length || fc.includes(name); };
+  // A name with no people and no company record (stage, owner, domain, notes) is a bucket for tasks, not a CRM company:
+  // it stays a client (task client, the top chips) but is left out of Companies and the company pipeline. Own companies stay.
+  const COMPANY_FIELDS = ['stage', 'owner', 'domain', 'notes'];
+  const listedCompany = f => !!f.own || f.people.length > 0 || COMPANY_FIELDS.some(k => typeof f.info[k] === 'string' && f.info[k].trim());
   function companyStagePill(f) {   // a derived stage reads the same, outlined, and says where it comes from
     if (!f.stage) return el('span', 'nostage muted', 'No stage');
     const b = stagePill(f.stage); if (f.stage && !f.stored) { b.classList.add('derived'); b.title = `${f.stage}: the most advanced stage among its people. Set the company's own stage in its record.`; }
@@ -7268,10 +7272,10 @@ if (typeof window !== 'undefined') (() => {
     bar.append(q, st); wrap.append(bar);
     const ql = companiesQ.toLowerCase(), order = s => s ? stages().indexOf(s) : stages().length;
     const items = companyNames().filter(companyFilter).map(companyFacts)
-      .filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
+      .filter(listedCompany).filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => (!!b.own - !!a.own) || order(a.stage) - order(b.stage) || String(b.last).localeCompare(String(a.last)) || a.name.localeCompare(b.name));   // own companies first, as members are in People
     capList('companies', items, companyRow, wrap);
-    if (!items.length) wrap.append(ui.empty({ text: companyNames().length ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
+    if (!items.length) wrap.append(ui.empty({ text: companyNames().map(companyFacts).some(listedCompany) ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
     board.append(wrap);
   }
 
@@ -7299,7 +7303,7 @@ if (typeof window !== 'undefined') (() => {
     const tl = ui.tabs({ items: [{ value: 'people', icon: 'user', label: 'People' }, { value: 'companies', icon: 'building-2', label: 'Companies' }], value: mode, label: 'Pipeline shows', onChange: v => { LS.set(pipeKey(), v); render(); } });
     tl.id = 'pipeMode'; bar.append(tl);
     const cols = el('div', 'pipecols'); cols.addEventListener('scroll', () => { pipeLeft = cols.scrollLeft; }, { passive: true });
-    const facts = mode === 'companies' ? companyNames().filter(companyFilter).map(companyFacts).filter(f => !f.own && f.stage) : [];
+    const facts = mode === 'companies' ? companyNames().filter(companyFilter).map(companyFacts).filter(f => listedCompany(f) && !f.own && f.stage) : [];
     stages().forEach(s => {
       const c = el('section', 'col'); c.dataset.stage = s; const cards = el('div', 'cards');
       if (mode === 'companies') {
