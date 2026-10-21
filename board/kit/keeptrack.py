@@ -5862,6 +5862,16 @@ def cmd_sent(a):
 
 
 CLIENT_FIELDS = ("stage", "owner", "domain", "notes")   # kit v84: a company's own record in client_info (all optional)
+RESERVED_NAMES = ("__proto__", "constructor", "prototype")   # JavaScript object keys: the web board would read them off Object.prototype
+
+
+def refuse_reserved_names(a):
+    """A client or company name the web board cannot store safely (kit v84 review) is refused before anything is written."""
+    for k in ("client", "company", "new"):
+        v = getattr(a, k, None)
+        for x in (v if isinstance(v, list) else [v]):
+            if isinstance(x, str) and x.strip() in RESERVED_NAMES:
+                sys.exit(f"'{x.strip()}' cannot be a client or company name")
 
 
 def clean_domain(v):
@@ -5882,16 +5892,17 @@ def member_login(data, u):
     return m["github"]
 
 
-def company_stage(data, company):
+def company_stage(data, company, ml=None, contacts=None):
     """(stage, derived): the company's own stage (client_info[company].stage, kit v84), or, until one is set, the most
     advanced stage among its people (stage order from settings.stages; a lost person never outranks a live one).
     Board members' own records do not count. ("", True) when it has no people with a known stage."""
     own = ((data.get("client_info") or {}).get(company) or {}).get("stage")
-    if isinstance(own, str) and own:
+    order = list(stages(data))
+    if isinstance(own, str) and own in order:   # a stage the board no longer has counts as unset
         return own, False
-    order = list(stages(data)); ml = member_logins(data); best = ""
+    ml = member_logins(data) if ml is None else ml; best = ""
     rank = lambda s: -1 if s.lower() == "lost" else order.index(s)
-    for p in data.get("contacts", []):
+    for p in (data.get("contacts", []) if contacts is None else contacts):
         s = p.get("stage")
         if p.get("company") != company or s not in order or own_member(p, ml):
             continue
@@ -5916,7 +5927,7 @@ def cmd_client_set(a):
         if got["domain"] is not None:
             values["domain"] = clean_domain(got["domain"])
         if got["notes"] is not None:
-            values["notes"] = got["notes"].strip("\n")
+            values["notes"] = got["notes"].strip("\n") if got["notes"].strip() else ""   # only whitespace clears it
         for k in CLIENT_FIELDS:
             if k not in values:
                 continue
@@ -6568,18 +6579,25 @@ def company_members(data, company):
 
 def cmd_clients(a):
     data, _ = load()
+    ml = member_logins(data)   # once, not per client (kit v84 review)
+    by = {k: collections.defaultdict(list) for k in ("tasks", "projects", "contacts")}
+    for k, field in (("tasks", "client"), ("projects", "client"), ("contacts", "company")):
+        for x in data.get(k, []) or []:
+            if isinstance(x, dict) and x.get(field):
+                by[k][x[field]].append(x)
+    infos = data.get("client_info") if isinstance(data.get("client_info"), dict) else {}
     for c in data.get("clients", []):
-        tasks, projects, people = _client_refs(data, c)
-        info = data.get("client_info", {}).get(c, {}) or {}
+        tasks, projects, people = by["tasks"].get(c, []), by["projects"].get(c, []), by["contacts"].get(c, [])
+        info = infos.get(c) if isinstance(infos.get(c), dict) else {}
         ns = info.get("north_star", "")
         members = company_members(data, c)
-        marker = "  [Board member company: " + ", ".join("@" + m["github"] for m in members) + "]" if members else ""
-        stage, derived = company_stage(data, c)   # kit v84: the company record
+        marker = "  [Board member company: " + ", ".join("@" + clean(m["github"]) for m in members) + "]" if members else ""
+        stage, derived = company_stage(data, c, ml, people)   # kit v84: the company record
         record = (f"  stage: {clean(stage)}" + (" (from its people)" if derived else "") if stage else "") \
             + (f"  owner: @{clean(info['owner'])}" if info.get("owner") else "") + (f"  domain: {clean(info['domain'])}" if info.get("domain") else "")
         notes = clean(str(info.get("notes") or "").replace("\n", " "), 80)
-        print(f"{c}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + marker + record
-              + (f"  north star: {ns}" if ns else "") + (f"  notes: {notes}" if notes.strip() else ""))
+        print(f"{clean(c)}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + marker + record
+              + (f"  north star: {clean(ns)}" if ns else "") + (f"  notes: {notes}" if notes.strip() else ""))
     if not data.get("clients"):
         print("(no clients)")
 
@@ -10602,6 +10620,7 @@ def main():
     _proposals_only(a)
     FILE = a.file
     read_stdin_args(a)
+    refuse_reserved_names(a)
     if UNTRUSTED_CONFIG and not getattr(a, "hook", False) and a.f is not cmd_use:
         print(f"note: ignored {UNTRUSTED_CONFIG}: `keeptrack.py use` did not write it on this computer (it may have come "
               "with a cloned repo or a download). If it is yours, run `keeptrack.py use <owner/board-repo>` there.",
