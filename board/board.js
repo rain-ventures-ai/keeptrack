@@ -5708,7 +5708,7 @@ if (typeof window !== 'undefined') (() => {
   $('clClose').onclick = () => $('dlgClient').close();
   $('dlgClient').addEventListener('close', () => { editingClient = ''; render(); });
   function addClientProject(name) {
-    const co = editingClient; if (!co) return false;
+    const co = editingClient; if (!co || refuseName(co)) return false;
     const pr = { id: boardId('pr_'), client: co, name, north_star: '', status: 'active', links: [], people: [], created: nowIso(), updated: nowIso() };
     mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) openProject(pr.id); });
   }
@@ -6170,7 +6170,7 @@ if (typeof window !== 'undefined') (() => {
     const fresh = normalise(got.data), change = clone(opts.change || p.change || {});
     if (action !== 'ignore' && Array.isArray(change.after) && change.after.some(x => !fresh.tasks.some(t => t.id === x)) && !archIdsNow(fresh)) { try { await loadArchived(); } catch { /* not loaded: an off-board id is not refused */ } }
     if (action !== 'ignore') { const why = proposalRefusal(p, change, fresh, action, opts.into ? { into: opts.into, fields: opts.fields || [] } : null); if (why) { inboxSay(why, true); return false; } }
-    if (action !== 'ignore' && ['client', 'company'].some(k => refuseName(change[k]))) { inboxSay('Not saved: edit the proposal\'s client or company, or ignore it.', true); return false; }   // as keeptrack.py proposal-accept
+    if (action !== 'ignore' && ['client', 'company'].some(k => reservedName(change[k]))) { inboxSay('Not saved: a client or company cannot be called __proto__, constructor or prototype. Edit the proposal or ignore it.', true); return false; }   // as keeptrack.py proposal-accept
     const edited = opts.change ? Object.fromEntries(Object.entries(opts.change).filter(([k, v]) => !sameJson((p.change || {})[k], v))) : null;
     let expect = {}, note = '';
     if (action !== 'ignore' && p.target) {
@@ -7259,8 +7259,9 @@ if (typeof window !== 'undefined') (() => {
   // A name with no people, no company record (stage, owner, domain, notes, north star), no files and no projects is a bucket for tasks, not a CRM company:
   // it stays a client (task client, the top chips) but is left out of Companies and the company pipeline. Own companies stay.
   const COMPANY_FIELDS = ['stage', 'owner', 'domain', 'notes'];
-  const listedCompany = f => !!f.own || f.people.length > 0 || [...COMPANY_FIELDS, 'north_star'].some(k => typeof f.info[k] === 'string' && f.info[k].trim())
-    || (Array.isArray(f.info.links) && f.info.links.length > 0) || projectsForClient(f.name).length > 0;   // a client with projects, files or a north star is a real client
+  const projectClients = () => new Set(projectsOf().map(p => p && p.client).filter(Boolean));   // built once per render, not per company
+  const listedCompany = (f, withProjects) => !!f.own || f.people.length > 0 || [...COMPANY_FIELDS, 'north_star'].some(k => typeof f.info[k] === 'string' && f.info[k].trim())
+    || (Array.isArray(f.info.links) && f.info.links.length > 0) || (withProjects || projectClients()).has(f.name);   // a client with projects, files or a north star is a real client
   function companyStagePill(f) {   // a derived stage reads the same, outlined, and says where it comes from
     if (!f.stage) return el('span', 'nostage muted', 'No stage');
     const b = stagePill(f.stage); if (f.stage && !f.stored) { b.classList.add('derived'); b.title = `${f.stage}: the most advanced stage among its people. Set the company's own stage in its record.`; }
@@ -7287,11 +7288,11 @@ if (typeof window !== 'undefined') (() => {
     const st = el('select', 'pillsel'); st.setAttribute('aria-label', 'Filter by stage'); [['', 'All stages'], ...stages().map(s => [s, s])].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; st.append(o); }); st.value = companiesStage; st.onchange = () => { companiesStage = st.value; render(); };
     bar.append(q, st); wrap.append(bar);
     const ql = companiesQ.toLowerCase(), order = s => s ? stages().indexOf(s) : stages().length;
-    const items = companyNames().filter(companyFilter()).map(companyFacts)
-      .filter(listedCompany).filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
+    const pc = projectClients(), listed = companyNames().filter(companyFilter()).map(companyFacts).filter(f => listedCompany(f, pc));
+    const items = listed.filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => (!!b.own - !!a.own) || order(a.stage) - order(b.stage) || String(b.last).localeCompare(String(a.last)) || a.name.localeCompare(b.name));   // own companies first, as members are in People
     capList('companies', items, companyRow, wrap);
-    if (!items.length) wrap.append(ui.empty({ text: companyNames().some(n => listedCompany(companyFacts(n))) ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
+    if (!items.length) wrap.append(ui.empty({ text: listed.length || companyNames().some(n => listedCompany(companyFacts(n), pc)) ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
     board.append(wrap);
   }
 
@@ -7320,7 +7321,7 @@ if (typeof window !== 'undefined') (() => {
     const tl = ui.tabs({ items: [{ value: 'people', icon: 'user', label: 'People' }, { value: 'companies', icon: 'building-2', label: 'Companies' }], value: mode, label: 'Pipeline shows', onChange: v => { LS.set(pipeKey(), v); render(); } });
     tl.id = 'pipeMode'; bar.append(tl);
     const cols = el('div', 'pipecols'); cols.addEventListener('scroll', () => { pipeLeft = cols.scrollLeft; }, { passive: true });
-    const facts = mode === 'companies' ? companyNames().filter(companyFilter()).map(companyFacts).filter(f => listedCompany(f) && !f.own && f.stage) : [];
+    const facts = mode === 'companies' ? companyNames().filter(companyFilter()).map(companyFacts).filter(f => f.stage && !f.own) : [];   // a company with a stage has a record or people, so it is listed
     stages().forEach(s => {
       const c = el('section', 'col'); c.dataset.stage = s; const cards = el('div', 'cards');
       if (mode === 'companies') {

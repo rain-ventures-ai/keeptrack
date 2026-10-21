@@ -10,11 +10,11 @@ Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #
 #283). A client with no people, no company record (stage, owner, domain, notes or north star), no files and no
 projects, such as a "General" bucket for tasks, is left out of Companies and the company pipeline; it stays a client
 for tasks and the client pills. The company record's menu reads "Show only this company" and "Copy company name".
-`__proto__`, `constructor` and `prototype` are never created as a client or company name: keeptrack.py refuses them in
-the commands that create one (client-set, add, task-set, project-add, project-set, person-add, person-set and
-client-rename's new name), `import` skips them with a report line, and a proposal that names one cannot be accepted (on
-the page or with `proposal-accept`). client-rm, client-rename's old name and the filters still accept them, so a bad
-name already on a board can be removed. The page reads and creates `client_info` entries only as own properties and
+`__proto__`, `constructor` and `prototype` are never created as a client or company name: every keeptrack.py save
+refuses one that would store such a name in one more place than before (so any command, `init --client`, a proposal
+accept or merge, `touch`/`sent --company` and `client-link` are covered), `import` skips them with a report line and
+counts them in its summary, and a proposal that names one cannot be accepted on the page. client-rm and client-rename
+OLD NEW only remove uses, so a bad name already on a board can be cleaned up. The page reads and creates `client_info` entries only as own properties and
 refuses those names wherever it would create one. `clients` skips a record whose client or company is not text. A stored company stage the board no longer has counts as unset (the stage from its
 people shows). `client-set --notes` with only whitespace clears the notes. `clients` prints every name through the
 terminal guard and groups people by company once.

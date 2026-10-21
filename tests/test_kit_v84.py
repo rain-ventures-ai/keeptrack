@@ -119,6 +119,62 @@ class Board(unittest.TestCase):
         self.assertNotIn("Proto task", self.kt("list", "--all").stdout)
         self.assertNotIn("__proto__", self.root()["clients"])
 
+    def run_as_person(self, *args):
+        env = dict(self.env); env.pop("BOARD_AGENT", None); env["HOME"] = self.tmp.name
+        return subprocess.run([sys.executable, KT, "--file", self.file, *args], env=env, cwd=self.tmp.name, capture_output=True, text=True)
+
+    def add_proposals(self, items):
+        props = os.path.join(self.tmp.name, "merge-props.json")
+        src = {"kind": "meeting", "id": "doc-2", "revision": "1", "title": "M", "date": "2026-10-08", "url": "https://example.invalid/m"}
+        with open(props, "w", encoding="utf-8") as f:
+            json.dump([dict(x, source=src, reason="test") for x in items], f)
+        r = self.run_as_person("proposal-add", props); self.assertEqual(0, r.returncode, r.stderr)
+        data = json.loads(self.run_as_person("proposals", "--json").stdout)
+        items = data if isinstance(data, list) else data.get("proposals", [])
+        return {x["title"]: x["id"] for x in items}
+
+    def test_every_create_path_is_refused_at_write(self):
+        before = self.root()
+        r = self.kt("client-link", "__proto__", "https://x.example/folder", ok=False)
+        self.assertIn("cannot be a client or company name", r.stderr)
+        self.assertEqual(before, self.root())
+        n = self.kt("person-add", "Robin Doe", "--company", "Acme").stdout.split()[1]
+        for cmd in (("touch", n, "Called", "--company", "__proto__"), ("person-set", n, "--company", "prototype")):
+            r = self.kt(*cmd, ok=False)
+            self.assertIn("cannot be a client or company name", r.stderr, cmd)
+        self.assertNotIn("__proto__", json.dumps(self.root()))
+        ids = self.add_proposals([
+            {"kind": "task.create", "title": "Merge client", "action_key": "ak-m1", "work_key": "wk-m1", "change": {"title": "Merge client", "client": "__proto__"}},
+            {"kind": "person.upsert", "title": "Merge company", "action_key": "ak-m2", "work_key": "wk-m2", "change": {"name": "Robin Doe", "company": "constructor"}}])
+        num = self.kt("list", "--all").stdout.splitlines()[0][1:].split()[0]
+        for pid, into, field in ((ids["Merge client"], "#" + num, "client"), (ids["Merge company"], n, "company")):
+            r = self.run_as_person("proposal-merge", pid, "--into", into, "--fields", field)
+            self.assertNotEqual(0, r.returncode, r.stdout)
+            self.assertIn("cannot be a client or company name", r.stderr, field)
+        every = "".join(open(os.path.join(d, f), encoding="utf-8").read() for d, _, fs in os.walk(self.dir) for f in fs if f.endswith(".json") and "proposals" not in d)
+        self.assertNotIn('"__proto__"', every); self.assertNotIn('"constructor"', every); self.assertNotIn('"prototype"', every)
+
+    def test_init_refuses_a_reserved_client(self):
+        board = os.path.join(self.tmp.name, "fresh", "board", "tasks.json")
+        r = subprocess.run([sys.executable, KT, "--file", board, "init", "--person", "alex:Alex", "--client", "__proto__"],
+                           env=self.env, cwd=self.tmp.name, capture_output=True, text=True)
+        self.assertNotEqual(0, r.returncode); self.assertIn("cannot be a client or company name", r.stderr)
+
+    def test_import_summary_counts_reserved_skips(self):
+        staging = os.path.join(self.tmp.name, "staging2.json")
+        with open(staging, "w", encoding="utf-8") as f:
+            json.dump({"companies": ["__proto__", "Fine\u202eCo"], "tasks": [{"title": "T\u0007x", "client": "constructor"}]}, f)
+        dry = self.kt("import", staging, "--dry-run").stdout
+        self.assertIn("and 2 with a reserved name", dry)
+        out = self.kt("import", staging).stdout
+        self.assertIn("and 2 with a reserved name", out)
+        self.assertNotIn("\u202e", out); self.assertNotIn("\u0007", out)
+
+    def test_client_info_entry_that_is_text_never_crashes(self):
+        root = self.root(); root["client_info"]["Acme"] = "oops"; root["clients"].append(7); self.write_root(root)
+        self.assertIn("Acme  (", self.kt("clients").stdout)
+        self.assertEqual(("", True), keeptrack.company_stage(self.root(), "Acme"))
+
     def test_clients_skips_records_that_are_not_text(self):
         self.kt("person-add", "Robin Doe", "--company", "Acme")
         path = next(os.path.join(self.dir, "people", f) for f in os.listdir(os.path.join(self.dir, "people")))

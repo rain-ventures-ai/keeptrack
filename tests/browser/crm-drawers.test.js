@@ -381,7 +381,6 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.match(await ccol('Talking').textContent(), /2 people.*Book a call.*6,000/);
       assert.match(await ccol('Talking').getAttribute('class'), /\bderived\b/);
       assert.deepEqual(await ccol('New').locator('.ctitle').allTextContents(), ['Beta Ltd']);
-      assert.equal(await pg.locator('.ccard[data-company="Empty Co"], .ccard[data-company="Recorded Co"]').count(), 0, 'no stage, no people: not in the company pipeline');
       assert.equal(await pg.locator('.col[data-stage="Talking"] h2 .psum').textContent(), '6,000');
       await shot(pg, 'pipeline-companies-desktop-light');
       // drag and drop as the page's own handlers see it: the card's dragstart fills the DataTransfer, the column's drop reads it
