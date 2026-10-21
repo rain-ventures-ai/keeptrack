@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v84: companies on the board, HubSpot style (private-tasks card #281). A company is every client name and every
+person's company, once each. `client_info[<company>]` gains four optional fields: `stage` (one of `settings.stages`),
+`owner` (a board member's login), `domain` and `notes`. Until a stage is set, a company shows the most advanced stage
+among its people (a Lost person never outranks a live one; members' own records do not count). keeptrack.py:
+`client-set NAME --stage --owner --domain --notes` (`""` clears; the stage and owner are checked), `clients` shows the
+stage, owner and domain, `settings-set --rename-stage` renames company stages too, `member-rm` clears that member as
+an owner, and `doctor` warns (CLIENT_RECORD) about an unknown stage or owner. Web board: a **Companies** tab between
+People and Pipeline (stage, people, open tasks, the earliest next step among its people, last contact; search, stage
+filter and client pills), the client drawer becomes the company record (stage, owner, domain, value from its people,
+notes, people as rows, every person's contact log merged with Show more, open tasks; north star, projects and files as
+before), company names link to it from person rows, pipeline cards and the person drawer, and **Pipeline** has a
+People | Companies toggle (remembered in this browser) where dragging a company card sets the company's stage. No
+migration; older kits and pages keep the new fields.
+
 Kit v83: goals on the board (consulting card #189). A board can hold goals in `tasks.json` (`goals`: a title, a metric,
 a target, the current value, a start and an end date, and a status of active, done or dropped), and a card links to one
 with `goal`. keeptrack.py: `goals`, `goal`, `goal-add`, `goal-set`, `goal-remove`, `add --goal`, `task-set --goal`,

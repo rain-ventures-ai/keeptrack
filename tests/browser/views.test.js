@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
 });
 
 const PHONE = { width: 390, height: 844 }, DESKTOP = { width: 1280, height: 860 };
-const VIEWS = [['today', 'crm'], ['people', 'crm'], ['pipeline', 'crm'], ['board', 'board'], ['list', 'board'], ['cal', 'board'], ['sched', 'board'], ['activity', 'board'], ['mentions', 'board']];
+const VIEWS = [['today', 'crm'], ['people', 'crm'], ['companies', 'crm'], ['pipeline', 'crm'], ['board', 'board'], ['list', 'board'], ['cal', 'board'], ['sched', 'board'], ['activity', 'board'], ['mentions', 'board']];
 let base;
 
 async function open(browser, { demo = 'board', view = 'board', viewport = DESKTOP, layout = 'classic' } = {}) {
@@ -224,6 +224,20 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await phone.waitForFunction(id => document.querySelector(`.col[data-col="${id}"]`).classList.contains('active'), second);
       assert.equal(await cols.nth(1).getAttribute('aria-selected'), 'true', 'arrow keys move between columns on a phone');
       assert.deepEqual(phone.errors, []); await phone.done();
+      // kit v84: People · Companies · Pipeline in the dock's People section, and the pipeline's People | Companies toggle (ui.tabs)
+      const crm = await open(browser, { demo: 'crm', view: 'companies', viewport: PHONE, layout: 'dock' });
+      assert.deepEqual(await crm.locator('#subnav [role="tab"]').allTextContents(), ['People', 'Companies', 'Pipeline']);
+      assert.equal(await crm.locator('#subnav [aria-selected="true"]').textContent(), 'Companies');
+      assert.equal(await crm.locator('#dock .dtab[data-grp="crm"]').getAttribute('aria-current'), 'page');
+      assert(await crm.locator('.crow').count() > 3, 'company rows');
+      await crm.locator('#subnav [data-view="pipeline"]').click(); await crm.waitForSelector('#pipeMode[role="tablist"]');
+      await crm.locator('#pipeMode [aria-selected="true"]').focus(); await crm.keyboard.press('ArrowRight'); await crm.waitForSelector('.ccard');
+      assert.equal(await crm.locator('#pipeMode [aria-selected="true"]').textContent(), 'Companies', 'arrow keys switch the pipeline to companies');
+      assert.equal(await crm.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true, 'company pipeline: no sideways scroll');
+      await crm.locator('#dock .dtab[data-grp="today"]').click(); await crm.waitForFunction(() => document.body.dataset.view === 'today');
+      await crm.locator('#dock .dtab[data-grp="crm"]').click(); await crm.waitForFunction(() => document.body.dataset.view === 'pipeline');
+      assert.equal(await crm.locator('#pipeMode [aria-selected="true"]').textContent(), 'Companies', 'the toggle stays for this viewer');
+      assert.deepEqual(crm.errors, []); await crm.done();
     }
 
     // 5. Popovers: opening one closes the other; Escape closes and refocuses the trigger; a click outside closes.

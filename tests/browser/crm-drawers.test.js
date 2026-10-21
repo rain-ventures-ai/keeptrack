@@ -1,7 +1,9 @@
 'use strict';
 // The person (#dlgContact), client (#dlgClient) and project (#dlgProject) drawers on a phone-width writable board with a
 // faked GitHub API: edits save, removals and Delete ask in-page first, the layout never scrolls sideways at 390px, the
-// header stays one row, no native dialog is used, and a read-only demo board locks all three.
+// header stays one row, no native dialog is used, and a read-only demo board locks all three. Kit v84: the Companies tab,
+// the company record (stage, owner, domain, value, notes, people, activity, open tasks), company links and the pipeline's
+// People | Companies toggle with drag-to-set-stage.
 // Run: node crm-drawers.test.js   (SHOTS=<dir> also saves screenshots: 390px and 1280px, light and dark, writable and read-only)
 
 const assert = require('node:assert/strict');
@@ -173,9 +175,10 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     await page.locator('#dlgClient[open]').waitFor(); assert.equal(await page.locator('#dlgContact').getAttribute('open'), null);
     assert.equal(await page.locator('#clName').textContent(), 'Acme');
     assert.deepEqual(await page.locator('#clHead button').evaluateAll(xs => xs.map(x => x.getAttribute('aria-label'))), ['More actions', 'Close']);
-    assert.deepEqual(await page.locator('#clBody .ui-props__label').allTextContents(), ['People', 'Tasks']);
-    assert.deepEqual(await page.locator('#clPeople .ui-pill__text').allTextContents(), ['Casey Example']);
-    assert.deepEqual(await page.locator('#clBody .ui-section__text').allTextContents(), ['North star', 'Projects', 'Files and folders']);
+    assert.deepEqual(await page.locator('#clBody .ui-props__label').allTextContents(), ['Stage', 'Owner', 'Domain', 'Value']);
+    assert.deepEqual(await page.locator('#clPeople .ui-listrow__text').allTextContents(), ['Casey Example']);
+    assert.deepEqual(await page.locator('#clBody .ui-section__text').allTextContents(), ['Notes', 'People', 'Activity', 'Open tasks', 'North star', 'Projects', 'Files and folders']);
+    assert.equal(await page.locator('#clHead .didentity__kind').textContent(), 'Company');
     await page.locator('#clNorth').fill('Win the Acme rollout'); w = saved(); await page.locator('#clNorth').blur(); await w; assert.equal(api.root().client_info.Acme.north_star, 'Win the Acme rollout');
     await page.locator('#clFilesSec .ui-addrow__ghost').click(); await page.locator('#clFileTitle').fill('Client Drive'); await page.locator('#clFileNew').fill('https://drive.google.com/drive/folders/acme');
     w = saved(); await page.locator('#clFileAdd').click(); await w; assert.deepEqual(api.root().client_info.Acme.links, [{ title: 'Client Drive', url: 'https://drive.google.com/drive/folders/acme' }]);
@@ -280,13 +283,119 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.equal(peopleFiles(), before, 'loading never adds another copy of your record'); assert.deepEqual(errs3, []); await p3.close();
     }
 
+    // ---- kit v84: the Companies tab, the company record, links to it, and the pipeline's People | Companies toggle ----
+    {
+      const api4 = new Github(), day = n => { const d = new Date(Date.now() - n * 864e5); return d.toISOString(); };
+      const touches = Array.from({ length: 12 }, (_, i) => ({ id: 'c' + i, at: day(20 - i), by: 'alex', channel: i % 2 ? 'email' : 'call', text: 'Touch ' + i, draft: false }));
+      api4.files['people/p_one.json'] = text({ ...person, value: '1000', next: 'Send the deck', next_due: '2030-01-09', comments: [{ id: 'cx', at: day(1), by: 'alex', channel: 'linkedin', text: 'Newest note to Casey', draft: false }] });
+      api4.files['people/p_two.json'] = text({ ...person, id: 'p_two', name: 'Robin Talker', role: 'CFO', stage: 'Talking', value: '5,000', next: 'Book a call', next_due: '2030-01-05', emails: [], comments: touches });
+      api4.files['people/p_three.json'] = text({ ...person, id: 'p_three', name: 'Jo Beta', company: 'Beta Ltd', stage: 'New', emails: [], next: '', next_due: '' });
+      api4.files['cards/t_two.json'] = text({ ...card, id: 't_two', num: 2, title: 'Old work', column: 'done', rank: 'a2' });
+      const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errs = [], nat = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => { nat.push(d.message()); d.dismiss().catch(() => {}); });
+      await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api4.route(r)); await pg.goto(base + '/board/index.html'); await pg.waitForSelector('.prow');
+      const save = () => pg.waitForResponse(r => ['PUT', 'PATCH', 'DELETE'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
+      const info = () => (api4.root().client_info || {}).Acme || {};
+      // the tab sits between People and Pipeline
+      assert.deepEqual(await pg.locator('#viewSw .viewgroup[data-grp="crm"] [role="tab"]').evaluateAll(xs => xs.map(x => x.dataset.view)), ['people', 'companies', 'pipeline']);
+      await pg.locator('#viewSw [data-view="companies"]').click(); await pg.waitForSelector('.crow');
+      // every client name and every person's company, deduplicated; sorted by stage order (New before Talking)
+      assert.deepEqual(await pg.locator('.crow .pwho b').allTextContents(), ['Beta Ltd', 'Acme']);
+      const acme = pg.locator('.crow[data-company="Acme"]');
+      assert.equal(await acme.locator('.pwho .muted').textContent(), '2 people · 1 open task');
+      assert.equal(await acme.locator('.stagepill').textContent(), 'Talking', 'until set, the most advanced stage among its people');
+      assert.match(await acme.locator('.stagepill').getAttribute('class'), /\bderived\b/);
+      assert.match(await acme.locator('.pnext').textContent(), /Book a call.*Robin Talker/, 'the earliest next step among its people, with whose it is');
+      assert.match(await acme.locator('.plast').textContent(), /last contact 1d ago/);
+      assert.equal(await pg.locator('.crow[data-company="Beta Ltd"] .pnext').textContent(), 'No next step');
+      await pg.locator('.psearch').fill('robin'); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 1);
+      assert.deepEqual(await pg.locator('.crow .pwho b').allTextContents(), ['Acme'], 'search reaches its people');
+      await pg.locator('.psearch').fill(''); await pg.locator('.companiesv .pillsel').selectOption('New'); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 1);
+      assert.deepEqual(await pg.locator('.crow .pwho b').allTextContents(), ['Beta Ltd'], 'the stage filter');
+      await pg.locator('.companiesv .pillsel').selectOption(''); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 2);
+      await shot(pg, 'companies-desktop-light');
+      // ---- the company record ----
+      await acme.locator('.pwho b').click(); await pg.locator('#dlgClient[open]').waitFor();
+      assert.equal(await pg.locator('#clStage').inputValue(), '', 'no stage of its own yet');
+      assert.equal(await pg.locator('#clStage option:checked').textContent(), 'Talking (from its people)');
+      assert.equal(await pg.locator('#clValue').textContent(), '6,000', 'value: the sum of its people\'s values');
+      assert.deepEqual(await pg.locator('#clPeople .dperson .ui-listrow__text').allTextContents(), ['Robin Talker', 'Casey Example'], 'most advanced first');
+      assert.match(await pg.locator('#clPeople .dperson').first().textContent(), /CFO · last contact \d+d ago.*Talking/);
+      assert.equal(await pg.locator('#clActCount').textContent(), '13');
+      assert.equal(await pg.locator('#clActivity .cmcard').count(), 10, 'activity is capped');
+      assert.match(await pg.locator('#clActivity .cmcard').first().textContent(), /LinkedIn.*Casey Example.*Newest note to Casey/, 'newest first, labelled with the person');
+      await pg.locator('#clActMore').click(); await pg.waitForFunction(() => document.querySelectorAll('#clActivity .cmcard').length === 13);
+      assert.equal(await pg.locator('#clActMore').isVisible(), false);
+      assert.deepEqual(await pg.locator('#clTasks .ui-task__title').allTextContents(), ['Kick-off'], 'open tasks only');
+      await assertFits(pg, 'dlgClient', 'company record 1280px'); await shot(pg, 'company-desktop-light');
+      // stage, owner, domain and notes save to client_info
+      let w = save(); await pg.locator('#clStage').selectOption('Proposal'); await w; assert.equal(info().stage, 'Proposal');
+      assert.match(await pg.locator('#clStage').evaluate(x => x.parentElement.className), /ui-select--info/);
+      w = save(); await pg.locator('#clOwner').selectOption('alex'); await w; assert.equal(info().owner, 'alex');
+      await pg.locator('#clDomain').fill('https://www.Acme.test/about'); w = save(); await pg.locator('#clDomain').press('Tab'); await w; assert.equal(info().domain, 'www.acme.test');
+      await pg.locator('#clDomain').fill('not a domain'); await pg.locator('#clDomain').press('Tab'); await pg.waitForTimeout(200);
+      assert.equal(await pg.locator('#clDomain').inputValue(), 'www.acme.test', 'a value that is not a domain is refused, as keeptrack.py does'); assert.equal(info().domain, 'www.acme.test');
+      await pg.locator('#clNotes').fill('Key account.'); w = save(); await pg.locator('#clNotes').blur(); await w; assert.equal(info().notes, 'Key account.');
+      assert.equal(info().north_star, '', 'other client_info fields stay');
+      await pg.locator('#clMore').click(); assert.deepEqual(await pg.locator('.ui-menu [role=menuitem]').allTextContents(), ['Show only this client', 'Copy client name', "Use people's stage"]);
+      w = save(); await pg.locator('.ui-menu [role=menuitem]', { hasText: "Use people's stage" }).click(); await w; assert.equal('stage' in info(), false, 'the stage is cleared, not blanked');
+      await pg.locator('#clStage option:checked', { hasText: 'Talking (from its people)' }).waitFor({ state: 'attached' });
+      w = save(); await pg.locator('#clOwner').selectOption(''); await w; assert.equal('owner' in info(), false);
+      // a person row opens the person
+      await pg.locator('#clPeople .dperson', { hasText: 'Robin Talker' }).click(); await pg.locator('#dlgContact[open]').waitFor(); assert.equal(await pg.locator('#pName').inputValue(), 'Robin Talker');
+      // the person drawer's Client field opens the company
+      assert.equal(await pg.locator('#pCompanyOpen').getAttribute('aria-label'), 'Open company Acme');
+      await pg.locator('#pCompanyOpen').click(); await pg.locator('#dlgClient[open]').waitFor(); assert.equal(await pg.locator('#dlgContact').getAttribute('open'), null);
+      await pg.keyboard.press('Escape'); await pg.locator('#dlgClient').waitFor({ state: 'hidden' });
+      // People rows: the company is a link to its record, the rest of the row opens the person
+      await pg.locator('#viewSw [data-view="people"]').click(); await pg.waitForSelector('.prow .colink');
+      await pg.locator('.prow', { hasText: 'Jo Beta' }).locator('.colink').click(); await pg.locator('#dlgClient[open]').waitFor();
+      assert.equal(await pg.locator('#clName').textContent(), 'Beta Ltd'); assert.equal(await pg.locator('#dlgContact').getAttribute('open'), null);
+      await pg.keyboard.press('Escape'); await pg.locator('#dlgClient').waitFor({ state: 'hidden' });
+      await pg.locator('.prow', { hasText: 'Jo Beta' }).locator('.colink').press('Enter'); await pg.locator('#dlgClient[open]').waitFor();
+      assert.equal(await pg.locator('#dlgContact').getAttribute('open'), null, 'Enter on the link opens only the company');
+      await pg.keyboard.press('Escape'); await pg.locator('#dlgClient').waitFor({ state: 'hidden' });
+      // ---- pipeline: People | Companies ----
+      await pg.locator('#viewSw [data-view="pipeline"]').click(); await pg.waitForSelector('#pipeMode');
+      assert.equal(await pg.locator('#pipeMode [aria-selected="true"]').textContent(), 'People');
+      await pg.locator('.pcard', { hasText: 'Robin Talker' }).locator('.colink').click(); await pg.locator('#dlgClient[open]').waitFor();
+      assert.equal(await pg.locator('#clName').textContent(), 'Acme', 'a person card links to the company'); await pg.keyboard.press('Escape'); await pg.locator('#dlgClient').waitFor({ state: 'hidden' });
+      await pg.locator('#pipeMode [data-value="companies"]').click(); await pg.waitForSelector('.ccard');
+      assert.equal(await pg.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('kb_pipe_mode:')).map(k => localStorage.getItem(k)).join()), 'companies', 'the toggle is remembered in this browser');
+      const ccol = st => pg.locator(`.col[data-stage="${st}"] .ccard`);
+      assert.deepEqual(await ccol('Talking').locator('.ctitle').allTextContents(), ['Acme']);
+      assert.match(await ccol('Talking').textContent(), /2 people.*Book a call.*6,000/);
+      assert.match(await ccol('Talking').getAttribute('class'), /\bderived\b/);
+      assert.deepEqual(await ccol('New').locator('.ctitle').allTextContents(), ['Beta Ltd']);
+      assert.equal(await pg.locator('.col[data-stage="Talking"] h2 .psum').textContent(), '6,000');
+      await shot(pg, 'pipeline-companies-desktop-light');
+      // drag and drop as the page's own handlers see it: the card's dragstart fills the DataTransfer, the column's drop reads it
+      const dragDrop = (card, stage) => pg.evaluate(([card, stage]) => { const k = document.querySelector(`.ccard[data-company="${card}"]`), to = document.querySelector(`.col[data-stage="${stage}"] .cards`), dt = new DataTransfer();
+        k.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt })); to.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+        to.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt })); k.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt })); }, [card, stage]);
+      w = save(); await dragDrop('Acme', 'Won'); await w;
+      assert.equal(info().stage, 'Won', 'dragging a company card sets the company stage');
+      await pg.waitForFunction(() => !!document.querySelector('.col[data-stage="Won"] .ccard'));
+      assert.equal((JSON.parse(api4.files['people/p_two.json'])).stage, 'Talking', 'its people keep their own stages');
+      await ccol('Won').click(); await pg.locator('#dlgClient[open]').waitFor(); assert.equal(await pg.locator('#clStage').inputValue(), 'Won');
+      await pg.keyboard.press('Escape'); await pg.locator('#dlgClient').waitFor({ state: 'hidden' });
+      await pg.reload(); await pg.waitForSelector('.ccard'); assert.equal(await pg.locator('#pipeMode [aria-selected="true"]').textContent(), 'Companies', 'still Companies after a reload');
+      await pg.setViewportSize({ width: 390, height: 844 }); await pg.waitForTimeout(150);
+      assert.equal(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'company pipeline fits a phone');
+      await shot(pg, 'pipeline-companies-phone-light');
+      await pg.locator('#viewSw [data-view="companies"]').click().catch(() => pg.evaluate(() => { location.hash = 'view=companies'; })); await pg.waitForSelector('.crow');
+      assert.equal(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Companies fits a phone'); await shot(pg, 'companies-phone-light');
+      await pg.locator('.crow[data-company="Acme"] .pwho b').click(); await pg.locator('#dlgClient[open]').waitFor();
+      await assertFits(pg, 'dlgClient', 'company record 390px'); await shot(pg, 'company-phone-light');
+      assert.deepEqual(nat, []); assert.deepEqual(errs, []); await pg.close();
+    }
+
     // ---- read-only demo board: fields disabled, add and remove controls hidden, copy and navigation still work, no Delete ----
     for (const vp of [{ width: 390, height: 844 }, { width: 1280, height: 860 }]) {
       for (const scheme of SHOTS ? ['light', 'dark'] : ['light']) {
         const demo = await browser.newPage({ viewport: vp, colorScheme: scheme }); const demoErrors = []; demo.on('pageerror', e => demoErrors.push(e.message));
         await demo.addInitScript(() => { try { localStorage.setItem('kb_tour_seen', '1'); localStorage.setItem('kb_tour', 'done'); } catch {} });
         await demo.goto(base + '/board/index.html?demo=crm'); await demo.locator('#roBar').waitFor();
-        await demo.locator('.prow').first().click(); await demo.locator('#dlgContact[open]').waitFor(); await demo.waitForTimeout(100);
+        await demo.locator('.prow b').first().click(); await demo.locator('#dlgContact[open]').waitFor(); await demo.waitForTimeout(100);
         for (const id of ['pName', 'pStage', 'pNext', 'pNextDue', 'pRole', 'pNotes', 'pTouchText']) assert.equal(await demo.locator('#' + id).isDisabled(), true, id + ' is locked');
         assert.equal(await demo.locator('#dlgContact .ui-addrow:visible').count(), 0, 'no add rows'); assert.equal(await demo.locator('#dlgContact .ui-listrow button[aria-label^="Remove"]:visible').count(), 0, 'no remove buttons');
         for (const id of ['pAgent', 'pMore', 'pClose']) assert.equal(await demo.locator('#' + id).isEnabled(), true, id + ' stays usable');
@@ -296,6 +405,9 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
         if (client) {
           await demo.locator('#pMore').click(); await demo.locator('.ui-menu [role=menuitem]', { hasText: client }).click(); await demo.locator('#dlgClient[open]').waitFor(); await demo.waitForTimeout(100);
           assert.equal(await demo.locator('#clNorth').isDisabled(), true); assert.equal(await demo.locator('#dlgClient .ui-addrow:visible').count(), 0);
+          for (const id of ['clStage', 'clOwner', 'clDomain', 'clNotes']) assert.equal(await demo.locator('#' + id).isDisabled(), true, id + ' is locked');
+          assert.equal(await demo.locator('#clPeople .dperson').first().isEnabled(), true, 'people rows still open the person');
+          await demo.locator('#clMore').click(); assert.ok(!(await demo.locator('.ui-menu [role=menuitem]').allTextContents()).includes("Use people's stage")); await demo.keyboard.press('Escape');
           await assertFits(demo, 'dlgClient', `read-only client ${vp.width}px`); await shot(demo, `client-${vp.width}-${scheme}-readonly`);
           const proj = demo.locator('#clProjects .dnav').first();
           if (await proj.count()) {
@@ -305,6 +417,16 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
             await assertFits(demo, 'dlgProject', `read-only project ${vp.width}px`); await shot(demo, `project-${vp.width}-${scheme}-readonly`);
           }
         }
+        await demo.evaluate(() => document.querySelectorAll('dialog[open]').forEach(d => d.close()));
+        const goView = async v => { for (let i = 0; i < 10; i++) {   // a closing drawer takes its own history step back: go once that has landed
+          await demo.waitForTimeout(150); await demo.evaluate(x => { location.hash = 'view=' + x; }, v);
+          if (await demo.waitForFunction(x => document.body.dataset.view === x, v, { timeout: 1000 }).then(() => true, () => false)) return; } throw new Error('could not open ' + v); };
+        await goView('pipeline'); await demo.waitForSelector('#pipeMode');
+        await demo.locator('#pipeMode [data-value="companies"]').click(); await demo.waitForSelector('.ccard');
+        assert.deepEqual(await demo.locator('.pcard').evaluateAll(xs => [...new Set(xs.map(x => x.draggable))]), [false], 'read-only cards cannot be dragged');
+        await demo.locator('#pipeMode [data-value="people"]').click(); await demo.waitForSelector('.pcard:not(.ccard)');
+        await goView('companies'); await demo.waitForSelector('.crow');
+        assert.equal(await demo.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `read-only Companies at ${vp.width}px fits`);
         assert.deepEqual(demoErrors, [], 'no page errors on the demo');
         await demo.close();
       }

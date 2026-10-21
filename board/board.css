@@ -741,6 +741,8 @@ body.ro .uidrawer .ui-pill--removable { padding-right: var(--sp-4); }
 .uidrawer .dfield:disabled { opacity: 1; cursor: default; }
 .uidrawer .dfield:disabled::placeholder, .uidrawer textarea:disabled::placeholder { color: transparent; }   /* read-only: an empty field reads as empty, not as an example value */
 .ui-props__value > .dfield + datalist { display: none; }
+.ui-props__value:has(> #pCompanyOpen) { flex-wrap: nowrap; } .ui-props__value > #pCompany { flex: 1 1 auto; width: auto; min-width: 0; }   /* the company link sits on the Client field's line */
+#pCompanyOpen { flex: none; color: var(--accent); }
 .dmuted { color: var(--muted); font-size: var(--fs-base); }
 .uidrawer .ui-props__value .dquick { min-height: 30px; padding: 0 var(--sp-3); color: var(--muted); }
 .uidrawer .ui-props__value .dquick:hover:not(:disabled) { color: var(--accent); }
@@ -963,7 +965,7 @@ header #filterBadge { background: var(--accent); }
 .alkinds { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-1) var(--sp-5); margin: var(--sp-3) 0; } @media (max-width: 520px) { .alkinds { grid-template-columns: 1fr; } }
 
 /* ==== Keeptrack CRM: Today, People, Pipeline, person drawer, first-run wizard ==== */
-#board.v-today, #board.v-people, #board.v-welcome { display: block; overflow-y: auto; padding: var(--sp-6) 18px 60px; }
+#board.v-today, #board.v-people, #board.v-companies, #board.v-welcome { display: block; overflow-y: auto; padding: var(--sp-6) 18px 60px; }
 #board > .today, .peoplev { max-width: 980px; margin: 0 auto; }
 .todayhead { display: flex; align-items: baseline; gap: var(--sp-5); flex-wrap: wrap; margin-bottom: var(--sp-2); } .todayhead h2 { margin: 0; font-size: 22px; }
 .tsec { margin: 18px 0 var(--sp-3); gap: var(--sp-1); }   /* ui.section */
@@ -1003,12 +1005,33 @@ header #filterBadge { background: var(--accent); }
 #board.pipe .col h2 .psum { margin-left: auto; font-size: var(--fs-sm); color: var(--muted); font-weight: 600; }
 .pcard { cursor: grab; } .pcard .ctitle { font-weight: 600; } .pcard .small { font-size: var(--fs-sm); margin-top: 3px; } .pcard .pval { font-size: var(--fs-sm); margin-top: var(--sp-1); font-weight: 600; }
 .touch .tchan { font-weight: 600; } .touch.draft { border-style: dashed; }
+/* ---- Companies (kit v84): the list, the company link, a derived stage, the pipeline's People | Companies toggle ---- */
+.colink { display: inline; min-height: 0; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font: inherit; text-align: inherit; cursor: pointer;
+  text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: 2px; }
+.colink:hover:not(:disabled) { color: var(--accent); text-decoration-color: currentColor; }
+.colink:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--r-sm); }
+.pwho .colink, .pcard .colink { overflow-wrap: anywhere; }
+.stagepill.derived { background: transparent; box-shadow: inset 0 0 0 1px hsl(var(--h) 70% 50% / .45); }
+.nostage { font-size: var(--fs-sm); white-space: nowrap; }
+.ui-select.derived .ui-select__control { font-weight: 500; font-style: italic; color: var(--muted); }
+#board.v-pipeline { flex-direction: column; gap: var(--sp-4); overflow: hidden; }
+.pipebar { flex: none; display: flex; align-items: center; gap: var(--sp-3); }
+.pipecols { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; scroll-snap-type: x proximity; }
+.pipecols > .col { max-height: 100%; }
+.uidrawer .dperson { gap: var(--sp-3); min-height: 48px; }
+.dperson__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.dperson__main .ui-listrow__meta { max-width: 100%; }
+.dperson > .ui-i { width: 16px; height: 16px; color: var(--muted); flex: none; }
+#clActMore { align-self: flex-start; margin-top: var(--sp-3); }
 .welcome { max-width: 640px; margin: var(--sp-4) auto; line-height: 1.5; } .welcome h2 { margin-top: 0; }
 @media (max-width: 760px) {
-  #board.v-today, #board.v-people, #board.v-welcome { padding: var(--sp-3) var(--sp-5) 90px; }
+  #board.v-pipeline { overflow-y: auto; }
+  #board.v-today, #board.v-people, #board.v-companies, #board.v-welcome { padding: var(--sp-3) var(--sp-5) 90px; }
   .prow { grid-template-columns: 1fr auto; } .prow .pnext { grid-column: 1 / -1; } .prow .plast { display: none; }
   .ttoday .todaytail { grid-column: 1 / -1; justify-items: stretch; } .ttoday .todayactions { justify-content: flex-start; opacity: 1; pointer-events: auto; } .quickstatus { flex: 1; width: auto; }
   #board.pipe .col { display: block; margin-bottom: 14px; } #board.pipe .col h2 { display: flex; }
+  .pipecols { display: block; overflow: visible; } .pipebar .ui-tabs { width: 100%; } .pipebar .ui-tab { flex: 1; justify-content: center; }
+  .dperson .ui-listrow__meta { max-width: none; }
 }
 @media (max-width: 520px) {
   .pbar { grid-template-columns: minmax(0, 1fr); } .pbar select { width: 100%; }

@@ -25,6 +25,23 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v84 (schema 4)
+Companies on the board (private-tasks card #281). No migration: a board whose companies have no record looks and works
+as before, and every company shows the stage worked out from its people.
+- New data, all optional: `stage`, `owner`, `domain` and `notes` on `client_info[<company>]`, next to `north_star`
+  and `links`. Older kits and older web pages keep them as they are (they merge field by field, like the rest of
+  `client_info`), so a person can set a company's stage before everyone has the new page.
+- keeptrack.py: `client-set NAME --stage S --owner LOGIN --domain D --notes ..` (`""` clears a field, `--notes -` reads
+  stdin); `clients` shows each company's stage (marked "from its people" until set), owner and domain;
+  `settings-set --rename-stage` also renames company stages and refuses to drop a stage a company is in; `member-rm`
+  clears the owner of that member's companies; `doctor` warns (CLIENT_RECORD) about a stage or owner the board does not
+  know.
+- Web board: a Companies tab (People · Companies · Pipeline), the client drawer becomes the company record (stage,
+  owner, domain, value, notes, people, merged activity, open tasks), company names link to it, and Pipeline has a
+  People | Companies toggle where dragging a company sets its stage.
+- Run `kit-update` only. Check: `kit-check` says v84, `python3 board/keeptrack.py clients` lists each company with
+  its stage, and the web board shows Companies between People and Pipeline.
+
 ### v83 (schema 4)
 Goals on the board (consulting card #189). No migration: a board without goals looks and works as before.
 - New data, both optional: `goals` in `tasks.json` (`id`, `title`, `metric`, `target`, `current`, `start`, `end`,

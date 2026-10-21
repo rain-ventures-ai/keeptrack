@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 83;
+  const PAGE_KIT = 84;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -2018,7 +2018,7 @@ if (typeof window !== 'undefined') (() => {
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
+      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
@@ -2443,13 +2443,13 @@ if (typeof window !== 'undefined') (() => {
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
   // Each board remembers its last view in this browser. sessionStorage still wins while Back/Forward is active in one tab.
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
-  const ALL_VIEWS = ['today', 'people', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
+  const ALL_VIEWS = ['today', 'people', 'companies', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
   let view = SS.get('kb_view') || boardContext().view || 'today'; if (!ALL_VIEWS.includes(view)) view = 'today';
   // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
   // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
   const VIEW_GROUPS = [
     { grp: 'today', label: 'Today', views: [{ value: 'today', icon: 'alarm-clock', label: 'Today', title: 'Today: people to contact and tasks due' }] },
-    { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people by stage' }] },
+    { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'companies', icon: 'building-2', label: 'Companies', title: 'Companies: each with its stage, people and next step' }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people or companies by stage' }] },
     { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'mentions', icon: 'at-sign', label: '@Mentions', title: '@Mentions: comments that mention you' },
       { value: 'list', icon: 'list', label: 'List', title: 'List' },
       { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' }] }
@@ -2503,9 +2503,9 @@ if (typeof window !== 'undefined') (() => {
     return [
       { title: 'Welcome to Keeptrack', text: `Keeptrack keeps ${tasks && crm ? 'your tasks and the people you work with' : tasks ? 'your tasks' : 'the people you work with'} in one place. Today is the home page: everything that needs you now.`, view: 'today' },
       tasks && { title: 'Kanban: your tasks', text: 'Each card is a task. It moves through the columns from To do to Done: drag it, or change its status inside the card. This card opens the board.', view: 'today', at: ['.tgo[data-go="board"]'] },
-      crm && { title: 'People: your CRM', text: 'Everyone you work with, each with a next step and a date. Log messages and calls in a person\'s card. Pipeline shows people by stage.', view: 'today', at: ['.tgo[data-go="people"]'] },
+      crm && { title: 'People: your CRM', text: 'Everyone you work with, each with a next step and a date. Log messages and calls in a person\'s card. Companies groups them by company, and Pipeline shows people or companies by stage.', view: 'today', at: ['.tgo[data-go="people"]'] },
       dock ? { title: 'The bar at the bottom', text: 'It goes everywhere: Today, Tasks and People. In Tasks and People, the strip at the top switches between views such as Kanban, List, Calendar or Pipeline.', at: ['#dock'] }
-        : { title: 'Views', text: 'Switch between Today, People, Pipeline, Kanban, @Mentions, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
+        : { title: 'Views', text: 'Switch between Today, People, Companies, Pipeline, Kanban, @Mentions, List, Calendar, Schedule and Activity here. On a phone, swipe this strip sideways to see them all.', at: ['#viewSw'] },
       { title: 'Find anything', text: 'Search people, tasks, notes and messages. On a computer, press / from anywhere.', at: [dock ? '#dock [data-head-action="btnSearch"]' : '#btnSearch'] },
       { title: 'Filters', text: 'Show one client, one person, or only what needs attention. The number shows how many filters are on.', at: ['#btnFilter'] },
       { title: 'Undo', text: dock ? 'After a change, tap Undo in the message. You can also use Menu \u2192 Undo last change.' : 'After every change, a message with Undo appears for a few seconds. The Undo button and Ctrl+Z (\u2318Z on a Mac) work too.', at: [dock ? '#dockMenu' : '#btnUndo'] },
@@ -5566,16 +5566,47 @@ if (typeof window !== 'undefined') (() => {
     roKeep(open); row.append(tick, open); return row;
   }
 
-  // ---- client drawer ----
-  let editingClient = '', clSig = '';
+  // ---- client drawer: the company record (kit v84) ----
+  // Properties (stage, owner, domain, value), notes, its people as rows, their contact logs merged, its open tasks, then the
+  // north star, projects and files as before. Stage, owner, domain and notes are stored in client_info[name].
+  let editingClient = '', clSig = '', clActMax = 10;
+  const ACT_STEP = 20;
+  function personNavRow(p) {   // a person in the company record: name, role, stage, last contact; the row opens them
+    const b = el('button', 'ui-listrow dnav dperson'); b.type = 'button';
+    const lt = lastTouch(p), main = el('span', 'dperson__main');
+    main.append(el('span', 'ui-listrow__text', p.name || '(no name)'), el('span', 'ui-listrow__meta', [p.role, memberOf(p) ? '' : lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted'].filter(Boolean).join(' · ')));
+    b.append(ui.avatar(p.name || '?', { size: 'sm' }), main, memberOf(p) ? memberPill(p) : stagePill(p.stage), ui.icon('chevron-right'));
+    b.setAttribute('aria-label', `Open ${p.name || 'this person'}${p.role ? ', ' + p.role : ''}, ${memberOf(p) ? 'board member' : 'stage ' + p.stage}`);
+    b.onclick = () => { $('dlgClient').close(); openContact(p.id); }; return roKeep(b);
+  }
+  function companyActivity(people) {   // every person's contact log, merged, newest first
+    return people.flatMap(p => p.comments.map(cm => ({ p, cm, at: cm.sent_at || cm.at || '' }))).sort((a, b) => b.at.localeCompare(a.at));
+  }
+  function activityCard({ p, cm }) {   // a touch, as in the person drawer, labelled with the person it was with
+    const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
+    const who = el('button', 'colink', p.name || '(no name)'); who.type = 'button'; who.title = `Open ${p.name}`; who.onclick = () => { $('dlgClient').close(); openContact(p.id); }; roKeep(who);
+    head.append(elI('span', 'tchan', ic, label), who, el('span', 'muted', 'by ' + (cm.by || '?')), el('time', null, ago2(cm.sent_at || cm.at)));
+    head.lastChild.title = cm.sent_at || cm.at || '';
+    if (cm.draft) head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
+    const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); return row;
+  }
   function buildClientDrawer() {
     const tile = iconTile('building-2'); tile.id = 'clTile';
-    drawerHead('cl', { kind: 'Client', tile, more: openClientMenu });
+    drawerHead('cl', { kind: 'Company', tile, more: openClientMenu });
+    $('dlgClient').setAttribute('aria-label', 'Company details');
     const name = el('h2', 'dtitle dtitle--static'); name.id = 'clName';
     const identity = el('p', 'hint'); identity.id = 'clIdentity';
-    const people = el('span', 'dval'); people.id = 'clPeople';
-    const tasks = el('span', 'dval dmuted'); tasks.id = 'clTaskSum';
-    const props = el('div', 'dprops'); props.append(ui.props([{ label: 'People', icon: 'users', value: people }, { label: 'Tasks', icon: 'square-check', value: tasks }]));
+    const value = el('span', 'dval'); value.id = 'clValue'; value.title = "The sum of its people's values";
+    const props = el('div', 'dprops'); props.id = 'clProps';
+    props.append(ui.props([
+      { label: 'Stage', icon: 'trending-up', value: drawerSelect('clStage', 'Company stage') },
+      { label: 'Owner', icon: 'user', value: drawerSelect('clOwner', 'Owner') },
+      { label: 'Domain', icon: 'globe', value: dfield('clDomain', 'Domain', { placeholder: 'For example: acme.com', autocomplete: 'off' }) },
+      { label: 'Value', icon: 'pound-sterling', value }
+    ]));
+    const more = ui.button({ label: 'Show more', variant: 'ghost', size: 'sm' }); more.id = 'clActMore'; more.classList.add('showmore'); roKeep(more);
+    more.onclick = () => { clActMax += ACT_STEP; fillClientDrawer(true); };
+    const acts = dlist('clActivity'); acts.classList.add('cmlist');
     const projAdd = crmAddRow('cl', 'clProjName', { placeholder: 'New project name', ghostLabel: 'Add project', label: 'New project name', onAdd: addClientProject });
     projAdd.querySelector('button[type=submit]').id = 'clProjAdd';
     const fileAdd = pairAddRow('cl', { id: 'clFileNew', labelId: 'clFileTitle', addId: 'clFileAdd', labelPlaceholder: 'Label', labelAria: 'New file label', placeholder: 'Cloud URL or local path', label: 'New file or folder: a cloud URL or local path', ghostLabel: 'Add file or folder',
@@ -5583,26 +5614,58 @@ if (typeof window !== 'undefined') (() => {
     const files = crmSection('clFilesSec', { title: 'Files and folders', body: [dlist('clFiles'), fileAdd, dhint(FILES_HINT)] }, 'clFileCount', true);
     files.querySelector('.ui-section__text').id = 'clFilesH';
     $('clBody').append(name, identity, props,
+      crmSection('clNotesSec', { title: 'Notes', body: dnote('clNotes', 'Company notes', 'Anything to remember about this company.') }),
+      crmSection('clPeopleSec', { title: 'People', body: dlist('clPeople') }, 'clPeopleCount'),
+      crmSection('clActSec', { title: 'Activity', body: [acts, more] }, 'clActCount'),
+      crmSection('clTaskSec', { title: 'Open tasks', body: dlist('clTasks') }, 'clTaskCount'),
       crmSection('clNorthSec', { title: 'North star', body: dnote('clNorth', 'North star', 'What we are trying to solve and what success looks like.', 4) }),
       crmSection('clProjSec', { title: 'Projects', body: [dlist('clProjects'), projAdd] }, 'clProjCount', true),
       files);
   }
   buildClientDrawer();
   function openClient(name) {
+    if (editingClient !== name) clActMax = 10;
     editingClient = name; clSig = ''; resetCrmRows('cl'); fillClientDrawer(true);
-    $('dlgClient').showModal(); $('clBody').scrollTop = 0;
+    if (!$('dlgClient').open) $('dlgClient').showModal(); $('clBody').scrollTop = 0; autosize($('clNotes'));
   }
+  const STAGE_TONE_CL = (stored, v) => stored ? STAGE_TONE(v) : 'neutral';
   function fillClientDrawer(force) {
     const co = editingClient; if (!co) return;
-    const info = clientInfo(co), prs = projectsForClient(co), people = state.contacts.filter(p => p.company === co), tasks = state.tasks.filter(t => t.client === co);
-    const sig = JSON.stringify([co, info, prs, people.map(p => [p.id, p.name]), tasks.map(t => t.column === doneColId()), companyMembers(co), cfg().me]); if (!force && sig === clSig) return; clSig = sig;
+    const f = companyFacts(co), info = f.info, prs = projectsForClient(co), people = f.people.slice(), tasks = f.tasks;
+    const sig = JSON.stringify([co, info, prs, people, tasks.map(t => [t.id, t.num, t.title, t.column, t.priority, t.due, t.labels, t.todos]), companyMembers(co), cfg().me, state.people, stages(), clActMax, modes()]); if (!force && sig === clSig) return; clSig = sig;
+    const keep = id => document.activeElement === $(id);
     $('clName').textContent = co; $('clTile').style.setProperty('--dtile-c', `hsl(${clientHue(co)} 72% 52%)`);
     $('clIdentity').hidden = !companyIdentity(co); $('clIdentity').textContent = companyIdentity(co) ? `${companyIdentity(co)} · ${companyMembers(co).map(m => '@' + m.github).join(', ')}. Protected from removal while linked in Board → Members. This is separate from CRM employer details.` : '';
+    // stage: its own, or "use people's stage" (shown with the stage it works out to)
+    const st = $('clStage'); st.textContent = '';
+    const auto = el('option', null, f.derived ? `${f.derived} (from its people)` : 'Not set (no people yet)'); auto.value = ''; st.append(auto);
+    [...new Set([...stages(), f.stored].filter(Boolean))].forEach(x => { const o = el('option', null, x); o.value = x; st.append(o); });
+    st.value = f.stored; const sw = st.parentElement; ['ok', 'neutral', 'info'].forEach(x => sw.classList.remove('ui-select--' + x)); sw.classList.add('ui-select--' + STAGE_TONE_CL(f.stored, f.stage)); sw.classList.toggle('derived', !f.stored);
+    st.title = f.stored ? 'Company stage' : "Company stage: worked out from its people's stages until you set one";
+    const ow = $('clOwner'); ow.textContent = ''; const owner = typeof info.owner === 'string' ? info.owner : '';
+    [['', 'No owner'], ...state.people.filter(m => m.github).map(m => [m.github, `${m.name || m.github} (@${m.github})`]), ...(owner && !state.people.some(m => String(m.github).toLowerCase() === owner.toLowerCase()) ? [[owner, `@${owner} (not a member)`]] : [])]
+      .forEach(([v, l]) => { const o = el('option', null, l); o.value = v; ow.append(o); });
+    ow.value = (state.people.find(m => String(m.github).toLowerCase() === owner.toLowerCase()) || {}).github || owner;
+    if (force || !keep('clDomain')) $('clDomain').value = typeof info.domain === 'string' ? info.domain : '';
+    $('clValue').textContent = f.value ? f.value.toLocaleString('en-GB') : '—'; $('clValue').classList.toggle('dmuted', !f.value);
+    if (force || !keep('clNotes')) $('clNotes').value = typeof info.notes === 'string' ? info.notes : ''; autosize($('clNotes'));
+    // people: you and members first, then by name
     const pbox = $('clPeople'); pbox.textContent = '';
-    people.sort((a, b) => a.name.localeCompare(b.name)).forEach(p => pbox.append(roKeep(ui.person({ name: p.name || '(no name)', onClick: () => { $('dlgClient').close(); openContact(p.id); } }))));
-    if (!people.length) pbox.append(el('span', 'dmuted', 'Nobody yet'));
-    const open = tasks.filter(t => t.column !== doneColId()).length; $('clTaskSum').textContent = tasks.length ? `${open} open · ${tasks.length - open} done` : 'No tasks yet';
-    if (force || document.activeElement !== $('clNorth')) $('clNorth').value = info.north_star || '';
+    people.sort((a, b) => (isMe(b) - isMe(a)) || (!!memberOf(b) - !!memberOf(a)) || stageRank(b.stage) - stageRank(a.stage) || a.name.localeCompare(b.name)).forEach(p => pbox.append(personNavRow(p)));
+    if (!people.length) pbox.append(dempty('Nobody at this company yet. Set a person\'s Client to add them.'));
+    setCount('clPeopleCount', people.length);
+    // activity: every person's contact log, merged, newest first, capped with Show more
+    const all = companyActivity(people), abox = $('clActivity'); abox.textContent = '';
+    all.slice(0, clActMax).forEach(x => abox.append(activityCard(x)));
+    $('clActMore').hidden = all.length <= clActMax; $('clActMore').textContent = `Show more (${all.length - Math.min(all.length, clActMax)} older)`;
+    if (!all.length) abox.append(dempty('No contact logged with its people yet.'));
+    setCount('clActCount', all.length);
+    // open tasks (tasks whose client is this company)
+    const tsec = $('clTaskSec'); tsec.hidden = !modes().includes('tasks');
+    const tbox = $('clTasks'); tbox.textContent = ''; f.open.forEach(t => tbox.append(drawerTaskRow(t)));
+    if (!f.open.length) tbox.append(dempty(tasks.length ? `No open tasks · ${tasks.length} done.` : 'No tasks for this company.'));
+    setCount('clTaskCount', f.open.length);
+    if (force || !keep('clNorth')) $('clNorth').value = info.north_star || '';
     const box = $('clProjects'); box.textContent = '';
     prs.sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => box.append(projectNavRow(pr, () => { $('dlgClient').close(); openProject(pr.id); })));
     setCount('clProjCount', prs.length); $('clProjSec').classList.toggle('is-empty', !prs.length);
@@ -5612,12 +5675,23 @@ if (typeof window !== 'undefined') (() => {
   }
   function openClientMenu(anchor) {
     const co = editingClient; if (!co) return;
-    ui.menu(anchor, [
+    const items = [
       { label: 'Show only this client', icon: 'eye', onSelect: () => { setClientValues([co]); $('dlgClient').close(); } },
       { label: 'Copy client name', icon: 'copy', onSelect: () => copyText(co, 'Client name copied') }
-    ], { label: `Actions for ${co}` });
+    ];
+    if (!ro && companyFacts(co).stored) items.push({ label: "Use people's stage", icon: 'users', onSelect: () => setCompanyStage(co, '') });
+    ui.menu(anchor, items, { label: `Actions for ${co}` });
   }
+  const clientEdit = (fn, msg) => { const co = editingClient; if (!co) return; return mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; fn(ci); if (!n.clients.includes(co)) n.clients.push(co); }, msg); };
   $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
+  $('clStage').onchange = e => { const co = editingClient, v = e.target.value; if (co) setCompanyStage(co, v); };
+  $('clOwner').onchange = e => { const v = e.target.value; clientEdit(ci => { if (v) ci.owner = v; else delete ci.owner; }, `Owner: ${editingClient}`); };
+  const cleanDomain = v => String(v || '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0].trim().toLowerCase();   // as keeptrack.py client-set --domain
+  $('clDomain').addEventListener('change', e => { const v = cleanDomain(e.target.value);
+    if (v && !(/^[a-z0-9.-]+(:\d+)?$/.test(v) && v.includes('.'))) { toast('Enter a domain such as acme.com, or leave it empty.', true); e.target.value = (clientInfo(editingClient).domain || ''); return; }
+    e.target.value = v; clientEdit(ci => { if (v) ci.domain = v; else delete ci.domain; }, `Domain: ${editingClient}`); });
+  $('clNotes').addEventListener('input', () => autosize($('clNotes')));
+  $('clNotes').addEventListener('change', e => { const v = e.target.value; clientEdit(ci => { if (v.trim()) ci.notes = v; else delete ci.notes; }, `Notes: ${editingClient}`); });
   $('clClose').onclick = () => $('dlgClient').close();
   $('dlgClient').addEventListener('close', () => { editingClient = ''; render(); });
   function addClientProject(name) {
@@ -5728,7 +5802,7 @@ if (typeof window !== 'undefined') (() => {
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
-  const CRM_VIEWS = ['people', 'pipeline'], TASK_VIEWS = ['board', 'mentions', 'list', 'cal', 'sched', 'activity'];
+  const CRM_VIEWS = ['people', 'companies', 'pipeline'], TASK_VIEWS = ['board', 'mentions', 'list', 'cal', 'sched', 'activity'];
   function syncModeSettings() {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
@@ -6850,9 +6924,20 @@ if (typeof window !== 'undefined') (() => {
   $('dlgAddPerson').addEventListener('close', () => { addPersonExtra = {}; $('apSave').disabled = false; });
 
   function stagePill(s) { const b = el('span', 'stagepill' + (closedStage(s) ? ' closed' : ''), s || '—'); b.style.setProperty('--h', ui.hueFor(s || '')); return b; }
+  // a company name that opens its company record (kit v84): in person rows, pipeline cards and the person drawer
+  function companyLink(name) {
+    const b = el('button', 'colink', name); b.type = 'button'; b.title = `Open company ${name}`; b.setAttribute('aria-label', `Open company ${name}`);
+    b.onclick = e => { e.stopPropagation(); e.preventDefault(); if ($('dlgContact').open) $('dlgContact').close(); openClient(name); };
+    b.onkeydown = e => e.stopPropagation();   // Enter opens the company, not the row it sits in
+    b.draggable = false; return roKeep(b);
+  }
+  function roleCompany(p, tag = 'span') {   // "Buyer · Acme", with Acme a link to the company
+    const s = el(tag, 'muted'); if (p.role) s.append(p.role); if (p.role && p.company) s.append(' · ');
+    if (p.company) s.append(companyLink(p.company)); return s;
+  }
   function personRow(p) {
     const row = el('div', 'prow'); row.tabIndex = 0; row.onclick = () => openContact(p.id); row.onkeydown = e => { if (e.key === 'Enter') openContact(p.id); };
-    const who = el('div', 'pwho'); who.append(el('b', null, p.name || '(no name)'), el('span', 'muted', [p.role, p.company].filter(Boolean).join(' · ')));
+    const who = el('div', 'pwho'); who.append(el('b', null, p.name || '(no name)'), roleCompany(p));
     if (memberOf(p)) { row.classList.add('pmember'); row.append(who, memberPill(p), el('div', 'pnext muted', isMe(p) ? 'Your own record' : 'Board member'), el('span', 'plast muted', '@' + memberOf(p).github)); return row; }
     const nx = el('div', 'pnext'); nx.append(el('span', null, p.next || (closedStage(p.stage) ? '' : 'No next step')), personDue(p));
     const lt = lastTouch(p), ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
@@ -7131,33 +7216,118 @@ if (typeof window !== 'undefined') (() => {
     wrap.append(addPersonBox()); board.append(wrap);
   }
 
+  // ==== Companies (kit v84): every client name and every person's company, each a record of its own ====
+  // A company's stage is client_info[name].stage once someone sets it; until then it is the most advanced stage among its
+  // people (a lost person never outranks a live one), shown as derived. Owner, domain and notes live there too.
+  const money = v => { const n = parseFloat(String(v).replace(/[^0-9.]/g, '')); return isFinite(n) ? n : 0; };
+  const companyNames = () => [...new Set([...state.clients, ...state.contacts.map(p => p.company)].filter(x => typeof x === 'string' && x))];
+  const stageRank = s => /^lost$/i.test(s) ? -1 : stages().indexOf(s);
+  let coIdx = null;   // people and tasks by company, built once per board state (a big board has thousands of each)
+  function companyIndex() {
+    if (coIdx && coIdx.contacts === state.contacts && coIdx.tasks === state.tasks && coIdx.n === state.contacts.length + ':' + state.tasks.length) return coIdx;
+    const people = new Map(), tasks = new Map(), add = (m, k, x) => { if (!m.has(k)) m.set(k, []); m.get(k).push(x); };
+    state.contacts.forEach(p => { if (p.company) add(people, p.company, p); }); state.tasks.forEach(t => { if (t.client) add(tasks, t.client, t); });
+    coIdx = { contacts: state.contacts, tasks: state.tasks, n: state.contacts.length + ':' + state.tasks.length, people, taskMap: tasks };
+    queueMicrotask(() => { coIdx = null; });   // never outlives this pass: an edit in place keeps the arrays
+    return coIdx;
+  }
+  function companyFacts(name) {
+    const ix = companyIndex(), info = clientInfo(name), people = (ix.people.get(name) || []).slice(), contacts = people.filter(contactOnly);
+    const stored = typeof info.stage === 'string' ? info.stage : '';
+    let derived = ''; contacts.forEach(p => { if (stages().includes(p.stage) && (!derived || stageRank(p.stage) > stageRank(derived))) derived = p.stage; });
+    const tasks = ix.taskMap.get(name) || [], open = tasks.filter(t => t.column !== doneColId());
+    const next = contacts.filter(p => p.next_due).sort((a, b) => a.next_due.localeCompare(b.next_due) || a.name.localeCompare(b.name))[0] || null;
+    return { name, info, people, contacts, stored, derived, stage: stored || derived, tasks, open, next,
+      last: contacts.map(lastTouch).filter(Boolean).sort().pop() || '', value: contacts.reduce((a, p) => a + money(p.value), 0), own: companyIdentity(name) };
+  }
+  const companyFilter = name => { const fc = clientValues(); return !fc.length || fc.includes(name); };
+  function companyStagePill(f) {   // a derived stage reads the same, outlined, and says where it comes from
+    if (!f.stage) return el('span', 'nostage muted', 'No stage');
+    const b = stagePill(f.stage); if (f.stage && !f.stored) { b.classList.add('derived'); b.title = `${f.stage}: the most advanced stage among its people. Set the company's own stage in its record.`; }
+    return b;
+  }
+  function companyNext(f) {   // the earliest next step among its people: what, when and whose
+    const nx = el('div', 'pnext');
+    if (!f.next) { nx.append(el('span', 'muted', f.contacts.length ? 'No next step' : 'No people yet')); return nx; }
+    nx.append(el('span', null, f.next.next || 'Next step'), personDue(f.next), el('span', 'muted small', f.next.name)); return nx;
+  }
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  function companyRow(f) {
+    const row = el('div', 'prow crow'); row.tabIndex = 0; row.dataset.company = f.name; row.onclick = () => openClient(f.name); row.onkeydown = e => { if (e.key === 'Enter') openClient(f.name); };
+    const who = el('div', 'pwho'); who.append(el('b', null, f.name), el('span', 'muted', [plural(f.people.length, 'person', 'people'), plural(f.open.length, 'open task', 'open tasks')].join(' · ')));
+    if (f.own) { row.classList.add('pmember'); const pill = el('span', 'stagepill memberpill', f.own); pill.title = `${f.own}: a board member's own company, not a client`; row.append(who, pill, el('div', 'pnext muted', 'Kept out of the pipeline'), el('span', 'plast muted', '')); return row; }
+    const lt = f.last, ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
+    row.append(who, companyStagePill(f), companyNext(f), ago); return row;
+  }
+  let companiesQ = '', companiesStage = '';
+  function renderCompaniesView() {
+    const board = $('board'), wrap = el('div', 'peoplev companiesv'), bar = el('div', 'pbar');
+    const q = el('input', 'psearch'); q.type = 'search'; q.placeholder = 'Search companies, people, notes…'; q.value = companiesQ; q.setAttribute('aria-label', 'Search companies');
+    q.oninput = () => { companiesQ = q.value; const pos = q.selectionStart; render(); const nq = document.querySelector('.psearch'); if (nq) { nq.focus(); nq.setSelectionRange(pos, pos); } };
+    const st = el('select', 'pillsel'); st.setAttribute('aria-label', 'Filter by stage'); [['', 'All stages'], ...stages().map(s => [s, s])].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; st.append(o); }); st.value = companiesStage; st.onchange = () => { companiesStage = st.value; render(); };
+    bar.append(q, st); wrap.append(bar);
+    const ql = companiesQ.toLowerCase(), order = s => s ? stages().indexOf(s) : stages().length;
+    const items = companyNames().filter(companyFilter).map(companyFacts)
+      .filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
+      .sort((a, b) => (!!b.own - !!a.own) || order(a.stage) - order(b.stage) || String(b.last).localeCompare(String(a.last)) || a.name.localeCompare(b.name));   // own companies first, as members are in People
+    capList('companies', items, companyRow, wrap);
+    if (!items.length) wrap.append(ui.empty({ text: companyNames().length ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
+    board.append(wrap);
+  }
+
+  // Pipeline: people by stage, or companies by stage (a People | Companies toggle, remembered per viewer and board)
+  const pipeKey = () => 'kb_pipe_mode:' + boardStoreId();
+  const pipeMode = () => LS.get(pipeKey(), 'people') === 'companies' ? 'companies' : 'people';
+  let pipeLeft = 0;   // the columns' sideways scroll survives a re-render
+  function setCompanyStage(name, s, msg) {
+    return mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[name] = n.client_info[name] || { links: [] }; if (s) ci.stage = s; else delete ci.stage; if (!n.clients.includes(name)) n.clients.push(name); }, msg || (s ? `Stage ${s}: ${name}` : `Stage from people: ${name}`));
+  }
+  function pipeDrop(cards, c, onDrop) {   // one drag-and-drop for both modes
+    cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
+    cards.addEventListener('dragleave', () => c.classList.remove('over'));
+    cards.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); onDrop(e.dataTransfer.getData('text/plain')); });
+  }
+  function pipeCard(key, open, parts) {
+    const k = el('div', 'card pcard'); k.draggable = !ro; k.tabIndex = 0;
+    k.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', key); k.classList.add('dragging'); });
+    k.addEventListener('dragend', () => k.classList.remove('dragging'));
+    activateCard(k, open); parts.filter(Boolean).forEach(x => k.append(x)); return k;
+  }
   function renderPipeline() {
     const board = $('board'); board.classList.add('pipe');
-    const money = v => { const n = parseFloat(String(v).replace(/[^0-9.]/g, '')); return isFinite(n) ? n : 0; };
+    const mode = pipeMode(), bar = el('div', 'pipebar');
+    const tl = ui.tabs({ items: [{ value: 'people', icon: 'user', label: 'People' }, { value: 'companies', icon: 'building-2', label: 'Companies' }], value: mode, label: 'Pipeline shows', onChange: v => { LS.set(pipeKey(), v); render(); } });
+    tl.id = 'pipeMode'; bar.append(tl);
+    const cols = el('div', 'pipecols'); cols.addEventListener('scroll', () => { pipeLeft = cols.scrollLeft; }, { passive: true });
+    const facts = mode === 'companies' ? companyNames().filter(companyFilter).map(companyFacts).filter(f => !f.own && f.stage) : [];
     stages().forEach(s => {
-      const items = state.contacts.filter(p => p.stage === s && crmFilter(p) && contactOnly(p)), sum = items.reduce((a, p) => a + money(p.value), 0);
-      const c = el('section', 'col'); c.dataset.stage = s; const h = colHead(s, items.length);
-      if (sum) h.append(el('span', 'psum', sum.toLocaleString('en-GB'))); c.append(h);
-      const cards = el('div', 'cards');
-      cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
-      cards.addEventListener('dragleave', () => c.classList.remove('over'));
-      cards.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); const id = e.dataTransfer.getData('text/plain'); const p = state.contacts.find(x => x.id === id); if (p && p.stage !== s) pedit(id, x => { x.stage = s; }, `Stage ${s}: ${p.name}`); });
-      capList('pp:' + s, items, p => {
-        const k = el('div', 'card pcard'); k.draggable = true; k.tabIndex = 0;
-        k.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', p.id); k.classList.add('dragging'); });
-        k.addEventListener('dragend', () => k.classList.remove('dragging'));
-        activateCard(k, () => openContact(p.id));
-        k.append(el('div', 'ctitle', p.name || '(no name)'));
-        if (p.company || p.role) k.append(el('div', 'muted small', [p.role, p.company].filter(Boolean).join(' · ')));
-        if (p.next || p.next_due) { const nx = el('div', 'pnext small'); nx.append(el('span', null, p.next || ''), personDue(p)); k.append(nx); }
-        if (p.value) k.append(el('div', 'pval', p.value));
-        return k;
-      }, cards);
-      if (!items.length) cards.append(emptyNote('Drop a person here.', 'user'));
+      const c = el('section', 'col'); c.dataset.stage = s; const cards = el('div', 'cards');
+      if (mode === 'companies') {
+        const items = facts.filter(f => f.stage === s).sort((a, b) => b.value - a.value || a.name.localeCompare(b.name)), sum = items.reduce((a, f) => a + f.value, 0);
+        const h = colHead(s, items.length); if (sum) h.append(el('span', 'psum', sum.toLocaleString('en-GB'))); c.append(h);
+        pipeDrop(cards, c, key => { if (!key.startsWith('company:')) return; const name = key.slice(8), f = companyNames().includes(name) ? companyFacts(name) : null; if (f && f.stage !== s) setCompanyStage(name, s); });
+        capList('pc:' + s, items, f => {
+          const nx = f.next ? el('div', 'pnext small') : null; if (nx) nx.append(el('span', null, f.next.next || 'Next step'), personDue(f.next));
+          const k = pipeCard('company:' + f.name, () => openClient(f.name), [el('div', 'ctitle', f.name), el('div', 'muted small', plural(f.people.length, 'person', 'people')), nx, f.value ? el('div', 'pval', f.value.toLocaleString('en-GB')) : null]);
+          k.classList.add('ccard'); k.dataset.company = f.name; if (!f.stored) { k.classList.add('derived'); k.title = `${f.name}: stage from its people until you set one (drag it, or set it in the company record)`; } return k;
+        }, cards);
+        if (!items.length) cards.append(emptyNote('Drop a company here.', 'building-2'));
+      } else {
+        const items = state.contacts.filter(p => p.stage === s && crmFilter(p) && contactOnly(p)), sum = items.reduce((a, p) => a + money(p.value), 0);
+        const h = colHead(s, items.length); if (sum) h.append(el('span', 'psum', sum.toLocaleString('en-GB'))); c.append(h);
+        pipeDrop(cards, c, id => { const p = state.contacts.find(x => x.id === id); if (p && p.stage !== s) pedit(id, x => { x.stage = s; }, `Stage ${s}: ${p.name}`); });
+        capList('pp:' + s, items, p => {
+          const nx = p.next || p.next_due ? el('div', 'pnext small') : null; if (nx) nx.append(el('span', null, p.next || ''), personDue(p));
+          const who = p.company || p.role ? roleCompany(p, 'div') : null; if (who) who.classList.add('small');
+          return pipeCard(p.id, () => openContact(p.id), [el('div', 'ctitle', p.name || '(no name)'), who, nx, p.value ? el('div', 'pval', p.value) : null]);
+        }, cards);
+        if (!items.length) cards.append(emptyNote('Drop a person here.', 'user'));
+      }
       c.append(cards);
-      if (s === stages()[0]) c.append(addPersonBox('Add: Name | Client', { stage: s }));
-      board.append(c);
+      if (mode === 'people' && s === stages()[0]) c.append(addPersonBox('Add: Name | Client', { stage: s }));
+      cols.append(c);
     });
+    board.append(bar, cols); cols.scrollLeft = pipeLeft;
   }
 
   // ---- person drawer --------------------------------------------------------
@@ -7172,13 +7342,14 @@ if (typeof window !== 'undefined') (() => {
     const due = datePill('pNextDue', 'Next step date', 'No date'); due.querySelector('.ui-pill__remove').dataset.due = '';   // clears like the quick-date buttons
     const quick = [['0', 'Today'], ['1', 'Tomorrow'], ['7', '+1 week']].map(([d, l]) => { const b = ui.button({ label: l, size: 'sm', variant: 'ghost' }); b.dataset.due = d; b.classList.add('dquick'); return b; });
     const companies = el('datalist'); companies.id = 'pCompanies';
+    const companyOpen = roKeep(ui.iconButton({ icon: 'arrow-up-right', label: 'Open company', size: 'sm', onClick: () => openPersonClient() })); companyOpen.id = 'pCompanyOpen';   // kit v84: the company record
     const props = el('div', 'dprops'); props.id = 'pProps';
     const memberNote = el('div'); memberNote.id = 'pMember'; memberNote.hidden = true; props.append(memberNote);
     props.append(ui.props([
       { label: 'Stage', icon: 'trending-up', value: drawerSelect('pStage', 'Stage') },
       { label: 'Next step', icon: 'arrow-right', value: dfield('pNext', 'Next step', { placeholder: 'For example: send a LinkedIn message' }) },
       { label: 'Next date', icon: 'calendar', value: [due, ...quick] },
-      { label: 'Client', icon: 'building-2', value: [dfield('pCompany', 'Client', { list: 'pCompanies', autocomplete: 'off' }), companies] },
+      { label: 'Client', icon: 'building-2', value: [dfield('pCompany', 'Client', { list: 'pCompanies', autocomplete: 'off' }), companies, companyOpen] },
       { label: 'Role', icon: 'briefcase', value: dfield('pRole', 'Role') },
       { label: 'Value', icon: 'pound-sterling', value: dfield('pValue', 'Value', { placeholder: 'For example: 5000' }) },
       { label: 'Source', icon: 'compass', value: dfield('pSource', 'Source', { placeholder: 'For example: weekly opportunity run' }) },
@@ -7243,6 +7414,7 @@ if (typeof window !== 'undefined') (() => {
     setCount('pLinkCount', p.links.length); $('pLinkSec').classList.toggle('is-empty', !p.links.length);
     const co = p.company, info = co ? clientInfo(co) : null;
     $('pNorthSec').hidden = !co; $('pProjSec').hidden = !co; $('pClientOpen').hidden = !co; $('pFilesSec').hidden = !co;
+    { const b = $('pCompanyOpen'); b.hidden = !co; if (co) { b.title = `Open company ${co}`; b.setAttribute('aria-label', `Open company ${co}`); } }
     if (co) {
       if (!keep('pNorthStar')) $('pNorthStar').value = info.north_star || '';
       const pl = $('pProjList'), prs = projectsForClient(co); pl.textContent = '';

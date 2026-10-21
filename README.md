@@ -9,7 +9,8 @@
 ## What you get
 - **Today:** one place for people to contact and tasks that are overdue or due today. It automatically reflects whichever board sections are enabled.
 - **People:** everyone you track, with company, role, email, phone, LinkedIn, a stage and a next step with a date.
-- **Pipeline:** people by stage (New, Contacted, Talking, Proposal, Won, Lost). Drag a card to move it. You can change the stages.
+- **Companies:** every client and every person's company, with its stage, people, open tasks, next step and last contact. A company's record holds its owner, domain, notes, its people and their contact log in one place.
+- **Pipeline:** people or companies by stage (New, Contacted, Talking, Proposal, Won, Lost). Drag a card to move it. You can change the stages.
 - **Contact log:** each LinkedIn message, email, call or meeting. A **draft** does not count as contact until you mark it **sent**.
 - **Contact details and resources:** each person can have multiple labelled emails, phone numbers and profile/reference links. Each company can link to working folders in Google Drive, Dropbox, OneDrive, SharePoint or on a local computer. Large files stay there, not in GitHub.
 - **Tasks (optional):** the board, list, calendar, schedule and activity views, linked to people and companies.

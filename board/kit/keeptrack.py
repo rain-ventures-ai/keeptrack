@@ -33,7 +33,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
 
 Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
-  keeptrack.py clients | client-rename OLD NEW | client-rm NAME | client-set NAME --north-star ..
+  keeptrack.py clients | client-rename OLD NEW | client-rm NAME | client-set NAME [--north-star ..] [--stage S] [--owner LOGIN] [--domain D] [--notes ..]   # "" clears
   keeptrack.py columns | column-add NAME [--after ID] | column-set ID --rename NAME | column-move ID --before|--after ID | column-rm ID [--move-to ID]
   keeptrack.py members | member-add USER [--name ..] | member-set USER --name .. | member-rm USER [--unassign]
   keeptrack.py agents | agent-add NAME | agent-rm NAME [--unassign]
@@ -289,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 83  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 84  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3753,9 +3753,9 @@ def cmd_todo_move(a):
 def read_stdin_args(a):
     """`-` as a comment's text, --details or --add-details reads the text from stdin (kit v62), so an agent can write
     multi-line Markdown (a heading, a list of options, a table) without shell quoting: `comment '#N' - <<'EOF'`."""
-    if a.f not in (cmd_comment, cmd_add, cmd_task_set, cmd_review, cmd_goal_add, cmd_goal_set):
+    if a.f not in (cmd_comment, cmd_add, cmd_task_set, cmd_review, cmd_goal_add, cmd_goal_set, cmd_client_set):
         return
-    keys = [k for k in ("text", "details", "add_details", "note") if getattr(a, k, None) == "-"]
+    keys = [k for k in ("text", "details", "add_details", "note", "notes") if getattr(a, k, None) == "-"]
     if len(keys) > 1:
         sys.exit("only one of the text, --details and --add-details can be '-' (stdin)")
     if keys:
@@ -4634,6 +4634,16 @@ def doctor_board(fix=False):
                 dt.date.fromisoformat(str(v))
             except ValueError:
                 problem("GOAL", gpath, f"`{k}` {v!r} must be a date (YYYY-MM-DD).")
+    # company records (kit v84): a stage or owner the board does not know is reported, never stopping the board
+    member_set = {str(m.get("github") or "").lower() for m in (data.get("people") or []) if isinstance(m, dict)}
+    for name, ci in (data.get("client_info") or {}).items() if isinstance(data.get("client_info"), dict) else []:
+        if not isinstance(ci, dict):
+            continue
+        cpath = f"client {clean(str(name), 40)}"
+        if ci.get("stage") not in (None, "") and ci.get("stage") not in stages(data):
+            problem("CLIENT_RECORD", cpath, f"Stage {clean(str(ci.get('stage')), 40)!r} is not one of settings.stages; set it with client-set NAME --stage S, or \"\" to use its people's stage.")
+        if ci.get("owner") not in (None, "") and str(ci.get("owner")).lower() not in member_set:
+            problem("CLIENT_RECORD", cpath, f"Owner {clean(str(ci.get('owner')), 40)!r} is not a board member; set another with client-set NAME --owner LOGIN, or \"\" to clear it.")
     for t in tasks:
         if t.get("goal") and (not isinstance(t["goal"], str) or t["goal"] not in goal_ids):
             problem("GOAL_MISSING", f"card {t.get('id', '?')}", f"The card links to goal {clean(str(t['goal']), 40)!r}, "
@@ -5257,7 +5267,7 @@ CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
 DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS",
                              "KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "AGENT_CLEARED", "WAITING", "RELATED",
-                             "AFTER_MISSING", "GOAL", "GOAL_MISSING"})   # v43: detect, never stop the board; a missing after card is tolerated
+                             "AFTER_MISSING", "GOAL", "GOAL_MISSING", "CLIENT_RECORD"})   # v43: detect, never stop the board; a missing after card is tolerated
 
 
 def person_for_github(data, github):
@@ -5851,13 +5861,71 @@ def cmd_sent(a):
     mutate(fn, f"Sent: {a.ref}")
 
 
+CLIENT_FIELDS = ("stage", "owner", "domain", "notes")   # kit v84: a company's own record in client_info (all optional)
+
+
+def clean_domain(v):
+    """A company's web domain as people type it: "https://www.acme.com/" is stored as "www.acme.com"."""
+    d = re.sub(r"^[a-z][a-z0-9+.-]*://", "", str(v or "").strip(), flags=re.I).split("/", 1)[0].strip().lower()
+    if d and (not re.fullmatch(r"[a-z0-9.-]+(:\d+)?", d) or "." not in d):
+        sys.exit(f"'{v}' is not a domain; use a name such as acme.com, or \"\" to clear it")
+    return d
+
+
+def member_login(data, u):
+    """The stored login of the board member u names (with or without @, any case), or exit."""
+    u = str(u or "").strip().lstrip("@")
+    people = [m for m in (data.get("people") or []) if isinstance(m, dict) and m.get("github")]
+    m = next((m for m in people if str(m["github"]).lower() == u.lower() and u), None)
+    if not m:
+        sys.exit(f"'{u}' is not a board member; members are: " + (", ".join("@" + str(x["github"]) for x in people) or "(none)"))
+    return m["github"]
+
+
+def company_stage(data, company):
+    """(stage, derived): the company's own stage (client_info[company].stage, kit v84), or, until one is set, the most
+    advanced stage among its people (stage order from settings.stages; a lost person never outranks a live one).
+    Board members' own records do not count. ("", True) when it has no people with a known stage."""
+    own = ((data.get("client_info") or {}).get(company) or {}).get("stage")
+    if isinstance(own, str) and own:
+        return own, False
+    order = list(stages(data)); ml = member_logins(data); best = ""
+    rank = lambda s: -1 if s.lower() == "lost" else order.index(s)
+    for p in data.get("contacts", []):
+        s = p.get("stage")
+        if p.get("company") != company or s not in order or own_member(p, ml):
+            continue
+        if not best or rank(s) > rank(best):
+            best = s
+    return best, True
+
+
 def cmd_client_set(a):
-    """Set a client's north star (what success looks like) or other client_info fields."""
+    """Set a client's north star (what success looks like) or its company record (kit v84): stage, owner, domain, notes.
+    An empty value ("") clears that field; a cleared stage is worked out from the company's people again."""
     def fn(data):
         ci = data.setdefault("client_info", {}).setdefault(a.client, {})
         if a.north_star is not None:
             ci["north_star"] = a.north_star
             print(f"north star for {a.client} updated")
+        values, got = {}, {k: getattr(a, k, None) for k in CLIENT_FIELDS}   # callers from before kit v84 pass only north_star
+        if got["stage"] is not None:
+            values["stage"] = check_stage(data, got["stage"].strip()) if got["stage"].strip() else ""
+        if got["owner"] is not None:
+            values["owner"] = member_login(data, got["owner"]) if got["owner"].strip().lstrip("@") else ""
+        if got["domain"] is not None:
+            values["domain"] = clean_domain(got["domain"])
+        if got["notes"] is not None:
+            values["notes"] = got["notes"].strip("\n")
+        for k in CLIENT_FIELDS:
+            if k not in values:
+                continue
+            if values[k]:
+                ci[k] = values[k]; shown = ("@" + values[k]) if k == "owner" else values[k]
+                print(f"{k} for {a.client}: " + (clean(shown, 80) if k == "notes" else clean(shown)))
+            else:
+                ci.pop(k, None)
+                print(f"{k} for {a.client} cleared" + (f" (shown stage now comes from its people: {company_stage(data, a.client)[0] or 'none'})" if k == "stage" else ""))
         if a.client not in data.setdefault("clients", []):
             data["clients"].append(a.client)
     mutate(fn, f"Client: {a.client}")
@@ -6502,10 +6570,16 @@ def cmd_clients(a):
     data, _ = load()
     for c in data.get("clients", []):
         tasks, projects, people = _client_refs(data, c)
-        ns = (data.get("client_info", {}).get(c, {}) or {}).get("north_star", "")
+        info = data.get("client_info", {}).get(c, {}) or {}
+        ns = info.get("north_star", "")
         members = company_members(data, c)
         marker = "  [Board member company: " + ", ".join("@" + m["github"] for m in members) + "]" if members else ""
-        print(f"{c}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + marker + (f"  north star: {ns}" if ns else ""))
+        stage, derived = company_stage(data, c)   # kit v84: the company record
+        record = (f"  stage: {clean(stage)}" + (" (from its people)" if derived else "") if stage else "") \
+            + (f"  owner: @{clean(info['owner'])}" if info.get("owner") else "") + (f"  domain: {clean(info['domain'])}" if info.get("domain") else "")
+        notes = clean(str(info.get("notes") or "").replace("\n", " "), 80)
+        print(f"{c}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + marker + record
+              + (f"  north star: {ns}" if ns else "") + (f"  notes: {notes}" if notes.strip() else ""))
     if not data.get("clients"):
         print("(no clients)")
 
@@ -6933,7 +7007,11 @@ def cmd_member_rm(a):
         for t in open_tasks:
             t["assignees"] = [x for x in t["assignees"] if x != u]; hist(t, f"unassigned @{u} (left the board)"); t["updated"] = now()
         data["people"] = [x for x in people if x is not m]
-        print(f"removed member {u}" + (f"; unassigned from {len(open_tasks)} open tasks" if open_tasks else ""))
+        owned = sorted(k for k, v in (data.get("client_info") or {}).items() if isinstance(v, dict) and str(v.get("owner") or "").lower() == u.lower())
+        for k in owned:   # kit v84: a company owner must be a board member
+            data["client_info"][k].pop("owner", None)
+        print(f"removed member {u}" + (f"; unassigned from {len(open_tasks)} open tasks" if open_tasks else "")
+              + (f"; no longer owner of {', '.join(owned)}" if owned else ""))
     mutate(fn, f"Remove member: {a.user}")
 
 
@@ -7098,6 +7176,14 @@ def cmd_settings_set(a):
             if orphan:
                 sys.exit("people are still in stage(s) " + ", ".join(orphan) + " that the new list drops; "
                          "use --rename-stage OLD=NEW or move them with person-set --stage first")
+            infos = {k: v for k, v in (data.get("client_info") or {}).items() if isinstance(v, dict) and isinstance(v.get("stage"), str) and v.get("stage")}
+            for v in infos.values():   # kit v84: a company's own stage follows a rename too
+                if v["stage"] in renames:
+                    v["stage"] = renames[v["stage"]]
+            gone = sorted(k for k, v in infos.items() if v["stage"] not in new_stages)
+            if gone:
+                sys.exit("companies are still in a stage the new list drops: " + ", ".join(gone) + "; "
+                         "use --rename-stage OLD=NEW or move them with client-set NAME --stage first")
             st["stages"] = new_stages; print("stages: " + ", ".join(new_stages))
             if renames:
                 def edit(cur):
@@ -10363,7 +10449,9 @@ def main():
     s = sub.add_parser("archived", help="list or search archived tasks and people"); s.add_argument("-q"); s.set_defaults(f=cmd_archived)
     s = sub.add_parser("archived-history", help="older history lines moved to the archive, for a task or person"); s.add_argument("ref"); s.set_defaults(f=cmd_archived_history)
     s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref"); s.set_defaults(f=cmd_unarchive)
-    s = sub.add_parser("client-set", help="set a client north star or other client_info"); s.add_argument("client"); s.add_argument("--north-star", dest="north_star"); s.set_defaults(f=cmd_client_set)
+    s = sub.add_parser("client-set", help="set a client's north star or company record (stage, owner, domain, notes; \"\" clears)"); s.add_argument("client"); s.add_argument("--north-star", dest="north_star")
+    s.add_argument("--stage", help="one of settings.stages; \"\" = use its people's stage"); s.add_argument("--owner", help="a board member's GitHub login; \"\" clears")
+    s.add_argument("--domain", help="web domain, e.g. acme.com; \"\" clears"); s.add_argument("--notes", help="free text ('-' reads stdin); \"\" clears"); s.set_defaults(f=cmd_client_set)
     s = sub.add_parser("client-link", help="link a client to a file store folder"); s.add_argument("client"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_client_link)
     s = sub.add_parser("client-unlink", help="remove a file store link from a client"); s.add_argument("client"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_client_unlink)
     s = sub.add_parser("projects", help="list projects"); s.add_argument("--client"); s.add_argument("--status", choices=PROJECT_STATUSES); s.add_argument("-q"); s.set_defaults(f=cmd_projects)

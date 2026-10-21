@@ -186,21 +186,13 @@ class Page(unittest.TestCase):
 
 
 class Docs(unittest.TestCase):
-    def test_kit_is_v83_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(83, keeptrack.KIT_VERSION)
-        with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(83, json.load(f)["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            with open(os.path.join(KIT, plugin, "plugin.json"), encoding="utf-8") as f:
-                self.assertEqual("0.83.0", json.load(f)["version"], plugin)
+    def test_kit_v83_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v84.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v83 = f.read().split("### v83 (schema 4)", 1)[1].split("### v82", 1)[0]
         for words in ("kit-update", "goal-add", "task-set --goal", "GOAL_MISSING", "Older kits"):
             self.assertIn(words, v83)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v83", f.read())
-        with open(os.path.join(REPO, "board", "board.js"), encoding="utf-8") as f:
-            self.assertIn("const PAGE_KIT = 83;", f.read())
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ python3 board/keeptrack.py members    # board members (assignable GitHub users),
 | Rename a client everywhere | `client-rename "Acme" "Acme Ltd"` (tasks, projects, people's company, client info) |
 | Remove an unused client | `client-rm "Old Co"` (refuses while anything uses it) |
 | Client north star | `client-set "Acme" --north-star ".."` |
+| Company record (kit v84) | `client-set "Acme" --stage Proposal --owner alex --domain acme.com --notes ".."` (`""` clears one; `--stage ""` = use its people's stage) |
 | Add / change a project | `project-add "Rollout" --client "Acme" --north-star ".."`, `project-set "Rollout" --status done` |
 | What is left on a project | `project "Rollout"` (goal, people, links, open tasks); `projects --client "Acme"` lists them |
 | List columns with card counts | `columns` |
