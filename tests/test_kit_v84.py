@@ -72,6 +72,21 @@ class Board(unittest.TestCase):
             self.assertNotIn(k, info, "a cleared field is removed, not left empty")
         self.assertEqual("One trusted view of every order", info["north_star"])
 
+    def test_reserved_names_are_refused(self):
+        before = self.root()
+        for args in (("client-set", "__proto__", "--stage", "New"), ("client-set", " constructor "), ("client-rename", "Acme", "prototype"),
+                     ("person-add", "Robin", "--company", "__proto__"), ("add", "Task", "--client", "constructor")):
+            self.assertIn("cannot be a client or company name", self.kt(*args, ok=False).stderr, args)
+        self.assertEqual(before, self.root())
+
+    def test_whitespace_notes_clear_and_stale_stage_is_unset(self):
+        self.kt("client-set", "Acme", "--notes", "Keep")
+        self.assertIn("notes for Acme cleared", self.kt("client-set", "Acme", "--notes", "   ").stdout)
+        self.assertNotIn("notes", self.info())
+        self.kt("person-add", "Sam Lee", "--company", "Acme", "--stage", "Contacted")
+        root = self.root(); root["client_info"]["Acme"]["stage"] = "Gone"; self.write_root(root)
+        self.assertIn("stage: Contacted (from its people)", self.clients_line(), "a stage the board no longer has counts as unset")
+
     def test_refusals_write_nothing(self):
         before = self.root()
         self.assertIn("unknown stage", self.kt("client-set", "Acme", "--stage", "Maybe", ok=False).stderr)
@@ -116,10 +131,14 @@ class Board(unittest.TestCase):
 
     def test_doctor_warns_but_never_stops(self):
         root = self.root(); root["client_info"]["Acme"].update({"stage": "Zzz", "owner": "ghost"}); self.write_root(root)
-        report = json.loads(self.kt("doctor", "--json", ok=False).stdout)
+        r = self.kt("doctor", "--json", ok=False)
+        report = json.loads(r.stdout)
         warned = [x for x in report["warnings"] if x["code"] == "CLIENT_RECORD"]
         self.assertEqual(2, len(warned))
-        self.assertFalse([x for x in report["issues"] if x["code"] == "CLIENT_RECORD" and x not in report["warnings"]])
+        hard = [x for x in report["issues"] if x not in report["warnings"]]
+        self.assertEqual([], [x for x in hard if x["code"] == "CLIENT_RECORD"], "a company record is never a hard issue")
+        self.assertTrue(report["healthy"], "the fixture board is otherwise clean, so the board stays healthy")
+        self.assertEqual(0, r.returncode)
         self.assertIn("CLIENT_RECORD", keeptrack.DOCTOR_WARNINGS)
         self.assertNotIn("CLIENT", keeptrack.DOCTOR_WARNINGS, "a project's unknown client stays a problem")
 
@@ -137,6 +156,8 @@ class Board(unittest.TestCase):
         try:
             src = subprocess.check_output(["git", "show", V83_REF], cwd=REPO, text=True, stderr=subprocess.DEVNULL)
         except (subprocess.CalledProcessError, OSError):
+            if os.environ.get("CI"):   # CI checks out with fetch-depth 0: a missing ref there is a failure, not a skip
+                self.fail("kit v83 (" + V83_REF + ") is not in this clone")
             self.skipTest("kit v83 is not in this clone (git fetch --depth=1500 origin main)")
         old = os.path.join(self.tmp.name, "keeptrack_v83.py")
         with open(old, "w", encoding="utf-8") as f:

@@ -292,7 +292,8 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       api4.files['people/p_three.json'] = text({ ...person, id: 'p_three', name: 'Jo Beta', company: 'Beta Ltd', stage: 'New', emails: [], next: '', next_due: '' });
       api4.files['cards/t_two.json'] = text({ ...card, id: 't_two', num: 2, title: 'Old work', column: 'done', rank: 'a2' });
       // a client with only a task and no record is a task bucket: hidden from Companies, still a client; one with a record shows
-      { const r = JSON.parse(api4.files['tasks.json']); r.clients = ['Acme', 'Empty Co', 'Recorded Co']; r.client_info['Recorded Co'] = { notes: 'Met at a fair', links: [] }; api4.files['tasks.json'] = text(r); }
+      { const r = JSON.parse(api4.files['tasks.json']); r.clients = ['Acme', 'Empty Co', 'Recorded Co']; r.client_info['Recorded Co'] = { notes: 'Met at a fair', links: [] };
+        r.client_info['Beta Ltd'] = { stage: 'Gone', links: [] }; api4.files['tasks.json'] = text(r); }   // a stage the board no longer has
       api4.files['cards/t_three.json'] = text({ ...card, id: 't_three', num: 3, title: 'Bucket task', client: 'Empty Co', project: '', rank: 'a3' });
       const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errs = [], nat = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => { nat.push(d.message()); d.dismiss().catch(() => {}); });
       await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api4.route(r)); await pg.goto(base + '/board/index.html'); await pg.waitForSelector('.prow');
@@ -305,6 +306,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.deepEqual(await pg.locator('.crow .pwho b').allTextContents(), ['Beta Ltd', 'Acme', 'Recorded Co'], 'Empty Co (no people, no record) is left out');
       assert.equal(await pg.locator('#fClient option[value="Empty Co"]').count(), 1, 'it stays a client for tasks and the top chips');
       assert.equal(await pg.locator('.crow[data-company="Recorded Co"] .pnext').textContent(), 'No people yet');
+      assert.equal(await pg.locator('.crow[data-company="Beta Ltd"] .stagepill.derived').textContent(), 'New', 'a stored stage the board no longer has counts as unset');
       const acme = pg.locator('.crow[data-company="Acme"]');
       assert.equal(await acme.locator('.pwho .muted').textContent(), '2 people · 1 open task');
       assert.equal(await acme.locator('.stagepill').textContent(), 'Talking', 'until set, the most advanced stage among its people');
@@ -345,6 +347,13 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       w = save(); await pg.locator('.ui-menu [role=menuitem]', { hasText: "Use people's stage" }).click(); await w; assert.equal('stage' in info(), false, 'the stage is cleared, not blanked');
       await pg.locator('#clStage option:checked', { hasText: 'Talking (from its people)' }).waitFor({ state: 'attached' });
       w = save(); await pg.locator('#clOwner').selectOption(''); await w; assert.equal('owner' in info(), false);
+      // names that are Object.prototype keys are refused and never reach the prototype
+      await pg.locator('#clPeople .dperson', { hasText: 'Casey Example' }).click(); await pg.locator('#dlgContact[open]').waitFor();
+      await pg.locator('#pCompany').fill('__proto__'); await pg.locator('#pCompany').press('Tab'); await pg.locator('.ui-toast', { hasText: 'cannot be a client or company name' }).waitFor();
+      assert.equal(await pg.locator('#pCompany').inputValue(), 'Acme'); assert.equal(JSON.parse(api4.files['people/p_one.json']).company, 'Acme');
+      assert.deepEqual(await pg.evaluate(() => [Object.keys(Object.prototype), ({}).stage, ({}).links]), [[], undefined, undefined], 'Object.prototype is untouched');
+      await pg.keyboard.press('Escape'); await pg.locator('#dlgContact').waitFor({ state: 'hidden' });
+      await pg.locator('#viewSw [data-view="companies"]').click(); await pg.locator('.crow[data-company="Acme"] .pwho b').click(); await pg.locator('#dlgClient[open]').waitFor();
       // a person row opens the person
       await pg.locator('#clPeople .dperson', { hasText: 'Robin Talker' }).click(); await pg.locator('#dlgContact[open]').waitFor(); assert.equal(await pg.locator('#pName').inputValue(), 'Robin Talker');
       // the person drawer's Client field opens the company

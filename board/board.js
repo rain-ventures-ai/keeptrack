@@ -3539,6 +3539,7 @@ if (typeof window !== 'undefined') (() => {
       if (editing !== id) { taskWorkSheet.close(); return; }
       const keepNewProject = !!(newProject && project === newProject.id), keepNewClient = !!(newClient && (client === newClient || (keepNewProject && newProject.client === newClient)));
       if (client === original.client && project === original.project && !keepNewClient && !keepNewProject) { taskWorkSheet.close(); return; }
+      if (keepNewClient && refuseName(newClient)) return;
       const ok = await edit(id, (t, n) => {
         if (keepNewClient && !n.clients.some(c => c.toLowerCase() === newClient.toLowerCase())) n.clients.push(newClient);
         if (keepNewProject) { n.projects = n.projects || []; if (!n.projects.some(p => p.id === newProject.id)) n.projects.push(newProject); }
@@ -5491,7 +5492,18 @@ if (typeof window !== 'undefined') (() => {
   const isMe = p => { const m = memberOf(p), meV = String(cfg().me || '').toLowerCase(); return !!m && !!meV && String(m.github).toLowerCase() === meV; };
   const contactOnly = p => !memberOf(p);
   function memberPill(p) { const b = el('span', 'stagepill memberpill', isMe(p) ? 'You' : 'Board member'); b.title = `@${memberOf(p).github} is a member of this board: their own record, not a contact`; return b; }
-  const clientInfo = name => (state.client_info || {})[name] || { links: [] };
+  // client_info is keyed by a name people type: read and create entries only as own properties, and never accept a name
+  // that is an Object.prototype key (kit v84 review), so "__proto__" can never reach or replace the prototype
+  const RESERVED_NAMES = ['__proto__', 'constructor', 'prototype'];
+  const reservedName = v => RESERVED_NAMES.includes(String(v == null ? '' : v).trim());
+  const refuseName = v => { if (!reservedName(v)) return false; toast(`“${String(v).trim()}” cannot be a client or company name.`, true); return true; };
+  const ownInfo = (d, name) => { const ci = d && d.client_info; return ci && typeof ci === 'object' && !reservedName(name) && Object.hasOwn(ci, name) && ci[name] && typeof ci[name] === 'object' ? ci[name] : null; };
+  function infoFor(n, name) {   // the entry to write, created when missing; a reserved name gets a throwaway object
+    if (reservedName(name)) return { links: [] };
+    if (!n.client_info || typeof n.client_info !== 'object' || Array.isArray(n.client_info)) n.client_info = {};
+    return ownInfo(n, name) || (n.client_info[name] = { links: [] });
+  }
+  const clientInfo = name => ownInfo(state, name) || { links: [] };
   const memberCompanies = m => Array.isArray(m.own_companies) ? [...new Set(m.own_companies.filter(x => typeof x === 'string' && x))] : [];
   const companyMembers = (company, board = state) => (board.people || []).filter(m => memberCompanies(m).includes(company));
   const companyIdentity = company => { const members = companyMembers(company); return members.length ? members.some(m => String(m.github).toLowerCase() === String(cfg().me).toLowerCase()) ? 'Your company' : 'Board member company' : ''; };
@@ -5632,7 +5644,8 @@ if (typeof window !== 'undefined') (() => {
   function fillClientDrawer(force) {
     const co = editingClient; if (!co) return;
     const f = companyFacts(co), info = f.info, prs = projectsForClient(co), people = f.people.slice(), tasks = f.tasks;
-    const sig = JSON.stringify([co, info, prs, people, tasks.map(t => [t.id, t.num, t.title, t.column, t.priority, t.due, t.labels, t.todos]), companyMembers(co), cfg().me, state.people, stages(), clActMax, modes()]); if (!force && sig === clSig) return; clSig = sig;
+    const pk = p => [p.id, p.updated, p.name, p.stage, p.role, p.value, p.github, p.comments.length, (p.comments[p.comments.length - 1] || {}).id, (p.comments[p.comments.length - 1] || {}).draft];
+    const sig = JSON.stringify([co, info, prs, people.map(pk), tasks.map(t => [t.id, t.num, t.title, t.column, t.priority, t.due, t.labels, t.todos]), companyMembers(co), cfg().me, state.people, stages(), clActMax, modes()]); if (!force && sig === clSig) return; clSig = sig;
     const keep = id => document.activeElement === $(id);
     $('clName').textContent = co; $('clTile').style.setProperty('--dtile-c', `hsl(${clientHue(co)} 72% 52%)`);
     $('clIdentity').hidden = !companyIdentity(co); $('clIdentity').textContent = companyIdentity(co) ? `${companyIdentity(co)} · ${companyMembers(co).map(m => '@' + m.github).join(', ')}. Protected from removal while linked in Board → Members. This is separate from CRM employer details.` : '';
@@ -5670,7 +5683,7 @@ if (typeof window !== 'undefined') (() => {
     prs.sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => box.append(projectNavRow(pr, () => { $('dlgClient').close(); openProject(pr.id); })));
     setCount('clProjCount', prs.length); $('clProjSec').classList.toggle('is-empty', !prs.length);
     const links = info.links || [];
-    renderLinkBox($('clFiles'), links, l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+    renderLinkBox($('clFiles'), links, l => mutate(n => { const ci = ownInfo(n, co); if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
     setCount('clFileCount', links.length); $('clFilesSec').classList.toggle('is-empty', !links.length);
   }
   function openClientMenu(anchor) {
@@ -5682,8 +5695,8 @@ if (typeof window !== 'undefined') (() => {
     if (!ro && companyFacts(co).stored) items.push({ label: "Use people's stage", icon: 'users', onSelect: () => setCompanyStage(co, '') });
     ui.menu(anchor, items, { label: `Actions for ${co}` });
   }
-  const clientEdit = (fn, msg) => { const co = editingClient; if (!co) return; return mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; fn(ci); if (!n.clients.includes(co)) n.clients.push(co); }, msg); };
-  $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
+  const clientEdit = (fn, msg) => { const co = editingClient; if (!co || refuseName(co)) return; return mutate(n => { const ci = infoFor(n, co); fn(ci); if (!n.clients.includes(co)) n.clients.push(co); }, msg); };
+  $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { const ci = infoFor(n, co); ci.north_star = v; }, `North star: ${co}`); });
   $('clStage').onchange = e => { const co = editingClient, v = e.target.value; if (co) setCompanyStage(co, v); };
   $('clOwner').onchange = e => { const v = e.target.value; clientEdit(ci => { if (v) ci.owner = v; else delete ci.owner; }, `Owner: ${editingClient}`); };
   const cleanDomain = v => String(v || '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0].trim().toLowerCase();   // as keeptrack.py client-set --domain
@@ -5701,7 +5714,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addClientFile(co, title, url) {
     if (!co) return false; const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return false; }
-    mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`);
+    mutate(n => { const ci = infoFor(n, co); ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`);
   }
 
   // ---- project drawer ----
@@ -6092,7 +6105,7 @@ if (typeof window !== 'undefined') (() => {
       const x = normaliseContact({ id: ctx.resultId, name: change.name || p.title, created: ts, updated: ts, createdBy: inboxMe() });
       Object.entries(change).forEach(([k, v]) => { x[k === 'due' ? 'next_due' : k] = clone(v); });
       histAdd(x, `created from proposal ${p.id}`); n.contacts.push(x);
-      if (x.company && !n.clients.includes(x.company)) n.clients.push(x.company);
+      if (x.company && !reservedName(x.company) && !n.clients.includes(x.company)) n.clients.push(x.company);
       return;
     }
     const rec = findRef(n, p.target); if (!rec) return;
@@ -6878,6 +6891,7 @@ if (typeof window !== 'undefined') (() => {
   const pedit = (id, f, msg) => mutate(n => { const p = n.contacts.find(x => x.id === id); if (p) { f(p, n); pstamp(p); } }, msg || `Update ${nameOf(id)}`, [id]);
 
   function addContact(name, extra) {
+    if (extra && refuseName(extra.company)) return Promise.resolve(null);
     const p = normaliseContact(Object.assign({ id: cid(), name, created: nowIso(), updated: nowIso() }, extra || {}));
     if (me()) { p.createdBy = me(); p.updatedBy = me(); }
     return mutate(n => { n.contacts.push(p); if (p.company && !n.clients.includes(p.company)) n.clients.push(p.company); }, `Add person: ${name}`).then(ok => ok ? p.id : null);
@@ -7220,7 +7234,7 @@ if (typeof window !== 'undefined') (() => {
   // A company's stage is client_info[name].stage once someone sets it; until then it is the most advanced stage among its
   // people (a lost person never outranks a live one), shown as derived. Owner, domain and notes live there too.
   const money = v => { const n = parseFloat(String(v).replace(/[^0-9.]/g, '')); return isFinite(n) ? n : 0; };
-  const companyNames = () => [...new Set([...state.clients, ...state.contacts.map(p => p.company)].filter(x => typeof x === 'string' && x))];
+  const companyNames = () => [...new Set([...state.clients, ...state.contacts.map(p => p.company)].filter(x => typeof x === 'string' && x && !reservedName(x)))];
   const stageRank = s => /^lost$/i.test(s) ? -1 : stages().indexOf(s);
   let coIdx = null;   // people and tasks by company, built once per board state (a big board has thousands of each)
   function companyIndex() {
@@ -7233,14 +7247,14 @@ if (typeof window !== 'undefined') (() => {
   }
   function companyFacts(name) {
     const ix = companyIndex(), info = clientInfo(name), people = (ix.people.get(name) || []).slice(), contacts = people.filter(contactOnly);
-    const stored = typeof info.stage === 'string' ? info.stage : '';
+    const stored = typeof info.stage === 'string' && stages().includes(info.stage) ? info.stage : '';   // a stage the board no longer has counts as unset
     let derived = ''; contacts.forEach(p => { if (stages().includes(p.stage) && (!derived || stageRank(p.stage) > stageRank(derived))) derived = p.stage; });
     const tasks = ix.taskMap.get(name) || [], open = tasks.filter(t => t.column !== doneColId());
     const next = contacts.filter(p => p.next_due).sort((a, b) => a.next_due.localeCompare(b.next_due) || a.name.localeCompare(b.name))[0] || null;
     return { name, info, people, contacts, stored, derived, stage: stored || derived, tasks, open, next,
       last: contacts.map(lastTouch).filter(Boolean).sort().pop() || '', value: contacts.reduce((a, p) => a + money(p.value), 0), own: companyIdentity(name) };
   }
-  const companyFilter = name => { const fc = clientValues(); return !fc.length || fc.includes(name); };
+  const companyFilter = () => { const fc = clientValues(); return name => !fc.length || fc.includes(name); };   // reads the client pills once
   // A name with no people and no company record (stage, owner, domain, notes) is a bucket for tasks, not a CRM company:
   // it stays a client (task client, the top chips) but is left out of Companies and the company pipeline. Own companies stay.
   const COMPANY_FIELDS = ['stage', 'owner', 'domain', 'notes'];
@@ -7271,7 +7285,7 @@ if (typeof window !== 'undefined') (() => {
     const st = el('select', 'pillsel'); st.setAttribute('aria-label', 'Filter by stage'); [['', 'All stages'], ...stages().map(s => [s, s])].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; st.append(o); }); st.value = companiesStage; st.onchange = () => { companiesStage = st.value; render(); };
     bar.append(q, st); wrap.append(bar);
     const ql = companiesQ.toLowerCase(), order = s => s ? stages().indexOf(s) : stages().length;
-    const items = companyNames().filter(companyFilter).map(companyFacts)
+    const items = companyNames().filter(companyFilter()).map(companyFacts)
       .filter(listedCompany).filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => (!!b.own - !!a.own) || order(a.stage) - order(b.stage) || String(b.last).localeCompare(String(a.last)) || a.name.localeCompare(b.name));   // own companies first, as members are in People
     capList('companies', items, companyRow, wrap);
@@ -7284,7 +7298,8 @@ if (typeof window !== 'undefined') (() => {
   const pipeMode = () => LS.get(pipeKey(), 'people') === 'companies' ? 'companies' : 'people';
   let pipeLeft = 0;   // the columns' sideways scroll survives a re-render
   function setCompanyStage(name, s, msg) {
-    return mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[name] = n.client_info[name] || { links: [] }; if (s) ci.stage = s; else delete ci.stage; if (!n.clients.includes(name)) n.clients.push(name); }, msg || (s ? `Stage ${s}: ${name}` : `Stage from people: ${name}`));
+    if (refuseName(name)) return Promise.resolve(false);
+    return mutate(n => { const ci = infoFor(n, name); if (s) ci.stage = s; else delete ci.stage; if (!n.clients.includes(name)) n.clients.push(name); }, msg || (s ? `Stage ${s}: ${name}` : `Stage from people: ${name}`));
   }
   function pipeDrop(cards, c, onDrop) {   // one drag-and-drop for both modes
     cards.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
@@ -7303,7 +7318,7 @@ if (typeof window !== 'undefined') (() => {
     const tl = ui.tabs({ items: [{ value: 'people', icon: 'user', label: 'People' }, { value: 'companies', icon: 'building-2', label: 'Companies' }], value: mode, label: 'Pipeline shows', onChange: v => { LS.set(pipeKey(), v); render(); } });
     tl.id = 'pipeMode'; bar.append(tl);
     const cols = el('div', 'pipecols'); cols.addEventListener('scroll', () => { pipeLeft = cols.scrollLeft; }, { passive: true });
-    const facts = mode === 'companies' ? companyNames().filter(companyFilter).map(companyFacts).filter(f => listedCompany(f) && !f.own && f.stage) : [];
+    const facts = mode === 'companies' ? companyNames().filter(companyFilter()).map(companyFacts).filter(f => listedCompany(f) && !f.own && f.stage) : [];
     stages().forEach(s => {
       const c = el('section', 'col'); c.dataset.stage = s; const cards = el('div', 'cards');
       if (mode === 'companies') {
@@ -7401,7 +7416,7 @@ if (typeof window !== 'undefined') (() => {
   const syncNextDue = v => paintDate('pNextDue', v, { empty: 'No date' });   // overdue is red, today amber, like a task's due date
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
-    const sig = JSON.stringify([p, p.company && (state.client_info || {})[p.company], p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), modes()]); if (!force && sig === pSig) return; pSig = sig;
+    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), modes()]); if (!force && sig === pSig) return; pSig = sig;
     const keep = id => document.activeElement === $(id);
     { const a = ui.avatar(p.name || '?', { size: 'lg' }); a.id = 'pAvatar'; $('pAvatar').replaceWith(a); }
     if (!keep('pName')) $('pName').value = p.name; autosize($('pName'));
@@ -7424,7 +7439,7 @@ if (typeof window !== 'undefined') (() => {
       const pl = $('pProjList'), prs = projectsForClient(co); pl.textContent = '';
       prs.forEach(pr => pl.append(projectNavRow(pr, () => openProject(pr.id)))); if (!prs.length) pl.append(dempty('No projects for this client.')); setCount('pProjCount', prs.length);
       const files = info.links || []; $('pFilesH').textContent = `Files and folders for ${co}`;
-      renderLinkBox($('pFiles'), files, l => mutate(n => { const ci = (n.client_info || {})[co]; if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
+      renderLinkBox($('pFiles'), files, l => mutate(n => { const ci = ownInfo(n, co); if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
       setCount('pFileCount', files.length); $('pFilesSec').classList.toggle('is-empty', !files.length);
     }
     renderTouches(p); renderPersonTasks(p);
@@ -7521,7 +7536,7 @@ if (typeof window !== 'undefined') (() => {
   $('pNext').addEventListener('change', e => { const v = e.target.value.trim(); pedit(editingContact, x => { x.next = v; }); });
   $('pNextDue').addEventListener('change', e => { const v = e.target.value; syncNextDue(v); pedit(editingContact, x => { x.next_due = v; }); });
   document.querySelectorAll('#dlgContact [data-due]').forEach(b => { b.onclick = () => { const v = b.dataset.due === '' ? '' : plusDays(+b.dataset.due); $('pNextDue').value = v; syncNextDue(v); pedit(editingContact, x => { x.next_due = v; }); }; });
-  PF.forEach(([fid, k]) => $(fid).addEventListener('change', e => { const v = e.target.value.trim(); pedit(editingContact, (x, n) => { x[k] = v; if (k === 'company' && v && !n.clients.includes(v)) n.clients.push(v); }); }));
+  PF.forEach(([fid, k]) => $(fid).addEventListener('change', e => { const v = e.target.value.trim(); if (k === 'company' && refuseName(v)) { e.target.value = (contactNow() || {}).company || ''; return; } pedit(editingContact, (x, n) => { x[k] = v; if (k === 'company' && v && !n.clients.includes(v)) n.clients.push(v); }); }));
   $('pNotes').addEventListener('input', () => autosize($('pNotes')));
   $('pNotes').addEventListener('change', e => { const v = e.target.value; pedit(editingContact, x => { x.notes = v; }); });
   function addContactMethod(kind, lab, v, input) {
@@ -7531,7 +7546,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonLink(title, url) { const p = contactNow(), l = parseNamedLink(title, url, false); if (!p) return false; if (!l) { toast('Enter an http:// or https:// link.', true); return false; } pedit(p.id, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); syncContactLegacy(x); }, `Links: ${p.name}`); }
   function addCompanyFile(title, url) { const p = contactNow(); if (!p || !p.company) return false; return addClientFile(p.company, title, url); }
-  $('pNorthStar').addEventListener('change', () => { const p = contactNow(), co = p && p.company, v = $('pNorthStar').value; if (!co) return; mutate(n => { n.client_info = n.client_info || {}; const ci = n.client_info[co] = n.client_info[co] || { links: [] }; ci.north_star = v; }, `North star: ${co}`); });
+  $('pNorthStar').addEventListener('change', () => { const p = contactNow(), co = p && p.company, v = $('pNorthStar').value; if (!co) return; mutate(n => { const ci = infoFor(n, co); ci.north_star = v; }, `North star: ${co}`); });
   const openPersonClient = () => { const p = contactNow(); if (p && p.company) { $('dlgContact').close(); openClient(p.company); } };
   $('pClientOpen').onclick = openPersonClient;
   $('pTouchPost').onclick = logTouch;
@@ -7562,7 +7577,7 @@ if (typeof window !== 'undefined') (() => {
     if (p.emails.length) lines.push('Email addresses: ' + p.emails.map(x => `${x.label}: ${x.value}`).join('; '));
     if (p.phones.length) lines.push('Phone numbers: ' + p.phones.map(x => `${x.label}: ${x.value}`).join('; '));
     if (p.links.length) { lines.push('', 'Profile and reference links (pages about this person/company, not working files):'); p.links.forEach(l => lines.push(`- ${l.title || l.url}: ${l.url}`)); }
-    const resources = ((state.client_info || {})[p.company] || {}).links || [];
+    const resources = (ownInfo(state, p.company) || {}).links || [];
     if (resources.length) { lines.push('', `Files and folders for ${p.company} (working material):`); resources.forEach(l => lines.push(`- ${l.title || l.url}: ${l.url}`)); lines.push('Access note: cloud links require the matching connector, plugin, MCP server and signed-in account. Local paths require a session on the computer that holds them. If you cannot access a resource, say so and ask me; do not pretend you opened it.'); }
     if (p.notes) lines.push('Notes: ' + p.notes);
     const recent = p.comments.slice(-5); if (recent.length) { lines.push('', 'Recent contact:'); recent.forEach(cm => lines.push(`- ${cm.at.slice(0, 10)} ${chan(cm.channel)[2]}${cm.draft ? ' (draft, not sent)' : ''}: ${cm.text.replace(/\s+/g, ' ').slice(0, 300)}`)); }
