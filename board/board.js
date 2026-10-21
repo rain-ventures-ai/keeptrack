@@ -8006,8 +8006,9 @@ if (typeof window !== 'undefined') (() => {
   function sizeBar() {   // a quiet nudge once the board file gets large
     const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
     if (!big) { showBar('sizeBar', null); return; }
-    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
-      action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('archive'); } },
+    const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\//.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count
+    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: mostlyArchive ? `The board files are ${Math.round(boardSize / 1024)} KB, ${Math.round(arch / 1024)} KB of it archive. The archive loads with the board and counts toward the 5 MB total; archiving more items does not make it smaller.` : `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
+      ...(mostlyArchive ? {} : { action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('archive'); } } }),
       onDismiss: () => LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))) });
   }
 

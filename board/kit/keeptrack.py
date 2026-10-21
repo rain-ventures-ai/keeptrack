@@ -4415,9 +4415,26 @@ def _doctor_snapshot():
                    "base_tree": head.get("base_tree") if isinstance(head, dict) else None, "files": files}
 
 
-LIVE_FILE_MAX = 200 * 1024      # a live card, person or project file: read with every board load
-ARCHIVE_FILE_MAX = 900 * 1024   # an archive/<year>.json: read lazily, and kept under the 1 MB the GitHub contents API returns inline
-ARCHIVE_FILE_WARN = 700 * 1024  # doctor warns from here, so there is time to act before it fails
+LIVE_FILE_MAX = 200 * 1024      # a card, person, project or other board file: 200 KB
+# archive/<year>.json is a different kind of file. It is loaded with the board like every other file (cached by blob sha,
+# downloaded again after each archive change), so its size counts toward load cost; the 5 MB board total still caps that.
+# 900 KB is a chosen margin, not a GitHub limit: the real archive was 578 KB when this was set, and a year file is rewritten
+# whole by every archive run. The warning leaves time to act before the error.
+ARCHIVE_FILE_MAX = 900 * 1024
+ARCHIVE_FILE_WARN = 700 * 1024
+ARCHIVE_FILE_RE = re.compile(r"archive/[0-9]{4}\.json")   # the shape check_year allows; any other file in archive/ keeps 200 KB
+ARCHIVE_NEXT_STEP = ("Tell the board owner: splitting an archive year into parts is planned as a follow-up card. "
+                     "Until then do not edit the file by hand.")
+
+
+def archive_size_issue(rel, size):
+    """(code, message) when an archive/<year>.json is at or over a limit, else None."""
+    if size > ARCHIVE_FILE_MAX:
+        return "FILE_SIZE", f"This archive file is {size // 1024} KB, over its {ARCHIVE_FILE_MAX // 1024} KB limit. " + ARCHIVE_NEXT_STEP
+    if size > ARCHIVE_FILE_WARN:
+        return "ARCHIVE_SIZE", (f"This archive file is {size // 1024} KB; doctor fails above {ARCHIVE_FILE_MAX // 1024} KB. "
+                                + ARCHIVE_NEXT_STEP)
+    return None
 
 
 def doctor_board(fix=False):
@@ -4699,14 +4716,10 @@ def doctor_board(fix=False):
             problem("BOARD_SIZE", "board", "The board files total more than 5 MB.")
         for rel, entry in state["files"].items():
             size = entry.get("size", len(entry["text"].encode()))
-            if rel.startswith("archive/"):
-                # An archive file is read on demand (never with the live board), so it has its own, higher limit.
-                if size > ARCHIVE_FILE_MAX:
-                    problem("FILE_SIZE", rel, f"This archive file is larger than {ARCHIVE_FILE_MAX // 1024} KB. Ask for the "
-                            "archive to be split into parts (a kit change); do not edit the file by hand.")
-                elif size > ARCHIVE_FILE_WARN:
-                    problem("ARCHIVE_SIZE", rel, f"This archive file is {size // 1024} KB, close to the {ARCHIVE_FILE_MAX // 1024} KB "
-                            "limit at which doctor fails. Plan to split the archive into parts before then.")
+            if ARCHIVE_FILE_RE.fullmatch(rel):   # a year file has its own, higher limit (see ARCHIVE_FILE_MAX)
+                found = archive_size_issue(rel, size)
+                if found:
+                    problem(found[0], rel, found[1])
             elif size > LIVE_FILE_MAX:
                 problem("FILE_SIZE", rel, "This board file is larger than 200 KB.")
 
@@ -9039,7 +9052,12 @@ def _cmd_archive(a):
         except UseGit:
             WRITE = "git"; continue
         if ok:
-            print(f"archived {summary}"); return
+            print(f"archived {summary}")
+            for rel, text in sorted(extra.items()):
+                found = archive_size_issue(rel, len(text.encode()))
+                if found:
+                    print(f"{'warning' if found[0] == 'ARCHIVE_SIZE' else 'error'}: {rel}: {found[1]}")
+            return
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not archive after retries (board busy)")
 

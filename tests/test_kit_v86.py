@@ -57,6 +57,18 @@ class ArchiveSize(unittest.TestCase):
         self.archive(901)
         self.assertIn(("FILE_SIZE", "archive/2026.json"), self.codes())
 
+    def test_other_archive_file_keeps_200_kb(self):
+        with open(os.path.join(self.dir, "archive", "notes.json"), "w", encoding="utf-8") as f:
+            json.dump({"pad": "x" * (300 * 1024)}, f)
+        self.assertIn(("FILE_SIZE", "archive/notes.json"), self.codes())
+
+    def test_errors_name_a_next_step(self):
+        for kb, code in ((750, "ARCHIVE_SIZE"), (901, "FILE_SIZE")):
+            self.archive(kb); keeptrack._BOARD_STATES.clear()
+            issues, _, _ = keeptrack.doctor_board(False)
+            msg = next(x["message"] for x in issues if x["code"] == code and x["path"] == "archive/2026.json")
+            self.assertIn("board owner", msg)
+
     def test_live_file_over_200_kb_still_fails(self):
         card = next(x for x in os.listdir(os.path.join(self.dir, "cards")) if x.endswith(".json"))
         path = os.path.join(self.dir, "cards", card)

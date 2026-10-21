@@ -28,7 +28,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v86 (schema 4)
 Archive files get their own size limit (private-tasks card #284). No migration, no data change.
 - `doctor` no longer fails an `archive/<year>.json` between 200 KB and 900 KB. It warns (`ARCHIVE_SIZE`) from 700 KB and
-  fails (`FILE_SIZE`) above 900 KB. Cards, people, projects and `tasks.json` keep the 200 KB limit.
+  fails (`FILE_SIZE`) above 900 KB; `keeptrack.py archive` prints the same warning when it writes a year file past 700 KB.
+  Cards, people, projects, `tasks.json` and any other file in `archive/` keep the 200 KB limit. The 5 MB board total still counts the archive.
+- Archive files are not lazy: they load with the board (cached by blob sha, downloaded again after each archive change).
+  900 KB is a chosen margin, not a GitHub limit.
+- These size checks run on split boards only (a one-file board has the 600 KB `BOARD_SIZE` check instead).
 - Run `kit-update` only. Check: `python3 board/keeptrack.py doctor` shows no `FILE_SIZE` error for the archive.
 
 ### v84 (schema 4)

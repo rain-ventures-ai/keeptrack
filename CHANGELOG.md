@@ -7,13 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 Kit v86: an archive file has its own size limit (private-tasks card #284). `doctor` failed with `FILE_SIZE` as soon as
-`archive/<year>.json` passed 200 KB, and relay's `ci_checks.py` (which runs doctor) failed on every PR. The 200 KB
-limit protects the files every board load reads (cards, people, projects, `tasks.json`); an archive file is read only
-on demand (the Archive view, an archived-card lookup), so it now has its own limit: `doctor` warns (`ARCHIVE_SIZE`)
-from 700 KB and fails (`FILE_SIZE`) above 900 KB, safely under the 1 MB the GitHub contents API returns inline. Live
-files keep 200 KB, and the 5 MB total is unchanged. No migration and no data change. Splitting a year into parts is
-not done yet: it needs every reader of `archive/<year>.json` to change, so it is a follow-up for when an archive
-nears 900 KB.
+`archive/<year>.json` passed 200 KB, and relay's `ci_checks.py` (which runs doctor) failed on every PR. An
+archive year file now has its own limit: `doctor` warns (`ARCHIVE_SIZE`) from 700 KB and fails (`FILE_SIZE`) above
+900 KB, and `keeptrack.py archive` prints the warning when it writes a year file past 700 KB. Archive files load with
+the board like every other file (cached by blob sha, downloaded again after each archive change); 900 KB is a chosen
+margin (the real archive was 578 KB), not a GitHub limit, and the 5 MB board total still caps load cost. Only
+`archive/<year>.json` gets the higher limit; any other file in `archive/` keeps 200 KB, and the web board's size bar no
+longer tells people to archive when the archive is most of the total. Size checks run on split boards only. No
+migration and no data change. Splitting a year into parts, and loading archives lazily, are follow-ups.
 
 Kit v84: companies on the board, HubSpot style (private-tasks card #281). A company is every client name and every
 person's company, once each. `client_info[<company>]` gains four optional fields: `stage` (one of `settings.stages`),
