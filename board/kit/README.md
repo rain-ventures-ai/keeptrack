@@ -111,7 +111,11 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
   "clients": ["Acme", "Rain Ventures", "General"],
   "labels":  [{ "name": "call", "color": "#0c66e4" }],
   "contacts": [ /* v3: people in the CRM, see "People (schema 3)" below */ ],
-  "client_info": { "Acme": { "north_star": "optional: what success looks like for this client", "links": [{ "title": "Drive or local folder", "url": "https://… or /local/path" }] } },   // v3: north star + working file/folder resources per client
+  "client_info": { "Acme": { "north_star": "optional: what success looks like for this client", "links": [{ "title": "Drive or local folder", "url": "https://… or /local/path" }],
+                              "stage": "Proposal", "owner": "alex", "domain": "acme.com", "notes": "free text" } },
+                                                 // v3: north star + working file/folder resources per client
+                                                 // v84 optional company record: stage (one of settings.stages; absent = the most advanced
+                                                 // stage among its people), owner (a board member's login), domain, notes
   "projects": [{ "id": "pr_ab12cd34", "client": "Acme", "name": "Phase one rollout", "north_star": "…", "status": "active | done | paused",
                   "links": [], "people": ["name@example.com"], "created": "…", "updated": "…" }],   // optional; split v4 uses projects/<id>.json instead
   "goals": [{ "id": "g_ab12cd34ef", "title": "Revenue", "metric": "revenue per month", "target": "£10,000", "current": "£4,200",
@@ -265,6 +269,11 @@ a page token it cannot pass back prints `page-token-unusable` (exit 3), never `e
 
 Person `links` are profile or reference pages about that person/company. Task `links` are supporting resources and
 references for that task: for example Drive/Dropbox files, issues, PRs, source pages or a local working path.
+`client_info[company].stage`, `owner`, `domain` and `notes` (kit v84, all optional) are the company's own record; the
+web board's Companies tab and company pipeline read them. Until a stage is set, a company shows the most advanced stage
+among its people (a Lost person never outranks a live one; board members' own records do not count). `settings-set
+--rename-stage` renames company stages too, and `member-rm` clears the owner of the member's companies. `doctor` warns
+(CLIENT_RECORD) about a stage or owner the board does not know and never stops the board for one.
 `client_info[company].links` are company-wide working file/folder resources rather than task-specific ones. An agent
 needs the matching connector/plugin/MCP and signed-in account for a cloud resource, or a session on the computer that
 holds a local path. If it cannot access one, it must say so and ask the user rather than implying it read the resource.
@@ -328,7 +337,7 @@ Never pass `--session` with an id you did not generate for this run, and never `
 | Goals (kit v83) | `goals [--all]` (active goals with their target, days left and cards done; says how many open cards link to no goal), `goal REF` (and its open cards), `goal-add TITLE --metric M --target T --end DATE [--current C] [--start DATE]`, `goal-set REF [--title] [--metric] [--target] [--current] [--start] [--end] [--status active\|done\|dropped]`, `goal-remove REF [--clear-cards]`. A card: `add --goal REF`, `task-set ID --goal REF\|none`, `list --goal REF\|none` |
 | Several items in one save (kit v78) | `add "Title" --todo "step" --link URL "title"` (both repeatable); `todo-add ID -` (one per line from stdin); `link ID -` (stdin: URL, tab, title per line) |
 | Labels | `labels`, `label-add NAME [--color #hex]`, `label-set NAME [--rename NEW] [--color #hex]`, `label-rm NAME [--force]`. `add --label` and `task-set --label` create a missing label in grey, as the web board does |
-| Clients | `clients`, `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set`, `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |
+| Clients | `clients` (with each company's stage, owner and domain), `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set NAME [--north-star ..] [--stage S] [--owner LOGIN] [--domain D] [--notes ..\|-]` (kit v84; `""` clears a field; the stage must be in `settings.stages` and the owner a board member), `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |
 | Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links and open tasks), `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL [--title]`, `project-unlink REF URL` (URL or title, as `unlink`), `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
 | Columns | `columns` (with card counts), `column-add NAME [--after ID]`, `column-set ID --rename NAME` (the id stays), `column-move ID --before ID\|--after ID`, `column-rm ID [--move-to ID]` (refuses while the column has cards unless `--move-to` says where they go; never `todo`, `in-progress`, `done` or the last column). New ids are a slug of the name |
 | Board members | `members`, `me`, `member-add USER [--name] [--email ..] [--timezone ..]`, `member-set USER [--name] [--email ..] [--remove-email ..] [--timezone ..]`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |

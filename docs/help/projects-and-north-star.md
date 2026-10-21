@@ -6,7 +6,7 @@ Keeptrack stays lightweight: nothing here is required, and older boards keep wor
 
 A **north star** is a short note about what you are trying to solve for a client and what success looks like.
 
-1. On the board, click the **arrow** on a client pill in the header, or open a person and choose **Open client**.
+1. On the board, click the **arrow** on a client pill in the header, open a company from **Companies**, or open a person and choose **Open client**.
 2. Edit **North star** and the client file links in the client panel.
 
 The same text is stored in `client_info` for that client name.
