@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v89: the last gaps in the reserved client-name check (private-tasks card #287; v87 and v88 are other changes in
+flight). `archive` and `unarchive` save directly, so they now run the check themselves: an archived record whose client
+or company is `__proto__`, `constructor` or `prototype` stays archived until `client-rename` (which also rewrites the
+archive). The hosted `add --client` runs it before posting. Board members' `own_companies` count as uses, so
+`member-set --own-company __proto__` is refused. Uses are counted by the exact stored string, so renaming
+`" __proto__"` to `"__proto__"` is refused (a padded name can still be renamed away). A command that would copy a
+reserved name already on the board (`todo-move`, `add --project`) names where it is stored and says how to clean it up.
+Web board: every save (GitHub and hosted) counts the same places and refuses one that adds a use, so picking an old
+reserved client from a list for a new task, a task sheet or a new project is refused with the same advice.
+
 Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #281; v85 is the Archive view, card
 #283). A client with no people, no company record (stage, owner, domain, notes or north star), no files and no
 projects, such as a "General" bucket for tasks, is left out of Companies and the company pipeline; it stays a client

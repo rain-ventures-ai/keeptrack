@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 86;
+  const PAGE_KIT = 89;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1419,6 +1419,8 @@ if (typeof window !== 'undefined') (() => {
         if (missingCompany) { state = pre; render(); fail('A board member company cannot be removed while linked. Explicitly unlink it in Board → Members first.'); return false; }
         const removedCompanyMember = pre.people.find(m => memberCompanies(m).length && !latest.people.some(x => x.github === m.github));
         if (removedCompanyMember) { state = pre; render(); fail('Explicitly unlink this member’s own companies before removing the member.'); return false; }
+        const grewName = reservedGrew(pre, latest);
+        if (grewName != null) { state = pre; render(); fail(reservedSaveMsg(grewName, pre)); return false; }
         fixNums(latest, pre); ensureRanks(latest);
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
@@ -5496,6 +5498,21 @@ if (typeof window !== 'undefined') (() => {
   // that is an Object.prototype key (kit v84 review), so "__proto__" can never reach or replace the prototype
   const RESERVED_NAMES = ['__proto__', 'constructor', 'prototype'];
   const reservedName = v => RESERVED_NAMES.includes(String(v == null ? '' : v).trim());
+  // kit v89: as keeptrack.py refuse_new_reserved_names. Every save counts each place a client or company name is stored
+  // (the client list, client_info keys, a card's or project's client, a person's company, a member's own_companies) by
+  // the exact stored string, and refuses one that stores a reserved name in one more place than the board had, so
+  // picking an old "__proto__" client from a list for a new task, a task sheet or a new project is refused too
+  const reservedUses = d => {
+    const uses = new Map(), note = v => { if (typeof v === 'string' && reservedName(v)) uses.set(v, (uses.get(v) || 0) + 1); };
+    (Array.isArray(d && d.clients) ? d.clients : []).forEach(note);
+    const ci = d && d.client_info; if (ci && typeof ci === 'object') Object.keys(ci).forEach(note);
+    for (const [k, f] of [['tasks', 'client'], ['projects', 'client'], ['contacts', 'company']]) (Array.isArray(d && d[k]) ? d[k] : []).forEach(x => { if (x && typeof x === 'object') note(x[f]); });
+    (Array.isArray(d && d.people) ? d.people : []).forEach(m => { if (m && Array.isArray(m.own_companies)) m.own_companies.forEach(note); });
+    return uses;
+  };
+  const reservedGrew = (before, after) => { const was = reservedUses(before); return [...reservedUses(after)].map(([n, c]) => c > (was.get(n) || 0) ? n : null).filter(n => n != null).sort()[0] || null; };
+  const reservedSaveMsg = (n, pre) => `Not saved: “${n.trim()}” cannot be a client or company name.`
+    + (Array.isArray(pre && pre.clients) && pre.clients.includes(n) ? ` This board already has it as a client: rename it first (Companies, or keeptrack.py client-rename '${n}' NEW).` : '');
   const refuseName = v => { if (!reservedName(v)) return false; toast(`“${String(v).trim()}” cannot be a client or company name.`, true); return true; };
   const ownInfo = (d, name) => { const ci = d && d.client_info; return ci && typeof ci === 'object' && !reservedName(name) && Object.hasOwn(ci, name) && ci[name] && typeof ci[name] === 'object' ? ci[name] : null; };
   function infoFor(n, name) {   // the entry to write, created when missing; a reserved name gets a throwaway object
@@ -8408,6 +8425,8 @@ if (typeof window !== 'undefined') (() => {
           if (pick === 'discard') { state = pre; render(); return false; }
           mg.clashes.forEach((c, n) => { if (pick[n].side === 'mine') setAt(latest, c.path, c.mine === undefined ? undefined : clone(c.mine)); else if (pick[n].side === 'edit') setAt(latest, c.path, pick[n].value); });
         }
+        const grewName = reservedGrew(pre, latest);   // kit v89: as mutateNow
+        if (grewName != null) throw new Error(reservedSaveMsg(grewName, pre));
         base = pre; mine = clone(latest);
         if (await hostedSave(latest, message) === 'ok') { render(); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); return true; }
       }

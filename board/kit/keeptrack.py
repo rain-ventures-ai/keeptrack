@@ -289,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 86  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 89  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1377,6 +1377,8 @@ def hosted_dispatch(a):
                 card["todos"] = [{"id": "d_" + secrets.token_hex(6), "text": text, "done": False} for text in a.todo]
             if getattr(a, "link", None):
                 card["links"] = [{"url": url, "title": title or url} for url, title in add_link_args(a)]
+            # kit v89: the hosted add posts a command, not a model save, so it runs the same check as mutate here
+            refuse_new_reserved_names({}, {"tasks": [card]})
             response = adapter.command({"kind": "create-card", "card": card})
             print(f"#{response['result']['num']} added ({response['result']['card_id']})")
             return 0
@@ -5874,29 +5876,52 @@ def reserved_name(v):
     return isinstance(v, str) and v.strip() in RESERVED_NAMES
 
 
-def reserved_name_uses(data):
-    """How often each reserved name is stored where a client or company name lives: the client list, client_info keys,
-    a card's client, a project's client and a person's company."""
-    uses = collections.Counter()
-    def note(v):
-        if reserved_name(v): uses[v.strip()] += 1
-    for c in data.get("clients") or []: note(c)
+def reserved_name_places(data):
+    """Kit v89: every place a client or company name is stored, as (exact stored string, where): the client list,
+    client_info keys, a card's client, a project's client, a person's company and a board member's own_companies.
+    Only names that are reserved once stripped are listed."""
+    out = []
+    def note(v, where):
+        if reserved_name(v): out.append((v, where))
+    for c in data.get("clients") or []: note(c, "the client list")
     if isinstance(data.get("client_info"), dict):
-        for k in data["client_info"]: note(k)
-    for key, field in (("tasks", "client"), ("projects", "client"), ("contacts", "company")):
+        for k in data["client_info"]: note(k, "client_info")
+    for key, field, what in (("tasks", "client", "card"), ("projects", "client", "project"), ("contacts", "company", "person")):
         for x in data.get(key) or []:
-            if isinstance(x, dict): note(x.get(field))
-    return uses
+            if isinstance(x, dict):
+                ref = f"#{x['num']}" if what == "card" and x.get("num") else str(x.get("name") or x.get("title") or x.get("id") or "?")
+                note(x.get(field), f"{what} {ref}")
+    for m in data.get("people") or []:
+        if isinstance(m, dict) and isinstance(m.get("own_companies"), list):
+            for c in m["own_companies"]: note(c, f"member @{m.get('github', '?')}'s own_companies")
+    return out
+
+
+def reserved_name_uses(data):
+    """How often each reserved name is stored where a client or company name lives, counted by the exact stored string
+    (kit v89): renaming " __proto__" to "__proto__" is one more use of "__proto__", not the same use."""
+    return collections.Counter(v for v, _ in reserved_name_places(data))
 
 
 def refuse_new_reserved_names(before, after):
     """Kit v86: every write path ends here. A save that would store a reserved name (__proto__, constructor, prototype) in
     one more place than the board had before is refused, whichever command, import, proposal or field caused it. A save
-    that only removes or renames one (client-rm, client-rename OLD NEW) has fewer uses, so a bad name can be cleaned up."""
+    that only removes or renames one (client-rm, client-rename OLD NEW) has fewer uses, so a bad name can be cleaned up.
+    Kit v89: archive and unarchive and the hosted add are checked too, and a name copied from one already on the board
+    says where it is and how to clean it up."""
     was, now_ = reserved_name_uses(before), reserved_name_uses(after)
     grew = sorted(n for n in now_ if now_[n] > was.get(n, 0))
-    if grew:
-        sys.exit(f"'{grew[0]}' cannot be a client or company name (a JavaScript object key); nothing was saved")
+    if not grew:
+        return
+    name = grew[0]
+    msg = f"'{clean(name.strip())}' cannot be a client or company name (a JavaScript object key); nothing was saved"
+    places = [where for v, where in reserved_name_places(before) if v == name]
+    if places:
+        shown = ", ".join(clean(w) for w in places[:5]) + (f" and {len(places) - 5} more" if len(places) > 5 else "")
+        fix = (f"rename it first with: keeptrack.py client-rename '{name}' NEW" if name in (before.get("clients") or [])
+               else "change each one first (task-set --client, project-set --client, person-set --company)")
+        msg += f". This board already stores it ({shown}), and this change would copy it once more; {fix}"
+    sys.exit(msg)
 
 
 def clean_domain(v):
@@ -9023,6 +9048,7 @@ def _cmd_archive(a):
     for attempt in range(6):
         data, base = load()
         guard_schema(data, write=not getattr(a, "dry_run", False)); migrate_data(data, min(SCHEMA, 3))
+        before = copy.deepcopy(data)   # kit v89: archive saves directly, so it runs the reserved-name check itself
         rules = archive_rules(data)
         for k in ("done_days", "lost_days", "keep_history"):
             if getattr(a, k) is not None:
@@ -9061,6 +9087,7 @@ def _cmd_archive(a):
             if not ref and slimmed:
                 if a.dry_run:
                     print(f"would slim {slimmed} decided proposal(s); nothing was saved"); return
+                refuse_new_reserved_names(before, data)
                 if save_changes(data, base, f"Slim {slimmed} Review Inbox proposal(s)"):
                     print(f"slimmed {slimmed} decided proposal(s)"); return
                 time.sleep(0.4 * (attempt + 1)); continue
@@ -9082,6 +9109,7 @@ def _cmd_archive(a):
                     task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
                 archive_index(data, y, cur); files[y] = (cur, sha)
             assign_nums(data)
+            refuse_new_reserved_names(before, data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
             ok = save_changes(data, base, msg, extra=extra)
         except UseGit:
@@ -9150,6 +9178,7 @@ def _cmd_unarchive(a):
     global WRITE
     for attempt in range(6):
         data, base = load(); guard_schema(data); migrate_data(data, min(SCHEMA, 3))
+        before = copy.deepcopy(data)   # kit v89: unarchive saves directly, so it runs the reserved-name check itself
         y, k, item, cur, sha = find_archived(data, base, a.ref.lstrip("#"))
         label = item.get("title") or item.get("name")
         if not any(x["id"] == item["id"] for x in data.setdefault(k, [])):
@@ -9163,6 +9192,7 @@ def _cmd_unarchive(a):
         idx["tasks"], idx["contacts"] = len(cur.get("tasks", [])), len(cur.get("contacts", []))   # counts come from the archive as it will be
         assign_nums(data)
         msg = f"Restore {label} from the archive"
+        refuse_new_reserved_names(before, data)   # a record whose client is reserved stays archived until client-rename
         try:
             ok = save_changes(data, base, msg, extra={f"archive/{y}.json": _json_text(cur)})
         except UseGit:

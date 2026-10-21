@@ -283,6 +283,12 @@ class HostedCLITest(unittest.TestCase):
         body = [c[2] for c in self.server.calls if c[0] == 'POST'][0]
         self.assertEqual(['ops', 'web'], body['card']['labels'])
 
+    def test_create_refuses_a_reserved_client(self):   # kit v89: the hosted add runs the same check as every save
+        for name in ('__proto__', ' constructor '):
+            p = self.run_cli('add', 'Synthetic reserved', '--client', name, code=1)
+            self.assertIn('cannot be a client or company name', p.stderr)
+        self.assertEqual([], [c for c in self.server.calls if c[0] == 'POST'])
+
     def test_legacy_board_api_still_works_with_a_note(self):   # kit v81: BOARD_HOSTED_API is the hosted URL now
         self.env['BOARD_API'] = self.env.pop('BOARD_HOSTED_API')
         p = self.run_cli('list', '--assignee', 'synthetic-a')
