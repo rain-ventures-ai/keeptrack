@@ -289,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 84  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 86  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -4415,6 +4415,11 @@ def _doctor_snapshot():
                    "base_tree": head.get("base_tree") if isinstance(head, dict) else None, "files": files}
 
 
+LIVE_FILE_MAX = 200 * 1024      # a live card, person or project file: read with every board load
+ARCHIVE_FILE_MAX = 900 * 1024   # an archive/<year>.json: read lazily, and kept under the 1 MB the GitHub contents API returns inline
+ARCHIVE_FILE_WARN = 700 * 1024  # doctor warns from here, so there is time to act before it fails
+
+
 def doctor_board(fix=False):
     """Return (issues, fixes, exit code). Each issue is safe to print or serialize."""
     try:
@@ -4693,7 +4698,16 @@ def doctor_board(fix=False):
         if total > 5 * 1024 * 1024:
             problem("BOARD_SIZE", "board", "The board files total more than 5 MB.")
         for rel, entry in state["files"].items():
-            if entry.get("size", len(entry["text"].encode())) > 200 * 1024:
+            size = entry.get("size", len(entry["text"].encode()))
+            if rel.startswith("archive/"):
+                # An archive file is read on demand (never with the live board), so it has its own, higher limit.
+                if size > ARCHIVE_FILE_MAX:
+                    problem("FILE_SIZE", rel, f"This archive file is larger than {ARCHIVE_FILE_MAX // 1024} KB. Ask for the "
+                            "archive to be split into parts (a kit change); do not edit the file by hand.")
+                elif size > ARCHIVE_FILE_WARN:
+                    problem("ARCHIVE_SIZE", rel, f"This archive file is {size // 1024} KB, close to the {ARCHIVE_FILE_MAX // 1024} KB "
+                            "limit at which doctor fails. Plan to split the archive into parts before then.")
+            elif size > LIVE_FILE_MAX:
                 problem("FILE_SIZE", rel, "This board file is larger than 200 KB.")
 
     typo_kit = 0   # min_kit above even the published kit is a typo: --fix lowers it to the published kit (this one at most)
@@ -5267,7 +5281,7 @@ CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
 DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS",
                              "KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "AGENT_CLEARED", "WAITING", "RELATED",
-                             "AFTER_MISSING", "GOAL", "GOAL_MISSING", "CLIENT_RECORD"})   # v43: detect, never stop the board; a missing after card is tolerated
+                             "AFTER_MISSING", "GOAL", "GOAL_MISSING", "CLIENT_RECORD", "ARCHIVE_SIZE"})   # v43: detect, never stop the board; a missing after card is tolerated
 
 
 def person_for_github(data, github):

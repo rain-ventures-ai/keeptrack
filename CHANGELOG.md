@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v86: an archive file has its own size limit (private-tasks card #284). `doctor` failed with `FILE_SIZE` as soon as
+`archive/<year>.json` passed 200 KB, and relay's `ci_checks.py` (which runs doctor) failed on every PR. The 200 KB
+limit protects the files every board load reads (cards, people, projects, `tasks.json`); an archive file is read only
+on demand (the Archive view, an archived-card lookup), so it now has its own limit: `doctor` warns (`ARCHIVE_SIZE`)
+from 700 KB and fails (`FILE_SIZE`) above 900 KB, safely under the 1 MB the GitHub contents API returns inline. Live
+files keep 200 KB, and the 5 MB total is unchanged. No migration and no data change. Splitting a year into parts is
+not done yet: it needs every reader of `archive/<year>.json` to change, so it is a follow-up for when an archive
+nears 900 KB.
+
 Kit v84: companies on the board, HubSpot style (private-tasks card #281). A company is every client name and every
 person's company, once each. `client_info[<company>]` gains four optional fields: `stage` (one of `settings.stages`),
 `owner` (a board member's login), `domain` and `notes`. Until a stage is set, a company shows the most advanced stage

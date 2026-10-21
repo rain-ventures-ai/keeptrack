@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v86 (schema 4)
+Archive files get their own size limit (private-tasks card #284). No migration, no data change.
+- `doctor` no longer fails an `archive/<year>.json` between 200 KB and 900 KB. It warns (`ARCHIVE_SIZE`) from 700 KB and
+  fails (`FILE_SIZE`) above 900 KB. Cards, people, projects and `tasks.json` keep the 200 KB limit.
+- Run `kit-update` only. Check: `python3 board/keeptrack.py doctor` shows no `FILE_SIZE` error for the archive.
+
 ### v84 (schema 4)
 Companies on the board (private-tasks card #281). No migration: a board whose companies have no record looks and works
 as before, and every company shows the stage worked out from its people.
