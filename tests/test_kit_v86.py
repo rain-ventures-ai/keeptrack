@@ -1,7 +1,10 @@
-"""Kit v86: an archive file has its own size limit (private-tasks card #284). Archive files are read on demand, so
-doctor warns from 700 KB and fails above 900 KB; a live board file keeps the 200 KB limit."""
+"""Kit v86: an archive year file has its own size limit (private-tasks card #284). Archive files load with the board
+(cached by blob sha); 900 KB is a chosen margin. doctor warns from 700 KB and fails above 900 KB; the archive command
+warns or refuses the same way; a live board file keeps the 200 KB limit."""
+import datetime
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -78,6 +81,64 @@ class ArchiveSize(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f)
         self.assertIn(("FILE_SIZE", f"cards/{card}"), self.codes())
+
+
+class ArchiveCommand(unittest.TestCase):
+    """`keeptrack.py archive` checks the year file it is about to write (split boards only)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = os.path.join(self.tmp.name, "board")
+        self.env = dict(os.environ, BOARD_USER="alex", BOARD_AGENT="claude", BOARD_SESSION="feedc0de11",
+                        BOARD_WRITE="local", BOARD_PROJECT="")
+        for k in ("BOARD_REPO", "BOARD_TOKEN", "BOARD_HOSTED_API", "BOARD_API"):
+            self.env.pop(k, None)
+        self.year = str(datetime.date.today().year)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_archive(self, fixture, kb):
+        copy_board_fixture(fixture, self.dir)
+        os.makedirs(os.path.join(self.dir, "archive"), exist_ok=True)
+        arch = os.path.join(self.dir, "archive", self.year + ".json")
+        with open(arch, "w", encoding="utf-8") as f:
+            json.dump({"version": 3, "archive": True, "year": self.year, "tasks": [], "contacts": [], "history": {},
+                       "pad": "x" * (kb * 1024)}, f)
+        file = os.path.join(self.dir, "tasks.json")
+        with open(file, encoding="utf-8") as f:
+            root = json.load(f)
+        cards = os.path.join(self.dir, "cards")
+        if os.path.isdir(cards):
+            items = []
+            for name in sorted(os.listdir(cards)):
+                with open(os.path.join(cards, name), encoding="utf-8") as f:
+                    items.append(json.load(f))
+        else:
+            items = root["tasks"]
+        ref = next(t["id"] for t in items if not t.get("claim") and not t.get("waiting"))
+        before = os.path.getsize(arch)
+        r = subprocess.run([sys.executable, os.path.join(KIT, "keeptrack.py"), "--file", file, "archive", ref],
+                           env=self.env, cwd=self.tmp.name, capture_output=True, text=True)
+        return r, before, os.path.getsize(arch)
+
+    def test_split_board_near_the_limit_warns_on_stderr(self):
+        r, _, _ = self.run_archive("v4_kit72", 710)
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+        self.assertIn("warning: archive/%s.json" % self.year, r.stderr)
+        self.assertIn("board owner", r.stderr)
+
+    def test_split_board_over_the_limit_refuses_and_writes_nothing(self):
+        r, before, after = self.run_archive("v4_kit72", 905)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("board owner", r.stdout + r.stderr)
+        self.assertIn("Nothing was written", r.stdout + r.stderr)
+        self.assertEqual(before, after)
+
+    def test_one_file_board_gets_no_split_size_message(self):
+        r, _, _ = self.run_archive("v3", 905)
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+        self.assertNotIn("board owner", r.stdout + r.stderr)
 
 
 class Docs(unittest.TestCase):

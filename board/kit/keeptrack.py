@@ -8987,6 +8987,7 @@ def _cmd_archive(a):
     global WRITE
     for attempt in range(6):
         data, base = load()
+        split = data.get("version") == 4 and data.get("layout") == "split"   # the size limits are checked on split boards only
         guard_schema(data, write=not getattr(a, "dry_run", False)); migrate_data(data, min(SCHEMA, 3))
         rules = archive_rules(data)
         for k in ("done_days", "lost_days", "keep_history"):
@@ -9048,15 +9049,20 @@ def _cmd_archive(a):
                 archive_index(data, y, cur); files[y] = (cur, sha)
             assign_nums(data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
+            size_notes = []
+            for rel, text in sorted(extra.items()):
+                found = archive_size_issue(rel, len(text.encode())) if split else None
+                if found and found[0] == "FILE_SIZE":
+                    sys.exit(f"refusing to archive: {rel} would be {len(text.encode()) // 1024} KB. {found[1]} Nothing was written.")
+                if found:
+                    size_notes.append(f"warning: {rel}: {found[1]}")
             ok = save_changes(data, base, msg, extra=extra)
         except UseGit:
             WRITE = "git"; continue
         if ok:
             print(f"archived {summary}")
-            for rel, text in sorted(extra.items()):
-                found = archive_size_issue(rel, len(text.encode()))
-                if found:
-                    print(f"{'warning' if found[0] == 'ARCHIVE_SIZE' else 'error'}: {rel}: {found[1]}")
+            for note in size_notes:
+                print(note, file=sys.stderr)
             return
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not archive after retries (board busy)")
