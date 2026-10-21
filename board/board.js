@@ -7942,7 +7942,11 @@ if (typeof window !== 'undefined') (() => {
         try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } if (!entry) break; const nextArchive = clone(entry.obj), fresh = normalise(got.data);
           const arch = (entry.obj[k] || []).find(x => x.id === item.id), h = (entry.obj.history || {})[item.id];   // the archive as it is now, not the copy the dialog showed
           const src = arch ? (h && h.length ? Object.assign({}, arch, { history: h.concat(arch.history || []) }) : arch) : item;
-          if (!fresh[k].some(x => x.id === item.id)) { const x = clone(src); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }
+          if (!fresh[k].some(x => x.id === item.id)) {
+            // kit v89 review: this save skips mutateNow, so it runs the reserved-name check itself before the record comes back
+            const grewName = reservedGrew(fresh, Object.assign({}, fresh, { [k]: fresh[k].concat([src]) }));
+            if (grewName != null) { toast(reservedSaveMsg(grewName, fresh), true); return; }
+            const x = clone(src); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }
           nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
           fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
           const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) });
@@ -8435,6 +8439,11 @@ if (typeof window !== 'undefined') (() => {
     finally { busy = false; syncUndo(); }
   }
   async function hostedArchive(entity, year, restoring = false) {
+    if (restoring) {   // kit v89 review: the server restores it from a command, so check here that it adds no reserved client or company
+      const k = entity.num ? 'tasks' : 'contacts', on = (state[k] || []).some(x => x && x.id === entity.id);
+      const grewName = on ? null : reservedGrew(state, Object.assign({}, state, { [k]: (state[k] || []).concat([entity]) }));
+      if (grewName != null) { toast(reservedSaveMsg(grewName, state), true); return false; }
+    }
     try {
       await hostedStorage.snapshot();
       const prefix = entity.num ? 'cards' : 'people', path = `${prefix}/${entity.id}.json`;

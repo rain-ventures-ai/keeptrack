@@ -14,7 +14,9 @@ archive). The hosted `add --client` runs it before posting. Board members' `own_
 `" __proto__"` to `"__proto__"` is refused (a padded name can still be renamed away). A command that would copy a
 reserved name already on the board (`todo-move`, `add --project`) names where it is stored and says how to clean it up.
 Web board: every save (GitHub and hosted) counts the same places and refuses one that adds a use, so picking an old
-reserved client from a list for a new task, a task sheet or a new project is refused with the same advice.
+reserved client from a list for a new task, a task sheet or a new project is refused with the same advice. Restoring
+an archived record is checked too (split boards, and the hosted unarchive in the page and the CLI), as is a hosted
+`add --project` whose project has a reserved client. `client-rm` keeps a reserved name while the archive still uses it.
 
 Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #281; v85 is the Archive view, card
 #283). A client with no people, no company record (stage, owner, domain, notes or north star), no files and no

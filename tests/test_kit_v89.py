@@ -2,7 +2,7 @@
 constructor and prototype as a client or company name at every mutate save; v89 also checks archive and unarchive
 (which save directly), the hosted add (tests/test_hosted_cli.py), board members' own_companies, counts by the exact
 stored string, and says where a copied name is and how to clean it up. The page check is in
-tests/browser/crm-drawers.test.js."""
+tests/browser/reserved-names.test.js."""
 import json
 import os
 import subprocess
@@ -99,6 +99,34 @@ class Board(unittest.TestCase):
         self.assertIn(REFUSED, self.kt("client-set", " constructor ", ok=False).stderr, "a padded new name is still refused")
         self.assertEqual({" __proto__": 1, "__proto__": 1}, dict(keeptrack.reserved_name_uses({"clients": [" __proto__", "__proto__"]})))
         self.kt("client-rename", " __proto__", "Proto Ltd")   # a padded old name can still be cleaned up
+
+    def test_client_rm_keeps_a_reserved_name_the_archive_still_uses(self):   # kit v89 review
+        self.add_client("__proto__")
+        self.set_field("cards/t_second.json", client="__proto__")
+        self.kt("archive", "#2")
+        r = self.kt("client-rm", "__proto__", ok=False)   # once removed, nothing could rename it in the archive
+        self.assertIn("archived item", r.stderr); self.assertIn("client-rename", r.stderr)
+        self.assertIn("__proto__", self.read("tasks.json")["clients"])
+        self.kt("client-rename", "__proto__", "Proto Ltd")
+        self.kt("unarchive", "#2")
+
+    def test_the_fix_hint_never_prints_a_control_character(self):   # kit v89 review: the stored name is board data
+        before = {"clients": ["\r__proto__"]}
+        with self.assertRaises(SystemExit) as e:
+            keeptrack.refuse_new_reserved_names(before, {"clients": ["\r__proto__"], "tasks": [{"num": 1, "client": "\r__proto__"}]})
+        self.assertNotIn("\r", str(e.exception))
+        self.assertIn('client-rename "\\r__proto__" NEW', str(e.exception))
+
+    def test_archive_keeps_only_a_small_snapshot(self):   # kit v89 review: no deep copy of the whole board per attempt
+        snap = keeptrack.reserved_snapshot({"clients": ["Acme", "__proto__"], "client_info": {"Acme": {}, "constructor": {}},
+                                            "tasks": [{"num": 1, "client": "Acme"}, {"num": 2, "client": "__proto__", "details": "x" * 50}],
+                                            "people": [{"github": "alex", "own_companies": ["Acme"]}, {"github": "sam", "own_companies": ["prototype"]}]})
+        self.assertEqual({"clients": ["__proto__"], "client_info": {"constructor": None},
+                          "tasks": [{"num": 2, "name": None, "title": None, "id": None, "client": "__proto__"}], "projects": [], "contacts": [],
+                          "people": [{"github": "sam", "own_companies": ["prototype"]}]}, snap)
+        src = open(KT, encoding="utf-8").read()
+        for fn in ("def _cmd_archive(a):", "def _cmd_unarchive(a):"):
+            self.assertIn("before = reserved_snapshot(data)", src.split(fn, 1)[1].split("\ndef ", 1)[0], fn)
 
     def test_copied_name_says_where_it_is_and_how_to_clean_it_up(self):
         self.add_client("__proto__")

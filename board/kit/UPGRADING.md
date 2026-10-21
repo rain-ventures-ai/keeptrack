@@ -36,7 +36,9 @@ v87 and v88 are other kit changes in flight; these can land in any order.
   renames it in the archive and in `own_companies`), or `task-set --client` / `project-set --client` /
   `person-set --company` when it is not.
 - Web board: every save is checked the same way, so picking an old reserved client from a list (new task, task sheet,
-  new project) is refused with the same advice.
+  new project) is refused with the same advice. Restoring an archived record (split boards, hosted boards) and the
+  hosted `add --project` are checked too, and `client-rm` keeps a reserved name while the archive still uses it, so
+  `client-rename` can still clean it up there.
 - Run `kit-update` only. Check: `kit-check` says v89, and on a board whose client list has `__proto__`,
   `python3 board/keeptrack.py member-set <you> --own-company __proto__` is refused.
 

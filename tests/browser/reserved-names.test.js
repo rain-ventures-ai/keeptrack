@@ -2,7 +2,8 @@
 // Kit v89 (private-tasks card #287): every page save counts the places a client or company name is stored and refuses
 // one that stores __proto__, constructor or prototype in one more place than the board had. An old board that already
 // has "__proto__" as a client: picking it for a task from the client list is refused with advice, nothing is written,
-// Object.prototype is untouched, and an ordinary pick still saves.
+// Object.prototype is untouched, and an ordinary pick still saves. Restoring an archived card with that client on a split
+// board is refused the same way (kit v89 review).
 // Run: node reserved-names.test.js
 
 const assert = require('node:assert/strict');
@@ -89,6 +90,22 @@ class Github {
     await page.locator('#cPrio').selectOption('high');
     for (let i = 0; i < 100 && api.card('t_two').priority !== 'high'; i++) await page.waitForTimeout(100);
     assert.equal(api.card('t_two').priority, 'high', 'editing a card that already has the old name is not a new use');
+    assert.deepEqual(errors, []);
+
+    // kit v89 review: restoring an archived card on a split board saves directly (not through mutateNow), so it runs the
+    // same check: a card whose client is the old reserved name stays archived, with the advice, and nothing is written
+    const arch = new Github(), r0 = JSON.parse(arch.files['tasks.json']); r0.archive.files = { 2025: { tasks: 1, contacts: 0 } }; arch.files['tasks.json'] = text(r0);
+    arch.files['archive/2025.json'] = text({ version: 4, archive: true, year: '2025', tasks: [card('t_three', 3, 'Third', { client: '__proto__', column: 'done' })], contacts: [] });
+    const ap = await browser.newPage({ viewport: { width: 1280, height: 900 } }); ap.on('pageerror', e => errors.push(e.message));
+    await ap.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board'); });
+    await ap.route('https://api.test/**', r => arch.route(r)); await ap.goto(base + '/board/index.html'); await ap.waitForSelector('.card');
+    const archBefore = JSON.stringify(arch.files), archWrites = arch.writes;
+    await ap.locator('#btnSearch').click(); await ap.locator('#qArch').check(); await ap.locator('#qQ').fill('Third'); await ap.locator('.qhit', { hasText: 'Third' }).click(); await ap.locator('#aRestore').click();
+    const archToast = ap.locator('.ui-toast', { hasText: 'cannot be a client or company name' }); await archToast.waitFor();
+    assert.match(await archToast.textContent(), /client-rename '__proto__' NEW/, 'the refused restore says how to clean the old name up');
+    await ap.waitForTimeout(300);
+    assert.equal(arch.writes, archWrites, 'a refused restore writes nothing'); assert.equal(JSON.stringify(arch.files), archBefore);
+    assert.equal(arch.card('t_three'), null, 'the card stays archived');
     assert.deepEqual(errors, []);
     console.log('reserved-names: ok');
   } finally { await browser.close(); server.close(); }

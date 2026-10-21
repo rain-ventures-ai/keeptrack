@@ -289,6 +289,19 @@ class HostedCLITest(unittest.TestCase):
             self.assertIn('cannot be a client or company name', p.stderr)
         self.assertEqual([], [c for c in self.server.calls if c[0] == 'POST'])
 
+    def test_create_refuses_a_reserved_client_copied_from_its_project(self):   # kit v89 review: as the local add --project
+        self.server.files['projects/pr_sample.json']['client'] = '__proto__'
+        p = self.run_cli('add', 'Synthetic project card', '--project', 'pr_sample', code=1)
+        self.assertIn('cannot be a client or company name', p.stderr); self.assertIn('project Synthetic Project', p.stderr)
+        self.assertEqual([], [c for c in self.server.calls if c[0] == 'POST'])
+        self.run_cli('add', 'Synthetic own client', '--project', 'pr_sample', '--client', 'Example Company')   # its own client copies nothing
+
+    def test_unarchive_refuses_a_reserved_client(self):   # kit v89 review: the server restores it, so the CLI checks it first
+        self.server.files['archive/2025.json']['tasks'][0]['client'] = '__proto__'
+        p = self.run_cli('unarchive', '#2', code=1)
+        self.assertIn('cannot be a client or company name', p.stderr)
+        self.assertEqual([], [c for c in self.server.calls if c[0] == 'POST'])
+
     def test_legacy_board_api_still_works_with_a_note(self):   # kit v81: BOARD_HOSTED_API is the hosted URL now
         self.env['BOARD_API'] = self.env.pop('BOARD_HOSTED_API')
         p = self.run_cli('list', '--assignee', 'synthetic-a')
