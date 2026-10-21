@@ -28,11 +28,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v86 (schema 4)
 Companies follow-up: the review fixes for v84 (card #281 on the owner's board). No migration and no data change. v85
 is the Archive view (card #283); the two can land in either order.
-- keeptrack.py refuses `__proto__`, `constructor` and `prototype` as a client or company name, treats a stored company
-  stage that is not in `settings.stages` as unset, clears `client-set --notes` given only whitespace, and prints
-  `clients` names through the terminal guard.
-- Web board: a client with no people and no company record is left out of Companies and the company pipeline (still a
-  client); the company menu says "Show only this company" and "Copy company name"; `client_info` is read and created
+- keeptrack.py never creates `__proto__`, `constructor` or `prototype` as a client or company name: the commands that
+  create one refuse it, `import` skips it with a report line and `proposal-accept` refuses a proposal that names one.
+  `client-rm` and `client-rename OLD NEW` still accept such an OLD name, so it can be cleaned up. A stored company
+  stage that is not in `settings.stages` counts as unset, `client-set --notes` given only whitespace clears the notes,
+  and `clients` prints names through the terminal guard and skips records whose client or company is not text.
+- Web board: a client with no people, no company record (stage, owner, domain, notes or north star), no files and no
+  projects is left out of Companies and the company pipeline (still a client); the company menu says "Show only this company" and "Copy company name"; `client_info` is read and created
   only as own properties.
 - Run `kit-update` only. Check: `kit-check` says v86, and `python3 board/keeptrack.py client-set __proto__` is refused.
 

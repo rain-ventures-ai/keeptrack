@@ -5686,7 +5686,7 @@ def set_fields(data, p, a):
     due = check_date(getattr(a, "due", None), data)
     if due is not None and due != p.get("next_due", ""):
         p["next_due"] = due; changed.append(f"next step date: {due or 'cleared'}")
-    if p.get("company") and p["company"] not in data.setdefault("clients", []):
+    if p.get("company") and not reserved_name(p["company"]) and p["company"] not in data.setdefault("clients", []):
         data["clients"].append(p["company"])
     return changed
 
@@ -5865,13 +5865,19 @@ CLIENT_FIELDS = ("stage", "owner", "domain", "notes")   # kit v84: a company's o
 RESERVED_NAMES = ("__proto__", "constructor", "prototype")   # JavaScript object keys: the web board would read them off Object.prototype
 
 
+def reserved_name(v):
+    return isinstance(v, str) and v.strip() in RESERVED_NAMES
+
+
 def refuse_reserved_names(a):
-    """A client or company name the web board cannot store safely (kit v84 review) is refused before anything is written."""
-    for k in ("client", "company", "new"):
-        v = getattr(a, k, None)
-        for x in (v if isinstance(v, list) else [v]):
-            if isinstance(x, str) and x.strip() in RESERVED_NAMES:
-                sys.exit(f"'{x.strip()}' cannot be a client or company name")
+    """A client or company name the web board cannot store safely (kit v84 review) is refused when a command would CREATE
+    it. Commands that only read, filter, or remove and rename an existing name (client-rm, client-rename's old name,
+    client-link/unlink, list/projects --client) still accept it, so a bad name already on the board can be cleaned up."""
+    creates = {"cmd_client_set": ("client",), "cmd_add": ("client",), "cmd_task_set": ("client",), "cmd_project_add": ("client",),
+               "cmd_project_set": ("client",), "cmd_person_add": ("company",), "cmd_person_set": ("company",), "cmd_client_rename": ("new",)}
+    for k in creates.get(getattr(getattr(a, "f", None), "__name__", ""), ()):
+        if reserved_name(getattr(a, k, None)):
+            sys.exit(f"'{getattr(a, k).strip()}' cannot be a client or company name")
 
 
 def clean_domain(v):
@@ -6583,7 +6589,7 @@ def cmd_clients(a):
     by = {k: collections.defaultdict(list) for k in ("tasks", "projects", "contacts")}
     for k, field in (("tasks", "client"), ("projects", "client"), ("contacts", "company")):
         for x in data.get(k, []) or []:
-            if isinstance(x, dict) and x.get(field):
+            if isinstance(x, dict) and isinstance(x.get(field), str) and x[field]:   # a hand-edited non-string never crashes clients
                 by[k][x[field]].append(x)
     infos = data.get("client_info") if isinstance(data.get("client_info"), dict) else {}
     for c in data.get("clients", []):
@@ -7484,12 +7490,20 @@ def apply_staging(data, st, label):
     by = who_am_i()
 
     def add_client(name):
-        if name and name not in clients:
+        if name and not reserved_name(name) and name not in clients:
             clients.append(name); say(f"+ company  {name}"); out["added"] += 1
 
+    def bad(what, name):   # kit v86: a JavaScript prototype key is never stored as a client or company name
+        if not reserved_name(name):
+            return False
+        say(f"! skipped  {what}: '{name.strip()}' cannot be a client or company name"); out.setdefault("skipped", 0); out["skipped"] += 1
+        return True
+
     for c in st.get("companies", []):
-        add_client(_s(c if isinstance(c, str) else c.get("name")))
+        name = _s(c if isinstance(c, str) else c.get("name"))
+        if not bad("company", name): add_client(name)
     for p in st.get("people", []):
+        if bad(f"person {_s(p.get('name'))}", _s(p.get("company"))): continue
         ev = _s(p.get("evidence")) or label
         q = _match_person(people, p)
         if q is None:
@@ -7516,6 +7530,7 @@ def apply_staging(data, st, label):
             out["same"] += 1
     for f in st.get("folders", []):
         name, url = _s(f["company"]), _folder_url(f["url"])
+        if bad("folder", name): continue
         links = info.setdefault(name, {}).setdefault("links", [])
         if any(_norm_url(l.get("url")) == _norm_url(url) for l in links):
             out["same"] += 1; continue
@@ -7524,6 +7539,7 @@ def apply_staging(data, st, label):
     tasks = data.setdefault("tasks", [])
     for t in st.get("tasks", []):
         title, client = _s(t["title"]), _s(t.get("client"))
+        if bad(f"task {title}", client): continue
         urls = {_norm_url(l["url"]) for l in t.get("links") or []}
         if any((_s(x.get("title")).lower(), _s(x.get("client")).lower()) == (title.lower(), client.lower())
                or urls & {_norm_url(l.get("url")) for l in x.get("links") or []} for x in tasks):
@@ -8286,7 +8302,7 @@ def _new_person(data, proposal, change):
     for key, value in change.items(): person["next_due" if key == "due" else key] = copy.deepcopy(value)
     sync_person_methods(person); hist(person, f"created from proposal {proposal['id']}")
     data.setdefault("contacts", []).append(person)
-    if person.get("company") and person["company"] not in data.setdefault("clients", []): data["clients"].append(person["company"])
+    if person.get("company") and not reserved_name(person["company"]) and person["company"] not in data.setdefault("clients", []): data["clients"].append(person["company"])
     return person, False
 
 
@@ -8419,6 +8435,9 @@ def cmd_proposal_accept(a):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "accepted"); _agent_decides(proposal, "accept", a)
         change, edited = _edit_change(proposal, a.edit)
+        for k in ("client", "company"):   # kit v86: never store a JavaScript prototype key as a client or company name
+            if reserved_name(change.get(k)):
+                proposal_error(f"'{change[k].strip()}' cannot be a client or company name; edit the proposal (--edit) or reject it")
         kind = proposal["kind"]
         target = _check_proposal_base(data, proposal)
         before, recovered = copy.deepcopy(target), False

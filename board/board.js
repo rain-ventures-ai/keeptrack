@@ -5696,7 +5696,7 @@ if (typeof window !== 'undefined') (() => {
     ui.menu(anchor, items, { label: `Actions for ${co}` });
   }
   const clientEdit = (fn, msg) => { const co = editingClient; if (!co || refuseName(co)) return; return mutate(n => { const ci = infoFor(n, co); fn(ci); if (!n.clients.includes(co)) n.clients.push(co); }, msg); };
-  $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co) return; mutate(n => { const ci = infoFor(n, co); ci.north_star = v; }, `North star: ${co}`); });
+  $('clNorth').addEventListener('change', () => { const co = editingClient, v = $('clNorth').value; if (!co || refuseName(co)) return; mutate(n => { const ci = infoFor(n, co); ci.north_star = v; }, `North star: ${co}`); });
   $('clStage').onchange = e => { const co = editingClient, v = e.target.value; if (co) setCompanyStage(co, v); };
   $('clOwner').onchange = e => { const v = e.target.value; clientEdit(ci => { if (v) ci.owner = v; else delete ci.owner; }, `Owner: ${editingClient}`); };
   const cleanDomain = v => String(v || '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0].trim().toLowerCase();   // as keeptrack.py client-set --domain
@@ -5713,7 +5713,7 @@ if (typeof window !== 'undefined') (() => {
     mutate(n => { n.projects = n.projects || []; n.projects.push(pr); if (!n.clients.includes(co)) n.clients.push(co); }, `Add project: ${name}`).then(ok => { if (ok) openProject(pr.id); });
   }
   function addClientFile(co, title, url) {
-    if (!co) return false; const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return false; }
+    if (!co || refuseName(co)) return false; const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or a local path.', true); return false; }
     mutate(n => { const ci = infoFor(n, co); ci.links = ci.links || []; if (!ci.links.some(y => y.url === l.url)) ci.links.push(l); }, `Files: ${co}`);
   }
 
@@ -6170,6 +6170,7 @@ if (typeof window !== 'undefined') (() => {
     const fresh = normalise(got.data), change = clone(opts.change || p.change || {});
     if (action !== 'ignore' && Array.isArray(change.after) && change.after.some(x => !fresh.tasks.some(t => t.id === x)) && !archIdsNow(fresh)) { try { await loadArchived(); } catch { /* not loaded: an off-board id is not refused */ } }
     if (action !== 'ignore') { const why = proposalRefusal(p, change, fresh, action, opts.into ? { into: opts.into, fields: opts.fields || [] } : null); if (why) { inboxSay(why, true); return false; } }
+    if (action !== 'ignore' && ['client', 'company'].some(k => refuseName(change[k]))) { inboxSay('Not saved: edit the proposal\'s client or company, or ignore it.', true); return false; }   // as keeptrack.py proposal-accept
     const edited = opts.change ? Object.fromEntries(Object.entries(opts.change).filter(([k, v]) => !sameJson((p.change || {})[k], v))) : null;
     let expect = {}, note = '';
     if (action !== 'ignore' && p.target) {
@@ -7255,10 +7256,11 @@ if (typeof window !== 'undefined') (() => {
       last: contacts.map(lastTouch).filter(Boolean).sort().pop() || '', value: contacts.reduce((a, p) => a + money(p.value), 0), own: companyIdentity(name) };
   }
   const companyFilter = () => { const fc = clientValues(); return name => !fc.length || fc.includes(name); };   // reads the client pills once
-  // A name with no people and no company record (stage, owner, domain, notes) is a bucket for tasks, not a CRM company:
+  // A name with no people, no company record (stage, owner, domain, notes, north star), no files and no projects is a bucket for tasks, not a CRM company:
   // it stays a client (task client, the top chips) but is left out of Companies and the company pipeline. Own companies stay.
   const COMPANY_FIELDS = ['stage', 'owner', 'domain', 'notes'];
-  const listedCompany = f => !!f.own || f.people.length > 0 || COMPANY_FIELDS.some(k => typeof f.info[k] === 'string' && f.info[k].trim());
+  const listedCompany = f => !!f.own || f.people.length > 0 || [...COMPANY_FIELDS, 'north_star'].some(k => typeof f.info[k] === 'string' && f.info[k].trim())
+    || (Array.isArray(f.info.links) && f.info.links.length > 0) || projectsForClient(f.name).length > 0;   // a client with projects, files or a north star is a real client
   function companyStagePill(f) {   // a derived stage reads the same, outlined, and says where it comes from
     if (!f.stage) return el('span', 'nostage muted', 'No stage');
     const b = stagePill(f.stage); if (f.stage && !f.stored) { b.classList.add('derived'); b.title = `${f.stage}: the most advanced stage among its people. Set the company's own stage in its record.`; }
@@ -7289,7 +7291,7 @@ if (typeof window !== 'undefined') (() => {
       .filter(listedCompany).filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => (!!b.own - !!a.own) || order(a.stage) - order(b.stage) || String(b.last).localeCompare(String(a.last)) || a.name.localeCompare(b.name));   // own companies first, as members are in People
     capList('companies', items, companyRow, wrap);
-    if (!items.length) wrap.append(ui.empty({ text: companyNames().map(companyFacts).some(listedCompany) ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
+    if (!items.length) wrap.append(ui.empty({ text: companyNames().some(n => listedCompany(companyFacts(n))) ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
     board.append(wrap);
   }
 
@@ -7546,7 +7548,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonLink(title, url) { const p = contactNow(), l = parseNamedLink(title, url, false); if (!p) return false; if (!l) { toast('Enter an http:// or https:// link.', true); return false; } pedit(p.id, x => { if (!x.links.some(y => y.url === l.url)) x.links.push(l); syncContactLegacy(x); }, `Links: ${p.name}`); }
   function addCompanyFile(title, url) { const p = contactNow(); if (!p || !p.company) return false; return addClientFile(p.company, title, url); }
-  $('pNorthStar').addEventListener('change', () => { const p = contactNow(), co = p && p.company, v = $('pNorthStar').value; if (!co) return; mutate(n => { const ci = infoFor(n, co); ci.north_star = v; }, `North star: ${co}`); });
+  $('pNorthStar').addEventListener('change', () => { const p = contactNow(), co = p && p.company, v = $('pNorthStar').value; if (!co || refuseName(co)) return; mutate(n => { const ci = infoFor(n, co); ci.north_star = v; }, `North star: ${co}`); });
   const openPersonClient = () => { const p = contactNow(); if (p && p.company) { $('dlgContact').close(); openClient(p.company); } };
   $('pClientOpen').onclick = openPersonClient;
   $('pTouchPost').onclick = logTouch;

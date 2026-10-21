@@ -79,6 +79,56 @@ class Board(unittest.TestCase):
             self.assertIn("cannot be a client or company name", self.kt(*args, ok=False).stderr, args)
         self.assertEqual(before, self.root())
 
+    def test_an_existing_reserved_name_can_be_cleaned_up(self):
+        root = self.root(); root["clients"] += ["__proto__", "prototype"]; self.write_root(root)
+        self.assertIn("removed client __proto__", self.kt("client-rm", "__proto__").stdout)
+        self.assertIn("renamed client prototype -> Proto Ltd", self.kt("client-rename", "prototype", "Proto Ltd").stdout)
+        self.assertNotIn("__proto__", self.root()["clients"]); self.assertIn("Proto Ltd", self.root()["clients"])
+        self.kt("list", "--all", "--client", "constructor")   # a filter is not a write
+
+    def test_import_skips_reserved_names(self):
+        staging = os.path.join(self.tmp.name, "staging.json")
+        with open(staging, "w", encoding="utf-8") as f:
+            json.dump({"companies": ["__proto__", "Good Co"], "people": [{"name": "Robin Proto", "company": "constructor"}],
+                       "folders": [{"company": "prototype", "url": "https://drive.google.com/x"}],
+                       "tasks": [{"title": "Proto task", "client": "__proto__"}]}, f)
+        out = self.kt("import", staging).stdout
+        self.assertEqual(4, out.count("! skipped"), out)
+        root = self.root()
+        self.assertIn("Good Co", root["clients"])
+        self.assertFalse(set(root["clients"]) & set(keeptrack.RESERVED_NAMES))
+        self.assertFalse(set(root["client_info"]) & set(keeptrack.RESERVED_NAMES))
+        self.assertNotIn("Robin Proto", self.kt("people").stdout)
+        self.assertNotIn("Proto task", self.kt("list", "--all").stdout)
+
+    def test_proposal_naming_a_reserved_client_cannot_be_accepted(self):
+        props = os.path.join(self.tmp.name, "props.json")
+        with open(props, "w", encoding="utf-8") as f:
+            json.dump([{"kind": "task.create", "title": "Proto task", "action_key": "ak-proto", "work_key": "wk-proto", "reason": "test",
+                        "source": {"kind": "meeting", "id": "doc-1", "revision": "1", "title": "M", "date": "2026-10-08", "url": "https://example.invalid/m"},
+                        "change": {"title": "Proto task", "client": "__proto__"}}], f)
+        env = dict(self.env); env.pop("BOARD_AGENT", None); env["HOME"] = self.tmp.name
+        run = lambda *args: subprocess.run([sys.executable, KT, "--file", self.file, *args], env=env, cwd=self.tmp.name, capture_output=True, text=True)
+        added = run("proposal-add", props)
+        self.assertEqual(0, added.returncode, added.stderr)
+        listed = run("proposals", "--json"); self.assertEqual(0, listed.returncode, listed.stderr)
+        data = json.loads(listed.stdout); items = data if isinstance(data, list) else data.get("proposals", [])
+        pid = next(x["id"] for x in items if x.get("title") == "Proto task")
+        r = run("proposal-accept", pid)
+        self.assertNotEqual(0, r.returncode); self.assertIn("cannot be a client or company name", r.stderr)
+        self.assertNotIn("Proto task", self.kt("list", "--all").stdout)
+        self.assertNotIn("__proto__", self.root()["clients"])
+
+    def test_clients_skips_records_that_are_not_text(self):
+        self.kt("person-add", "Robin Doe", "--company", "Acme")
+        path = next(os.path.join(self.dir, "people", f) for f in os.listdir(os.path.join(self.dir, "people")))
+        with open(path, encoding="utf-8") as f:
+            person = json.load(f)
+        person["company"] = {"a": 1}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(person, f)
+        self.assertIn("Acme  (", self.kt("clients").stdout)
+
     def test_whitespace_notes_clear_and_stale_stage_is_unset(self):
         self.kt("client-set", "Acme", "--notes", "Keep")
         self.assertIn("notes for Acme cleared", self.kt("client-set", "Acme", "--notes", "   ").stdout)

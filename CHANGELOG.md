@@ -7,11 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #281; v85 is the Archive view, card
-#283). A client with no people and no company record (no stage, owner, domain or notes), such as a "General" bucket for
-tasks, is left out of Companies and the company pipeline; it stays a client for tasks and the client pills. The company
-record's menu reads "Show only this company" and "Copy company name". `__proto__`, `constructor` and `prototype` are
-refused as client or company names in keeptrack.py and on the page, and the page reads and creates `client_info`
-entries only as own properties. A stored company stage the board no longer has counts as unset (the stage from its
+#283). A client with no people, no company record (stage, owner, domain, notes or north star), no files and no
+projects, such as a "General" bucket for tasks, is left out of Companies and the company pipeline; it stays a client
+for tasks and the client pills. The company record's menu reads "Show only this company" and "Copy company name".
+`__proto__`, `constructor` and `prototype` are never created as a client or company name: keeptrack.py refuses them in
+the commands that create one (client-set, add, task-set, project-add, project-set, person-add, person-set and
+client-rename's new name), `import` skips them with a report line, and a proposal that names one cannot be accepted (on
+the page or with `proposal-accept`). client-rm, client-rename's old name and the filters still accept them, so a bad
+name already on a board can be removed. The page reads and creates `client_info` entries only as own properties and
+refuses those names wherever it would create one. `clients` skips a record whose client or company is not text. A stored company stage the board no longer has counts as unset (the stage from its
 people shows). `client-set --notes` with only whitespace clears the notes. `clients` prints every name through the
 terminal guard and groups people by company once.
 
