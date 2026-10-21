@@ -289,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 84  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 86  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1318,6 +1318,7 @@ class HostedStorageAdapter:
             if lost is None:
                 with contextlib.redirect_stdout(out):
                     result = fn(data)
+                refuse_new_reserved_names(base, data)
                 wanted = copy.deepcopy(data)
                 output = out.getvalue()
                 lost = (base, wanted)
@@ -1918,6 +1919,7 @@ def _mutate(fn, message):
             _MUT["base"], _MUT["extra"], _MUT["recheck"], _MUT["rerun"], _MUT["after"] = sha, {}, False, False, []
             with contextlib.redirect_stdout(out):
                 result = fn(data)
+            refuse_new_reserved_names(base, data)
             assign_nums(data)
         else:
             # Someone saved first. Three-way merge: what we first loaded, what we wanted to save, what is there now.
@@ -5040,6 +5042,9 @@ def cmd_kit_owner(a):
 
 
 def cmd_init(a):
+    for c in a.client or []:   # kit v86: refused before anything else, as at every write
+        if reserved_name(c):
+            sys.exit(f"'{c.strip()}' cannot be a client or company name")
     need_repo_clone()
     """Set up a new board repo in this clone: the kit, the repo-owned starter files (only if missing) and an empty board."""
     if not REPO:
@@ -5686,7 +5691,7 @@ def set_fields(data, p, a):
     due = check_date(getattr(a, "due", None), data)
     if due is not None and due != p.get("next_due", ""):
         p["next_due"] = due; changed.append(f"next step date: {due or 'cleared'}")
-    if p.get("company") and p["company"] not in data.setdefault("clients", []):
+    if p.get("company") and not reserved_name(p["company"]) and p["company"] not in data.setdefault("clients", []):
         data["clients"].append(p["company"])
     return changed
 
@@ -5862,6 +5867,36 @@ def cmd_sent(a):
 
 
 CLIENT_FIELDS = ("stage", "owner", "domain", "notes")   # kit v84: a company's own record in client_info (all optional)
+RESERVED_NAMES = ("__proto__", "constructor", "prototype")   # JavaScript object keys: the web board would read them off Object.prototype
+
+
+def reserved_name(v):
+    return isinstance(v, str) and v.strip() in RESERVED_NAMES
+
+
+def reserved_name_uses(data):
+    """How often each reserved name is stored where a client or company name lives: the client list, client_info keys,
+    a card's client, a project's client and a person's company."""
+    uses = collections.Counter()
+    def note(v):
+        if reserved_name(v): uses[v.strip()] += 1
+    for c in data.get("clients") or []: note(c)
+    if isinstance(data.get("client_info"), dict):
+        for k in data["client_info"]: note(k)
+    for key, field in (("tasks", "client"), ("projects", "client"), ("contacts", "company")):
+        for x in data.get(key) or []:
+            if isinstance(x, dict): note(x.get(field))
+    return uses
+
+
+def refuse_new_reserved_names(before, after):
+    """Kit v86: every write path ends here. A save that would store a reserved name (__proto__, constructor, prototype) in
+    one more place than the board had before is refused, whichever command, import, proposal or field caused it. A save
+    that only removes or renames one (client-rm, client-rename OLD NEW) has fewer uses, so a bad name can be cleaned up."""
+    was, now_ = reserved_name_uses(before), reserved_name_uses(after)
+    grew = sorted(n for n in now_ if now_[n] > was.get(n, 0))
+    if grew:
+        sys.exit(f"'{grew[0]}' cannot be a client or company name (a JavaScript object key); nothing was saved")
 
 
 def clean_domain(v):
@@ -5882,16 +5917,19 @@ def member_login(data, u):
     return m["github"]
 
 
-def company_stage(data, company):
+def company_stage(data, company, ml=None, contacts=None):
     """(stage, derived): the company's own stage (client_info[company].stage, kit v84), or, until one is set, the most
     advanced stage among its people (stage order from settings.stages; a lost person never outranks a live one).
     Board members' own records do not count. ("", True) when it has no people with a known stage."""
-    own = ((data.get("client_info") or {}).get(company) or {}).get("stage")
-    if isinstance(own, str) and own:
+    infos = data.get("client_info") if isinstance(data.get("client_info"), dict) else {}
+    entry = infos.get(company) if isinstance(company, str) else None
+    own = entry.get("stage") if isinstance(entry, dict) else None
+    order = list(stages(data))
+    if isinstance(own, str) and own in order:   # a stage the board no longer has counts as unset
         return own, False
-    order = list(stages(data)); ml = member_logins(data); best = ""
+    ml = member_logins(data) if ml is None else ml; best = ""
     rank = lambda s: -1 if s.lower() == "lost" else order.index(s)
-    for p in data.get("contacts", []):
+    for p in (data.get("contacts", []) if contacts is None else contacts):
         s = p.get("stage")
         if p.get("company") != company or s not in order or own_member(p, ml):
             continue
@@ -5916,7 +5954,7 @@ def cmd_client_set(a):
         if got["domain"] is not None:
             values["domain"] = clean_domain(got["domain"])
         if got["notes"] is not None:
-            values["notes"] = got["notes"].strip("\n")
+            values["notes"] = got["notes"].strip("\n") if got["notes"].strip() else ""   # only whitespace clears it
         for k in CLIENT_FIELDS:
             if k not in values:
                 continue
@@ -6568,18 +6606,27 @@ def company_members(data, company):
 
 def cmd_clients(a):
     data, _ = load()
+    ml = member_logins(data)   # once, not per client (kit v84 review)
+    by = {k: collections.defaultdict(list) for k in ("tasks", "projects", "contacts")}
+    for k, field in (("tasks", "client"), ("projects", "client"), ("contacts", "company")):
+        for x in data.get(k, []) or []:
+            if isinstance(x, dict) and isinstance(x.get(field), str) and x[field]:   # a hand-edited non-string never crashes clients
+                by[k][x[field]].append(x)
+    infos = data.get("client_info") if isinstance(data.get("client_info"), dict) else {}
     for c in data.get("clients", []):
-        tasks, projects, people = _client_refs(data, c)
-        info = data.get("client_info", {}).get(c, {}) or {}
+        if not isinstance(c, str):   # a hand-edited entry that is not text is skipped, never a crash
+            continue
+        tasks, projects, people = by["tasks"].get(c, []), by["projects"].get(c, []), by["contacts"].get(c, [])
+        info = infos.get(c) if isinstance(infos.get(c), dict) else {}
         ns = info.get("north_star", "")
         members = company_members(data, c)
-        marker = "  [Board member company: " + ", ".join("@" + m["github"] for m in members) + "]" if members else ""
-        stage, derived = company_stage(data, c)   # kit v84: the company record
+        marker = "  [Board member company: " + ", ".join("@" + clean(m["github"]) for m in members) + "]" if members else ""
+        stage, derived = company_stage(data, c, ml, people)   # kit v84: the company record
         record = (f"  stage: {clean(stage)}" + (" (from its people)" if derived else "") if stage else "") \
             + (f"  owner: @{clean(info['owner'])}" if info.get("owner") else "") + (f"  domain: {clean(info['domain'])}" if info.get("domain") else "")
         notes = clean(str(info.get("notes") or "").replace("\n", " "), 80)
-        print(f"{c}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + marker + record
-              + (f"  north star: {ns}" if ns else "") + (f"  notes: {notes}" if notes.strip() else ""))
+        print(f"{clean(c)}  ({len(tasks)} tasks, {len(projects)} projects, {len(people)} people)" + marker + record
+              + (f"  north star: {clean(ns)}" if ns else "") + (f"  notes: {notes}" if notes.strip() else ""))
     if not data.get("clients"):
         print("(no clients)")
 
@@ -7459,19 +7506,27 @@ def _match_person(people, p):
 
 def apply_staging(data, st, label):
     """Apply the staging file to data. Returns counts and report lines. Never overwrites a field that has a value."""
-    out = {"added": 0, "filled": 0, "same": 0, "lines": []}
+    out = {"added": 0, "filled": 0, "same": 0, "skipped": 0, "lines": []}
     say = out["lines"].append
     people = data.setdefault("contacts", []); clients = data.setdefault("clients", [])
     info = data.setdefault("client_info", {})
     by = who_am_i()
 
     def add_client(name):
-        if name and name not in clients:
-            clients.append(name); say(f"+ company  {name}"); out["added"] += 1
+        if name and not reserved_name(name) and name not in clients:
+            clients.append(name); say(f"+ company  {clean(name, 80)}"); out["added"] += 1
+
+    def bad(what, name):   # kit v86: a JavaScript prototype key is never stored as a client or company name
+        if not reserved_name(name):
+            return False
+        say(f"! skipped  {clean(what, 80)}: '{clean(name.strip(), 40)}' cannot be a client or company name"); out["skipped"] += 1
+        return True
 
     for c in st.get("companies", []):
-        add_client(_s(c if isinstance(c, str) else c.get("name")))
+        name = _s(c if isinstance(c, str) else c.get("name"))
+        if not bad("company", name): add_client(name)
     for p in st.get("people", []):
+        if bad(f"person {_s(p.get('name'))}", _s(p.get("company"))): continue
         ev = _s(p.get("evidence")) or label
         q = _match_person(people, p)
         if q is None:
@@ -7484,7 +7539,7 @@ def apply_staging(data, st, label):
             if _s(p.get("stage")): q["stage"] = check_stage(data, _s(p["stage"]))
             if _s(p.get("due")): q["next_due"] = _s(p["due"])
             hist(q, f"imported ({ev})", by); people.append(q); add_client(q["company"])
-            say(f"+ person   {q['name']}{' (' + q['company'] + ')' if q['company'] else ''}  [{q['stage']}]  {ev}"); out["added"] += 1
+            say(f"+ person   {clean(q['name'], 80)}{' (' + clean(q['company'], 80) + ')' if q['company'] else ''}  [{clean(q['stage'])}]  {clean(ev, 120)}"); out["added"] += 1
             continue
         filled = [k for k in IMPORT_PERSON_FIELDS if _s(p.get(k)) and not _s(q.get(k))]
         for k in filled: q[k] = _s(p[k])
@@ -7493,19 +7548,21 @@ def apply_staging(data, st, label):
             q["next_due"] = _s(p["due"]); filled.append("next_due")
         if filled:
             hist(q, f"import filled {', '.join(filled)} ({ev})", by); q["updated"] = now(); add_client(q.get("company"))
-            say(f"~ person   {q['name']}: filled {', '.join(filled)}"); out["filled"] += 1
+            say(f"~ person   {clean(q['name'], 80)}: filled {', '.join(filled)}"); out["filled"] += 1
         else:
             out["same"] += 1
     for f in st.get("folders", []):
         name, url = _s(f["company"]), _folder_url(f["url"])
+        if bad("folder", name): continue
         links = info.setdefault(name, {}).setdefault("links", [])
         if any(_norm_url(l.get("url")) == _norm_url(url) for l in links):
             out["same"] += 1; continue
         links.append({"title": _s(f.get("title")) or url, "url": url}); add_client(name)
-        say(f"+ folder   {name}: {_s(f.get('title')) or url}"); out["added"] += 1
+        say(f"+ folder   {clean(name, 80)}: {clean(_s(f.get('title')) or url, 120)}"); out["added"] += 1
     tasks = data.setdefault("tasks", [])
     for t in st.get("tasks", []):
         title, client = _s(t["title"]), _s(t.get("client"))
+        if bad(f"task {title}", client): continue
         urls = {_norm_url(l["url"]) for l in t.get("links") or []}
         if any((_s(x.get("title")).lower(), _s(x.get("client")).lower()) == (title.lower(), client.lower())
                or urls & {_norm_url(l.get("url")) for l in x.get("links") or []} for x in tasks):
@@ -7526,7 +7583,7 @@ def apply_staging(data, st, label):
             x["rank"] = append_rank(ranks)
         append_priority_rank(data, x)
         hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
-        say(f"+ task     {title}{' [' + client + ']' if client else ''}"); out["added"] += 1
+        say(f"+ task     {clean(title, 120)}{' [' + clean(client, 80) + ']' if client else ''}"); out["added"] += 1
     return out
 
 
@@ -7541,7 +7598,8 @@ def cmd_import(a):
     if a.dry_run:
         r = apply_staging(data, st, label)
         for l in r["lines"]: print(l)
-        print(f"DRY RUN: would add {r['added']}, fill in {r['filled']}, skip {r['same']} already on the board. Nothing was saved.")
+        print(f"DRY RUN: would add {r['added']}, fill in {r['filled']}, skip {r['same']} already on the board"
+              + (f" and {r['skipped']} with a reserved name" if r["skipped"] else "") + ". Nothing was saved.")
         if r["added"] or r["filled"]:
             print(f"To import, run: keeptrack.py import {a.path}" + (f" --source \"{a.source}\"" if a.source else ""))
         return
@@ -7549,7 +7607,8 @@ def cmd_import(a):
     def fn(d):
         r = apply_staging(d, st, label)
         for l in r["lines"]: print(l)
-        print(f"imported: added {r['added']}, filled in {r['filled']}, skipped {r['same']} already on the board.")
+        print(f"imported: added {r['added']}, filled in {r['filled']}, skipped {r['same']} already on the board"
+              + (f" and {r['skipped']} with a reserved name" if r["skipped"] else "") + ".")
         return r
     mutate(fn, f"Import: {label}")
 
@@ -8268,7 +8327,7 @@ def _new_person(data, proposal, change):
     for key, value in change.items(): person["next_due" if key == "due" else key] = copy.deepcopy(value)
     sync_person_methods(person); hist(person, f"created from proposal {proposal['id']}")
     data.setdefault("contacts", []).append(person)
-    if person.get("company") and person["company"] not in data.setdefault("clients", []): data["clients"].append(person["company"])
+    if person.get("company") and not reserved_name(person["company"]) and person["company"] not in data.setdefault("clients", []): data["clients"].append(person["company"])
     return person, False
 
 
@@ -8401,6 +8460,9 @@ def cmd_proposal_accept(a):
         require_review_storage(data); _MUT["recheck"] = True
         proposal = find_proposal(data, a.id); _already_decided(proposal); _not_ask(proposal, "accepted"); _agent_decides(proposal, "accept", a)
         change, edited = _edit_change(proposal, a.edit)
+        for k in ("client", "company"):   # kit v86: never store a JavaScript prototype key as a client or company name
+            if reserved_name(change.get(k)):
+                proposal_error(f"'{change[k].strip()}' cannot be a client or company name; edit the proposal (--edit) or reject it")
         kind = proposal["kind"]
         target = _check_proposal_base(data, proposal)
         before, recovered = copy.deepcopy(target), False

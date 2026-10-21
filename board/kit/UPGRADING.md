@@ -25,6 +25,20 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v86 (schema 4)
+Companies follow-up: the review fixes for v84 (card #281 on the owner's board). No migration and no data change. v85
+is the Archive view (card #283); the two can land in either order.
+- keeptrack.py never creates `__proto__`, `constructor` or `prototype` as a client or company name: every save is
+  checked, and one that would store such a name in one more place than before is refused (commands, `init --client`,
+  proposal accept and merge alike); `import` skips it with a report line. `client-rm` and `client-rename OLD NEW` only
+  remove uses, so such a name can be cleaned up. A stored company
+  stage that is not in `settings.stages` counts as unset, `client-set --notes` given only whitespace clears the notes,
+  and `clients` prints names through the terminal guard and skips records whose client or company is not text.
+- Web board: a client with no people, no company record (stage, owner, domain, notes or north star), no files and no
+  projects is left out of Companies and the company pipeline (still a client); the company menu says "Show only this company" and "Copy company name"; `client_info` is read and created
+  only as own properties.
+- Run `kit-update` only. Check: `kit-check` says v86, and `python3 board/keeptrack.py client-set __proto__` is refused.
+
 ### v84 (schema 4)
 Companies on the board (private-tasks card #281). No migration: a board whose companies have no record looks and works
 as before, and every company shows the stage worked out from its people.

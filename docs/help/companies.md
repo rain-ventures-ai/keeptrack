@@ -2,6 +2,8 @@
 
 **Companies** lists every client on your board and every company your people work at, once each. A company appears as soon as a person's **Client** or a task's client names it; you never have to create it first.
 
+A client with no people, no company record (no stage, owner, domain, notes or north star), no files and no projects, such as a "General" bucket for tasks, is left out of Companies and the company pipeline. It is still a client: tasks keep it and the client pills show it. Give it any of those, or add a person, and it appears.
+
 Each row shows:
 
 - the company's **stage**;

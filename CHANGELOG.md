@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #281; v85 is the Archive view, card
+#283). A client with no people, no company record (stage, owner, domain, notes or north star), no files and no
+projects, such as a "General" bucket for tasks, is left out of Companies and the company pipeline; it stays a client
+for tasks and the client pills. The company record's menu reads "Show only this company" and "Copy company name".
+`__proto__`, `constructor` and `prototype` are never created as a client or company name: every keeptrack.py save
+refuses one that would store such a name in one more place than before (so any command, `init --client`, a proposal
+accept or merge, `touch`/`sent --company` and `client-link` are covered), `import` skips them with a report line and
+counts them in its summary, and a proposal that names one cannot be accepted on the page. client-rm and client-rename
+OLD NEW only remove uses, so a bad name already on a board can be cleaned up. The page reads and creates `client_info` entries only as own properties and
+refuses those names wherever it would create one. `clients` skips a record whose client or company is not text. A stored company stage the board no longer has counts as unset (the stage from its
+people shows). `client-set --notes` with only whitespace clears the notes. `clients` prints every name through the
+terminal guard and groups people by company once.
+
 Kit v84: companies on the board, HubSpot style (private-tasks card #281). A company is every client name and every
 person's company, once each. `client_info[<company>]` gains four optional fields: `stage` (one of `settings.stages`),
 `owner` (a board member's login), `domain` and `notes`. Until a stage is set, a company shows the most advanced stage
