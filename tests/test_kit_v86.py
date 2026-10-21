@@ -83,8 +83,22 @@ class ArchiveSize(unittest.TestCase):
         self.assertIn(("FILE_SIZE", f"cards/{card}"), self.codes())
 
 
+def snapshot(folder):
+    """Every file under the board folder: relative path -> bytes."""
+    out = {}
+    for root, _, names in os.walk(folder):
+        for n in names:
+            if n.endswith(".lock"):
+                continue   # the empty lock file every local write leaves beside tasks.json
+            full = os.path.join(root, n)
+            with open(full, "rb") as f:
+                out[os.path.relpath(full, folder)] = f.read()
+    return out
+
+
 class ArchiveCommand(unittest.TestCase):
-    """`keeptrack.py archive` checks the year file it is about to write (split boards only)."""
+    """`keeptrack.py archive` checks each year file it is about to write, on every layout: a year over the limit keeps
+    its items on the board and the rest is archived; the run exits non-zero only when nothing it meant to write was written."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -94,51 +108,99 @@ class ArchiveCommand(unittest.TestCase):
         for k in ("BOARD_REPO", "BOARD_TOKEN", "BOARD_HOSTED_API", "BOARD_API"):
             self.env.pop(k, None)
         self.year = str(datetime.date.today().year)
+        self.file = os.path.join(self.dir, "tasks.json")
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_archive(self, fixture, kb):
-        copy_board_fixture(fixture, self.dir)
+    def prefill(self, year, kb):
         os.makedirs(os.path.join(self.dir, "archive"), exist_ok=True)
-        arch = os.path.join(self.dir, "archive", self.year + ".json")
-        with open(arch, "w", encoding="utf-8") as f:
-            json.dump({"version": 3, "archive": True, "year": self.year, "tasks": [], "contacts": [], "history": {},
+        with open(os.path.join(self.dir, "archive", year + ".json"), "w", encoding="utf-8") as f:
+            json.dump({"version": 3, "archive": True, "year": year, "tasks": [], "contacts": [], "history": {},
                        "pad": "x" * (kb * 1024)}, f)
-        file = os.path.join(self.dir, "tasks.json")
-        with open(file, encoding="utf-8") as f:
-            root = json.load(f)
+
+    def unclaimed_card(self):
         cards = os.path.join(self.dir, "cards")
         if os.path.isdir(cards):
-            items = []
-            for name in sorted(os.listdir(cards)):
-                with open(os.path.join(cards, name), encoding="utf-8") as f:
-                    items.append(json.load(f))
+            items = [json.load(open(os.path.join(cards, n), encoding="utf-8")) for n in sorted(os.listdir(cards))]
         else:
-            items = root["tasks"]
-        ref = next(t["id"] for t in items if not t.get("claim") and not t.get("waiting"))
-        before = os.path.getsize(arch)
-        r = subprocess.run([sys.executable, os.path.join(KIT, "keeptrack.py"), "--file", file, "archive", ref],
-                           env=self.env, cwd=self.tmp.name, capture_output=True, text=True)
-        return r, before, os.path.getsize(arch)
+            items = json.load(open(self.file, encoding="utf-8"))["tasks"]
+        return next(t["id"] for t in items if not t.get("claim") and not t.get("waiting"))
 
-    def test_split_board_near_the_limit_warns_on_stderr(self):
-        r, _, _ = self.run_archive("v4_kit72", 710)
+    def kt(self, *args):
+        return subprocess.run([sys.executable, os.path.join(KIT, "keeptrack.py"), "--file", self.file, *args],
+                              env=self.env, cwd=self.tmp.name, capture_output=True, text=True)
+
+    def test_split_board_near_the_limit_archives_and_warns_on_stderr(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        self.prefill(self.year, 710)
+        ref = self.unclaimed_card()
+        before = snapshot(self.dir)
+        r = self.kt("archive", ref)
         self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+        after = snapshot(self.dir)
         self.assertIn("warning: archive/%s.json" % self.year, r.stderr)
         self.assertIn("board owner", r.stderr)
+        self.assertIn(f"cards/{ref}.json", before)
+        self.assertNotIn(f"cards/{ref}.json", after)   # the card left the board
+        self.assertGreater(len(after[f"archive/{self.year}.json"]), len(before[f"archive/{self.year}.json"]))   # and is in the year file
 
-    def test_split_board_over_the_limit_refuses_and_writes_nothing(self):
-        r, before, after = self.run_archive("v4_kit72", 905)
+    def test_split_board_every_item_held_back_changes_nothing(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        self.prefill(self.year, 905)
+        ref = self.unclaimed_card()
+        before = snapshot(self.dir)
+        r = self.kt("archive", ref)
         self.assertNotEqual(0, r.returncode)
+        self.assertIn("held back 1 item(s) from archive/%s.json" % self.year, r.stdout + r.stderr)
         self.assertIn("board owner", r.stdout + r.stderr)
-        self.assertIn("Nothing was written", r.stdout + r.stderr)
-        self.assertEqual(before, after)
+        self.assertEqual(before, snapshot(self.dir))   # not one file under the board folder changed
 
-    def test_one_file_board_gets_no_split_size_message(self):
-        r, _, _ = self.run_archive("v3", 905)
+    def test_split_board_one_year_held_back_the_rest_archived(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        root = json.load(open(self.file, encoding="utf-8"))
+        ids = []
+        for n, year in (("t_first", "2025"), ("t_second", "2024")):
+            path = os.path.join(self.dir, "cards", n + ".json")
+            card = json.load(open(path, encoding="utf-8"))
+            card.update(column="done", updated=year + "-01-05T09:00:00.000Z"); card.pop("claim", None); card.pop("waiting", None)
+            json.dump(card, open(path, "w", encoding="utf-8"), indent=2); ids.append(card["id"])
+        self.prefill("2025", 905)
+        before = snapshot(self.dir)
+        r = self.kt("archive")
         self.assertEqual(0, r.returncode, r.stdout + r.stderr)
-        self.assertNotIn("board owner", r.stdout + r.stderr)
+        self.assertIn("held back 1 item(s) from archive/2025.json", r.stderr)
+        after = snapshot(self.dir)
+        changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+        self.assertEqual({"tasks.json", "cards/t_second.json", "archive/2024.json"}, changed)
+        self.assertNotIn("cards/t_second.json", after)   # archived
+        self.assertEqual(before["cards/t_first.json"], after["cards/t_first.json"])   # held back, untouched
+        self.assertEqual(before["archive/2025.json"], after["archive/2025.json"])
+
+    def test_dry_run_reports_the_hold_back_and_writes_nothing(self):
+        copy_board_fixture("v4_kit72", self.dir)
+        self.prefill(self.year, 905)
+        before = snapshot(self.dir)
+        r = self.kt("archive", "--dry-run", self.unclaimed_card())
+        self.assertIn("would hold back 1 item(s) from archive/%s.json" % self.year, r.stdout + r.stderr)
+        self.assertEqual(before, snapshot(self.dir))
+
+    def test_one_file_board_is_checked_too(self):
+        copy_board_fixture("v3", self.dir)
+        self.prefill(self.year, 905)
+        before = snapshot(self.dir)
+        r = self.kt("archive", self.unclaimed_card())
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("held back", r.stdout + r.stderr)
+        self.assertEqual(before, snapshot(self.dir))
+
+    def test_atomic_write_keeps_newlines_as_written(self):
+        path = os.path.join(self.tmp.name, "x.json")
+        with open(path, "w") as f:
+            f.write("old")
+        keeptrack.atomic_write(path, "{\n  \"a\": 1\n}\n")
+        with open(path, "rb") as f:
+            self.assertEqual(b"{\n  \"a\": 1\n}\n", f.read())
 
 
 class Docs(unittest.TestCase):

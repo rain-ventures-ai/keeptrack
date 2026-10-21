@@ -327,7 +327,7 @@ def atomic_write(path, text):
     """Write text to path without ever leaving a half-written file: a unique temp file in the same folder, flushed to disk, then renamed over it."""
     fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".part", dir=os.path.dirname(os.path.abspath(path)))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:   # newline="": no \n -> \r\n on Windows, so the size on disk is the size measured
             f.write(text); f.flush(); os.fsync(f.fileno())
         try:
             os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))   # keep the existing file's permissions
@@ -8977,6 +8977,40 @@ def write_archive(year, cur, sha, message):
     sys.exit(f"write failed ({archive_path(year)}): {err.strip()} {out.strip()[:200]}")
 
 
+def archive_check_sizes(data, plan, base, ref_orig=None):
+    """Hold back every planned year whose file would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and
+    the year leaves the plan; the other years are archived as planned. Returns (held, warnings), both lists of text.
+    Overflow history lines of an over-limit year go back to their items (on the board, or in another planned year)."""
+    held, warnings = [], []
+    for y in sorted(plan):
+        part, rel = plan[y], f"archive/{y}.json"
+        cur, _ = read_archive(y, base)
+        size = len(_json_text(archive_merge(cur, part, y)).encode())
+        found = archive_size_issue(rel, size)
+        if not found:
+            continue
+        if found[0] == "ARCHIVE_SIZE":
+            warnings.append(f"warning: {rel}: {found[1]}")
+            continue
+        names = [f"#{t.get('num')} {t.get('title', '')}".strip() for t in part["tasks"]] + [c.get("name") or c["id"] for c in part["contacts"]] \
+            + [f"proposal {x['id']}" for x in part.get("proposals", [])]
+        for t in part["tasks"]:
+            data["tasks"].append(ref_orig if ref_orig is not None and ref_orig.get("id") == t["id"] else t)
+        data["contacts"].extend(part["contacts"])
+        if part.get("proposals"):
+            data.setdefault("proposals", []).extend(part["proposals"])
+        del plan[y]
+        for ident, lines in part["history"].items():
+            owner = next((x for x in data["tasks"] + data["contacts"] if x.get("id") == ident), None) \
+                or next((x for q in plan.values() for x in q["tasks"] + q["contacts"] if x.get("id") == ident), None)
+            if owner is not None:
+                owner["history"] = list(lines) + list(owner.get("history") or [])
+        shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+        held.append(f"held back {len(names)} item(s) from {rel}: it would be {size // 1024} KB, over the {ARCHIVE_FILE_MAX // 1024} KB limit"
+                    f" ({shown}). They stay on the board. " + ARCHIVE_NEXT_STEP.replace(" Until then do not edit the file by hand.", ""))
+    return held, warnings
+
+
 def cmd_archive(a):
     with local_lock():   # --file mode: one critical section from read to both writes
         return _cmd_archive(a)
@@ -8987,13 +9021,13 @@ def _cmd_archive(a):
     global WRITE
     for attempt in range(6):
         data, base = load()
-        split = data.get("version") == 4 and data.get("layout") == "split"   # the size limits are checked on split boards only
         guard_schema(data, write=not getattr(a, "dry_run", False)); migrate_data(data, min(SCHEMA, 3))
         rules = archive_rules(data)
         for k in ("done_days", "lost_days", "keep_history"):
             if getattr(a, k) is not None:
                 rules[k] = getattr(a, k)
         ref = getattr(a, "ref", None)
+        ref_orig = None
         if ref:
             if any(getattr(a, k) is not None for k in ("done_days", "lost_days", "keep_history")):
                 sys.exit("an individual task reference cannot be combined with bulk archive rules")
@@ -9002,6 +9036,7 @@ def _cmd_archive(a):
                 sys.exit("an agent is working on this task; finish or release its claim before archiving")
             if open_waiting(task):
                 sys.exit(f"this task is waiting on {waiting_text(open_waiting(task))}; unwait it first, so a wait is never hidden in the archive")
+            ref_orig = task
             task = copy.deepcopy(task)
             older = []
             for y in reversed(archive_years(data)):
@@ -9019,6 +9054,7 @@ def _cmd_archive(a):
             plan = archive_plan(data, rules)
             slimmed = sum(1 for old in proposals_before for new in data.get("proposals", [])
                           if old.get("id") == new.get("id") and old != new)
+        held, size_warnings = archive_check_sizes(data, plan, base, ref_orig)   # a year over its limit: its items stay on the board
         nt = sum(len(p["tasks"]) for p in plan.values()); np_ = sum(len(p["contacts"]) for p in plan.values())
         nr = sum(len(p.get("proposals", [])) for p in plan.values())
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
@@ -9026,12 +9062,23 @@ def _cmd_archive(a):
         if not plan:
             if not ref and slimmed:
                 if a.dry_run:
-                    print(f"would slim {slimmed} decided proposal(s); nothing was saved"); return
+                    print(f"would slim {slimmed} decided proposal(s); nothing was saved")
+                    for line in held: print(line.replace("held back", "would hold back", 1))
+                    if held: sys.exit(1)
+                    return
                 if save_changes(data, base, f"Slim {slimmed} Review Inbox proposal(s)"):
-                    print(f"slimmed {slimmed} decided proposal(s)"); return
+                    print(f"slimmed {slimmed} decided proposal(s)")
+                    for line in held: print(line, file=sys.stderr)
+                    if held: sys.exit(1)
+                    return
                 time.sleep(0.4 * (attempt + 1)); continue
+            if held:   # everything was held back: nothing written, non-zero exit
+                for line in held: print(line.replace("held back", "would hold back", 1) if a.dry_run else line, file=sys.stderr)
+                sys.exit(1)
             print("nothing to archive"); return
         if a.dry_run:
+            for line in size_warnings: print(line)
+            for line in held: print(line.replace("held back", "would hold back", 1))
             for y, p in sorted(plan.items()):
                 print(f"{archive_path(y)}: {len(p['tasks'])} tasks, {len(p['contacts'])} people, {len(p.get('proposals', []))} proposals, {sum(len(h) for h in p['history'].values())} history lines")
                 for t in p["tasks"]: print(f"  #{t.get('num')} {t['title']}")
@@ -9049,19 +9096,12 @@ def _cmd_archive(a):
                 archive_index(data, y, cur); files[y] = (cur, sha)
             assign_nums(data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
-            size_notes = []
-            for rel, text in sorted(extra.items()):
-                found = archive_size_issue(rel, len(text.encode())) if split else None
-                if found and found[0] == "FILE_SIZE":
-                    sys.exit(f"refusing to archive: {rel} would be {len(text.encode()) // 1024} KB. {found[1]} Nothing was written.")
-                if found:
-                    size_notes.append(f"warning: {rel}: {found[1]}")
             ok = save_changes(data, base, msg, extra=extra)
         except UseGit:
             WRITE = "git"; continue
         if ok:
             print(f"archived {summary}")
-            for note in size_notes:
+            for note in size_warnings + held:
                 print(note, file=sys.stderr)
             return
         time.sleep(0.4 * (attempt + 1))
