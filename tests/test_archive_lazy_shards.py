@@ -1,5 +1,7 @@
 """Archive demand reads, safe cache collection and bounded year-part preservation."""
 import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -7,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'board', 'kit'))
 import keeptrack as k
@@ -18,6 +21,37 @@ def envelope(year='2020', **extra):
 
 
 class ArchiveLazyShards(unittest.TestCase):
+    def test_restore_history_is_linear_and_keeps_dictionary_equality_and_order(self):
+        class Counted(dict):
+            comparisons = 0
+            def __eq__(self, other):
+                Counted.comparisons += 1
+                return dict.__eq__(self, other)
+        lines = [Counted(text=f'line {n}', value=n, nested={'b': [1, True], 'a': None}) for n in range(5000)]
+        duplicate = {'nested': {'a': None, 'b': [True, 1.0]}, 'value': 1.0, 'text': 'line 1'}
+        item = dict(id='t_old', num=1, title='Old task', history=[duplicate, {'text': 'own'}])
+        current = envelope(tasks=[item], history={'t_old': lines})
+        other = envelope(history={'t_old': [duplicate]})
+        data = dict(version=3, tasks=[], contacts=[], settings={}, people=[])
+        with mock.patch.object(k, 'load', return_value=(data, None)), mock.patch.object(k, 'find_archived', return_value=('2020', 'tasks', item, current, None)), mock.patch.object(k, 'archive_years', return_value=['2020', '2021']), mock.patch.object(k, 'read_archive', return_value=(other, None)), mock.patch.object(k, 'save_changes', return_value=True), mock.patch.object(k, 'who_am_i', return_value='synthetic'), contextlib.redirect_stdout(io.StringIO()):
+            k._cmd_unarchive(SimpleNamespace(ref='t_old', client=None, company=None))
+        restored = data['tasks'][0]['history']
+        self.assertEqual(len(restored), 5002)  # 5000 unique, own line and restore note
+        self.assertEqual(restored[0], duplicate)
+        self.assertEqual(restored[1]['text'], 'line 0')
+        self.assertEqual(restored[-2], {'text': 'own'})
+        self.assertLess(Counted.comparisons, 100, 'structural tokens avoid pairwise dictionary equality scans')
+
+    def test_malformed_archive_records_refuse_cleanly_before_packing_or_save(self):
+        current = envelope(tasks=[None])
+        with self.assertRaisesRegex(k.ArchiveUnpackable, 'invalid records'):
+            k.shard_archive_family('2020', current, None, {}, {}, None)
+        data = {'tasks': [], 'contacts': []}
+        plan = {'2020': {'tasks': [], 'contacts': [], 'proposals': [], 'history': {}}}
+        with mock.patch.object(k, 'read_archive', return_value=(current, None)):
+            with self.assertRaisesRegex(SystemExit, 'not saved: archive/2020.json contains invalid archive records'):
+                k.archive_check_sizes(data, plan, None)
+
     def test_hosted_revision_uses_metadata_route_and_only_falls_back_for_unsupported_route(self):
         adapter = object.__new__(k.HostedStorageAdapter); adapter.board = 'synthetic-board'
         with mock.patch.object(adapter, 'request', return_value={'path': 'archive/2020.json', 'rev': 'r1'}) as request, mock.patch.object(adapter, 'read') as read:
@@ -33,35 +67,38 @@ class ArchiveLazyShards(unittest.TestCase):
 
     def test_cli_archive_parts_and_restore_preserve_history_and_opaque_fields(self):
         from board_fixtures import copy_board_fixture
-        with tempfile.TemporaryDirectory() as folder:
-            board = Path(folder) / 'board'; copy_board_fixture('v3', board)
-            path = board / 'tasks.json'; data = json.loads(path.read_text())
-            data['tasks'] = [dict(id=f't_large{n}', num=n, title=f'Synthetic {n}', column='done',
-                                  updated='2020-01-01T00:00:00Z', details='x' * 400000,
-                                  history=[{'at': '2019-01-01T00:00:00Z', 'text': 'own history'}]) for n in range(1, 4)]
-            data['contacts'] = []; data['archive'] = {'files': {'2020': {'tasks': 0, 'contacts': 0}}}
-            path.write_text(json.dumps(data)); (board / 'archive').mkdir(exist_ok=True)
-            (board / 'archive' / '2020.json').write_text(json.dumps(envelope(custom={'opaque': True}, history={'t_large2': [{'at': '2018-01-01T00:00:00Z', 'text': 'older history'}]})))
-            env = dict(os.environ, BOARD_USER='alex', BOARD_AGENT='codex', BOARD_SESSION='archive102test', BOARD_WRITE='local', BOARD_PROJECT='')
-            for key in ('BOARD_REPO', 'BOARD_TOKEN', 'BOARD_HOSTED_API', 'BOARD_API'):
-                env.pop(key, None)
-            def run(*args):
-                result = subprocess.run([sys.executable, k.__file__, '--file', str(path), *args], cwd=folder, env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                return result
-            run('archive')
-            saved = json.loads(path.read_text()); self.assertEqual(saved['tasks'], [])
-            self.assertEqual(saved['settings']['min_kit'], 102)
-            self.assertGreater(len(saved['archive']['files']), 1)
-            for year in saved['archive']['files']:
-                self.assertLessEqual((board / 'archive' / (year + '.json')).stat().st_size, k.ARCHIVE_FILE_MAX)
-            self.assertEqual(json.loads((board / 'archive' / '2020.json').read_text())['custom'], {'opaque': True})
-            run('unarchive', 't_large2')
-            restored = json.loads(path.read_text())['tasks'][0]
-            self.assertEqual(restored['details'], 'x' * 400000)
-            self.assertEqual([line['text'] for line in restored['history'][:2]], ['older history', 'own history'])
-            remaining = [item['id'] for file in (board / 'archive').glob('*.json') for item in json.loads(file.read_text()).get('tasks', [])]
-            self.assertEqual(sorted(remaining), ['t_large1', 't_large3'])
+        for min_kit in (None, '103', 102.5, True, False, 0, -1, 101):
+            with self.subTest(min_kit=min_kit):
+                with tempfile.TemporaryDirectory() as folder:
+                    board = Path(folder) / 'board'; copy_board_fixture('v3', board)
+                    path = board / 'tasks.json'; data = json.loads(path.read_text())
+                    data['tasks'] = [dict(id=f't_large{n}', num=n, title=f'Synthetic {n}', column='done',
+                                          updated='2020-01-01T00:00:00Z', details='x' * 400000,
+                                          history=[{'at': '2019-01-01T00:00:00Z', 'text': 'own history'}]) for n in range(1, 4)]
+                    data.setdefault('settings', {})['min_kit'] = min_kit
+                    data['contacts'] = []; data['archive'] = {'files': {'2020': {'tasks': 0, 'contacts': 0}}}
+                    path.write_text(json.dumps(data)); (board / 'archive').mkdir(exist_ok=True)
+                    (board / 'archive' / '2020.json').write_text(json.dumps(envelope(custom={'opaque': True}, history={'t_large2': [{'at': '2018-01-01T00:00:00Z', 'text': 'older history'}]})))
+                    env = dict(os.environ, BOARD_USER='alex', BOARD_AGENT='codex', BOARD_SESSION='archive102test', BOARD_WRITE='local', BOARD_PROJECT='')
+                    for key in ('BOARD_REPO', 'BOARD_TOKEN', 'BOARD_HOSTED_API', 'BOARD_API'):
+                        env.pop(key, None)
+                    def run(*args):
+                        result = subprocess.run([sys.executable, k.__file__, '--file', str(path), *args], cwd=folder, env=env, capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        return result
+                    run('archive')
+                    saved = json.loads(path.read_text()); self.assertEqual(saved['tasks'], [])
+                    self.assertEqual(saved['settings']['min_kit'], 102)
+                    self.assertGreater(len(saved['archive']['files']), 1)
+                    for year in saved['archive']['files']:
+                        self.assertLessEqual((board / 'archive' / (year + '.json')).stat().st_size, k.ARCHIVE_FILE_MAX)
+                    self.assertEqual(json.loads((board / 'archive' / '2020.json').read_text())['custom'], {'opaque': True})
+                    run('unarchive', 't_large2')
+                    restored = json.loads(path.read_text())['tasks'][0]
+                    self.assertEqual(restored['details'], 'x' * 400000)
+                    self.assertEqual([line['text'] for line in restored['history'][:2]], ['older history', 'own history'])
+                    remaining = [item['id'] for file in (board / 'archive').glob('*.json') for item in json.loads(file.read_text()).get('tasks', [])]
+                    self.assertEqual(sorted(remaining), ['t_large1', 't_large3'])
 
     def test_local_snapshot_defers_archive_bodies_and_demand_read_hydrates_captured_entry(self):
         with tempfile.TemporaryDirectory() as tmp:

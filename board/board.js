@@ -1224,7 +1224,7 @@ if (typeof window !== 'undefined') (() => {
       if (!res.ok) return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       const out = await res.json(); if (gone()) return 'gone'; const files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
       const parent = ((out.commit.parents || [])[0] || {}).sha;
-      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
+      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); if (!isSplit(next)) { sha = files.get('tasks.json')?.sha || null; etag = null; } state = next; return 'ok';
     }
     const api = (method, endpoint, body) => { if (gone()) throw new Error('gone'); return ghApi(method, endpoint, body, {}, at); };
     try {
@@ -1237,7 +1237,7 @@ if (typeof window !== 'undefined') (() => {
       if (!rr.ok) return (rr.status === 409 || rr.status === 422) ? 'conflict' : 'error:' + rr.status;
       if (gone()) return 'gone';
       const files = new Map(meta.files); made.forEach(([rel, text, blob]) => { files.set(rel, { sha: blob, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(blob), text); }); deletes.forEach(rel => files.delete(rel));
-      splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
+      splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); if (!isSplit(next)) { sha = files.get('tasks.json')?.sha || null; etag = null; } state = next; return 'ok';
     } catch (e) { if (gone()) return 'gone'; throw e; }
   }
 
@@ -8658,6 +8658,10 @@ if (typeof window !== 'undefined') (() => {
     keys.push(year); keys.sort((a, b) => (a === year ? 0 : Number(a.slice(5))) - (b === year ? 0 : Number(b.slice(5))));
     const family = new Map([[year, current]]);
     await mapLimit(keys.filter(key => key !== year), 8, async key => { const entry = await archiveEntry(meta, key, at, gen); if (!entry || !isObj(entry.obj)) throw new ArchiveUnpackable('Missing archive part'); family.set(key, entry.obj); });
+    for (const cur of family.values()) {
+      if (!isObj(cur)) throw new ArchiveUnpackable('Invalid archive part');
+      for (const kind of ['tasks', 'contacts', 'proposals']) if (cur[kind] !== undefined && (!Array.isArray(cur[kind]) || cur[kind].some(item => !isObj(item)))) throw new ArchiveUnpackable('Invalid archive records');
+    }
     const incomingIds = new Set(['tasks', 'contacts', 'proposals'].flatMap(k => (incoming[k] || []).map(x => x.id))), records = new Map(), histories = new Map(), historySeen = new Map(), updates = new Map();
     for (const kind of ['tasks', 'contacts', 'proposals']) for (const item of current[kind] || []) if (incomingIds.has(item.id)) updates.set(item.id, [kind, item]);
     for (const key of keys) {
@@ -8717,7 +8721,7 @@ if (typeof window !== 'undefined') (() => {
           }
           if (!packed && bytes > ARCH_MAX) { held += partCount(plan[y]); heldYears++; plan[y].tasks.forEach(x => heldIds.add(x.id)); notes.push(heldNote(y, partCount(plan[y]), bytes)); delete plan[y]; continue; }
           if (packed) { packed.forEach((value, key) => { extras[`archive/${key}.json`] = jsonText(value); counts[key] = { tasks: value.tasks.length, contacts: value.contacts.length, ...(value.proposals.length ? { proposals: value.proposals.length } : {}) }; });
-            if ([...packed.keys()].some(k => k.includes('-'))) fresh.settings = Object.assign({}, fresh.settings, { min_kit: Math.max(102, fresh.settings?.min_kit || 0) }); notes.push(`Split ${archPath(y)} across ${packed.size} bounded archive parts.`);
+            if ([...packed.keys()].some(k => k.includes('-'))) fresh.settings = Object.assign({}, fresh.settings, { min_kit: Number.isInteger(fresh.settings?.min_kit) && fresh.settings.min_kit > 0 ? Math.max(102, fresh.settings.min_kit) : 102 }); notes.push(`Split ${archPath(y)} across ${packed.size} bounded archive parts.`);
           } else { if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes)); extras[rel] = text; counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; }
           plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); });
         }

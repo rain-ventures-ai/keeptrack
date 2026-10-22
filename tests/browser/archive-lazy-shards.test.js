@@ -41,6 +41,7 @@ const env = (extra = {}) => ({ version: 3, archive: true, year: '2020', tasks: [
     if (value.tasks.some(x => x.id === 't_2')) assert.deepEqual(clone(value.history.t_2), [{ text: 'older' }]); }
   assert.deepEqual(records.map(x => x.id).sort(), cur.tasks.map(x => x.id).sort()); assert.deepEqual(clone(history),cur.history);
   await assert.rejects(context.api.shardArchiveFamily('2020', env({ tasks:[{ id:'t_big', details:'x'.repeat(2000) }] }), {}, { archive:{files:{}} }, { files:new Map() }, config,0), /single logical/);
+  await assert.rejects(context.api.shardArchiveFamily('2020',env({tasks:[null]}),{}, {archive:{files:{}}},{files:new Map()},config,0), /Invalid archive records/);
   serializations = 0;
   const large = env({ tasks:Array.from({length:1000},(_,n)=>({id:'t_'+n,title:'small record'})) });
   const packed = await context.api.shardArchiveFamily('2020',large,{}, {archive:{files:{}}},{files:new Map()},config,0);

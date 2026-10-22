@@ -9867,6 +9867,10 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     keys = sorted(family, key=lambda key: 0 if key == year else int(key[5:]))
     if any(not isinstance(family[key][0], dict) for key in keys):
         raise ArchiveUnpackable("an indexed archive part is missing or invalid")
+    for cur, _ in family.values():
+        for kind in ("tasks", "contacts", "proposals"):
+            if not isinstance(cur.get(kind, []), list) or any(not isinstance(item, dict) for item in cur.get(kind, [])):
+                raise ArchiveUnpackable("an archive collection contains invalid records")
     incoming_ids = {x["id"] for kind in ("tasks", "contacts", "proposals") for x in incoming.get(kind, [])}
     records, histories, history_seen = {}, {}, {}
     updates = {item["id"]: (kind, item) for kind in ("tasks", "contacts", "proposals")
@@ -9956,6 +9960,8 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
         for y in sorted(plan):
             part, rel = plan[y], f"archive/{y}.json"
             cur, sha = read_archive(y, base)
+            if cur is not None and (not isinstance(cur, dict) or any(not isinstance(cur.get(kind, []), list) or any(not isinstance(item, dict) for item in cur.get(kind, [])) for kind in ("tasks", "contacts", "proposals"))):
+                sys.exit(f"not saved: {rel} contains invalid archive records; nothing changed")
             cur = archive_merge(cur, part, y)
             if ref_orig is not None:   # one card: the archive's lines for it move onto the card copy, as the write does
                 task = part["tasks"][0]
@@ -10104,7 +10110,8 @@ def _cmd_archive(a):
                 archive_index(data, y, cur)
             if any("-" in key for key in files):
                 settings = data.setdefault("settings", {})
-                settings["min_kit"] = max(102, settings.get("min_kit", 0))
+                current_min = settings.get("min_kit")
+                settings["min_kit"] = max(102, current_min) if type(current_min) is int and current_min > 0 else 102
             assign_nums(data)
             refuse_new_reserved_names(before, data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
@@ -10174,6 +10181,15 @@ def cmd_unarchive(a):
         return _cmd_unarchive(a)
 
 
+def _history_equality_token(value):
+    """Hashable JSON structure with Python equality: object order is irrelevant and 1, 1.0 and True agree."""
+    if isinstance(value, dict):
+        return ("object", frozenset((key, _history_equality_token(item)) for key, item in value.items()))
+    if isinstance(value, list):
+        return ("array", tuple(_history_equality_token(item) for item in value))
+    return ("scalar", value)
+
+
 def _cmd_unarchive(a):
     global WRITE
     for attempt in range(6):
@@ -10184,13 +10200,14 @@ def _cmd_unarchive(a):
         if not any(x["id"] == item["id"] for x in data.setdefault(k, [])):
             # Older history may occupy another part (or an older year). Restore a complete copy without
             # deleting those historical records; subsequent reads deduplicate the retained archive evidence.
-            older = []
+            older, seen = [], set()
             for key in reversed(archive_years(data)):
                 source = cur if key == y else read_archive(key, base)[0]
                 for line in (source or {}).get("history", {}).get(item["id"], []):
-                    if line not in older:
-                        older.append(line)
-            item["history"] = older + [line for line in item.get("history", []) if line not in older]
+                    token = _history_equality_token(line)
+                    if token not in seen:
+                        older.append(line); seen.add(token)
+            item["history"] = older + [line for line in item.get("history", []) if _history_equality_token(line) not in seen]
             if k == "tasks" and data.get("layout") == "split" and not valid_rank(item.get("rank")):
                 ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
                 item["rank"] = append_rank(ranks)
