@@ -25,6 +25,15 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v93 (schema 4)
+Meeting-notes name resolution: auto-generated notes (Gemini and similar) often garble spoken names in the body while
+keeping correct attendee emails. The keeptrack-notes skill, its routine prompt and notes-folder-to-tasks now resolve
+people from header `mailto:` / email addresses and board matches first, rewrite clear near-miss body spellings to the
+roster/board name, and refuse to invent people. No migration and no data change.
+- Run `kit-update` only. Check: `kit-check` says v93, and `.claude/skills/keeptrack-notes/SKILL.md` has the section
+  **Resolve names before you extract actions**. Re-save any scheduled meeting-notes routine prompt from the updated
+  template in `keeptrack-notes/references/routines.md` so the live job picks up the rule.
+
 ### v92 (schema 4)
 Images on cards (private-tasks card #292). No migration and no schema change.
 - An image (PNG, JPEG, GIF or WebP, at most 2 MB) is a file in `assets/<card id>/` next to the board files, named
