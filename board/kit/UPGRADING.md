@@ -39,8 +39,8 @@ Gmail source-link privacy and record navigation fixes. No data change or migrati
   `/mail/u/0/`. Query parameters and account addresses are removed by the browser and CLI. Search, label and category routes are refused, even when their final word looks like a thread ID.
   Gmail pagination and ambiguous mailbox/search/label/category links are refused. Recognition is deliberately limited
   to legacy 1-16-hex IDs and observed `FMfcgz` web IDs with a bounded suffix; other formats fail closed.
-  This does not verify that the thread exists in an account. Existing Gmail source links are shown
-  with the same clean target; stored old entries are not rewritten until edited.
+  This does not verify that the thread exists in an account. Existing Gmail source links in the browser and CLI person output are shown
+  with a canonical target, or a neutral unavailable warning for rejected routes; stored old entries are not rewritten until edited.
 - A missing record reached through Back/Forward resets its history entry to the current view, so the next person,
   company or project drawer creates its own entry. The CLI accepts uppercase `HTTPS://`, as the browser does.
 - Check: `kit-check` reports v100. Save a mailbox/thread link and verify its saved URL uses `#all/<id>`; refuse a search/label view even with an ID-shaped final segment; navigate Forward to a deleted person, open another person, then Back should close that drawer.

@@ -6396,7 +6396,9 @@ def cmd_person(a):
         print(f"  [{clean(str(c['at'])[:16], 16)}] {clean(c.get('channel', 'note'), 40)}{' DRAFT (not sent) ' + clean(c['id'], 40) if c.get('draft') else ''} "
               f"{clean(c.get('by', '?'), 80)}: {clean_lines(c['text'], '    ')}")
         if c.get("source_message_ids"): print("    source messages: " + ", ".join(clean(x, 200) for x in c["source_message_ids"]))
-        if isinstance(c.get("url"), str) and c["url"]: print(f"    source link ({clean(c['id'], 40)}): {clean(c['url'], 2000)}")
+        if isinstance(c.get("url"), str) and c["url"]:
+            source_url = normalise_touch_url(c["url"])
+            print(f"    source link ({clean(c['id'], 40)}): {clean(source_url, 2000) if source_url else 'unavailable; use a canonical mailbox/thread link'}")
     tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
     for x in tasks: print("  task: " + line(data, x))
     by_who, cards = waiting_index(data)
@@ -6451,21 +6453,20 @@ def cmd_person_rm(a):
     mutate(fn, f"Delete person: {a.ref}")
 
 
-def check_touch_url(url):
-    """A source link; Gmail saves only its thread ID and optional numeric account selector."""
+def normalise_touch_url(url):
+    """Read-only source normalizer: safe URL or None; invalid stored data never aborts a read."""
     url = str(url or "").strip()
     if not url:
         return ""
-    error = "source link must be one http(s) URL of at most 2000 characters, such as https://mail.google.com/mail/u/0/#all/<thread id>"
     if not re.match(r"^https?://[^\s/]+", url, re.I) or len(url) > 2000 or any(ch.isspace() for ch in url) or "\\" in url:
-        sys.exit(error)
+        return None
     try:
         parsed = urllib.parse.urlsplit(url)
         host = urllib.parse.unquote(parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
     except (ValueError, UnicodeError):
-        sys.exit(error)
+        return None
     if not host:
-        sys.exit(error)
+        return None
     if host != "mail.google.com":
         return url
     parts = parsed.fragment.split("/")
@@ -6476,10 +6477,18 @@ def check_touch_url(url):
     # Legacy thread IDs are unsigned 64-bit values represented in hex; retain their 1-16 digit forms.
     if (route not in mailboxes or len(parts) != 2
             or not re.fullmatch(r"(?:[0-9a-fA-F]{1,16}|FMfcgz[A-Za-z0-9_-]{20,512})", thread)):
-        sys.exit("source link must identify one Gmail thread using a mailbox/thread link; search, label, category, pagination and extra path segments are refused")
+        return None
     account = re.fullmatch(r"/mail/u/([0-9]+)/?", parsed.path)
     path = f"/mail/u/{account.group(1)}/" if account else "/mail/"
     return "https://mail.google.com" + path + "#all/" + thread
+
+
+def check_touch_url(url):
+    """Writing requires a supported source; a refusal never silently drops a requested URL."""
+    value = normalise_touch_url(url)
+    if value is None:
+        sys.exit("source link must be one http(s) URL of at most 2000 characters; a Gmail thread must use mailbox/thread only, without search, label, category, pagination or extra segments")
+    return value
 
 
 def cmd_touch_url(a):
