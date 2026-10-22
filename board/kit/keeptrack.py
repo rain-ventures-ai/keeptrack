@@ -289,22 +289,32 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 
 
+# gh consumes both public-GitHub and Enterprise aliases automatically. These names cannot safely
+# identify a new board-specific credential; old configs are still read with the same isolation gate.
+GLOBAL_AUTH_TOKEN_ENVS = frozenset(("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"))
 TOKEN_REPLACED = ""
 TOKEN_SKIPPED = ""
 _tv = PROJECT.get("token_env")
-if _tv and _tv != "BOARD_TOKEN" and os.environ.get(_tv):
+if _tv and os.environ.get(_tv):
     # The config supplies a github.com credential only for its resolved board and API host.
     # An empty BOARD_REPO falls back to the clone, rather than the config's repo.
-    _api = urllib.parse.urlparse(os.environ.get("BOARD_API", "https://api.github.com"))
+    try:
+        _api = urllib.parse.urlparse(os.environ.get("BOARD_API", "https://api.github.com"))
+    except ValueError:
+        _api = None   # invalid IPv6/user input must not break where or local --file commands
     if not REPO or REPO.lower() != str(PROJECT.get("repo") or "").lower():
         TOKEN_SKIPPED = "the resolved board differs from this folder's board"
-    elif (_api.scheme != "https" or _api.hostname != "api.github.com" or _api.netloc.lower() not in ("api.github.com", "api.github.com:443")
+    elif (_api is None or _api.scheme != "https" or _api.hostname != "api.github.com" or _api.netloc.lower() not in ("api.github.com", "api.github.com:443")
           or _api.username or _api.password):
         TOKEN_SKIPPED = "BOARD_API is not the github.com API"
     else:
         if os.environ.get("BOARD_TOKEN") and os.environ["BOARD_TOKEN"] != os.environ[_tv]:
             TOKEN_REPLACED = _tv
         os.environ["BOARD_TOKEN"] = os.environ[_tv]
+    if TOKEN_SKIPPED and _tv in GLOBAL_AUTH_TOKEN_ENVS:
+        # Removing only this CLI process's copy closes token() fallback and gh-child inheritance.
+        # A separate explicit credential remains usable; the calling shell is untouched.
+        os.environ.pop(_tv, None)
 
 
 _MISMATCH = None
@@ -5675,6 +5685,11 @@ def cmd_init(a):
 
 def cmd_use(a):
     """Name this project's board (and optionally its board project) in .keeptrack/config.json, kept out of git."""
+    if a.token_env:
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", a.token_env):
+            sys.exit("--token-env takes the NAME of an environment variable (e.g. BOARD_TOKEN_PRIVATE), never the token")
+        if a.token_env in GLOBAL_AUTH_TOKEN_ENVS:
+            sys.exit("--token-env needs a board-specific variable, not an automatic auth alias; use BOARD_TOKEN_PRIVATE")
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
         sys.exit("repo must be owner/name, e.g. osouthgate/private-tasks")
     rc, top, _ = (lambda p: (p.returncode, p.stdout.strip(), p.stderr))(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True))
@@ -5691,8 +5706,6 @@ def cmd_use(a):
     if a.user: cfg["user"] = a.user
     if getattr(a, "project", None): cfg["project"] = a.project
     if a.token_env:
-        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", a.token_env):
-            sys.exit("--token-env takes the NAME of an environment variable (e.g. BOARD_TOKEN_PRIVATE), never the token")
         cfg["token_env"] = a.token_env
     try:
         ensure_local_dir(cfg_path)
@@ -5828,7 +5841,7 @@ def _auth_source():
     """Which variable the board token comes from (kit v90: named, so `where` shows which one won). Never the token."""
     tv = PROJECT.get("token_env")
     cfg = os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, "config.json") if PROJECT_DIR else "the config"
-    if tv and os.environ.get(tv) and TOKEN_SKIPPED:
+    if tv and TOKEN_SKIPPED:
         actual = "token from $BOARD_TOKEN (from the shell)" if os.environ.get("BOARD_TOKEN") else (
             "gh login" if shutil.which("gh") else next(
                 (f"token from ${v}" for v in ("GH_TOKEN", "GITHUB_TOKEN") if os.environ.get(v)), "none"))

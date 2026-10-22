@@ -1,4 +1,5 @@
 """Regression coverage for token selection and clone mismatch diagnostics."""
+import json
 import os
 import pathlib
 import shutil
@@ -44,6 +45,98 @@ class TokenBoardEdges(v90.FolderTokenWins):
                 r = self.run_kt(d, env, "where")
                 self.assertIn("(none)", self.line(r.stdout, "board:"))
                 self.assertIn("not used", self.line(r.stdout, "auth:"))
+
+    def alias_folder(self, alias):
+        d = pathlib.Path(self.tmp.name, "alias-" + alias)
+        (d / ".keeptrack").mkdir(parents=True)
+        p = d / ".keeptrack" / "config.json"
+        p.write_text(json.dumps({"repo": "o/board", "token_env": alias}))
+        p.chmod(0o600)
+        keeptrack.trust_config(str(p))
+        return str(d)
+
+    def test_malformed_api_does_not_break_where_or_local_file_commands(self):
+        d = self.folder({"repo": "o/board", "token_env": "KT_V90_TOKEN"})
+        copy = pathlib.Path(self.tmp.name, "copy.json")
+        copy.write_text('{"tasks": []}')
+        env = self.env(BOARD_API="https://[broken", KT_V90_TOKEN="folder-value")
+        for args in (("where",), ("--file", str(copy), "where")):
+            with self.subTest(args=args):
+                r = self.run_kt(d, env, *args)
+                self.assertEqual(0, r.returncode, r.stderr)
+                self.assertIn("not used: BOARD_API", self.line(r.stdout, "auth:"))
+                self.assertNotIn("folder-value", r.stdout + r.stderr)
+
+    def test_skipped_global_aliases_do_not_reach_direct_http(self):
+        aliases = ("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+        for alias in aliases:
+            d = self.alias_folder(alias)
+            for target in ({"BOARD_REPO": "o/other"}, {"BOARD_API": "https://ghe.example/api/v3"}):
+                for shell in ("", "shell-value"):
+                    if alias == "BOARD_TOKEN" and shell:
+                        continue
+                    env = self.env(BOARD_TOKEN=shell, **target)
+                    env[alias] = "folder-value"
+                    code = """import contextlib, io, sys
+sys.path.insert(0, KIT_PATH)
+import keeptrack as k
+k.shutil.which = lambda command: None
+seen = []
+def send(req, **kw):
+    seen.append(req.get_header('Authorization'))
+    return contextlib.nullcontext(io.BytesIO(b'{}'))
+k.urllib.request.urlopen = send
+try:
+    k.gh('repos/o/other')
+except SystemExit:
+    pass
+assert k.token() != 'folder-value'
+assert 'Bearer folder-value' not in seen
+if k.token():
+    assert seen == ['Bearer shell-value']
+print('safe')
+""".replace("KIT_PATH", repr(KIT))
+                    with self.subTest(alias=alias, target=target, shell=bool(shell)):
+                        r = subprocess.run([sys.executable, "-c", code], cwd=d, env=env, capture_output=True, text=True)
+                        self.assertEqual(0, r.returncode, r.stderr)
+                        self.assertEqual("safe", r.stdout.strip())
+                        self.assertEqual("folder-value", env[alias], "the calling environment stays unchanged")
+
+    def test_skipped_global_aliases_are_removed_before_gh_children(self):
+        aliases = ("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+        bindir = pathlib.Path(self.tmp.name, "bin")
+        bindir.mkdir()
+        gh = bindir / "gh"
+        gh.write_text("#!" + sys.executable + "\nimport os\nassert all(os.environ.get(k) != 'folder-value' for k in " + repr(aliases) + ")\nprint('safe-child')\n")
+        gh.chmod(0o700)
+        for alias in aliases:
+            d = self.alias_folder(alias)
+            for target in ({"BOARD_REPO": "o/other"}, {"BOARD_API": "https://ghe.example/api/v3"}):
+                env = self.env(PATH=str(bindir) + os.pathsep + os.environ["PATH"], **target)
+                env[alias] = "folder-value"
+                code = f"import sys; sys.path.insert(0, {KIT!r}); import keeptrack as k; rc, out, err = k.gh('repos/o/other'); print(out.strip()); sys.exit(rc)"
+                with self.subTest(alias=alias, target=target):
+                    r = subprocess.run([sys.executable, "-c", code], cwd=d, env=env, capture_output=True, text=True)
+                    self.assertEqual(0, r.returncode, r.stderr)
+                    self.assertEqual("safe-child", r.stdout.strip())
+                    where = self.run_kt(d, env, "where")
+                    self.assertIn("not used", self.line(where.stdout, "auth:"))
+                    self.assertNotIn("folder-value", where.stdout + where.stderr)
+
+    def test_matching_legacy_global_aliases_remain_usable(self):
+        for alias in ("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+            d = self.alias_folder(alias)
+            self.assertEqual("folder-value", self.token_in(d, self.env(**{alias: "folder-value"})))
+
+    def test_use_refuses_automatic_auth_aliases_before_writing_config(self):
+        d = pathlib.Path(self.tmp.name, "new-project")
+        d.mkdir()
+        for alias in ("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+            with self.subTest(alias=alias):
+                r = self.run_kt(str(d), self.env(), "use", "o/board", "--branch", "main", "--token-env", alias)
+                self.assertNotEqual(0, r.returncode)
+                self.assertIn("board-specific", r.stderr)
+                self.assertFalse((d / ".keeptrack" / "config.json").exists())
 
     def test_empty_shell_repo_uses_the_resolved_clone_before_selecting_token(self):
         c = self.clone("o/clone")

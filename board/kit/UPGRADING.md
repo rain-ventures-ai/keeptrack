@@ -32,6 +32,11 @@ Includes the v97 List view and v98 image fixes.
   github.com API. A different shell board, an empty `BOARD_REPO` resolving to another clone, or another API host
   never borrows the folder's token, even when the shell has no `BOARD_TOKEN`. `where` names the actual auth source
   and explains why the folder token was skipped.
+- New `use --token-env` settings must name a board-specific variable, such as `BOARD_TOKEN_PRIVATE`, rather than
+  `BOARD_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`. Existing configs using
+  these aliases still work for a matching board/API. When skipped, only this CLI process's alias is removed before
+  direct HTTP fallback or `gh` children can use it; a separately named shell credential remains usable. Invalid API
+  URLs also skip the folder credential without breaking `where` or local `--file` commands.
 - Clone mismatch warnings recommend unsetting `BOARD_REPO` only for a clone already trusted by `use`, or whose
   own CLI is running. Nested clone warnings describe the clone the CLI itself would use.
 - Hosted commands skip the GitHub mismatch diagnostic; GitHub commands cache it with a two-second git budget.
