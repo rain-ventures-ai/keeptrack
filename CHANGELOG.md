@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v97: List view multi-select and last activity (private-tasks card #307). Mark done is a square, in List and Schedule, so it is not mistaken for a select box. List adds a tick box on each row and a select-all for the rows on screen. With a selection, a bar offers **Move to…**, **Mark done**, **Copy IDs** (for example `#150 #96`) and **Clear selection**. Move and Mark done are off on a read-only board. The selection stays in this tab and clears when you leave List. **Activity** is how long since the newest edit, comment or history entry (`3d ago`); a card quiet for 14 days is marked, and on a phone the time sits under the title. No data change and no migration; keeptrack.py changes only its version.
+
 Kit v96: an Archive view to browse archived cards and people (private-tasks card #283). Before, the archive could only be
 reached by ticking Include archive in Search, so you had to know what to look for. Web board: **Archive** is a new tab
 after Activity in the Tasks views. It lists the archived cards by archive year, newest year first (the year of the
