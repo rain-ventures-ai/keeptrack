@@ -8253,10 +8253,10 @@ if (typeof window !== 'undefined') (() => {
     let parsed; try { parsed = new URL(url); } catch { return ''; }
     if (parsed.hostname.toLowerCase().replace(/\.+$/, '') !== 'mail.google.com') return url;
     const parts = parsed.hash.slice(1).split('/'), route = parts[0].toLowerCase();
-    const count = ['search', 'label', 'category'].includes(route) ? 3 : ['all', 'inbox', 'sent', 'drafts', 'starred', 'important', 'snoozed', 'spam', 'trash', 'scheduled'].includes(route) ? 2 : 0;
+    const mailbox = ['all', 'inbox', 'sent', 'drafts', 'starred', 'important', 'snoozed', 'spam', 'trash', 'scheduled'].includes(route);
     const thread = parts[parts.length - 1].split('?')[0];
-    // Match the CLI's conservative legacy/web ID shapes; arbitrary label/search words are not thread IDs.
-    if (!count || parts.length < count || /^p[0-9]+$/i.test(thread) || !/^(?:[0-9a-fA-F]{16}|FMfcgz[A-Za-z0-9_-]{20,512})$/.test(thread)) return '';
+    // Match CLI mailbox/thread-only routes; an ID-shaped label/search word is still private view data.
+    if (!mailbox || parts.length !== 2 || !/^(?:[0-9a-fA-F]{1,16}|FMfcgz[A-Za-z0-9_-]{20,512})$/.test(thread)) return '';
     const account = parsed.pathname.match(/^\/mail\/u\/([0-9]+)\/?$/);
     return 'https://mail.google.com' + (account ? `/mail/u/${account[1]}/` : '/mail/') + '#all/' + thread;
   }
@@ -8266,13 +8266,14 @@ if (typeof window !== 'undefined') (() => {
     if (url) { let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
       const a = elI('a', 'tsrclink', 'arrow-up-right', host === 'mail.google.com' ? 'Open in Gmail' : 'Open original'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
       a.title = `Open the original in a new tab: ${host || url}`; box.append(roKeep(a)); }
+    if (cm.url && !url) box.append(el('span', 'muted', 'Source link unavailable; use a canonical mailbox/thread link.'));
     if (editable && !ro) box.append(ui.iconButton({ icon: url ? 'pencil' : 'link', label: url ? 'Change source link' : 'Add source link (for example the Gmail thread)', size: 'sm', onClick: () => setTouchUrl(p.id, cm.id, url) }));
     return box;
   }
   async function setTouchUrl(pid, cmid, cur) {
-    const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the original thread link. Gmail searches and labels are removed; only the thread link is saved. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
+    const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the original thread link. Use a Gmail mailbox/thread link (for example #all/<thread id>); search, label, category and pagination views are refused. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
     if (v === null) return; const raw = v.trim(), url = touchUrl({ url: raw });
-    if (raw && !url) { toast('Enter one link starting with https://. Gmail links must open an individual thread.', true); return; }
+    if (raw && !url) { toast('Enter one link starting with https://. Gmail links must use mailbox/thread only; search, label, category, pagination and extra segments are refused.', true); return; }
     pedit(pid, x => { const c = x.comments.find(y => y.id === cmid); if (!c) return; if (url) c.url = url; else delete c.url; }, `Source link: ${nameOf(pid)}`);
   }
   async function markSent(pid, cmid) {
