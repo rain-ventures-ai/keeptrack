@@ -15,20 +15,13 @@ import keeptrack  # noqa: E402
 
 class Docs(unittest.TestCase):
     def test_kit_is_v93_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(93, keeptrack.KIT_VERSION)
-        with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(93, json.load(f)["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            with open(os.path.join(KIT, plugin, "plugin.json"), encoding="utf-8") as f:
-                self.assertEqual("0.93.0", json.load(f)["version"], plugin)
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 93)   # the exact version is asserted by the newest tests/test_kit_v*.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v93 = f.read().split("### v93 (schema 4)", 1)[1].split("### v92", 1)[0]
         for words in ("kit-update", "Resolve names before you extract actions", "No migration", "mailto"):
             self.assertIn(words, v93)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v93", f.read())
-        with open(os.path.join(REPO, "board", "board.js"), encoding="utf-8") as f:
-            self.assertIn("const PAGE_KIT = 93;", f.read())
 
     def test_notes_skill_resolves_names_from_attendee_emails(self):
         with open(os.path.join(KIT, "skills", "keeptrack-notes", "SKILL.md"), encoding="utf-8") as f:

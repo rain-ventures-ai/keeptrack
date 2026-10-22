@@ -17,7 +17,7 @@ If you selected **Tasks** when you made your board, you also have these views. T
 - **Kanban:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Click or tap a card to open it, or focus it and press Enter or Space. Inline controls still work without opening the card. Each card shows compact **Created** and **Active** ages; activity includes edits, comments, history and agent runs. Hover a relative time for its exact date and time.
 - **List**, **Calendar** and **Schedule:** the same tasks by group, by due date and by week.
 - **Activity:** what was done today, yesterday or on a day that you select, by you and your agents. **📋 Copy** gives it as Markdown.
-- **@Mentions:** every comment that mentions you (`@your-github-username`), newest first, with the task, its description and the comment. Your own comments are not shown. **New** means posted since you last opened that task. Click a row to open the task at that comment. Today shows an **@Mentions** tile when you have mentions. The filters apply here too.
+- **@Mentions:** every comment that mentions you (`@your-github-username`), newest first, with the task, its description and the comment. A mention on a project opens that project. A reply says who it is replying to. Your own comments are not shown. **New** means posted since you last opened that task or project. Click a row to open it at that comment. Today shows an **@Mentions** tile when you have mentions. The filters apply to task mentions.
 
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
 People, labels and the combined **Client & project** control use the full width. The client/project picker filters projects
@@ -35,7 +35,9 @@ click it and search finds it; a linked pull request also shows in the Pull reque
 five tests, a bad card and the same card written well. Agents follow the same guide.
 
 ## Images (screenshots)
-Add an image to a card's description or to a comment: paste it (Ctrl/Cmd+V), drag it into the box, or press **Image**. PNG, JPEG, GIF and WebP work, up to 2 MB; a bigger screenshot is made smaller first. The image is saved as a file in the board repo (`board/assets/<card>/`), and the text gets a short line such as `![Login page](assets/t_x/20261022-ab12cd.png)` where the image shows.
+Add an image to a card's description or to a comment: paste it (Ctrl/Cmd+V), drag it into the box, or press **Image**. In **Links**, **Add image** puts the same file in the card's links instead of in the text. PNG, JPEG, GIF and WebP work, up to 2 MB; a bigger screenshot is made smaller first. The image is saved as a file in the board repo (`board/assets/<card>/`), and the text or the link uses a short path such as `assets/t_x/20261022-ab12cd.png`. Opening that link shows the image.
+
+Reply to a comment with **Reply**. The reply sits under that comment, one level only. From the terminal: `keeptrack.py comment '#12' "text" --reply-to c_ab12cd`.
 
 Only people who can open the board can see the images. Don't add a screenshot with confidential client detail: put that in Drive and link it. From the terminal: `keeptrack.py attach '#12' screenshot.png "what it shows"` (`--details` adds it to the description instead). Images are not available on hosted boards yet.
 

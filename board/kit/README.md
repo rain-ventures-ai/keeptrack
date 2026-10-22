@@ -117,7 +117,9 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // v84 optional company record: stage (one of settings.stages; absent = the most advanced
                                                  // stage among its people), owner (a board member's login), domain, notes
   "projects": [{ "id": "pr_ab12cd34", "client": "Acme", "name": "Phase one rollout", "north_star": "…", "status": "active | done | paused",
-                  "links": [], "people": ["name@example.com"], "created": "…", "updated": "…" }],   // optional; split v4 uses projects/<id>.json instead
+                  "links": [], "people": ["name@example.com"], "comments": [], "created": "…", "updated": "…" }],
+                                                 // optional; split v4 uses projects/<id>.json instead
+                                                 // v94 optional comments: same shape as a card comment, including reply_to
   "goals": [{ "id": "g_ab12cd34ef", "title": "Revenue", "metric": "revenue per month", "target": "£10,000", "current": "£4,200",
                "start": "2026-08-10", "end": "2026-10-31", "status": "active | done | dropped", "created": "…", "updated": "…" }],
                                                  // v83 optional: what the board works towards; a card links to one with "goal" (below)
@@ -138,11 +140,13 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
     "assignees": ["osouthgate", "JezHub"],         // GitHub usernames (people)
     "details": "free text; URLs become clickable",
     "todos":   [{ "id": "d_ab12cd", "text": "…", "done": false, "doneBy": "…", "doneAt": "…" }],   // checklist inside the card (not separate tasks)
-    "comments": [{ "id": "c_ab12cd", "at": "…", "by": "JezHub", "text": "append-only stream for people and agents" }],
+    "comments": [{ "id": "c_ab12cd", "at": "…", "by": "JezHub", "text": "append-only stream for people and agents", "reply_to": "c_parent" }],
+    // reply_to (v94, optional) is one level only: the parent comment's id. A reply cannot point at another reply.
     // a comment can carry "session_url" (the Claude session that works on it). type "activity" is a one-line event that the web board adds, for example
     // { "type": "activity", "by": "claude", "text": "Claude started a session for @JezHub: https://claude.ai/code/session_…", "session_url": "…", "reply_to": "c_ab12cd" }
+    // an activity line's reply_to stays flat: it names the comment that started the session, and nothing replies to the activity line.
     "history": [{ "at": "…", "by": "claude@osouthgate", "text": "✓ step one" }],               // automatic log, newest last, capped at 200
-    "links":    [{ "title": "Drive folder or PR", "url": "https://… or /local/path" }],   // task resources/references; GitHub issue/PR/repo URLs show as chips
+    "links":    [{ "title": "Drive folder or PR", "url": "https://… or /local/path or assets/<card id>/<file>.png" }],   // task resources; an assets/ image opens from the board files (v94)
     "contacts": [{ "name": "…", "role": "…", "email": "…", "phone": "…" }],
     "claim": null,                                 // see below
     "last_run": null,                              // set by `done`: the finished claim, shown as one "Last run" line
@@ -338,7 +342,7 @@ Never pass `--session` with an id you did not generate for this run, and never `
 | Several items in one save (kit v78) | `add "Title" --todo "step" --link URL "title"` (both repeatable); `todo-add ID -` (one per line from stdin); `link ID -` (stdin: URL, tab, title per line) |
 | Labels | `labels`, `label-add NAME [--color #hex]`, `label-set NAME [--rename NEW] [--color #hex]`, `label-rm NAME [--force]`. `add --label` and `task-set --label` create a missing label in grey, as the web board does |
 | Clients | `clients` (with each company's stage, owner and domain), `client-rename OLD NEW` (tasks, projects, people's company and client info follow), `client-rm NAME` (only when unused), `client-set NAME [--north-star ..] [--stage S] [--owner LOGIN] [--domain D] [--notes ..\|-]` (kit v84; `""` clears a field; the stage must be in `settings.stages` and the owner a board member), `client-link`, `client-unlink CLIENT URL` (URL or title, as `unlink`) |
-| Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links and open tasks), `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL [--title]`, `project-unlink REF URL` (URL or title, as `unlink`), `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
+| Projects | `projects [--client] [--status active\|done\|paused] [-q]`, `project REF` (goal, people, links, comments and open tasks), `project-comment REF "text" [--reply-to CID]`, `project-comments REF`, `project-add NAME --client C [--north-star]`, `project-set REF [--name] [--client] [--north-star] [--status]`, `project-link REF URL [--title]`, `project-unlink REF URL` (URL or title, as `unlink`), `project-person REF EMAIL [--remove]`, `project-remove REF [--clear-project]` |
 | Columns | `columns` (with card counts), `column-add NAME [--after ID]`, `column-set ID --rename NAME` (the id stays), `column-move ID --before ID\|--after ID`, `column-rm ID [--move-to ID]` (refuses while the column has cards unless `--move-to` says where they go; never `todo`, `in-progress`, `done` or the last column). New ids are a slug of the name |
 | Board members | `members`, `me`, `member-add USER [--name] [--email ..] [--timezone ..]`, `member-set USER [--name] [--email ..] [--remove-email ..] [--timezone ..]`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
 | Agents | `agents`, `agent-add NAME`, `agent-rm NAME [--unassign]` (the names the web board uses in filters and assignment; never one with an active claim) |
