@@ -132,15 +132,28 @@ function png(w = 40, h = 30) {
     await page.waitForFunction(() => /\n!\[pasted\]\(assets\/t_one\/\d{8}-[0-9a-f]{12}\.png\)$/.test(document.getElementById('cDetails').value));
     assert.equal(puts.length, 2);
     assert.equal(await page.locator('#descImage').count(), 1, 'the description toolbar has an Image button');
+    // ---- a photo's EXIF (GPS, owner) never reaches the repo: the page draws the image again before upload ----
+    const jpegB64 = await page.evaluate(() => new Promise(res => { const c = document.createElement('canvas'); c.width = 30; c.height = 20; c.getContext('2d').fillRect(0, 0, 30, 20);
+      c.toBlob(b => b.arrayBuffer().then(a => { let s = ''; new Uint8Array(a).forEach(x => { s += String.fromCharCode(x); }); res(btoa(s)); }), 'image/jpeg', 0.9); }));
+    const jpeg = Buffer.from(jpegB64, 'base64'), exif = Buffer.from('Exif\0\0GPS-51.5074,-0.1278 OWNER-SECRET'), app1 = Buffer.concat([Buffer.from([0xff, 0xe1, 0, exif.length + 2]), exif]);
+    const tagged = Buffer.concat([jpeg.subarray(0, 2), app1, jpeg.subarray(2)]);
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'photo.jpg', mimeType: 'image/jpeg', buffer: tagged });
+    await page.waitForFunction(() => /!\[photo\]\(assets\/t_one\/\d{8}-[0-9a-f]{12}\.jpg\)/.test(document.getElementById('cDetails').value));
+    assert.equal(puts.length, 3); const up = assets[puts[2].path];
+    assert.deepEqual([...up.subarray(0, 3)], [0xff, 0xd8, 0xff], 'still a JPEG'); assert.equal(up.includes('OWNER-SECRET'), false, 'the EXIF is gone'); assert.equal(up.includes('GPS-51'), false);
     await shot(page, 'images-editing-1280');
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(native, [], 'no native dialogs');
 
-    // ---- read-only (demo) and hosted boards: no upload; the button says why ----
-    const ro = await browser.newPage({ viewport: { width: 390, height: 844 } }); const roErr = []; ro.on('pageerror', e => roErr.push(e.message));
-    await ro.addInitScript(INIT); await ro.addInitScript(() => { localStorage.removeItem('kb_token'); });
-    await ro.route('https://api.test/**', r => api.route(r)); await ro.goto(base + '/board/index.html#1');
-    await ro.waitForTimeout(1500);
-    assert.deepEqual(roErr, [], 'no page errors without a token'); await ro.close();
+    // ---- a read-only board here: the Image button is off, and a file that still reaches it is refused; nothing is uploaded ----
+    const ro = await browser.newPage({ viewport: { width: 390, height: 844 } }); const roErr = [], roPuts = []; ro.on('pageerror', e => roErr.push(e.message));
+    await ro.addInitScript(INIT); await ro.addInitScript(() => { localStorage.setItem('kb_ro:acme/board', '1'); });
+    await ro.route('https://api.test/**', r => { if (r.request().method() === 'PUT') roPuts.push(r.request().url()); return api.route(r); }); await ro.goto(base + '/board/index.html#1');
+    await ro.locator('#dlgCard[open]').waitFor(); await ro.locator('#cmText').click({ force: true }); await ro.evaluate(() => { document.getElementById('cmActions').hidden = false; });
+    assert.equal(await ro.locator('#cmImage').isDisabled(), true, 'read-only: the Image button is off, like the comment box');
+    assert.equal(await ro.locator('#cmText').isDisabled(), true);
+    await ro.locator('#cmImage input[type=file]').setInputFiles({ name: 'x.png', mimeType: 'image/png', buffer: png() });   // even a file that reaches the input
+    await ro.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /read-only/.test(x.textContent)));
+    assert.deepEqual(roPuts, [], 'nothing is written'); assert.deepEqual(roErr, [], 'no page errors when read-only'); await ro.close();
     console.log('images: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

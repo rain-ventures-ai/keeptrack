@@ -396,14 +396,20 @@ if (typeof window !== 'undefined') (() => {
   const MD_IMG = /!\[([^\]\n]{0,200})\]\((assets\/[^\s)]{1,200})\)/g;
   const ASSET_RE = /^assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(png|jpe?g|gif|webp))$/i;
   const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }, IMG_MAX = 2 * 1024 * 1024;
-  const imgCache = new Map();   // assets/... -> Promise of an object URL ('' when it cannot be read)
+  const imgCache = new Map(), IMG_KEEP = 40;   // assets/... -> Promise of an object URL; the newest 40, older ones let go
+  function cacheImage(rel, p) {
+    imgCache.delete(rel); imgCache.set(rel, p);
+    while (imgCache.size > IMG_KEEP) { const [old, op] = imgCache.entries().next().value; imgCache.delete(old); op.then(u => { if (u) URL.revokeObjectURL(u); }); }   // an image still on screen keeps showing
+  }
   function assetBlobUrl(rel) {
-    if (!imgCache.has(rel)) imgCache.set(rel, (async () => {
+    if (imgCache.has(rel)) { const p = imgCache.get(rel); cacheImage(rel, p); return p; }   // used again: the newest
+    const p = (async () => {
       try { const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' }); if (!r.ok) return '';
         const bytes = new Uint8Array(await r.arrayBuffer()), type = IMG_TYPES[rel.split('.').pop().toLowerCase()];
         if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return '';   // what the file is, not what it is called
-        return URL.createObjectURL(new Blob([bytes], { type })); } catch { return ''; } })());
-    return imgCache.get(rel);
+        return URL.createObjectURL(new Blob([bytes], { type })); } catch { return ''; } })();
+    cacheImage(rel, p); p.then(u => { if (!u && imgCache.get(rel) === p) imgCache.delete(rel); });   // a failed read is tried again next time
+    return p;
   }
   function imgKind(b) {   // the image type from its first bytes; '' for anything else (an SVG or HTML never passes)
     const at = (i, xs) => xs.every((x, k) => b[i + k] === x);
@@ -2470,11 +2476,12 @@ if (typeof window !== 'undefined') (() => {
   // ---- adding images (card #292, kit v92): paste, drop or pick; written to assets/<card id>/ in the board repo, then
   // put in the box as ![alt](assets/...). PNG, JPEG, GIF, WebP; one over 2 MB is scaled down (not a GIF), or refused.
   const imgUploadBlock = () => ro ? 'This board is read-only here.' : HOSTED ? 'Images are not available on hosted boards yet.' : DEMO ? 'Images cannot be added to the demo board.' : !cfg().token ? 'Connect the board with a token to add images.' : '';
-  async function shrinkImage(file) {   // longest side at most 2000px; a PNG stays PNG unless that is still over 2 MB
+  async function redrawImage(file) {   // drawn again: no EXIF (GPS, device), no text chunks; longest side at most 2000px;
+    // same type where the browser can write it, JPEG when the result is still over 2 MB
     try { const bmp = await createImageBitmap(file), k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height)), cv = document.createElement('canvas');
       cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k)); cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
       const as = (type, q) => new Promise(res => cv.toBlob(res, type, q));
-      let out = file.type === 'image/png' ? await as('image/png') : null; if (!out || out.size > IMG_MAX) out = await as('image/jpeg', 0.85);
+      let out = await as(file.type, 0.9); if (!out || out.size > IMG_MAX) out = await as('image/jpeg', 0.85);
       return out; } catch { return null; }
   }
   const b64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
@@ -2482,8 +2489,10 @@ if (typeof window !== 'undefined') (() => {
     const block = imgUploadBlock(); if (block) { toast(block, true); return ''; }
     if (!safeCardId(cardId)) return '';
     if (!Object.values(IMG_TYPES).includes(file.type)) { toast('Only PNG, JPEG, GIF or WebP images can be added.', true); return ''; }
-    let blob = file; if (blob.size > IMG_MAX && file.type !== 'image/gif') blob = await shrinkImage(file);
-    if (!blob || blob.size > IMG_MAX) { toast('That image is over 2 MB. Make it smaller, or put it in Drive and link it.', true); return ''; }
+    if (!imgKind(new Uint8Array(await file.slice(0, 16).arrayBuffer()))) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
+    let blob = file; if (file.type !== 'image/gif') blob = await redrawImage(file);   // a GIF keeps its frames (it has no EXIF)
+    if (!blob) { toast('That image could not be read. Try saving it again as PNG or JPEG.', true); return ''; }
+    if (blob.size > IMG_MAX) { toast('That image is over 2 MB. Make it smaller, or put it in Drive and link it.', true); return ''; }
     const bytes = new Uint8Array(await blob.arrayBuffer()), kind = imgKind(bytes); if (!kind) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
     const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[kind];
     const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].slice(0, 6).map(x => x.toString(16).padStart(2, '0')).join('');
@@ -2492,9 +2501,10 @@ if (typeof window !== 'undefined') (() => {
     setStatus('Uploading image…', 'saving');
     try {
       const r = await gh('PUT', { message: `Image: ${t ? '#' + t.num : cardId}`, content: b64(bytes), branch: cfg().branch }, false, { path: remotePath(rel) });
-      if (!r.ok && r.status !== 422) { toast(`The image was not saved (GitHub error ${r.status}).`, true); setStatus('Image not saved', 'err'); return ''; }   // 422: the same image is already there (same name, same bytes)
+      const there = r.status === 422 && /sha/i.test(String((await r.json().catch(() => ({}))).message || ''));   // 422 asking for a sha: a file of this name (these bytes) is there
+      if (!r.ok && !there) { toast(`The image was not saved (GitHub error ${r.status}).`, true); setStatus('Image not saved', 'err'); return ''; }
     } catch (e) { toast('The image was not saved: ' + (isTimeout(e) ? 'GitHub did not answer.' : e.message), true); setStatus('Image not saved', 'err'); return ''; }
-    imgCache.set(rel, Promise.resolve(URL.createObjectURL(new Blob([bytes], { type: kind })))); setStatus('Image saved', 'ok');
+    cacheImage(rel, Promise.resolve(URL.createObjectURL(new Blob([bytes], { type: kind })))); setStatus('Image saved', 'ok');
     return `![${alt}](${rel})`;
   }
   async function addImages(ta, files) {   // upload each image, then put its Markdown where the cursor was

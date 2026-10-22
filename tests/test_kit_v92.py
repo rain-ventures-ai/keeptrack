@@ -79,6 +79,7 @@ class Attach(unittest.TestCase):
         self.assertEqual(1, len(self.assets()))
 
     def test_refuses_what_is_not_an_image_or_too_big(self):
+        n = len(self.card().get("comments", []))
         fake = os.path.join(self.tmp.name, "x.png")
         for body in (b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', b"<html></html>", b"\x89PN"):
             with open(fake, "wb") as f:
@@ -90,8 +91,7 @@ class Attach(unittest.TestCase):
         r = self.run_kt("attach", "t_first", fake)
         self.assertNotEqual(0, r.returncode); self.assertIn("over 2 MB", r.stderr)
         self.assertEqual([], self.assets())
-        n = len(self.card().get("comments", []))
-        self.assertEqual(n, len(self.card().get("comments", [])))
+        self.assertEqual(n, len(self.card().get("comments", [])), "a refused attach adds no comment")
 
     def test_image_kind_reads_the_bytes(self):
         self.assertEqual("png", keeptrack.image_kind(png()))
@@ -105,6 +105,53 @@ class Attach(unittest.TestCase):
         self.assertFalse(keeptrack._wanted_rel("assets/t_first/x.png"))
         r = self.run_kt("doctor")
         self.assertNotIn("assets", r.stdout + r.stderr)
+
+    def test_attach_strips_metadata(self):
+        exif = b"Exif\x00\x00GPS-51.5074,-0.1278 OwnerName"
+        app1 = b"\xff\xe1" + (len(exif) + 2).to_bytes(2, "big") + exif
+        jpeg = b"\xff\xd8" + app1 + b"\xff\xdb\x00\x03\x00" + b"\xff\xda\x00\x02" + b"scan-data\xff\xd9"
+        path = os.path.join(self.tmp.name, "photo.jpg")
+        with open(path, "wb") as f:
+            f.write(jpeg)
+        r = self.run_kt("attach", "t_first", path)
+        self.assertEqual(0, r.returncode, r.stderr)
+        [name] = self.assets()
+        with open(os.path.join(self.dir, "assets", "t_first", name), "rb") as f:
+            saved = f.read()
+        self.assertNotIn(b"GPS", saved); self.assertNotIn(b"Exif", saved)
+        self.assertEqual(b"\xff\xd8\xff\xdb\x00\x03\x00\xff\xda\x00\x02scan-data\xff\xd9", saved, "everything else kept, in order")
+
+    def test_strip_png_and_webp_metadata(self):
+        ch = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+        p = png()
+        tagged = p[:-12] + ch(b"tEXt", b"Author\x00Jo Bloggs") + ch(b"eXIf", b"MM\x00*GPS") + p[-12:]
+        self.assertEqual(p, keeptrack.strip_image_metadata(tagged, "png"))
+        vp8x = b"VP8X" + (10).to_bytes(4, "little") + bytes([0x0C]) + b"\x00" * 9
+        img = b"VP8L" + (5).to_bytes(4, "little") + b"/abcd" + b"\x00"
+        ex = b"EXIF" + (4).to_bytes(4, "little") + b"GPS!"
+        body = vp8x + img + ex
+        webp = b"RIFF" + (len(body) + 4).to_bytes(4, "little") + b"WEBP" + body
+        out = keeptrack.strip_image_metadata(webp, "webp")
+        self.assertNotIn(b"GPS!", out); self.assertEqual("webp", keeptrack.image_kind(out))
+        self.assertEqual(len(out) - 8, int.from_bytes(out[4:8], "little"), "the RIFF size matches")
+        self.assertEqual(0, out[20] & 0x0C, "the EXIF and XMP flags are cleared")
+        with self.assertRaises(ValueError):
+            keeptrack.strip_image_metadata(p[:20], "png")
+
+    def test_proxy_blocked_api_write_falls_back_to_git(self):
+        """In a sandbox whose proxy refuses API writes (403 ... proxy), attach saves the way every other write does."""
+        calls = []
+        old = (keeptrack.gh, keeptrack.load, keeptrack.WRITE, keeptrack.FILE)
+        try:
+            keeptrack.WRITE = "auto"; keeptrack.FILE = self.file; keeptrack._BOARD_STATES.clear()
+            keeptrack.gh = lambda *a, **k: (calls.append(a) or (1, json.dumps({"message": "Blocked by the egress proxy"}), "HTTP 403"))
+            keeptrack.load = lambda: ({}, {"mode": "local"})
+            keeptrack.save_asset("assets/t_first/20261022-abcdefabcdef.png", png(), "Image: #1", {"mode": "api"})
+            self.assertEqual("git", keeptrack.WRITE)
+            self.assertEqual(1, len(calls))
+            self.assertTrue(os.path.exists(os.path.join(self.dir, "assets", "t_first", "20261022-abcdefabcdef.png")))
+        finally:
+            keeptrack.gh, keeptrack.load, keeptrack.WRITE, keeptrack.FILE = old; keeptrack._BOARD_STATES.clear()
 
     def test_help_lists_attach(self):
         self.assertIn("attach", self.run_kt("help", "checklists-comments").stdout)

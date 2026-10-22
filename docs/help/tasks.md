@@ -37,7 +37,7 @@ five tests, a bad card and the same card written well. Agents follow the same gu
 ## Images (screenshots)
 Add an image to a card's description or to a comment: paste it (Ctrl/Cmd+V), drag it into the box, or press **Image**. PNG, JPEG, GIF and WebP work, up to 2 MB; a bigger screenshot is made smaller first. The image is saved as a file in the board repo (`board/assets/<card>/`), and the text gets a short line such as `![Login page](assets/t_x/20261022-ab12cd.png)` where the image shows.
 
-Only people who can open the board can see the images. Don't add a screenshot with confidential client detail: put that in Drive and link it. From the terminal: `keeptrack.py attach '#12' screenshot.png "what it shows"` (`--details` adds it to the description instead). Images are not available on hosted boards yet.
+Only people who can open the board can see the images. A photo's hidden details (location, device) are removed before it is saved. Don't add a screenshot that shows a password, token or confidential client detail: an image stays in the repo's history. Put that in Drive and link it. From the terminal: `keeptrack.py attach '#12' screenshot.png "what it shows"` (`--details` adds it to the description instead). Images are not available on hosted boards yet.
 
 ## Tasks for a person
 Open a person and type in **☑ Tasks**. The task is linked to that person and their company, and it shows on **Today** when it is due.
