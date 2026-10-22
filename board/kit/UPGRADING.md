@@ -25,6 +25,22 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v94 (schema 4)
+Project comments, one-level replies, and an image in a card's Links (private-tasks cards #300, #301, #303). No migration
+and no schema change. Optional fields only; older kits leave them as they are.
+- A project may carry `comments[]` in the same shape as a card comment (`id`, `at`, `by`, `text`, and optional
+  `reply_to`). `project-comment REF "text" [--reply-to CID]` posts one, `project-comments REF` prints it, and `project`
+  prints the comments newest last. The project drawer has a Comments section after Links and before Open tasks
+  (Markdown, @mentions, Ctrl/Cmd+Enter). An @mention in a project comment shows in @Mentions and opens the project.
+- Anywhere comments exist on a card or a project, `reply_to` is the parent comment's id. One level only, like Slack:
+  `--reply-to` is refused when the parent is missing, is itself a reply, or is an activity line (activity stays flat).
+  `comments` and `project-comments` print each reply indented under its parent. The card Activity stream has a Reply
+  button and indents replies. @Mentions says "replying to @who". A reply does not clear a waiting card.
+- `check_link_url` accepts `assets/<id>/<file>.(png|jpg|jpeg|gif|webp)`. `attach <card> <image> --link` writes the file
+  and adds that path to the card's Links (refused together with `--details`). The card's Links section has **Add image**.
+  An assets/ path in Links opens through the same board-file read as an inline image.
+- Run `kit-update` only. Check: `python3 board/keeptrack.py help clients-projects` lists `project-comment`, and
+  `help checklists-comments` mentions `--reply-to` on `comment`.
 ### v93 (schema 4)
 Meeting-notes name resolution: auto-generated notes (Gemini and similar) often garble spoken names in the body while
 keeping correct attendee emails. The keeptrack-notes skill, its routine prompt and notes-folder-to-tasks now resolve

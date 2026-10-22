@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 93;
+  const PAGE_KIT = 94;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -395,6 +395,7 @@ if (typeof window !== 'undefined') (() => {
   // image is ever loaded (it could track who opened the card).
   const MD_IMG = /!\[([^\]\n]{0,200})\]\((assets\/[^\s)]{1,200})\)/g;
   const ASSET_RE = /^assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(png|jpe?g|gif|webp))$/i;
+  const assetPath = v => { const s = String(v || '').trim(); return ASSET_RE.test(s) ? s : ''; };
   const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }, IMG_MAX = 2 * 1024 * 1024;
   const imgCache = new Map();   // assets/... -> Promise of an object URL ('' when it cannot be read)
   function assetBlobUrl(rel) {
@@ -1833,9 +1834,10 @@ if (typeof window !== 'undefined') (() => {
   const saveSeen = () => LS.set(seenKey(), JSON.stringify(seenMap));
   const maxAt = arr => arr.reduce((m, x) => (x.at > m ? x.at : m), '');
   const stampsOf = t => ({ c: maxAt(t.comments), h: maxAt(t.history) });
-  function initSeen() { if (loadSeen()) return; seenMap = {}; state.tasks.forEach(t => { seenMap[t.id] = stampsOf(t); }); saveSeen(); }   // only after a successful load
-  function markSeen(id) { if (fromSnap) return; const t = state.tasks.find(x => x.id === id), m = loadSeen(); if (!t || !m) return; const s = stampsOf(t), o = m[id]; if (o && o.c === s.c && o.h === s.h) return; m[id] = s; saveSeen(); }
-  function markAllSeen() { if (fromSnap) return; const m = loadSeen() || (seenMap = {}); state.tasks.forEach(t => { m[t.id] = stampsOf(t); }); saveSeen(); }
+  const seenStamp = item => ({ c: maxAt(item.comments || []), h: maxAt(item.history || []) });
+  function initSeen() { if (loadSeen()) return; seenMap = {}; state.tasks.forEach(t => { seenMap[t.id] = stampsOf(t); }); (state.projects || []).forEach(pr => { if (pr && pr.id) seenMap[pr.id] = seenStamp(pr); }); saveSeen(); }   // only after a successful load
+  function markSeen(id) { if (fromSnap) return; const t = state.tasks.find(x => x.id === id), pr = !t && (state.projects || []).find(p => p.id === id), item = t || pr, m = loadSeen(); if (!item || !m) return; const s = t ? stampsOf(t) : seenStamp(pr), o = m[id]; if (o && o.c === s.c && o.h === s.h) return; m[id] = s; saveSeen(); }
+  function markAllSeen() { if (fromSnap) return; const m = loadSeen() || (seenMap = {}); state.tasks.forEach(t => { m[t.id] = stampsOf(t); }); (state.projects || []).forEach(pr => { if (pr && pr.id) m[pr.id] = seenStamp(pr); }); saveSeen(); }
   const mentionsMe = text => { const me = (cfg().me || '').replace(/[^\w-]/g, ''); return !!me && new RegExp('(?<![\\w@#&/])@' + me + '(?![\\w-])', 'i').test(String(text || '')); };
   // Your own agents (by "<agent>@<you>") act for you: their history entries are your work, not news, and their comments are
   // news only when they @mention you (a question or a hand-back). Otherwise one busy agent marks every card it touches as new.
@@ -2356,16 +2358,63 @@ if (typeof window !== 'undefined') (() => {
     return box;
   }
   function syncHistBtn() { const b = $('cmHistBtn'); if (!b) return; const on = cmHist(); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.title = on ? 'Hide the history entries between the comments' : 'Show the card history between the comments'; b.classList.toggle('on', on); }
+  // One level of replies (kit v94), like Slack: a comment with reply_to hangs under that comment. Activity lines stay
+  // flat even when they carry reply_to (they point at the comment that started the session). A reply to a reply is not a thread.
+  function commentParent(list, c) {
+    const pid = c && typeof c.reply_to === 'string' ? c.reply_to : '';
+    if (!pid || c.type === 'activity') return null;
+    const p = (list || []).find(x => x && x.id === pid);
+    if (!p || p.type === 'activity' || p.reply_to) return null;
+    return p;
+  }
+  function commentGroups(list) {
+    const replies = new Map(), tops = [];
+    (list || []).forEach(c => { const p = commentParent(list, c); if (p) { if (!replies.has(p.id)) replies.set(p.id, []); replies.get(p.id).push(c); } else tops.push(c); });
+    return { tops, replies };
+  }
+  const replyWho = by => '@' + String(by || '?').split('@')[0];
+  function commentCard(cm, opts) {
+    const row = el('div', 'cmcard' + (opts.mine ? ' mine' : '') + (opts.isNew ? ' cmnew' : '')), head = el('div', 'cmhead');
+    row.dataset.cid = cmKey(cm);
+    head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), ...(opts.isNew ? [newPill()] : []));
+    const tm = el('time', null, ago2(cm.at)); tm.title = cm.at || ''; head.append(tm);
+    if (safeUrl(cm.session_url)) { const a = elI('a', 'cmsess', 'bot', 'Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
+    if (opts.onReply) { const b = ui.button({ label: 'Reply', variant: 'ghost', size: 'sm' }); b.type = 'button'; b.classList.add('cmreplybtn'); b.onclick = opts.onReply; head.append(b); }
+    const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body);
+    if (opts.linkTask) { const add = commentLinkAdds(opts.linkTask, body); if (add) row.append(add); }
+    return row;
+  }
+  function commentThread(cm, list, opts) {
+    const parent = commentParent(list, cm) || (cm.type !== 'activity' && !cm.reply_to ? cm : null);
+    const onReply = opts.canReply && parent ? () => opts.onReply(parent) : null;
+    const thread = el('div', 'cmthread');
+    thread.append(commentCard(cm, { mine: opts.mine, isNew: opts.isNew, onReply, linkTask: opts.linkTask }));
+    const kids = opts.replies && opts.replies.get(cm.id);
+    if (kids && kids.length) {
+      const box = el('div', 'cmreplies');
+      kids.forEach(r => box.append(commentCard(r, { mine: mentionsMe(r.text), isNew: opts.fresh ? opts.fresh({ c: r }) : false, onReply, linkTask: opts.linkTask })));
+      thread.append(box);
+    }
+    return thread;
+  }
+  let cmReplyTo = null;
+  function replyBar(bar, who, onCancel) {
+    bar.hidden = false; bar.textContent = '';
+    bar.append(document.createTextNode('Replying to ' + replyWho(who)));
+    const x = ui.button({ label: 'Cancel', variant: 'ghost', size: 'sm', onClick: onCancel }); x.type = 'button'; bar.append(x);
+  }
+  function clearCardReply() { cmReplyTo = null; const bar = $('cmReplyBar'); if (bar) { bar.hidden = true; bar.textContent = ''; } }
   function renderComments() {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
     if (HOSTED && hostedHistoryLoading($('cmStream'), [`cards/${t.id}.json`])) { cmSig = ''; $('cmCount').textContent = ''; return; }
     const hist = cmHist() ? (t.history || []) : [], hl = hist[hist.length - 1];
-    const sig = JSON.stringify(t.comments.map(m => m.id + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : ''); if (sig === cmSig) return; cmSig = sig;
+    const sig = JSON.stringify(t.comments.map(m => m.id + (m.reply_to || '') + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : ''); if (sig === cmSig) return; cmSig = sig;
     $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
     const arrived = noteFresh(t), fresh = x => cmFresh.has(cmItemKey(x));
     // one list, oldest first (a stable sort keeps the saved order on equal times), then shown newest first: the composer stays at the top
     const timed = (xs, k) => { let last = 0; return xs.map(x => { const v = Date.parse(x.at); last = Number.isFinite(v) ? v : last; return { [k]: x, at: last }; }); };   // no time: keeps its place after the entry before it
-    const items = [...timed(hist, 'h'), ...timed(t.comments, 'c')].sort((a, b) => a.at - b.at).reverse();
+    const grouped = commentGroups(t.comments);
+    const items = [...timed(hist, 'h'), ...timed(grouped.tops, 'c')].sort((a, b) => a.at - b.at).reverse();
     let run = [];
     const flush = () => { if (run.length) box.append(histRun(run, fresh)); run = []; };
     items.forEach(it => {
@@ -2377,12 +2426,7 @@ if (typeof window !== 'undefined') (() => {
         if (url) { const a = el('a', null, 'Open session ↗'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; row.append(a); }
         const tm = el('time', null, ago2(cm.at)); tm.title = cm.at; row.append(tm); box.append(row); return;
       }
-      const row = el('div', 'cmcard' + (mentionsMe(cm.text) ? ' mine' : '') + (fresh(it) ? ' cmnew' : '')), head = el('div', 'cmhead');
-      row.dataset.cid = cmKey(cm);
-      head.append(avatar(String(cm.by || '?').replace(/@.*/, '')), el('b', null, cm.by || '?'), ...(fresh(it) ? [newPill()] : []), el('time', null, ago2(cm.at)));
-      head.lastChild.title = cm.at; if (safeUrl(cm.session_url)) { const a = elI('a', 'cmsess', 'bot', 'Session ↗'); a.href = safeUrl(cm.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = 'The Claude session that works on this comment'; head.append(a); }
-      const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); box.append(row);
-      const add = commentLinkAdds(t, body); if (add) row.append(add);
+      box.append(commentThread(cm, t.comments, { mine: mentionsMe(cm.text), isNew: fresh(it), fresh, replies: grouped.replies, canReply: !ro, linkTask: t, onReply: parent => { cmReplyTo = parent; replyBar($('cmReplyBar'), parent.by, clearCardReply); $('cmActions').hidden = false; $('cmText').focus(); } }));
     });
     flush();
     if (!items.length) box.append(el('p', 'hint cmempty', cmHist() ? 'No comments or changes yet.' : 'No comments yet.'));
@@ -2448,9 +2492,14 @@ if (typeof window !== 'undefined') (() => {
         if (other && !(await ui.confirm({ title: 'Send to Claude anyway?', body: `${t0.claim.agent} already has a running session on this task. Cancel posts the comment without starting Claude.`, confirmLabel: 'Send to Claude' }))) { /* post only */ }
         else { const a = await askSend(t0 ? t0.num : '?'); if (a === 'cancel') return; send = a === 'send'; } }
     }
-    const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me; ta.value = ''; autosize(ta); $('cmPost').disabled = true;
+    const n0 = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.length, cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me;
+    const replyTo = cmReplyTo && cmReplyTo.id, parentNow = replyTo && commentParent((state.tasks.find(x => x.id === id) || {}).comments || [], { reply_to: replyTo, type: 'comment' });
+    if (replyTo && (!parentNow || parentNow.id !== replyTo)) { toast('Replies are one level, under a comment. That comment is not one.', true); clearCardReply(); return; }
+    ta.value = ''; autosize(ta); $('cmPost').disabled = true; clearCardReply();
     let sent = send, why = '', ph = '';
-    await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return; t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text });
+    await mutate(n => { const t = n.tasks.find(x => x.id === id); if (!t) return;
+      if (replyTo && !commentParent(t.comments, { reply_to: replyTo, type: 'comment' })) return;
+      t.comments.push({ id: cid, at: nowIso(), by: who || 'someone', text, ...(replyTo ? { reply_to: replyTo } : {}) });
       const live = activeClaim(t), full = send && !waitingOf(t) ? agentLimitFull(id, n) : ''; sent = send && !waitingOf(t) && !(live && live.session_id !== seen) && !full;   // the newer board may wait, be at the agent limit, or someone took it meanwhile
       why = send && !sent ? (waitingOf(t) ? waitingBlock(t) + ' Posted as a normal comment.' : full ? full + ' Posted as a normal comment.' : 'Someone took this task meanwhile; posted as a normal comment.') : '';
       if (sent) { if (!t.assignees.includes(who)) t.assignees.push(who); t.claim = pendingClaudeClaim(who); ph = t.claim.session_id; }   // the routine claims only cards assigned to its person
@@ -2463,10 +2512,11 @@ if (typeof window !== 'undefined') (() => {
       const t1 = state.tasks.find(x => x.id === id);
       if (!(await waitArrived(id, ph))) await triggerClaude(t1, who, cid);
     }
-    if ((state.tasks.find(x => x.id === id) || { comments: [] }).comments.length <= n0) { ta.value = text; autosize(ta); toast('Comment not saved. Your text is still in the box.', true); }
+    if ((state.tasks.find(x => x.id === id) || { comments: [] }).comments.length <= n0) { ta.value = text; autosize(ta); if (replyTo) { const back = (state.tasks.find(x => x.id === id) || { comments: [] }).comments.find(c => c.id === replyTo); if (back) { cmReplyTo = back; replyBar($('cmReplyBar'), back.by, clearCardReply); } } toast('Comment not saved. Your text is still in the box.', true); }
     cmSig = ''; renderComments(); ta.focus();
   }
   $('cmPost').onclick = postComment;
+  { const bar = el('div', 'cmreplyto'); bar.id = 'cmReplyBar'; bar.hidden = true; $('cmText').before(bar); }
   // ---- adding images (card #292, kit v92): paste, drop or pick; written to assets/<card id>/ in the board repo, then
   // put in the box as ![alt](assets/...). PNG, JPEG, GIF, WebP; one over 2 MB is scaled down (not a GIF), or refused.
   const imgUploadBlock = () => ro ? 'This board is read-only here.' : HOSTED ? 'Images are not available on hosted boards yet.' : DEMO ? 'Images cannot be added to the demo board.' : !cfg().token ? 'Connect the board with a token to add images.' : '';
@@ -3012,9 +3062,15 @@ if (typeof window !== 'undefined') (() => {
     const me = (cfg().me || '').toLowerCase(), m = loadSeen(), seen = m || {}, hideDone = !all && $('fHideDone').checked, rows = [];
     if (!me) return rows;
     const at = '@' + me.replace(/[^\w-]/g, ''), re = new RegExp('(?<![\\w@#&/])' + at + '(?![\\w-])', 'i');   // compiled once: Today runs this on every render
+    const hit = (c, s) => { const x = String(c.text || ''); return c.type !== 'activity' && String(c.by || '').toLowerCase() !== me && x.toLowerCase().includes(at) && re.test(x) ? { c, fresh: !!m && c.at > s.c } : null; };
     state.tasks.filter(t => all || (filtered(t) && !(hideDone && t.column === doneColId()))).forEach(t => {
       const s = seen[t.id] || { c: '' };
-      t.comments.forEach(c => { const x = String(c.text || ''); if (c.type !== 'activity' && String(c.by || '').toLowerCase() !== me && x.toLowerCase().includes(at) && re.test(x)) rows.push({ t, c, fresh: !!m && c.at > s.c }); });
+      t.comments.forEach(c => { const row = hit(c, s); if (row) rows.push({ t, ...row }); });
+    });
+    (state.projects || []).forEach(pr => {   // a mention on a project opens the project, not a card
+      if (!pr || !pr.id || !Array.isArray(pr.comments)) return;
+      const s = seen[pr.id] || { c: '' };
+      pr.comments.forEach(c => { const row = hit(c, s); if (row) rows.push({ pr, ...row }); });
     });
     return rows.sort((a, b) => (a.c.at < b.c.at ? 1 : a.c.at > b.c.at ? -1 : 0));
   }
@@ -3030,17 +3086,20 @@ if (typeof window !== 'undefined') (() => {
     wrap.append(sum);
     if (!rows.length) { wrap.append(ui.empty({ text: 'No comments mention you' + (filterDesc() ? ' with these filters.' : ' yet.'), icon: 'at-sign' })); board.append(wrap); return; }
     const list = el('div', 'mnlist');
-    rows.slice(0, MENTIONS_MAX).forEach(({ t, c, fresh }) => {
-      const r = el('button', 'mnrow' + (fresh ? ' fresh' : '')); r.type = 'button'; r.dataset.task = t.id; r.dataset.cid = cmKey(c);
-      r.setAttribute('aria-label', `#${t.num} ${t.title}: ${c.by || 'someone'} mentioned you ${ago2(c.at)}` + (fresh ? ', new' : ''));
-      const head = el('span', 'mnhead'); head.append(el('span', 'numchip', '#' + t.num), el('span', 'acttitle', t.title)); if (fresh) head.append(el('span', 'newb', 'New'));
-      head.append(el('span', 'ssub', cardSub(t)));
+    rows.slice(0, MENTIONS_MAX).forEach(({ t, pr, c, fresh }) => {
+      const r = el('button', 'mnrow' + (fresh ? ' fresh' : '')); r.type = 'button'; r.dataset.cid = cmKey(c);
+      const parent = commentParent(t ? t.comments : (pr.comments || []), c), reply = parent ? `replying to ${replyWho(parent.by)}` : '';
+      if (t) r.dataset.task = t.id; else r.dataset.project = pr.id;
+      r.setAttribute('aria-label', `${t ? '#' + t.num + ' ' + t.title : (pr.name || 'Project')}: ${c.by || 'someone'} mentioned you ${ago2(c.at)}` + (reply ? ', ' + reply : '') + (fresh ? ', new' : ''));
+      const head = el('span', 'mnhead'); head.append(el('span', 'numchip', t ? '#' + t.num : 'Project'), el('span', 'acttitle', t ? t.title : (pr.name || 'Project'))); if (fresh) head.append(el('span', 'newb', 'New'));
+      head.append(el('span', 'ssub', t ? cardSub(t) : [pr.client, pr.status || 'active'].filter(Boolean).join(' · ')));
       r.append(head);
-      if ((t.details || '').trim()) r.append(el('span', 'mndesc', snippet(mdPlain(t.details), 160)));
+      if (t && (t.details || '').trim()) r.append(el('span', 'mndesc', snippet(mdPlain(t.details), 160)));
       const cm = el('span', 'mncm'), who = el('span', 'mnwho'), tm = el('time', null, ago2(c.at)); tm.title = c.at;
       who.append(avatar(String(c.by || '?').replace(/@.*/, '')), el('b', null, c.by || '?'), tm);
+      if (reply) who.append(el('span', 'mnreply', reply));
       cm.append(who, el('span', 'mnbody', snippet(c.text, 400))); r.append(cm);   // plain text: a link inside the row's button would be a button in a button
-      r.onclick = () => openCard(t.id, { comment: cmKey(c) });
+      r.onclick = () => t ? openCard(t.id, { comment: cmKey(c) }) : openProject(pr.id, cmKey(c));
       list.append(r);
     });
     wrap.append(list);
@@ -3050,7 +3109,8 @@ if (typeof window !== 'undefined') (() => {
   function mentionsMarkdown() {
     const rows = mentionData(), f = filterDesc(), L = [`# @Mentions: @${cfg().me || '?'}`, '', `_${cfg().repo}${f ? ' · filters: ' + f : ''} · copied ${fmtStamp(new Date().toISOString())}_`, ''];
     if (!rows.length) { L.push('No comments mention you.'); return L.join('\n'); }
-    rows.forEach(({ t, c, fresh }) => L.push(`- **#${t.num} ${mdLine(t.title)}**${fresh ? ' (new)' : ''} · ${fmtStamp(c.at)} · ${c.by || '?'}: ${mdIndent(c.text)}`));
+    rows.forEach(({ t, pr, c, fresh }) => { const parent = commentParent(t ? t.comments : (pr.comments || []), c), reply = parent ? ` (replying to ${replyWho(parent.by)})` : '';
+      L.push(`- **${t ? '#' + t.num + ' ' + mdLine(t.title) : mdLine(pr.name || 'Project')}**${fresh ? ' (new)' : ''}${reply} · ${fmtStamp(c.at)} · ${c.by || '?'}: ${mdIndent(c.text)}`); });
     return L.join('\n');
   }
 
@@ -3455,7 +3515,8 @@ if (typeof window !== 'undefined') (() => {
     const todos = el('div', 'dtodos'); todos.id = 'cTodos';
     const todoAdd = drawerAddRow('cTodoNew', { placeholder: 'Add a checklist item', ghostLabel: 'Add item', label: 'New checklist item', onAdd: v => { const id = editing; addTodo(id, v).then(() => { if (editing === id) renderDlgTodos(); }); } });
     const links = el('div', 'dlist'); links.id = 'cLinkList';
-    const linkAdd = drawerAddRow('cLinkNew', { placeholder: 'URL or local path (Title | location)', ghostLabel: 'Add link', label: 'New link: a cloud URL or local path, optionally as Title | location', onAdd: addLinkLine });
+    const linkAdd = drawerAddRow('cLinkNew', { placeholder: 'URL, local path or assets/ image (Title | location)', ghostLabel: 'Add link', label: 'New link: a cloud URL, a local path or an assets/ image, optionally as Title | location', onAdd: addLinkLine });
+    const linkImage = linkImageButton();
     const linkHint = el('p', 'hint dhint', 'Working Drive, Dropbox or local files/folders, issues, pull requests and other supporting pages for this task. Cloud access needs the matching connector/plugin/MCP and account; a local path needs an agent session on that computer. Profile links such as LinkedIn belong on the person.');
     const contacts = el('div', 'dlist'); contacts.id = 'cContactList';
     const contactAdd = drawerAddRow('cContactNew', { placeholder: 'Find a CRM contact, or Name | role | email | phone', ghostLabel: 'Add contact', label: 'Find a CRM contact or add a new task contact', onAdd: addContactLine });
@@ -3466,7 +3527,7 @@ if (typeof window !== 'undefined') (() => {
       drawerSection('cDescSec', { title: 'Description', action: descActs, body: $('cDescParts') }),
       drawerSection('cRelSec', { title: 'Related cards', count: '', body: rel }),
       drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
-      drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint] }),
+      drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint, linkImage] }),
       drawerSection('cContactSec', { title: 'Contacts', count: '', body: [contacts, contactAdd] }),
       drawerSection('cmSec', { title: 'Activity', count: '', action: histBtn, body: $('cmParts') })
     ];
@@ -3503,7 +3564,7 @@ if (typeof window !== 'undefined') (() => {
   $('cBody').addEventListener('scroll', () => { const bar = $('cmNewBar'); if (bar.hidden) return; const b = $('cBody').getBoundingClientRect(), r = $('cmSec').getBoundingClientRect(); if (r.top < b.bottom - 60 && r.bottom > b.top) bar.hidden = true; }, { passive: true });
   $('cmHistBtn').onclick = () => { LS.set('kb_cm_hist', cmHist() ? '0' : ''); syncHistBtn(); cmSig = ''; renderComments(); };
   syncHistBtn();
-  $('cRawBtn').onclick = () => { LS.set('kb_md_raw', mdRaw() ? '' : '1'); syncRawBtn(); const t = taskNow(); if (t) { if (!editingDesc) renderDescView(t); cmSig = ''; renderComments(); } };
+  $('cRawBtn').onclick = () => { LS.set('kb_md_raw', mdRaw() ? '' : '1'); syncRawBtn(); const t = taskNow(); if (t) { if (!editingDesc) renderDescView(t); cmSig = ''; renderComments(); } if (editingProject) { prSig = ''; fillProjectDrawer(); } };
   syncRawBtn();
   function mdWrap(before, after = before, ph = 'text') {
     const ta = $('cDetails'), a = ta.selectionStart, b = ta.selectionEnd, sel = ta.value.slice(a, b) || ph;
@@ -3828,10 +3889,23 @@ if (typeof window !== 'undefined') (() => {
   }
   $('cLabelNew').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addLabel(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLabelInput(); $('cLabelAdd').focus(); } }); $('cLabelNew').addEventListener('change', addLabel);
 
-  const parseLine = txt => { const p = txt.split('|').map(x => x.trim()); const url = p.length > 1 ? p.slice(1).join('|').trim() : p[0]; return safeUrl(url) || localResource(url) ? { title: p.length > 1 && p[0] ? p[0] : url, url } : null; };
+  const parseLine = txt => { const p = txt.split('|').map(x => x.trim()); const url = p.length > 1 ? p.slice(1).join('|').trim() : p[0]; const asset = assetPath(url); if (!(safeUrl(url) || localResource(url) || asset)) return null; const fallback = asset ? (asset.split('/').pop() || asset) : url; return { title: p.length > 1 && p[0] ? p[0] : fallback, url: asset || url }; };
   function addLinkLine(txt) {
-    const v = parseLine(txt); if (!v) { toast('Paste an http(s) cloud link or local path, optionally as: Title | location', true); return false; }
+    const v = parseLine(txt); if (!v) { toast('Paste an http(s) cloud link, a local path, or an assets/ image, optionally as: Title | location', true); return false; }
     edit(editing, t => { if (!t.links.some(y => y.url === v.url)) t.links.push(v); }, `Links: ${titleOf(editing)}`);
+  }
+  function linkImageButton() {   // Links: Add image writes the file and lists the assets/ path (kit v94)
+    const inp = el('input'); inp.type = 'file'; inp.accept = 'image/png,image/jpeg,image/gif,image/webp'; inp.hidden = true;
+    inp.onchange = async () => {
+      const file = inp.files && inp.files[0]; inp.value = ''; const id = editing; if (!file || !id) return;
+      const md = await uploadImage(id, file); if (!md || editing !== id) return;
+      const m = /!\[([^\]\n]*)\]\((assets\/[^)\s]+)\)/.exec(md); if (!m) return;
+      const title = (m[1] || 'image').trim() || 'image', url = m[2];
+      edit(id, t => { t.links = t.links || []; if (!t.links.some(y => y.url === url)) t.links.push({ title, url }); }, `Links: ${titleOf(id)}`);
+    };
+    const b = ui.button({ label: 'Add image', icon: 'image', variant: 'ghost', size: 'sm' }); b.type = 'button'; b.id = 'cLinkImage'; b.title = 'Add an image to this card\'s Links';
+    b.onclick = () => { const why = imgUploadBlock(); if (why) toast(why, true); else inp.click(); };
+    b.append(inp); return b;
   }
   function renderLinkList(t) {   // the same list as the person, client and project drawers (renderLinkBox)
     const id = editing; $('cLinkCount').textContent = t.links.length || '';
@@ -4141,7 +4215,7 @@ if (typeof window !== 'undefined') (() => {
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
-    fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me;
+    fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; clearCardReply();
     markSeen(id); $('dlgCard').showModal(); render();
     $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
@@ -5853,21 +5927,37 @@ if (typeof window !== 'undefined') (() => {
     const sug = el('div', 'dsuggest'); sug.id = 'prSuggest';
     const personAdd = crmAddRow('pr', 'prPersonEmail', { placeholder: 'email@example.com', ghostLabel: 'Add by email', label: 'Person email', onAdd: addProjectPerson });
     personAdd.input.type = 'email'; personAdd.querySelector('button[type=submit]').id = 'prPersonAdd';
-    const linkAdd = pairAddRow('pr', { id: 'prLinkNew', labelId: 'prLinkTitle', addId: 'prLinkAdd', labelPlaceholder: 'Label', labelAria: 'New link label', placeholder: 'Cloud URL or local path', label: 'New link: a cloud URL or local path', ghostLabel: 'Add link', onAdd: addProjectLink });
+    const linkAdd = pairAddRow('pr', { id: 'prLinkNew', labelId: 'prLinkTitle', addId: 'prLinkAdd', labelPlaceholder: 'Label', labelAria: 'New link label', placeholder: 'Cloud URL, local path or assets/ image', label: 'New link: a cloud URL, a local path or an assets/ image', ghostLabel: 'Add link', onAdd: addProjectLink });
+    const prReply = el('div', 'cmreplyto'); prReply.id = 'prCmReply'; prReply.hidden = true;
+    const prText = el('textarea'); prText.id = 'prCmText'; prText.rows = 1; prText.placeholder = 'Write a comment…'; prText.setAttribute('aria-label', 'Write a project comment');
+    const prPost = ui.button({ label: 'Comment', variant: 'primary', size: 'sm' }); prPost.id = 'prCmPost'; prPost.type = 'button';
+    const prActs = el('div', 'cbtns'); prActs.id = 'prCmActions'; prActs.hidden = true; prActs.append(prPost, el('span', 'hint', 'Ctrl/Cmd+Enter posts'));
+    const prComposer = el('div', 'composer'); prComposer.append(prReply, prText, prActs);
+    const prStream = dlist('prComments'); prStream.classList.add('cmlist'); prStream.setAttribute('aria-live', 'polite');
     const foot = el('div', 'dfoot2'); const created = el('span', 'dcreated'); created.id = 'prCreated'; foot.append(created);
     $('prBody').append(dtitle('prName', 'Project name', 'Project name'), props,
       crmSection('prGoalSec', { title: 'Goal', body: dnote('prNorth', 'Project goal', 'What this project should achieve.') }),
       crmSection('prPeopleSec', { title: 'People', body: [dlist('prPeople'), sug, personAdd] }, 'prPeopleCount', true),
       crmSection('prLinkSec', { title: 'Links', body: [dlist('prLinks'), linkAdd] }, 'prLinkCount', true),
+      crmSection('prCmSec', { title: 'Comments', body: [prComposer, prStream] }, 'prCmCount'),
       crmSection('prTaskSec', { title: 'Open tasks', body: dlist('prTasks') }, 'prTaskCount'),
       crmSection('prDoneSec', { title: 'Completed tasks', collapsible: true, open: false, body: dlist('prDoneTasks') }, 'prDoneCount'),
       foot);
   }
   buildProjectDrawer();
+  attachSuggest($('prCmText'));
+  $('prCmPost').onclick = postProjectComment;
+  $('prCmText').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); postProjectComment(); } });
+  $('prCmText').addEventListener('focus', () => { $('prCmActions').hidden = false; });
+  $('prCmText').addEventListener('input', () => autosize($('prCmText')));
   function syncProjectStatus(v) { const w = $('prStatus').parentElement; ['ok', 'warn', 'neutral'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + (PROJECT_TONE[v] || 'neutral')); }
-  function openProject(id) {
-    editingProject = id; prSig = ''; resetCrmRows('pr'); $('prDoneSec').toggle(false); fillProjectDrawer(true);
+  let prReplyTo = null, prFocusComment = '';
+  function clearProjectReply() { prReplyTo = null; const bar = $('prCmReply'); if (bar) { bar.hidden = true; bar.textContent = ''; } }
+  function openProject(id, focusComment) {
+    if (editingProject !== id) { const ta = $('prCmText'); if (ta) { ta.value = ''; autosize(ta); } clearProjectReply(); }
+    editingProject = id; prFocusComment = focusComment || ''; prSig = ''; resetCrmRows('pr'); $('prDoneSec').toggle(false); fillProjectDrawer(true);
     if (!$('dlgProject').open) $('dlgProject').showModal(); else syncRecordUrl('dlgProject'); $('prBody').scrollTop = 0; autosize($('prName'));
+    if (prFocusComment) setTimeout(() => { const row = [...$('prComments').querySelectorAll('.cmcard')].find(r => r.dataset.cid === prFocusComment); if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('cmflash'); } markSeen(id); }, 60);
   }
   function fillProjectDrawer(force) {
     const pr = projectById(editingProject); if (!pr) { $('dlgProject').close(); return; }
@@ -5895,6 +5985,7 @@ if (typeof window !== 'undefined') (() => {
     setCount('prPeopleCount', (pr.people || []).length); $('prPeopleSec').classList.toggle('is-empty', !(pr.people || []).length && !sug.childNodes.length);
     renderLinkBox($('prLinks'), pr.links || [], l => projectEdit(pr.id, x => { x.links = (x.links || []).filter(y => y.url !== l.url); }, 'Project links'), true, 'project resource');
     setCount('prLinkCount', (pr.links || []).length); $('prLinkSec').classList.toggle('is-empty', !(pr.links || []).length);
+    renderProjectComments(pr); markSeen(pr.id);
     const dc = doneCol(), open = linked.filter(t => t.column !== dc), done = linked.filter(t => t.column === dc);
     const tbox = $('prTasks'); tbox.textContent = ''; open.forEach(t => tbox.append(drawerTaskRow(t))); if (!open.length) tbox.append(dempty('No open tasks linked to this project.'));
     const dbox = $('prDoneTasks'); dbox.textContent = ''; done.forEach(t => dbox.append(drawerTaskRow(t))); if (!done.length) dbox.append(dempty('No completed tasks linked to this project.'));
@@ -5907,7 +5998,34 @@ if (typeof window !== 'undefined') (() => {
   $('prStatus').onchange = e => { syncProjectStatus(e.target.value); projectEdit(editingProject, p => { p.status = e.target.value; }); };
   $('prNorth').addEventListener('change', e => projectEdit(editingProject, p => { p.north_star = e.target.value; }));
   function addProjectPerson(em) { if (!editingProject) return false; projectEdit(editingProject, p => { p.people = p.people || []; if (!p.people.some(x => x.toLowerCase() === em.toLowerCase())) p.people.push(em); }); }
-  function addProjectLink(title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL or local path.', true); return false; }
+  function renderProjectComments(pr) {
+    const box = $('prComments'); if (!box) return; box.textContent = '';
+    const list = Array.isArray(pr.comments) ? pr.comments : [];
+    setCount('prCmCount', list.length);
+    const { tops, replies } = commentGroups(list);
+    if (!tops.length) box.append(el('p', 'hint cmempty', 'No comments yet.'));
+    tops.forEach(cm => {
+      if (cm.type === 'activity') { box.append(commentCard(cm, { mine: mentionsMe(cm.text) })); return; }
+      box.append(commentThread(cm, list, { mine: mentionsMe(cm.text), replies, canReply: !ro, onReply: parent => { prReplyTo = parent; replyBar($('prCmReply'), parent.by, clearProjectReply); $('prCmActions').hidden = false; $('prCmText').focus(); } }));
+    });
+  }
+  async function postProjectComment() {
+    const ta = $('prCmText'), text = ta.value.trim(), id = editingProject; if (!text || !id) return;
+    if (busy) { toast('Busy, try again in a moment', true); return; }
+    const pr0 = projectById(id), replyTo = prReplyTo && prReplyTo.id;
+    const parentNow = replyTo && commentParent((pr0 && pr0.comments) || [], { reply_to: replyTo, type: 'comment' });
+    if (replyTo && (!parentNow || parentNow.id !== replyTo)) { toast('Replies are one level, under a comment. That comment is not one.', true); clearProjectReply(); return; }
+    const cid = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), who = cfg().me || 'someone', n0 = ((pr0 && pr0.comments) || []).length;
+    ta.value = ''; autosize(ta); clearProjectReply();
+    await projectEdit(id, p => {
+      p.comments = Array.isArray(p.comments) ? p.comments : [];
+      if (replyTo && !commentParent(p.comments, { reply_to: replyTo, type: 'comment' })) return;
+      p.comments.push({ id: cid, at: nowIso(), by: who, text, ...(replyTo ? { reply_to: replyTo } : {}) });
+    }, `Comment: ${(pr0 && pr0.name) || 'project'}`);
+    const saved = projectById(id);
+    if (!saved || !(saved.comments || []).some(c => c.id === cid)) { ta.value = text; autosize(ta); if (replyTo && saved) { const back = (saved.comments || []).find(c => c.id === replyTo); if (back) { prReplyTo = back; replyBar($('prCmReply'), back.by, clearProjectReply); } } toast('Comment not saved. Your text is still in the box.', true); }
+  }
+  function addProjectLink(title, url) { const l = parseNamedLink(title, url, true); if (!l) { toast('Enter a cloud URL, a local path, or an assets/ image.', true); return false; }
     projectEdit(editingProject, p => { p.links = p.links || []; if (!p.links.some(y => y.url === l.url)) p.links.push(l); }); }
   $('prClose').onclick = () => $('dlgProject').close();
   async function deleteProject() {
@@ -7631,16 +7749,21 @@ if (typeof window !== 'undefined') (() => {
   function renderLinkBox(box, links, onRemove, resources, kind = 'link') {
     box.textContent = '';
     links.forEach(l => {
-      const g = ghLink(l.url), local = resources && localResource(l.url); let host = local ? 'Local path' : ''; try { if (!local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
-      const row = ui.listRow({ text: g ? g.label : (l.title || l.url), meta: g && l.title && l.title !== l.url ? l.title : host, href: safeUrl(l.url) || undefined, icon: g ? 'github' : local ? 'laptop' : storeIcon(host), removeLabel: `Remove link ${l.title || l.url}`,
+      const g = ghLink(l.url), asset = assetPath(l.url), local = !asset && resources && localResource(l.url); let host = asset ? 'Image' : local ? 'Local path' : ''; try { if (!asset && !local) host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
+      const row = ui.listRow({ text: g ? g.label : (l.title || l.url), meta: g && l.title && l.title !== l.url ? l.title : host, href: safeUrl(l.url) || undefined, icon: g ? 'github' : asset ? 'image' : local ? 'laptop' : storeIcon(host), removeLabel: `Remove link ${l.title || l.url}`,
         onRemove: async () => { if (await askRemoval(`the ${kind} “${l.title || l.url}”`)) onRemove(l); } });
       row.title = l.url;
+      if (asset) {
+        const main = row.querySelector('.ui-listrow__main'), a = el('a', 'ui-listrow__main');
+        while (main.firstChild) a.append(main.firstChild); main.replaceWith(a); a.href = '#'; a.title = 'Open image';
+        a.onclick = e => { e.preventDefault(); assetBlobUrl(asset).then(u => { if (u) window.open(u, '_blank', 'noopener'); else toast('That image could not be opened.', true); }); };
+      }
       if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
       box.append(row);
     });
   }
   const storeIcon = h => /drive\.google|docs\.google|dropbox|sharepoint|onedrive|office|live\.com/.test(h) ? 'folder' : /github/.test(h) ? 'github' : /notion/.test(h) ? 'file-text' : 'link';
-  const parseNamedLink = (title, value, resources) => { const url = String(value || '').trim(); if (!(safeUrl(url) || (resources && localResource(url)))) return null; let fallback = url; try { fallback = new URL(url).hostname.replace(/^www\./, ''); } catch { fallback = url.split(/[\\/]/).filter(Boolean).pop() || url; } return { title: String(title || '').trim() || fallback, url }; };
+  const parseNamedLink = (title, value, resources) => { const url = String(value || '').trim(); const asset = assetPath(url); if (!(safeUrl(url) || asset || (resources && localResource(url)))) return null; let fallback = asset ? (asset.split('/').pop() || asset) : url; if (!asset) { try { fallback = new URL(url).hostname.replace(/^www\./, ''); } catch { fallback = url.split(/[\\/]/).filter(Boolean).pop() || url; } } return { title: String(title || '').trim() || fallback, url }; };
 
   function renderTouches(p) {
     const box = $('pTouches'); box.textContent = ''; setCount('pTouchCount', p.comments.length);

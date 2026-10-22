@@ -20,8 +20,8 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py todo-done ID N          # tick item N (1-based, as shown by `show`); todo-undo / todo-rm work the same way
   keeptrack.py history ID              # print the card's history log
   keeptrack.py archived-history ID     # older history lines that `archive` moved to archive/<year>.json
-  keeptrack.py comment ID "text"       # post a comment on the card (questions, updates, hand-offs for people and agents)
-  keeptrack.py comments ID             # print the whole comment stream
+  keeptrack.py comment ID "text" [--reply-to CID]   # post a comment; --reply-to replies one level under that comment
+  keeptrack.py comments ID             # print the comment stream (replies indented under their parent)
   keeptrack.py move ID --column COLUMN [--before ID | --after ID | --top] [--priority high|medium|low]
   keeptrack.py assign ID USER [USER...] [--add|--remove] [--note ...]   # hand the task to people (replaces assignees unless --add/--remove)
   keeptrack.py link ID URL [--title ...]            # attach a link, e.g. the pull request
@@ -39,7 +39,8 @@ Board structure (labels, clients, members, settings) lives in tasks.json; change
   keeptrack.py agents | agent-add NAME | agent-rm NAME [--unassign]
   keeptrack.py task-rm ID --yes | person-rm REF --yes     # delete something created by mistake
   keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--max-agent-claims N] [--stages "A,B,C" | --rename-stage OLD=NEW]
-  keeptrack.py projects [--client ..] [--status active|done|paused] [-q ..] | project REF   # project REF: its goal, people, links and OPEN tasks
+  keeptrack.py projects [--client ..] [--status active|done|paused] [-q ..] | project REF   # project REF: its goal, people, links, comments and OPEN tasks
+  keeptrack.py project-comment REF "text" [--reply-to CID] | project-comments REF   # a project's comment stream (one-level replies)
   keeptrack.py project-add NAME --client .. [--north-star ..] | project-set REF [--name ..] [--client ..] [--north-star ..] [--status ..] | project-remove REF [--clear-project]
   ID may also be a task number: '#12' (quote the # in a shell).
 
@@ -318,7 +319,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 93  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 94  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1493,6 +1494,8 @@ def hosted_dispatch(a):
         cmd = {"kind": a.cmd, "card_id": card["id"], "baseRev": entry["rev"]}
         if a.cmd == "comment":
             cmd["text"] = a.text
+            if getattr(a, "reply_to", ""):
+                cmd["reply_to"] = a.reply_to
         elif a.cmd == "claim":
             if not session:
                 sys.exit("invalid_fence: claim needs --session or BOARD_SESSION")
@@ -3647,9 +3650,13 @@ def cmd_assign(a):
     mutate(fn, f"Agent assign: {a.id}")
 
 
+# An image kept beside the board (assets/<id>/<file>.png|jpg|jpeg|gif|webp) is a link, the same as a cloud URL (kit v94).
+ASSET_URL_RE = re.compile(r"^assets/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(?:png|jpe?g|gif|webp)$", re.I)
+
+
 def check_link_url(url):
-    if not (url.startswith(("http://", "https://")) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", url)):
-        sys.exit(f"resource must be an http(s) cloud URL or a local path: {url}")
+    if not (url.startswith(("http://", "https://")) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", url) or ASSET_URL_RE.match(url or "")):
+        sys.exit(f"resource must be an http(s) cloud URL, a local path, or an assets/ image: {url}")
     return url
 
 
@@ -3823,7 +3830,7 @@ def cmd_todo_move(a):
 def read_stdin_args(a):
     """`-` as a comment's text, --details or --add-details reads the text from stdin (kit v62), so an agent can write
     multi-line Markdown (a heading, a list of options, a table) without shell quoting: `comment '#N' - <<'EOF'`."""
-    if a.f not in (cmd_comment, cmd_add, cmd_task_set, cmd_review, cmd_goal_add, cmd_goal_set, cmd_client_set):
+    if a.f not in (cmd_comment, cmd_project_comment, cmd_add, cmd_task_set, cmd_review, cmd_goal_add, cmd_goal_set, cmd_client_set):
         return
     keys = [k for k in ("text", "details", "add_details", "note", "notes") if getattr(a, k, None) == "-"]
     if len(keys) > 1:
@@ -3835,10 +3842,65 @@ def read_stdin_args(a):
         setattr(a, keys[0], value)
 
 
+def reply_parent(comments, cid):
+    """The comment a one-level reply may hang from. Activity lines stay flat, and a reply cannot itself be replied to."""
+    parent = next((c for c in comments or [] if isinstance(c, dict) and c.get("id") == cid), None)
+    if not parent:
+        sys.exit(f"no comment '{cid}' to reply to")
+    if parent.get("type") == "activity":
+        sys.exit("cannot reply to an activity line; activity stays flat, reply to the comment")
+    if parent.get("reply_to"):
+        sys.exit("replies are one level only; reply to the original comment, not to a reply")
+    return parent
+
+
+def comment_is_reply(comments, c):
+    """True when this comment hangs one level under a real comment (not an activity line, not a reply)."""
+    pid = c.get("reply_to") if isinstance(c, dict) else None
+    if not isinstance(pid, str) or not pid or c.get("type") == "activity":
+        return False
+    parent = next((x for x in comments if isinstance(x, dict) and x.get("id") == pid), None)
+    return bool(parent) and parent.get("type") != "activity" and not parent.get("reply_to")
+
+
+def append_comment(item, text, by, reply_to=""):
+    comments = item.setdefault("comments", [])
+    if reply_to:
+        reply_parent(comments, reply_to)
+    row = {"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": by, "text": text}
+    if reply_to:
+        row["reply_to"] = reply_to
+    comments.append(row)
+    return row
+
+
+def print_comment_line(c, indent=""):
+    cid = f" ({c['id']})" if c.get("id") else ""
+    print(f"{indent}[{str(c.get('at', ''))[:16]}] {c.get('by', '?')}{cid}: {c.get('text', '')}")
+
+
+def print_comments(comments):
+    """Parents in saved order (newest last), each reply indented under its parent, in saved order."""
+    comments = [c for c in comments or [] if isinstance(c, dict)]
+    if not comments:
+        print("(no comments)")
+        return
+    replies = {}
+    for c in comments:
+        if comment_is_reply(comments, c):
+            replies.setdefault(c.get("reply_to"), []).append(c)
+    for c in comments:
+        if comment_is_reply(comments, c):
+            continue
+        print_comment_line(c)
+        for r in replies.get(c.get("id"), []):
+            print_comment_line(r, "  ")
+
+
 def cmd_comment(a):
     def fn(data):
         t = find(data, a.id)
-        t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": a.text})
+        append_comment(t, a.text, who_am_i(t), getattr(a, "reply_to", "") or "")
         t["updated"] = now(); print(f"commented on {t['id']} ({len(t['comments'])} total)")
     mutate(fn, f"Comment: {a.id}")
 
@@ -3912,8 +3974,10 @@ def save_asset(rel, blob, message):
 
 
 def cmd_attach(a):
-    """Add an image (screenshot) to a card: written to assets/<card id>/, then shown in a new comment, or appended to the
-    description with --details."""
+    """Add an image (screenshot) to a card: written to assets/<card id>/, then shown in a new comment, appended to the
+    description with --details, or added to the card's Links with --link."""
+    if getattr(a, "link", False) and a.details:
+        sys.exit("--link adds the image to the card's Links; it cannot be combined with --details")
     if BACKEND == "hosted":
         sys.exit("capability_unavailable: images are not available on hosted boards yet")
     try:
@@ -3929,12 +3993,15 @@ def cmd_attach(a):
     data, _ = load(); t = find(data, a.id)
     rel = f"assets/{t['id']}/{dt.datetime.now(dt.timezone.utc):%Y%m%d}-{hashlib.sha256(blob).hexdigest()[:12]}.{ext}"
     alt = re.sub(r"[\[\]\r\n]", " ", a.alt or os.path.splitext(os.path.basename(a.path))[0]).strip()[:60] or "image"
+    title = re.sub(r"[\r\n]", " ", a.text).strip()[:120] if a.link and a.text and a.text.strip() else alt
     md = f"![{alt}]({rel})"
     save_asset(rel, blob, f"Image: #{t.get('num', t['id'])}")
 
     def fn(data):
         t = find(data, a.id)
-        if a.details:
+        if a.link:
+            add_links(t, [(rel, title)])
+        elif a.details:
             t["details"] = (t.get("details", "").rstrip() + "\n\n" if t.get("details", "").strip() else "") + md
             hist(t, f"image added to the description: {rel}")
         else:
@@ -3942,14 +4009,13 @@ def cmd_attach(a):
             t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": text})
         t["updated"] = now()
     mutate(fn, f"Image: {a.id}")
-    print(f"attached {rel} to {t['id']} ({'description' if a.details else 'new comment'}): {md}")
+    where = "links" if a.link else ("description" if a.details else "new comment")
+    print(f"attached {rel} to {t['id']} ({where}): {md if not a.link else rel}")
 
 
 def cmd_comments(a):
     data, _ = load(); t = find(data, a.id)
-    for c in t.get("comments", []):
-        print(f"[{c['at'][:16]}] {c.get('by', '?')}{' (' + c['id'] + ')' if c.get('id') else ''}: {c['text']}")
-    if not t.get("comments"): print("(no comments)")
+    print_comments(t.get("comments", []))
 
 
 def cmd_history(a):
@@ -4873,7 +4939,7 @@ def doctor_board(fix=False):
                     "counts as their own record and all stay contacts; keep it on one (person-set <id> --github '').")
         if gh_user and "crm" in board_modes and not person_for_github(data, gh_user):
             problem("MEMBER_NO_PERSON", "tasks.json", f"Board member {gh_user!r} has no CRM person record (add a person with --github <login>).")
-    for item in tasks + people:
+    for item in tasks + people + [p for p in data.get("projects") or [] if isinstance(p, dict)]:
         for comment in item.get("comments", []):
             absent = [x for x in ("id", "at", "by") if not comment.get(x)]
             if absent:
@@ -4918,7 +4984,7 @@ def doctor_board(fix=False):
                 upper = next((x["rank"] for x in cards[i + 1:] if valid_rank(x.get("rank")) and (previous is None or x["rank"] > previous)), None)
                 t["rank"] = key_between(previous, upper); previous = t["rank"]; moved += 1
             fixes.append(f"re-ranked {moved} card(s) in column {column!r} (duplicate or missing ranks; the order is kept)")
-        for item in tasks + people:
+        for item in tasks + people + [p for p in data.get("projects") or [] if isinstance(p, dict)]:
             for comment in item.get("comments", []):
                 if not comment.get("id"):
                     comment["id"] = "c_" + uuid.uuid4().hex[:6]
@@ -5388,7 +5454,7 @@ HELP_TOPICS = {
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "attach", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-url", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
-                         "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
+                         "projects", "project", "project-comment", "project-comments", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
     "goals": ["goals", "goal", "goal-add", "goal-set", "goal-remove"],
     "search": ["links"],
@@ -5431,7 +5497,8 @@ COMMAND_HELP = {   # one line each, for commands whose parser has none
     "done": "finish a claimed card (--note result and links)",
     "auto-heartbeat": "for hooks: refresh the active claim at most every 15 minutes (never for --attended claims); silent otherwise",
     "todo-add": "add a checklist item (- reads several from stdin)", "todo-move": "move to-do N to a new follow-up card, linked both ways", "todo-done": "tick checklist item N", "todo-undo": "untick checklist item N",
-    "todo-rm": "remove checklist item N", "comment": "post a comment on a card", "comments": "read a card's comments",
+    "todo-rm": "remove checklist item N", "comment": "post a comment on a card (--reply-to CID: one level under that comment)",
+    "comments": "read a card's comments (replies indented under their parent)",
     "history": "a card's history log",
     "init": "set up a new board repo (--person github-user:Name)",
     "kit-check": "is this repo's board kit current? (--card makes an upgrade card)",
@@ -6298,7 +6365,8 @@ def cmd_projects(a):
 
 def cmd_project(a):
     data, _ = load()
-    pr = find_project(data, a.ref)
+    pr = dict(find_project(data, a.ref))
+    cms = pr.pop("comments", None) or []
     print(json.dumps(pr, indent=2, ensure_ascii=False))
     ns = (pr.get("north_star") or "").strip()
     if ns:
@@ -6313,6 +6381,13 @@ def cmd_project(a):
             person = person_for_email(data, em)
             label = f"{person['name']} ({em})" if person else em
             print(f"  - {label}")
+    if cms:
+        print("\ncomments:")   # saved order, newest last; threads are in project-comments
+        for c in cms:
+            if not isinstance(c, dict):
+                continue
+            extra = f" (reply to {c['reply_to']})" if c.get("reply_to") else ""
+            print(f"  [{str(c.get('at', ''))[:16]}] {c.get('by', '?')}{extra}: {c.get('text', '')}")
     open_tasks = [t for t in data.get("tasks", []) if t.get("project") == pr["id"] and t.get("column") != "done"]
     if open_tasks:
         print("\nopen tasks:")
@@ -6351,9 +6426,23 @@ def cmd_project_set(a):
     mutate(fn, f"Update project: {a.ref}")
 
 
+def cmd_project_comment(a):
+    def fn(data):
+        pr = find_project(data, a.ref)
+        append_comment(pr, a.text, who_am_i(), getattr(a, "reply_to", "") or "")
+        pr["updated"] = now()
+        print(f"commented on {pr['id']} ({len(pr['comments'])} total)")
+    mutate(fn, f"Project comment: {a.ref}")
+
+
+def cmd_project_comments(a):
+    data, _ = load()
+    pr = find_project(data, a.ref)
+    print_comments(pr.get("comments", []))
+
+
 def cmd_project_link(a):
-    if not (re.match(r"https?://", a.url) or re.match(r"^(file://|~?/|\.\.?/|[A-Za-z]:[\\/]|\\\\)", a.url)):
-        sys.exit("resource must be an http(s) cloud URL or a local path")
+    a.url = check_link_url(a.url)
     def fn(data):
         pr = find_project(data, a.ref)
         links = pr.setdefault("links", [])
@@ -10713,7 +10802,7 @@ def _automation_parser(sub):
 def _proposals_only(a):
     if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
     # Fail closed: new commands must be deliberately classified before loader use.
-    reads = {"list", "show", "people", "person", "projects", "project", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
+    reads = {"list", "show", "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
 
@@ -10823,12 +10912,14 @@ def main():
     s = sub.add_parser("link", help="add a link to a card; - reads one per line from stdin (URL, tab, title) in one save")
     s.add_argument("id"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_link)
     s = sub.add_parser("history"); s.add_argument("id"); s.set_defaults(f=cmd_history)
-    s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin"); s.set_defaults(f=cmd_comment)
+    s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin")
+    s.add_argument("--reply-to", dest="reply_to", help="reply one level under this comment id (not under a reply or an activity line)"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
-    s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, or the description with --details")
-    s.add_argument("id"); s.add_argument("path", help="the image file"); s.add_argument("text", nargs="?", default="", help="comment text to go with it")
+    s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, the description with --details, or Links with --link")
+    s.add_argument("id"); s.add_argument("path", help="the image file"); s.add_argument("text", nargs="?", default="", help="comment text to go with it, or the link title with --link")
     s.add_argument("--alt", help="a few words saying what the image shows (default: the file name)")
-    s.add_argument("--details", action="store_true", help="append it to the description instead of a new comment"); s.set_defaults(f=cmd_attach)
+    s.add_argument("--details", action="store_true", help="append it to the description instead of a new comment")
+    s.add_argument("--link", action="store_true", help="add it to the card's Links (assets/ path) instead of a comment; not with --details"); s.set_defaults(f=cmd_attach)
     s = sub.add_parser("add"); s.add_argument("title"); s.add_argument("--column"); s.add_argument("--client"); s.add_argument("--project")
     s.add_argument("--priority", default="medium", choices=["high", "medium", "low"]); s.add_argument("--due")
     s.add_argument("--assign", action="append"); s.add_argument("--label", action="append"); s.add_argument("--details", help="Markdown; - reads it from stdin")
@@ -10918,7 +11009,10 @@ def main():
     s = sub.add_parser("client-link", help="link a client to a file store folder"); s.add_argument("client"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_client_link)
     s = sub.add_parser("client-unlink", help="remove a file store link from a client"); s.add_argument("client"); s.add_argument("url", help="the link's URL or title"); s.set_defaults(f=cmd_client_unlink)
     s = sub.add_parser("projects", help="list projects"); s.add_argument("--client"); s.add_argument("--status", choices=PROJECT_STATUSES); s.add_argument("-q"); s.set_defaults(f=cmd_projects)
-    s = sub.add_parser("project", help="show one project and its open tasks"); s.add_argument("ref"); s.set_defaults(f=cmd_project)
+    s = sub.add_parser("project", help="show one project, its comments and its open tasks"); s.add_argument("ref"); s.set_defaults(f=cmd_project)
+    s = sub.add_parser("project-comment", help="post a comment on a project (Markdown; - reads stdin; --reply-to is one level)")
+    s.add_argument("ref"); s.add_argument("text"); s.add_argument("--reply-to", dest="reply_to", help="reply one level under this comment id"); s.set_defaults(f=cmd_project_comment)
+    s = sub.add_parser("project-comments", help="read a project's comments (replies indented under their parent)"); s.add_argument("ref"); s.set_defaults(f=cmd_project_comments)
     s = sub.add_parser("project-add", help="add a project under a client"); s.add_argument("name"); s.add_argument("--client"); s.add_argument("--north-star", dest="north_star")
     s.add_argument("--status", choices=PROJECT_STATUSES, default="active"); s.set_defaults(f=cmd_project_add)
     s = sub.add_parser("project-set", help="change a project"); s.add_argument("ref"); s.add_argument("--name"); s.add_argument("--client")
