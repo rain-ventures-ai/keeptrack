@@ -89,7 +89,7 @@ python3 <plugin>/keeptrack.py where
 - `use` writes `.keeptrack/config.json` and `.keeptrack/.gitignore` (`*`), so it is never committed and teammates never see it. It asks GitHub for the default branch. `--project <name>` makes that board project this repo's default scope. The older `.board/config.json` is still read.
 - The plugin's session-start hook prints a few lines (board, project, your open cards) only in a repo with that file, or with `BOARD_REPO` set; everywhere else it prints nothing. The heartbeat hook checks for a claim with plain shell first, so projects without Keeptrack pay nothing.
 - The file holds the repo, branch, path and user, and only the **name** of the environment variable with the token. Never the token.
-- Auth: a `gh` login that can see the board repo, or a fine-grained token (Contents: Read and write on that repo) in that variable or in `BOARD_TOKEN`.
+- Auth: a `gh` login that can see the board repo, or a fine-grained token (Contents: Read and write on that repo) in that variable or in `BOARD_TOKEN`. When both are set, the variable the config names wins (kit v90), with a warning when it replaces a different `BOARD_TOKEN`; `where` says which variable won.
 
 ## What it runs, sends and changes
 Facts from the code, so you can decide what to allow. File names are in `rain-ventures-ai/keeptrack`.

@@ -306,7 +306,7 @@ class Docs(unittest.TestCase):
     def test_kit_is_v87_with_upgrade_notes_and_changelog(self):
         self.assertGreaterEqual(keeptrack.KIT_VERSION, 87)   # the exact version is asserted by the newest tests/test_kit_v*.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
-            v87 = f.read().split("### v87 (schema 4)", 1)[1].split("### v86", 1)[0]
+            v87 = f.read().split("### v87 (schema 4)", 1)[1].split("### v8", 1)[0]
         for words in ("kit-update", "ARCHIVE_SIZE", "900 KB", "No migration"):
             self.assertIn(words, v87)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
