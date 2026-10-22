@@ -32,8 +32,11 @@ cryptographic protection against a raw repository writer. In a GitHub board chec
 Replace the example with the owner's chosen reference; provider/root must be paired. `--clear-docs-home` is an
 explicit removal, never part of failed setup. The web form is Settings → Board → Docs home.
 
-Hosted boards require the human board OWNER to change settings. Agent writes are refused `invalid_fence`:
-report the exact refusal and direct the owner to the normal web form. Never retry through another credential,
+Hosted CLI docs-home access is read-only for every identity, including a human owner: `settings --json` reads;
+`settings-set` destination set/clear refuses `docs_home_confirmation_required` before posting. The human board OWNER
+uses web Settings → Board → Docs home and confirms the displayed destination there. Agents never proxy that confirmation.
+The hosted server separately refuses agent setting writes `invalid_fence`. In any refusal report, state explicitly
+that only the human board owner can confirm the destination in the web form. Report the exact refusal. Never retry through another credential,
 connector or route. The setting grants neither storage access nor authorisation to create folders/write files.
 
 ## File an authorised output

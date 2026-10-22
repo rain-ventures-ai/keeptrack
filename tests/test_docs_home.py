@@ -58,7 +58,7 @@ class DocsHome(unittest.TestCase):
 
     def test_invalid_combinations_never_write(self):
         before = self.file.read_bytes()
-        for flags in [('--docs-provider','local'), ('--docs-root','/tmp/keeptrack'), ('--clear-docs-home','--docs-provider','local','--docs-root','/tmp/root'), ('--docs-provider','google-drive','--docs-root','https://drive.google.com.evil.test/root')]:
+        for flags in [('--docs-provider','local'), ('--docs-root','/tmp/keeptrack'), ('--clear-docs-home','--docs-provider','local','--docs-root','/tmp/root'), ('--docs-provider','google-drive','--docs-root','https://drive.google.com.evil.test/root'), ('--docs-provider','local','--docs-root','/docs/root','--title','Changed'), ('--clear-docs-home','--stages','New,Won')]:
             self.assertNotEqual(self.cli('settings-set', *flags).returncode, 0)
             self.assertEqual(self.file.read_bytes(), before)
 
@@ -77,7 +77,7 @@ class DocsHome(unittest.TestCase):
         accepted = [('google-drive','https://drive.google.com/drive/folders/abc'), ('local','/docs/'+'😀'*2042), ('dropbox','https://www.dropbox.com/home/keeptrack'), ('onedrive','https://tenant.sharepoint.com/:f:/keeptrack'), ('onedrive','https://1drv.ms/f/abc'), ('local','/work/keeptrack'), ('local',r'C:\work\keeptrack'), ('local',r'\\server\share\keeptrack')]
         for provider, root in accepted:
             self.assertEqual(kt.validate_docs_home({'provider':provider, 'root':root}), {'provider':provider,'root':root})
-        bad = [('local','~/keeptrack'), ('local',' /docs/root'), ('local','/docs/root '), ('google-drive','https://ｄｒｉｖｅ.google.com/root'), ('local','/docs/'+'😀'*2043), ('local','relative/path'), ('local','file:///tmp/root'), ('google-drive','https://@drive.google.com/folder'), ('google-drive','https:///drive.google.com/folder'), ('google-drive','http://drive.google.com/root'), ('google-drive','https://x:secret@drive.google.com/root'), ('dropbox','https://dropbox.com.evil/root'), ('onedrive','https://evilsharepoint.com/root'), ('google-drive','https://drive.google.com/a%0ab'), ('local','/work/\x00root'), ('local','/work/\u202eroot'), ('local','/work/\u2028root'), ('local','/'+'x'*2048)]
+        bad = [('local','~/keeptrack'), ('local',' /docs/root'), ('local','/docs/root '), ('google-drive','https://ｄｒｉｖｅ.google.com/root'), ('local','/docs/'+'😀'*2043), ('local','relative/path'), ('local','file:///tmp/root'), ('google-drive','https://@drive.google.com/folder'), ('google-drive','https:///drive.google.com/folder'), ('google-drive','http://drive.google.com/root'), ('google-drive','https://x:secret@drive.google.com/root'), ('dropbox','https://dropbox.com.evil/root'), ('onedrive','https://evilsharepoint.com/root'), ('google-drive','https://drive.google.com/a%0ab'), ('local','/work/\x00root'), ('local','/work/\u202eroot'), ('local','/work/\u2028root'), ('local','/work/\ud800root'), ('local','/work/\udfffroot'), ('local','/'+'x'*2048)]
         for provider, root in bad:
             with self.subTest(provider=provider, root=root), self.assertRaises(ValueError): kt.validate_docs_home({'provider':provider,'root':root})
         for value in [None, [], {}, {'provider':'unknown','root':'/tmp'}, {'provider':'local','root':'/tmp','extra':1}]:

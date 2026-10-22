@@ -392,28 +392,31 @@ class HostedCLITest(unittest.TestCase):
         self.assertEqual(len(posts), 2)
         self.assertEqual(posts[0][3]['Idempotency-Key'], posts[1][3]['Idempotency-Key'])
 
-    def test_docs_home_read_and_agent_setting_refusal_do_not_fall_back(self):
-        from unittest.mock import patch
+    def test_docs_home_read_and_all_hosted_cli_writes_refuse_before_post(self):
         home = {"provider": "google-drive", "root": "https://drive.google.com/drive/folders/synthetic-root"}
         self.server.files['tasks.json']['settings']['docs_home'] = home
-        self.assertEqual(json.loads(self.run_cli('settings', '--json').stdout)['docs_home'], home)
-        original = Handler.do_POST
-        def owner_only(handler):
-            if handler.path.endswith('/commits'):
-                handler.server.calls.append(('POST', handler.path, None, dict(handler.headers)))
-                return handler.error('invalid_fence', 403)
-            return original(handler)
-        with patch.object(Handler, 'do_POST', owner_only):
-            result = self.run_cli('settings-set', '--docs-provider', 'local', '--docs-root', '/work/keeptrack', code=1)
-        self.assertIn('invalid_fence', result.stderr)
-        self.assertEqual(self.server.files['tasks.json']['settings']['docs_home'], home)
-        self.assertEqual(len([c for c in self.server.calls if c[0] == 'POST']), 1)
+        before = copy.deepcopy(self.server.files)
+        for identity in ({**ACTOR, 'agent_id': None}, ACTOR):
+            self.server.identity.update(identity)
+            self.server.identity['boards'][0]['role'] = 'owner'
+            with self.subTest(identity=identity):
+                self.assertEqual(json.loads(self.run_cli('settings', '--json').stdout)['docs_home'], home)
+                self.assertIn('docs_home:', self.run_cli('settings').stdout)
+                for flags in (('--docs-provider', 'local', '--docs-root', '/work/keeptrack'), ('--clear-docs-home',)):
+                    result = self.run_cli('settings-set', *flags, code=1)
+                    self.assertIn('docs_home_confirmation_required', result.stderr)
+                    self.assertIn('web Settings → Board → Docs home', result.stderr)
+                    self.assertEqual(self.server.files, before)
+                    self.assertFalse(any(c[0] == 'POST' for c in self.server.calls))
 
     def test_hosted_docs_home_cannot_smuggle_legacy_settings(self):
         before = copy.deepcopy(self.server.files)
-        for flags in [('--rename-stage', 'New=Changed'), ('--title', 'Changed'), ('--min-kit', '103'), ('--stages', 'New,Won')]:
-            result = self.run_cli('settings-set', '--docs-provider', 'local', '--docs-root', '/docs/root', *flags, code=1)
-            self.assertIn('docs-home-only', result.stderr)
+        for identity in ({**ACTOR, 'agent_id': None}, ACTOR):
+            self.server.identity.update(identity); self.server.identity['boards'][0]['role'] = 'owner'
+            for docs in (('--docs-provider', 'local', '--docs-root', '/docs/root'), ('--clear-docs-home',)):
+                for flags in [('--rename-stage', 'New=Changed'), ('--title', 'Changed'), ('--min-kit', '103'), ('--stages', 'New,Won')]:
+                    result = self.run_cli('settings-set', *docs, *flags, code=1)
+                    self.assertIn('legacy settings flags are refused', result.stderr)
         self.assertEqual(self.server.files, before)
         self.assertFalse(any(c[0] == 'POST' for c in self.server.calls))
 

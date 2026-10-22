@@ -1462,7 +1462,9 @@ def hosted_dispatch(a):
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
     if a.cmd == "settings-set" and (any(getattr(a, key, None) is not None for key in DOCS_LEGACY_FLAGS)
             or not (getattr(a, "docs_provider", None) is not None or getattr(a, "clear_docs_home", False))):
-        sys.exit("capability_unavailable: hosted settings-set supports docs-home-only flags; legacy settings flags are refused")
+        sys.exit("capability_unavailable: hosted settings-set is read-only; legacy settings flags are refused; use settings --json or web Settings → Board → Docs home")
+    if a.cmd == "settings-set":
+        sys.exit(DOCS_HOSTED_READONLY)
     adapter = storage_adapter()
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
@@ -7954,7 +7956,7 @@ def validate_docs_home(value):
     provider, root = value.get("provider"), value.get("root")
     if provider not in DOCS_PROVIDERS or not isinstance(root, str) or not 1 <= len(root) <= 2048:
         raise ValueError("docs home needs a supported provider and a root of 1-2048 characters")
-    if root != root.strip() or any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in root) or re.search(r"%(?:0[0-9a-f]|1[0-9a-f]|7f)", root, re.I):
+    if root != root.strip() or any(unicodedata.category(c) in ("Cc", "Cf", "Cs", "Zl", "Zp") for c in root) or re.search(r"%(?:0[0-9a-f]|1[0-9a-f]|7f)", root, re.I):
         raise ValueError("docs home root must not contain controls or surrounding whitespace")
     if provider == "local":
         if not (root.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", root)
@@ -8011,6 +8013,11 @@ def cmd_settings(a):
     print(f"labels: {len(data.get('labels', []))}  clients: {len(data.get('clients', []))}  members: {len(data.get('people', []))}")
 
 
+DOCS_HOSTED_READONLY = ("docs_home_confirmation_required: hosted CLI docs-home settings are read-only; "
+                        "the human board owner must confirm the destination in web Settings → Board → Docs home. "
+                        "Read it with settings --json; nothing changed.")
+
+
 DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
                      "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit")
 
@@ -8037,12 +8044,17 @@ def cmd_settings_set(a):
     clear = getattr(a, "clear_docs_home", False)
     if (provider is None) != (root is None) or (clear and provider is not None):
         sys.exit("use paired --docs-provider and --docs-root, or --clear-docs-home on its own")
+    requested = provider is not None or root is not None or clear
+    if requested and any(getattr(a, key, None) is not None for key in DOCS_LEGACY_FLAGS):
+        sys.exit("docs-home-only: legacy settings flags require a separate command and are outside this destination read-back")
+    if requested and BACKEND == "hosted" and not FILE:
+        sys.exit(DOCS_HOSTED_READONLY)
     home = None
     if provider is not None:
         try: home = validate_docs_home({"provider": provider, "root": root})
         except ValueError as e: sys.exit(str(e))
     consent = None
-    if (home is not None or clear) and not (BACKEND == "hosted" and not FILE):
+    if home is not None or clear:
         data, _ = load()
         consent = docs_home_confirmation(data, home, clear)
     def fn(data):

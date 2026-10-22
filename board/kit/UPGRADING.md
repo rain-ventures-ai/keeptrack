@@ -26,8 +26,8 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Versions
 ### v103 (schema 4)
-- Optional `settings.docs_home` stores `{provider, root}` for google-drive, dropbox, onedrive or local. No migration or folder creation. CLI `settings --json`, paired `settings-set --docs-provider/--docs-root`, and explicit `--clear-docs-home`; web Settings → Board includes the same reference.
-- GitHub destination changes/clear require the configured kit owner (first-member fallback) and explicit live owner read-back confirmation. This is a normal tool workflow, not protection against a raw repository writer. Hosted CLI allows docs-home-only setting flags; legacy settings combinations remain unavailable.
+- Optional `settings.docs_home` stores `{provider, root}` for google-drive, dropbox, onedrive or local. No migration or folder creation. CLI `settings --json` reads it; GitHub boards support paired `settings-set --docs-provider/--docs-root` and explicit `--clear-docs-home`; web Settings → Board includes the same reference.
+- GitHub destination changes/clear require the configured kit owner (first-member fallback) and explicit live owner read-back confirmation. This is a normal tool workflow, not protection against a raw repository writer. Hosted CLI docs-home access is read-only for every identity: set/clear are refused before posting, with guidance to the confirming web Settings → Board → Docs home form. Legacy settings combinations remain unavailable.
 - The new keeptrack-docs-home skill handles owner-chosen setup and authorised filing, reusing the existing keeptrack root. Hosted setting changes require the human board owner; agent invalid_fence refusals must not be bypassed. Local paths remain text and need a session with access on that machine.
 
 ### v102 (schema 4)

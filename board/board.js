@@ -1617,7 +1617,7 @@ if (typeof window !== 'undefined') (() => {
         setStatus('Someone else changed the board, retrying…', 'err');
       }
       fail('Could not save after retries'); back(); busy = false; if (ag === archGen) await load(true); return false;
-    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); back(); return false; } finally { busy = false; syncUndo(); }
+    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); back(); return false; } finally { busy = false; syncUndo(); if ($('dlgSettings')?.open) syncDocsHome(undefined, true); }
   }
 
   function boardId(prefix) {
@@ -6546,7 +6546,7 @@ if (typeof window !== 'undefined') (() => {
   function docsHome(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'provider,root') throw Error('Docs home must contain provider and root.');
     const { provider, root } = value;
-    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 4096 || [...root].length > 2048 || root.trim() !== root || (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(root) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root))) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
+    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 4096 || [...root].length > 2048 || root.trim() !== root || (/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(root) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root))) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
     if (provider === 'local') {
       if (!root.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(root) && !/^\\\\[^\\/]+[\\/][^\\/]+/.test(root)) throw Error('Use an absolute local path.');
     } else {
@@ -8899,7 +8899,7 @@ if (typeof window !== 'undefined') (() => {
     const what = ids ? batchWhat(ids.length) : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
     if (!ids && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
-    if (!HOSTED) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
+    if (!HOSTED) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; if ($('dlgSettings')?.open) syncDocsHome(undefined, true); } return; }
     setStatus('Archiving…');
     // the board this run reads and writes is fixed now (at), and a Forget token or another board meanwhile (ag) ends it quietly
     const at = Object.assign({}, cfg()), ag = archGen, gone = () => ag !== archGen;
@@ -9604,7 +9604,7 @@ if (typeof window !== 'undefined') (() => {
       }
       throw new Error('revision_conflict: board stayed busy; read and retry');
     } catch (e) { state = before; render(); hostedFailure(e); return false; }
-    finally { busy = false; syncUndo(); }
+    finally { busy = false; syncUndo(); if ($('dlgSettings')?.open) syncDocsHome(undefined, true); }
   }
   async function hostedArchive(entity, year, restoring = false) {
     if (restoring) {   // kit v89 review: the server restores it from a command, so check here that it adds no reserved client or company

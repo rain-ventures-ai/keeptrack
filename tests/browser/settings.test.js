@@ -35,6 +35,7 @@ class Github {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (method !== 'GET') this.writes++;
+    if (this.failWrite && method !== 'GET') return json({ message: 'Synthetic write failure' }, 500);
     if (this.raw && method === 'GET' && Object.hasOwn(this.raw, decodeURIComponent(p))) return json(this.raw[decodeURIComponent(p)]);
     if (this.puts && method === 'PUT' && p.startsWith('/contents/automation/')) { this.puts.push({ path: p, body: req.postDataJSON() }); return json({ content: { sha: 'put-' + this.puts.length } }); }
     if (this.extra && Object.hasOwn(this.extra, p) && method === 'GET') { const x = this.extra[p]; return x === 404 ? json({ message: 'Not Found' }, 404) : json(Array.isArray(x) ? x : { content: Buffer.from(text(x)).toString('base64') }); }
@@ -92,6 +93,27 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Unrelated Settings saves finish with docs controls enabled and preserve the user's dirty draft.
+    for (const fail of [false, true]) {
+      const page = await open(browser);
+      await page.evaluate(() => window.kbSettings.open('labels'));
+      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/docs/unsaved draft');
+      page.api.failWrite = fail;
+      await page.locator('#labelBox input[aria-label="New label name"]').fill(fail ? 'refused-label' : 'saved-label');
+      const attempted = page.waitForResponse(r => r.request().method() !== 'GET' && r.url().startsWith('https://api.test/'));
+      await page.locator('#labelBox button', { hasText: 'Add label' }).click(); await attempted;
+      if (!fail) await waitStored(() => JSON.parse(page.api.files['tasks.json']).labels.some(l => l.name === 'saved-label'));
+      else await page.waitForFunction(() => [...document.querySelectorAll('.toast,.ui-toast')].some(x => /Save failed/.test(x.textContent)));
+      await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled && !document.querySelector('#sDocsRoot').disabled);
+      assert.equal(await page.locator('#dlgSettings').evaluate(e => e.open), true, 'Settings stays open throughout mutation');
+      assert.equal(await page.locator('#sDocsProvider').inputValue(), 'local');
+      assert.equal(await page.locator('#sDocsRoot').inputValue(), '/docs/unsaved draft', `${fail ? 'failure' : 'success'} preserves dirty destination`);
+      assert.equal(await page.locator('#sDocsClear').isEnabled(), true);
+      assert.equal(JSON.parse(page.api.files['tasks.json']).labels.some(l => l.name === 'refused-label'), false);
+      assert.equal(Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'), false, 'unrelated save never files the draft');
+      assert.deepEqual(page.errors, []); await page.close();
+    }
+
     // Docs home saves through ordinary shared-board mutation and survives a reload.
     {
       const page = await open(browser);
@@ -113,6 +135,13 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
       await page.locator('#sModeCrm').uncheck(); await settle(page);
       assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/not-confirmed', 'unrelated setting save preserves destination draft');
       await page.waitForFunction(() => !document.querySelector('#sModeCrm').disabled);
+      const beforeSurrogate = page.api.writes;
+      await page.locator('#sDocsProvider').selectOption('local');
+      await page.evaluate(() => { const input = document.querySelector('#sDocsRoot'); input.value = '/docs/' + String.fromCharCode(0xd800); input.dispatchEvent(new Event('input', { bubbles: true })); });
+      await page.locator('#sDocsSave').click(); await settle(page);
+      assert.equal(await page.getByRole('alertdialog').count(), 0, 'lone surrogate is refused before destination confirmation');
+      assert.equal(page.api.writes, beforeSurrogate, 'lone surrogate destination writes nothing');
+      await page.locator('#sDocsProvider').selectOption('google-drive');
       const afterOtherSettings = page.api.writes;
       await page.locator('#sDocsRoot').fill('https://ｄｒｉｖｅ.google.com/root'); await page.locator('#sDocsSave').click(); await settle(page);
       assert.equal(page.api.writes, afterOtherSettings, 'fullwidth host aliases are refused');
