@@ -52,6 +52,19 @@ class ArchiveLazyShards(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, 'not saved: archive/2020.json contains invalid archive records'):
                 k.archive_check_sizes(data, plan, None)
 
+    def test_unhashable_or_nonstring_ids_refuse_before_merge_or_membership(self):
+        for ident in ([1], {"bad": 1}, None, 123, "../bad"):
+            with self.subTest(id=ident):
+                current = envelope(tasks=[{"id": ident}])
+                with self.assertRaisesRegex(k.ArchiveUnpackable, 'invalid records'):
+                    k.shard_archive_family('2020', current, None, {}, {}, None)
+                with self.assertRaisesRegex(k.ArchiveUnpackable, 'invalid records'):
+                    k.shard_archive_family('2020', envelope(), None, {"tasks": [{"id": ident}]}, {}, None)
+                plan = {'2020': {'tasks': [], 'contacts': [], 'proposals': [], 'history': {}}}
+                with mock.patch.object(k, 'read_archive', return_value=(current, None)):
+                    with self.assertRaisesRegex(SystemExit, 'not saved: archive/2020.json contains invalid archive records'):
+                        k.archive_check_sizes({'tasks': [], 'contacts': []}, plan, None)
+
     def test_hosted_revision_uses_metadata_route_and_only_falls_back_for_unsupported_route(self):
         adapter = object.__new__(k.HostedStorageAdapter); adapter.board = 'synthetic-board'
         with mock.patch.object(adapter, 'request', return_value={'path': 'archive/2020.json', 'rev': 'r1'}) as request, mock.patch.object(adapter, 'read') as read:

@@ -9855,6 +9855,14 @@ class ArchiveUnpackable(ValueError):
     pass
 
 
+def valid_archive_records(cur):
+    """Validate ids before any set/dict membership in merge or packing."""
+    return isinstance(cur, dict) and all(
+        isinstance(cur.get(kind, []), list) and all(
+            isinstance(item, dict) and isinstance(item.get("id"), str) and SAFE_ID.fullmatch(item["id"])
+            for item in cur.get(kind, [])) for kind in ("tasks", "contacts", "proposals"))
+
+
 def shard_archive_family(year, current, current_sha, incoming, data, base, absorbed_ids=()):
     """Pack a logical year atomically. Existing envelopes retain every unknown field and their file names; no
     archive file is deleted. Entity and older history stay together. Per-unit size estimates are conservative,
@@ -9866,10 +9874,8 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     keys = sorted(family, key=lambda key: 0 if key == year else int(key[5:]))
     if any(not isinstance(family[key][0], dict) for key in keys):
         raise ArchiveUnpackable("an indexed archive part is missing or invalid")
-    for cur, _ in family.values():
-        for kind in ("tasks", "contacts", "proposals"):
-            if not isinstance(cur.get(kind, []), list) or any(not isinstance(item, dict) for item in cur.get(kind, [])):
-                raise ArchiveUnpackable("an archive collection contains invalid records")
+    if any(not valid_archive_records(cur) for cur, _ in family.values()) or not valid_archive_records(incoming):
+        raise ArchiveUnpackable("an archive collection contains invalid records")
     incoming_ids = {x["id"] for kind in ("tasks", "contacts", "proposals") for x in incoming.get(kind, [])}
     records, histories, history_seen = {}, {}, {}
     updates = {item["id"]: (kind, item) for kind in ("tasks", "contacts", "proposals")
@@ -9881,7 +9887,7 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
             if not isinstance(cur.get(kind, []), list):
                 raise ArchiveUnpackable("an archive collection is not a list")
             for item in cur.get(kind, []):
-                if not isinstance(item, dict) or not SAFE_ID.fullmatch(str(item.get("id", ""))):
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not SAFE_ID.fullmatch(item["id"]):
                     raise ArchiveUnpackable("an archive record has no safe id")
                 ident = item["id"]
                 if ident in incoming_ids:
@@ -9959,7 +9965,7 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
         for y in sorted(plan):
             part, rel = plan[y], f"archive/{y}.json"
             cur, sha = read_archive(y, base)
-            if cur is not None and (not isinstance(cur, dict) or any(not isinstance(cur.get(kind, []), list) or any(not isinstance(item, dict) for item in cur.get(kind, [])) for kind in ("tasks", "contacts", "proposals"))):
+            if (cur is not None and not valid_archive_records(cur)) or not valid_archive_records(part):
                 sys.exit(f"not saved: {rel} contains invalid archive records; nothing changed")
             cur = archive_merge(cur, part, y)
             if ref_orig is not None:   # one card: the archive's lines for it move onto the card copy, as the write does
