@@ -51,7 +51,11 @@ class ImageReview(unittest.TestCase):
         def chunk(kind, body):
             return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
         head = b'\x89PNG\r\n\x1a\n'
-        frames = chunk(b'acTL', b'\0' * 8) + chunk(b'fcTL', b'\0' * 26) + chunk(b'IDAT', b'pixels') + chunk(b'fdAT', b'frame2') + chunk(b'IEND', b'')
+        ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+        control = lambda seq: struct.pack('>IIIIIHHBB', seq, 1, 1, 0, 0, 1, 10, 0, 0)
+        frames = (ihdr + chunk(b'acTL', struct.pack('>II', 2, 0)) + chunk(b'fcTL', control(0))
+                  + chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33')) + chunk(b'fcTL', control(1))
+                  + chunk(b'fdAT', struct.pack('>I', 2) + zlib.compress(b'\0\x33\x22\x11')) + chunk(b'IEND', b''))
         private = b''.join(chunk(kind, b'AUTHOR') for kind in (b'vpAg', b'caBX', b'iCCP', b'tIME', b'tEXt'))
         self.assertEqual(head + frames, keeptrack.strip_image_metadata(head + private + frames, 'png'))
         with self.assertRaises(ValueError):
@@ -73,7 +77,29 @@ class ImageReview(unittest.TestCase):
 
     def test_gif_keeps_loop_but_drops_unrecognised_application_extensions(self):
         head = b'GIF89a' + b'\x01\0\x01\0\x80\0\0' + b'\0\0\0\xff\xff\xff'
-        unknown = b'\x21\xff\x0bPRIVATE-AUT\x06AUTHOR\0'
+        unknown = b'\x21\xff\x0bPRIVATE-AUT\x06AUTHOR\0' + b'\x21\x01\x0c' + b'\0' * 12 + b'\x06AUTHOR\0'
         loop = b'\x21\xff\x0bNETSCAPE2.0\x03\x01\0\0\0'
         frame = b'\x2c\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0'
         self.assertEqual(head + loop + frame + b'\x3b', keeptrack.strip_image_metadata(head + unknown + loop + frame + b'\x3b', 'gif'))
+
+    def test_png_orphan_animation_payload_is_removed_and_invalid_apng_is_rejected(self):
+        import struct
+        import zlib
+        def chunk(kind, body):
+            return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+        head = b'\x89PNG\r\n\x1a\n'
+        ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+        pixels = chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33'))
+        end = chunk(b'IEND', b'')
+        secret = chunk(b'fdAT', b'HIDDEN-AUTHOR') + chunk(b'fcTL', b'PRIVATE-LOCATION')
+        self.assertEqual(head + ihdr + pixels + end, keeptrack.strip_image_metadata(head + ihdr + pixels + secret + end, 'png'))
+        control = lambda seq, w=1: struct.pack('>IIIIIHHBB', seq, w, 1, 0, 0, 1, 10, 0, 0)
+        animation = chunk(b'acTL', struct.pack('>II', 1, 0))
+        for malformed in (
+            head + ihdr + animation + chunk(b'fcTL', control(1)) + pixels + end,
+            head + ihdr + animation + chunk(b'fcTL', control(0, 2)) + pixels + end,
+            head + ihdr + animation + pixels + chunk(b'fdAT', b'SECRET') + end,
+            head + ihdr + animation + chunk(b'fcTL', control(0)) + end,
+        ):
+            with self.assertRaises(ValueError):
+                keeptrack.strip_image_metadata(malformed, 'png')

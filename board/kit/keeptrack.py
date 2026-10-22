@@ -4001,11 +4001,51 @@ def strip_image_metadata(blob, ext):
         raise ValueError("broken JPEG")
     if ext == "png":
         out, i = bytearray(blob[:8]), 8
+        canvas, pixels, declared, frame_count, sequence, frame = None, False, 0, 0, 0, None
         fixed = {b"IHDR": 13, b"IEND": 0, b"gAMA": 4, b"cHRM": 32, b"sRGB": 1, b"pHYs": 9, b"acTL": 8, b"fcTL": 26}
         while i + 12 <= len(blob):
             n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
             if i + 12 + n > len(blob):
                 raise ValueError("broken PNG")
+            if kind == b"IHDR" and n == 13:
+                canvas = (int.from_bytes(blob[i + 8:i + 12], "big"), int.from_bytes(blob[i + 12:i + 16], "big"))
+            if kind == b"acTL":
+                count = int.from_bytes(blob[i + 8:i + 12], "big")
+                if pixels or declared or n != 8 or not canvas or not count:
+                    raise ValueError("broken APNG")
+                declared = count
+            elif kind == b"fcTL":
+                if not declared:
+                    i += 12 + n; continue
+                seq = int.from_bytes(blob[i + 8:i + 12], "big")
+                if n != 26 or (frame and not frame["data"]) or seq != sequence:
+                    raise ValueError("broken APNG")
+                sequence += 1
+                w, h, x, y = (int.from_bytes(blob[j:j + 4], "big") for j in (i + 12, i + 16, i + 20, i + 24))
+                if (not w or not h or x + w > canvas[0] or y + h > canvas[1]
+                        or blob[i + 32] > 2 or blob[i + 33] > 1
+                        or (not pixels and (x or y or w != canvas[0] or h != canvas[1]))):
+                    raise ValueError("broken APNG")
+                frame_count += 1
+                if frame_count > declared:
+                    raise ValueError("broken APNG")
+                frame = {"default": not pixels, "data": False}
+            elif kind == b"fdAT":
+                if not declared:
+                    i += 12 + n; continue
+                seq = int.from_bytes(blob[i + 8:i + 12], "big")
+                if not pixels or not frame or frame["default"] or n < 4 or seq != sequence:
+                    raise ValueError("broken APNG")
+                sequence += 1; frame["data"] |= n > 4
+            elif kind == b"IDAT":
+                if declared and frame:
+                    if not frame["default"]:
+                        raise ValueError("broken APNG")
+                    frame["data"] |= n > 0
+                pixels = True
+            elif kind == b"IEND" and declared:
+                if not pixels or not frame or not frame["data"] or frame_count != declared:
+                    raise ValueError("broken APNG")
             if kind == b"eXIf":
                 turn = tiff_orientation(blob[i + 8:i + 8 + n])
                 if turn != 1:
@@ -4065,7 +4105,7 @@ def strip_image_metadata(blob, ext):
             raise ValueError("broken WebP")
         out = chunks(12, end)
         return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + out
-    if ext == "gif":   # keep graphic/plain-text controls and reconstructed standard animation loops
+    if ext == "gif":   # keep graphic controls and reconstructed standard animation loops
         if len(blob) < 13:
             raise ValueError("broken GIF")
         i = 13 + (3 * (2 << (blob[10] & 7)) if blob[10] & 0x80 else 0)
@@ -4087,8 +4127,6 @@ def strip_image_metadata(blob, ext):
                 if label == b"\xf9":
                     if blob[i + 2] != 4 or end != i + 8:
                         raise ValueError("broken GIF")
-                    out += blob[i:end]
-                elif label == b"\x01":
                     out += blob[i:end]
                 elif (label == b"\xff" and blob[i + 2] == 11
                       and blob[i + 3:i + 14] in (b"NETSCAPE2.0", b"ANIMEXTS1.0")

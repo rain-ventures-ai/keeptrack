@@ -398,62 +398,80 @@ if (typeof window !== 'undefined') (() => {
   const ASSET_RE = /^assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(png|jpe?g|gif|webp))$/i;
   const assetPath = v => { const s = String(v || '').trim(); return ASSET_RE.test(s) ? s : ''; };
   const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }, IMG_MAX = 2 * 1024 * 1024;
-  const imgCache = new Map(), imgOwned = new Map(), imgOwners = new WeakMap(), IMG_KEEP = 120, IMG_RETRY_MS = 30000;
-  // The LRU holds at most IMG_KEEP reusable entries. Evicted pending/displayed entries live only for
-  // their owners, then are revoked when the render finishes or its DOM nodes disappear.
-  let imgSweepQueued = false, imgObserver;
-  function pruneImageCache() {
-    for (const entry of new Set([...imgCache.values(), ...imgOwned.values()])) {
-      for (const [owner, pending] of entry.owners) if (!pending && !owner.isConnected) { entry.owners.delete(owner); imgOwners.delete(owner); }
-    }
-    while (imgCache.size > IMG_KEEP) {
-      const [rel, entry] = imgCache.entries().next().value; imgCache.delete(rel); imgOwned.set(rel, entry);
-    }
-    for (const [rel, entry] of imgOwned) {
-      if (!entry.settled || entry.owners.size) continue;
-      if (entry.url) URL.revokeObjectURL(entry.url); imgOwned.delete(rel);
-    }
+  const imgCache = new Map(), imgOwned = new Map(), imgOwners = new WeakMap(), imgFailures = new Map(), IMG_KEEP = 120, IMG_RETRY_MS = 30000;
+  // Reusable entries are bounded. Pending/displayed leases own overflow URLs; settlement and
+  // removal only touch their affected entry. Unrelated mutations never scan cached image owners.
+  let imgObserver, imgWatching = false, imgOwnerCount = 0;
+  function disposeImageEntry(entry) {
+    if (!entry.settled || entry.owners.size || imgCache.get(entry.rel) === entry) return;
+    if (imgOwned.get(entry.rel) === entry) imgOwned.delete(entry.rel);
+    if (entry.url) { URL.revokeObjectURL(entry.url); entry.url = ''; }
   }
-  function scheduleImageSweep() {
-    if (imgSweepQueued) return; imgSweepQueued = true;
-    queueMicrotask(() => { imgSweepQueued = false; pruneImageCache(); });
+  function releaseImageOwner(owner, releaseConnected = false) {
+    const entry = imgOwners.get(owner); if (!entry) return;
+    const pending = entry.owners.get(owner);
+    if (pending || (!releaseConnected && owner.isConnected)) return;
+    entry.owners.delete(owner); imgOwners.delete(owner); imgOwnerCount--;
+    disposeImageEntry(entry);
+    if (!imgOwnerCount && imgWatching) { imgObserver.disconnect(); imgWatching = false; }
+  }
+  function watchImageOwners() {
+    if (!imgObserver) imgObserver = new MutationObserver(records => {
+      for (const record of records) for (const node of record.removedNodes) {
+        if (node.nodeType !== 1) continue;
+        releaseImageOwner(node);
+        // Only the removed subtree is inspected; moved owners still connected keep their leases.
+        for (const owner of node.querySelectorAll('[data-image-owner]')) releaseImageOwner(owner);
+      }
+    });
+    if (!imgWatching) { imgObserver.observe(document.documentElement, { childList: true, subtree: true }); imgWatching = true; }
   }
   function cacheImage(rel, entry) {
-    if (!entry.owners) entry.owners = new Map();
+    entry.rel = rel; if (!entry.owners) entry.owners = new Map();
     imgOwned.delete(rel); imgCache.delete(rel); imgCache.set(rel, entry);
-    while (imgCache.size > IMG_KEEP) { const [old, value] = imgCache.entries().next().value; imgCache.delete(old); imgOwned.set(old, value); }
-    scheduleImageSweep();
+    while (imgCache.size > IMG_KEEP) {
+      const [old, value] = imgCache.entries().next().value; imgCache.delete(old);
+      if (!value.settled || value.owners.size) imgOwned.set(old, value); else disposeImageEntry(value);
+    }
   }
   function imageOwnerReady(owner) {
     const entry = imgOwners.get(owner); if (!entry) return;
-    entry.owners.set(owner, false); scheduleImageSweep();
+    entry.owners.set(owner, Math.max(0, entry.owners.get(owner) - 1)); releaseImageOwner(owner, entry.failed);
   }
   function assetBlobUrl(rel, owner) {
-    // Callers hold an explicit DOM lease until they have assigned the resolved URL. This protects
-    // the promise-resolution window even when a render starts more than IMG_KEEP concurrent loads.
-    if (!imgObserver) {
-      imgObserver = new MutationObserver(scheduleImageSweep);
-      imgObserver.observe(document.documentElement, { childList: true, subtree: true });
-    }
-    let entry = imgCache.get(rel) || imgOwned.get(rel);
+    // Validate before starting a request so a missing caller lease cannot orphan an object URL.
+    if (!owner || typeof owner.setAttribute !== 'function') throw new TypeError('An image DOM owner is required');
+    let entry = imgCache.get(rel) || imgOwned.get(rel), history = imgFailures.get(rel);
     if (entry && entry.failed && !entry.final && Date.now() - entry.at > entry.retryMs) entry = null;
+    if (!entry && history && (history.final || Date.now() - history.at <= history.retryMs)) {
+      entry = { ...history, failed: true, settled: true, owners: new Map(), p: Promise.resolve('') };
+    }
     if (!entry) {
-      const previous = imgCache.get(rel) || imgOwned.get(rel);
-      entry = { at: Date.now(), failed: false, final: false, owners: new Map(), attempts: (previous && previous.attempts || 0) + 1, retryMs: IMG_RETRY_MS };
+      const previous = imgCache.get(rel) || imgOwned.get(rel) || history;
+      entry = { rel, at: Date.now(), failed: false, final: false, owners: new Map(), attempts: (previous && previous.attempts || 0) + 1, retryMs: IMG_RETRY_MS };
       entry.p = (async () => {
         const fail = final => { entry.failed = true; entry.final = final; entry.at = Date.now();
-          entry.retryMs = Math.min(30 * 60 * 1000, IMG_RETRY_MS * 2 ** Math.min(entry.attempts - 1, 6)); return ''; };
+          entry.retryMs = Math.min(30 * 60 * 1000, IMG_RETRY_MS * 2 ** Math.min(entry.attempts - 1, 6));
+          imgFailures.delete(rel); imgFailures.set(rel, { attempts: entry.attempts, at: entry.at, retryMs: entry.retryMs, final });
+          if (imgFailures.size > IMG_KEEP * 4) imgFailures.delete(imgFailures.keys().next().value);
+          return ''; };
         try {
           const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' });
           if (!r.ok) { const limited = r.status === 403 && (r.headers.get('retry-after') || r.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(await r.text()));
             return fail(!(r.status === 404 || r.status === 429 || r.status >= 500 || limited)); }
           const bytes = new Uint8Array(await r.arrayBuffer()), type = IMG_TYPES[rel.split('.').pop().toLowerCase()];
           if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return fail(true);
-          entry.url = URL.createObjectURL(new Blob([bytes], { type })); return entry.url;
-        } catch { return fail(false); } finally { entry.settled = true; scheduleImageSweep(); }
+          imgFailures.delete(rel); entry.url = URL.createObjectURL(new Blob([bytes], { type })); return entry.url;
+        } catch { return fail(false); } finally { entry.settled = true; disposeImageEntry(entry); }
       })();
     }
-    entry.owners.set(owner, true); imgOwners.set(owner, entry); cacheImage(rel, entry); return entry.p;
+    const previousOwner = imgOwners.get(owner);
+    if (previousOwner && previousOwner !== entry) {
+      previousOwner.owners.delete(owner); imgOwners.delete(owner); imgOwnerCount--; disposeImageEntry(previousOwner);
+    }
+    if (!entry.owners.has(owner)) imgOwnerCount++;
+    entry.owners.set(owner, (entry.owners.get(owner) || 0) + 1); imgOwners.set(owner, entry);
+    owner.setAttribute('data-image-owner', ''); watchImageOwners(); cacheImage(rel, entry); return entry.p;
   }
   function imgKind(b) {   // the image type from its first bytes; '' for anything else (an SVG or HTML never passes)
     const at = (i, xs) => xs.every((x, k) => b[i + k] === x);
@@ -2710,9 +2728,30 @@ if (typeof window !== 'undefined') (() => {
       if (type === 'image/png') {
         const parts = [b.subarray(0, 8)], keep = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'gAMA', 'cHRM', 'sRGB', 'pHYs', 'sBIT', 'bKGD', 'acTL', 'fcTL', 'fdAT']);
         const fixed = { IHDR: 13, IEND: 0, gAMA: 4, cHRM: 32, sRGB: 1, pHYs: 9, acTL: 8, fcTL: 26 };
-        let i = 8, pixels = false;
+        let i = 8, pixels = false, canvas = null, declaredFrames = 0, frameCount = 0, sequence = 0, frame = null;
         while (i + 12 <= b.length) {
           const n = v.getUint32(i), end = i + 12 + n, name = word(i + 4, 4); if (end > b.length) return null;
+          // Orphan animation chunks are ignored metadata on a still PNG. An APNG declaration,
+          // however, must describe complete, ordered frames inside the IHDR canvas.
+          if (name === 'IHDR' && n === 13) canvas = [v.getUint32(i + 8), v.getUint32(i + 12)];
+          if (name === 'acTL') {
+            if (pixels || declaredFrames || n !== 8 || !canvas || !(declaredFrames = v.getUint32(i + 8))) return null;
+          } else if (name === 'fcTL') {
+            if (!declaredFrames) { i = end; continue; }
+            if (n !== 26 || (frame && !frame.data) || v.getUint32(i + 8) !== sequence++) return null;
+            const w = v.getUint32(i + 12), h = v.getUint32(i + 16), x = v.getUint32(i + 20), y = v.getUint32(i + 24);
+            if (!w || !h || x + w > canvas[0] || y + h > canvas[1] || b[i + 32] > 2 || b[i + 33] > 1) return null;
+            if (!pixels && (x || y || w !== canvas[0] || h !== canvas[1])) return null;
+            if (++frameCount > declaredFrames) return null; frame = { default: !pixels, data: false };
+          } else if (name === 'fdAT') {
+            if (!declaredFrames) { i = end; continue; }
+            if (!pixels || !frame || frame.default || n < 4 || v.getUint32(i + 8) !== sequence++) return null;
+            frame.data ||= n > 4;
+          } else if (name === 'IDAT' && declaredFrames && frame) {
+            if (!frame.default) return null; frame.data ||= n > 0;
+          } else if (name === 'IEND' && declaredFrames) {
+            if (!pixels || !frame || !frame.data || frameCount !== declaredFrames) return null; animated = true;
+          }
           if (name === 'eXIf') { const turn = orientation(b.subarray(i + 8, end - 4)); if (turn !== 1) parts.push(chunk('eXIf', tiff(turn))); }
           else if (keep.has(name)) {
             if (name in fixed && n !== fixed[name]) return null;
@@ -2720,8 +2759,7 @@ if (typeof window !== 'undefined') (() => {
             parts.push(b.subarray(i, end));
           }
           else if (!(b[i + 4] & 32)) return null;   // unknown critical chunks cannot safely be dropped
-          if (name === 'iCCP') profiled = true;
-          if (name === 'acTL' && !pixels && n === 8) animated = true;
+          if (['iCCP', 'cICP', 'mDCV', 'cLLI', 'eXIf'].includes(name)) profiled = true;
           if (name === 'IDAT') pixels = true;
           i = end; if (name === 'IEND') return finish(parts);
         }
@@ -2744,7 +2782,7 @@ if (typeof window !== 'undefined') (() => {
               let t = b.subarray(i + 8, i + 8 + n); if (wordAt(t, 0, 6) === 'Exif\0\0') t = t.subarray(6); const turn = orientation(t);
               if (turn !== 1) { data = tiff(turn); if (flags) flags[8] |= 8; }
             }
-            if (name === 'ICCP') profiled = true;
+            if (name === 'ICCP' || name === 'EXIF') profiled = true;
             if (data) { const c = chunk(name, data, true); if (name === 'VP8X') flags = c; parts.push(c); }
             i = next;
           }
@@ -2766,7 +2804,7 @@ if (typeof window !== 'undefined') (() => {
             const transform = b[i + 15]; if (transform > 2) return null;
             parts.push(new Uint8Array([255,238,0,14,65,100,111,98,101,0,100,0,0,0,0,transform]));
           } else if ((marker >= 192 && marker <= 199) || (marker >= 201 && marker <= 207) || (marker >= 218 && marker <= 223)) parts.push(b.subarray(i, end));
-          if (marker === 226 && word(i + 4, 12) === 'ICC_PROFILE\0') profiled = true;
+          if ((marker === 226 && word(i + 4, 12) === 'ICC_PROFILE\0') || (marker === 225 && word(i + 4, 6) === 'Exif\0\0')) profiled = true;
           i = end;
           if (marker === 218) { const start = i; while (i < b.length) { if (b[i] !== 255) { i++; continue; } let j = i + 1; while (b[j] === 255) j++;
               if (b[j] === 0 || (b[j] >= 208 && b[j] <= 215)) { i = j + 1; continue; } break; } parts.push(b.subarray(start, i)); }
@@ -2775,7 +2813,7 @@ if (typeof window !== 'undefined') (() => {
     } catch {}
     return null;
   }
-  async function gifWithoutMetadata(file) {   // only graphics, plain-text controls and standard animation loops survive
+  async function gifWithoutMetadata(file) {   // only graphics controls and standard animation loops survive
     const g = new Uint8Array(await file.arrayBuffer()), out = [];
     try {
       let i = 13 + (g[10] & 0x80 ? 3 * (2 << (g[10] & 7)) : 0); out.push(g.subarray(0, i));
@@ -2784,7 +2822,6 @@ if (typeof window !== 'undefined') (() => {
         if (g[i] === 0x3b) { out.push(g.subarray(i, i + 1)); return new Blob(out, { type: 'image/gif' }); }
         if (g[i] === 0x21) { const label = g[i + 1], end = blocks(i + 2), app = String.fromCharCode(...g.subarray(i + 3, i + 14));
           if (label === 0xf9) { if (g[i + 2] !== 4 || end !== i + 8) return null; out.push(g.subarray(i, end)); }
-          else if (label === 1) out.push(g.subarray(i, end));
           else if (label === 0xff && g[i + 2] === 11 && ['NETSCAPE2.0', 'ANIMEXTS1.0'].includes(app) && g[i + 14] === 3 && g[i + 15] === 1 && end >= i + 19) out.push(g.subarray(i, i + 18), new Uint8Array([0])); i = end; continue; }
         if (g[i] === 0x2c) { const f = g[i + 9], end = blocks(i + 10 + (f & 0x80 ? 3 * (2 << (f & 7)) : 0) + 1); out.push(g.subarray(i, end)); i = end; continue; }
         throw new Error('broken');
@@ -2797,6 +2834,7 @@ if (typeof window !== 'undefined') (() => {
     const block = imgUploadBlock(); if (block) { toast(block, true); return ''; }
     if (!safeCardId(cardId)) return '';
     if (!Object.values(IMG_TYPES).includes(file.type)) { toast('Only PNG, JPEG, GIF or WebP images can be added.', true); return ''; }
+    if (file.size > 25 * 1024 * 1024) { toast('That image is over 25 MB. Choose a smaller source image before uploading.', true); return ''; }
     const k0 = imgKind(new Uint8Array(await file.slice(0, 16).arrayBuffer())); if (!k0) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
     const typed = new File([file], file.name, { type: k0 }), stripped = await strippedImage(typed);
     // Animated uploads retain their frames; stills must apply profiles and the dimension limit.
@@ -2815,7 +2853,9 @@ if (typeof window !== 'undefined') (() => {
       const there = r.status === 422 && /sha/i.test(String((await r.json().catch(() => ({}))).message || ''));   // 422 asking for a sha: a file of this name (these bytes) is there
       if (!r.ok && !there) { toast(`The image was not saved (GitHub error ${r.status}).`, true); setStatus('Image not saved', 'err'); return ''; }
     } catch (e) { toast('The image was not saved: ' + (isTimeout(e) ? 'GitHub did not answer.' : e.message), true); setStatus('Image not saved', 'err'); return ''; }
-    if (!imgCache.has(rel) && !imgOwned.has(rel)) {
+    const existing = imgCache.get(rel) || imgOwned.get(rel);
+    if (!existing || existing.failed) {
+      imgFailures.delete(rel);
       const url = URL.createObjectURL(new Blob([bytes], { type: kind }));
       cacheImage(rel, { url, p: Promise.resolve(url), settled: true, at: Date.now(), failed: false, final: false });
     }
@@ -8144,7 +8184,10 @@ if (typeof window !== 'undefined') (() => {
       if (asset) {
         const main = row.querySelector('.ui-listrow__main'), a = el('a', 'ui-listrow__main');
         while (main.firstChild) a.append(main.firstChild); main.replaceWith(a); a.href = '#'; a.title = 'Open image';
-        a.onclick = e => { e.preventDefault(); assetBlobUrl(asset).then(u => { if (u) window.open(u, '_blank', 'noopener'); else toast('That image could not be opened.', true); }); };
+        a.onclick = e => { e.preventDefault(); assetBlobUrl(asset, a).then(u => {
+          try { if (u) { a.href = u; window.open(u, '_blank', 'noopener'); } else toast('That image could not be opened.', true); }
+          finally { imageOwnerReady(a); }
+        }); };
       }
       if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
       box.append(row);

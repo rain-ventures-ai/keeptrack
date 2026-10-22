@@ -73,6 +73,17 @@ function png(w = 40, h = 30, uncompressedMarker = false) {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ch('IHDR', ihdr), ch('IDAT', zlib.deflateSync(raw, uncompressedMarker ? { level: 0 } : {})), ch('IEND', Buffer.alloc(0))]);
 }
 
+function pngChunkBytes(kind, body) {
+  const length = Buffer.alloc(4); length.writeUInt32BE(body.length);
+  const payload = Buffer.concat([Buffer.from(kind), body]); let crc = 0xffffffff;
+  for (const x of payload) { crc ^= x; for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1; }
+  const sum = Buffer.alloc(4); sum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+  return Buffer.concat([length, payload, sum]);
+}
+function extraPngChunk(kind, body, image = png(60, 40)) {
+  return Buffer.concat([image.subarray(0, -12), pngChunkBytes(kind, body), image.subarray(-12)]);
+}
+
 (async () => {
   await require('./image-review.test.js')();
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
@@ -176,6 +187,22 @@ function png(w = 40, h = 30, uncompressedMarker = false) {
     const pngStill = png(4000, 2, true); assert.ok(pngStill.includes('acTL'), 'fixture has acTL in IDAT bytes, not a chunk');
     await page.locator('#descImage input[type=file]').setInputFiles({ name: 'still-marker.png', mimeType: 'image/png', buffer: pngStill });
     assert.deepEqual(await uploadedDimensions('still-marker'), [2000, 1], 'still PNG payload cannot bypass the dimension limit');
+    // A valid still PNG can contain ignored APNG data. Sanitisation must remove it even when
+    // its compact original wins the size comparison against the canvas export.
+    const orphanedFrame = extraPngChunk('fdAT', Buffer.from('HIDDEN-AUTHOR-LOCATION'));
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'orphan-frame.png', mimeType: 'image/png', buffer: orphanedFrame });
+    assert.deepEqual(await uploadedDimensions('orphan-frame'), [60, 40]);
+    assert.deepEqual(assets[puts.at(-1).path], png(60, 40), 'orphan fdAT is gone from the retained compressed original');
+    const single = png(1, 1), frameControl = seq => { const b = Buffer.alloc(26); b.writeUInt32BE(seq); b.writeUInt32BE(1, 4); b.writeUInt32BE(1, 8); b.writeUInt16BE(1, 20); b.writeUInt16BE(10, 22); return b; };
+    const apng = Buffer.concat([single.subarray(0, 33), pngChunkBytes('acTL', Buffer.from([0,0,0,2,0,0,0,0])), pngChunkBytes('fcTL', frameControl(0)),
+      single.subarray(33, -12), pngChunkBytes('fcTL', frameControl(1)), pngChunkBytes('fdAT', Buffer.concat([Buffer.from([0,0,0,2]), zlib.deflateSync(Buffer.from([0,0x66,0x66,0x66]))])), single.subarray(-12)]);
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'two-frames.png', mimeType: 'image/png', buffer: apng });
+    assert.deepEqual(await uploadedDimensions('two-frames'), [1, 1]);
+    assert.deepEqual(assets[puts.at(-1).path], apng, 'validated APNG retains both complete compressed frames');
+    const beforeHuge = puts.length;
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'huge.png', mimeType: 'image/png', buffer: Buffer.alloc(25 * 1024 * 1024 + 1) });
+    await page.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /over 25 MB/.test(x.textContent)));
+    assert.equal(puts.length, beforeHuge, 'source ceiling is enforced before parsing/encoding/upload');
     await shot(page, 'images-editing-1280');
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(native, [], 'no native dialogs');
 
@@ -189,6 +216,48 @@ function png(w = 40, h = 30, uncompressedMarker = false) {
     await ro.locator('#cmImage input[type=file]').setInputFiles({ name: 'x.png', mimeType: 'image/png', buffer: png() });   // even a file that reaches the input
     await ro.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /read-only/.test(x.textContent)));
     assert.deepEqual(roPuts, [], 'nothing is written'); assert.deepEqual(roErr, [], 'no page errors when read-only'); await ro.close();
+    // Both assetBlobUrl call sites must hold DOM leases: Markdown images above and the
+    // shared task/person Links row click path here. Intercept window.open rather than navigating.
+    const linkApi = new Github();
+    linkApi.files['cards/t_one.json'] = text({ ...card, links: [{ title: 'Stored screen', url: seeded }] });
+    linkApi.files['people/p_one.json'] = text({ ...person, links: [{ title: 'Stored screen', url: seeded }] });
+    const linked = await browser.newPage(), linkErrors = []; linked.on('pageerror', e => linkErrors.push(e.message));
+    await linked.addInitScript(INIT);
+    await linked.addInitScript(() => { window.openedImageUrls = []; window.open = url => { window.openedImageUrls.push(url); return null; }; });
+    await linked.route('https://api.test/**', r => {
+      const rel = decodeURIComponent(new URL(r.request().url()).pathname).replace('/repos/acme/board/contents/board/', '');
+      return rel === seeded ? r.fulfill({ status: 200, body: png(), headers: { 'Content-Type': 'application/octet-stream' } }) : linkApi.route(r);
+    });
+    for (const [hash, selector] of [['1', '#cLinkList'], ['person=p_one', '#pLinks']]) {
+      await linked.goto(base + '/board/index.html#' + hash);
+      await linked.locator(`${selector} a[title="Open image"]`).click();
+      await linked.waitForFunction(() => window.openedImageUrls.length === 1);
+      assert.match(await linked.evaluate(() => window.openedImageUrls[0]), /^blob:/, 'image resource click opens the fetched image');
+    }
+    assert.deepEqual(linkErrors, []); await linked.close();
+
+    // A successful re-upload repairs a cached missing image immediately, without waiting for retry backoff.
+    const repairApi = new Github(), repairAssets = {}, repairRel = puts[0].path;
+    repairApi.files['cards/t_one.json'] = text({ ...card, details: `![Missing](${repairRel})` });
+    const repair = await browser.newPage(); await repair.addInitScript(INIT);
+    await repair.route('https://api.test/**', r => {
+      const rel = decodeURIComponent(new URL(r.request().url()).pathname).replace('/repos/acme/board/contents/board/', '');
+      if (rel.startsWith('assets/')) {
+        if (r.request().method() === 'PUT') { repairAssets[rel] = Buffer.from(r.request().postDataJSON().content, 'base64'); return r.fulfill({ status: 201, body: '{}' }); }
+        return repairAssets[rel] ? r.fulfill({ status: 200, body: repairAssets[rel] }) : r.fulfill({ status: 404, body: '{}' });
+      }
+      return repairApi.route(r);
+    });
+    await repair.goto(base + '/board/index.html#1');
+    await repair.waitForFunction(() => document.querySelector('#cDescView').textContent.includes('image not found'));
+    await repair.locator('#cmText').click();
+    await repair.locator('#cmImage input[type=file]').setInputFiles({ name: 'Recreated.png', mimeType: 'image/png', buffer: png(60, 40) });
+    await repair.waitForFunction(() => document.querySelector('#cmText').value.includes('![Recreated]'));
+    assert.ok(repairAssets[repairRel], 'upload recreated the same content-hash path');
+    await repair.locator('#cmPost').click();
+    await repair.waitForFunction(() => { const image = document.querySelector('#cmStream img.mdimg'); return image && image.naturalWidth === 60; });
+    await repair.close();
+
     // More simultaneous requests than the LRU limit: displayed leases survive, then a real DOM removal
     // must revoke overflow without requiring another asset read. Spy only on URLs, never production internals.
     const burstApi = new Github(), burstAssets = {};
