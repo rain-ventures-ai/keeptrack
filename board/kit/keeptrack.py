@@ -319,7 +319,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 94  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 95  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3920,10 +3920,133 @@ def image_kind(data):
     return "webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else ""
 
 
-def save_asset(rel, blob, message):
+def tiff_orientation(tiff):
+    """EXIF Orientation (1-8) from a TIFF block (the body of an EXIF segment); 1 when absent or unreadable."""
+    try:
+        bo = {b"II": "little", b"MM": "big"}[tiff[:2]]
+        ifd = int.from_bytes(tiff[4:8], bo); count = int.from_bytes(tiff[ifd:ifd + 2], bo)
+        for k in range(count):
+            e = ifd + 2 + 12 * k
+            if int.from_bytes(tiff[e:e + 2], bo) == 0x0112 and int.from_bytes(tiff[e + 2:e + 4], bo) == 3:
+                v = int.from_bytes(tiff[e + 8:e + 10], bo)
+                return v if 1 <= v <= 8 else 1
+    except (KeyError, IndexError, ValueError):
+        pass
+    return 1
+
+
+def orientation_only_tiff(v):
+    """A TIFF block holding nothing but Orientation: what a photo keeps so it still shows the right way up."""
+    return b"MM\x00*\x00\x00\x00\x08" + b"\x00\x01" + b"\x01\x12\x00\x03\x00\x00\x00\x01" + v.to_bytes(2, "big") + b"\x00\x00" + b"\x00\x00\x00\x00"
+
+
+def strip_image_metadata(blob, ext):
+    """The image without its metadata (EXIF: GPS position, device, owner; text chunks; XMP), so a photo or screenshot
+    never commits that to the board repo (AGENTS rule 7). Pixels are untouched; a photo's EXIF Orientation is kept (alone),
+    so it still shows the right way up. Raises ValueError on a broken file."""
+    if ext == "jpg":   # keep every segment but APP1 (EXIF/XMP), APP13 (IPTC) and COM; the scan data from SOS to the end of the image
+        out, i, turn = bytearray(blob[:2]), 2, 1
+        while i + 4 <= len(blob):
+            if blob[i] != 0xFF:
+                raise ValueError("broken JPEG")
+            while i + 2 < len(blob) and blob[i + 1] == 0xFF:   # fill bytes before a marker
+                i += 1
+            marker = blob[i + 1]
+            if marker == 0xDA:   # start of scan: image data to the end of the image; anything after it (a second image, a vendor trailer) is dropped
+                end = blob.find(b"\xff\xd9", i)
+                if end < 0:
+                    raise ValueError("broken JPEG")
+                out += blob[i:end + 2]; return bytes(out)
+            if 0xD0 <= marker <= 0xD9 or marker == 0x01:
+                out += blob[i:i + 2]; i += 2; continue
+            n = int.from_bytes(blob[i + 2:i + 4], "big")
+            if n < 2 or i + 2 + n > len(blob):
+                raise ValueError("broken JPEG")
+            if marker == 0xE1 and blob[i + 4:i + 10] == b"Exif\x00\x00" and turn == 1:
+                turn = tiff_orientation(blob[i + 10:i + 2 + n])
+                if turn != 1:   # straight after SOI, where EXIF belongs
+                    body = b"Exif\x00\x00" + orientation_only_tiff(turn)
+                    out[2:2] = b"\xff\xe1" + (len(body) + 2).to_bytes(2, "big") + body
+            elif marker not in (0xE1, 0xED, 0xFE):
+                out += blob[i:i + 2 + n]
+            i += 2 + n
+        raise ValueError("broken JPEG")
+    if ext == "png":   # drop eXIf and the text chunks (tEXt, zTXt, iTXt)
+        out, i = bytearray(blob[:8]), 8
+        while i + 12 <= len(blob):
+            n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
+            if i + 12 + n > len(blob):
+                raise ValueError("broken PNG")
+            if kind == b"eXIf":
+                turn = tiff_orientation(blob[i + 8:i + 8 + n])
+                if turn != 1:
+                    d = orientation_only_tiff(turn)
+                    out += len(d).to_bytes(4, "big") + b"eXIf" + d + (__import__("zlib").crc32(b"eXIf" + d) & 0xFFFFFFFF).to_bytes(4, "big")
+            elif kind not in (b"tEXt", b"zTXt", b"iTXt"):
+                out += blob[i:i + 12 + n]
+            i += 12 + n
+            if kind == b"IEND":
+                return bytes(out)
+        raise ValueError("broken PNG")
+    if ext == "webp":   # drop the EXIF and XMP chunks and clear their flags in VP8X
+        out, i, vp8x = bytearray(), 12, None
+        while i + 8 <= len(blob):
+            kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
+            if i + 8 + n > len(blob):
+                raise ValueError("broken WebP")
+            chunk = bytearray(blob[i:i + size])
+            if kind == b"VP8X" and len(chunk) > 8:
+                chunk[8] &= ~0x0C & 0xFF   # EXIF (0x08) and XMP (0x04) flags; EXIF set again below if Orientation stays
+                vp8x = len(out)
+            if kind == b"EXIF":
+                tiff = blob[i + 8:i + 8 + n]; tiff = tiff[6:] if tiff[:6] == b"Exif\x00\x00" else tiff
+                turn = tiff_orientation(tiff)
+                if turn != 1:
+                    d = orientation_only_tiff(turn)
+                    out += b"EXIF" + len(d).to_bytes(4, "little") + d + (b"\x00" if len(d) & 1 else b"")
+                    if vp8x is not None:
+                        out[vp8x + 8] |= 0x08
+            elif kind != b"XMP ":
+                out += chunk
+            i += size
+        return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + bytes(out)
+    if ext == "gif":   # drop comment extensions and the XMP application extension; frames kept as they are
+        if len(blob) < 13:
+            raise ValueError("broken GIF")
+        i = 13 + (3 * (2 << (blob[10] & 7)) if blob[10] & 0x80 else 0)
+        out = bytearray(blob[:i])
+
+        def blocks(j):   # the end of a run of data sub-blocks starting at j
+            while True:
+                if j >= len(blob):
+                    raise ValueError("broken GIF")
+                n = blob[j]; j += 1 + n
+                if n == 0:
+                    return j
+        while i < len(blob):
+            b = blob[i]
+            if b == 0x3B:
+                out += blob[i:i + 1]; return bytes(out)
+            if b == 0x21:
+                label = blob[i + 1:i + 2]; end = blocks(i + 2)
+                xmp = label == b"\xff" and blob[i + 3:i + 14] == b"XMP DataXMP"
+                if label != b"\xfe" and not xmp:
+                    out += blob[i:end]
+                i = end; continue
+            if b == 0x2C:
+                if i + 10 > len(blob):
+                    raise ValueError("broken GIF")
+                flags = blob[i + 9]; j = i + 10 + (3 * (2 << (flags & 7)) if flags & 0x80 else 0) + 1
+                end = blocks(j); out += blob[i:end]; i = end; continue
+            raise ValueError("broken GIF")
+        raise ValueError("broken GIF")
+    return blob
+
+
+def save_asset(rel, blob, message, state):
     """Write one binary file next to the board (local folder, git clone or GitHub API). Its name holds its hash, so an
     existing file of that name already has these bytes."""
-    _, state = load()
+    global WRITE
     if state["mode"] == "local":
         path = _local_path(rel); os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
@@ -3933,8 +4056,9 @@ def save_asset(rel, blob, message):
     remote = _remote_path(rel)
     if state["mode"] == "git":
         _check_git_clone()
-        for _ in range(4):
-            _, state = load()
+        for attempt in range(4):
+            if attempt:
+                _BOARD_STATES.clear(); _, state = load()   # the branch moved: read it again
             with tempfile.NamedTemporaryFile(delete=False) as f:
                 f.write(blob); tmp = f.name
             try:
@@ -3965,17 +4089,21 @@ def save_asset(rel, blob, message):
                 return
             if not ("non-fast-forward" in err or "fetch first" in err or "rejected" in err):
                 sys.exit(f"write failed: git push to {REPO}@{BRANCH} was refused: {err}")
-            _BOARD_STATES.clear()   # the branch moved: read it again and retry
         sys.exit("write failed: the branch kept moving; run the command again")
     body = {"message": message, "branch": BRANCH, "content": base64.b64encode(blob).decode()}
-    rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{remote}", "--input", "-", body=body)
-    if rc and not ("422" in err and "sha" in (err + out).lower()):   # 422 without a sha: a file of this name (these bytes) is there
-        _api_error(rc, out, err)
+    path = "/".join(urllib.parse.quote(x, safe="") for x in remote.split("/"))
+    rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{path}", "--input", "-", body=body)
+    if rc and not ("422" in err and "sha" in (err + out).lower()):   # 422 asking for a sha: a file of this name (these bytes) is there
+        try:
+            _api_error(rc, out, err)
+        except UseGit:   # the sandbox blocks API writes: push from this clone, as every other write does
+            WRITE = "git"; _BOARD_STATES.clear(); _, state = load()
+            save_asset(rel, blob, message, state)
 
 
 def cmd_attach(a):
     """Add an image (screenshot) to a card: written to assets/<card id>/, then shown in a new comment, appended to the
-    description with --details, or added to the card's Links with --link."""
+    description with --details, or added to the card's Links with --link. Its metadata (EXIF and the like) is removed first."""
     if getattr(a, "link", False) and a.details:
         sys.exit("--link adds the image to the card's Links; it cannot be combined with --details")
     if BACKEND == "hosted":
@@ -3990,12 +4118,19 @@ def cmd_attach(a):
     ext = image_kind(blob)
     if not ext:
         sys.exit("only PNG, JPEG, GIF or WebP images can be attached (checked from the file's content, not its name)")
-    data, _ = load(); t = find(data, a.id)
+    try:
+        blob = strip_image_metadata(blob, ext)
+    except ValueError as e:
+        sys.exit(f"cannot attach {a.path}: {e}")
+    data, state = load(); guard_schema(data)   # a board this kit may not write gets no file either
+    t = find(data, a.id)
+    if not SAFE_ID.fullmatch(str(t.get("id", ""))):
+        sys.exit(f"card {t.get('id')!r} has an id that cannot name a folder; run keeptrack.py doctor")
     rel = f"assets/{t['id']}/{dt.datetime.now(dt.timezone.utc):%Y%m%d}-{hashlib.sha256(blob).hexdigest()[:12]}.{ext}"
     alt = re.sub(r"[\[\]\r\n]", " ", a.alt or os.path.splitext(os.path.basename(a.path))[0]).strip()[:60] or "image"
     title = re.sub(r"[\r\n]", " ", a.text).strip()[:120] if a.link and a.text and a.text.strip() else alt
     md = f"![{alt}]({rel})"
-    save_asset(rel, blob, f"Image: #{t.get('num', t['id'])}")
+    save_asset(rel, blob, f"Image: #{t.get('num', t['id'])}", state)
 
     def fn(data):
         t = find(data, a.id)

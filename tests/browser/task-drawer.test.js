@@ -288,7 +288,8 @@ async function assertFits(page, where) {
     await page.locator('#cmText').fill('Looks good'); w = saved(); await page.locator('#cmPost').click(); await w; assert.equal(api.card().comments.at(-1).text, 'Looks good');
     assert.equal(await page.locator('#cmCount').textContent(), '1');
     // Activity: one timeline, newest first; history rows sit between the comments, like a GitHub pull request (kit v66)
-    const tl = () => page.locator('#cmStream').evaluate(b => [...b.querySelectorAll(':scope > .cmcard, :scope > .cmhrun .cmhist')].map(x => x.classList.contains('cmcard') ? 'C:' + x.querySelector('.cmbody').textContent.trim() : 'H:' + x.querySelector('.cmhtext').textContent.trim()));
+    // A comment sits in .cmthread (kit v94 replies). History rows stay direct children of the stream.
+    const tl = () => page.locator('#cmStream').evaluate(b => [...b.querySelectorAll(':scope > .cmthread > .cmcard, :scope > .cmhrun .cmhist')].map(x => x.classList.contains('cmcard') ? 'C:' + x.querySelector('.cmbody').textContent.trim() : 'H:' + x.querySelector('.cmhtext').textContent.trim()));
     let rows = await tl(); assert.equal(rows[0], 'C:Looks good', 'the newest comment is at the top');
     assert.equal(rows.filter(r => r.startsWith('H:')).length, 4, 'a long run of changes shows the newest four: ' + rows.join(' | '));
     assert.match(await page.locator('#cmStream .cmhmore').innerText(), /^Show \d+ more changes?$/);

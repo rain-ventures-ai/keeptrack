@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v95: images on cards, the review fixes for v92 (private-tasks card #292). Uploaded images lose their metadata
+(EXIF: GPS position, device, owner; text chunks; XMP; GIF comments; data after a JPEG's end): the page draws every image
+again before upload (chosen by its bytes, not its name) and `keeptrack.py attach` strips those segments, keeping only a
+photo's Orientation so it is not saved sideways. `attach` falls back to a git push when the sandbox proxy blocks API writes,
+checks the card id and the board's read-only guard before writing, and reads the board once. The page treats a 422 as
+"already there" only when GitHub asks for a sha, tries a failed image read again after 30 seconds, keeps at most 120 images in memory and
+refuses a non-image before redrawing it. No migration.
+
 Kit v94: project comments, one-level replies, and an image in Links (private-tasks cards #300, #301, #303). A project
 record can hold a comment stream (`project-comment`, `project-comments`, and `project` prints them newest last); the
 project drawer has a Comments section after Links. Card and project comments may set `reply_to` to one parent comment,

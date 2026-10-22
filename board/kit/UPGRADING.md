@@ -25,6 +25,20 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v95 (schema 4)
+Images on cards: the review fixes for v92 (private-tasks card #292). No migration and no data change.
+- Metadata is removed before an image is saved. The page draws every image again (which ones is decided by the file's
+  bytes, not its name; longest side at most 2000px), and a GIF loses its comment and XMP extensions but keeps its frames.
+  `attach` strips JPEG APP1/APP13/COM and anything after the end of the image (a second image, a vendor trailer), PNG
+  eXIf/tEXt/zTXt/iTXt, WebP EXIF/XMP and GIF comment/XMP extensions. A photo's EXIF Orientation alone is kept, so it is
+  not saved sideways. A screenshot of a secret still goes into git history: the help says not to add one.
+- `attach` falls back to a git push when the sandbox proxy blocks API writes (as every other write does). It checks the
+  card id and the board's read-only guard before writing anything, and reads the board once.
+- Web board: a GitHub 422 counts as "this image is already there" only when GitHub asks for a sha; a failed image read is
+  tried again after 30 seconds unless it can never work (too big, the wrong type, refused); at most 120 images are kept in
+  memory, and one still on the page is never let go; a non-image is refused first.
+- Run `kit-update` only. Check: `kit-check` says v95.
+
 ### v94 (schema 4)
 Project comments, one-level replies, and an image in a card's Links (private-tasks cards #300, #301, #303). No migration
 and no schema change. Optional fields only; older kits leave them as they are.

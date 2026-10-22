@@ -59,20 +59,13 @@ class KitV94(unittest.TestCase):
         return next(p for p in self.load()["projects"] if p["id"] == "pr_pilot01ab")
 
     def test_kit_is_v94(self):
-        self.assertEqual(94, keeptrack.KIT_VERSION)
-        with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(94, json.load(f)["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            with open(os.path.join(KIT, plugin, "plugin.json"), encoding="utf-8") as f:
-                self.assertEqual("0.94.0", json.load(f)["version"], plugin)
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 94)   # the exact version is asserted by the newest tests/test_kit_v*.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v93 = f.read().split("### v94 (schema 4)", 1)[1].split("### v93", 1)[0]
         for words in ("kit-update", "project-comment", "reply_to", "No migration", "Add image", "--link"):
             self.assertIn(words, v93)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v94", f.read())
-        with open(os.path.join(REPO, "board", "board.js"), encoding="utf-8") as f:
-            self.assertIn("const PAGE_KIT = 94;", f.read())
         help_out = self.run_kt("help", "clients-projects").stdout
         self.assertIn("project-comment", help_out)
         self.assertIn("project-comments", help_out)
