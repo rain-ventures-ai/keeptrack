@@ -20,6 +20,20 @@ reserved client from a list for a new task, a task sheet or a new project is ref
 an archived record is checked too (split boards, and the hosted unarchive in the page and the CLI), as is a hosted
 `add --project` whose project has a reserved client. `client-rm` keeps a reserved name while the archive still uses it.
 
+Kit v87: an archive file has its own size limit (private-tasks card #284). `doctor` failed with `FILE_SIZE` as soon as
+`archive/<year>.json` passed 200 KB, and relay's `ci_checks.py` (which runs doctor) failed on every PR. An
+archive year file now has its own limit: `doctor` warns (`ARCHIVE_SIZE`) from 700 KB and fails (`FILE_SIZE`) above
+900 KB, and `keeptrack.py archive` and the web board's Archive (also the Done-lane button) check each year file before writing, on
+every layout: a year that would pass 900 KB is held back (its items stay on the board, the other years are archived,
+the message names what stayed), and past 700 KB the archive is written with a warning; `archive` exits 1 when no archive year was
+written (everything was held back; a run that only saved proposal slimming says so and still exits 1), and `--dry-run` reports the same. A rename
+(label, client, stage) that would push an archive year over 900 KB is refused with nothing written. `atomic_write` no longer turns `\n` into `\r\n` on Windows. Archive files load with
+the board like every other file (cached by blob sha, downloaded again after each archive change); 900 KB is a chosen
+margin (the real archive was 578 KB), not a GitHub limit, and the 5 MB board total still caps load cost. Only
+`archive/<year>.json` gets the higher limit; any other file in `archive/` keeps 200 KB, and the web board's size bar no
+longer tells people to archive when the archive is most of the total. `doctor`'s size checks run on split boards only. No
+migration and no data change. Splitting a year into parts, and loading archives lazily, are follow-ups.
+
 Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #281; v85 is the Archive view, card
 #283). A client with no people, no company record (stage, owner, domain, notes or north star), no files and no
 projects, such as a "General" bucket for tasks, is left out of Companies and the company pipeline; it stays a client
