@@ -102,6 +102,38 @@ class ImageReview(unittest.TestCase):
             self.assertEqual(head + ihdr + pixels + end, out)
             self.assertNotIn(b'PRIVATE', out)
 
+    def test_png_rejects_ignored_zlib_tails_incomplete_streams_and_expansion(self):
+        import struct
+        import zlib
+        def chunk(kind, body):
+            return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+        head = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+        stream = zlib.compress(b'\0\x11\x22\x33')
+        for data in (stream + b'PRIVATE-TRAILER', stream[:-1], zlib.compress(b'x' * (64 * 1024 * 1024 + 1))):
+            with self.assertRaises(ValueError):
+                keeptrack.strip_image_metadata(head + chunk(b'IDAT', data) + chunk(b'IEND', b''), 'png')
+        split = head + chunk(b'IDAT', stream[:3]) + chunk(b'IDAT', stream[3:]) + chunk(b'IEND', b'')
+        self.assertEqual(split, keeptrack.strip_image_metadata(split, 'png'))
+
+    def test_gif_graphics_control_targets_removed_text_not_following_image(self):
+        head = bytes.fromhex('47494638396101000100800000000000ffffff')
+        frame = bytes.fromhex('2c0000000001000100000202440100')
+        control = bytes.fromhex('21f9040107000000')
+        text = b'\x21\x01\x0c' + b'\0' * 12 + b'\x01A\0'
+        comment = b'\x21\xfe\x01A\0'
+        for extension, expected in ((text, b''), (comment, control)):
+            self.assertEqual(head + expected + frame + b'\x3b', keeptrack.strip_image_metadata(head + control + extension + frame + b'\x3b', 'gif'))
+
+    def test_webp_rejects_duplicate_empty_and_excessive_chunks_before_retaining_them(self):
+        def ch(kind, data):
+            return kind + len(data).to_bytes(4, 'little') + data + (b'\0' if len(data) % 2 else b'')
+        animation = ch(b'VP8X', b'\x02' + b'\0' * 9) + ch(b'ANIM', b'\0' * 6)
+        frames = ch(b'ANMF', b'\0' * 16 + ch(b'VP8L', b'x')) * 513
+        for body in (ch(b'VP8 ', b''), ch(b'VP8 ', b'x') + ch(b'VP8L', b'x'), ch(b'JUNK', b'') * 4097, animation + frames):
+            image = b'RIFF' + (len(body) + 4).to_bytes(4, 'little') + b'WEBP' + body
+            with self.assertRaises(ValueError):
+                keeptrack.strip_image_metadata(image, 'webp')
+
     def test_webp_animation_requires_control_and_nonempty_pixel_frames(self):
         def chunk(kind, body):
             return kind + len(body).to_bytes(4, 'little') + body + (b'\0' if len(body) % 2 else b'')

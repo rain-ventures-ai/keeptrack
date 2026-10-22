@@ -124,7 +124,7 @@ function extraPngChunk(kind, body, image = png(60, 40)) {
     assert.match(await page.locator('#cmImage').getAttribute('title'), /APNG is saved as a still image/);
     await page.locator('#cmImage input[type=file]').setInputFiles({ name: 'Login page.png', mimeType: 'image/png', buffer: png(60, 40) });
     await page.waitForFunction(() => /!\[Login page\]\(assets\/t_one\/\d{8}-[0-9a-f]{12}\.png\)/.test(document.getElementById('cmText').value));
-    assert.ok(assets[puts[0].path].length <= png(60, 40).length, 'upload keeps the smaller stripped original');
+    assert.ok(assets[puts[0].path].length > 0, 'upload exports decoded pixels');
     assert.equal(puts.length, 1); assert.match(puts[0].path, /^assets\/t_one\/\d{8}-[0-9a-f]{12}\.png$/); assert.equal(puts[0].message, 'Image: #1'); assert.equal(puts[0].branch, 'main');
     assert.deepEqual([...assets[puts[0].path].subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'the bytes are written as they are');
     await page.locator('#cmText').press('End'); await page.locator('#cmText').type(' Here it is');
@@ -201,6 +201,11 @@ function extraPngChunk(kind, body, image = png(60, 40)) {
     assert.deepEqual(await uploadedDimensions('two-frames'), [1, 1]);
     assert.equal(assets[puts.at(-1).path].includes('acTL'), false, 'APNG is saved as a still image');
     assert.equal(assets[puts.at(-1).path].includes('fdAT'), false);
+    const secretTail = Buffer.from('PRIVATE-PNG-IDAT-TRAILER'), idatLength = single.readUInt32BE(33);
+    const tailedPng = Buffer.concat([single.subarray(0, 33), pngChunkBytes('IDAT', Buffer.concat([single.subarray(41, 41 + idatLength), secretTail])), single.subarray(-12)]);
+    await page.locator('#cmImage input[type=file]').setInputFiles({ name: 'tailed.png', mimeType: 'image/png', buffer: tailedPng });
+    await page.waitForFunction(() => document.getElementById('cmText').value.includes('![tailed]'));
+    assert.equal(assets[puts.at(-1).path].includes(secretTail), false, 'ignored PNG compressed-stream tails cannot survive browser pixel export');
     const hiddenApng = Buffer.concat([single.subarray(0, 33), pngChunkBytes('acTL', Buffer.from([0,0,0,2,0,0,0,0])), pngChunkBytes('fcTL', frameControl(0)),
       single.subarray(33, -12), pngChunkBytes('fcTL', frameControl(1)), pngChunkBytes('fdAT', Buffer.concat([Buffer.from([0,0,0,2]), Buffer.from('PRIVATE-NON-ZLIB-FRAME')])), single.subarray(-12)]);
     await page.locator('#descImage input[type=file]').setInputFiles({ name: 'ignored-frame.png', mimeType: 'image/png', buffer: hiddenApng });
