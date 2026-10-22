@@ -229,6 +229,8 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
       await pg.goBack(); await pg.locator('#dlgContact').waitFor({ state: 'hidden' });
       delete missing.files['people/p_one.json']; missing.head = 'head-person-removed';
       await pg.reload(); await pg.locator('.prow', { hasText: 'Bo Beta' }).waitFor();
+      // The cached board may paint Bo before the fresh snapshot removes Casey. Observe that deletion first.
+      await pg.locator('.prow', { hasText: 'Casey Example' }).waitFor({ state: 'hidden' });
       await pg.goForward();
       await pg.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /person was not found/.test(x.textContent)));
       assert.deepEqual(await pg.evaluate(() => history.state), { kbView: 'people' }, 'missing record clears old drawer/depth state');
