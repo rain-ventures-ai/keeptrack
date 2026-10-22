@@ -64,12 +64,13 @@ let base;
 const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.waitForTimeout(250); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); } };
 const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour', 'done'); localStorage.setItem('kb_tour_seen', '1'); };
 const zlib = require('node:zlib');
-function png(w = 40, h = 30) {
-  const raw = Buffer.concat(Array.from({ length: h }, () => Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3, 0x33)])));
+function png(w = 40, h = 30, uncompressedMarker = false) {
+  const pixels = Buffer.alloc(w * 3, 0x33); if (uncompressedMarker) Buffer.from('acTL').copy(pixels);
+  const raw = Buffer.concat(Array.from({ length: h }, () => Buffer.concat([Buffer.from([0]), pixels])));
   const crc = b => { let c, t = []; for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } c = 0xffffffff; for (const x of b) c = t[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
   const ch = (type, d) => { const len = Buffer.alloc(4); len.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(type), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
   const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ch('IHDR', ihdr), ch('IDAT', zlib.deflateSync(raw)), ch('IEND', Buffer.alloc(0))]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ch('IHDR', ihdr), ch('IDAT', zlib.deflateSync(raw, uncompressedMarker ? { level: 0 } : {})), ch('IEND', Buffer.alloc(0))]);
 }
 
 (async () => {
@@ -159,6 +160,22 @@ function png(w = 40, h = 30) {
       const im = new Image(); im.src = url; await im.decode(); const size = [im.naturalWidth, im.naturalHeight]; URL.revokeObjectURL(url); return size; }, assets[puts[4].path].toString('base64'));
     assert.deepEqual(size, [20, 30], 'rotated photo stays upright after upload');
     assert.ok((await page.evaluate(() => window.imageDecodeOptions)).every(o => o && o.imageOrientation === 'from-image'), 'canvas decodes explicitly apply EXIF orientation');
+    // Simple VP8L has no VP8X flags. A large still must resize rather than interpreting 0x2f as animation.
+    const lossless = fs.readFileSync(path.join(__dirname, 'fixtures/still-4000px-lossless.webp'));
+    assert.equal(lossless.toString('ascii', 12, 16), 'VP8L');
+    const padding = Buffer.alloc(8 + 2 * 1024 * 1024); padding.write('AUTH'); padding.writeUInt32LE(padding.length - 8, 4); padding.write('PRIVATE-AUTHOR', 8);
+    const largeStill = Buffer.concat([lossless, padding]); largeStill.writeUInt32LE(largeStill.length - 8, 4);
+    const uploadedDimensions = async name => {
+      await page.waitForFunction(name => document.getElementById('cDetails').value.includes(`![${name}]`), name);
+      const up = assets[puts.at(-1).path]; assert.ok(up.length <= 2 * 1024 * 1024); assert.equal(up.includes('PRIVATE-AUTHOR'), false);
+      return page.evaluate(async b64 => { const b = Uint8Array.from(atob(b64), c => c.charCodeAt(0)), u = URL.createObjectURL(new Blob([b]));
+        const im = new Image(); im.src = u; await im.decode(); const size = [im.naturalWidth, im.naturalHeight]; URL.revokeObjectURL(u); return size; }, up.toString('base64'));
+    };
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'large-still.webp', mimeType: 'image/webp', buffer: largeStill });
+    assert.deepEqual(await uploadedDimensions('large-still'), [2000, 1]);
+    const pngStill = png(4000, 2, true); assert.ok(pngStill.includes('acTL'), 'fixture has acTL in IDAT bytes, not a chunk');
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'still-marker.png', mimeType: 'image/png', buffer: pngStill });
+    assert.deepEqual(await uploadedDimensions('still-marker'), [2000, 1], 'still PNG payload cannot bypass the dimension limit');
     await shot(page, 'images-editing-1280');
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(native, [], 'no native dialogs');
 
@@ -172,6 +189,24 @@ function png(w = 40, h = 30) {
     await ro.locator('#cmImage input[type=file]').setInputFiles({ name: 'x.png', mimeType: 'image/png', buffer: png() });   // even a file that reaches the input
     await ro.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /read-only/.test(x.textContent)));
     assert.deepEqual(roPuts, [], 'nothing is written'); assert.deepEqual(roErr, [], 'no page errors when read-only'); await ro.close();
+    // More simultaneous requests than the LRU limit: displayed leases survive, then a real DOM removal
+    // must revoke overflow without requiring another asset read. Spy only on URLs, never production internals.
+    const burstApi = new Github(), burstAssets = {};
+    const imageLines = Array.from({ length: 135 }, (_, i) => { const rel = `assets/t_one/20261001-${i.toString(16).padStart(12, '0')}.png`; burstAssets[rel] = png(); return `![burst${i}](${rel})`; });
+    burstApi.files['cards/t_one.json'] = text({ ...card, details: imageLines.join('\n\n'), comments: [] });
+    const burst = await browser.newPage(); await burst.addInitScript(INIT);
+    await burst.addInitScript(() => { const create = URL.createObjectURL, revoke = URL.revokeObjectURL; window.imageUrls = []; window.revokedImageUrls = [];
+      URL.createObjectURL = b => { const u = create(b); window.imageUrls.push(u); return u; }; URL.revokeObjectURL = u => { window.revokedImageUrls.push(u); revoke(u); }; });
+    await burst.route('https://api.test/**', r => { const p = decodeURIComponent(new URL(r.request().url()).pathname), m = /^\/repos\/acme\/board\/contents\/board\/(assets\/.+)$/.exec(p);
+      return m ? r.fulfill({ status: 200, body: burstAssets[m[1]], headers: { 'Content-Type': 'application/octet-stream' } }) : burstApi.route(r); });
+    await burst.goto(base + '/board/index.html#1');
+    await burst.waitForFunction(() => { const imgs = [...document.querySelectorAll('#cDescView img.mdimg')]; return imgs.length === 135 && imgs.every(i => i.complete && i.naturalWidth > 0); });
+    assert.equal(await burst.evaluate(() => [...document.querySelectorAll('#cDescView img.mdimg')].every(i => !window.revokedImageUrls.includes(i.src))), true, 'concurrent leases never revoke a displayed URL');
+    const beforeRemoval = await burst.evaluate(() => window.revokedImageUrls.length);
+    await burst.evaluate(() => { document.querySelector('#cDescView').textContent = ''; });
+    await burst.waitForFunction(before => window.revokedImageUrls.length >= before + 15 && window.imageUrls.length - window.revokedImageUrls.length === 120, beforeRemoval);
+    assert.equal(await burst.evaluate(() => window.imageUrls.length - window.revokedImageUrls.length), 120, 'only the bounded reusable cache survives removal');
+    await burst.close();
     console.log('images: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

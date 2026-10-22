@@ -41,7 +41,7 @@ Add an image to a card's description or to a comment: paste it (Ctrl/Cmd+V), dra
 
 Reply to a comment with **Reply**. The reply sits under that comment, one level only. From the terminal: `keeptrack.py comment '#12' "text" --reply-to c_ab12cd`.
 
-Only people who can open the board can see the images. A photo's hidden details (location, device) are removed before it is saved. Don't add a screenshot that shows a password, token or confidential client detail: an image stays in the repo's history. Put that in Drive and link it. From the terminal: `keeptrack.py attach '#12' screenshot.png "what it shows"` (`--details` adds it to the description instead). Images are not available on hosted boards yet.
+Only people who can open the board can see the images. A photo's hidden details (location, device, author and provenance) are removed before it is saved. GIF, APNG and animated WebP keep their frames; animations over 2 MB must be made smaller first. Colour profiles are removed because they can contain identifying details. Browser uploads convert still-image colours before saving; terminal uploads and animations may look slightly different after a profile is removed. Don't add a screenshot that shows a password, token or confidential client detail: an image stays in the repo's history. Put that in Drive and link it. From the terminal: `keeptrack.py attach '#12' screenshot.png "what it shows"` (`--details` adds it to the description instead). Images are not available on hosted boards yet.
 
 ## Tasks for a person
 Open a person and type in **☑ Tasks**. The task is linked to that person and their company, and it shows on **Today** when it is due.

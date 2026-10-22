@@ -3943,9 +3943,13 @@ def orientation_only_tiff(v):
 def strip_image_metadata(blob, ext):
     """The image without its metadata (EXIF: GPS position, device, owner; text chunks; XMP), so a photo or screenshot
     never commits that to the board repo (AGENTS rule 7). Pixels are untouched; a photo's EXIF Orientation is kept (alone),
-    so it still shows the right way up. Raises ValueError on a broken file."""
+    so it still shows the right way up. ICC profiles are removed too, which may change colours.
+    Raises ValueError on a broken file."""
+    # Retain decoding data by format, rather than guessing every possible metadata container.
+    # ICC profiles can carry names/device details: drop them too (CLI colours may change).
     if ext == "jpg":   # filter metadata between every scan as well as before the first scan
         out, i, turn = bytearray(blob[:2]), 2, 1
+        decoding = set(range(0xC0, 0xC8)) | set(range(0xC9, 0xD0)) | set(range(0xDA, 0xE0))
         while i + 4 <= len(blob):
             if blob[i] != 0xFF:
                 raise ValueError("broken JPEG")
@@ -3964,7 +3968,16 @@ def strip_image_metadata(blob, ext):
                 if turn != 1:   # straight after SOI, where EXIF belongs
                     body = b"Exif\x00\x00" + orientation_only_tiff(turn)
                     out[2:2] = b"\xff\xe1" + (len(body) + 2).to_bytes(2, "big") + body
-            elif marker not in (0xE1, 0xED, 0xFE):
+            elif marker == 0xE0 and blob[i + 4:i + 9] == b"JFIF\x00" and n >= 16:
+                # Fixed JFIF fields only, never its embedded thumbnail or vendor trailer.
+                body = b"JFIF\x00\x01\x02" + blob[i + 11:i + 16] + b"\x00\x00"
+                out += b"\xff\xe0\x00\x10" + body
+            elif marker == 0xEE and blob[i + 4:i + 9] == b"Adobe" and n >= 14:
+                transform = blob[i + 15]
+                if transform > 2:
+                    raise ValueError("broken JPEG colour transform")
+                out += b"\xff\xee\x00\x0eAdobe\x00\x64\x00\x00\x00\x00" + bytes([transform])
+            elif marker in decoding:
                 out += blob[i:i + 2 + n]
             i += 2 + n
             if marker == 0xDA:   # copy entropy bytes, including stuffing and restart markers, until a real marker
@@ -3986,8 +3999,9 @@ def strip_image_metadata(blob, ext):
         if blob[i:i + 2] == b"\xff\xd9":
             return bytes(out + b"\xff\xd9")
         raise ValueError("broken JPEG")
-    if ext == "png":   # drop eXIf and the text chunks (tEXt, zTXt, iTXt)
+    if ext == "png":
         out, i = bytearray(blob[:8]), 8
+        fixed = {b"IHDR": 13, b"IEND": 0, b"gAMA": 4, b"cHRM": 32, b"sRGB": 1, b"pHYs": 9, b"acTL": 8, b"fcTL": 26}
         while i + 12 <= len(blob):
             n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
             if i + 12 + n > len(blob):
@@ -3997,40 +4011,61 @@ def strip_image_metadata(blob, ext):
                 if turn != 1:
                     d = orientation_only_tiff(turn)
                     out += len(d).to_bytes(4, "big") + b"eXIf" + d + (__import__("zlib").crc32(b"eXIf" + d) & 0xFFFFFFFF).to_bytes(4, "big")
-            elif kind not in (b"tEXt", b"zTXt", b"iTXt"):
+            elif kind in (b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"pHYs", b"sBIT", b"bKGD", b"acTL", b"fcTL", b"fdAT"):
+                if kind in fixed and n != fixed[kind]:
+                    raise ValueError("broken PNG")
+                if ((kind == b"PLTE" and (n > 768 or n % 3)) or (kind == b"tRNS" and n > 256)
+                        or (kind == b"sBIT" and n > 4) or (kind == b"bKGD" and n > 6)):
+                    raise ValueError("broken PNG")
                 out += blob[i:i + 12 + n]
+            elif not kind[0] & 0x20:
+                raise ValueError("unknown critical PNG chunk")
             i += 12 + n
             if kind == b"IEND":
                 return bytes(out)
         raise ValueError("broken PNG")
-    if ext == "webp":   # drop the EXIF and XMP chunks and clear their flags in VP8X
-        out, i, vp8x = bytearray(), 12, None
+    if ext == "webp":
+        def chunks(start, end, frame=False):
+            out, i, vp8x = bytearray(), start, None
+            while i + 8 <= end:
+                kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
+                if i + size > end:
+                    raise ValueError("broken WebP")
+                body = blob[i + 8:i + 8 + n]; chunk = None
+                if kind in (b"VP8 ", b"VP8L", b"ALPH"):
+                    chunk = body
+                elif not frame and kind == b"VP8X":
+                    if n != 10:
+                        raise ValueError("broken WebP")
+                    chunk = bytes([body[0] & 0x12]) + b"\x00\x00\x00" + body[4:]
+                    vp8x = len(out)
+                elif not frame and kind == b"ANIM":
+                    if n != 6:
+                        raise ValueError("broken WebP")
+                    chunk = body
+                elif not frame and kind == b"ANMF":
+                    if n < 16:
+                        raise ValueError("broken WebP")
+                    chunk = body[:16] + chunks(i + 24, i + 8 + n, frame=True)
+                elif not frame and kind == b"EXIF":
+                    tiff = body[6:] if body.startswith(b"Exif\x00\x00") else body
+                    turn = tiff_orientation(tiff)
+                    if turn != 1:
+                        chunk = orientation_only_tiff(turn)
+                        if vp8x is not None:
+                            out[vp8x + 8] |= 0x08
+                if chunk is not None:
+                    out += kind + len(chunk).to_bytes(4, "little") + chunk + (b"\x00" if len(chunk) & 1 else b"")
+                i += size
+            if i != end:
+                raise ValueError("broken WebP")
+            return bytes(out)
         end = int.from_bytes(blob[4:8], "little") + 8
         if end < 12 or end > len(blob):
             raise ValueError("broken WebP")
-        while i + 8 <= end:
-            kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
-            if i + size > end:
-                raise ValueError("broken WebP")
-            chunk = bytearray(blob[i:i + size])
-            if kind == b"VP8X" and len(chunk) > 8:
-                chunk[8] &= ~0x0C & 0xFF   # EXIF (0x08) and XMP (0x04) flags; EXIF set again below if Orientation stays
-                vp8x = len(out)
-            if kind == b"EXIF":
-                tiff = blob[i + 8:i + 8 + n]; tiff = tiff[6:] if tiff[:6] == b"Exif\x00\x00" else tiff
-                turn = tiff_orientation(tiff)
-                if turn != 1:
-                    d = orientation_only_tiff(turn)
-                    out += b"EXIF" + len(d).to_bytes(4, "little") + d + (b"\x00" if len(d) & 1 else b"")
-                    if vp8x is not None:
-                        out[vp8x + 8] |= 0x08
-            elif kind != b"XMP ":
-                out += chunk
-            i += size
-        if i != end:
-            raise ValueError("broken WebP")
-        return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + bytes(out)
-    if ext == "gif":   # drop comment extensions and the XMP application extension; frames kept as they are
+        out = chunks(12, end)
+        return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + out
+    if ext == "gif":   # keep graphic/plain-text controls and reconstructed standard animation loops
         if len(blob) < 13:
             raise ValueError("broken GIF")
         i = 13 + (3 * (2 << (blob[10] & 7)) if blob[10] & 0x80 else 0)
@@ -4049,9 +4084,16 @@ def strip_image_metadata(blob, ext):
                 out += blob[i:i + 1]; return bytes(out)
             if b == 0x21:
                 label = blob[i + 1:i + 2]; end = blocks(i + 2)
-                xmp = label == b"\xff" and blob[i + 3:i + 14] == b"XMP DataXMP"
-                if label != b"\xfe" and not xmp:
+                if label == b"\xf9":
+                    if blob[i + 2] != 4 or end != i + 8:
+                        raise ValueError("broken GIF")
                     out += blob[i:end]
+                elif label == b"\x01":
+                    out += blob[i:end]
+                elif (label == b"\xff" and blob[i + 2] == 11
+                      and blob[i + 3:i + 14] in (b"NETSCAPE2.0", b"ANIMEXTS1.0")
+                      and blob[i + 14:i + 16] == b"\x03\x01" and end >= i + 19):
+                    out += blob[i:i + 18] + b"\x00"
                 i = end; continue
             if b == 0x2C:
                 if i + 10 > len(blob):

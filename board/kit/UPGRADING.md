@@ -28,9 +28,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v98 (schema 4)
 Image parsing, uploads and cache fixes ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). No migration: `kit-update` copies the files.
 - Progressive JPEG metadata is removed between every scan; JPEG tables containing EOI-like bytes stay intact.
-- WebP reads stop at the RIFF boundary, discard trailers and reject incomplete chunks.
-- Browser uploads strip metadata without flattening APNG or animated WebP; GIF frames remain intact too. Still images use whichever is smaller: stripped compressed pixels or an oriented canvas export. Orientation is the only EXIF tag retained.
-- Temporary server/rate-limit image failures retry with backoff capped at 30 minutes. On-screen cache URLs are retained until they can be safely evicted.
+- WebP reads stop at the RIFF boundary, discard trailers and reject incomplete chunks, including missing required odd-chunk padding.
+- Browser and CLI uploads allow only decoding/animation chunks and fixed colour fields. Unknown/private chunks, JPEG APP11/APP12 provenance/author data and embedded JFIF thumbnails are discarded; Orientation is reconstructed alone. WebP animation frame subchunks are filtered too.
+- ICC colour profiles are stripped because they can carry author/device details. Browser still uploads apply colour conversion in canvas; CLI uploads and profile-stripped animations can look different. GIF, APNG and animated WebP keep their frames; oversized animations are refused.
+- Animation is detected from actual PNG acTL chunks or WebP VP8X flags, never pixel payload bytes. Still images are scaled to at most 2000px on the longest side, then use the smaller stripped original or canvas export when no scale/profile conversion is required.
+- Temporary server/rate-limit image failures retry with backoff capped at 30 minutes. A bounded reusable LRU and explicit DOM leases retain displayed/pending-use URLs; settlement and DOM-removal sweeps revoke inactive overflow without another image read.
 - Check: upload an EXIF-rotated photo, a progressive JPEG and animated PNG/WebP; verify orientation and animation, then simulate a temporary image-read failure and retry.
 - Includes the v97 List-view release.
 
