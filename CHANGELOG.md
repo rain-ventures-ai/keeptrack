@@ -7,10 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 Kit v94: images on cards, the review fixes for v92 (private-tasks card #292). Uploaded images lose their metadata
-(EXIF: GPS position, device, owner; text chunks; XMP): the page draws every image again before upload and
-`keeptrack.py attach` strips those segments. `attach` falls back to a git push when the sandbox proxy blocks API writes,
+(EXIF: GPS position, device, owner; text chunks; XMP; GIF comments; data after a JPEG's end): the page draws every image
+again before upload (chosen by its bytes, not its name) and `keeptrack.py attach` strips those segments, keeping only a
+photo's Orientation so it is not saved sideways. `attach` falls back to a git push when the sandbox proxy blocks API writes,
 checks the card id and the board's read-only guard before writing, and reads the board once. The page treats a 422 as
-"already there" only when GitHub asks for a sha, tries a failed image read again, keeps at most 40 images in memory and
+"already there" only when GitHub asks for a sha, tries a failed image read again after 30 seconds, keeps at most 120 images in memory and
 refuses a non-image before redrawing it. No migration.
 
 Kit v93: meeting-notes name resolution. Auto-generated notes often garble spoken names in the body while keeping

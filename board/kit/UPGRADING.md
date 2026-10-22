@@ -27,13 +27,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ## Versions
 ### v94 (schema 4)
 Images on cards: the review fixes for v92 (private-tasks card #292). No migration and no data change.
-- Metadata never reaches the repo: the page draws every image again before upload (no EXIF such as GPS position or
-  device; longest side at most 2000px; a GIF is kept as it is), and `attach` strips JPEG APP1/APP13/COM, PNG
-  eXIf/tEXt/zTXt/iTXt and WebP EXIF/XMP. A screenshot of a secret still goes into git history: the help says not to add one.
+- Metadata is removed before an image is saved. The page draws every image again (which ones is decided by the file's
+  bytes, not its name; longest side at most 2000px), and a GIF loses its comment and XMP extensions but keeps its frames.
+  `attach` strips JPEG APP1/APP13/COM and anything after the end of the image (a second image, a vendor trailer), PNG
+  eXIf/tEXt/zTXt/iTXt, WebP EXIF/XMP and GIF comment/XMP extensions. A photo's EXIF Orientation alone is kept, so it is
+  not saved sideways. A screenshot of a secret still goes into git history: the help says not to add one.
 - `attach` falls back to a git push when the sandbox proxy blocks API writes (as every other write does). It checks the
   card id and the board's read-only guard before writing anything, and reads the board once.
 - Web board: a GitHub 422 counts as "this image is already there" only when GitHub asks for a sha; a failed image read is
-  tried again next time (no "not found" until reload); at most 40 images are kept in memory; a non-image is refused first.
+  tried again after 30 seconds unless it can never work (too big, the wrong type, refused); at most 120 images are kept in
+  memory, and one still on the page is never let go; a non-image is refused first.
 - Run `kit-update` only. Check: `kit-check` says v94.
 
 ### v93 (schema 4)

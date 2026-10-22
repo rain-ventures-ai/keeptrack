@@ -141,6 +141,10 @@ function png(w = 40, h = 30) {
     await page.waitForFunction(() => /!\[photo\]\(assets\/t_one\/\d{8}-[0-9a-f]{12}\.jpg\)/.test(document.getElementById('cDetails').value));
     assert.equal(puts.length, 3); const up = assets[puts[2].path];
     assert.deepEqual([...up.subarray(0, 3)], [0xff, 0xd8, 0xff], 'still a JPEG'); assert.equal(up.includes('OWNER-SECRET'), false, 'the EXIF is gone'); assert.equal(up.includes('GPS-51'), false);
+    // a JPEG photo whose name says .gif is still drawn again (the bytes decide, not the label)
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'IMG_1234.gif', mimeType: 'image/gif', buffer: tagged });
+    await page.waitForFunction(() => /!\[IMG_1234\]\(assets\/t_one\/\d{8}-[0-9a-f]{12}\.jpg\)/.test(document.getElementById('cDetails').value));
+    { const up2 = assets[puts[3].path]; assert.equal(up2.includes('OWNER-SECRET'), false, 'mislabelled photo: the EXIF is gone too'); }
     await shot(page, 'images-editing-1280');
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(native, [], 'no native dialogs');
 

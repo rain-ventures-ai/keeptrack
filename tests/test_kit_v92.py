@@ -138,8 +138,52 @@ class Attach(unittest.TestCase):
         with self.assertRaises(ValueError):
             keeptrack.strip_image_metadata(p[:20], "png")
 
-    def test_proxy_blocked_api_write_falls_back_to_git(self):
-        """In a sandbox whose proxy refuses API writes (403 ... proxy), attach saves the way every other write does."""
+    def test_strip_gif_comments_and_xmp_and_jpeg_trailers(self):
+        gif = (b"GIF89a" + b"\x01\x00\x01\x00\x80\x00\x00" + b"\x00\x00\x00\xff\xff\xff"      # header, screen, 2-colour table
+               + b"\x21\xfe\x0bOWNER-SECRET"[:3] + b"\x0bOWNER-SECRE\x00"[1:]                 # placeholder, replaced below
+               )
+        comment = b"\x21\xfe" + bytes([12]) + b"OWNER-SECRET" + b"\x00"
+        xmp = b"\x21\xff\x0bXMP DataXMP" + bytes([7]) + b"GPS=1,2" + b"\x00"
+        loop = b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"
+        frame = b"\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00" + b"\x02\x02\x44\x01\x00"
+        head = b"GIF89a" + b"\x01\x00\x01\x00\x80\x00\x00" + b"\x00\x00\x00\xff\xff\xff"
+        tagged = head + comment + xmp + loop + frame + b"\x3b"
+        out = keeptrack.strip_image_metadata(tagged, "gif")
+        self.assertEqual(head + loop + frame + b"\x3b", out, "the animation loop and the frame stay")
+        with self.assertRaises(ValueError):
+            keeptrack.strip_image_metadata(head + b"\x21\xfe\x05ab", "gif")
+        jpeg = b"\xff\xd8\xff\xdb\x00\x03\x00\xff\xda\x00\x02scan\xff\xd9" + b"\xff\xd8\xff\xe1\x00\x08Exif\x00\x00\xff\xd9TRAILER-GPS"
+        self.assertEqual(b"\xff\xd8\xff\xdb\x00\x03\x00\xff\xda\x00\x02scan\xff\xd9", keeptrack.strip_image_metadata(jpeg, "jpg"),
+                         "a second image or a vendor trailer after the end of the image is dropped")
+
+    def test_orientation_is_kept_alone(self):
+        """A phone photo's Orientation survives (so it is not saved sideways); GPS and the rest do not."""
+        def exif(turn, extra=b"GPS-51.5"):
+            # little-endian TIFF: IFD0 with Orientation and one more (ASCII) tag
+            ifd = (2).to_bytes(2, "little") + b"\x12\x01\x03\x00\x01\x00\x00\x00" + turn.to_bytes(2, "little") + b"\x00\x00" \
+                + b"\x0e\x01\x02\x00" + len(extra).to_bytes(4, "little") + (8 + 2 + 24 + 4).to_bytes(4, "little") + b"\x00\x00\x00\x00"
+            return b"II*\x00\x08\x00\x00\x00" + ifd + extra
+        tiff = exif(6)
+        self.assertEqual(6, keeptrack.tiff_orientation(tiff)); self.assertEqual(1, keeptrack.tiff_orientation(b"junk"))
+        body = b"Exif\x00\x00" + tiff
+        jpeg = b"\xff\xd8\xff\xe1" + (len(body) + 2).to_bytes(2, "big") + body + b"\xff\xff\xdb\x00\x03\x00\xff\xda\x00\x02scan\xff\xd9"
+        out = keeptrack.strip_image_metadata(jpeg, "jpg")   # (the 0xff 0xff before DQT is a fill byte)
+        self.assertNotIn(b"GPS", out)
+        self.assertEqual(b"\xff\xd8\xff\xe1", out[:4]); self.assertEqual(6, keeptrack.tiff_orientation(out[12:4 + int.from_bytes(out[4:6], "big")]))
+        self.assertTrue(out.endswith(b"\xff\xdb\x00\x03\x00\xff\xda\x00\x02scan\xff\xd9"))
+        plain = b"\xff\xd8\xff\xe1" + (len(b"Exif\x00\x00" + exif(1)) + 2).to_bytes(2, "big") + b"Exif\x00\x00" + exif(1) + b"\xff\xda\x00\x02s\xff\xd9"
+        self.assertEqual(b"\xff\xd8\xff\xda\x00\x02s\xff\xd9", keeptrack.strip_image_metadata(plain, "jpg"), "upright: no EXIF at all")
+        ch = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+        p = png(); tagged = p[:-12] + ch(b"eXIf", exif(8)) + p[-12:]
+        out = keeptrack.strip_image_metadata(tagged, "png")
+        self.assertNotIn(b"GPS", out); self.assertIn(b"eXIf", out); self.assertEqual(p[:-12], out[:len(p) - 12])
+        i = out.index(b"eXIf"); n = int.from_bytes(out[i - 4:i], "big")
+        self.assertEqual(8, keeptrack.tiff_orientation(out[i + 4:i + 4 + n]))
+        self.assertEqual(zlib.crc32(out[i:i + 4 + n]) & 0xFFFFFFFF, int.from_bytes(out[i + 4 + n:i + 8 + n], "big"), "a valid CRC")
+
+    def test_proxy_403_switches_to_git_and_saves_again(self):
+        """In a sandbox whose proxy refuses API writes (403 ... proxy), save_asset switches WRITE to git, reads the board
+        again and saves through that mode (here a local board stands in for the git clone)."""
         calls = []
         old = (keeptrack.gh, keeptrack.load, keeptrack.WRITE, keeptrack.FILE)
         try:

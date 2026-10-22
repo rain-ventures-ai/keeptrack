@@ -396,20 +396,25 @@ if (typeof window !== 'undefined') (() => {
   const MD_IMG = /!\[([^\]\n]{0,200})\]\((assets\/[^\s)]{1,200})\)/g;
   const ASSET_RE = /^assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(png|jpe?g|gif|webp))$/i;
   const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }, IMG_MAX = 2 * 1024 * 1024;
-  const imgCache = new Map(), IMG_KEEP = 40;   // assets/... -> Promise of an object URL; the newest 40, older ones let go
-  function cacheImage(rel, p) {
-    imgCache.delete(rel); imgCache.set(rel, p);
-    while (imgCache.size > IMG_KEEP) { const [old, op] = imgCache.entries().next().value; imgCache.delete(old); op.then(u => { if (u) URL.revokeObjectURL(u); }); }   // an image still on screen keeps showing
+  const imgCache = new Map(), IMG_KEEP = 120, IMG_RETRY_MS = 30000;   // assets/... -> { p: Promise of an object URL ('' failed), at, final }
+  function cacheImage(rel, entry) {
+    imgCache.delete(rel); imgCache.set(rel, entry);
+    while (imgCache.size > IMG_KEEP) {   // the oldest goes; its URL is let go only when no image on the page still shows it
+      const [old, e] = imgCache.entries().next().value; imgCache.delete(old);
+      e.p.then(u => { if (u && ![...document.querySelectorAll('img.mdimg, a.mdimglink')].some(x => x.src === u || x.href === u)) URL.revokeObjectURL(u); });   // nor a full-size link
+    }
   }
   function assetBlobUrl(rel) {
-    if (imgCache.has(rel)) { const p = imgCache.get(rel); cacheImage(rel, p); return p; }   // used again: the newest
-    const p = (async () => {
-      try { const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' }); if (!r.ok) return '';
+    const hit = imgCache.get(rel);
+    if (hit && !(hit.failed && !hit.final && Date.now() - hit.at > IMG_RETRY_MS)) { cacheImage(rel, hit); return hit.p; }   // a lasting failure (too big, not that type, refused) stays; a missing file or a network error is tried again after 30 s
+    const entry = { at: Date.now(), failed: false, final: false };
+    entry.p = (async () => {
+      const fail = final => { entry.failed = true; entry.final = final; entry.at = Date.now(); return ''; };
+      try { const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' }); if (!r.ok) return fail(r.status !== 404);
         const bytes = new Uint8Array(await r.arrayBuffer()), type = IMG_TYPES[rel.split('.').pop().toLowerCase()];
-        if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return '';   // what the file is, not what it is called
-        return URL.createObjectURL(new Blob([bytes], { type })); } catch { return ''; } })();
-    cacheImage(rel, p); p.then(u => { if (!u && imgCache.get(rel) === p) imgCache.delete(rel); });   // a failed read is tried again next time
-    return p;
+        if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return fail(true);   // what the file is, not what it is called
+        return URL.createObjectURL(new Blob([bytes], { type })); } catch { return fail(false); } })();
+    cacheImage(rel, entry); return entry.p;
   }
   function imgKind(b) {   // the image type from its first bytes; '' for anything else (an SVG or HTML never passes)
     const at = (i, xs) => xs.every((x, k) => b[i + k] === x);
@@ -2484,13 +2489,29 @@ if (typeof window !== 'undefined') (() => {
       let out = await as(file.type, 0.9); if (!out || out.size > IMG_MAX) out = await as('image/jpeg', 0.85);
       return out; } catch { return null; }
   }
+  async function gifWithoutMetadata(file) {   // a GIF's comment and XMP extensions removed (as keeptrack.py attach does); null if it is broken
+    const g = new Uint8Array(await file.arrayBuffer()), out = [];
+    try {
+      let i = 13 + (g[10] & 0x80 ? 3 * (2 << (g[10] & 7)) : 0); out.push(g.subarray(0, i));
+      const blocks = j => { for (;;) { if (j >= g.length) throw new Error('broken'); const n = g[j]; j += 1 + n; if (!n) return j; } };
+      while (i < g.length) {
+        if (g[i] === 0x3b) { out.push(g.subarray(i, i + 1)); return new Blob(out, { type: 'image/gif' }); }
+        if (g[i] === 0x21) { const label = g[i + 1], end = blocks(i + 2), xmp = label === 0xff && String.fromCharCode(...g.subarray(i + 3, i + 14)) === 'XMP DataXMP';
+          if (label !== 0xfe && !xmp) out.push(g.subarray(i, end)); i = end; continue; }
+        if (g[i] === 0x2c) { const f = g[i + 9], end = blocks(i + 10 + (f & 0x80 ? 3 * (2 << (f & 7)) : 0) + 1); out.push(g.subarray(i, end)); i = end; continue; }
+        throw new Error('broken');
+      }
+    } catch {}
+    return null;
+  }
   const b64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
   async function uploadImage(cardId, file) {   // the Markdown to insert, or '' (a toast says why)
     const block = imgUploadBlock(); if (block) { toast(block, true); return ''; }
     if (!safeCardId(cardId)) return '';
     if (!Object.values(IMG_TYPES).includes(file.type)) { toast('Only PNG, JPEG, GIF or WebP images can be added.', true); return ''; }
-    if (!imgKind(new Uint8Array(await file.slice(0, 16).arrayBuffer()))) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
-    let blob = file; if (file.type !== 'image/gif') blob = await redrawImage(file);   // a GIF keeps its frames (it has no EXIF)
+    const k0 = imgKind(new Uint8Array(await file.slice(0, 16).arrayBuffer())); if (!k0) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
+    let blob = file; if (k0 !== 'image/gif') blob = await redrawImage(new File([file], file.name, { type: k0 }));   // what the bytes are, not the file's label; a GIF keeps its frames
+    else blob = await gifWithoutMetadata(file);
     if (!blob) { toast('That image could not be read. Try saving it again as PNG or JPEG.', true); return ''; }
     if (blob.size > IMG_MAX) { toast('That image is over 2 MB. Make it smaller, or put it in Drive and link it.', true); return ''; }
     const bytes = new Uint8Array(await blob.arrayBuffer()), kind = imgKind(bytes); if (!kind) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
@@ -2504,7 +2525,7 @@ if (typeof window !== 'undefined') (() => {
       const there = r.status === 422 && /sha/i.test(String((await r.json().catch(() => ({}))).message || ''));   // 422 asking for a sha: a file of this name (these bytes) is there
       if (!r.ok && !there) { toast(`The image was not saved (GitHub error ${r.status}).`, true); setStatus('Image not saved', 'err'); return ''; }
     } catch (e) { toast('The image was not saved: ' + (isTimeout(e) ? 'GitHub did not answer.' : e.message), true); setStatus('Image not saved', 'err'); return ''; }
-    cacheImage(rel, Promise.resolve(URL.createObjectURL(new Blob([bytes], { type: kind })))); setStatus('Image saved', 'ok');
+    cacheImage(rel, { p: Promise.resolve(URL.createObjectURL(new Blob([bytes], { type: kind }))), at: Date.now(), failed: false, final: false }); setStatus('Image saved', 'ok');
     return `![${alt}](${rel})`;
   }
   async function addImages(ta, files) {   // upload each image, then put its Markdown where the cursor was
