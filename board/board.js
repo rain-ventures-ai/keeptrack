@@ -6544,7 +6544,7 @@ if (typeof window !== 'undefined') (() => {
   function docsHome(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'provider,root') throw Error('Docs home must contain provider and root.');
     const { provider, root } = value;
-    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 2048 || root.trim() !== root || /[\x00-\x1f\x7f]|%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root)) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
+    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 2048 || root.trim() !== root || (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(root) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root))) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
     if (provider === 'local') {
       if (!root.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(root) && !/^\\\\[^\\/]+[\\/][^\\/]+/.test(root)) throw Error('Use an absolute local path.');
     } else {

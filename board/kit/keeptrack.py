@@ -7939,10 +7939,11 @@ def validate_docs_home(value):
     """Validate a reference only; never expand, access or create its destination."""
     if not isinstance(value, dict) or set(value) != {"provider", "root"}:
         raise ValueError("docs home must contain provider and root")
+    import unicodedata
     provider, root = value.get("provider"), value.get("root")
     if provider not in DOCS_PROVIDERS or not isinstance(root, str) or not 1 <= len(root) <= 2048:
         raise ValueError("docs home needs a supported provider and a root of 1-2048 characters")
-    if root != root.strip() or any(ord(c) < 32 or ord(c) == 127 for c in root) or re.search(r"%(?:0[0-9a-f]|1[0-9a-f]|7f)", root, re.I):
+    if root != root.strip() or any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in root) or re.search(r"%(?:0[0-9a-f]|1[0-9a-f]|7f)", root, re.I):
         raise ValueError("docs home root must not contain controls or surrounding whitespace")
     if provider == "local":
         if not (root.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", root)
