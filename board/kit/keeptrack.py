@@ -3989,8 +3989,12 @@ def strip_image_metadata(blob, ext):
     # ICC profiles can carry names/device details: drop them too (CLI colours may change).
     if ext == "jpg":   # filter metadata between every scan as well as before the first scan
         out, i, turn = bytearray(blob[:2]), 2, 1
+        segments = 0
         decoding = set(range(0xC0, 0xC8)) | set(range(0xC9, 0xD0)) | set(range(0xDA, 0xE0))
         while i + 4 <= len(blob):
+            segments += 1
+            if segments > 4096:
+                raise ValueError("too many JPEG segments")
             if blob[i] != 0xFF:
                 raise ValueError("broken JPEG")
             while i + 2 < len(blob) and blob[i + 1] == 0xFF:   # fill bytes before a marker
@@ -4199,15 +4203,21 @@ def strip_image_metadata(blob, ext):
         i = 13 + (3 * (2 << (blob[10] & 7)) if blob[10] & 0x80 else 0)
         out = bytearray(blob[:i])
         pending_control = b""
+        block_count, frame_count, subblock_count = 0, 0, 0
 
         def blocks(j):   # the end of a run of data sub-blocks starting at j
+            nonlocal subblock_count
             while True:
-                if j >= len(blob):
+                subblock_count += 1
+                if subblock_count > 131072 or j >= len(blob):
                     raise ValueError("broken GIF")
                 n = blob[j]; j += 1 + n
                 if n == 0:
                     return j
         while i < len(blob):
+            block_count += 1
+            if block_count > 4096:
+                raise ValueError("too many GIF blocks")
             b = blob[i]
             if b == 0x3B:
                 out += blob[i:i + 1]; return bytes(out)
@@ -4225,6 +4235,9 @@ def strip_image_metadata(blob, ext):
                     out += blob[i:i + 18] + b"\x00"
                 i = end; continue
             if b == 0x2C:
+                frame_count += 1
+                if frame_count > 512:
+                    raise ValueError("too many GIF frames")
                 if i + 10 > len(blob):
                     raise ValueError("broken GIF")
                 flags = blob[i + 9]; j = i + 10 + (3 * (2 << (flags & 7)) if flags & 0x80 else 0) + 1

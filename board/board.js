@@ -2798,8 +2798,9 @@ if (typeof window !== 'undefined') (() => {
         };
         const parts = chunks(12, end), h = b.slice(0, 12); new DataView(h.buffer).setUint32(4, parts.reduce((n, p) => n + p.length, 4), true); return finish([h, ...parts]);
       } else if (type === 'image/jpeg') {
-        const parts = [b.subarray(0, 2)]; let i = 2, turned = false;
+        const parts = [b.subarray(0, 2)]; let i = 2, turned = false, segments = 0;
         while (i + 1 < b.length) {
+          if (++segments > 4096) return null;
           if (b[i] !== 255) return null; while (b[i + 1] === 255) i++; const marker = b[i + 1];
           if (marker === 217) { parts.push(b.subarray(i, i + 2)); return finish(parts); }
           if (marker === 1 || (marker >= 208 && marker <= 215)) { parts.push(b.subarray(i, i + 2)); i += 2; continue; }
@@ -2824,16 +2825,17 @@ if (typeof window !== 'undefined') (() => {
   async function gifWithoutMetadata(file) {   // only graphics controls and standard animation loops survive
     const g = new Uint8Array(await file.arrayBuffer()), out = [];
     try {
-      let pendingControl = null;
+      let pendingControl = null, blockCount = 0, frameCount = 0, subblockCount = 0;
       let i = 13 + (g[10] & 0x80 ? 3 * (2 << (g[10] & 7)) : 0); out.push(g.subarray(0, i));
-      const blocks = j => { for (;;) { if (j >= g.length) throw new Error('broken'); const n = g[j]; j += 1 + n; if (!n) return j; } };
+      const blocks = j => { for (;;) { if (++subblockCount > 131072 || j >= g.length) throw new Error('broken'); const n = g[j]; j += 1 + n; if (!n) return j; } };
       while (i < g.length) {
+        if (++blockCount > 4096) return null;
         if (g[i] === 0x3b) { out.push(g.subarray(i, i + 1)); return new Blob(out, { type: 'image/gif' }); }
         if (g[i] === 0x21) { const label = g[i + 1], end = blocks(i + 2), app = String.fromCharCode(...g.subarray(i + 3, i + 14));
           if (label === 0xf9) { if (g[i + 2] !== 4 || end !== i + 8) return null; pendingControl = g.subarray(i, end); }
           else if (label === 0x01) pendingControl = null;
           else if (label === 0xff && g[i + 2] === 11 && ['NETSCAPE2.0', 'ANIMEXTS1.0'].includes(app) && g[i + 14] === 3 && g[i + 15] === 1 && end >= i + 19) out.push(g.subarray(i, i + 18), new Uint8Array([0])); i = end; continue; }
-        if (g[i] === 0x2c) { const f = g[i + 9], end = blocks(i + 10 + (f & 0x80 ? 3 * (2 << (f & 7)) : 0) + 1); if (pendingControl) out.push(pendingControl); pendingControl = null; out.push(g.subarray(i, end)); i = end; continue; }
+        if (g[i] === 0x2c) { if (++frameCount > 512) return null; const f = g[i + 9], end = blocks(i + 10 + (f & 0x80 ? 3 * (2 << (f & 7)) : 0) + 1); if (pendingControl) out.push(pendingControl); pendingControl = null; out.push(g.subarray(i, end)); i = end; continue; }
         throw new Error('broken');
       }
     } catch {}
