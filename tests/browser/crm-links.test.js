@@ -69,7 +69,7 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
   try {
     const api = new Github();
     // Acme: contacted 2 days ago, changed 40 days ago. Beta: contacted 60 days ago, changed today. Zed Co: never contacted.
-    api.files['people/p_one.json'] = text({ ...person, updated: day(40), comments: [{ id: 'c_mail', at: day(2), by: 'alex', channel: 'email', text: 'Email received: confirmed the call.', draft: false, url: 'https://mail.google.com/mail/u/0/?authuser=private%40example.test#label/Private%20Client/18f2a01c9be0d4a1' },
+    api.files['people/p_one.json'] = text({ ...person, updated: day(40), comments: [{ id: 'c_mail', at: day(2), by: 'alex', channel: 'email', text: 'Email received: confirmed the call.', draft: false, url: 'https://mail.google.com/mail/u/0/?authuser=private%40example.test#inbox/18f2a01c9be0d4a1' },
       { id: 'c_call', at: day(3), by: 'alex', channel: 'call', text: 'Called about pricing.', draft: false }] });
     api.files['people/p_two.json'] = text({ ...person, id: 'p_two', name: 'Bo Beta', company: 'Beta', emails: [], updated: day(0), comments: [{ id: 'c_old', at: day(60), by: 'alex', channel: 'email', text: 'Old email', draft: false, url: 'javascript:alert(1)' }, { id: 'c_look', at: day(59), by: 'alex', channel: 'note', text: 'Look-alike', draft: false, url: 'https://mail.google.evil.example/x' }] });
     api.files['people/p_three.json'] = text({ ...person, id: 'p_three', name: 'Zoe Zed', company: 'Zed Co', emails: [], updated: day(10), comments: [] });
@@ -123,7 +123,7 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
     await page.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /https:/.test(x.textContent)));
     assert.equal(api.person().comments[1].url, undefined, 'a bad link is refused, nothing saved');
     await page.locator('#pTouches .touch').nth(0).locator('button[aria-label^="Add source link"]').click();
-    await sheet.locator('input').fill('HTTPS://MAIL.GOOGLE.COM/mail/u/0/?authuser=private%40example.test#search/private%40example.test/FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz'); let w = saved(); await sheet.locator('button', { hasText: 'Save' }).first().click(); await w;
+    await sheet.locator('input').fill('HTTPS://MAIL.GOOGLE.COM/mail/u/0/?authuser=private%40example.test#sent/FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz'); let w = saved(); await sheet.locator('button', { hasText: 'Save' }).first().click(); await w;
     assert.equal(api.person().comments[1].url, 'https://mail.google.com/mail/u/0/#all/FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz');
     await page.waitForFunction(() => document.querySelectorAll('#pTouches a.tsrclink').length === 2);
     assert.equal(await page.locator('#pProjActSec').isVisible(), true);
@@ -167,7 +167,7 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
       assert.equal(await pg.locator('#dlgContact[open]').count(), 0, 'a reload after X does not reopen it');
       assert.deepEqual(errs, [], 'Back/X: no page errors'); await pg.close(); }
     // Pagination, nested labels and search views are not individual Gmail threads.
-    for (const fragment of ['inbox/p2', 'search/private%40example.test/p2', 'label/Clients/Acme', 'search/from%3Aacme/renewal', 'search/private/ImportantRenewalNotesFromPrivateClient']) {
+    for (const fragment of ['label/Clients/0123456789abcdef', 'search/private/FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz', 'category/0123456789abcdef', 'inbox/p2/0123456789abcdef', 'all/0123456789abcdef/extra', 'all/0123456789abcdef/', 'inbox/p2', 'search/private%40example.test/p2', 'label/Clients/Acme', 'search/from%3Aacme/renewal', 'search/private/ImportantRenewalNotesFromPrivateClient']) {
       const pagination = new Github();
       pagination.files['people/p_one.json'] = text({ ...person, comments: [{ id: 'c_page', at: day(0), by: 'alex', channel: 'email', text: 'Original reference.' }] });
       const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } });
@@ -179,7 +179,37 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
       await form.locator('button', { hasText: 'Save' }).first().click();
       await pg.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /https:/.test(x.textContent)));
       assert.equal(pagination.person().comments[0].url, undefined, 'ambiguous Gmail views never become stored thread links');
+      assert.equal(pagination.head, 'head-1', 'refusing a sensitive source does not silently write a URL-less edit');
       assert.equal(await pg.locator('#pTouches a.tsrclink').count(), 0);
+      await pg.close();
+    }
+    // Canonical mailbox routes retain short legacy hexadecimal thread IDs too.
+    for (const id of ['a', 'abc123']) {
+      const canonical = new Github();
+      canonical.files['people/p_one.json'] = text({ ...person, comments: [{ id: 'c_short', at: day(0), by: 'alex', channel: 'email', text: 'Reference.' }] });
+      const pg = await browser.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => canonical.route(r));
+      await pg.goto(base + '/board/index.html#person=p_one'); await pg.locator('#dlgContact[open]').waitFor();
+      await pg.locator('#pTouches button[aria-label^="Add source link"]').click();
+      const form = pg.locator('dialog.ui-sheet[open]');
+      await form.locator('input').fill('https://mail.google.com/mail/u/0/#inbox/' + id);
+      const written = pg.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
+      await form.locator('button', { hasText: 'Save' }).first().click();
+      await pg.waitForFunction(() => document.querySelector('#pTouches a.tsrclink'));
+      assert.equal(await pg.locator('#pTouches a.tsrclink').getAttribute('href'), 'https://mail.google.com/mail/u/0/#all/' + id);
+      await written;
+      assert.equal(canonical.person().comments[0].url, 'https://mail.google.com/mail/u/0/#all/' + id);
+      await pg.close();
+    }
+    // Rejected old sources show a neutral warning without exposing private route text.
+    {
+      const old = new Github();
+      old.files['people/p_one.json'] = text({ ...person, comments: [{ id: 'c_old', at: day(0), by: 'alex', channel: 'email', text: 'Reference.', url: 'https://mail.google.com/mail/#label/PrivateClient/0123456789abcdef' }] });
+      const pg = await browser.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => old.route(r));
+      await pg.goto(base + '/board/index.html#person=p_one'); await pg.locator('#dlgContact[open]').waitFor();
+      assert.equal(await pg.locator('#pTouches a.tsrclink').count(), 0);
+      assert.match(await pg.locator('#pTouches').textContent(), /Source link unavailable/);
+      assert.doesNotMatch(await pg.locator('#pTouches').textContent(), /PrivateClient/);
+      assert.equal(old.head, 'head-1', 'displaying a rejected old URL does not rewrite it');
       await pg.close();
     }
     // A Forward entry for a deleted person must not keep an old drawer marker.
