@@ -6252,7 +6252,7 @@ if (typeof window !== 'undefined') (() => {
     const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
     const who = el('button', 'colink', p.name || '(no name)'); who.type = 'button'; who.title = `Open ${p.name}`; who.onclick = () => { $('dlgClient').close(); openContact(p.id); }; roKeep(who);
     head.append(elI('span', 'tchan', ic, label), who, el('span', 'muted', 'by ' + (cm.by || '?')), el('time', null, ago2(cm.sent_at || cm.at)));
-    head.lastChild.title = cm.sent_at || cm.at || ''; if (touchUrl(cm)) head.append(touchSource(p, cm, false));
+    head.lastChild.title = cm.sent_at || cm.at || ''; if (cm.url) head.append(touchSource(p, cm, false));
     if (cm.draft) head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
     const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); return row;
   }
