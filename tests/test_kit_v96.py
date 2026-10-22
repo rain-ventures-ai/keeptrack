@@ -1,5 +1,6 @@
 """Kit v96: an Archive view to browse archived cards and people (private-tasks card #283). Web board only: the browser
 behaviour is tested in tests/browser/archive-view.test.js; this file checks the version, the notes and the help."""
+import json
 import os
 import sys
 import unittest

@@ -19,11 +19,11 @@ def read(*parts):
 
 class Version(unittest.TestCase):
     def test_kit_is_v97_everywhere(self):
-        self.assertEqual(97, keeptrack.KIT_VERSION)
-        self.assertEqual(97, json.loads(read("board", "kit", "manifest.json"))["version"])
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 97)
+        self.assertEqual(keeptrack.KIT_VERSION, json.loads(read("board", "kit", "manifest.json"))["version"])
         for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            self.assertEqual("0.97.0", json.loads(read("board", "kit", plugin, "plugin.json"))["version"], plugin)
-        self.assertIn("const PAGE_KIT = 97;", read("board", "board.js"))
+            self.assertEqual(f"0.{keeptrack.KIT_VERSION}.0", json.loads(read("board", "kit", plugin, "plugin.json"))["version"], plugin)
+        self.assertIn(f"const PAGE_KIT = {keeptrack.KIT_VERSION};", read("board", "board.js"))
 
     def test_upgrade_notes_and_changelog(self):
         v97 = read("board", "kit", "UPGRADING.md").split("### v97 (schema 4)", 1)[1].split("\n### v", 1)[0]

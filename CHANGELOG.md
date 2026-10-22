@@ -10,7 +10,9 @@ Kit v99: resolve the board before choosing its token. The folder token is used o
 GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
 explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
 same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
-(v97 and v98 are reserved for concurrent List view and image changes.)
+Includes the v97 List view and v98 image releases.
+
+Kit v98: image review follow-ups ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). Progressive JPEG metadata is removed between scans without mistaking table bytes for the end of the image. WebP trailers outside the declared RIFF length are discarded. Browser uploads preserve GIF, APNG and animated WebP frames, retain only EXIF Orientation, and use the smaller of stripped original bytes and an oriented canvas export for still images. JPEG application metadata, private PNG/WebP chunks and ICC profiles are removed using format allowlists. Browser still images apply colour conversion; CLI uploads and profile-stripped animations can look different. Image reads retry server and rate-limit failures with bounded exponential backoff; a bounded reusable cache and explicit DOM leases revoke unused overflow after settlement or DOM removal. No migration. Includes the v97 List-view release.
 
 Kit v97: List view multi-select and last activity (private-tasks card #307). Mark done is a square, in List and Schedule, so it is not mistaken for a select box. List adds a tick box on each row and a select-all for the rows on screen. With a selection, a bar offers **Move to…**, **Mark done**, **Copy IDs** (for example `#150 #96`) and **Clear selection**. Move and Mark done are off on a read-only board. The selection stays in this tab and clears when you leave List. **Activity** is how long since the newest edit, comment or history entry (`3d ago`); a card quiet for 14 days is marked, and on a phone the time sits under the title. No data change and no migration; keeptrack.py changes only its version.
 
@@ -1012,6 +1014,6 @@ Kit v99: resolve the board before choosing its token. The folder token is used o
 GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
 explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
 same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
-(v97 and v98 are reserved for concurrent List view and image changes.)
+Includes the v97 List view and v98 image releases.
 
 - Frozen boards under `tests/fixtures/` and CI running Python + Playwright upgrade tests ([#46](https://github.com/rain-ventures-ai/keeptrack/issues/46)).

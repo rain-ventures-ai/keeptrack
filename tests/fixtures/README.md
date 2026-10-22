@@ -41,3 +41,5 @@ option, when a question has lapsed) that `tests/test_inbox_rules_parity.py` runs
 Add a case there when either changes.
 
 `v4_kit99` freezes unchanged split records before token selection hardening (kit v96 to v99).
+
+`v4_kit98` freezes unchanged split board data before the image review fixes (kit v96 → v98).
