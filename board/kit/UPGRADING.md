@@ -28,7 +28,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v101 (schema 4)
 Archive size follow-ups (private-tasks card #288). No data change and no migration; run `kit-update` only.
 - Split-board archive messages count only the years actually saved, excluding held items and history.
-- Label, client and stage rewrites may shrink or leave unchanged an already oversized archive year; further growth above 900 KB is refused. Size warnings print once, after a successful save.
+- Label, client and stage rewrites may shrink or leave unchanged an already oversized archive year; further growth above 900 KB is refused. The comparison uses the original stored UTF-8 bytes, including compact formatting; if that size is unavailable, an oversized rewrite is refused. Size warnings print once, after a successful save.
 - Held CLI tasks and people retain their original list positions. Their history is trimmed under `keep_history` when the current year's history archive fits; if that year is also held, the history stays on the board.
 - Hosted archive writes are performed by the server rather than the GitHub year-file path. The browser's 700 KB warning and 900 KB hold-back check do not apply to hosted writes; hosted storage uses the server's limits. This release adds no browser-side size guarantee for hosted archives.
 - Check: an archive run holding one oversized year reports only saved items, and shrinking renames work without repeating warnings on retries.

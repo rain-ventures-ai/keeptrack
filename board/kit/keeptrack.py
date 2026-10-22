@@ -1859,12 +1859,12 @@ def rewrite_archives(data, edit):
     n = 0
     for y in archive_years(data):
         cur, _ = read_archive(y, _MUT["base"])
-        before_size = len(_json_text(cur).encode()) if cur else 0
+        before_size = getattr(cur, "stored_bytes", None) if cur is not None else 0
         k = edit(cur) if cur else 0
         if k:
             text = _json_text(cur)
             found = archive_size_issue(f"archive/{y}.json", len(text.encode()))
-            if found and found[0] == "FILE_SIZE" and len(text.encode()) > before_size:
+            if found and found[0] == "FILE_SIZE" and (before_size is None or len(text.encode()) > before_size):
                 sys.exit(f"not saved: archive/{y}.json would be {len(text.encode()) // 1024} KB, over its {ARCHIVE_FILE_MAX // 1024} KB limit, "
                          "so this change to the archive is refused and nothing was written. " + ARCHIVE_NEXT_STEP)
             if found:
@@ -9741,12 +9741,24 @@ def archive_index(data, year, cur):
     a["last_run"] = now()
 
 
+class ArchiveRead(dict):
+    """Parsed archive with transport byte metadata outside the JSON schema."""
+    def __init__(self, body, stored_bytes):
+        super().__init__(body)
+        self.stored_bytes = stored_bytes
+
+
+def archive_decoded(text, stored_bytes):
+    body = json.loads(text)
+    return ArchiveRead(body, stored_bytes) if isinstance(body, dict) else body
+
+
 def read_archive(year, base):
     """(data or None, sha) of one archive file, from the same place as the board file."""
     if BACKEND == "hosted" and not FILE:
         try:
             file = storage_adapter().read(f"archive/{check_year(year)}.json")
-            return file["body"], file["rev"]
+            return (ArchiveRead(file["body"], None) if isinstance(file["body"], dict) else file["body"]), file["rev"]
         except HostedError as e:
             if e.status == 404:
                 return None, None
@@ -9756,29 +9768,37 @@ def read_archive(year, base):
     if isinstance(base, dict) and rel in base.get("files", {}):
         entry = base["files"][rel]
         try:
-            return json.loads(entry["text"]), entry.get("sha")
+            size = entry.get("size")
+            size = size if type(size) is int and size >= 0 else len(entry["text"].encode("utf-8"))
+            return archive_decoded(entry["text"], size), entry.get("sha")
         except ValueError as e:
             sys.exit(f"cannot read {pth}: invalid JSON ({e})")
     if FILE:
         f = local_archive_file(year)
         if not os.path.exists(f):
             return None, None
-        with open(f, encoding="utf-8") as src:
-            return json.load(src), None
+        with open(f, "rb") as src:
+            raw = src.read()
+        return archive_decoded(raw.decode("utf-8"), len(raw)), None
     if WRITE == "git":
         head = base.get("head") if isinstance(base, dict) else base
         rc, raw, _ = git("show", f"{head}:{pth}")
-        return (json.loads(raw) if rc == 0 else None), None
+        if rc:
+            return None, None
+        size_rc, size, _ = git("cat-file", "-s", f"{head}:{pth}")
+        return archive_decoded(raw, int(size) if size_rc == 0 and size.isdigit() else None), None
     hit = cached_read(pth)
     if hit:
-        return json.loads(hit[0]), hit[1]
+        return archive_decoded(hit[0], len(hit[0].encode("utf-8"))), hit[1]
     rc, out, err = gh(f"repos/{REPO}/contents/{pth}?ref={BRANCH}")
     if rc:
         if "404" in err or "Not Found" in out:
             return None, None
         sys.exit(f"cannot read {pth}: {err.strip() or out.strip()}")
     d = json.loads(out)
-    return json.loads(content_text(pth, d)), d["sha"]
+    text = content_text(pth, d)
+    size = d.get("size")
+    return archive_decoded(text, size if type(size) is int and size >= 0 else None), d["sha"]
 
 
 def write_archive(year, cur, sha, message):
