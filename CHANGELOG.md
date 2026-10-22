@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v92: images on cards (private-tasks card #292). An image (PNG, JPEG, GIF, WebP, at most 2 MB) is written to
+`assets/<card id>/<yyyymmdd>-<hash>.<ext>` beside the board files and referenced as `![alt](assets/...)` in a
+description or comment, so the board data stays small. The web board adds images by paste, drop or an **Image** button
+(scaling larger ones down) and shows them by reading them through the GitHub API with its token; a file whose bytes are
+not the image type it claims is never shown, and no outside image is ever loaded. `keeptrack.py attach <card> <image>`
+does the same from the terminal (a new comment, or `--details` for the description). Board loaders never read
+`assets/`. Not on hosted boards yet. No migration.
+
 Kit v91: CRM gaps after Companies (private-tasks card #290; v88 is another change in flight). Companies gets a **Sort** menu (stage, recently
 contacted, recently updated, name) and a last-contact filter (contacted in 30 days, no contact in 30+ days, never
 contacted), remembered per viewer and board. A company, person or project record has its own address

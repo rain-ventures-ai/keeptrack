@@ -318,7 +318,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 91  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 92  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3843,6 +3843,108 @@ def cmd_comment(a):
     mutate(fn, f"Comment: {a.id}")
 
 
+# ---- images on cards (card #292, kit v92): a file under assets/<card id>/ next to the board files, referenced from a
+# comment or the description as ![alt](assets/<card id>/<file>). Never embedded in the board data; the board loaders read
+# only tasks.json and cards/ people/ projects/ proposals/ archive/, so an asset is never parsed as a board file.
+IMG_MAX = 2 * 1024 * 1024
+IMG_MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"), (b"GIF89a", "gif"))
+
+
+def image_kind(data):
+    """png, jpg, gif or webp from the file's first bytes; '' for anything else (an SVG or HTML never passes)."""
+    for magic, ext in IMG_MAGIC:
+        if data.startswith(magic):
+            return ext
+    return "webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else ""
+
+
+def save_asset(rel, blob, message):
+    """Write one binary file next to the board (local folder, git clone or GitHub API). Its name holds its hash, so an
+    existing file of that name already has these bytes."""
+    _, state = load()
+    if state["mode"] == "local":
+        path = _local_path(rel); os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not os.path.exists(path):
+            with open(path, "wb") as f:
+                f.write(blob)
+        return
+    remote = _remote_path(rel)
+    if state["mode"] == "git":
+        _check_git_clone()
+        for _ in range(4):
+            _, state = load()
+            with tempfile.NamedTemporaryFile(delete=False) as f:
+                f.write(blob); tmp = f.name
+            try:
+                rc, sha, err = git("hash-object", "-w", tmp)
+            finally:
+                os.remove(tmp)
+            if rc:
+                sys.exit(f"write failed (git hash-object): {err}")
+            fd, idx = tempfile.mkstemp(prefix="board-index-"); os.close(fd); os.remove(idx)
+            try:
+                e = {"GIT_INDEX_FILE": idx}
+                for args in (("read-tree", state["head"]), ("update-index", "--add", "--cacheinfo", f"100644,{sha},{remote}")):
+                    rc, _, err = git(*args, env=e)
+                    if rc:
+                        sys.exit(f"write failed (git {args[0]}): {err}")
+                _, tree, _ = git("write-tree", env=e)
+            finally:
+                if os.path.exists(idx):
+                    os.remove(idx)
+            name = who_am_i()
+            ident = {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": "board@users.noreply.github.com",
+                     "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": "board@users.noreply.github.com"}
+            rc, commit, err = git("commit-tree", tree, "-p", state["head"], "-m", message, env=ident)
+            if rc:
+                sys.exit(f"write failed (git commit-tree): {err}")
+            rc, _, err = git("push", "-q", "origin", f"{commit}:refs/heads/{BRANCH}")
+            if rc == 0:
+                return
+            if not ("non-fast-forward" in err or "fetch first" in err or "rejected" in err):
+                sys.exit(f"write failed: git push to {REPO}@{BRANCH} was refused: {err}")
+            _BOARD_STATES.clear()   # the branch moved: read it again and retry
+        sys.exit("write failed: the branch kept moving; run the command again")
+    body = {"message": message, "branch": BRANCH, "content": base64.b64encode(blob).decode()}
+    rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{remote}", "--input", "-", body=body)
+    if rc and not ("422" in err and "sha" in (err + out).lower()):   # 422 without a sha: a file of this name (these bytes) is there
+        _api_error(rc, out, err)
+
+
+def cmd_attach(a):
+    """Add an image (screenshot) to a card: written to assets/<card id>/, then shown in a new comment, or appended to the
+    description with --details."""
+    if BACKEND == "hosted":
+        sys.exit("capability_unavailable: images are not available on hosted boards yet")
+    try:
+        with open(a.path, "rb") as f:
+            blob = f.read(IMG_MAX + 1)
+    except OSError as e:
+        sys.exit(f"cannot read {a.path}: {e.strerror}")
+    if len(blob) > IMG_MAX:
+        sys.exit("the image is over 2 MB: make it smaller (or put it in Drive and link it)")
+    ext = image_kind(blob)
+    if not ext:
+        sys.exit("only PNG, JPEG, GIF or WebP images can be attached (checked from the file's content, not its name)")
+    data, _ = load(); t = find(data, a.id)
+    rel = f"assets/{t['id']}/{dt.datetime.now(dt.timezone.utc):%Y%m%d}-{hashlib.sha256(blob).hexdigest()[:12]}.{ext}"
+    alt = re.sub(r"[\[\]\r\n]", " ", a.alt or os.path.splitext(os.path.basename(a.path))[0]).strip()[:60] or "image"
+    md = f"![{alt}]({rel})"
+    save_asset(rel, blob, f"Image: #{t.get('num', t['id'])}")
+
+    def fn(data):
+        t = find(data, a.id)
+        if a.details:
+            t["details"] = (t.get("details", "").rstrip() + "\n\n" if t.get("details", "").strip() else "") + md
+            hist(t, f"image added to the description: {rel}")
+        else:
+            text = (a.text.strip() + "\n\n" if a.text and a.text.strip() else "") + md
+            t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": text})
+        t["updated"] = now()
+    mutate(fn, f"Image: {a.id}")
+    print(f"attached {rel} to {t['id']} ({'description' if a.details else 'new comment'}): {md}")
+
+
 def cmd_comments(a):
     data, _ = load(); t = find(data, a.id)
     for c in t.get("comments", []):
@@ -5283,7 +5385,7 @@ def _here(a):
 HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
-    "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
+    "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "attach", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-url", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
@@ -10723,6 +10825,10 @@ def main():
     s = sub.add_parser("history"); s.add_argument("id"); s.set_defaults(f=cmd_history)
     s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
+    s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, or the description with --details")
+    s.add_argument("id"); s.add_argument("path", help="the image file"); s.add_argument("text", nargs="?", default="", help="comment text to go with it")
+    s.add_argument("--alt", help="a few words saying what the image shows (default: the file name)")
+    s.add_argument("--details", action="store_true", help="append it to the description instead of a new comment"); s.set_defaults(f=cmd_attach)
     s = sub.add_parser("add"); s.add_argument("title"); s.add_argument("--column"); s.add_argument("--client"); s.add_argument("--project")
     s.add_argument("--priority", default="medium", choices=["high", "medium", "low"]); s.add_argument("--due")
     s.add_argument("--assign", action="append"); s.add_argument("--label", action="append"); s.add_argument("--details", help="Markdown; - reads it from stdin")

@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 91;
+  const PAGE_KIT = 92;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -381,11 +381,41 @@ if (typeof window !== 'undefined') (() => {
     parent.classList.toggle('md', !mdRaw());
     if (mdRaw()) linkify(parent, text); else mdRender(parent, text);
   }
-  function mdInline(parent, text) {   // `code` first (nothing inside it is changed), then emphasis, then links and mentions
+  function mdInline(parent, text) {   // `code` first (nothing inside it is changed), then images, then emphasis, then links and mentions
     String(text || '').split(/(`[^`\n]+`)/g).forEach((chunk, i) => {
       if (i % 2 === 1) parent.append(el('code', null, chunk.slice(1, -1)));
-      else if (chunk) mdEmph(parent, chunk);
+      else if (chunk) chunk.split(MD_IMG).forEach((part, j, all) => {   // split keeps the two groups: [text, alt, path, text, ...]
+        if (j % 3 === 1) mdImage(parent, part, all[j + 1]); else if (j % 3 === 0 && part) mdEmph(parent, part);
+      });
     });
+  }
+  // Images on cards (card #292, kit v92): a board file under assets/<card id>/, written as ![alt](assets/t_x/20261022-ab12cd.png).
+  // Never embedded in the board data. The page reads it through the GitHub API with its own token (a private repo has no
+  // public URL), so only people who can read the board see it. Anything else in ![...](...) stays as text: no outside
+  // image is ever loaded (it could track who opened the card).
+  const MD_IMG = /!\[([^\]\n]{0,200})\]\((assets\/[^\s)]{1,200})\)/g;
+  const ASSET_RE = /^assets\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(png|jpe?g|gif|webp))$/i;
+  const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }, IMG_MAX = 2 * 1024 * 1024;
+  const imgCache = new Map();   // assets/... -> Promise of an object URL ('' when it cannot be read)
+  function assetBlobUrl(rel) {
+    if (!imgCache.has(rel)) imgCache.set(rel, (async () => {
+      try { const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' }); if (!r.ok) return '';
+        const bytes = new Uint8Array(await r.arrayBuffer()), type = IMG_TYPES[rel.split('.').pop().toLowerCase()];
+        if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return '';   // what the file is, not what it is called
+        return URL.createObjectURL(new Blob([bytes], { type })); } catch { return ''; } })());
+    return imgCache.get(rel);
+  }
+  function imgKind(b) {   // the image type from its first bytes; '' for anything else (an SVG or HTML never passes)
+    const at = (i, xs) => xs.every((x, k) => b[i + k] === x);
+    return at(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) ? 'image/png' : at(0, [0xff, 0xd8, 0xff]) ? 'image/jpeg' : at(0, [0x47, 0x49, 0x46, 0x38]) ? 'image/gif'
+      : at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50]) ? 'image/webp' : '';
+  }
+  function mdImage(parent, alt, rel) {
+    const label = String(alt || '').trim() || 'image';
+    if (!ASSET_RE.test(rel) || HOSTED || DEMO || !cfg().repo) { parent.append(el('span', 'mdimgalt', `[${label}]`)); return; }
+    const a = el('a', 'mdimglink'), img = el('img', 'mdimg'); img.alt = label; img.decoding = 'async'; a.title = `${label}: open full size in a new tab`; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.append(img); parent.append(a); a.classList.add('loading');
+    assetBlobUrl(rel).then(u => { a.classList.remove('loading'); if (u) { img.src = u; a.href = u; } else { a.replaceWith(el('span', 'mdimgalt', `[${label}: image not found]`)); } });
   }
   const MD_EMPH = /(\*\*(?=\S)[^\n]+?\*\*(?!\*)|__(?=\S)[^\n]+?__(?![\w_])|~~(?=\S)[^~\n]+?~~|(?<![\w*])\*(?=[^\s*])[^*\n]*?[^\s*]?\*(?![\w*])|(?<![\w_])_(?=[^\s_])[^_\n]*?_(?![\w_]))/g;
   const MD_LINKISH = /\[[^\]\n]{1,200}\]\(https?:\/\/[^\s<>"()]+\)|https?:\/\/[^\s<>"')]+/g;
@@ -455,7 +485,7 @@ if (typeof window !== 'undefined') (() => {
     }
   }
   // A one-line preview of Markdown (card faces, lists): the words without the marks
-  const mdPlain = s => String(s || '').replace(/^\s*```.*$/gm, '').replace(/^\s{0,3}([-*_])(\s*\1){2,}\s*$/gm, '').replace(/^\s{0,3}#{1,6}\s+/gm, '').replace(/^\s*([-*+]|\d{1,9}[.)])\s+(\[[ xX]\]\s+)?/gm, '').replace(/^\s*>\s?/gm, '')
+  const mdPlain = s => String(s || '').replace(/!\[([^\]\n]*)\]\([^)\s]*\)/g, (m, a) => `[${a.trim() || 'image'}]`).replace(/^\s*```.*$/gm, '').replace(/^\s{0,3}([-*_])(\s*\1){2,}\s*$/gm, '').replace(/^\s{0,3}#{1,6}\s+/gm, '').replace(/^\s*([-*+]|\d{1,9}[.)])\s+(\[[ xX]\]\s+)?/gm, '').replace(/^\s*>\s?/gm, '')
     .replace(/\[([^\]\n]+)\]\(https?:\/\/[^\s)]+\)/g, '$1').replace(/(\*\*|__|~~|`)(?=\S)([^\n]*?\S)\1/g, '$2').replace(/^\s*\|?\s*:?-{2,}[-|: ]*$/gm, '').replace(/\|/g, ' ');
 
   // Task numbers (#12): stable, human-friendly, never reused. Every writer (this page and keeptrack.py) runs the same deterministic rule:
@@ -2437,6 +2467,59 @@ if (typeof window !== 'undefined') (() => {
     cmSig = ''; renderComments(); ta.focus();
   }
   $('cmPost').onclick = postComment;
+  // ---- adding images (card #292, kit v92): paste, drop or pick; written to assets/<card id>/ in the board repo, then
+  // put in the box as ![alt](assets/...). PNG, JPEG, GIF, WebP; one over 2 MB is scaled down (not a GIF), or refused.
+  const imgUploadBlock = () => ro ? 'This board is read-only here.' : HOSTED ? 'Images are not available on hosted boards yet.' : DEMO ? 'Images cannot be added to the demo board.' : !cfg().token ? 'Connect the board with a token to add images.' : '';
+  async function shrinkImage(file) {   // longest side at most 2000px; a PNG stays PNG unless that is still over 2 MB
+    try { const bmp = await createImageBitmap(file), k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height)), cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k)); cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+      const as = (type, q) => new Promise(res => cv.toBlob(res, type, q));
+      let out = file.type === 'image/png' ? await as('image/png') : null; if (!out || out.size > IMG_MAX) out = await as('image/jpeg', 0.85);
+      return out; } catch { return null; }
+  }
+  const b64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
+  async function uploadImage(cardId, file) {   // the Markdown to insert, or '' (a toast says why)
+    const block = imgUploadBlock(); if (block) { toast(block, true); return ''; }
+    if (!safeCardId(cardId)) return '';
+    if (!Object.values(IMG_TYPES).includes(file.type)) { toast('Only PNG, JPEG, GIF or WebP images can be added.', true); return ''; }
+    let blob = file; if (blob.size > IMG_MAX && file.type !== 'image/gif') blob = await shrinkImage(file);
+    if (!blob || blob.size > IMG_MAX) { toast('That image is over 2 MB. Make it smaller, or put it in Drive and link it.', true); return ''; }
+    const bytes = new Uint8Array(await blob.arrayBuffer()), kind = imgKind(bytes); if (!kind) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
+    const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[kind];
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].slice(0, 6).map(x => x.toString(16).padStart(2, '0')).join('');
+    const rel = `assets/${cardId}/${todayIso().replace(/-/g, '')}-${hash}.${ext}`, t = state.tasks.find(x => x.id === cardId);
+    const alt = (String(file.name || '').replace(/\.[a-z0-9]+$/i, '').replace(/[\[\]\n]/g, ' ').trim().slice(0, 60)) || 'image';
+    setStatus('Uploading image…', 'saving');
+    try {
+      const r = await gh('PUT', { message: `Image: ${t ? '#' + t.num : cardId}`, content: b64(bytes), branch: cfg().branch }, false, { path: remotePath(rel) });
+      if (!r.ok && r.status !== 422) { toast(`The image was not saved (GitHub error ${r.status}).`, true); setStatus('Image not saved', 'err'); return ''; }   // 422: the same image is already there (same name, same bytes)
+    } catch (e) { toast('The image was not saved: ' + (isTimeout(e) ? 'GitHub did not answer.' : e.message), true); setStatus('Image not saved', 'err'); return ''; }
+    imgCache.set(rel, Promise.resolve(URL.createObjectURL(new Blob([bytes], { type: kind })))); setStatus('Image saved', 'ok');
+    return `![${alt}](${rel})`;
+  }
+  async function addImages(ta, files) {   // upload each image, then put its Markdown where the cursor was
+    const id = editing, imgs = [...files].filter(f => f && /^image\//.test(f.type)); if (!id) return false;
+    if (!imgs.length) { if (files.length) toast('Only PNG, JPEG, GIF or WebP images can be added.', true); return false; }
+    const at = ta.selectionEnd; let md = '';
+    for (const f of imgs) { const m = await uploadImage(id, f); if (m) md += (md ? '\n' : '') + m; }
+    if (!md || editing !== id) return true;
+    const v = ta.value, pre = at > 0 && v[at - 1] !== '\n' ? '\n' : '', post = v[at] && v[at] !== '\n' ? '\n' : '';
+    ta.setRangeText(pre + md + post, at, at, 'end'); ta.focus(); ta.dispatchEvent(new Event('input')); return true;
+  }
+  function imageTarget(ta, onShow) {   // paste and drop images into a text box
+    ta.addEventListener('paste', e => { const fs = e.clipboardData && e.clipboardData.files; if (fs && [...fs].some(f => /^image\//.test(f.type))) { e.preventDefault(); onShow && onShow(); addImages(ta, fs); } });
+    ta.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+    ta.addEventListener('drop', e => { const fs = e.dataTransfer && e.dataTransfer.files; if (fs && [...fs].some(f => /^image\//.test(f.type))) { e.preventDefault(); onShow && onShow(); addImages(ta, fs); } });
+  }
+  function imagePicker(ta, label) {   // an Image button with a hidden file input
+    const inp = el('input'); inp.type = 'file'; inp.accept = 'image/png,image/jpeg,image/gif,image/webp'; inp.multiple = true; inp.hidden = true;
+    inp.onchange = () => { const fs = [...inp.files]; inp.value = ''; addImages(ta, fs); };
+    const b = el('button', 'mdtool imgpick', 'Image'); b.type = 'button'; b.title = label; b.setAttribute('aria-label', label); b.onmousedown = e => e.preventDefault(); b.onclick = () => { const why = imgUploadBlock(); if (why) toast(why, true); else inp.click(); };
+    b.append(inp); return b;
+  }
+  imageTarget($('cmText'), () => { $('cmActions').hidden = false; });
+  imageTarget($('cDetails'));
+  { const b = imagePicker($('cmText'), 'Add an image to this comment'); b.classList.remove('mdtool'); b.id = 'cmImage'; $('cmActions').insertBefore(b, $('cmActions').querySelector('.hint')); }
   $('cmText').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); postComment(); } });
   $('cmText').addEventListener('focus', () => { $('cmActions').hidden = false; });
   $('cmText').addEventListener('input', () => autosize($('cmText')));
@@ -3440,6 +3523,7 @@ if (typeof window !== 'undefined') (() => {
     const w = tab('descWrite', 'Write'), pv = tab('descPreview', 'Preview'); tabs.append(w, pv);
     const tools = el('div', 'mdtools'); tools.id = 'descToolBtns';
     MD_TOOLS.forEach(([txt, name, fn]) => { const b = el('button', 'mdtool', txt); b.type = 'button'; b.title = name; b.setAttribute('aria-label', name); b.onmousedown = e => e.preventDefault(); b.onclick = fn; tools.append(b); });
+    { const b = imagePicker($('cDetails'), 'Add an image to the description'); b.id = 'descImage'; tools.append(b); }
     bar.append(tabs, tools);
     const show = prev => { w.setAttribute('aria-selected', String(!prev)); pv.setAttribute('aria-selected', String(prev)); tools.hidden = prev; $('cDetails').hidden = prev; const v = $('descPrev'); v.hidden = !prev;
       if (prev) { v.textContent = ''; const x = $('cDetails').value; if (x.trim()) mdRender(v, x); else v.append(el('span', 'ph', 'Nothing to preview')); } else $('cDetails').focus(); };
