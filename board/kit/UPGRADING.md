@@ -32,6 +32,9 @@ change; `kit-update` copies the files. (v88 and v89 are taken by open kit pull r
   `BOARD_TOKEN` is already set in the shell. Before v90 an inherited `BOARD_TOKEN` won, so a shell set up for one board
   sent another board's commands with the wrong token. When it replaces a different value, commands print a warning on
   stderr (hooks stay silent). If `token_env` is named but its variable is not set, the shell's `BOARD_TOKEN` is still used.
+  The folder's token wins only when the folder also decides the board: when the shell sets `BOARD_REPO` to another board
+  than the config's `repo` (a relay worker), the shell's `BOARD_TOKEN` stays, so the board and its token always come
+  from the same place; `where` says so.
 - `keeptrack.py where` names the variable the token came from (`token from $VAR`, and whether it replaced the shell's
   `BOARD_TOKEN`), and says when a `BOARD_REPO` from the shell won over the board clone the folder is in.
 - In a board clone, a command warns on stderr when an inherited `BOARD_REPO` names another board than the clone's git

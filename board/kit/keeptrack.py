@@ -280,13 +280,21 @@ for _k, _v in (("BOARD_REPO", "repo"), ("BOARD_BRANCH", "branch"), ("BOARD_PATH"
     if PROJECT.get(_v):
         os.environ.setdefault(_k, str(PROJECT[_v]))
 TOKEN_REPLACED = ""   # kit v90: the token_env variable whose value replaced a different BOARD_TOKEN from the shell
+TOKEN_KEPT = ""       # kit v90: the shell's BOARD_REPO, when it names another board and so the shell's BOARD_TOKEN stays
 _tv = PROJECT.get("token_env")
 if _tv and _tv != "BOARD_TOKEN" and os.environ.get(_tv):   # the file names the variable that holds the token, never the token
     # Kit v90 (#286): the folder's own setting wins over a BOARD_TOKEN inherited from the shell, so a shell set up for
     # one board never sends another board's commands with the wrong token. main() says so when it replaced one.
-    if os.environ.get("BOARD_TOKEN") and os.environ["BOARD_TOKEN"] != os.environ[_tv]:
-        TOKEN_REPLACED = _tv
-    os.environ["BOARD_TOKEN"] = os.environ[_tv]
+    # Only when the folder also decides the board: a shell BOARD_REPO naming another board keeps its own token, so the
+    # token and the board never come from different places (review round 1).
+    if not SHELL_REPO or SHELL_REPO.lower() == str(PROJECT.get("repo", "")).lower():
+        if os.environ.get("BOARD_TOKEN") and os.environ["BOARD_TOKEN"] != os.environ[_tv]:
+            TOKEN_REPLACED = _tv
+        os.environ["BOARD_TOKEN"] = os.environ[_tv]
+    elif os.environ.get("BOARD_TOKEN"):
+        TOKEN_KEPT = SHELL_REPO
+    else:
+        os.environ["BOARD_TOKEN"] = os.environ[_tv]   # as before v90: fills the gap only
 if os.path.basename(os.path.dirname(os.path.abspath(__file__))) != "board":
     ROOT = None   # this keeptrack.py is not inside a board repo (e.g. the Claude plugin): no git remote, no kit files
 if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a board repo clone: use that clone
@@ -5303,6 +5311,9 @@ def _auth_source():
     """Which variable the board token comes from (kit v90: named, so `where` shows which one won). Never the token."""
     tv = PROJECT.get("token_env")
     cfg = os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, "config.json") if PROJECT_DIR else "the config"
+    if tv and os.environ.get(tv) and TOKEN_KEPT:
+        return (f"token from $BOARD_TOKEN (from the shell: BOARD_REPO={_flat(TOKEN_KEPT)} from the shell is not this "
+                f"folder's board, so ${tv}, named in {cfg}, is not used)")
     if tv and os.environ.get(tv):
         return (f"token from ${tv} (token_env in {cfg})"
                 + ("; it replaced a different BOARD_TOKEN from the shell" if TOKEN_REPLACED else ""))
@@ -5324,7 +5335,7 @@ def cmd_where(a):
     print(f"path:    {PATH}  [{src('BOARD_PATH', 'path')}]")
     print(f"project: {DEFAULT_PROJECT or '(none: commands cover the whole board)'}" + (f"  [{src('BOARD_PROJECT', 'project')}]" if DEFAULT_PROJECT else ""))
     print(f"user:    {os.environ.get('BOARD_USER') or '(from gh login)'}")
-    mismatch = _repo_mismatch()
+    mismatch = ("", "") if FILE else _repo_mismatch()   # --file uses no remote board
     if mismatch[0]:
         print(f"         (BOARD_REPO={_flat(mismatch[0])} from the shell won over this clone of {_flat(mismatch[1])}: "
               f"unset BOARD_REPO to use the clone's board)")
@@ -10807,10 +10818,11 @@ def main():
         print(f"note: this folder is in a clone of {_flat(UNTRUSTED_CLONE[0])}, a board you never connected with `keeptrack.py use`, "
               f"so {_flat(UNTRUSTED_CLONE[1])} still decides the board. If the clone is yours, run "
               f"`keeptrack.py use {_flat(UNTRUSTED_CLONE[0])}` in it.", file=sys.stderr)
-    if TOKEN_REPLACED and not getattr(a, "hook", False):
+    quiet = getattr(a, "hook", False) or a.f is cmd_auto_heartbeat   # hooks stay silent (and start no git process)
+    if TOKEN_REPLACED and not quiet:
         print(f"warning: ${TOKEN_REPLACED} (token_env in {_flat(os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json'))}) "
               "replaced a different BOARD_TOKEN from the shell: this folder's own setting wins (kit v90).", file=sys.stderr)
-    if not FILE and not getattr(a, "hook", False) and a.f is not cmd_use:
+    if not FILE and not quiet and a.f is not cmd_use:
         shell_repo, clone_repo = _repo_mismatch()
         if shell_repo:
             print(f"warning: BOARD_REPO={_flat(shell_repo)} from the shell, but this folder is a clone of {_flat(clone_repo)}; "

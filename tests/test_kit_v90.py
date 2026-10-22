@@ -126,6 +126,53 @@ class FolderTokenWins(unittest.TestCase):
         r = self.run_kt(d, env, "here", "--hook")
         self.assertNotIn("warning:", r.stderr)
 
+    def test_a_shell_board_repo_for_another_board_keeps_the_shell_token(self):
+        # Review round 1 (blocking): the board and its token must come from the same place. A shell (a relay worker)
+        # that sets BOARD_REPO for another board keeps its own BOARD_TOKEN; the folder's token_env is not used.
+        d = self.folder({"repo": "o/board", "token_env": "KT_V90_TOKEN"})
+        env = self.env(BOARD_REPO="o/other", BOARD_TOKEN="shell-value", KT_V90_TOKEN="folder-value")
+        self.assertEqual("shell-value", self.token_in(d, env))
+        r = self.run_kt(d, env, "where")
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertNotIn("warning", r.stderr)
+        self.assertIn("o/other", self.line(r.stdout, "board:"))
+        auth = self.line(r.stdout, "auth:")
+        self.assertIn("$BOARD_TOKEN", auth)
+        self.assertIn("$KT_V90_TOKEN", auth)
+        self.assertIn("not used", auth)
+        self.assertNotIn("folder-value", r.stdout + r.stderr)
+        self.assertNotIn("shell-value", r.stdout + r.stderr)
+
+    def test_a_shell_board_repo_for_the_same_board_still_lets_the_folder_token_win(self):
+        d = self.folder({"repo": "o/board", "token_env": "KT_V90_TOKEN"})
+        env = self.env(BOARD_REPO="O/Board", BOARD_TOKEN="shell-value", KT_V90_TOKEN="folder-value")
+        self.assertEqual("folder-value", self.token_in(d, env))
+
+    def test_a_shell_board_repo_for_another_board_without_a_token_fills_the_gap_as_before(self):
+        d = self.folder({"repo": "o/board", "token_env": "KT_V90_TOKEN"})
+        env = self.env(BOARD_REPO="o/other", KT_V90_TOKEN="folder-value")
+        self.assertEqual("folder-value", self.token_in(d, env))
+
+    def test_the_auto_heartbeat_hook_stays_silent(self):
+        # Review round 1: auto-heartbeat runs after every tool call and has no --hook flag.
+        d = self.folder({"repo": "o/board", "token_env": "KT_V90_TOKEN"})
+        env = self.env(BOARD_TOKEN="shell-value", KT_V90_TOKEN="folder-value", BOARD_API="http://127.0.0.1:9")
+        r = self.run_kt(d, env, "auto-heartbeat")
+        self.assertEqual("", r.stderr)
+        c = self.clone("o/board")
+        r = self.run_kt(c, self.env(BOARD_REPO="o/other", BOARD_API="http://127.0.0.1:9"), "auto-heartbeat")
+        self.assertEqual("", r.stderr)
+
+    def test_where_with_a_local_file_does_not_warn_about_the_clone(self):
+        c = self.clone("o/board")
+        f = os.path.join(self.tmp.name, "copy.json")
+        with open(f, "w", encoding="utf-8") as fh:
+            json.dump({"tasks": []}, fh)
+        r = self.run_kt(c, self.env(BOARD_REPO="o/other"), "--file", f, "where")
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertNotIn("won over", r.stdout)
+        self.assertNotIn("warning", r.stderr)
+
     def test_an_inherited_board_repo_that_differs_from_the_clone_is_warned_about(self):
         c = self.clone("o/board")
         r = self.run_kt(c, self.env(BOARD_REPO="o/other"), "where")
