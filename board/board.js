@@ -1643,7 +1643,11 @@ if (typeof window !== 'undefined') (() => {
   const goalCards = g => { const dc = doneColId(), cards = state.tasks.filter(t => t.goal === g.id); return { open: cards.filter(t => t.column !== dc).length, done: cards.filter(t => t.column === dc).length }; };
   const goalPickerLabel = g => (g.title || 'Untitled goal') + (goalStatus(g) !== 'active' ? ' · ' + goalStatus(g) : '');
   const setGoalFilter = v => { deferredFilterRoute.delete('goal'); $('fGoal').value = v; closePops(); render(); };
-  const setProjectFilter = v => { deferredFilterRoute.delete('project'); $('fProject').value = v; closePops(); render(); };
+  const setProjectFilter = v => {
+    deferredFilterRoute.delete('project'); $('fProject').value = v;
+    const p = v && projectById(v); if (p && p.client && !clientValues().includes(p.client)) { deferredFilterRoute.delete('client'); setClientValues([...clientValues(), p.client]); }
+    closePops(); render();
+  };
   // Company and project drawers: jump to the board with matching filters (open tasks only).
   function showBoardTasks({ clients = [], project = '' } = {}) {
     deferredFilterRoute.delete('client'); deferredFilterRoute.delete('project'); deferredFilterRoute.delete('status');
@@ -1773,7 +1777,9 @@ if (typeof window !== 'undefined') (() => {
   const toggleClient = v => {
     deferredFilterRoute.delete('client');
     const selected = new Set(clientValues()); if (selected.has(v)) selected.delete(v); else selected.add(v);
-    setClientValues(selected); render();
+    setClientValues(selected);
+    const p = projectById($('fProject').value);
+    if (p && p.client && selected.size && !selected.has(p.client)) setProjectFilter(''); else render();
     document.querySelectorAll('#clientPop [data-client]').forEach(b => { const on = selected.has(b.dataset.client); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
   };
   function clientProjects(name) {
@@ -1807,7 +1813,7 @@ if (typeof window !== 'undefined') (() => {
     }
     const det = el('button', 'cpillgo'); det.type = 'button'; det.title = 'Client details'; det.setAttribute('aria-label', `Client details for ${c.name}`);
     det.append(svgIcon('panel-right-open')); det.onclick = e => { e.stopPropagation(); openClient(c.name); };
-    b.append(det); b.onclick = () => toggleClient(c.name);
+    b.append(det); b.onclick = e => { if (e.target.closest('.cpillproj, .cpillgo')) return; toggleClient(c.name); };
     return b;
   }
   const activeClaim = t => t.claim && t.claim.status !== 'done' ? t.claim : null;
@@ -1851,7 +1857,9 @@ if (typeof window !== 'undefined') (() => {
           const b = el('button', 'cmenu' + (on ? ' on' : '')); b.type = 'button'; b.dataset.client = c.name; b.setAttribute('aria-pressed', String(on)); b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`);
           b.append(el('i', 'cdotc'), el('span', 'nm', c.name), el('span', 'cn', c.open ? String(c.open) : '')); b.onclick = () => toggleClient(c.name);
           const det = el('button', 'cmenu detail', 'Details'); det.type = 'button'; det.title = 'Open client details'; det.onclick = () => { closePops(); openClient(c.name); };
-          row.append(b, det); pop.append(row); });
+          const bits = [b];
+          if (clientProjects(c.name).length) { const proj = el('button', 'cmenu detail', 'Projects'); proj.type = 'button'; proj.title = `Projects for ${c.name}`; proj.setAttribute('aria-label', `Projects for ${c.name}`); proj.onclick = ev => { ev.stopPropagation(); openClientProjects(proj, c.name); }; bits.push(proj); }
+          row.append(...bits, det); pop.append(row); });
         pop.style.left = Math.max(0, more.offsetLeft - 10) + 'px'; } }); };
     }
     const pq = $('peopleQ'); pq.textContent = ''; const w = $('fWho').value;
@@ -2012,6 +2020,13 @@ if (typeof window !== 'undefined') (() => {
     newsSheet = sh; sh.el.classList.add('newssheet'); sh.open();
   }
 
+  // A project narrows only the company that owns it. With several companies selected, the others stay whole.
+  function projectKeeps(t, fproj, fc) {
+    const owner = (projectById(fproj) || {}).client || '';
+    if (owner && fc.length > 1 && fc.includes(owner)) return t.client !== owner || t.project === fproj;
+    if (owner && fc.length && !fc.includes(owner)) return true;
+    return t.project === fproj;
+  }
   function filtered(t) {
     const status = $('fStatus').value;
     if (status === '__open' && isDoneTask(t)) return false;
@@ -2019,7 +2034,7 @@ if (typeof window !== 'undefined') (() => {
     if (freshOnly && !isFresh(t)) return false;
     const fc = clientValues(), fw = $('fWho').value, fd = $('fDoneBy').value, fl = $('fLabel').value, fprio = $('fPrio').value, fproj = $('fProject').value;
     if (fc.length && !fc.includes(t.client)) return false;
-    if (fproj && t.project !== fproj) return false;
+    if (fproj && !projectKeeps(t, fproj, fc)) return false;
     const fgoal = $('fGoal').value;
     if (fgoal === '__none' ? !!goalById(t.goal) || isDoneTask(t) : fgoal && t.goal !== fgoal) return false;   // No goal: the open cards, as the bar counts them
     if (fw === '__none' && t.assignees.length) return false;

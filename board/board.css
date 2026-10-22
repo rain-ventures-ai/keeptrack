@@ -570,7 +570,8 @@ header .logo { flex: 0 0 auto; width: 32px; height: 32px; font-size: 17px; borde
 .cpill:hover { border-color: var(--cc, var(--accent)); } .cpill .cn { font-size: var(--fs-xs); color: var(--muted); } .cpill .cdotc, .cmenu .cdotc { width: 9px; height: 9px; border-radius: 50%; background: var(--cc, var(--muted)); flex: 0 0 auto; }
 .cpill.on { background: color-mix(in srgb, var(--cc, var(--accent)) 16%, var(--card)); border-color: var(--cc, var(--accent)); font-weight: 600; } .cpill.all.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .cpill.more { color: var(--muted); }
-.cpillproj { display: inline-flex; align-items: center; margin: 0 -4px 0 0; padding: 0; border: 0; background: transparent; color: inherit; }
+.cpillproj { flex: 0 0 auto; display: inline-grid; place-items: center; width: 22px; height: 22px; margin: 0 -4px 0 2px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: inherit; cursor: pointer; }
+.cpillproj:hover { background: var(--accent-soft); }
 .cpillproj svg { width: 14px; height: 14px; }
 .cpill.projtok { max-width: 200px; gap: var(--sp-1); }
 .cpill.projtok svg { width: 14px; height: 14px; flex: 0 0 auto; }
@@ -1352,7 +1353,7 @@ body.setup header { justify-content: flex-start; } body.setup .hutils { margin-l
   :root[data-layout="dock"] body[data-view="board"] #board, :root[data-layout="dock"] body[data-view="list"] #board { padding-bottom: calc(var(--dock-top) + 84px); }   /* clear of the dock and the "Add a task" button */
   :root[data-layout="dock"] #dock .dockpop { top: auto; max-height: calc(100vh - var(--dock-top) - 80px); max-height: calc(100dvh - var(--dock-top) - 80px); }
 }
-header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone tap size is for the pill, not the details icon inside it */
+header .cpillgo, header .cpillproj { min-width: 0 !important; min-height: 0; padding: 0; }   /* the phone tap size is for the pill, not the details icon or the project chevron inside it */
 
 /* ---- "Show me around" tour: a dimmed screen with one highlighted part and a tip next to it ---------------- */
 .tour { position: fixed; inset: 0; z-index: var(--z-dialog); }

@@ -465,6 +465,47 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
         await demo.close();
       }
     }
+    // A selected company stays a normal pill, and a second company can still pick its own project.
+    {
+      const apiP = new Github();
+      apiP.files['tasks.json'] = text({ ...root, clients: ['Rain Ventures', 'Beta'], next_num: 4 });
+      apiP.files['projects/pr_one.json'] = text({ ...project, client: 'Rain Ventures', name: 'Launch' });
+      apiP.files['projects/pr_two.json'] = text({ ...project, id: 'pr_two', client: 'Beta', name: 'Beta site' });
+      apiP.files['cards/t_one.json'] = text({ ...card, client: 'Rain Ventures', title: 'Rain task' });
+      apiP.files['cards/t_two.json'] = text({ ...card, id: 't_two', num: 2, client: 'Beta', project: 'pr_two', title: 'Beta task', rank: 'a2' });
+      apiP.files['cards/t_three.json'] = text({ ...card, id: 't_three', num: 3, client: 'Rain Ventures', project: '', title: 'Rain other', rank: 'a3' });
+      const pg = await browser.newPage({ viewport: { width: 740, height: 800 } }); const errs = []; pg.on('pageerror', e => errs.push(e.message));
+      await pg.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour', 'done'); sessionStorage.setItem('kb_view', 'board'); });
+      await pg.route('https://api.test/**', r => apiP.route(r)); await pg.goto(base + '/board/index.html'); await pg.locator('.card .t', { hasText: 'Rain task' }).waitFor();
+      const company = name => pg.locator('#clientBar .cpill').filter({ has: pg.locator('.cdotc') }).filter({ hasText: name });
+      const pickCompany = async name => {
+        const pill = company(name);
+        if (await pill.count()) { await pill.click({ position: { x: 24, y: 16 } }); return; }
+        await pg.locator('.cpill.more').click(); await pg.locator(`#clientPop .cmenu[data-client="${name}"]`).click();
+      };
+      const pickProject = async (name, label) => {
+        const pill = company(name);
+        if (await pill.count() && await pill.locator('.cpillproj').count()) await pill.locator('.cpillproj').click();
+        else { await pg.locator('.cpill.more').click(); await pg.locator(`#clientPop [aria-label="Projects for ${name}"]`).click(); }
+        await pg.locator('.ui-menu [role=menuitem]', { hasText: label }).click();
+      };
+      const rain = company('Rain Ventures');
+      await pickCompany('Rain Ventures');
+      await rain.locator('.cpillproj').waitFor();
+      const tall = await rain.boundingBox();
+      assert.ok(tall && tall.height < 48, `selected company pill is ${tall && Math.round(tall.height)}px tall`);
+      await rain.locator('.cpillproj').click();
+      assert.equal(await rain.getAttribute('aria-pressed'), 'true', 'opening projects leaves the company selected');
+      await pg.locator('.ui-menu [role=menuitem]', { hasText: 'Launch' }).click();
+      await pg.locator('.card .t', { hasText: 'Rain other' }).waitFor({ state: 'hidden' });
+      await pickCompany('Beta');
+      await pg.locator('.card .t', { hasText: 'Beta task' }).waitFor();
+      assert.equal(await pg.locator('.card .t', { hasText: 'Rain other' }).count(), 0, 'the first company stays narrowed to its project');
+      await pickProject('Beta', 'Beta site');
+      assert.equal(await pg.locator('.card .t', { hasText: 'Beta task' }).count(), 1);
+      assert.equal(await pg.locator('.card .t', { hasText: 'Rain other' }).count(), 1, 'the other selected company stays whole');
+      assert.deepEqual(errs, []); await pg.close();
+    }
     console.log('crm-drawers: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
