@@ -319,7 +319,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 96  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 98  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3944,7 +3944,7 @@ def strip_image_metadata(blob, ext):
     """The image without its metadata (EXIF: GPS position, device, owner; text chunks; XMP), so a photo or screenshot
     never commits that to the board repo (AGENTS rule 7). Pixels are untouched; a photo's EXIF Orientation is kept (alone),
     so it still shows the right way up. Raises ValueError on a broken file."""
-    if ext == "jpg":   # keep every segment but APP1 (EXIF/XMP), APP13 (IPTC) and COM; the scan data from SOS to the end of the image
+    if ext == "jpg":   # filter metadata between every scan as well as before the first scan
         out, i, turn = bytearray(blob[:2]), 2, 1
         while i + 4 <= len(blob):
             if blob[i] != 0xFF:
@@ -3952,11 +3952,8 @@ def strip_image_metadata(blob, ext):
             while i + 2 < len(blob) and blob[i + 1] == 0xFF:   # fill bytes before a marker
                 i += 1
             marker = blob[i + 1]
-            if marker == 0xDA:   # start of scan: image data to the end of the image; anything after it (a second image, a vendor trailer) is dropped
-                end = blob.find(b"\xff\xd9", i)
-                if end < 0:
-                    raise ValueError("broken JPEG")
-                out += blob[i:end + 2]; return bytes(out)
+            if marker == 0xD9:
+                return bytes(out + b"\xff\xd9")
             if 0xD0 <= marker <= 0xD9 or marker == 0x01:
                 out += blob[i:i + 2]; i += 2; continue
             n = int.from_bytes(blob[i + 2:i + 4], "big")
@@ -3970,6 +3967,24 @@ def strip_image_metadata(blob, ext):
             elif marker not in (0xE1, 0xED, 0xFE):
                 out += blob[i:i + 2 + n]
             i += 2 + n
+            if marker == 0xDA:   # copy entropy bytes, including stuffing and restart markers, until a real marker
+                start = i
+                while i < len(blob):
+                    if blob[i] != 0xFF:
+                        i += 1
+                        continue
+                    j = i + 1
+                    while j < len(blob) and blob[j] == 0xFF:
+                        j += 1
+                    if j >= len(blob):
+                        raise ValueError("broken JPEG")
+                    if blob[j] == 0 or 0xD0 <= blob[j] <= 0xD7:
+                        i = j + 1
+                        continue
+                    break
+                out += blob[start:i]
+        if blob[i:i + 2] == b"\xff\xd9":
+            return bytes(out + b"\xff\xd9")
         raise ValueError("broken JPEG")
     if ext == "png":   # drop eXIf and the text chunks (tEXt, zTXt, iTXt)
         out, i = bytearray(blob[:8]), 8
@@ -3990,9 +4005,12 @@ def strip_image_metadata(blob, ext):
         raise ValueError("broken PNG")
     if ext == "webp":   # drop the EXIF and XMP chunks and clear their flags in VP8X
         out, i, vp8x = bytearray(), 12, None
-        while i + 8 <= len(blob):
+        end = int.from_bytes(blob[4:8], "little") + 8
+        if end < 12 or end > len(blob):
+            raise ValueError("broken WebP")
+        while i + 8 <= end:
             kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
-            if i + 8 + n > len(blob):
+            if i + size > end:
                 raise ValueError("broken WebP")
             chunk = bytearray(blob[i:i + size])
             if kind == b"VP8X" and len(chunk) > 8:
@@ -4009,6 +4027,8 @@ def strip_image_metadata(blob, ext):
             elif kind != b"XMP ":
                 out += chunk
             i += size
+        if i != end:
+            raise ValueError("broken WebP")
         return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + bytes(out)
     if ext == "gif":   # drop comment extensions and the XMP application extension; frames kept as they are
         if len(blob) < 13:

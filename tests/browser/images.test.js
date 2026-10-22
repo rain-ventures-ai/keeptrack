@@ -73,6 +73,7 @@ function png(w = 40, h = 30) {
 }
 
 (async () => {
+  await require('./image-review.test.js')();
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
@@ -84,6 +85,8 @@ function png(w = 40, h = 30) {
     page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { native.push(d.message()); d.dismiss().catch(() => {}); });
     await page.route('https://evil.test/**', r => { outside.push(r.request().url()); r.fulfill({ status: 404, body: '' }); });
     await page.addInitScript(INIT);
+    await page.addInitScript(() => { const original = window.createImageBitmap; window.imageDecodeOptions = [];
+      window.createImageBitmap = (...args) => { window.imageDecodeOptions.push(args[1]); return original(...args); }; });
     await page.route('https://api.test/**', r => {
       const req = r.request(), u = new URL(req.url()), p = u.pathname.replace('/repos/acme/board', '');
       const m = /^\/contents\/board\/(assets\/.+)$/.exec(decodeURIComponent(p));
@@ -108,6 +111,7 @@ function png(w = 40, h = 30) {
     await page.locator('#cmText').click(); await page.locator('#cmImage').waitFor();
     await page.locator('#cmImage input[type=file]').setInputFiles({ name: 'Login page.png', mimeType: 'image/png', buffer: png(60, 40) });
     await page.waitForFunction(() => /!\[Login page\]\(assets\/t_one\/\d{8}-[0-9a-f]{12}\.png\)/.test(document.getElementById('cmText').value));
+    assert.ok(assets[puts[0].path].length <= png(60, 40).length, 'upload keeps the smaller stripped original');
     assert.equal(puts.length, 1); assert.match(puts[0].path, /^assets\/t_one\/\d{8}-[0-9a-f]{12}\.png$/); assert.equal(puts[0].message, 'Image: #1'); assert.equal(puts[0].branch, 'main');
     assert.deepEqual([...assets[puts[0].path].subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'the bytes are written as they are');
     await page.locator('#cmText').press('End'); await page.locator('#cmText').type(' Here it is');
@@ -145,6 +149,16 @@ function png(w = 40, h = 30) {
     await page.locator('#descImage input[type=file]').setInputFiles({ name: 'IMG_1234.gif', mimeType: 'image/gif', buffer: tagged });
     await page.waitForFunction(() => /!\[IMG_1234\]\(assets\/t_one\/\d{8}-[0-9a-f]{12}\.jpg\)/.test(document.getElementById('cDetails').value));
     { const up2 = assets[puts[3].path]; assert.equal(up2.includes('OWNER-SECRET'), false, 'mislabelled photo: the EXIF is gone too'); }
+    // A phone photo with orientation 6 must display upright whether the smaller output is the
+    // compressed original with minimal Orientation or the browser's already-oriented canvas export.
+    const turn = Buffer.from([77,77,0,42,0,0,0,8,0,1,1,18,0,3,0,0,0,1,0,6,0,0,0,0,0,0]);
+    const rotated = Buffer.concat([jpeg.subarray(0, 2), Buffer.from([255,225,0,turn.length + 8,69,120,105,102,0,0]), turn, jpeg.subarray(2)]);
+    await page.locator('#descImage input[type=file]').setInputFiles({ name: 'rotated.jpg', mimeType: 'image/jpeg', buffer: rotated });
+    await page.waitForFunction(() => document.getElementById('cDetails').value.includes('![rotated]'));
+    const size = await page.evaluate(async b64 => { const b = Uint8Array.from(atob(b64), c => c.charCodeAt(0)); const url = URL.createObjectURL(new Blob([b], { type: 'image/jpeg' }));
+      const im = new Image(); im.src = url; await im.decode(); const size = [im.naturalWidth, im.naturalHeight]; URL.revokeObjectURL(url); return size; }, assets[puts[4].path].toString('base64'));
+    assert.deepEqual(size, [20, 30], 'rotated photo stays upright after upload');
+    assert.ok((await page.evaluate(() => window.imageDecodeOptions)).every(o => o && o.imageOrientation === 'from-image'), 'canvas decodes explicitly apply EXIF orientation');
     await shot(page, 'images-editing-1280');
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(native, [], 'no native dialogs');
 

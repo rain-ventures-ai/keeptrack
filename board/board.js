@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 96;
+  const PAGE_KIT = 98;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -401,21 +401,26 @@ if (typeof window !== 'undefined') (() => {
   const imgCache = new Map(), IMG_KEEP = 120, IMG_RETRY_MS = 30000;   // assets/... -> { p: Promise of an object URL ('' failed), at, final }
   function cacheImage(rel, entry) {
     imgCache.delete(rel); imgCache.set(rel, entry);
-    while (imgCache.size > IMG_KEEP) {   // the oldest goes; its URL is let go only when no image on the page still shows it
-      const [old, e] = imgCache.entries().next().value; imgCache.delete(old);
-      e.p.then(u => { if (u && ![...document.querySelectorAll('img.mdimg, a.mdimglink')].some(x => x.src === u || x.href === u)) URL.revokeObjectURL(u); });   // nor a full-size link
+    if (imgCache.size > IMG_KEEP) for (const [old, e] of imgCache) {
+      if (imgCache.size <= IMG_KEEP) break;
+      if (!e.settled || (e.url && [...document.querySelectorAll('img.mdimg, a.mdimglink')].some(x => x.src === e.url || x.href === e.url))) continue;
+      imgCache.delete(old); if (e.url) URL.revokeObjectURL(e.url);
     }
   }
   function assetBlobUrl(rel) {
     const hit = imgCache.get(rel);
-    if (hit && !(hit.failed && !hit.final && Date.now() - hit.at > IMG_RETRY_MS)) { cacheImage(rel, hit); return hit.p; }   // a lasting failure (too big, not that type, refused) stays; a missing file or a network error is tried again after 30 s
-    const entry = { at: Date.now(), failed: false, final: false };
+    if (hit && !(hit.failed && !hit.final && Date.now() - hit.at > hit.retryMs)) { cacheImage(rel, hit); return hit.p; }
+    const entry = { at: Date.now(), failed: false, final: false, attempts: (hit && hit.attempts || 0) + 1, retryMs: IMG_RETRY_MS };
     entry.p = (async () => {
-      const fail = final => { entry.failed = true; entry.final = final; entry.at = Date.now(); return ''; };
-      try { const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' }); if (!r.ok) return fail(r.status !== 404);
+      const fail = final => { entry.failed = true; entry.final = final; entry.at = Date.now(); entry.settled = true;
+        entry.retryMs = Math.min(30 * 60 * 1000, IMG_RETRY_MS * 2 ** Math.min(entry.attempts - 1, 6)); return ''; };
+      try { const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' });
+        if (!r.ok) { const limited = r.status === 403 && (r.headers.get('retry-after') || r.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(await r.text()));
+          return fail(!(r.status === 404 || r.status === 429 || r.status >= 500 || limited)); }
         const bytes = new Uint8Array(await r.arrayBuffer()), type = IMG_TYPES[rel.split('.').pop().toLowerCase()];
-        if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return fail(true);   // what the file is, not what it is called
-        return URL.createObjectURL(new Blob([bytes], { type })); } catch { return fail(false); } })();
+        if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return fail(true);
+        entry.url = URL.createObjectURL(new Blob([bytes], { type })); entry.settled = true; return entry.url;
+      } catch { return fail(false); } })();
     cacheImage(rel, entry); return entry.p;
   }
   function imgKind(b) {   // the image type from its first bytes; '' for anything else (an SVG or HTML never passes)
@@ -2637,11 +2642,58 @@ if (typeof window !== 'undefined') (() => {
   const imgUploadBlock = () => ro ? 'This board is read-only here.' : HOSTED ? 'Images are not available on hosted boards yet.' : DEMO ? 'Images cannot be added to the demo board.' : !cfg().token ? 'Connect the board with a token to add images.' : '';
   async function redrawImage(file) {   // drawn again: no EXIF (GPS, device), no text chunks; longest side at most 2000px;
     // same type where the browser can write it, JPEG when the result is still over 2 MB
-    try { const bmp = await createImageBitmap(file), k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height)), cv = document.createElement('canvas');
+    try { const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }), k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height)), cv = document.createElement('canvas');
       cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k)); cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
       const as = (type, q) => new Promise(res => cv.toBlob(res, type, q));
       let out = await as(file.type, 0.9); if (!out || out.size > IMG_MAX) out = await as('image/jpeg', 0.85);
-      return out; } catch { return null; }
+      bmp.close(); return out; } catch { return null; }
+  }
+  // Preserve compressed pixels (and animation) when they are smaller than a canvas export. Only the
+  // orientation tag survives EXIF; byte-level stripping also avoids a lossy JPEG re-encode.
+  async function strippedImage(file) {
+    const b = new Uint8Array(await file.arrayBuffer()), v = new DataView(b.buffer), parts = [], type = file.type;
+    const word = (i, n) => String.fromCharCode(...b.subarray(i, i + n));
+    const orientation = t => { try { const d = new DataView(t.buffer, t.byteOffset, t.byteLength), le = wordAt(t, 0, 2) === 'II';
+      if (!le && wordAt(t, 0, 2) !== 'MM') return 1; const start = d.getUint32(4, le), count = d.getUint16(start, le);
+      for (let k = 0; k < count; k++) { const e = start + 2 + 12 * k; if (d.getUint16(e, le) === 0x112 && d.getUint16(e + 2, le) === 3) { const n = d.getUint16(e + 8, le); return n >= 1 && n <= 8 ? n : 1; } }
+    } catch {} return 1; };
+    const wordAt = (a, i, n) => String.fromCharCode(...a.subarray(i, i + n));
+    const tiff = n => new Uint8Array([77,77,0,42,0,0,0,8,0,1,1,18,0,3,0,0,0,1,0,n,0,0,0,0,0,0]);
+    const chunk = (name, data, little = false) => { const out = new Uint8Array(8 + data.length + (little ? data.length % 2 : 4)), d = new DataView(out.buffer);
+      out.set([...name].map(c => c.charCodeAt(0)), little ? 0 : 4); d.setUint32(little ? 4 : 0, data.length, little); out.set(data, 8);
+      if (!little) { let crc = 0xffffffff; for (const x of out.subarray(4, 8 + data.length)) { crc ^= x; for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1; } d.setUint32(8 + data.length, (crc ^ 0xffffffff) >>> 0); } return out; };
+    try {
+      if (type === 'image/gif') return await gifWithoutMetadata(file);
+      if (type === 'image/png') {
+        parts.push(b.subarray(0, 8)); let i = 8;
+        while (i + 12 <= b.length) { const n = v.getUint32(i), end = i + 12 + n, name = word(i + 4, 4); if (end > b.length) return null;
+          if (name === 'eXIf') { const turn = orientation(b.subarray(i + 8, end - 4)); if (turn !== 1) parts.push(chunk('eXIf', tiff(turn))); }
+          else if (!['tEXt', 'zTXt', 'iTXt'].includes(name)) parts.push(b.subarray(i, end));
+          i = end; if (name === 'IEND') return new Blob(parts, { type });
+        }
+      } else if (type === 'image/webp') {
+        const end = v.getUint32(4, true) + 8; if (end < 12 || end > b.length) return null; let i = 12, flags;
+        while (i + 8 <= end) { const n = v.getUint32(i + 4, true), next = i + 8 + n + n % 2, name = word(i, 4); if (next > end) return null;
+          if (name === 'EXIF') { let t = b.subarray(i + 8, i + 8 + n); if (wordAt(t, 0, 6) === 'Exif\0\0') t = t.subarray(6); const turn = orientation(t);
+            if (turn !== 1) { parts.push(chunk('EXIF', tiff(turn), true)); if (flags) flags[8] |= 8; } }
+          else if (name !== 'XMP ') { const c = b.slice(i, next); if (name === 'VP8X') { c[8] &= ~12; flags = c; } parts.push(c); } i = next;
+        }
+        if (i !== end) return null; const h = b.slice(0, 12); new DataView(h.buffer).setUint32(4, parts.reduce((n, p) => n + p.length, 4), true); return new Blob([h, ...parts], { type });
+      } else if (type === 'image/jpeg') {
+        parts.push(b.subarray(0, 2)); let i = 2, turned = false;
+        while (i + 1 < b.length) { if (b[i] !== 255) return null; while (b[i + 1] === 255) i++; const marker = b[i + 1];
+          if (marker === 217) { parts.push(b.subarray(i, i + 2)); return new Blob(parts, { type }); }
+          if (marker === 1 || (marker >= 208 && marker <= 215)) { parts.push(b.subarray(i, i + 2)); i += 2; continue; }
+          const n = v.getUint16(i + 2), end = i + 2 + n; if (n < 2 || end > b.length) return null;
+          if (marker === 225 && word(i + 4, 6) === 'Exif\0\0' && !turned) { const turn = orientation(b.subarray(i + 10, end));
+            if (turn !== 1) { const t = tiff(turn); parts.splice(1, 0, new Uint8Array([255,225,0,t.length + 8,69,120,105,102,0,0]), t); turned = true; } }
+          else if (![225,237,254].includes(marker)) parts.push(b.subarray(i, end)); i = end;
+          if (marker === 218) { const start = i; while (i < b.length) { if (b[i] !== 255) { i++; continue; } let j = i + 1; while (b[j] === 255) j++;
+              if (b[j] === 0 || (b[j] >= 208 && b[j] <= 215)) { i = j + 1; continue; } break; } parts.push(b.subarray(start, i)); }
+        }
+      }
+    } catch {}
+    return null;
   }
   async function gifWithoutMetadata(file) {   // a GIF's comment and XMP extensions removed (as keeptrack.py attach does); null if it is broken
     const g = new Uint8Array(await file.arrayBuffer()), out = [];
@@ -2664,8 +2716,12 @@ if (typeof window !== 'undefined') (() => {
     if (!safeCardId(cardId)) return '';
     if (!Object.values(IMG_TYPES).includes(file.type)) { toast('Only PNG, JPEG, GIF or WebP images can be added.', true); return ''; }
     const k0 = imgKind(new Uint8Array(await file.slice(0, 16).arrayBuffer())); if (!k0) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
-    let blob = file; if (k0 !== 'image/gif') blob = await redrawImage(new File([file], file.name, { type: k0 }));   // what the bytes are, not the file's label; a GIF keeps its frames
-    else blob = await gifWithoutMetadata(file);
+    const typed = new File([file], file.name, { type: k0 }), stripped = await strippedImage(typed);
+    // Animation stays byte-for-byte; scaling is only needed to fit the upload limit for still images.
+    const animated = stripped && ((k0 === 'image/webp' && new Uint8Array(await stripped.slice(12, 21).arrayBuffer())[8] & 2)
+      || (k0 === 'image/png' && new TextDecoder('latin1').decode(await stripped.arrayBuffer()).includes('acTL')));
+    let blob = stripped;
+    if (k0 !== 'image/gif' && !animated) { const drawn = await redrawImage(typed); if (!drawn) blob = null; else if (!blob || drawn.size < blob.size) blob = drawn; }
     if (!blob) { toast('That image could not be read. Try saving it again as PNG or JPEG.', true); return ''; }
     if (blob.size > IMG_MAX) { toast('That image is over 2 MB. Make it smaller, or put it in Drive and link it.', true); return ''; }
     const bytes = new Uint8Array(await blob.arrayBuffer()), kind = imgKind(bytes); if (!kind) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }

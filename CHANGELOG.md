@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v98: image review follow-ups ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). Progressive JPEG metadata is removed between scans without mistaking table bytes for the end of the image. WebP trailers outside the declared RIFF length are discarded. Browser uploads preserve GIF, APNG and animated WebP frames, retain only EXIF Orientation, and use the smaller of stripped original bytes and an oriented canvas export for still images. Image reads retry server and rate-limit failures with bounded exponential backoff; cached URLs stay owned while displayed and are revoked after eviction. No migration. Version 97 is reserved for concurrent List-view work.
+
 Kit v96: an Archive view to browse archived cards and people (private-tasks card #283). Before, the archive could only be
 reached by ticking Include archive in Search, so you had to know what to look for. Web board: **Archive** is a new tab
 after Activity in the Tasks views. It lists the archived cards by archive year, newest year first (the year of the

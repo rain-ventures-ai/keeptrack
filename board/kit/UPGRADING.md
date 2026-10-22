@@ -25,6 +25,15 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v98 (schema 4)
+Image parsing, uploads and cache fixes ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). No migration: `kit-update` copies the files.
+- Progressive JPEG metadata is removed between every scan; JPEG tables containing EOI-like bytes stay intact.
+- WebP reads stop at the RIFF boundary, discard trailers and reject incomplete chunks.
+- Browser uploads strip metadata without flattening APNG or animated WebP; GIF frames remain intact too. Still images use whichever is smaller: stripped compressed pixels or an oriented canvas export. Orientation is the only EXIF tag retained.
+- Temporary server/rate-limit image failures retry with backoff capped at 30 minutes. On-screen cache URLs are retained until they can be safely evicted.
+- Check: upload an EXIF-rotated photo, a progressive JPEG and animated PNG/WebP; verify orientation and animation, then simulate a temporary image-read failure and retry.
+- Version 97 is reserved for concurrent List-view work.
+
 ### v96 (schema 4)
 An Archive view to browse archived cards and people (private-tasks card #283). Web board only. No data change and no migration:
 it reads the archive files that `keeptrack.py archive` and the web board already write (`archive/<year>.json`).
