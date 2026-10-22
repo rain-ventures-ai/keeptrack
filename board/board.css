@@ -234,7 +234,7 @@ button.cmchip.has { color: var(--accent); background: var(--accent-soft); font-w
 #viewSw .ui-tab.viewprimary { font-weight: 600; }
 #viewSw .ui-tab.viewprimary .ui-tab__label { display: inline; }
 body:not([data-view="board"]) #tabs { display: none !important; }
-#board.v-list, #board.v-cal, #board.v-sched, #board.v-activity, #board.v-mentions { display: block; overflow-y: auto; padding: var(--sp-6) 18px 60px; }
+#board.v-list, #board.v-cal, #board.v-sched, #board.v-activity, #board.v-mentions, #board.v-archive { display: block; overflow-y: auto; padding: var(--sp-6) 18px 60px; }
 
 /* ---- list view ----------------------------------------------------------- */
 .lsec { max-width: 900px; margin: 0 auto 18px; }
@@ -272,7 +272,7 @@ body:not([data-view="board"]) #tabs { display: none !important; }
 .calundated { margin-top: 18px; } .calundated summary { cursor: pointer; font-weight: 600; color: var(--muted); padding: var(--sp-2) 0; }
 @media (max-width: 760px) {
   #viewSw .ui-tab .ui-i { font-size: var(--fs-lg); }
-  #board.v-list, #board.v-cal, #board.v-sched, #board.v-activity, #board.v-mentions { padding: var(--sp-3) var(--sp-5) 90px; }
+  #board.v-list, #board.v-cal, #board.v-sched, #board.v-activity, #board.v-mentions, #board.v-archive { padding: var(--sp-3) var(--sp-5) 90px; }
   .circ { width: 26px; height: 26px; } .lt { font-size: 15px; }
   .calcell { min-height: 54px; padding: 3px; align-items: center; } .pills { display: none; } .dots { display: flex; justify-content: center; }
   .calwd { font-size: 10px; } .caltitle { font-size: var(--fs-lg); }
@@ -1094,7 +1094,23 @@ dialog.qsearch[open] { display: flex; }
 .qhit { display: grid; grid-template-columns: 22px 1fr auto; gap: 2px var(--sp-3); text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--r-md); padding: 7px 9px; }
 .qhit:hover, .qhit:focus, .qhit.first { background: var(--panel); border-color: var(--border); }
 .qhit .qic { grid-row: span 2; } .qhit .qt { font-weight: 600; } .qhit .qsub { grid-column: 2 / -1; font-size: var(--fs-sm); color: var(--muted); }
-.qarch { font-size: var(--fs-xs); padding: 1px 7px; border-radius: var(--r-pill); background: var(--panel); color: var(--muted); border: 1px dashed var(--border); white-space: nowrap; }
+.qarch { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); font-weight: 600; padding: 1px 7px; border-radius: var(--r-pill); background: var(--panel); color: var(--muted); border: 1px dashed var(--border); white-space: nowrap; }
+.qarch svg, .archpill svg { width: 12px; height: 12px; flex: 0 0 auto; }
+/* ---- Archive view (Tasks → Archive) and People → Archived ---- */
+.archv { max-width: 980px; margin: 0 auto; }
+.archbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-3); } .archbar .archq { flex: 1 1 240px; }
+.archcount { font-size: var(--fs-sm); margin: 0 0 var(--sp-3); }
+.archlist { display: grid; gap: var(--sp-2); }
+.archrow .ui-task__meta { flex-wrap: wrap; }
+.archpill { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; border-style: dashed; }
+.prow.parch .plast.archpill { font-size: var(--fs-xs); font-weight: 600; padding: 1px 7px; border-radius: var(--r-pill); background: var(--panel); border: 1px dashed var(--border); }
+.archmore { margin: var(--sp-4) auto 0; display: flex; }
+.archload > .ui-i { animation: ui-spin 1s linear infinite; }   /* ui.css keyframes */
+@media (prefers-reduced-motion: reduce) { .archload > .ui-i { animation: none; } }
+@media (max-width: 760px) {
+  .archbar .archq { flex-basis: 100%; } .archbar .archsel { flex: 1 1 calc(50% - var(--sp-3)); min-width: 0; } .archbar .archsel select { width: 100%; }
+  .prow.parch .plast { display: inline-flex; justify-self: start; }
+}
 
 #btnSearch { flex: 0 0 auto; }
 @media (max-width: 1400px) { #btnFilter .tx { display: none; } }

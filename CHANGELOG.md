@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v96: an Archive view to browse archived cards and people (private-tasks card #283). Before, the archive could only be
+reached by ticking Include archive in Search, so you had to know what to look for. Web board: **Archive** is a new tab
+after Activity in the Tasks views. It lists the archived cards by archive year, newest year first (the year of the
+archive file: when a card was archived, or for the bulk clean-up the year it last changed), with search (title, details,
+checklist, comments, labels, #number), filters for project, label, year and Done or cancelled (not Done), the client
+filter at the top, a count and **Load more** after 50. The archive files load when the view opens, with a loading and
+an error state (Try again). A tap opens the existing read-only archived card with **Put back on the board**, which a
+read-only board hides. People: the stage filter has a last option, **Archived**, that lists the people the archive
+moved out (Lost people) the same way. Search: **Include archive** is remembered in this browser, and archived results
+carry an "Archived <year>" pill with that archive file year. No data change and no migration; keeptrack.py changes only its version.
+
 Kit v95: images on cards, the review fixes for v92 (private-tasks card #292). Uploaded images lose their metadata
 (EXIF: GPS position, device, owner; text chunks; XMP; GIF comments; data after a JPEG's end): the page draws every image
 again before upload (chosen by its bytes, not its name) and `keeptrack.py attach` strips those segments, keeping only a
@@ -82,7 +93,7 @@ margin (the real archive was 578 KB), not a GitHub limit, and the 5 MB board tot
 longer tells people to archive when the archive is most of the total. `doctor`'s size checks run on split boards only. No
 migration and no data change. Splitting a year into parts, and loading archives lazily, are follow-ups.
 
-Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #281; v85 is the Archive view, card
+Kit v86: Companies follow-up, the review fixes for kit v84 (private-tasks card #281; v96 is the Archive view, card
 #283). A client with no people, no company record (stage, owner, domain, notes or north star), no files and no
 projects, such as a "General" bucket for tasks, is left out of Companies and the company pipeline; it stays a client
 for tasks and the client pills. The company record's menu reads "Show only this company" and "Copy company name".

@@ -62,7 +62,7 @@ A draft is a message that you have not sent yet. It does **not** count as contac
 **🤖 Copy for AI** at the top of a card (also in its **⋯** menu) copies the person, their stage, their next step and their recent contact log. Paste it into Claude, ChatGPT or another assistant and ask for a message. See [AI assistants](ai-assistants.md).
 
 ## Search
-**People** lists everyone. Search by name, company, notes or next step, or select a stage.
+**People** lists everyone. Search by name, company, notes or next step, or select a stage. The last choice, **Archived**, lists the people the archive moved out (people at the stage Lost); open one to read it or put it back on the board. See [Search and archive](search-and-archive.md).
 
 ## Delete a person
 Open the **⋯** (More actions) menu at the top of the card, select **Delete person** and confirm the warning. Use the **Undo** button, **Ctrl+Z** on Windows/Linux, or **⌘Z** on a Mac if you change your mind during the same board session. See [Privacy and security](privacy-and-security.md) for what stays in the repo history.
