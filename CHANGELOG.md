@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v90: a folder's own token setting wins (private-tasks card #286; v88 and v89 are held by open kit pull requests).
+When `.keeptrack/config.json` names `token_env` and that variable is set, `keeptrack.py` uses its value even when
+`BOARD_TOKEN` is already set in the shell, and warns on stderr when it replaces a different value. `where` names the
+variable the token came from and which board won. In a board clone, a `BOARD_REPO` inherited from the shell that names
+another board than the clone's git remote now prints a warning (it still decides). No migration and no data change.
+
 Kit v87: an archive file has its own size limit (private-tasks card #284). `doctor` failed with `FILE_SIZE` as soon as
 `archive/<year>.json` passed 200 KB, and relay's `ci_checks.py` (which runs doctor) failed on every PR. An
 archive year file now has its own limit: `doctor` warns (`ARCHIVE_SIZE`) from 700 KB and fails (`FILE_SIZE`) above

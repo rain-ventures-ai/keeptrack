@@ -25,6 +25,20 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v90 (schema 4)
+A folder's own token setting wins over a `BOARD_TOKEN` from the shell (private-tasks card #286). No migration, no data
+change; `kit-update` copies the files. (v88 and v89 are taken by open kit pull requests; this release is numbered after them.)
+- When `.keeptrack/config.json` names `token_env` and that variable is set, its value is the board token, even when
+  `BOARD_TOKEN` is already set in the shell. Before v90 an inherited `BOARD_TOKEN` won, so a shell set up for one board
+  sent another board's commands with the wrong token. When it replaces a different value, commands print a warning on
+  stderr (hooks stay silent). If `token_env` is named but its variable is not set, the shell's `BOARD_TOKEN` is still used.
+- `keeptrack.py where` names the variable the token came from (`token from $VAR`, and whether it replaced the shell's
+  `BOARD_TOKEN`), and says when a `BOARD_REPO` from the shell won over the board clone the folder is in.
+- In a board clone, a command warns on stderr when an inherited `BOARD_REPO` names another board than the clone's git
+  remote. `BOARD_REPO` still decides (relay workers set it on purpose); unset it to use the clone's board.
+- Check after the upgrade: in a folder with a `token_env` config, run `BOARD_TOKEN=x python3 board/keeptrack.py where`;
+  the `auth:` line names the config's variable and says it replaced the shell's token.
+
 ### v87 (schema 4)
 Archive files get their own size limit (private-tasks card #284). No migration, no data change.
 - `doctor` no longer fails an `archive/<year>.json` between 200 KB and 900 KB. It warns (`ARCHIVE_SIZE`) from 700 KB and
