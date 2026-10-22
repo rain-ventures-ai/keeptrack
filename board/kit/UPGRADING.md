@@ -25,6 +25,24 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v87 (schema 4)
+Archive files get their own size limit (private-tasks card #284). No migration, no data change.
+- `doctor` no longer fails an `archive/<year>.json` between 200 KB and 900 KB. It warns (`ARCHIVE_SIZE`) from 700 KB and
+  fails (`FILE_SIZE`) above 900 KB. Only `doctor` is split-only; see the archive rule below.
+- `keeptrack.py archive` and the web board's Archive (including the Done-lane button) check each year file they are about
+  to write, on every layout (a one-file board is protected too, for a later migration to split). A year that would pass
+  900 KB is held back: its items stay on the board, every other year is archived, and the message names what stayed and
+  the next step (tell the board owner; splitting a year is a follow-up card). Past 700 KB the archive is written and the
+  warning is printed (stderr) or toasted. `archive` exits 1 when no archive year was written (everything was held back; a run that
+  only saved proposal slimming says so and still exits 1); `--dry-run` reports the same. A label, client or stage rename
+  that would push an archive year over 900 KB is refused and writes nothing. History lines of a held year stay on their items.
+  Cards, people, projects, `tasks.json` and any other file in `archive/` keep the 200 KB limit. The 5 MB board total still counts the archive.
+- Archive files are not lazy: they load with the board (cached by blob sha, downloaded again after each archive change).
+  900 KB is a chosen margin, not a GitHub limit.
+- `doctor`'s size checks run on split boards only (a one-file board has the 600 KB `BOARD_SIZE` check instead).
+- `atomic_write` opens files with `newline=""`, so a file written on Windows keeps the bytes that were measured.
+- Run `kit-update` only. Check: `python3 board/keeptrack.py doctor` shows no `FILE_SIZE` error for the archive.
+
 ### v86 (schema 4)
 Companies follow-up: the review fixes for v84 (card #281 on the owner's board). No migration and no data change. v85
 is the Archive view (card #283); the two can land in either order.

@@ -289,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 86  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 87  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -327,7 +327,7 @@ def atomic_write(path, text):
     """Write text to path without ever leaving a half-written file: a unique temp file in the same folder, flushed to disk, then renamed over it."""
     fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".part", dir=os.path.dirname(os.path.abspath(path)))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:   # newline="": no \n -> \r\n on Windows, so the size on disk is the size measured
             f.write(text); f.flush(); os.fsync(f.fileno())
         try:
             os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))   # keep the existing file's permissions
@@ -1758,7 +1758,14 @@ def rewrite_archives(data, edit):
         cur, _ = read_archive(y, _MUT["base"])
         k = edit(cur) if cur else 0
         if k:
-            _MUT["extra"][f"archive/{y}.json"] = _json_text(cur); n += k
+            text = _json_text(cur)
+            found = archive_size_issue(f"archive/{y}.json", len(text.encode()))
+            if found and found[0] == "FILE_SIZE":
+                sys.exit(f"not saved: archive/{y}.json would be {len(text.encode()) // 1024} KB, over its {ARCHIVE_FILE_MAX // 1024} KB limit, "
+                         "so this change to the archive is refused and nothing was written. " + ARCHIVE_NEXT_STEP)
+            if found:
+                print(f"warning: archive/{y}.json: {found[1]}", file=sys.stderr)
+            _MUT["extra"][f"archive/{y}.json"] = text; n += k
     return n
 
 
@@ -4417,6 +4424,28 @@ def _doctor_snapshot():
                    "base_tree": head.get("base_tree") if isinstance(head, dict) else None, "files": files}
 
 
+LIVE_FILE_MAX = 200 * 1024      # a card, person, project or other board file: 200 KB
+# archive/<year>.json is a different kind of file. It is loaded with the board like every other file (cached by blob sha,
+# downloaded again after each archive change), so its size counts toward load cost; the 5 MB board total still caps that.
+# 900 KB is a chosen margin, not a GitHub limit: the real archive was 578 KB when this was set, and a year file is rewritten
+# whole by every archive run. The warning leaves time to act before the error.
+ARCHIVE_FILE_MAX = 900 * 1024
+ARCHIVE_FILE_WARN = 700 * 1024
+ARCHIVE_FILE_RE = re.compile(r"archive/[0-9]{4}\.json")   # the shape check_year allows; any other file in archive/ keeps 200 KB
+ARCHIVE_NEXT_STEP = ("Tell the board owner: splitting an archive year into parts is planned as a follow-up card. "
+                     "Until then do not edit the file by hand.")
+
+
+def archive_size_issue(rel, size):
+    """(code, message) when an archive/<year>.json is at or over a limit, else None."""
+    if size > ARCHIVE_FILE_MAX:
+        return "FILE_SIZE", f"This archive file is {size // 1024} KB, over its {ARCHIVE_FILE_MAX // 1024} KB limit. " + ARCHIVE_NEXT_STEP
+    if size > ARCHIVE_FILE_WARN:
+        return "ARCHIVE_SIZE", (f"This archive file is {size // 1024} KB; doctor fails above {ARCHIVE_FILE_MAX // 1024} KB. "
+                                + ARCHIVE_NEXT_STEP)
+    return None
+
+
 def doctor_board(fix=False):
     """Return (issues, fixes, exit code). Each issue is safe to print or serialize."""
     try:
@@ -4695,7 +4724,12 @@ def doctor_board(fix=False):
         if total > 5 * 1024 * 1024:
             problem("BOARD_SIZE", "board", "The board files total more than 5 MB.")
         for rel, entry in state["files"].items():
-            if entry.get("size", len(entry["text"].encode())) > 200 * 1024:
+            size = entry.get("size", len(entry["text"].encode()))
+            if ARCHIVE_FILE_RE.fullmatch(rel):   # a year file has its own, higher limit (see ARCHIVE_FILE_MAX)
+                found = archive_size_issue(rel, size)
+                if found:
+                    problem(found[0], rel, found[1])
+            elif size > LIVE_FILE_MAX:
                 problem("FILE_SIZE", rel, "This board file is larger than 200 KB.")
 
     typo_kit = 0   # min_kit above even the published kit is a typo: --fix lowers it to the published kit (this one at most)
@@ -5272,7 +5306,7 @@ CHANNELS = ["linkedin", "email", "call", "meeting", "note"]
 PROJECT_STATUSES = ["active", "done", "paused"]
 DOCTOR_WARNINGS = frozenset({"MEMBER_NO_PERSON", "MEMBER_PERSON_DUP", "PROJECT", "SETTINGS",
                              "KIT_OLD", "MIN_KIT_LOWERED", "CLAIM_BLOCKED", "AGENT_CLEARED", "WAITING", "RELATED",
-                             "AFTER_MISSING", "GOAL", "GOAL_MISSING", "CLIENT_RECORD"})   # v43: detect, never stop the board; a missing after card is tolerated
+                             "AFTER_MISSING", "GOAL", "GOAL_MISSING", "CLIENT_RECORD", "ARCHIVE_SIZE"})   # v43: detect, never stop the board; a missing after card is tolerated
 
 
 def person_for_github(data, github):
@@ -9012,6 +9046,57 @@ def write_archive(year, cur, sha, message):
     sys.exit(f"write failed ({archive_path(year)}): {err.strip()} {out.strip()[:200]}")
 
 
+def archive_check_sizes(data, plan, base, ref_orig=None):
+    """Build the text of every planned year file (read, merge, and for one card its history moved onto the card), and hold
+    back each year that would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and the year leaves the plan; the
+    other years are archived as planned. Returns (held, warnings, files): text lines, and {year: (archive data, sha)} for
+    the years to write, so the size checked is the text written. History lines of a held year go back to their items (on the
+    board, or in another planned year, which is then measured again)."""
+    held = []
+    while True:
+        warnings, files, again = [], {}, False
+        for y in sorted(plan):
+            part, rel = plan[y], f"archive/{y}.json"
+            cur, sha = read_archive(y, base)
+            cur = archive_merge(cur, part, y)
+            if ref_orig is not None:   # one card: the archive's lines for it move onto the card copy, as the write does
+                task = part["tasks"][0]
+                extra_history = cur.get("history", {}).pop(task["id"], [])
+                task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
+            size = len(_json_text(cur).encode())
+            found = archive_size_issue(rel, size)
+            if not found:
+                files[y] = (cur, sha); continue
+            if found[0] == "ARCHIVE_SIZE":
+                warnings.append(f"warning: {rel}: {found[1]}"); files[y] = (cur, sha); continue
+            names = [f"#{t.get('num')} {clean(t.get('title', ''), 80)}".strip() for t in part["tasks"]] \
+                + [clean(c.get("name") or c["id"], 80) for c in part["contacts"]] + [f"proposal {clean(x['id'], 80)}" for x in part.get("proposals", [])]
+            for t in part["tasks"]:
+                data["tasks"].append(ref_orig if ref_orig is not None and ref_orig.get("id") == t["id"] else t)
+            data["contacts"].extend(part["contacts"])
+            if part.get("proposals"):
+                data.setdefault("proposals", []).extend(part["proposals"])
+            del plan[y]
+            owners = {x["id"]: x for x in data["tasks"] + data["contacts"] if isinstance(x, dict) and "id" in x}
+            for q in plan.values():
+                owners.update({x["id"]: x for x in q["tasks"] + q["contacts"] if isinstance(x, dict) and x.get("id") not in owners})
+            lines_back = 0
+            for ident, lines in part["history"].items():
+                owner = owners.get(ident)
+                if owner is not None:
+                    owner["history"] = list(lines) + list(owner.get("history") or []); lines_back += len(lines)
+            if names:
+                shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+                held.append(f"held back {len(names)} item(s) from {rel}: it would be {size // 1024} KB, over the {ARCHIVE_FILE_MAX // 1024} KB limit"
+                            f" ({shown}). They stay on the board. " + ARCHIVE_NEXT_STEP.replace(" Until then do not edit the file by hand.", ""))
+            else:
+                held.append(f"kept {lines_back} old history line(s) on the board: {rel} would be {size // 1024} KB, over the {ARCHIVE_FILE_MAX // 1024} KB limit. "
+                            + ARCHIVE_NEXT_STEP.replace(" Until then do not edit the file by hand.", ""))
+            again = True; break   # the plan changed: measure the remaining years again
+        if not again:
+            return held, warnings, files
+
+
 def cmd_archive(a):
     with local_lock():   # --file mode: one critical section from read to both writes
         return _cmd_archive(a)
@@ -9028,6 +9113,7 @@ def _cmd_archive(a):
             if getattr(a, k) is not None:
                 rules[k] = getattr(a, k)
         ref = getattr(a, "ref", None)
+        ref_orig = None
         if ref:
             if any(getattr(a, k) is not None for k in ("done_days", "lost_days", "keep_history")):
                 sys.exit("an individual task reference cannot be combined with bulk archive rules")
@@ -9036,6 +9122,7 @@ def _cmd_archive(a):
                 sys.exit("an agent is working on this task; finish or release its claim before archiving")
             if open_waiting(task):
                 sys.exit(f"this task is waiting on {waiting_text(open_waiting(task))}; unwait it first, so a wait is never hidden in the archive")
+            ref_orig = task
             task = copy.deepcopy(task)
             older = []
             for y in reversed(archive_years(data)):
@@ -9051,43 +9138,53 @@ def _cmd_archive(a):
         else:
             proposals_before = copy.deepcopy(data.get("proposals", []))
             plan = archive_plan(data, rules)
+        held, size_warnings, files = archive_check_sizes(data, plan, base, ref_orig)   # a year over its limit: its items stay on the board
+        if not ref:   # after the check: a held proposal goes back on the board already slimmed, and that slimming is saved
             slimmed = sum(1 for old in proposals_before for new in data.get("proposals", [])
                           if old.get("id") == new.get("id") and old != new)
         nt = sum(len(p["tasks"]) for p in plan.values()); np_ = sum(len(p["contacts"]) for p in plan.values())
         nr = sum(len(p.get("proposals", [])) for p in plan.values())
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
-        summary = f"task #{task.get('num')} ({task['title']}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
+        summary = f"task #{task.get('num')} ({clean(task['title'], 80)}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
         if not plan:
             if not ref and slimmed:
                 if a.dry_run:
-                    print(f"would slim {slimmed} decided proposal(s); nothing was saved"); return
+                    print(f"would slim {slimmed} decided proposal(s); nothing was saved")
+                    for line in held: print(line.replace("held back", "would hold back", 1))
+                    if held: sys.exit(1)
+                    return
                 if save_changes(data, base, f"Slim {slimmed} Review Inbox proposal(s)"):
-                    print(f"slimmed {slimmed} decided proposal(s)"); return
+                    print(f"slimmed {slimmed} decided proposal(s) and saved them" + ("; no archive year was written" if held else ""))
+                    for line in held: print(line, file=sys.stderr)
+                    if held: sys.exit(1)
+                    return
                 time.sleep(0.4 * (attempt + 1)); continue
+            if held:   # everything was held back: nothing written, non-zero exit
+                for line in held: print(line.replace("held back", "would hold back", 1) if a.dry_run else line, file=sys.stderr)
+                sys.exit(1)
             print("nothing to archive"); return
         if a.dry_run:
+            for line in size_warnings: print(line)
+            for line in held: print(line.replace("held back", "would hold back", 1))
             for y, p in sorted(plan.items()):
                 print(f"{archive_path(y)}: {len(p['tasks'])} tasks, {len(p['contacts'])} people, {len(p.get('proposals', []))} proposals, {sum(len(h) for h in p['history'].values())} history lines")
-                for t in p["tasks"]: print(f"  #{t.get('num')} {t['title']}")
-                for c in p["contacts"]: print(f"  {c['id']} {c['name']} ({c.get('company', '')})")
+                for t in p["tasks"]: print(f"  #{t.get('num')} {clean(t['title'], 80)}")
+                for c in p["contacts"]: print(f"  {clean(c['id'], 80)} {clean(c.get('name') or c['id'], 80)} ({clean(c.get('company', ''), 80)})")
             return
         msg = f"Archive {summary}"
         try:
-            files = {}
-            for y, p in plan.items():
-                cur, sha = read_archive(y, base)
-                cur = archive_merge(cur, p, y)
-                if ref:
-                    extra_history = cur.get("history", {}).pop(task["id"], [])
-                    task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
-                archive_index(data, y, cur); files[y] = (cur, sha)
+            for y, (cur, _) in files.items():   # the same data the size check measured
+                archive_index(data, y, cur)
             assign_nums(data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
             ok = save_changes(data, base, msg, extra=extra)
         except UseGit:
             WRITE = "git"; continue
         if ok:
-            print(f"archived {summary}"); return
+            print(f"archived {summary}")
+            for note in size_warnings + held:
+                print(note, file=sys.stderr)
+            return
         time.sleep(0.4 * (attempt + 1))
     sys.exit("could not archive after retries (board busy)")
 
