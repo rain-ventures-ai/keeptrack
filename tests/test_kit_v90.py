@@ -148,10 +148,12 @@ class FolderTokenWins(unittest.TestCase):
         env = self.env(BOARD_REPO="O/Board", BOARD_TOKEN="shell-value", KT_V90_TOKEN="folder-value")
         self.assertEqual("folder-value", self.token_in(d, env))
 
-    def test_a_shell_board_repo_for_another_board_without_a_token_fills_the_gap_as_before(self):
+    def test_a_shell_board_repo_for_another_board_without_a_token_does_not_borrow_the_folder_token(self):
         d = self.folder({"repo": "o/board", "token_env": "KT_V90_TOKEN"})
         env = self.env(BOARD_REPO="o/other", KT_V90_TOKEN="folder-value")
-        self.assertEqual("folder-value", self.token_in(d, env))
+        self.assertNotEqual("folder-value", self.token_in(d, env))
+        r = self.run_kt(d, env, "where")
+        self.assertIn("not used", self.line(r.stdout, "auth:"))
 
     def test_the_auto_heartbeat_hook_stays_silent(self):
         # Review round 1: auto-heartbeat runs after every tool call and has no --hook flag.

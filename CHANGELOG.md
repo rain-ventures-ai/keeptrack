@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v99: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
+GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
+explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
+same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
+(v97 and v98 are reserved for concurrent List view and image changes.)
+
 Kit v96: an Archive view to browse archived cards and people (private-tasks card #283). Before, the archive could only be
 reached by ticking Include archive in Search, so you had to know what to look for. Web board: **Archive** is a new tab
 after Activity in the Tasks views. It lists the archived cards by archive year, newest year first (the year of the
@@ -61,7 +67,7 @@ No migration.
 Kit v90: a folder's own token setting wins (private-tasks card #286; v88 is held by an open kit pull request).
 When `.keeptrack/config.json` names `token_env` and that variable is set, `keeptrack.py` uses its value even when
 `BOARD_TOKEN` is already set in the shell, and warns on stderr when it replaces a different value. A shell `BOARD_REPO`
-naming another board keeps the shell's `BOARD_TOKEN`, so the board and its token always come from the same place. `where` names the
+naming another board keeps the shell's `BOARD_TOKEN`, and v99 also stops borrowing the folder token when the shell token is missing. `where` names the
 variable the token came from and which board won. In a board clone, a `BOARD_REPO` inherited from the shell that names
 another board than the clone's git remote now prints a warning (it still decides). No migration and no data change.
 
@@ -999,5 +1005,11 @@ preserved through CLI edits, proposals and archiving; disabling the layout leave
 ## Repository tooling
 
 ### Unreleased
+
+Kit v99: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
+GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
+explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
+same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
+(v97 and v98 are reserved for concurrent List view and image changes.)
 
 - Frozen boards under `tests/fixtures/` and CI running Python + Playwright upgrade tests ([#46](https://github.com/rain-ventures-ai/keeptrack/issues/46)).

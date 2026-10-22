@@ -39,3 +39,5 @@ Each fixture may include `fixture.json` with expected entity counts and the kit 
 `inbox-rules-cases.json` is not a board: it holds the Review Inbox read-time rules (the lapse setting, the recommended
 option, when a question has lapsed) that `tests/test_inbox_rules_parity.py` runs through `keeptrack.py` and `board.js`.
 Add a case there when either changes.
+
+`v4_kit99` freezes unchanged split records before token selection hardening (kit v96 to v99).
