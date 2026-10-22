@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v93: meeting-notes name resolution. Auto-generated notes often garble spoken names in the body while keeping
+correct attendee emails. The keeptrack-notes skill, its recurring-import prompt and notes-folder-to-tasks now build a
+roster from header mailto/email addresses, match board people by email, derive names from email local parts, and rewrite
+clear near-miss body spellings (e.g. "Sega" when `sagar.…@…` is an attendee) to the roster/board name in titles, details
+and reasons. No migration and no data change.
+
 Kit v92: images on cards (private-tasks card #292). An image (PNG, JPEG, GIF, WebP, at most 2 MB) is written to
 `assets/<card id>/<yyyymmdd>-<hash>.<ext>` beside the board files and referenced as `![alt](assets/...)` in a
 description or comment, so the board data stays small. The web board adds images by paste, drop or an **Image** button

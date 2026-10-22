@@ -38,12 +38,32 @@ Use explicit evidence first: meeting title, date, attendee list, email addresses
 in the notes. Match attendees to existing people by email, then by an unambiguous name and company. Distinguish the
 owner's colleagues from external contacts.
 
+### Resolve names before you extract actions
+
+Auto-generated notes (Gemini Meet notes, Otter, Fireflies, and similar) often garble spoken names in the body while
+keeping correct `mailto:` links and email addresses in the header. Treat the roster as higher-trust than body spelling.
+
+1. **Build the roster first.** Collect every participant from the header attendee list, `mailto:` links, and any
+   explicit email addresses. For each address, derive a candidate name from the local part (`sagar.mulji@…` →
+   Sagar Mulji; `rebecca.bownas@…` → Rebecca Bownas) and search the board: `$B people -q '<email>'` then
+   `$B people -q '<given name or local part>'`. Prefer an existing board person's stored name when the email matches.
+2. **Correct near-miss body names.** When the body uses a name that is not on the roster but is a clear near miss of
+   one roster or board name (shared consonants, one-phoneme slip, truncated or brand-like form — e.g. "Sega" or "Ski"
+   for Sagar when `sagar.…@…` is an attendee), rewrite that person to the roster/board name everywhere you write:
+   titles, details, `reason`, owner lines, comments and search queries. Do not keep the garbled form "as in the notes".
+3. **Do not invent people.** A body name with no roster email, no board match and no clear near miss stays as written,
+   or is reported under Needs clarification / asked about in chat. Never invent a surname, company or email to force a
+   match. Two plausible roster people for one body name is an ambiguity: ask (chat) or report it (routine); do not guess.
+4. **Search with the corrected name.** Deduplicate and match existing tasks using the resolved name, not the garbled
+   one, so a later correct import does not create a second card beside an older misspelled proposal.
+
 Infer the client only when the notes or a single strong board match identifies it. Do not choose a client merely from
 a similar name, a common email domain, or the topic. Ask one compact question when any of these would materially change
 the result:
 
 - two people or clients are plausible;
 - a new attendee's identity or company is unclear;
+- a body name could be more than one roster person, or looks garbled with no clear near miss;
 - an action has no clear owner;
 - a relative date cannot be resolved from the meeting date;
 - it is unclear whether an item is a personal follow-up or project work.
