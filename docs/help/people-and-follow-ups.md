@@ -47,7 +47,7 @@ Each field saves on its own when you leave it. There is no Save button.
 
 When you log a contact for a person at the first stage (**New**), the person moves to **Contacted**.
 
-To link an entry to the original email, click the link icon on the entry and paste the address of the thread (in Gmail, open the thread and copy the address bar). The pencil icon changes or removes it. From the terminal: `keeptrack.py touch <person> "<text>" --channel email --url <thread URL>`, or `keeptrack.py touch-url <person> <URL> [--touch <entry id>]` for an entry already logged.
+To link an entry to the original email, click the link icon on the entry and paste a link to the individual thread. Gmail links are saved as `#all/<thread id>`; searches, label names and query fields are removed. Only a numeric account selector, such as `/mail/u/0/`, is kept alongside the thread ID. A mailbox or search without an open thread is refused. The pencil icon changes or removes it. From the terminal: `keeptrack.py touch <person> "<text>" --channel email --url <thread URL>`, or `keeptrack.py touch-url <person> <URL> [--touch <entry id>]` for an entry already logged.
 
 Every person also has their own link: see [Companies](companies.md#links-to-a-company-person-or-project).
 

@@ -1,0 +1,12 @@
+{
+  "label": "v4 frozen before Gmail source privacy and record history fixes (kit v100); unchanged schema",
+  "schema": 4,
+  "layout": "split",
+  "kit_before_update": 99,
+  "counts": {
+    "tasks": 2,
+    "contacts": 1,
+    "clients": 1,
+    "projects": 1
+  }
+}

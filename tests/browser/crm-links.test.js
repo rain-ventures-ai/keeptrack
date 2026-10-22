@@ -69,7 +69,7 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
   try {
     const api = new Github();
     // Acme: contacted 2 days ago, changed 40 days ago. Beta: contacted 60 days ago, changed today. Zed Co: never contacted.
-    api.files['people/p_one.json'] = text({ ...person, updated: day(40), comments: [{ id: 'c_mail', at: day(2), by: 'alex', channel: 'email', text: 'Email received: confirmed the call.', draft: false, url: 'https://mail.google.com/mail/u/0/#all/18f2a01c9be0d4a1' },
+    api.files['people/p_one.json'] = text({ ...person, updated: day(40), comments: [{ id: 'c_mail', at: day(2), by: 'alex', channel: 'email', text: 'Email received: confirmed the call.', draft: false, url: 'https://mail.google.com/mail/u/0/?authuser=private%40example.test#label/Private%20Client/18f2a01c9be0d4a1' },
       { id: 'c_call', at: day(3), by: 'alex', channel: 'call', text: 'Called about pricing.', draft: false }] });
     api.files['people/p_two.json'] = text({ ...person, id: 'p_two', name: 'Bo Beta', company: 'Beta', emails: [], updated: day(0), comments: [{ id: 'c_old', at: day(60), by: 'alex', channel: 'email', text: 'Old email', draft: false, url: 'javascript:alert(1)' }, { id: 'c_look', at: day(59), by: 'alex', channel: 'note', text: 'Look-alike', draft: false, url: 'https://mail.google.evil.example/x' }] });
     api.files['people/p_three.json'] = text({ ...person, id: 'p_three', name: 'Zoe Zed', company: 'Zed Co', emails: [], updated: day(10), comments: [] });
@@ -123,7 +123,7 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
     await page.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /https:/.test(x.textContent)));
     assert.equal(api.person().comments[1].url, undefined, 'a bad link is refused, nothing saved');
     await page.locator('#pTouches .touch').nth(0).locator('button[aria-label^="Add source link"]').click();
-    await sheet.locator('input').fill('https://mail.google.com/mail/u/0/#all/abc123'); let w = saved(); await sheet.locator('button', { hasText: 'Save' }).first().click(); await w;
+    await sheet.locator('input').fill('HTTPS://MAIL.GOOGLE.COM/mail/u/0/?authuser=private%40example.test#search/private%40example.test/abc123'); let w = saved(); await sheet.locator('button', { hasText: 'Save' }).first().click(); await w;
     assert.equal(api.person().comments[1].url, 'https://mail.google.com/mail/u/0/#all/abc123');
     await page.waitForFunction(() => document.querySelectorAll('#pTouches a.tsrclink').length === 2);
     assert.equal(await page.locator('#pProjActSec').isVisible(), true);
@@ -166,6 +166,28 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
       await pg.reload(); await pg.waitForSelector('.crow'); await pg.waitForTimeout(500);
       assert.equal(await pg.locator('#dlgContact[open]').count(), 0, 'a reload after X does not reopen it');
       assert.deepEqual(errs, [], 'Back/X: no page errors'); await pg.close(); }
+    // A Forward entry for a deleted person must not keep an old drawer marker.
+    {
+      const missing = new Github(); missing.files = { ...api.files };
+      const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+      await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => missing.route(r));
+      await pg.goto(base + '/board/index.html#view=people');
+      await pg.locator('.prow', { hasText: 'Casey Example' }).click();
+      await pg.locator('#dlgContact[open]').waitFor();
+      assert.equal((await pg.evaluate(() => history.state)).kbDlg, 'dlgContact');
+      await pg.goBack(); await pg.locator('#dlgContact').waitFor({ state: 'hidden' });
+      delete missing.files['people/p_one.json']; missing.head = 'head-person-removed';
+      await pg.reload(); await pg.locator('.prow', { hasText: 'Bo Beta' }).waitFor();
+      await pg.goForward();
+      await pg.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /person was not found/.test(x.textContent)));
+      assert.deepEqual(await pg.evaluate(() => history.state), { kbView: 'people' }, 'missing record clears old drawer/depth state');
+      const length = await pg.evaluate(() => history.length);
+      await pg.locator('.prow', { hasText: 'Bo Beta' }).click(); await pg.locator('#dlgContact[open]').waitFor();
+      assert.equal(await pg.evaluate(() => history.length), length + 1, 'next person creates its own history entry');
+      await pg.goBack(); await pg.locator('#dlgContact').waitFor({ state: 'hidden' });
+      assert.equal(await pg.evaluate(() => location.hash), '#view=people');
+      await pg.close();
+    }
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(native, [], 'no native dialogs');
     console.log('crm-links: all checks passed');
   } finally { await browser.close(); server.close(); }

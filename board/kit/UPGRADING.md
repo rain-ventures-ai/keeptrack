@@ -25,6 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v100 (schema 4)
+Gmail source-link privacy and record navigation fixes. No data change or migration; `kit-update` copies the files.
+- New Gmail source links save only the thread ID as `#all/<id>` and an optional numeric account selector such as
+  `/mail/u/0/`. Search words, label names, query parameters and account addresses are removed by the browser and CLI.
+  Gmail mailbox/search/label links without an individual thread are refused. Existing Gmail source links are shown
+  with the same clean target; stored old entries are not rewritten until edited.
+- A missing record reached through Back/Forward resets its history entry to the current view, so the next person,
+  company or project drawer creates its own entry. The CLI accepts uppercase `HTTPS://`, as the browser does.
+- Check: `kit-check` reports v100. Save a Gmail search-thread link and verify its saved URL uses `#all/<id>` without
+  the search; navigate Forward to a deleted person, open another person, then Back should close that drawer.
+
 ### v99 (schema 4)
 Token and board selection edge cases. No data change and no migration; run `kit-update`.
 Includes the v97 List view and v98 image fixes.

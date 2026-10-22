@@ -358,7 +358,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 99  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 100  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -6450,11 +6450,32 @@ def cmd_person_rm(a):
 
 
 def check_touch_url(url):
-    """A contact log entry's source link (kit v91): the original message or thread, such as a Gmail thread URL. http(s) only."""
+    """A source link; Gmail saves only its thread ID and optional numeric account selector."""
     url = str(url or "").strip()
-    if url and (not re.match(r"^https?://[^\s/]+", url) or len(url) > 2000 or any(ch.isspace() for ch in url)):
-        sys.exit("source link must be one http(s) URL of at most 2000 characters, such as https://mail.google.com/mail/u/0/#all/<thread id>")
-    return url
+    if not url:
+        return ""
+    error = "source link must be one http(s) URL of at most 2000 characters, such as https://mail.google.com/mail/u/0/#all/<thread id>"
+    if not re.match(r"^https?://[^\s/]+", url, re.I) or len(url) > 2000 or any(ch.isspace() for ch in url) or "\\" in url:
+        sys.exit(error)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        host = urllib.parse.unquote(parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
+    except (ValueError, UnicodeError):
+        sys.exit(error)
+    if not host:
+        sys.exit(error)
+    if host != "mail.google.com":
+        return url
+    parts = parsed.fragment.split("/")
+    route = parts[0].lower()
+    mailboxes = {"all", "inbox", "sent", "drafts", "starred", "important", "snoozed", "spam", "trash", "scheduled"}
+    count = 3 if route in {"search", "label", "category"} else 2 if route in mailboxes else 0
+    thread = parts[-1].split("?", 1)[0]
+    if not count or len(parts) < count or not re.fullmatch(r"[A-Za-z0-9_-]+", thread):
+        sys.exit("source link must identify one Gmail thread, not a mailbox, search or label")
+    account = re.fullmatch(r"/mail/u/([0-9]+)/?", parsed.path)
+    path = f"/mail/u/{account.group(1)}/" if account else "/mail/"
+    return "https://mail.google.com" + path + "#all/" + thread
 
 
 def cmd_touch_url(a):

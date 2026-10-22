@@ -59,6 +59,35 @@ class TouchUrl(unittest.TestCase):
         self.assertEqual(GMAIL, self.touches()[-1]["url"])
         self.assertIn(f"source link ({self.touches()[-1]['id']}): {GMAIL}", self.person())
 
+    def test_gmail_sources_keep_only_the_thread_and_numeric_account(self):
+        thread = "FMfcgzQXabc123"
+        for source, target in (
+            (f"HTTPS://MAIL.GOOGLE.COM/mail/u/2/?authuser=private%40example.test#search/private%40example.test/{thread}", f"https://mail.google.com/mail/u/2/#all/{thread}"),
+            (f"https://mail.google.com/mail/u/0/#label/Private%20Client/{thread}?projector=1", f"https://mail.google.com/mail/u/0/#all/{thread}"),
+            (f"https://mail.google.com/mail/u/private@example.test/#inbox/{thread}", f"https://mail.google.com/mail/#all/{thread}"),
+            (f"https://mail.google.com/mail/#category/updates/{thread}", f"https://mail.google.com/mail/#all/{thread}"),
+        ):
+            with self.subTest(source=source):
+                self.run_ok("touch", "Robin Linktest", "Thread reference.", "--channel", "email", "--url", source)
+                self.assertEqual(target, self.touches()[-1]["url"])
+                self.assertNotIn("private", self.touches()[-1]["url"].lower())
+
+    def test_gmail_source_without_a_thread_is_refused(self):
+        for fragment in ("search/private", "label/PrivateClient", "settings/general", "inbox", "all/"):
+            with self.subTest(fragment=fragment):
+                r = self.run_kt("touch", "Robin Linktest", "Thread reference.", "--channel", "email", "--url", "https://mail.google.com/mail/u/0/#" + fragment)
+                self.assertNotEqual(0, r.returncode)
+                self.assertIn("Gmail thread", r.stderr)
+        self.assertEqual([], self.touches())
+
+    def test_uppercase_https_is_accepted_and_other_hosts_stay_unchanged(self):
+        source = "HTTPS://other.example.test/original?label=keep#part"
+        self.run_ok("touch", "Robin Linktest", "Original reference.", "--channel", "note", "--url", source)
+        self.assertEqual(source, self.touches()[-1]["url"])
+        lookalike = "https://mail.google.com.evil.example/search/private/thread123"
+        self.run_ok("touch-url", "Robin Linktest", lookalike)
+        self.assertEqual(lookalike, self.touches()[-1]["url"])
+
     def test_touch_without_url_has_no_field(self):
         self.run_ok("touch", "Robin Linktest", "Called.", "--channel", "call")
         self.assertNotIn("url", self.touches()[-1])
