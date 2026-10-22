@@ -11,6 +11,28 @@ def segment(marker, body):
 
 
 class ImageReview(unittest.TestCase):
+    def test_valid_highly_compressible_large_png_rasters_are_accepted(self):
+        import struct
+        import zlib
+        def chunk(kind, body):
+            return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+        # Valid non-interlaced 8-bit PNGs: each row has filter 0 followed by exactly width*channels samples.
+        # Build zlib input a row at a time, keeping test allocation independent of the full raster size.
+        for width, height, channels, colour in ((1920, 1080, 3, 2), (4000, 4000, 3, 2), (4095, 4096, 4, 6)):
+            with self.subTest(width=width, height=height, channels=channels):
+                row = b'\0' * (1 + width * channels)
+                compressor = zlib.compressobj()
+                pieces = [compressor.compress(row) for _ in range(height)]
+                pixels = b''.join(pieces) + compressor.flush()
+                self.assertLess(len(pixels) * 100, len(row) * height, 'exercise highly compressed valid raster data')
+                header = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, colour, 0, 0, 0))
+                # Consecutive IDAT chunks may split the one zlib stream anywhere, including before its header ends.
+                payload = chunk(b'IDAT', pixels[:1]) + chunk(b'IDAT', pixels[1:17]) + chunk(b'IDAT', pixels[17:])
+                clean = header + payload + chunk(b'IEND', b'')
+                tagged = header + chunk(b'tEXt', b'Author\0SYNTHETIC-OWNER') + payload + chunk(b'IEND', b'')
+                self.assertEqual(keeptrack.strip_image_metadata(clean, 'png'), clean)
+                self.assertEqual(keeptrack.strip_image_metadata(tagged, 'png'), clean)
+
     def test_progressive_jpeg_filters_metadata_between_scans_without_truncating_tables(self):
         first = segment(218, b'') + b'scan\xff\x00\xd9\xff\xd0bytes'
         table = segment(196, b'table\xff\xd9more')

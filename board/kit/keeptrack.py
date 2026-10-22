@@ -3941,11 +3941,12 @@ def orientation_only_tiff(v):
 
 
 def strip_image_metadata(blob, ext):
-    """The image without its metadata (EXIF: GPS position, device, owner; text chunks; XMP), so a photo or screenshot
-    never commits that to the board repo (AGENTS rule 7). Pixels are untouched; a photo's EXIF Orientation is kept (alone),
-    so it still shows the right way up. APNG is saved as a still image.
-    ICC profiles are removed too, which may change colours.
-    Raises ValueError on a broken file."""
+    """Remove recognised container metadata, comments and colour profiles; retain EXIF Orientation alone.
+    GIF and animated WebP retain compressed frame data, which may contain ignored bytes. This is not a guarantee
+    that hidden identifying information is removed. APNG is saved as a still image; CLI pixels are otherwise
+    retained, and removing ICC profiles may change colours. Re-export a fresh still PNG/JPEG to discard the
+    original animation payload. Browser still uploads separately re-encode decoded pixels.
+    Raises ValueError on a broken file or a parser/raster budget violation."""
     # Retain decoding data by format, rather than guessing every possible metadata container.
     # ICC profiles can carry names/device details: drop them too (CLI colours may change).
     if ext == "jpg":   # filter metadata between every scan as well as before the first scan
@@ -4268,7 +4269,9 @@ def save_asset(rel, blob, message, state):
 
 def cmd_attach(a):
     """Add an image (screenshot) to a card: written to assets/<card id>/, then shown in a new comment, appended to the
-    description with --details, or added to the card's Links with --link. Its metadata (EXIF and the like) is removed first."""
+    description with --details, or added to the card's Links with --link. Recognised container metadata, comments and
+    colour profiles are removed first. GIF/animated WebP keep compressed frame data, which may contain ignored bytes;
+    this does not guarantee removal of hidden identifying information. APNG is saved as a still image."""
     if getattr(a, "link", False) and a.details:
         sys.exit("--link adds the image to the card's Links; it cannot be combined with --details")
     if BACKEND == "hosted":
@@ -11215,7 +11218,11 @@ def main():
     s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin")
     s.add_argument("--reply-to", dest="reply_to", help="reply one level under this comment id (not under a reply or an activity line)"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
-    s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, the description with --details, or Links with --link")
+    s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, the description with --details, or Links with --link",
+                       description="Recognised container metadata, comments and colour profiles are removed. GIF and animated "
+                       "WebP retain compressed frame data, which may contain ignored bytes; removal of hidden identifying "
+                       "information is not guaranteed. APNG is saved as a still image. Re-export a fresh still PNG/JPEG "
+                       "to discard the original animation payload. Browser still uploads separately re-encode decoded pixels.")
     s.add_argument("id"); s.add_argument("path", help="the image file"); s.add_argument("text", nargs="?", default="", help="comment text to go with it, or the link title with --link")
     s.add_argument("--alt", help="a few words saying what the image shows (default: the file name)")
     s.add_argument("--details", action="store_true", help="append it to the description instead of a new comment")

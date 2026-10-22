@@ -2724,8 +2724,9 @@ if (typeof window !== 'undefined') (() => {
       return out;
     } catch { return null; } finally { if (bmp) bmp.close(); }
   }
-  // Only decoding/animation chunks and fixed colour fields survive. ICC profiles can contain author/device
-  // descriptions, so they are removed too. Still uploads use canvas colour conversion when one was present.
+  // Container allowlists remove recognised metadata/comments and ICC profiles, which can describe author/device.
+  // GIF/WebP compressed frame data is retained and may contain ignored bytes; hidden information is not ruled out.
+  // Browser still uploads separately re-encode decoded pixels; APNG is saved as a still image.
   async function strippedImage(file) {
     const b = new Uint8Array(await file.arrayBuffer()), v = new DataView(b.buffer), type = file.type;
     const wordAt = (a, i, n) => String.fromCharCode(...a.subarray(i, i + n));
