@@ -2262,7 +2262,7 @@ if (typeof window !== 'undefined') (() => {
     writeFilterRoute();
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
-    applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
+    applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox(); if ($('dlgSettings').open) syncDocsHome(undefined, !!$('secDocsHome')?.contains(document.activeElement));
     if (view !== 'board') {
       const listPos = listPosition();
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
@@ -6554,18 +6554,18 @@ if (typeof window !== 'undefined') (() => {
     }
     return { provider, root };
   }
-  function syncDocsHome(locked = !!ro || !!newerSchema || busy) {
+  function syncDocsHome(locked = !!ro || !!newerSchema || busy, preserveDraft = false) {
     if (!$('sDocsCurrent')) return;
     const display = $('sDocsCurrent'); display.textContent = '';
     const raw = state.settings.docs_home;
-    if (!Object.hasOwn(state.settings, 'docs_home')) { display.textContent = 'Not set. Ask the owner to choose an existing docs folder.'; $('sDocsRoot').value = ''; }
+    if (!Object.hasOwn(state.settings, 'docs_home')) { display.textContent = 'Not set. Ask the owner to choose an existing docs folder.'; if (!preserveDraft) $('sDocsRoot').value = ''; }
     else {
       try {
-        const home = docsHome(raw); $('sDocsProvider').value = home.provider; $('sDocsRoot').value = home.root;
+        const home = docsHome(raw); if (!preserveDraft) { $('sDocsProvider').value = home.provider; $('sDocsRoot').value = home.root; }
         display.append(document.createTextNode(home.provider + ': '));
         if (home.provider === 'local') display.append(document.createTextNode(home.root + ' — requires access on that machine.'));
         else { const link = document.createElement('a'); link.href = home.root; link.textContent = home.root; link.target = '_blank'; link.rel = 'noopener noreferrer'; display.append(link); }
-      } catch (_) { display.textContent = 'Invalid stored docs home. Ask the owner to repair it before filing; do not create a replacement root.'; $('sDocsRoot').value = ''; }
+      } catch (_) { display.textContent = 'Invalid stored docs home. Ask the owner to repair it before filing; do not create a replacement root.'; if (!preserveDraft) $('sDocsRoot').value = ''; }
     }
     for (const id of ['sDocsProvider', 'sDocsRoot', 'sDocsSave', 'sDocsClear']) $(id).disabled = !!locked;
   }

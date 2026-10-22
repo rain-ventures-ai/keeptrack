@@ -66,8 +66,9 @@ class Github {
 let base;
 const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); } };
 const TABS = ['Prefs', 'Board', 'Conn', 'Agents'];
-async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board', query = '' } = {}) {
+async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board', query = '', settings = null } = {}) {
   const api = new Github(), page = await browser.newPage({ viewport: { width, height } }), errors = [];
+  if (settings) { const data = JSON.parse(api.files['tasks.json']); Object.assign(data.settings, settings); api.files['tasks.json'] = text(data); }
   page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { errors.push('native dialog: ' + d.message()); d.dismiss(); });
   await page.addInitScript(([token, repo]) => {
     if (repo) { localStorage.setItem('kb_repo', repo); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); }
@@ -95,22 +96,26 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
       await page.locator('#sDocsProvider').selectOption('google-drive');
       await page.locator('#sDocsRoot').fill('https://drive.google.com/drive/folders/existing-root');
-      await page.locator('#sDocsSave').click();
+      await page.locator('#sDocsSave').click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
       await page.waitForFunction(() => document.querySelector('#sDocsCurrent a')?.href.includes('existing-root'));
       assert.equal(JSON.parse(page.api.files['tasks.json']).settings.docs_home.provider, 'google-drive');
       await page.reload(); await page.waitForSelector('.card');
       if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
       assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/existing-root');
       const writes = page.api.writes;
-      await page.locator('#sDocsRoot').fill('https://evil.test/root'); await page.locator('#sDocsSave').click();
+      await page.locator('#sDocsRoot').fill('https://evil.test/root'); await page.locator('#sDocsSave').click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
       await settle(page); assert.equal(page.api.writes, writes, 'invalid provider host never writes');
-      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/work/<private>/keeptrack'); await page.locator('#sDocsSave').click();
+      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/work/<private>/keeptrack'); await page.locator('#sDocsSave').click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
       await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.includes('/work/<private>/keeptrack'));
       assert.equal(await page.locator('#sDocsCurrent a').count(), 0, 'local path remains text, never file navigation');
       assert.equal(await page.locator('#sDocsCurrent private').count(), 0, 'stored text is escaped');
-      await page.locator('#sDocsClear').click(); await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.startsWith('Not set'));
+      await page.locator('#sDocsClear').click(); await page.waitForFunction(() => !document.querySelector('#sDocsClear').disabled); await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.startsWith('Not set'));
       assert.equal(Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'), false);
       assert.deepEqual(page.errors, []); await page.close();
+      const invalid = await open(browser, { settings: { docs_home: { provider: 'future', root: 'javascript:alert(1)' } } });
+      await invalid.locator('#btnSettings').click(); await invalid.locator('#tabBoard').click();
+      assert.match(await invalid.locator('#sDocsCurrent').textContent(), /Invalid stored docs home/);
+      assert.equal(await invalid.locator('#sDocsCurrent a').count(), 0); await invalid.close();
       const demo = await open(browser, { demo: true });
       if (!await demo.locator('#dlgSettings').evaluate(e => e.open)) await demo.locator('#btnSettings').click(); await demo.locator('#tabBoard').click();
       assert.equal(await demo.locator('#sDocsSave').isDisabled(), true);

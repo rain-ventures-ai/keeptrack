@@ -1457,14 +1457,14 @@ _HOSTED_STORAGE = None
 def hosted_dispatch(a):
     """Route only phase-0 CLI commands. There is deliberately no GitHub fallback."""
     allowed = {"list", "show", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
-               "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "archive", "unarchive", "review", "task-set", "approve"}
+               "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "archive", "unarchive", "review", "task-set", "approve", "settings", "settings-set"}
     if a.cmd not in allowed:
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
     adapter = storage_adapter()
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
         adapter.whoami()
-        if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list"):
+        if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list", "settings", "settings-set"):
             return a.f(a)
         data = adapter.snapshot()
         session = getattr(a, "session", None) or os.environ.get("BOARD_SESSION", "")
