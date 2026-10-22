@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 100;
+  const PAGE_KIT = 101;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -8634,7 +8634,10 @@ if (typeof window !== 'undefined') (() => {
         [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
         fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, counts); fresh.archive.last_run = nowIso();
         const out = await save(fresh, message, got.meta, extras, false, ag); if (out === 'gone' || ag !== archGen) return;
-        if (out === 'ok') { archDrop(); snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); archiveNote = notes.join(' '); toast('Archived ' + (rules.taskIds ? batchWhat(gone.size) : what) + '.' + (notes.length ? ' ' + notes.join(' ') : ''), !!heldYears); return; }
+        if (out === 'ok') { archDrop(); snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); archiveNote = notes.join(' ');
+          const wrote = Object.values(plan), sum = f => wrote.reduce((n, part) => n + f(part), 0);
+          const said = rules.taskIds ? batchWhat(gone.size) : heldYears ? `${sum(p => p.tasks.length)} done tasks, ${sum(p => p.contacts.length)} Lost people and ${sum(p => Object.values(p.history).reduce((n, h) => n + h.length, 0))} old history lines` : what;
+          toast('Archived ' + said + '.' + (notes.length ? ' ' + notes.join(' ') : ''), !!heldYears); return; }
         if (out !== 'conflict') throw new Error(out); setStatus('Someone else changed the board, retrying…', 'err');
       } catch (e) { if (ag !== archGen) return; console.error(e); setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     }

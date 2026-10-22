@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v101: archive size follow-ups. Split-board toasts exclude held years, archived label/client/stage rewrites allow oversized files to shrink or remain unchanged, and size warnings appear once after save. Held CLI tasks and people retain list positions and can still trim history into a year with room. Hosted archive size enforcement remains server-side and is documented explicitly. No migration; includes v100.
+
 Kit v100: Gmail contact-log source links are saved with only a thread ID and optional numeric account selector.
 Search terms, labels, query parameters and account addresses are removed in the page and CLI; a Gmail view without
 an individual thread is refused. Existing Gmail links render with clean targets. Missing-record Back/Forward entries
