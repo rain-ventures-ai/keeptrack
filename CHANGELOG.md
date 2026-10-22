@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Kit v88: CRM gaps after Companies (private-tasks card #290). Companies gets a **Sort** menu (stage, recently
+Kit v90: CRM gaps after Companies (private-tasks card #290; v88 is another change in flight). Companies gets a **Sort** menu (stage, recently
 contacted, recently updated, name) and a last-contact filter (contacted in 30 days, no contact in 30+ days, never
 contacted), remembered per viewer and board. A company, person or project record has its own address
 (`#company=<name>`, `#person=<id>`, `#project=<id>`): opening the record puts it in the address bar, opening the link
@@ -16,6 +16,20 @@ record and the company's Activity show **Open in Gmail** / **Open original** in 
 prints it. The `keeptrack-email` skill passes the Gmail thread link. A person's record shows **Project activity**: for
 each project they are in (their email is on it, or a task names them), the newest comments and changes on its tasks.
 No migration.
+
+Kit v89: the last gaps in the reserved client-name check (private-tasks card #287; v87 and v88 are other changes in
+flight). `archive` and `unarchive` save directly, so they now run the check themselves: an archived record whose client
+or company is `__proto__`, `constructor` or `prototype` stays archived until it is restored with a new name
+(`unarchive '#N' --client NEW`, or `--company NEW` for a person; on hosted boards a person runs it, as an agent cannot
+change a card it does not hold) or renamed with `client-rename` (which also rewrites the archive; not on hosted boards).
+The refused restore, in the CLI and on the page, names that command. The hosted `add --client` runs it before posting. Board members' `own_companies` count as uses, so
+`member-set --own-company __proto__` is refused. Uses are counted by the exact stored string, so renaming
+`" __proto__"` to `"__proto__"` is refused (a padded name can still be renamed away). A command that would copy a
+reserved name already on the board (`todo-move`, `add --project`) names where it is stored and says how to clean it up.
+Web board: every save (GitHub and hosted) counts the same places and refuses one that adds a use, so picking an old
+reserved client from a list for a new task, a task sheet or a new project is refused with the same advice. Restoring
+an archived record is checked too (split boards, and the hosted unarchive in the page and the CLI), as is a hosted
+`add --project` whose project has a reserved client. `client-rm` keeps a reserved name while the archive still uses it.
 
 Kit v87: an archive file has its own size limit (private-tasks card #284). `doctor` failed with `FILE_SIZE` as soon as
 `archive/<year>.json` passed 200 KB, and relay's `ci_checks.py` (which runs doctor) failed on every PR. An

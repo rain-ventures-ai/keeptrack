@@ -312,5 +312,6 @@ class Docs(unittest.TestCase):
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v87", f.read())
 
+
 if __name__ == "__main__":
     unittest.main()

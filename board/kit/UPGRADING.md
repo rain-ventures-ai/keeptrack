@@ -25,9 +25,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v88 (schema 4)
+### v90 (schema 4)
 CRM: Companies sort and filter, links to a company, person or project, source links on the contact log and project
-activity on a person (private-tasks card #290). No migration. One new optional field.
+activity on a person (private-tasks card #290). No migration. One new optional field. v88 is another kit change
+in flight; these can land in any order.
 - A contact log entry (`contacts[].comments[]`) may carry `url`: an http(s) link to the original message or thread,
   such as a Gmail thread. `keeptrack.py touch --url <URL>` sets it when logging, `touch-url <person> <URL> [--touch <id>]`
   sets or clears (`""`) it later (default: the newest entry), and `person` prints it. The web board shows
@@ -39,7 +40,28 @@ activity on a person (private-tasks card #290). No migration. One new optional f
   link opens it, and each record's ⋯ menu has **Copy link**. A person's record shows **Project activity**: for each
   project they are in, the newest comments and changes on its tasks.
 - The `keeptrack-email` skill passes `--url` with the Gmail thread link.
-- Run `kit-update` only. Check: `kit-check` says v88, and `python3 board/keeptrack.py help crm` lists `touch-url`.
+- Run `kit-update` only. Check: `kit-check` says v90, and `python3 board/keeptrack.py help crm` lists `touch-url`.
+
+### v89 (schema 4)
+The last gaps in the reserved client-name check (card #287 on the owner's board). No migration and no data change.
+v87 and v88 are other kit changes in flight; these can land in any order.
+- keeptrack.py also runs the check on `archive` and `unarchive` (they save directly), on the hosted `add --client`,
+  and on board members' `own_companies`, so `member-set --own-company __proto__` is refused. Uses are counted by the
+  exact stored string, so renaming `" __proto__"` to `"__proto__"` is refused.
+- `unarchive '#N' --client NEW` (`--company NEW` for a person) restores an archived record with a new client or
+  company, so one whose name is reserved can come back; a refused `unarchive`, in the CLI and on the page, names it.
+  It works on hosted boards too (a person runs it there: the new name is saved right after the restore, and an agent
+  can change only a card it holds), which have no `client-rename`.
+- A command that would copy a reserved name already on the board (`todo-move`, `add --project`, `unarchive`) says
+  where it is stored and how to clean it up: `client-rename '__proto__' NEW` when it is in the client list (this also
+  renames it in the archive and in `own_companies`), or `task-set --client` / `project-set --client` /
+  `person-set --company` when it is not.
+- Web board: every save is checked the same way, so picking an old reserved client from a list (new task, task sheet,
+  new project) is refused with the same advice. Restoring an archived record (split boards, hosted boards) and the
+  hosted `add --project` are checked too, and `client-rm` keeps a reserved name while the archive still uses it, so
+  `client-rename` can still clean it up there.
+- Run `kit-update` only. Check: `kit-check` says v89, and on a board whose client list has `__proto__`,
+  `python3 board/keeptrack.py member-set <you> --own-company __proto__` is refused.
 
 ### v87 (schema 4)
 Archive files get their own size limit (private-tasks card #284). No migration, no data change.

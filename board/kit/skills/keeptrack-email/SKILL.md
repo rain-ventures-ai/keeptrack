@@ -163,7 +163,7 @@ and the hidden content and sender checks are counted rather than guessed.
     --url 'https://mail.google.com/mail/u/0/#all/<Gmail thread id>'
   ```
 
-- `--url` (kit v88) is the entry's source link: the board shows **Open in Gmail** on it, opening the thread in a new
+- `--url` (kit v90) is the entry's source link: the board shows **Open in Gmail** on it, opening the thread in a new
   tab for whoever owns that mailbox. Build it only from the provider's opaque thread id (Gmail: the thread id that
   `email-search` printed second); never put an address, subject or search query in it. For Outlook, pass the
   message's `webLink` only when the connector returns one. Skip it when you have no thread id. For an entry already

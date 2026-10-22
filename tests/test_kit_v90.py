@@ -1,4 +1,4 @@
-"""Kit v88: CRM gaps after Companies (private-tasks card #290). A contact log entry may carry `url`, the link to the
+"""Kit v90: CRM gaps after Companies (private-tasks card #290). A contact log entry may carry `url`, the link to the
 original message or thread: `touch --url` and `touch-url` set it, `person` prints it. The page's sort, filter, deep links,
 source links and project activity are tested in tests/browser/crm-links.test.js; this file covers the CLI and pins the version."""
 import json
@@ -93,21 +93,21 @@ class TouchUrl(unittest.TestCase):
 
 
 class Docs(unittest.TestCase):
-    def test_kit_is_v88_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(88, keeptrack.KIT_VERSION)
+    def test_kit_is_v90_with_upgrade_notes_and_changelog(self):
+        self.assertEqual(90, keeptrack.KIT_VERSION)
         with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(88, json.load(f)["version"])
+            self.assertEqual(90, json.load(f)["version"])
         for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
             with open(os.path.join(KIT, plugin, "plugin.json"), encoding="utf-8") as f:
-                self.assertEqual("0.88.0", json.load(f)["version"], plugin)
+                self.assertEqual("0.90.0", json.load(f)["version"], plugin)
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
-            v88 = f.read().split("### v88 (schema 4)", 1)[1].split("### v87", 1)[0]
+            v90 = f.read().split("### v90 (schema 4)", 1)[1].split("### v89", 1)[0]
         for words in ("kit-update", "touch-url", "#company=", "No migration", "noopener"):
-            self.assertIn(words, v88)
+            self.assertIn(words, v90)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
-            self.assertIn("Kit v88", f.read())
+            self.assertIn("Kit v90", f.read())
         with open(os.path.join(REPO, "board", "board.js"), encoding="utf-8") as f:
-            self.assertIn("const PAGE_KIT = 88;", f.read())
+            self.assertIn("const PAGE_KIT = 90;", f.read())
         with open(os.path.join(KIT, "skills", "keeptrack-email", "SKILL.md"), encoding="utf-8") as f:
             self.assertIn("--url 'https://mail.google.com/mail/u/0/#all/<Gmail thread id>'", f.read())
 
