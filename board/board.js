@@ -5512,7 +5512,12 @@ if (typeof window !== 'undefined') (() => {
   };
   const reservedGrew = (before, after) => { const was = reservedUses(before); return [...reservedUses(after)].map(([n, c]) => c > (was.get(n) || 0) ? n : null).filter(n => n != null).sort()[0] || null; };
   const reservedSaveMsg = (n, pre) => `Not saved: “${n.trim()}” cannot be a client or company name.`
-    + (Array.isArray(pre && pre.clients) && pre.clients.includes(n) ? ` This board already has it as a client: rename it first (Companies, or keeptrack.py client-rename '${n}' NEW).` : '');
+    + (Array.isArray(pre && pre.clients) && pre.clients.includes(n) ? ` This board already has it as a client: rename it first with keeptrack.py client-rename '${n}' NEW.` : '');
+  // kit v89 review round 2: a refused restore names the command that restores the record with a new name (it works on
+  // hosted boards too, which have no client-rename)
+  const restoreRefusedMsg = (n, k, item) => `Not restored: “${n.trim()}” cannot be a client or company name. Restore it with a new name: keeptrack.py unarchive `
+    + (k === 'tasks' ? `'#${item.num}' --client NEW.` : `'${item.id}' --company NEW.`);
+  const restoreGrew = (d, k, item) => (d[k] || []).some(x => x && x.id === item.id) ? null : reservedGrew(d, Object.assign({}, d, { [k]: (d[k] || []).concat([item]) }));
   const refuseName = v => { if (!reservedName(v)) return false; toast(`“${String(v).trim()}” cannot be a client or company name.`, true); return true; };
   const ownInfo = (d, name) => { const ci = d && d.client_info; return ci && typeof ci === 'object' && !reservedName(name) && Object.hasOwn(ci, name) && ci[name] && typeof ci[name] === 'object' ? ci[name] : null; };
   function infoFor(n, name) {   // the entry to write, created when missing; a reserved name gets a throwaway object
@@ -7945,7 +7950,7 @@ if (typeof window !== 'undefined') (() => {
           if (!fresh[k].some(x => x.id === item.id)) {
             // kit v89 review: this save skips mutateNow, so it runs the reserved-name check itself before the record comes back
             const grewName = reservedGrew(fresh, Object.assign({}, fresh, { [k]: fresh[k].concat([src]) }));
-            if (grewName != null) { toast(reservedSaveMsg(grewName, fresh), true); return; }
+            if (grewName != null) { toast(restoreRefusedMsg(grewName, k, src), true); return; }
             const x = clone(src); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }
           nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
           fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
@@ -7957,6 +7962,8 @@ if (typeof window !== 'undefined') (() => {
       toast('The board stayed busy. Try again.', true); return;
     }
     const k = kind === 'task' ? 'tasks' : 'contacts';   // item already carries its archived history lines (loadArchived)
+    const grewName = restoreGrew(state, k, item);   // mutate refuses it too; checked here so the advice names the restore
+    if (grewName != null) { toast(restoreRefusedMsg(grewName, k, item), true); return; }
     const ok = await mutate(d => { d[k] = d[k] || []; if (!d[k].some(x => x.id === item.id)) { const x = clone(item); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); d[k].push(x); } }, `Restore ${item.title || item.name} from the archive`);
     if (!ok) { toast('Not restored: the board could not be saved. The archived copy is unchanged.', true); return; }
     try { for (let i = 0; i < 3; i++) { const { data, sha } = await readArchive(y); if (!data) break; const next = clone(data); next[k] = (next[k] || []).filter(x => x.id !== item.id); if (next.history) delete next.history[item.id];
@@ -8440,9 +8447,8 @@ if (typeof window !== 'undefined') (() => {
   }
   async function hostedArchive(entity, year, restoring = false) {
     if (restoring) {   // kit v89 review: the server restores it from a command, so check here that it adds no reserved client or company
-      const k = entity.num ? 'tasks' : 'contacts', on = (state[k] || []).some(x => x && x.id === entity.id);
-      const grewName = on ? null : reservedGrew(state, Object.assign({}, state, { [k]: (state[k] || []).concat([entity]) }));
-      if (grewName != null) { toast(reservedSaveMsg(grewName, state), true); return false; }
+      const k = entity.num ? 'tasks' : 'contacts', grewName = restoreGrew(state, k, entity);
+      if (grewName != null) { toast(restoreRefusedMsg(grewName, k, entity), true); return false; }
     }
     try {
       await hostedStorage.snapshot();

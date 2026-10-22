@@ -1349,6 +1349,7 @@ def hosted_dispatch(a):
     if a.cmd not in allowed:
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
     adapter = storage_adapter()
+    renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
         adapter.whoami()
         if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list"):
@@ -1399,8 +1400,16 @@ def hosted_dispatch(a):
                 sys.exit("not_found: archived entity not found")
             card, year, archive = found
             kind = "tasks" if "num" in card else "contacts"
-            # kit v89: the server restores it, so check here that the restored record adds no reserved client or company
-            refuse_new_reserved_names(data, dict(data, **{kind: list(data.get(kind) or []) + [card]}))
+            # kit v89: the server restores it, so check here that the restored record adds no reserved client or company.
+            # Review round 2: the server restores the record as archived, so --client/--company is a save right after it
+            probe = copy.deepcopy(card)
+            renamed = restore_rename(probe, kind, a)
+            after = dict(data, **{kind: list(data.get(kind) or []) + [probe]})
+            if renamed and renamed[0] == "client" and renamed[2] and renamed[2] not in (data.get("clients") or []):
+                after["clients"] = list(data.get("clients") or []) + [renamed[2]]
+            refuse_new_reserved_names(data, after, restore_hint(card, kind), alone=True)
+            if renamed and kind == "tasks" and adapter.identity["agent_id"]:   # the save after it would need a claim the agent cannot hold yet
+                sys.exit("ineligible: an agent changes only a card it holds, so a person runs unarchive --client here; nothing was restored")
             prefix = "cards/" if "num" in card else "people/"
             # File GET supplies the archived entity revision needed by unarchive.
             entry = adapter.read(prefix + card["id"] + ".json")
@@ -1514,6 +1523,20 @@ def hosted_dispatch(a):
                 cmd.pop("card_id")
                 cmd.update(entity_id=card["id"], year=year, rootRev=adapter.files["tasks.json"]["rev"], archiveRev=archive["rev"])
         response = adapter.command(cmd)
+        if a.cmd == "unarchive" and renamed:
+            field, old, new = renamed
+            def fix(d):
+                for x in d.get(kind) or []:
+                    if x.get("id") == card["id"]:
+                        x[field] = new
+                if kind == "tasks" and new and new not in d.setdefault("clients", []):
+                    d["clients"].append(new)
+            try:
+                adapter.mutate(fix, f"Restore {card['id']} with {field} {new}")
+            except (HostedError, SystemExit) as e:
+                print(f"restored, but the {field} was not changed ({e}); change it now with "
+                      + ("keeptrack.py task-set" if kind == "tasks" else "the page"), file=sys.stderr)
+                return 1
         if a.cmd == "claim":
             adapter.store_proof(card["id"], session, {"session_id": session, "proof": proof, "fence": response["result"]["fence"]})
         if a.cmd in ("release", "done", "review", "archive"):
@@ -5924,12 +5947,14 @@ def reserved_name_uses(data):
     return collections.Counter(v for v, _ in reserved_name_places(data))
 
 
-def refuse_new_reserved_names(before, after):
+def refuse_new_reserved_names(before, after, fix=None, alone=False):
     """Kit v86: every write path ends here. A save that would store a reserved name (__proto__, constructor, prototype) in
     one more place than the board had before is refused, whichever command, import, proposal or field caused it. A save
     that only removes or renames one (client-rm, client-rename OLD NEW) has fewer uses, so a bad name can be cleaned up.
     Kit v89: archive and unarchive and the hosted add are checked too, and a name copied from one already on the board
-    says where it is and how to clean it up."""
+    says where it is and how to clean it up. fix (kit v89 review round 2): the caller's own way out, said whether or not
+    the name is still on the board (unarchive: restore it with a new name), after the usual advice unless alone (the hosted
+    CLI, which has no client-rename or person-set)."""
     was, now_ = reserved_name_uses(before), reserved_name_uses(after)
     grew = sorted(n for n in now_ if now_[n] > was.get(n, 0))
     if not grew:
@@ -5940,10 +5965,38 @@ def refuse_new_reserved_names(before, after):
     if places:
         shown = ", ".join(clean(w) for w in places[:5]) + (f" and {len(places) - 5} more" if len(places) > 5 else "")
         shown_name = f"'{name}'" if name.isprintable() else json.dumps(name)   # a control character never reaches the terminal raw
-        fix = (f"rename it first with: keeptrack.py client-rename {shown_name} NEW" if name in (before.get("clients") or [])
-               else "change each one first (task-set --client, project-set --client, person-set --company)")
+        usual = (f"rename it first with: keeptrack.py client-rename {shown_name} NEW" if name in (before.get("clients") or [])
+                 else "change each one first (task-set --client, project-set --client, person-set --company)")
+        fix = fix if fix and alone else f"{usual}, or {fix}" if fix else usual
         msg += f". This board already stores it ({shown}), and this change would copy it once more; {fix}"
+    elif fix:
+        msg += f"; {fix}"
     sys.exit(msg)
+
+
+def restore_rename(item, kind, a):
+    """Kit v89 review round 2: unarchive --client NEW (a card) or --company NEW (a person) replaces that field on the
+    record it restores, so a record whose name is reserved can come back with a new one. Returns (field, old, new) or None."""
+    client, company = getattr(a, "client", None), getattr(a, "company", None)
+    if kind == "tasks" and company is not None:
+        sys.exit("--company is for an archived person; use --client for a card")
+    if kind == "contacts" and client is not None:
+        sys.exit("--client is for an archived card; use --company for a person")
+    field, new = ("client", client) if kind == "tasks" else ("company", company)
+    if new is None:
+        return None
+    new = new.strip()
+    if _has_break(new):
+        sys.exit(f"the new {field} must be on one line")
+    old = item.get(field) or ""
+    item[field] = new
+    return field, old, new
+
+
+def restore_hint(item, kind):
+    """The unarchive command that restores this record with a new client or company name."""
+    ref = f"'#{item['num']}'" if kind == "tasks" and item.get("num") else f"'{clean(str(item.get('id')))}'"
+    return f"restore it with a new name: keeptrack.py unarchive {ref} --{'client' if kind == 'tasks' else 'company'} NEW"
 
 
 def clean_domain(v):
@@ -9216,13 +9269,19 @@ def _cmd_unarchive(a):
                 ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
                 item["rank"] = append_rank(ranks)
             item.setdefault("history", []).append({"at": now(), "by": who_am_i(item), "text": f"restored from {archive_path(y)}"})
+            renamed = restore_rename(item, k, a)
+            if renamed:
+                field, old, new = renamed
+                hist(item, f"{field} changed on restore: {old or '(none)'} -> {new or '(none)'}")
+                if k == "tasks" and new and new not in data.setdefault("clients", []):
+                    data["clients"].append(new)   # as task-set --client
             data[k].append(item)
         cur[k] = [x for x in cur[k] if x["id"] != item["id"]]
         idx = data.setdefault("archive", {}).setdefault("files", {}).setdefault(y, {"tasks": 0, "contacts": 0})
         idx["tasks"], idx["contacts"] = len(cur.get("tasks", [])), len(cur.get("contacts", []))   # counts come from the archive as it will be
         assign_nums(data)
         msg = f"Restore {label} from the archive"
-        refuse_new_reserved_names(before, data)   # a record whose client is reserved stays archived until client-rename
+        refuse_new_reserved_names(before, data, restore_hint(item, k))   # a reserved client stays archived unless --client/--company replaces it
         try:
             ok = save_changes(data, base, msg, extra={f"archive/{y}.json": _json_text(cur)})
         except UseGit:
@@ -10570,7 +10629,9 @@ def main():
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_archive)
     s = sub.add_parser("archived", help="list or search archived tasks and people"); s.add_argument("-q"); s.set_defaults(f=cmd_archived)
     s = sub.add_parser("archived-history", help="older history lines moved to the archive, for a task or person"); s.add_argument("ref"); s.set_defaults(f=cmd_archived_history)
-    s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref"); s.set_defaults(f=cmd_unarchive)
+    s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref")
+    s.add_argument("--client", help="restore a card with this client instead (e.g. when its archived client is a reserved name)")
+    s.add_argument("--company", help="restore a person with this company instead"); s.set_defaults(f=cmd_unarchive)
     s = sub.add_parser("client-set", help="set a client's north star or company record (stage, owner, domain, notes; \"\" clears)"); s.add_argument("client"); s.add_argument("--north-star", dest="north_star")
     s.add_argument("--stage", help="one of settings.stages; \"\" = use its people's stage"); s.add_argument("--owner", help="a board member's GitHub login; \"\" clears")
     s.add_argument("--domain", help="web domain, e.g. acme.com; \"\" clears"); s.add_argument("--notes", help="free text ('-' reads stdin); \"\" clears"); s.set_defaults(f=cmd_client_set)

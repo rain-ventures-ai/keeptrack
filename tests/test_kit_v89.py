@@ -74,11 +74,25 @@ class Board(unittest.TestCase):
         self.kt("unarchive", "#2")
         self.assertEqual("Proto Ltd", self.read("cards/t_second.json")["client"])
 
+    def test_unarchive_can_replace_a_reserved_name(self):   # kit v89 review round 2: a way out that needs no client-rename
+        self.set_field("cards/t_second.json", client="__proto__")   # an old board: the name is not in the client list
+        self.kt("archive", "#2")
+        r = self.kt("unarchive", "#2", ok=False)
+        self.assertIn(REFUSED, r.stderr)
+        self.assertIn("unarchive '#2' --client NEW", r.stderr, "the refusal names a command that works here")
+        self.assertIn(REFUSED, self.kt("unarchive", "#2", "--client", " constructor", ok=False).stderr)
+        self.assertIn("--company is for an archived person", self.kt("unarchive", "#2", "--company", "Proto Ltd", ok=False).stderr)
+        self.kt("unarchive", "#2", "--client", "Proto Ltd")
+        card = self.read("cards/t_second.json")
+        self.assertEqual("Proto Ltd", card["client"])
+        self.assertIn("client changed on restore: __proto__ -> Proto Ltd", json.dumps(card["history"]))
+        self.assertIn("Proto Ltd", self.read("tasks.json")["clients"])
+
     def test_archive_and_unarchive_run_the_check(self):   # both save directly, not through mutate
         src = open(KT, encoding="utf-8").read()
         for fn in ("def _cmd_archive(a):", "def _cmd_unarchive(a):"):
             body = src.split(fn, 1)[1].split("\ndef ", 1)[0]
-            self.assertIn("refuse_new_reserved_names(before, data)", body, fn)
+            self.assertIn("refuse_new_reserved_names(before, data", body, fn)
 
     def test_own_companies_are_counted(self):
         self.add_client("__proto__")

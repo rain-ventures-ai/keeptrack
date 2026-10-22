@@ -8,8 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Kit v89: the last gaps in the reserved client-name check (private-tasks card #287; v87 and v88 are other changes in
 flight). `archive` and `unarchive` save directly, so they now run the check themselves: an archived record whose client
-or company is `__proto__`, `constructor` or `prototype` stays archived until `client-rename` (which also rewrites the
-archive). The hosted `add --client` runs it before posting. Board members' `own_companies` count as uses, so
+or company is `__proto__`, `constructor` or `prototype` stays archived until it is restored with a new name
+(`unarchive '#N' --client NEW`, or `--company NEW` for a person; on hosted boards a person runs it, as an agent cannot
+change a card it does not hold) or renamed with `client-rename` (which also rewrites the archive; not on hosted boards).
+The refused restore, in the CLI and on the page, names that command. The hosted `add --client` runs it before posting. Board members' `own_companies` count as uses, so
 `member-set --own-company __proto__` is refused. Uses are counted by the exact stored string, so renaming
 `" __proto__"` to `"__proto__"` is refused (a padded name can still be renamed away). A command that would copy a
 reserved name already on the board (`todo-move`, `add --project`) names where it is stored and says how to clean it up.

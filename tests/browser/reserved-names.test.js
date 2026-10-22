@@ -75,6 +75,7 @@ class Github {
     let sheet = await pick('__proto__'); const writes = api.writes; await page.locator('#cWorkDone').click();
     const toast = page.locator('.ui-toast', { hasText: 'cannot be a client or company name' }); await toast.waitFor();
     assert.match(await toast.textContent(), /client-rename '__proto__' NEW/, 'the refusal says how to clean the old name up');
+    assert.doesNotMatch(await toast.textContent(), /Companies/, 'the page has no company rename (kit v89 review round 2)');
     await page.waitForTimeout(300);
     assert.equal(api.writes, writes, 'nothing was written'); assert.equal(JSON.stringify(api.files), before);
     assert.equal(api.card('t_one').client, '');
@@ -102,7 +103,8 @@ class Github {
     const archBefore = JSON.stringify(arch.files), archWrites = arch.writes;
     await ap.locator('#btnSearch').click(); await ap.locator('#qArch').check(); await ap.locator('#qQ').fill('Third'); await ap.locator('.qhit', { hasText: 'Third' }).click(); await ap.locator('#aRestore').click();
     const archToast = ap.locator('.ui-toast', { hasText: 'cannot be a client or company name' }); await archToast.waitFor();
-    assert.match(await archToast.textContent(), /client-rename '__proto__' NEW/, 'the refused restore says how to clean the old name up');
+    assert.match(await archToast.textContent(), /keeptrack\.py unarchive '#3' --client NEW/, 'the refused restore names a command that restores it (kit v89 review round 2)');
+    assert.doesNotMatch(await archToast.textContent(), /Companies/, 'no page action that does not exist');
     await ap.waitForTimeout(300);
     assert.equal(arch.writes, archWrites, 'a refused restore writes nothing'); assert.equal(JSON.stringify(arch.files), archBefore);
     assert.equal(arch.card('t_three'), null, 'the card stays archived');

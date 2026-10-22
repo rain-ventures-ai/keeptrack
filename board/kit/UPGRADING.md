@@ -31,6 +31,10 @@ v87 and v88 are other kit changes in flight; these can land in any order.
 - keeptrack.py also runs the check on `archive` and `unarchive` (they save directly), on the hosted `add --client`,
   and on board members' `own_companies`, so `member-set --own-company __proto__` is refused. Uses are counted by the
   exact stored string, so renaming `" __proto__"` to `"__proto__"` is refused.
+- `unarchive '#N' --client NEW` (`--company NEW` for a person) restores an archived record with a new client or
+  company, so one whose name is reserved can come back; a refused `unarchive`, in the CLI and on the page, names it.
+  It works on hosted boards too (a person runs it there: the new name is saved right after the restore, and an agent
+  can change only a card it holds), which have no `client-rename`.
 - A command that would copy a reserved name already on the board (`todo-move`, `add --project`, `unarchive`) says
   where it is stored and how to clean it up: `client-rename '__proto__' NEW` when it is in the client list (this also
   renames it in the archive and in `own_companies`), or `task-set --client` / `project-set --client` /
