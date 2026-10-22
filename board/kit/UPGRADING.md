@@ -38,6 +38,13 @@ v97 and v98 are reserved for the concurrent List view and image fixes.
 - Check: `kit-check` says v99. In a connected folder, run `where` with a different `BOARD_REPO` or `BOARD_API`;
   the folder's token must be reported as not used, without displaying token values.
 
+### v97 (schema 4)
+List view: select several tasks and see when each was last active (private-tasks card #307). Web board only. No data change and no migration.
+- Mark done is a square (the same `square` / `square-check` control as a task row in a person or project record), in List and in Schedule, so it is not mistaken for a select box. List adds a real tick box on each row and a select-all box for the rows that table is showing.
+- With rows selected, a bar stays at the top of the list: **Move to…** (a column), **Mark done**, **Copy IDs** (for example `#150 #96`) and **Clear selection**. Move and Mark done are off on a read-only board. The selection is kept only in this tab and clears when you leave List.
+- **Activity** is the newer of the card's last edit, its latest comment and its latest history entry, as a relative time (`3d ago`; hover for the exact time). A card with nothing for 14 days is marked so it is easy to spot. On a phone the time sits under the title.
+- Run `kit-update` only. Check: `kit-check` says v97, and List shows a select box and an Activity column.
+
 ### v96 (schema 4)
 An Archive view to browse archived cards and people (private-tasks card #283). Web board only. No data change and no migration:
 it reads the archive files that `keeptrack.py archive` and the web board already write (`archive/<year>.json`).
