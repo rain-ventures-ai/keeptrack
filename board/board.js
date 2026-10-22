@@ -6252,7 +6252,7 @@ if (typeof window !== 'undefined') (() => {
     const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
     const who = el('button', 'colink', p.name || '(no name)'); who.type = 'button'; who.title = `Open ${p.name}`; who.onclick = () => { $('dlgClient').close(); openContact(p.id); }; roKeep(who);
     head.append(elI('span', 'tchan', ic, label), who, el('span', 'muted', 'by ' + (cm.by || '?')), el('time', null, ago2(cm.sent_at || cm.at)));
-    head.lastChild.title = cm.sent_at || cm.at || ''; if (touchUrl(cm)) head.append(touchSource(p, cm, false));
+    head.lastChild.title = cm.sent_at || cm.at || ''; if (cm.url) head.append(touchSource(p, cm, false));
     if (cm.draft) head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
     const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); return row;
   }
@@ -8299,10 +8299,10 @@ if (typeof window !== 'undefined') (() => {
     let parsed; try { parsed = new URL(url); } catch { return ''; }
     if (parsed.hostname.toLowerCase().replace(/\.+$/, '') !== 'mail.google.com') return url;
     const parts = parsed.hash.slice(1).split('/'), route = parts[0].toLowerCase();
-    const count = ['search', 'label', 'category'].includes(route) ? 3 : ['all', 'inbox', 'sent', 'drafts', 'starred', 'important', 'snoozed', 'spam', 'trash', 'scheduled'].includes(route) ? 2 : 0;
+    const mailbox = ['all', 'inbox', 'sent', 'drafts', 'starred', 'important', 'snoozed', 'spam', 'trash', 'scheduled'].includes(route);
     const thread = parts[parts.length - 1].split('?')[0];
-    // Match the CLI's conservative legacy/web ID shapes; arbitrary label/search words are not thread IDs.
-    if (!count || parts.length < count || /^p[0-9]+$/i.test(thread) || !/^(?:[0-9a-fA-F]{16}|FMfcgz[A-Za-z0-9_-]{20,512})$/.test(thread)) return '';
+    // Match CLI mailbox/thread-only routes; an ID-shaped label/search word is still private view data.
+    if (!mailbox || parts.length !== 2 || !/^(?:[0-9a-fA-F]{1,16}|FMfcgz[A-Za-z0-9_-]{20,512})$/.test(thread)) return '';
     const account = parsed.pathname.match(/^\/mail\/u\/([0-9]+)\/?$/);
     return 'https://mail.google.com' + (account ? `/mail/u/${account[1]}/` : '/mail/') + '#all/' + thread;
   }
@@ -8312,13 +8312,14 @@ if (typeof window !== 'undefined') (() => {
     if (url) { let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
       const a = elI('a', 'tsrclink', 'arrow-up-right', host === 'mail.google.com' ? 'Open in Gmail' : 'Open original'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
       a.title = `Open the original in a new tab: ${host || url}`; box.append(roKeep(a)); }
+    if (cm.url && !url) box.append(el('span', 'muted', 'Source link unavailable; use a canonical mailbox/thread link.'));
     if (editable && !ro) box.append(ui.iconButton({ icon: url ? 'pencil' : 'link', label: url ? 'Change source link' : 'Add source link (for example the Gmail thread)', size: 'sm', onClick: () => setTouchUrl(p.id, cm.id, url) }));
     return box;
   }
   async function setTouchUrl(pid, cmid, cur) {
-    const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the original thread link. Gmail searches and labels are removed; only the thread link is saved. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
+    const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the original thread link. Use a Gmail mailbox/thread link (for example #all/<thread id>); search, label, category and pagination views are refused. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
     if (v === null) return; const raw = v.trim(), url = touchUrl({ url: raw });
-    if (raw && !url) { toast('Enter one link starting with https://. Gmail links must open an individual thread.', true); return; }
+    if (raw && !url) { toast('Enter one link starting with https://. Gmail links must use mailbox/thread only; search, label, category, pagination and extra segments are refused.', true); return; }
     pedit(pid, x => { const c = x.comments.find(y => y.id === cmid); if (!c) return; if (url) c.url = url; else delete c.url; }, `Source link: ${nameOf(pid)}`);
   }
   async function markSent(pid, cmid) {
@@ -8632,10 +8633,25 @@ if (typeof window !== 'undefined') (() => {
     return o;
   }
   function archRawIn(data, kind, id) {   // one archived card or person as that year's file has it (Put back writes this; archNorm is for display only), with its older history lines; null when not there
-    const k = kind === 'task' ? 'tasks' : 'contacts', x = isObj(data) && Array.isArray(data[k]) ? data[k].find(x => isObj(x) && x.id === id) : null; if (!x) return null;
+    const k = kind === 'task' ? 'tasks' : 'contacts', x = isObj(data) && Array.isArray(data[k]) ? data[k].find(x => isObj(x) && safeCardId(x.id) && x.id === id) : null; if (!x) return null;
     const own = Object.fromEntries(Object.entries(x).filter(([key]) => !reservedKey(key)));   // own keys only: a "__proto__" key in the file never reaches the board
     own.history = archArr(isObj(data.history) && has(data.history, id) ? data.history[id] : null, isObj).concat(archArr(x.history, isObj));   // older lines first; only real entries
     return own;
+  }
+  async function restoreHistory(src, id, fresh, meta, at, gen) {
+    // A live record's trimmed history can predate the file holding its archived body. Read from this fresh
+    // snapshot, not the view/cache, and retain other files as historical evidence (as the CLI does).
+    const keys = Object.keys((fresh.archive || {}).files || {}).filter(archivePartKey)
+      .sort((a, b) => Number(a.slice(0, 4)) - Number(b.slice(0, 4)) || Number(a.slice(5) || 0) - Number(b.slice(5) || 0));
+    const files = await mapLimit(keys, 8, async key => {
+      const entry = await archiveEntry(meta, key, at, gen);
+      if (!entry || !isObj(entry.obj)) throw new Error('An indexed archive file is missing or invalid. Nothing restored.');
+      return entry.obj;
+    });
+    const seen = new Set(), history = [];
+    const append = lines => { for (const line of archArr(lines, isObj)) { const token = JSON.stringify(line); if (!seen.has(token)) { seen.add(token); history.push(line); } } };
+    for (const file of files) append(isObj(file.history) && has(file.history, id) ? file.history[id] : null);
+    append(src.history); src.history = history; return src;
   }
   function restoredItem(src, kind) {   // the board's own per-card tolerance (normalise) for one restored card or person: missing lists filled, unknown and non-text fields kept
     const k = kind === 'task' ? 'tasks' : 'contacts', x = normalise({ [k]: [clone(src)] })[k][0];
@@ -8646,7 +8662,7 @@ if (typeof window !== 'undefined') (() => {
     const out = { tasks: [], contacts: [] }; if (!isObj(data)) return out;
     const hist = isObj(data.history) ? data.history : {};
     const withHist = x => { const h = archArr(hist[x.id], isObj); return h.length ? Object.assign({}, x, { history: h.concat(x.history) }) : x; };   // older history lines kept in the same file
-    const seen = new Set(), first = x => isObj(x) && isStr(x.id) && !seen.has(x.id) && !!seen.add(x.id);   // one item per id in a year: a repeated id is skipped (search needs unique ids)
+    const seen = new Set(), first = x => isObj(x) && safeCardId(x.id) && !seen.has(x.id) && !!seen.add(x.id);   // one item per id in a year: a repeated id is skipped (search needs unique ids)
     out.tasks = archArr(data.tasks, first).map(t => withHist(archNorm(t, 'task'))); seen.clear();
     out.contacts = archArr(data.contacts, first).map(p => withHist(archNorm(p, 'contact')));
     if (count) window.kbArchNormYears = (window.kbArchNormYears || 0) + 1; return out;
@@ -8932,6 +8948,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function restoreArchived(...args) { return trackRun(restoreArchivedRun(...args)); }
   async function restoreArchivedRun(kind, item, y, open = true) {
+    if (!['task', 'contact'].includes(kind) || !isObj(item) || !safeCardId(item.id) || !archivePartKey(y)) { toast('Invalid archived item; nothing restored.', true); return; }
     if (HOSTED) { const ok = await hostedArchive(item, y, true); if (ok && open && kind === 'task') openCard(item.id); return; }   // open: show the restored card or person afterwards
     if (writeBlocked()) return;
     const ag = archGen, at = Object.assign({}, cfg()), gone = () => ag !== archGen, name = item.title || item.name;   // as archiveNow: this board, until a Forget token or another board
@@ -8944,12 +8961,12 @@ if (typeof window !== 'undefined') (() => {
           if (!src) { refuse(fresh[k].some(x => x.id === item.id)); return; }   // the card, or its whole year file, is gone
           const nextArchive = clone(entry.obj);
           if (!fresh[k].some(x => x.id === item.id)) {
-            const x = restoredItem(src, kind);
+            const x = restoredItem(await restoreHistory(src, item.id, fresh, got.meta, at, ag), kind);
             // kit v89 review: this save skips mutateNow, so it runs the reserved-name check itself before the record comes back
             const grewName = reservedGrew(fresh, Object.assign({}, fresh, { [k]: fresh[k].concat([x]) }));
             if (grewName != null) { toast(restoreRefusedMsg(grewName, k, x), true); return; }
             fresh[k].push(x); if (kind === 'task' && !Number.isInteger(src.num)) assignNums(fresh); ensureRanks(fresh); }
-          nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
+          nextArchive[k] = (nextArchive[k] || []).filter(x => !isObj(x) || x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
           fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
           const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) }, true, ag);
           if (out === 'gone' || ag !== archGen) return;   // Forget token or another board meanwhile

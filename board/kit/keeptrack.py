@@ -1905,12 +1905,12 @@ def rewrite_archives(data, edit):
     n = 0
     for y in archive_years(data):
         cur, _ = read_archive(y, _MUT["base"])
-        before_size = len(_json_text(cur).encode()) if cur else 0
+        before_size = getattr(cur, "stored_bytes", None) if cur is not None else 0
         k = edit(cur) if cur else 0
         if k:
             text = _json_text(cur)
             found = archive_size_issue(f"archive/{y}.json", len(text.encode()))
-            if found and found[0] == "FILE_SIZE" and len(text.encode()) > before_size:
+            if found and found[0] == "FILE_SIZE" and (before_size is None or len(text.encode()) > before_size):
                 sys.exit(f"not saved: archive/{y}.json would be {len(text.encode()) // 1024} KB, over its {ARCHIVE_FILE_MAX // 1024} KB limit, "
                          "so this change to the archive is refused and nothing was written. " + ARCHIVE_NEXT_STEP)
             if found:
@@ -6441,7 +6441,9 @@ def cmd_person(a):
         print(f"  [{clean(str(c['at'])[:16], 16)}] {clean(c.get('channel', 'note'), 40)}{' DRAFT (not sent) ' + clean(c['id'], 40) if c.get('draft') else ''} "
               f"{clean(c.get('by', '?'), 80)}: {clean_lines(c['text'], '    ')}")
         if c.get("source_message_ids"): print("    source messages: " + ", ".join(clean(x, 200) for x in c["source_message_ids"]))
-        if isinstance(c.get("url"), str) and c["url"]: print(f"    source link ({clean(c['id'], 40)}): {clean(c['url'], 2000)}")
+        if isinstance(c.get("url"), str) and c["url"]:
+            source_url = normalise_touch_url(c["url"])
+            print(f"    source link ({clean(c['id'], 40)}): {clean(source_url, 2000) if source_url else 'unavailable; use a canonical mailbox/thread link'}")
     tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
     for x in tasks: print("  task: " + line(data, x))
     by_who, cards = waiting_index(data)
@@ -6496,36 +6498,42 @@ def cmd_person_rm(a):
     mutate(fn, f"Delete person: {a.ref}")
 
 
-def check_touch_url(url):
-    """A source link; Gmail saves only its thread ID and optional numeric account selector."""
+def normalise_touch_url(url):
+    """Read-only source normalizer: safe URL or None; invalid stored data never aborts a read."""
     url = str(url or "").strip()
     if not url:
         return ""
-    error = "source link must be one http(s) URL of at most 2000 characters, such as https://mail.google.com/mail/u/0/#all/<thread id>"
     if not re.match(r"^https?://[^\s/]+", url, re.I) or len(url) > 2000 or any(ch.isspace() for ch in url) or "\\" in url:
-        sys.exit(error)
+        return None
     try:
         parsed = urllib.parse.urlsplit(url)
         host = urllib.parse.unquote(parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
     except (ValueError, UnicodeError):
-        sys.exit(error)
+        return None
     if not host:
-        sys.exit(error)
+        return None
     if host != "mail.google.com":
         return url
     parts = parsed.fragment.split("/")
     route = parts[0].lower()
     mailboxes = {"all", "inbox", "sent", "drafts", "starred", "important", "snoozed", "spam", "trash", "scheduled"}
-    count = 3 if route in {"search", "label", "category"} else 2 if route in mailboxes else 0
     thread = parts[-1].split("?", 1)[0]
-    # Recognise a conservative subset, not arbitrary final label/search words: full-width legacy
-    # hex IDs (https://developers.google.com/workspace/gmail/imap/imap-extensions#access_to_the_gmail_thread_id_x-gm-thrid)
-    # and observed FMfcgz-prefixed web IDs. Other/short ambiguous forms fail closed without account access.
-    if not count or len(parts) < count or re.fullmatch(r"p[0-9]+", thread, re.I) or not re.fullmatch(r"(?:[0-9a-fA-F]{16}|FMfcgz[A-Za-z0-9_-]{20,512})", thread):
-        sys.exit("source link must identify one Gmail thread, not a mailbox, search or label")
+    # Only canonical mailbox/thread routes are unambiguous. Label/search words can themselves look like IDs.
+    # Legacy thread IDs are unsigned 64-bit values represented in hex; retain their 1-16 digit forms.
+    if (route not in mailboxes or len(parts) != 2
+            or not re.fullmatch(r"(?:[0-9a-fA-F]{1,16}|FMfcgz[A-Za-z0-9_-]{20,512})", thread)):
+        return None
     account = re.fullmatch(r"/mail/u/([0-9]+)/?", parsed.path)
     path = f"/mail/u/{account.group(1)}/" if account else "/mail/"
     return "https://mail.google.com" + path + "#all/" + thread
+
+
+def check_touch_url(url):
+    """Writing requires a supported source; a refusal never silently drops a requested URL."""
+    value = normalise_touch_url(url)
+    if value is None:
+        sys.exit("source link must be one http(s) URL of at most 2000 characters; a Gmail thread must use mailbox/thread only, without search, label, category, pagination or extra segments")
+    return value
 
 
 def cmd_touch_url(a):
@@ -9871,12 +9879,24 @@ def archive_index(data, year, cur):
     a["last_run"] = now()
 
 
+class ArchiveRead(dict):
+    """Parsed archive with transport byte metadata outside the JSON schema."""
+    def __init__(self, body, stored_bytes):
+        super().__init__(body)
+        self.stored_bytes = stored_bytes
+
+
+def archive_decoded(text, stored_bytes):
+    body = json.loads(text)
+    return ArchiveRead(body, stored_bytes) if isinstance(body, dict) else body
+
+
 def read_archive(year, base):
     """(data or None, sha) of one archive file, from the same place as the board file."""
     if BACKEND == "hosted" and not FILE:
         try:
             file = storage_adapter().read(f"archive/{check_year(year)}.json")
-            return file["body"], file["rev"]
+            return (ArchiveRead(file["body"], None) if isinstance(file["body"], dict) else file["body"]), file["rev"]
         except HostedError as e:
             if e.status == 404:
                 return None, None
@@ -9897,29 +9917,37 @@ def read_archive(year, base):
                 with open(local_archive_file(year), encoding="utf-8") as src:
                     entry["text"] = src.read()
         try:
-            return json.loads(entry["text"]), entry.get("sha")
+            size = entry.get("size")
+            size = size if type(size) is int and size >= 0 else len(entry["text"].encode("utf-8"))
+            return archive_decoded(entry["text"], size), entry.get("sha")
         except ValueError as e:
             sys.exit(f"cannot read {pth}: invalid JSON ({e})")
     if FILE:
         f = local_archive_file(year)
         if not os.path.exists(f):
             return None, None
-        with open(f, encoding="utf-8") as src:
-            return json.load(src), None
+        with open(f, "rb") as src:
+            raw = src.read()
+        return archive_decoded(raw.decode("utf-8"), len(raw)), None
     if WRITE == "git":
         head = base.get("head") if isinstance(base, dict) else base
         rc, raw, _ = git("show", f"{head}:{pth}")
-        return (json.loads(raw) if rc == 0 else None), None
+        if rc:
+            return None, None
+        size_rc, size, _ = git("cat-file", "-s", f"{head}:{pth}")
+        return archive_decoded(raw, int(size) if size_rc == 0 and size.isdigit() else None), None
     hit = cached_read(pth)
     if hit:
-        return json.loads(hit[0]), hit[1]
+        return archive_decoded(hit[0], len(hit[0].encode("utf-8"))), hit[1]
     rc, out, err = gh(f"repos/{REPO}/contents/{pth}?ref={BRANCH}")
     if rc:
         if "404" in err or "Not Found" in out:
             return None, None
         sys.exit(f"cannot read {pth}: {err.strip() or out.strip()}")
     d = json.loads(out)
-    return json.loads(content_text(pth, d)), d["sha"]
+    text = content_text(pth, d)
+    size = d.get("size")
+    return archive_decoded(text, size if type(size) is int and size >= 0 else None), d["sha"]
 
 
 def write_archive(year, cur, sha, message):
@@ -9942,6 +9970,14 @@ class ArchiveUnpackable(ValueError):
     pass
 
 
+def valid_archive_records(cur):
+    """Validate ids before any set/dict membership in merge or packing."""
+    return isinstance(cur, dict) and all(
+        isinstance(cur.get(kind, []), list) and all(
+            isinstance(item, dict) and isinstance(item.get("id"), str) and SAFE_ID.fullmatch(item["id"])
+            for item in cur.get(kind, [])) for kind in ("tasks", "contacts", "proposals"))
+
+
 def shard_archive_family(year, current, current_sha, incoming, data, base, absorbed_ids=()):
     """Pack a logical year atomically. Existing envelopes retain every unknown field and their file names; no
     archive file is deleted. Entity and older history stay together. Per-unit size estimates are conservative,
@@ -9953,10 +9989,8 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     keys = sorted(family, key=lambda key: 0 if key == year else int(key[5:]))
     if any(not isinstance(family[key][0], dict) for key in keys):
         raise ArchiveUnpackable("an indexed archive part is missing or invalid")
-    for cur, _ in family.values():
-        for kind in ("tasks", "contacts", "proposals"):
-            if not isinstance(cur.get(kind, []), list) or any(not isinstance(item, dict) for item in cur.get(kind, [])):
-                raise ArchiveUnpackable("an archive collection contains invalid records")
+    if any(not valid_archive_records(cur) for cur, _ in family.values()) or not valid_archive_records(incoming):
+        raise ArchiveUnpackable("an archive collection contains invalid records")
     incoming_ids = {x["id"] for kind in ("tasks", "contacts", "proposals") for x in incoming.get(kind, [])}
     records, histories, history_seen = {}, {}, {}
     updates = {item["id"]: (kind, item) for kind in ("tasks", "contacts", "proposals")
@@ -9968,7 +10002,7 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
             if not isinstance(cur.get(kind, []), list):
                 raise ArchiveUnpackable("an archive collection is not a list")
             for item in cur.get(kind, []):
-                if not isinstance(item, dict) or not SAFE_ID.fullmatch(str(item.get("id", ""))):
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not SAFE_ID.fullmatch(item["id"]):
                     raise ArchiveUnpackable("an archive record has no safe id")
                 ident = item["id"]
                 if ident in incoming_ids:
@@ -10046,7 +10080,7 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
         for y in sorted(plan):
             part, rel = plan[y], f"archive/{y}.json"
             cur, sha = read_archive(y, base)
-            if cur is not None and (not isinstance(cur, dict) or any(not isinstance(cur.get(kind, []), list) or any(not isinstance(item, dict) for item in cur.get(kind, [])) for kind in ("tasks", "contacts", "proposals"))):
+            if (cur is not None and not valid_archive_records(cur)) or not valid_archive_records(part):
                 sys.exit(f"not saved: {rel} contains invalid archive records; nothing changed")
             cur = archive_merge(cur, part, y)
             if ref_orig is not None:   # one card: the archive's lines for it move onto the card copy, as the write does

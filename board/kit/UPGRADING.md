@@ -40,7 +40,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v101 (schema 4)
 Archive size follow-ups (private-tasks card #288). No data change and no migration; run `kit-update` only.
 - Split-board archive messages count only the years actually saved, excluding held items and history.
-- Label, client and stage rewrites may shrink or leave unchanged an already oversized archive year; further growth above 900 KB is refused. Size warnings print once, after a successful save.
+- Label, client and stage rewrites may shrink or leave unchanged an already oversized archive year; further growth above 900 KB is refused. The comparison uses the original stored UTF-8 bytes, including compact formatting; if that size is unavailable, an oversized rewrite is refused. Size warnings print once, after a successful save.
 - Held CLI tasks and people retain their original list positions. Their history is trimmed under `keep_history` when the current year's history archive fits; if that year is also held, the history stays on the board.
 - Hosted archive writes are performed by the server rather than the GitHub year-file path. The browser's 700 KB warning and 900 KB hold-back check do not apply to hosted writes; hosted storage uses the server's limits. This release adds no browser-side size guarantee for hosted archives.
 - Check: an archive run holding one oversized year reports only saved items, and shrinking renames work without repeating warnings on retries.
@@ -48,15 +48,14 @@ Archive size follow-ups (private-tasks card #288). No data change and no migrati
 ### v100 (schema 4)
 Gmail source-link privacy and record navigation fixes. No data change or migration; `kit-update` copies the files.
 - New Gmail source links save only the thread ID as `#all/<id>` and an optional numeric account selector such as
-  `/mail/u/0/`. Search words, label names, query parameters and account addresses are removed by the browser and CLI.
+  `/mail/u/0/`. Query parameters and account addresses are removed by the browser and CLI. Search, label and category routes are refused, even when their final word looks like a thread ID.
   Gmail pagination and ambiguous mailbox/search/label/category links are refused. Recognition is deliberately limited
-  to full-width legacy 16-hex IDs and observed `FMfcgz` web IDs with a bounded suffix; other formats fail closed.
-  This does not verify that the thread exists in an account. Existing Gmail source links are shown
-  with the same clean target; stored old entries are not rewritten until edited.
+  to legacy 1-16-hex IDs and observed `FMfcgz` web IDs with a bounded suffix; other formats fail closed.
+  This does not verify that the thread exists in an account. Existing Gmail source links in the browser and CLI person output are shown
+  with a canonical target, or a neutral unavailable warning for rejected routes; stored old entries are not rewritten until edited.
 - A missing record reached through Back/Forward resets its history entry to the current view, so the next person,
   company or project drawer creates its own entry. The CLI accepts uppercase `HTTPS://`, as the browser does.
-- Check: `kit-check` reports v100. Save a Gmail search-thread link and verify its saved URL uses `#all/<id>` without
-  the search; navigate Forward to a deleted person, open another person, then Back should close that drawer.
+- Check: `kit-check` reports v100. Save a mailbox/thread link and verify its saved URL uses `#all/<id>`; refuse a search/label view even with an ID-shaped final segment; navigate Forward to a deleted person, open another person, then Back should close that drawer.
 
 ### v99 (schema 4)
 Token and board selection edge cases. No data change and no migration; run `kit-update`.

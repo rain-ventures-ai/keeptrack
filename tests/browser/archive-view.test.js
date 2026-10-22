@@ -441,6 +441,36 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       assert.equal(back().history[0].text, 'older line', 'the older history lines come back first');
       assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
 
+    // Put back rehydrates history across older years and part files in both layouts, even after the view cached them.
+    for (const layout of ['split', 'single']) {
+      const api = new Github();
+      const root = api.json('tasks.json'); root.archive.files['2025-2'] = { tasks: 0, contacts: 0 };
+      api.files['tasks.json'] = text(root);
+      const older = { at: '2025-01-01T00:00:00Z', by: 'alex', text: 'older year history' };
+      const middle = { at: '2025-02-01T00:00:00Z', by: 'alex', text: 'older part history' };
+      const own = { at: stamp, by: 'alex', text: 'own latest history' };
+      const a = api.json('archive/2026.json'); a.tasks.find(t => t.id === 'a26_one').history = [middle, own, own];
+      a.history.a26_one = [middle]; api.files['archive/2026.json'] = text(a);
+      const prev = api.json('archive/2025.json'); prev.history.a26_one = [older, older]; api.files['archive/2025.json'] = text(prev);
+      api.files['archive/2025-2.json'] = text({ version: 3, archive: true, year: '2025', tasks: [], contacts: [], history: { a26_one: [older, middle] } });
+      if (layout === 'single') api.single();
+      const page = await open(browser, api); await waitNums(page, ['#22', '#21', '#20', '#11', '#10']);
+      // Change older history after the Archive view loaded: Put back must use its own fresh reads.
+      const late = { at: '2025-03-01T00:00:00Z', by: 'alex', text: 'fresh older history' };
+      const changed = api.json('archive/2025-2.json'); changed.history.a26_one.push(late); api.files['archive/2025-2.json'] = text(changed);
+      api.head = 'head-' + ++api.n;   // a real external commit changes the immutable tree identity too
+      await page.locator('.archrow', { hasText: 'Invoice March' }).click(); await page.locator('#aRestore').click();
+      await page.locator('#dlgArch').waitFor({ state: 'hidden' });
+      const back = () => layout === 'split' ? api.json('cards/a26_one.json') : api.json('tasks.json').tasks.find(t => t.id === 'a26_one');
+      for (let i = 0; i < 80 && !back(); i++) await page.waitForTimeout(100);
+      assert.ok(back(), `${layout}: restored card exists`);
+      assert.deepEqual(back().history.slice(0, 4).map(h => h.text), [older.text, middle.text, late.text, own.text], `${layout}: all indexed history is hydrated fresh in year/part order`);
+      assert.equal(back().history.filter(h => h.text === middle.text).length, 1, `${layout}: repeated history is deduplicated`);
+      assert.equal(back().history.filter(h => h.text === own.text).length, 1, `${layout}: own duplicates are deduplicated`);
+      assert.equal(api.json('archive/2025.json').history.a26_one[0].text, older.text, 'other archive evidence is retained');
+      assert.deepEqual(page.errors, [], `${layout}: no page errors`); await page.done();
+    }
+
     // ---- split board: Put back reads the year file from a fresh snapshot. A card that left that file elsewhere (deleted or
     //      purged), or a year file that is gone, is refused, the archived card closes and nothing is written; the page's
     //      loaded copy never brings it back ----
@@ -466,6 +496,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       const api = new Github(); if (layout === 'single') api.single();
       const a = api.json('archive/2026.json');
       a.tasks = a.tasks.map(t => { if (t.id !== 'a26_one') return t; const x = { ...t, history: [null, { at: stamp, by: 'alex', text: 'own line' }] }; delete x.labels; delete x.links; delete x.todos; return x; });
+      a.tasks.unshift(null, { id: { invalid: true }, title: 'Malformed id' }, { id: '../unsafe', title: 'Unsafe id' });
       a.history = { a26_one: [null, { at: stamp, by: 'alex', text: 'older line' }, 'junk'] };
       api.files['archive/2026.json'] = text(a).replace('"id": "a26_one",', '"__proto__": { "polluted": true },\n      "constructor": { "polluted": true },\n      "id": "a26_one",');
       assert.ok(api.files['archive/2026.json'].includes('"__proto__"'), 'the fixture carries an own __proto__ key');

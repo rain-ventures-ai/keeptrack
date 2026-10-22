@@ -16,7 +16,8 @@ import keeptrack as k
 
 class ArchiveFollowups(unittest.TestCase):
     def archive(self, size):
-        return {'version': 3, 'archive': True, 'year': '2025', 'tasks': [], 'contacts': [], 'history': {}, 'pad': 'x' * size}
+        body = {'version': 3, 'archive': True, 'year': '2025', 'tasks': [], 'contacts': [], 'history': {}, 'pad': 'x' * size}
+        return k.ArchiveRead(body, len(k._json_text(body).encode('utf-8')))
 
     def test_rewrite_allows_oversized_shrinks_or_equal_size_but_refuses_growth(self):
         for delta in (-100, 0, 100):
@@ -56,6 +57,58 @@ class ArchiveFollowups(unittest.TestCase):
             self.assertEqual(errors.getvalue().count('warning: archive/2025.json:'), 1)
         finally:
             k._MUT.clear(); k._MUT.update(saved)
+
+    def test_archive_read_keeps_transport_byte_size_outside_json_fields(self):
+        raw = '{\r\n"tasks":[],"contacts":[],"history":{},"note":"é"\r\n}\r\n'
+        size = len(raw.encode('utf-8'))
+        base = {'files': {'archive/2025.json': {'text': raw, 'sha': 'blob', 'size': size}}}
+        body, sha = k.read_archive('2025', base)
+        self.assertEqual((body.stored_bytes, sha), (size, 'blob'))
+        self.assertNotIn('stored_bytes', json.loads(k._json_text(body)))
+        with tempfile.TemporaryDirectory() as folder:
+            os.makedirs(os.path.join(folder, 'archive'))
+            with open(os.path.join(folder, 'archive', '2025.json'), 'wb') as fh:
+                fh.write(raw.encode('utf-8'))
+            with mock.patch.object(k, 'FILE', os.path.join(folder, 'tasks.json')):
+                body, _ = k.read_archive('2025', None)
+                self.assertEqual(body.stored_bytes, size, 'CRLF and non-ASCII bytes are counted as stored')
+        with mock.patch.object(k, 'FILE', None), mock.patch.object(k, 'WRITE', 'git'), mock.patch.object(k, 'git', side_effect=[(0, raw.strip(), ''), (0, str(size), '')]) as git:
+            body, _ = k.read_archive('2025', 'head')
+            self.assertEqual(body.stored_bytes, size, 'Git metadata wins over stripped command text')
+            self.assertEqual(git.call_args.args[:2], ('cat-file', '-s'))
+        with mock.patch.object(k, 'FILE', None), mock.patch.object(k, 'WRITE', 'api'), mock.patch.object(k, 'cached_read', return_value=(raw, 'cached')):
+            body, sha = k.read_archive('2025', None)
+            self.assertEqual((body.stored_bytes, sha), (size, 'cached'))
+
+    def test_real_cli_equal_rename_cannot_expand_a_compact_oversized_archive(self):
+        from board_fixtures import copy_board_fixture
+        with tempfile.TemporaryDirectory() as folder:
+            board = os.path.join(folder, 'board'); copy_board_fixture('v3', board)
+            path = os.path.join(board, 'tasks.json')
+            with open(path) as fh:
+                data = json.load(fh)
+            data['labels'] = [{'name': 'Before', 'color': '#123456'}]; data['archive'] = {'files': {'2025': {'tasks': 1, 'contacts': 0}}}
+            with open(path, 'w') as fh:
+                json.dump(data, fh)
+            archive = dict(self.archive(k.ARCHIVE_FILE_MAX + 1000))
+            archive['tasks'] = [{'id': 't_old', 'num': 77, 'title': 'Old', 'labels': ['Before'],
+                                 'history': [{'at': '2026-10-22T12:00:00.000Z', 'by': 'codex@alex', 'text': 'label Before renamed to After!'}] * 200}]
+            archive_path = os.path.join(board, 'archive', '2025.json'); os.makedirs(os.path.dirname(archive_path), exist_ok=True)
+            raw = json.dumps(archive, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            with open(archive_path, 'wb') as fh:
+                fh.write(raw)
+            with open(path, 'rb') as fh:
+                before_board = fh.read()
+            env = dict(os.environ, BOARD_USER='alex', BOARD_AGENT='codex', BOARD_SESSION='compact288test', BOARD_WRITE='local', BOARD_PROJECT='')
+            for key in ('BOARD_REPO', 'BOARD_TOKEN', 'BOARD_HOSTED_API', 'BOARD_API'):
+                env.pop(key, None)
+            result = subprocess.run([sys.executable, k.__file__, '--file', path, 'label-set', 'Before', '--rename', 'After!'], env=env, cwd=folder, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('this change to the archive is refused', result.stderr)
+            with open(archive_path, 'rb') as fh:
+                self.assertEqual(raw, fh.read())
+            with open(path, 'rb') as fh:
+                self.assertEqual(before_board, fh.read())
 
     def test_held_tasks_and_people_keep_positions_and_trim_history_when_other_year_fits(self):
         history = [{'text': str(i)} for i in range(5)]
