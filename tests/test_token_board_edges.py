@@ -35,6 +35,16 @@ class TokenBoardEdges(v90.FolderTokenWins):
                 self.assertIn("not used: BOARD_API", self.line(r.stdout, "auth:"))
                 self.assertNotIn("folder-value", r.stdout + r.stderr)
 
+    def test_without_a_resolved_board_the_folder_token_is_not_promoted(self):
+        d = self.folder({"token_env": "KT_V90_TOKEN"})
+        for shell in ("shell-value", ""):
+            with self.subTest(shell=bool(shell)):
+                env = self.env(BOARD_TOKEN=shell, KT_V90_TOKEN="folder-value")
+                self.assertEqual(shell, self.token_in(d, env))
+                r = self.run_kt(d, env, "where")
+                self.assertIn("(none)", self.line(r.stdout, "board:"))
+                self.assertIn("not used", self.line(r.stdout, "auth:"))
+
     def test_empty_shell_repo_uses_the_resolved_clone_before_selecting_token(self):
         c = self.clone("o/clone")
         cfg = os.path.join(c, ".keeptrack")

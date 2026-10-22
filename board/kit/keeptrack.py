@@ -296,7 +296,7 @@ if _tv and _tv != "BOARD_TOKEN" and os.environ.get(_tv):
     # The config supplies a github.com credential only for its resolved board and API host.
     # An empty BOARD_REPO falls back to the clone, rather than the config's repo.
     _api = urllib.parse.urlparse(os.environ.get("BOARD_API", "https://api.github.com"))
-    if REPO.lower() != str(PROJECT.get("repo") or "").lower():
+    if not REPO or REPO.lower() != str(PROJECT.get("repo") or "").lower():
         TOKEN_SKIPPED = "the resolved board differs from this folder's board"
     elif (_api.scheme != "https" or _api.hostname != "api.github.com" or _api.netloc.lower() not in ("api.github.com", "api.github.com:443")
           or _api.username or _api.password):
