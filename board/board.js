@@ -3981,7 +3981,7 @@ if (typeof window !== 'undefined') (() => {
         // Restoring the same URL after a delayed load must not reset an open
         // settings section (e.g. collapse the connection form after token reuse).
         if (!alreadyOpen || settingsRoute !== valid) settingsTab(valid); }
-      else if (recordRoute(q)) { const r = recordRoute(q); if (!openRecord(r) && lastSyncOk) toast(`This ${r.kind} was not found on this board`, true); }   // before the board loads, the load applies it again
+      else if (recordRoute(q)) { const r = recordRoute(q); if (!openRecord(r) && lastSyncOk) { toast(`This ${r.kind} was not found on this board`, true); try { history.replaceState({ ...(history.state || {}), kbView: view }, '', bareUrl() + '#view=' + view); } catch {} } }   // before the board loads, the load applies it again
       else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
       else if (h === 'menu') { const docked = window.kbLayout && window.kbLayout.get() === 'dock', pop = docked ? 'dockPop' : 'morePop', trigger = docked ? 'dockMenu' : 'btnMore'; if ($(pop).hidden) $(trigger).click(); }
       else { const id = Object.keys(routeDialogs).find(id => routeDialogs[id] === h); if (id && $(id) && !$(id).open) { if (id === 'dlgSearch') openSearch(); else if (id === 'dlgAddPerson') openAddPersonForm(); else if (id === 'dlgCopy') $('btnCopy').click(); else $(id).showModal(); } }
@@ -3994,7 +3994,7 @@ if (typeof window !== 'undefined') (() => {
     if (backStack.includes(d.id)) return;
     try {
       const url = bareUrl() + routeHash(d);
-      if (routeDialogs[d.id] && !(history.state || {}).kbDlg) history.replaceState({ kbView: view }, '', bareUrl() + '#view=' + view);
+      if ((routeDialogs[d.id] || Object.values(RECORD_ROUTES).includes(d.id)) && !(history.state || {}).kbDlg) history.replaceState({ kbView: view }, '', bareUrl() + '#view=' + view);   // a record opened from its link: the entry under it is the board, so Back closes it
       const top = backStack[backStack.length - 1];
       if (top && !$(top).open && st.kbDlg === top) {   // it replaces a drawer that just closed (person → Open client): take over its entry
         backStack.pop(); history.replaceState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id); return;
@@ -7341,10 +7341,10 @@ if (typeof window !== 'undefined') (() => {
     const board = $('board'), wrap = el('div', 'peoplev companiesv'), bar = el('div', 'pbar');
     const q = el('input', 'psearch'); q.type = 'search'; q.placeholder = 'Search companies, people, notes…'; q.value = companiesQ; q.setAttribute('aria-label', 'Search companies');
     q.oninput = () => { companiesQ = q.value; const pos = q.selectionStart; render(); const nq = document.querySelector('.psearch'); if (nq) { nq.focus(); nq.setSelectionRange(pos, pos); } };
-    const pick = (label, opts, value, onChange) => { const x = el('select', 'pillsel'); x.setAttribute('aria-label', label); opts.forEach(([v, l]) => { const o = el('option', null, l); o.value = v; x.append(o); }); x.value = value; if (x.value !== value) x.value = opts[0][0]; x.onchange = () => onChange(x.value); return x; };
+    const pick = (label, opts, value, onChange, onReset = () => {}) => { const x = el('select', 'pillsel'); x.setAttribute('aria-label', label); opts.forEach(([v, l]) => { const o = el('option', null, l); o.value = v; x.append(o); }); x.value = value; if (x.value !== value) { x.value = opts[0][0]; onReset(); } x.onchange = () => onChange(x.value); return x; };
     if (!companiesSort) companiesSort = COMPANY_SORTS.some(([v]) => v === LS.get(coSortKey())) ? LS.get(coSortKey()) : 'stage';
     if (!companiesSeen) companiesSeen = COMPANY_SEEN.some(([v]) => v && v === LS.get(coSeenKey())) ? LS.get(coSeenKey()) : '';
-    const st = pick('Filter by stage', [['', 'All stages'], ...stages().map(s => [s, s])], companiesStage, v => { companiesStage = v; render(); });
+    const st = pick('Filter by stage', [['', 'All stages'], ...stages().map(s => [s, s])], companiesStage, v => { companiesStage = v; render(); }, () => { companiesStage = ''; });   // a stage renamed or removed since
     const seen = pick('Filter by last contact', COMPANY_SEEN, companiesSeen, v => { companiesSeen = v; LS.set(coSeenKey(), v); render(); });
     const so = pick('Sort companies', COMPANY_SORTS, companiesSort, v => { companiesSort = v; LS.set(coSortKey(), v); render(); });
     bar.classList.add('cbar'); bar.append(q, st, seen, so); wrap.append(bar);
@@ -7481,7 +7481,8 @@ if (typeof window !== 'undefined') (() => {
   const syncNextDue = v => paintDate('pNextDue', v, { empty: 'No date' });   // overdue is red, today amber, like a task's due date
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
-    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), personProjects(p).map(x => [x.pr.id, x.tasks.map(t => [t.id, t.updated])]), modes()]); if (!force && sig === pSig) return; pSig = sig;
+    const projs = personProjects(p);
+    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), projs.map(x => [x.pr.id, x.tasks.map(t => [t.id, t.updated])]), modes()]); if (!force && sig === pSig) return; pSig = sig;
     const keep = id => document.activeElement === $(id);
     { const a = ui.avatar(p.name || '?', { size: 'lg' }); a.id = 'pAvatar'; $('pAvatar').replaceWith(a); }
     if (!keep('pName')) $('pName').value = p.name; autosize($('pName'));
@@ -7507,7 +7508,7 @@ if (typeof window !== 'undefined') (() => {
       renderLinkBox($('pFiles'), files, l => mutate(n => { const ci = ownInfo(n, co); if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
       setCount('pFileCount', files.length); $('pFilesSec').classList.toggle('is-empty', !files.length);
     }
-    renderTouches(p); renderPersonTasks(p); renderPersonProjects(p);
+    renderTouches(p); renderPersonTasks(p); renderPersonProjects(projs);
     renderHistory($('pHist'), $('pHistCount'), p.history);
     $('pCreated').textContent = p.created ? `Added ${new Date(p.created).toLocaleDateString('en-GB')}${p.createdBy ? ' by ' + p.createdBy : ''}` : '';
   }
@@ -7576,7 +7577,7 @@ if (typeof window !== 'undefined') (() => {
   function touchSource(p, cm, editable) {
     const url = touchUrl(cm), box = el('span', 'tsrc');
     if (url) { let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
-      const a = elI('a', 'tsrclink', 'arrow-up-right', /mail\.google\./.test(host) ? 'Open in Gmail' : 'Open original'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      const a = elI('a', 'tsrclink', 'arrow-up-right', host === 'mail.google.com' ? 'Open in Gmail' : 'Open original'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
       a.title = `Open the original in a new tab: ${host || url}`; box.append(roKeep(a)); }
     if (editable && !ro) box.append(ui.iconButton({ icon: url ? 'pencil' : 'link', label: url ? 'Change source link' : 'Add source link (for example the Gmail thread)', size: 'sm', onClick: () => setTouchUrl(p.id, cm.id, url) }));
     return box;
@@ -7616,15 +7617,17 @@ if (typeof window !== 'undefined') (() => {
     return projectsOf().filter(pr => pr && pr.id).map(pr => ({ pr, tasks: byProject.get(pr.id) || [] }))
       .filter(({ pr, tasks }) => (pr.people || []).some(e => mine.has(String(e).toLowerCase())) || tasks.some(t => t.contact === p.id));
   }
-  function projectEvents(tasks) {   // newest first: comments and history lines on the project's tasks
-    return tasks.flatMap(t => [...(t.comments || []).map(c => ({ t, at: c.at || '', by: c.by, text: c.text, kind: 'comment' })), ...(t.history || []).map(h => ({ t, at: h.at || '', by: h.by, text: h.text, kind: 'change' }))])
-      .filter(e => typeof e.at === 'string' && e.at && typeof e.text === 'string').sort((a, b) => b.at.localeCompare(a.at));
+  function projectEvents(tasks, max) {   // the newest `max` comments and history lines on the project's tasks, newest first (one pass, no full sort)
+    const top = [], add = e => { if (typeof e.at !== 'string' || !e.at || typeof e.text !== 'string') return; if (top.length === max && e.at <= top[max - 1].at) return;
+      let i = top.length; while (i > 0 && top[i - 1].at < e.at) i--; top.splice(i, 0, e); if (top.length > max) top.pop(); };
+    tasks.forEach(t => { (t.comments || []).forEach(c => add({ t, at: c.at || '', by: c.by, text: c.text, kind: 'comment' })); (t.history || []).forEach(h => add({ t, at: h.at || '', by: h.by, text: h.text, kind: 'change' })); });
+    return top;
   }
-  function renderPersonProjects(p) {
-    const box = $('pProjAct'), list = personProjects(p); box.textContent = ''; $('pProjActSec').hidden = !list.length; setCount('pProjActCount', list.length); if (!list.length) return;
+  function renderPersonProjects(list) {
+    const box = $('pProjAct'); box.textContent = ''; $('pProjActSec').hidden = !list.length; setCount('pProjActCount', list.length); if (!list.length) return;
     list.sort((a, b) => projectStatusOrder(a.pr.status) - projectStatusOrder(b.pr.status) || a.pr.name.localeCompare(b.pr.name)).forEach(({ pr, tasks }) => {
       const grp = el('div', 'projact'); grp.append(projectNavRow(pr, () => openProject(pr.id)));
-      const evs = projectEvents(tasks).slice(0, PROJ_ACT_MAX), ul = el('div', 'projact__list');
+      const evs = projectEvents(tasks, PROJ_ACT_MAX), ul = el('div', 'projact__list');
       evs.forEach(e => { const b = el('button', 'projact__ev'); b.type = 'button'; b.title = `Open #${e.t.num}`;
         const txt = e.text.replace(/\s+/g, ' ').trim();
         b.append(el('span', 'numchip', '#' + e.t.num), el('span', 'projact__text', `${e.kind === 'comment' ? (e.by || '?') + ': ' : ''}${txt.length > 140 ? txt.slice(0, 139) + '…' : txt}`), el('time', 'muted', ago2(e.at)));

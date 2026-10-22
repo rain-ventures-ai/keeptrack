@@ -71,7 +71,7 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
     // Acme: contacted 2 days ago, changed 40 days ago. Beta: contacted 60 days ago, changed today. Zed Co: never contacted.
     api.files['people/p_one.json'] = text({ ...person, updated: day(40), comments: [{ id: 'c_mail', at: day(2), by: 'alex', channel: 'email', text: 'Email received: confirmed the call.', draft: false, url: 'https://mail.google.com/mail/u/0/#all/18f2a01c9be0d4a1' },
       { id: 'c_call', at: day(3), by: 'alex', channel: 'call', text: 'Called about pricing.', draft: false }] });
-    api.files['people/p_two.json'] = text({ ...person, id: 'p_two', name: 'Bo Beta', company: 'Beta', emails: [], updated: day(0), comments: [{ id: 'c_old', at: day(60), by: 'alex', channel: 'email', text: 'Old email', draft: false, url: 'javascript:alert(1)' }] });
+    api.files['people/p_two.json'] = text({ ...person, id: 'p_two', name: 'Bo Beta', company: 'Beta', emails: [], updated: day(0), comments: [{ id: 'c_old', at: day(60), by: 'alex', channel: 'email', text: 'Old email', draft: false, url: 'javascript:alert(1)' }, { id: 'c_look', at: day(59), by: 'alex', channel: 'note', text: 'Look-alike', draft: false, url: 'https://mail.google.evil.example/x' }] });
     api.files['people/p_three.json'] = text({ ...person, id: 'p_three', name: 'Zoe Zed', company: 'Zed Co', emails: [], updated: day(10), comments: [] });
     api.files['projects/pr_one.json'] = text({ ...project, updated: day(40), people: ['casey@acme.test'] });
     api.files['cards/t_one.json'] = text({ ...card, updated: day(40), comments: [{ id: 'k1', at: day(1), by: 'alex', text: 'Sent the launch plan to Casey' }], history: [{ at: day(5), by: 'alex', text: 'created' }] });
@@ -141,7 +141,7 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
       await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api.route(r));
       await pg.goto(base + '/board/index.html?repo=acme%2Fboard&branch=main&path=board%2Ftasks.json' + hash); await pg.locator(`#${dlg}[open]`).waitFor();
       assert.equal(await check(pg), { '#company=Acme': 'Acme', '#person=p_two': 'Bo Beta', '#project=pr_one': 'Launch' }[hash], hash + ' opens its record');
-      if (hash === '#person=p_two') assert.equal(await pg.locator('#pTouches a.tsrclink').count(), 0, 'a javascript: link is never shown as a link');
+      if (hash === '#person=p_two') { assert.equal(await pg.locator('#pTouches a.tsrclink').count(), 1, 'a javascript: link is never shown as a link'); assert.equal((await pg.locator('#pTouches a.tsrclink').textContent()).trim(), 'Open original', 'only mail.google.com itself reads Open in Gmail'); }
       if (hash === '#project=pr_one') { await pg.locator('#prMore').click(); await pg.locator('.ui-menu [role=menuitem]', { hasText: 'Copy link' }).waitFor(); await pg.keyboard.press('Escape'); }
       await shot(pg, 'deeplink-' + dlg + '-390');
       assert.equal(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, hash + ' fits at 390px');
@@ -149,8 +149,23 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
     }
     { const pg = await browser.newPage({ viewport: { width: 390, height: 844 } }); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api.route(r));
       await pg.goto(base + '/board/index.html#person=p_gone'); await pg.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /person was not found/.test(x.textContent)));
-      assert.equal(await pg.locator('#dlgContact[open]').count(), 0); await pg.goto(base + '/board/index.html'); await pg.waitForSelector('.crow');
+      assert.equal(await pg.locator('#dlgContact[open]').count(), 0); assert.match(await pg.evaluate(() => location.hash), /^#view=/, 'a missing record leaves the address'); await pg.goto(base + '/board/index.html'); await pg.waitForSelector('.crow');
       await shot(pg, 'companies-390'); assert.equal(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Companies bar fits at 390px'); await pg.close(); }
+    // ---- Back from a record opened by its link goes to the board; X leaves no record in the address ----
+    { const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } }); const errs = []; pg.on('pageerror', e => errs.push(e.message));
+      await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api.route(r));
+      await pg.goto(base + '/board/index.html#company=Acme'); await pg.locator('#dlgClient[open]').waitFor(); await pg.waitForTimeout(300);
+      assert.equal(await pg.evaluate(() => location.hash), '#company=Acme');
+      await pg.goBack(); await pg.locator('#dlgClient').waitFor({ state: 'hidden' }); await pg.waitForTimeout(500);
+      assert.equal(await pg.locator('#dlgClient[open]').count(), 0, 'Back closes the record and it stays closed');
+      assert.match(await pg.evaluate(() => location.hash), /^#view=/, 'Back lands on the board');
+      await pg.goForward(); await pg.locator('#dlgClient[open]').waitFor(); assert.equal(await pg.evaluate(() => location.hash), '#company=Acme', 'Forward opens it again');
+      await pg.goto(base + '/board/index.html#person=p_one'); await pg.locator('#dlgContact[open]').waitFor(); await pg.waitForTimeout(300);
+      await pg.locator('#pClose').click(); await pg.locator('#dlgContact').waitFor({ state: 'hidden' }); await pg.waitForTimeout(500);
+      assert.match(await pg.evaluate(() => location.hash), /^#view=/, 'X leaves the board address, not the record');
+      await pg.reload(); await pg.waitForSelector('.crow'); await pg.waitForTimeout(500);
+      assert.equal(await pg.locator('#dlgContact[open]').count(), 0, 'a reload after X does not reopen it');
+      assert.deepEqual(errs, [], 'Back/X: no page errors'); await pg.close(); }
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(native, [], 'no native dialogs');
     console.log('crm-links: all checks passed');
   } finally { await browser.close(); server.close(); }

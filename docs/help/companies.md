@@ -15,7 +15,7 @@ Rows are sorted by stage, then by the most recent contact. The **Sort** menu als
 
 ## Links to a company, person or project
 
-Each company, person and project has its own address. When you open one, the address bar changes to it (for example `…#company=Acme`, `…#person=p_x1y2`, `…#project=pr_a1b2`), so you can bookmark it, and Back closes it. **Copy link** in the record's ⋯ menu copies it to share. Opening the link opens the board and then the record. Only people who can open the board can open the link.
+Each company, person and project has its own address. When you open one, the address bar changes to it (for example `…#company=Acme`, `…#person=p_x1y2`, `…#project=pr_a1b2`), so you can bookmark it, and Back closes it. **Copy link** in the record's ⋯ menu copies it to share. Opening the link opens the board and then the record. Only people who can open the board can open the record. A company's link contains the company's name, so anyone who sees the link can read it: share it only where the name may be seen.
 
 ## The company record
 
