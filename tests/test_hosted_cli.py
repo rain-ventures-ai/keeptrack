@@ -283,6 +283,42 @@ class HostedCLITest(unittest.TestCase):
         body = [c[2] for c in self.server.calls if c[0] == 'POST'][0]
         self.assertEqual(['ops', 'web'], body['card']['labels'])
 
+    def test_create_refuses_a_reserved_client(self):   # kit v89: the hosted add runs the same check as every save
+        for name in ('__proto__', ' constructor '):
+            p = self.run_cli('add', 'Synthetic reserved', '--client', name, code=1)
+            self.assertIn('cannot be a client or company name', p.stderr)
+        self.assertEqual([], [c for c in self.server.calls if c[0] == 'POST'])
+
+    def test_create_refuses_a_reserved_client_copied_from_its_project(self):   # kit v89 review: as the local add --project
+        self.server.files['projects/pr_sample.json']['client'] = '__proto__'
+        p = self.run_cli('add', 'Synthetic project card', '--project', 'pr_sample', code=1)
+        self.assertIn('cannot be a client or company name', p.stderr); self.assertIn('project Synthetic Project', p.stderr)
+        self.assertEqual([], [c for c in self.server.calls if c[0] == 'POST'])
+        self.run_cli('add', 'Synthetic own client', '--project', 'pr_sample', '--client', 'Example Company')   # its own client copies nothing
+
+    def test_unarchive_refuses_a_reserved_client(self):   # kit v89 review: the server restores it, so the CLI checks it first
+        self.server.files['archive/2025.json']['tasks'][0]['client'] = '__proto__'
+        p = self.run_cli('unarchive', '#2', code=1)
+        self.assertIn('cannot be a client or company name', p.stderr)
+        self.assertEqual([], [c for c in self.server.calls if c[0] == 'POST'])
+
+    def test_unarchive_can_replace_a_reserved_client(self):   # kit v89 review round 2: hosted has no client-rename
+        self.claim(); self.run_cli('move', '#17', 'backlog'); self.run_cli('archive', '#17')
+        path = [p for p, f in self.server.files.items() if p.startswith('archive/') and any(x['id'] == 't_sample' for x in f['tasks'])][0]
+        for card in [x for x in self.server.files[path]['tasks'] if x['id'] == 't_sample'] + [self.server.files['cards/t_sample.json']]:
+            card['client'] = '__proto__'   # an old board archived it with a reserved client
+        posts = len([c for c in self.server.calls if c[0] == 'POST'])
+        p = self.run_cli('unarchive', '#17', code=1)
+        self.assertIn("unarchive '#17' --client NEW", p.stderr); self.assertNotIn('client-rename', p.stderr)
+        self.assertEqual(posts, len([c for c in self.server.calls if c[0] == 'POST']), 'nothing was posted')
+        p = self.run_cli('unarchive', '#17', '--client', 'Proto Ltd', code=1)   # an agent could not save the new client after it
+        self.assertIn('a person runs unarchive --client', p.stderr)
+        self.assertEqual(posts, len([c for c in self.server.calls if c[0] == 'POST']), 'nothing was restored')
+        self.server.identity['agent_id'] = None   # a person
+        self.run_cli('unarchive', '#17', '--client', 'Proto Ltd')
+        self.assertEqual('Proto Ltd', self.server.files['cards/t_sample.json']['client'], 'saved right after the restore')
+        self.assertIn('Proto Ltd', self.server.files['tasks.json']['clients'])
+
     def test_legacy_board_api_still_works_with_a_note(self):   # kit v81: BOARD_HOSTED_API is the hosted URL now
         self.env['BOARD_API'] = self.env.pop('BOARD_HOSTED_API')
         p = self.run_cli('list', '--assignee', 'synthetic-a')

@@ -304,20 +304,13 @@ class ArchiveCommand(unittest.TestCase):
 
 class Docs(unittest.TestCase):
     def test_kit_is_v87_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(87, keeptrack.KIT_VERSION)
-        with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(87, json.load(f)["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            with open(os.path.join(KIT, plugin, "plugin.json"), encoding="utf-8") as f:
-                self.assertEqual("0.87.0", json.load(f)["version"], plugin)
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 87)   # the exact version is asserted by the newest tests/test_kit_v*.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v87 = f.read().split("### v87 (schema 4)", 1)[1].split("### v86", 1)[0]
         for words in ("kit-update", "ARCHIVE_SIZE", "900 KB", "No migration"):
             self.assertIn(words, v87)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v87", f.read())
-        with open(os.path.join(REPO, "board", "board.js"), encoding="utf-8") as f:
-            self.assertIn("const PAGE_KIT = 87;", f.read())
 
 
 if __name__ == "__main__":
