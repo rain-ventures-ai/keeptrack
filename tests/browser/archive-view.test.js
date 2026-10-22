@@ -175,6 +175,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await stage.selectOption({ label: 'Archived' }); await page.locator('.parch').first().waitFor();
       assert.deepEqual(await page.locator('.parch .pwho b').allTextContents(), ['Omar Gone', 'Lena Lost'], 'newest archived first');
       assert.equal(await page.locator('.archcount').innerText(), '2 archived people');
+      await page.waitForFunction(() => [...document.querySelectorAll('.parch .archpill')].every(x => x.innerText));
       assert.equal(await page.locator('.parch', { hasText: 'Lena Lost' }).locator('.archpill').innerText(), 'Archived 2025');
       assert.equal(await page.locator('.peoplev .padd').count(), 0, 'no quick add in the archived list');
       await page.locator('.psearch').fill('agency'); await page.waitForFunction(() => document.querySelectorAll('.parch').length === 1);
@@ -327,11 +328,10 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await page.locator('#viewSw button[data-view="board"]').click(); const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Shipped live' });
       await shipped.hover(); await shipped.locator('.quickarch').click(); await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
       // the archive run itself reads every year (older history lines); from here on, only loading the view: every year is
-      // asked for again (a conditional GET, so a file that changed is never served from this page's copy), the unchanged
-      // year is a 304, and only the changed year is normalised again
-      const norms = await page.evaluate(() => window.kbArchNormYears), unchanged = api.notModified || 0;
+      // checked against the captured tree; the unchanged archive reuses its SHA body and only the changed year is normalised again
+      const norms = await page.evaluate(() => window.kbArchNormYears), beforeReads = { ...reads };
       await page.locator('#viewSw button[data-view="archive"]').click(); await page.locator('.archrow', { hasText: 'Shipped live' }).waitFor();
-      assert.ok((api.notModified || 0) > unchanged, `the ${other} file is a 304, not downloaded again`);
+      assert.equal(reads[other], beforeReads[other], `the unchanged ${other} archive reuses the immutable snapshot blob`);
       assert.equal(await page.evaluate(() => window.kbArchNormYears) - norms, 1, `only the ${year} file is normalised again`);
       assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
 

@@ -47,3 +47,5 @@ Add a case there when either changes.
 `v4_kit100` freezes unchanged split board data before Gmail source privacy and record history fixes (kit v99 to v100).
 
 `v4_kit101` freezes unchanged split records before archive-size follow-ups (kit v100 to v101).
+
+`v4_kit102` freezes a split board with year and part archives, opaque envelope fields and older history (kit v102).
