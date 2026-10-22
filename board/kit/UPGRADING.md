@@ -25,6 +25,23 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v91 (schema 4)
+CRM: Companies sort and filter, links to a company, person or project, source links on the contact log and project
+activity on a person (private-tasks card #290). No migration. One new optional field. v88 is another kit change
+in flight; these can land in any order.
+- A contact log entry (`contacts[].comments[]`) may carry `url`: an http(s) link to the original message or thread,
+  such as a Gmail thread. `keeptrack.py touch --url <URL>` sets it when logging, `touch-url <person> <URL> [--touch <id>]`
+  sets or clears (`""`) it later (default: the newest entry), and `person` prints it. The web board shows
+  **Open in Gmail** / **Open original** (a new tab, `noopener`) and lets a person add or change it; any other scheme is
+  never shown as a link. Older kits keep the field untouched.
+- Web board only: Companies has a **Sort** menu (stage, recently contacted, recently updated, name) and a contact
+  filter (contacted in 30 days, no contact in 30+ days, never contacted), remembered per viewer and board. A company,
+  person or project drawer puts its record in the address (`#company=<name>`, `#person=<id>`, `#project=<id>`), the
+  link opens it, and each record's ⋯ menu has **Copy link**. A person's record shows **Project activity**: for each
+  project they are in, the newest comments and changes on its tasks.
+- The `keeptrack-email` skill passes `--url` with the Gmail thread link.
+- Run `kit-update` only. Check: `kit-check` says v91, and `python3 board/keeptrack.py help crm` lists `touch-url`.
+
 ### v90 (schema 4)
 A folder's own token setting wins over a `BOARD_TOKEN` from the shell (private-tasks card #286). No migration, no data
 change; `kit-update` copies the files. (v88 is taken by an open kit pull request; this release is numbered after it.)

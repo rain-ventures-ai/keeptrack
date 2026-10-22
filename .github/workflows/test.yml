@@ -60,6 +60,9 @@ jobs:
       - name: Person, client and project drawers
         working-directory: tests/browser
         run: node crm-drawers.test.js
+      - name: CRM links (Companies sort and filter, record deep links, source links, project activity)
+        working-directory: tests/browser
+        run: node crm-links.test.js
       - name: Reserved client names on every page save (kit v89)
         working-directory: tests/browser
         run: node reserved-names.test.js

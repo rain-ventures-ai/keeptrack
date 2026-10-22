@@ -782,6 +782,10 @@ body.ro .uidrawer .ui-pill--removable { padding-right: var(--sp-4); }
 .crmdrawer .cmlist { margin-top: var(--sp-4); }
 .touch .tchan { display: inline-flex; align-items: center; gap: var(--sp-1); font-weight: 600; } .touch.draft { border-style: dashed; }
 .touch .cmhead { flex-wrap: wrap; } .touch .cmacts { display: flex; gap: var(--sp-2); width: 100%; }
+.projact + .projact { margin-top: var(--sp-3); } .projact__list { display: grid; gap: 2px; padding-left: var(--sp-6); }
+.projact__ev { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-3); align-items: baseline; text-align: left; background: none; border: 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); color: inherit; font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.projact__ev:hover, .projact__ev:focus-visible { background: var(--hover, color-mix(in srgb, var(--accent) 8%, transparent)); } .projact__text { overflow-wrap: anywhere; } .projact__ev time { white-space: nowrap; }
+.tsrc { display: inline-flex; align-items: center; gap: var(--sp-1); } .tsrc:empty { display: none; } .tsrclink { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--accent); text-decoration: none; } .tsrclink:hover { text-decoration: underline; } .tsrclink svg { width: 14px; height: 14px; }
 .crmdrawer .ddesc { min-height: 88px; margin: 0; }
 .crmdrawer .ui-section__action .ui-btn { color: var(--accent); }
 @media (max-width: 760px) {
@@ -1000,6 +1004,7 @@ header #filterBadge { background: var(--accent); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .stagepill { color: hsl(var(--h) 70% 72%); } }   /* theme follows the device: no data-theme to match */
 .stagepill.closed { opacity: .7; }
 .pbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); margin-bottom: var(--sp-3); max-width: 100%; } .psearch { min-width: 0; width: 100%; }
+.cbar { grid-template-columns: minmax(0, 1fr) auto auto auto; }   /* Companies: search, stage, last contact, sort */
 .padd { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); max-width: 100%; } .padd input { min-width: 0; width: 100%; }
 .personform .required { color: var(--danger); font-size: 10px; margin-left: 5px; text-transform: uppercase; letter-spacing: .04em; }
 #board.pipe .col h2 .psum { margin-left: auto; font-size: var(--fs-sm); color: var(--muted); font-weight: 600; }
@@ -1032,6 +1037,7 @@ header #filterBadge { background: var(--accent); }
   #board.pipe .col { display: block; margin-bottom: 14px; } #board.pipe .col h2 { display: flex; }
   .pipecols { display: block; overflow: visible; } .pipebar .ui-tabs { width: 100%; } .pipebar .ui-tab { flex: 1; justify-content: center; }
   .dperson .ui-listrow__meta { max-width: none; }
+  .pbar.cbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cbar .psearch, .cbar select[aria-label="Sort companies"] { grid-column: 1 / -1; } .cbar select { min-width: 0; width: 100% !important; }
 }
 @media (max-width: 520px) {
   .pbar { grid-template-columns: minmax(0, 1fr); } .pbar select { width: 100%; }

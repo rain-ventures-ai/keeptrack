@@ -166,7 +166,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
 
     // the ⋯ menu: copy for AI, open the client
     await page.locator('#pMore').click();
-    assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Copy for AI', 'Open client Acme', 'Delete person']);
+    assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Copy for AI', 'Copy link', 'Open client Acme', 'Delete person']);
     await shot(page, 'person-phone-light-menu');
     await menu.locator('[role=menuitem]', { hasText: 'Copy for AI' }).click(); await page.waitForFunction(() => /Help me with my contact Casey Example/.test(window.__copied));
     await page.locator('#pMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Open client Acme' }).click();
@@ -189,7 +189,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     assert.deepEqual(api.root().client_info.Acme.links.map(l => l.title), ['Client Drive']);
     await assertFits(page, 'dlgClient', 'client'); await shot(page, 'client-phone-light-writable');
     if (SHOTS) { await page.emulateMedia({ colorScheme: 'dark' }); await shot(page, 'client-phone-dark-writable'); await page.setViewportSize({ width: 1280, height: 860 }); await shot(page, 'client-desktop-dark-writable'); await page.emulateMedia({ colorScheme: 'light' }); await shot(page, 'client-desktop-light-writable'); await page.setViewportSize({ width: 390, height: 844 }); }
-    await page.locator('#clMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Show only this company', 'Copy company name']); await page.keyboard.press('Escape');
+    await page.locator('#clMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Show only this company', 'Copy company name', 'Copy link']); await page.keyboard.press('Escape');
     // a new project opens in its own drawer
     await page.locator('#clProjSec .ui-addrow__ghost').click(); await page.locator('#clProjName').fill('Phase two'); w = saved(); await page.locator('#clProjAdd').click(); await w;
     await page.locator('#dlgProject[open]').waitFor(); assert.equal(await page.locator('#prName').inputValue(), 'Phase two');
@@ -220,7 +220,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     await assertFits(page, 'dlgProject', 'project'); await page.locator('#prBody').evaluate(b => { b.scrollTop = 0; }); await shot(page, 'project-phone-light-writable');
     if (SHOTS) { await page.emulateMedia({ colorScheme: 'dark' }); await shot(page, 'project-phone-dark-writable'); await page.setViewportSize({ width: 1280, height: 860 }); await shot(page, 'project-desktop-dark-writable'); await page.emulateMedia({ colorScheme: 'light' }); await shot(page, 'project-desktop-light-writable'); await page.setViewportSize({ width: 390, height: 844 }); }
     // delete via ⋯: Cancel keeps it, Remove deletes it and clears it from its task
-    await page.locator('#prMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Open client Acme', 'Copy project name', 'Delete project']);
+    await page.locator('#prMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Open client Acme', 'Copy project name', 'Copy link', 'Delete project']);
     await menu.locator('[role=menuitem]', { hasText: 'Delete project' }).click(); await confirmSheet.waitFor(); assert.match(await confirmSheet.textContent(), /Remove project "Launch v2" and clear it from 1 task/);
     await confirmSheet.locator('button', { hasText: 'Cancel' }).click(); await confirmSheet.waitFor({ state: 'detached' }); assert.ok(api.project(), 'Cancel keeps the project');
     await page.locator('#prMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete project' }).click(); await confirmSheet.waitFor();
@@ -317,9 +317,9 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.equal(await pg.locator('.crow[data-company="Beta Ltd"] .pnext').textContent(), 'No next step');
       await pg.locator('.psearch').fill('robin'); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 1);
       assert.deepEqual(await pg.locator('.crow .pwho b').allTextContents(), ['Acme'], 'search reaches its people');
-      await pg.locator('.psearch').fill(''); await pg.locator('.companiesv .pillsel').selectOption('New'); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 1);
+      await pg.locator('.psearch').fill(''); await pg.locator('.companiesv .pillsel[aria-label="Filter by stage"]').selectOption('New'); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 1);
       assert.deepEqual(await pg.locator('.crow .pwho b').allTextContents(), ['Beta Ltd'], 'the stage filter');
-      await pg.locator('.companiesv .pillsel').selectOption(''); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 4);
+      await pg.locator('.companiesv .pillsel[aria-label="Filter by stage"]').selectOption(''); await pg.waitForFunction(() => document.querySelectorAll('.crow').length === 4);
       await shot(pg, 'companies-desktop-light');
       // ---- the company record ----
       await acme.locator('.pwho b').click(); await pg.locator('#dlgClient[open]').waitFor();
@@ -344,7 +344,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.equal(await pg.locator('#clDomain').inputValue(), 'www.acme.test', 'a value that is not a domain is refused, as keeptrack.py does'); assert.equal(info().domain, 'www.acme.test');
       await pg.locator('#clNotes').fill('Key account.'); w = save(); await pg.locator('#clNotes').blur(); await w; assert.equal(info().notes, 'Key account.');
       assert.equal(info().north_star, '', 'other client_info fields stay');
-      await pg.locator('#clMore').click(); assert.deepEqual(await pg.locator('.ui-menu [role=menuitem]').allTextContents(), ['Show only this company', 'Copy company name', "Use people's stage"]);
+      await pg.locator('#clMore').click(); assert.deepEqual(await pg.locator('.ui-menu [role=menuitem]').allTextContents(), ['Show only this company', 'Copy company name', 'Copy link', "Use people's stage"]);
       w = save(); await pg.locator('.ui-menu [role=menuitem]', { hasText: "Use people's stage" }).click(); await w; assert.equal('stage' in info(), false, 'the stage is cleared, not blanked');
       await pg.locator('#clStage option:checked', { hasText: 'Talking (from its people)' }).waitFor({ state: 'attached' });
       w = save(); await pg.locator('#clOwner').selectOption(''); await w; assert.equal('owner' in info(), false);

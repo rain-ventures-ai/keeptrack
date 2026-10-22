@@ -11,7 +11,11 @@ Each row shows:
 - the **next step**: the earliest next step among its people, with its date and whose it is;
 - the **last contact** with any of its people.
 
-Rows are sorted by stage, then by the most recent contact. Search finds a company by its name, domain or notes, or by the name or role of anyone who works there. The stage list and the client pills filter it, as they do People.
+Rows are sorted by stage, then by the most recent contact. The **Sort** menu also sorts by **recently contacted**, **recently updated** (the newest change to any of its people, tasks or projects; the row then shows when) or **name**. The contact menu shows only companies **contacted in the last 30 days**, with **no contact for 30+ days**, or **never contacted**. Your sort and contact filter are remembered on this device. Search finds a company by its name, domain or notes, or by the name or role of anyone who works there. The stage list and the client pills filter it, as they do People.
+
+## Links to a company, person or project
+
+Each company, person and project has its own address. When you open one, the address bar changes to it (for example `…#company=Acme`, `…#person=p_x1y2`, `…#project=pr_a1b2`), so you can bookmark it, and Back closes it. **Copy link** in the record's ⋯ menu copies it to share. Opening the link opens the board and then the record. Only people who can open the board can open the record. A company's link contains the company's name, so anyone who sees the link can read it: share it only where the name may be seen.
 
 ## The company record
 
@@ -20,7 +24,7 @@ Click a company (or a company name anywhere on the board: in a person row, on a 
 - **Stage**, **Owner** (a board member), **Domain** and **Value**. Value is the sum of its people's values; you cannot type it.
 - **Notes** about the company.
 - **People**: everyone at the company, with their role, stage and last contact. Click one to open them.
-- **Activity**: the contact log of all its people in one list, newest first, each entry labelled with the person. The first ten show; **Show more** shows older ones.
+- **Activity**: the contact log of all its people in one list, newest first, each entry labelled with the person. The first ten show; **Show more** shows older ones. An entry with a source link shows **Open in Gmail** (or **Open original**), which opens the original email thread in a new tab.
 - **Open tasks**: the tasks whose client is this company.
 - The **north star**, **projects** and **files and folders**, as before.
 
