@@ -28,15 +28,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v100 (schema 4)
 Gmail source-link privacy and record navigation fixes. No data change or migration; `kit-update` copies the files.
 - New Gmail source links save only the thread ID as `#all/<id>` and an optional numeric account selector such as
-  `/mail/u/0/`. Search words, label names, query parameters and account addresses are removed by the browser and CLI.
+  `/mail/u/0/`. Query parameters and account addresses are removed by the browser and CLI. Search, label and category routes are refused, even when their final word looks like a thread ID.
   Gmail pagination and ambiguous mailbox/search/label/category links are refused. Recognition is deliberately limited
-  to full-width legacy 16-hex IDs and observed `FMfcgz` web IDs with a bounded suffix; other formats fail closed.
+  to legacy 1-16-hex IDs and observed `FMfcgz` web IDs with a bounded suffix; other formats fail closed.
   This does not verify that the thread exists in an account. Existing Gmail source links are shown
   with the same clean target; stored old entries are not rewritten until edited.
 - A missing record reached through Back/Forward resets its history entry to the current view, so the next person,
   company or project drawer creates its own entry. The CLI accepts uppercase `HTTPS://`, as the browser does.
-- Check: `kit-check` reports v100. Save a Gmail search-thread link and verify its saved URL uses `#all/<id>` without
-  the search; navigate Forward to a deleted person, open another person, then Back should close that drawer.
+- Check: `kit-check` reports v100. Save a mailbox/thread link and verify its saved URL uses `#all/<id>`; refuse a search/label view even with an ID-shaped final segment; navigate Forward to a deleted person, open another person, then Back should close that drawer.
 
 ### v99 (schema 4)
 Token and board selection edge cases. No data change and no migration; run `kit-update`.
