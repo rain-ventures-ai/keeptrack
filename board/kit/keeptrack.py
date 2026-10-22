@@ -3858,10 +3858,58 @@ def image_kind(data):
     return "webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else ""
 
 
-def save_asset(rel, blob, message):
+def strip_image_metadata(blob, ext):
+    """The image without its metadata (EXIF: GPS position, device, owner; text chunks; XMP), so a photo or screenshot
+    never commits that to the board repo (AGENTS rule 7). Pixels are untouched. Raises ValueError on a broken file."""
+    if ext == "jpg":   # keep every segment but APP1 (EXIF/XMP), APP13 (IPTC) and COM; the scan data from SOS on as it is
+        out, i = bytearray(blob[:2]), 2
+        while i + 4 <= len(blob):
+            if blob[i] != 0xFF:
+                raise ValueError("broken JPEG")
+            marker = blob[i + 1]
+            if marker == 0xDA:   # start of scan: the rest is image data
+                out += blob[i:]; return bytes(out)
+            if 0xD0 <= marker <= 0xD9 or marker == 0x01:
+                out += blob[i:i + 2]; i += 2; continue
+            n = int.from_bytes(blob[i + 2:i + 4], "big")
+            if n < 2 or i + 2 + n > len(blob):
+                raise ValueError("broken JPEG")
+            if marker not in (0xE1, 0xED, 0xFE):
+                out += blob[i:i + 2 + n]
+            i += 2 + n
+        raise ValueError("broken JPEG")
+    if ext == "png":   # drop eXIf and the text chunks (tEXt, zTXt, iTXt)
+        out, i = bytearray(blob[:8]), 8
+        while i + 12 <= len(blob):
+            n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
+            if i + 12 + n > len(blob):
+                raise ValueError("broken PNG")
+            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt"):
+                out += blob[i:i + 12 + n]
+            i += 12 + n
+            if kind == b"IEND":
+                return bytes(out)
+        raise ValueError("broken PNG")
+    if ext == "webp":   # drop the EXIF and XMP chunks and clear their flags in VP8X
+        out, i = bytearray(), 12
+        while i + 8 <= len(blob):
+            kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
+            if i + 8 + n > len(blob):
+                raise ValueError("broken WebP")
+            chunk = bytearray(blob[i:i + size])
+            if kind == b"VP8X" and len(chunk) > 8:
+                chunk[8] &= ~0x0C & 0xFF   # EXIF (0x08) and XMP (0x04) flags
+            if kind not in (b"EXIF", b"XMP "):
+                out += chunk
+            i += size
+        return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + bytes(out)
+    return blob   # GIF: no EXIF; frames kept as they are
+
+
+def save_asset(rel, blob, message, state):
     """Write one binary file next to the board (local folder, git clone or GitHub API). Its name holds its hash, so an
     existing file of that name already has these bytes."""
-    _, state = load()
+    global WRITE
     if state["mode"] == "local":
         path = _local_path(rel); os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
@@ -3871,8 +3919,9 @@ def save_asset(rel, blob, message):
     remote = _remote_path(rel)
     if state["mode"] == "git":
         _check_git_clone()
-        for _ in range(4):
-            _, state = load()
+        for attempt in range(4):
+            if attempt:
+                _BOARD_STATES.clear(); _, state = load()   # the branch moved: read it again
             with tempfile.NamedTemporaryFile(delete=False) as f:
                 f.write(blob); tmp = f.name
             try:
@@ -3903,17 +3952,21 @@ def save_asset(rel, blob, message):
                 return
             if not ("non-fast-forward" in err or "fetch first" in err or "rejected" in err):
                 sys.exit(f"write failed: git push to {REPO}@{BRANCH} was refused: {err}")
-            _BOARD_STATES.clear()   # the branch moved: read it again and retry
         sys.exit("write failed: the branch kept moving; run the command again")
     body = {"message": message, "branch": BRANCH, "content": base64.b64encode(blob).decode()}
-    rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{remote}", "--input", "-", body=body)
-    if rc and not ("422" in err and "sha" in (err + out).lower()):   # 422 without a sha: a file of this name (these bytes) is there
-        _api_error(rc, out, err)
+    path = "/".join(urllib.parse.quote(x, safe="") for x in remote.split("/"))
+    rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{path}", "--input", "-", body=body)
+    if rc and not ("422" in err and "sha" in (err + out).lower()):   # 422 asking for a sha: a file of this name (these bytes) is there
+        try:
+            _api_error(rc, out, err)
+        except UseGit:   # the sandbox blocks API writes: push from this clone, as every other write does
+            WRITE = "git"; _BOARD_STATES.clear(); _, state = load()
+            save_asset(rel, blob, message, state)
 
 
 def cmd_attach(a):
     """Add an image (screenshot) to a card: written to assets/<card id>/, then shown in a new comment, or appended to the
-    description with --details."""
+    description with --details. Its metadata (EXIF and the like) is removed first."""
     if BACKEND == "hosted":
         sys.exit("capability_unavailable: images are not available on hosted boards yet")
     try:
@@ -3926,11 +3979,18 @@ def cmd_attach(a):
     ext = image_kind(blob)
     if not ext:
         sys.exit("only PNG, JPEG, GIF or WebP images can be attached (checked from the file's content, not its name)")
-    data, _ = load(); t = find(data, a.id)
+    try:
+        blob = strip_image_metadata(blob, ext)
+    except ValueError as e:
+        sys.exit(f"cannot attach {a.path}: {e}")
+    data, state = load(); guard_schema(data)   # a board this kit may not write gets no file either
+    t = find(data, a.id)
+    if not SAFE_ID.fullmatch(str(t.get("id", ""))):
+        sys.exit(f"card {t.get('id')!r} has an id that cannot name a folder; run keeptrack.py doctor")
     rel = f"assets/{t['id']}/{dt.datetime.now(dt.timezone.utc):%Y%m%d}-{hashlib.sha256(blob).hexdigest()[:12]}.{ext}"
     alt = re.sub(r"[\[\]\r\n]", " ", a.alt or os.path.splitext(os.path.basename(a.path))[0]).strip()[:60] or "image"
     md = f"![{alt}]({rel})"
-    save_asset(rel, blob, f"Image: #{t.get('num', t['id'])}")
+    save_asset(rel, blob, f"Image: #{t.get('num', t['id'])}", state)
 
     def fn(data):
         t = find(data, a.id)

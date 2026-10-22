@@ -36,6 +36,9 @@ Images on cards (private-tasks card #292). No migration and no schema change.
   that is not an `assets/` path stays text: the page never loads an outside image. Not on hosted boards or the demo yet.
 - keeptrack.py: `attach <card> <image> ["comment text"] [--alt ".."] [--details]` writes the file (local folder, git
   clone or API) and adds it in a new comment, or at the end of the description.
+- Metadata is removed before an image is saved: the page draws it again (no EXIF, longest side at most 2000px; a GIF
+  is kept as it is), and `attach` strips JPEG APP1/APP13/COM, PNG eXIf/tEXt/zTXt/iTXt and WebP EXIF/XMP. A screenshot of a
+  secret still goes into git history: the help says not to add one.
 - Archiving a card keeps its images; nothing deletes an image automatically.
 - Run `kit-update` only. Check: `python3 board/keeptrack.py help checklists-comments` lists `attach`.
 
