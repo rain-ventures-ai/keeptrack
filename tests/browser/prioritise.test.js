@@ -251,8 +251,8 @@ let base;
     await page.goto(laterLink.href); await page.locator('#listPrioritise').waitFor();
     assert.equal(await page.locator('#listStatus option[value="later"]').count(), 0, 'interaction takes place against stale cached options');
     await page.locator('.cpill.all').click();
-    // the header's view tabs (Companies, kit v84) leave a 1280px header less room for client pills, so on CI Acme's
-    // pill can sit in the "+N" list: pick it from there when it is not shown
+    // the header's view tabs (Companies, kit v84, and Archive, kit v96, about 33px each) leave a 1280px header less room for client
+    // pills, so Acme's pill may sit in the "+N" list: pick it from there when it is not shown
     if (await page.locator('.cpill').filter({ hasText: 'Acme' }).count()) await page.locator('.cpill').filter({ hasText: 'Acme' }).click({ position: { x: 25, y: 15 } });
     else { await page.locator('.cpill.more').click(); await page.locator('#clientPop .cmenu[data-client="Acme"]').click(); }
     await page.locator('#listStatus').selectOption('todo');

@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
 });
 
 const PHONE = { width: 390, height: 844 }, DESKTOP = { width: 1280, height: 860 };
-const VIEWS = [['today', 'crm'], ['people', 'crm'], ['companies', 'crm'], ['pipeline', 'crm'], ['board', 'board'], ['list', 'board'], ['cal', 'board'], ['sched', 'board'], ['activity', 'board'], ['mentions', 'board']];
+const VIEWS = [['today', 'crm'], ['people', 'crm'], ['companies', 'crm'], ['pipeline', 'crm'], ['board', 'board'], ['list', 'board'], ['cal', 'board'], ['sched', 'board'], ['activity', 'board'], ['mentions', 'board'], ['archive', 'board']];
 let base;
 
 async function open(browser, { demo = 'board', view = 'board', viewport = DESKTOP, layout = 'classic' } = {}) {
@@ -204,7 +204,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await page.waitForFunction(() => document.body.dataset.view === 'mentions');
       assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'mentions', 'focus moves with the selection');
       assert.equal(await page.locator('#viewSw [data-view="mentions"]').getAttribute('aria-selected'), 'true');
-      await page.keyboard.press('End'); await page.waitForFunction(() => document.body.dataset.view === 'activity');
+      await page.keyboard.press('End'); await page.waitForFunction(() => document.body.dataset.view === 'archive');
       await page.keyboard.press('Home'); await page.waitForFunction(() => document.body.dataset.view === 'board');
       assert.equal(await page.locator('#viewSw [data-view="people"]').getAttribute('tabindex'), '0', 'a group with nothing selected keeps its first tab reachable');
       // Activity range: arrow keys re-render the view and the focus stays on the range
@@ -217,7 +217,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await page.locator('#tabConn').focus(); await page.keyboard.press('ArrowLeft'); assert.equal(await page.locator('#panelBoard').isVisible(), true, 'arrow keys switch settings sections');
       await page.done();
       const phone = await open(browser, { view: 'board', viewport: PHONE, layout: 'dock' });
-      assert.deepEqual(await phone.locator('#subnav [role="tab"]').allTextContents(), ['Kanban', '@Mentions', 'List', 'Calendar', 'Schedule', 'Activity']);
+      assert.deepEqual(await phone.locator('#subnav [role="tab"]').allTextContents(), ['Kanban', '@Mentions', 'List', 'Calendar', 'Schedule', 'Activity', 'Archive']);
       const cols = phone.locator('#tabs [role="tab"]'); assert(await cols.count() >= 2, 'column tabs');
       await cols.first().click(); await cols.first().focus(); await phone.keyboard.press('ArrowRight');
       const second = await cols.nth(1).getAttribute('data-value');

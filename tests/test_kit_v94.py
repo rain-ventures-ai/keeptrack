@@ -61,9 +61,9 @@ class KitV94(unittest.TestCase):
     def test_kit_is_v94(self):
         self.assertGreaterEqual(keeptrack.KIT_VERSION, 94)   # the exact version is asserted by the newest tests/test_kit_v*.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
-            v93 = f.read().split("### v94 (schema 4)", 1)[1].split("### v93", 1)[0]
+            v94 = f.read().split("### v94 (schema 4)", 1)[1].split("### v93", 1)[0]
         for words in ("kit-update", "project-comment", "reply_to", "No migration", "Add image", "--link"):
-            self.assertIn(words, v93)
+            self.assertIn(words, v94)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v94", f.read())
         help_out = self.run_kt("help", "clients-projects").stdout

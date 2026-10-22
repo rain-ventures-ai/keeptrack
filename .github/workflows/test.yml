@@ -105,3 +105,6 @@ jobs:
       - name: Goals bar, Goals sheet, Goal field and filter (kit v83)
         working-directory: tests/browser
         run: node goals.test.js
+      - name: Archive view, People Archived and the remembered Include archive (kit v96)
+        working-directory: tests/browser
+        run: node archive-view.test.js

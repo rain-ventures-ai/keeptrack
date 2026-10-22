@@ -292,7 +292,7 @@ class Page(unittest.TestCase):
 
 
 class Docs(unittest.TestCase):
-    def test_kit_v84_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v86.py
+    def test_kit_v84_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v96.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v84 = f.read().split("### v84 (schema 4)", 1)[1].split("### v83", 1)[0]
         for words in ("kit-update", "client-set NAME --stage", "CLIENT_RECORD", "No migration", "Older kits"):
