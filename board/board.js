@@ -2710,7 +2710,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- adding images (card #292, kit v92): paste, drop or pick; written to assets/<card id>/ in the board repo, then
   // put in the box as ![alt](assets/...). PNG, JPEG, GIF, WebP; one over 2 MB is scaled down (not a GIF), or refused.
   const imgUploadBlock = () => ro ? 'This board is read-only here.' : HOSTED ? 'Images are not available on hosted boards yet.' : DEMO ? 'Images cannot be added to the demo board.' : !cfg().token ? 'Connect the board with a token to add images.' : '';
-  async function redrawImage(file, original = null, profiled = false) {
+  async function redrawImage(file) {
     // Canvas applies EXIF orientation and colour profiles before exporting only pixels.
     let bmp;
     try {
@@ -2720,8 +2720,8 @@ if (typeof window !== 'undefined') (() => {
       cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
       const as = (type, q) => new Promise(res => cv.toBlob(res, type, q));
       let out = await as(file.type, 0.9); if (!out || out.size > IMG_MAX) out = await as('image/jpeg', 0.85);
-      // A profile must be converted, and oversized dimensions must be scaled, regardless of compressed size.
-      return original && !profiled && k === 1 && (!out || original.size < out.size) ? original : out;
+      // Always export decoded pixels: retained compressed chunks can contain ignored identifying tails.
+      return out;
     } catch { return null; } finally { if (bmp) bmp.close(); }
   }
   // Only decoding/animation chunks and fixed colour fields survive. ICC profiles can contain author/device
@@ -2764,17 +2764,22 @@ if (typeof window !== 'undefined') (() => {
         }
       } else if (type === 'image/webp') {
         const end = v.getUint32(4, true) + 8; if (end < 12 || end > b.length) return null;
+        let chunkCount = 0, frameCount = 0;
         const chunks = (start, stop, frame = false) => {
-          const parts = []; let i = start, flags, declaredAnimation = false, hasAnimationControl = false, frames = 0;
+          const parts = []; let i = start, flags, declaredAnimation = false, hasAnimationControl = false, frames = 0, pixels = false, alpha = false;
           while (i + 8 <= stop) {
+            if (++chunkCount > 4096) throw new Error('too many WebP chunks');
             const n = v.getUint32(i + 4, true), next = i + 8 + n + n % 2, name = word(i, 4); if (next > stop) throw new Error('broken WebP');
             let data = null;
-            if (['VP8 ', 'VP8L', 'ALPH'].includes(name)) data = b.subarray(i + 8, i + 8 + n);
+            if (['VP8 ', 'VP8L', 'ALPH'].includes(name)) {
+              if (!n || (name === 'ALPH' ? alpha : pixels)) throw new Error('duplicate or empty WebP pixels');
+              if (name === 'ALPH') alpha = true; else pixels = true; data = b.subarray(i + 8, i + 8 + n);
+            }
             else if (!frame && name === 'VP8X') {
-              if (n !== 10) throw new Error('broken WebP'); data = b.slice(i + 8, i + 8 + n); declaredAnimation = !!(data[0] & 2); data[0] &= 0x12; data.fill(0, 1, 4);
+              if (n !== 10 || flags) throw new Error('broken WebP'); data = b.slice(i + 8, i + 8 + n); declaredAnimation = !!(data[0] & 2); data[0] &= 0x12; data.fill(0, 1, 4);
             } else if (!frame && name === 'ANIM') { if (n !== 6 || !declaredAnimation || hasAnimationControl) throw new Error('broken WebP'); hasAnimationControl = true; data = b.subarray(i + 8, i + 8 + n); }
             else if (!frame && name === 'ANMF') {
-              if (n < 16 || !hasAnimationControl) throw new Error('broken WebP'); frames++;
+              if (n < 16 || !hasAnimationControl || ++frameCount > 512) throw new Error('broken WebP'); frames++;
               const inner = chunks(i + 24, i + 8 + n, true);
               if (!inner.some(c => ['VP8 ', 'VP8L'].includes(wordAt(c, 0, 4)) && new DataView(c.buffer).getUint32(4, true) > 0)) throw new Error('broken WebP');
               const size = inner.reduce((sum, c) => sum + c.length, 16);
@@ -2787,7 +2792,7 @@ if (typeof window !== 'undefined') (() => {
             if (data) { const c = chunk(name, data, true); if (name === 'VP8X') flags = c; parts.push(c); }
             i = next;
           }
-          if (i !== stop || (!frame && declaredAnimation !== (hasAnimationControl && frames > 0))) throw new Error('broken WebP');
+          if (i !== stop || (!frame && (declaredAnimation !== (hasAnimationControl && frames > 0) || (declaredAnimation && pixels)))) throw new Error('broken WebP');
           if (!frame) animated = declaredAnimation; return parts;
         };
         const parts = chunks(12, end), h = b.slice(0, 12); new DataView(h.buffer).setUint32(4, parts.reduce((n, p) => n + p.length, 4), true); return finish([h, ...parts]);
@@ -2818,14 +2823,16 @@ if (typeof window !== 'undefined') (() => {
   async function gifWithoutMetadata(file) {   // only graphics controls and standard animation loops survive
     const g = new Uint8Array(await file.arrayBuffer()), out = [];
     try {
+      let pendingControl = null;
       let i = 13 + (g[10] & 0x80 ? 3 * (2 << (g[10] & 7)) : 0); out.push(g.subarray(0, i));
       const blocks = j => { for (;;) { if (j >= g.length) throw new Error('broken'); const n = g[j]; j += 1 + n; if (!n) return j; } };
       while (i < g.length) {
         if (g[i] === 0x3b) { out.push(g.subarray(i, i + 1)); return new Blob(out, { type: 'image/gif' }); }
         if (g[i] === 0x21) { const label = g[i + 1], end = blocks(i + 2), app = String.fromCharCode(...g.subarray(i + 3, i + 14));
-          if (label === 0xf9) { if (g[i + 2] !== 4 || end !== i + 8) return null; out.push(g.subarray(i, end)); }
+          if (label === 0xf9) { if (g[i + 2] !== 4 || end !== i + 8) return null; pendingControl = g.subarray(i, end); }
+          else if (label === 0x01) pendingControl = null;
           else if (label === 0xff && g[i + 2] === 11 && ['NETSCAPE2.0', 'ANIMEXTS1.0'].includes(app) && g[i + 14] === 3 && g[i + 15] === 1 && end >= i + 19) out.push(g.subarray(i, i + 18), new Uint8Array([0])); i = end; continue; }
-        if (g[i] === 0x2c) { const f = g[i + 9], end = blocks(i + 10 + (f & 0x80 ? 3 * (2 << (f & 7)) : 0) + 1); out.push(g.subarray(i, end)); i = end; continue; }
+        if (g[i] === 0x2c) { const f = g[i + 9], end = blocks(i + 10 + (f & 0x80 ? 3 * (2 << (f & 7)) : 0) + 1); if (pendingControl) out.push(pendingControl); pendingControl = null; out.push(g.subarray(i, end)); i = end; continue; }
         throw new Error('broken');
       }
     } catch {}
@@ -2843,7 +2850,7 @@ if (typeof window !== 'undefined') (() => {
     let blob = stripped && stripped.blob;
     if (stripped && !stripped.animated) {
       const source = stripped.stillOnly ? new File([stripped.poster], file.name, { type: k0 }) : typed;
-      blob = await redrawImage(source, stripped.blob, stripped.profiled || stripped.stillOnly);
+      blob = await redrawImage(source);
     }
     if (!blob) { toast('That image could not be read. Try saving it again as PNG or JPEG.', true); return ''; }
     if (blob.size > IMG_MAX) { toast('That image is over 2 MB. Make it smaller, or put it in Drive and link it.', true); return ''; }

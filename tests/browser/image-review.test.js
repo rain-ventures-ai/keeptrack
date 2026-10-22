@@ -124,6 +124,17 @@ module.exports = async function imageReview() {
     riff(Buffer.concat([ch('VP8X', Buffer.from([2,0,0,0,0,0,0,0,0,0]), true), ch('ANIM', Buffer.alloc(6), true)])),
     riff(Buffer.concat([ch('VP8X', Buffer.from([2,0,0,0,0,0,0,0,0,0]), true), ch('ANIM', Buffer.alloc(6), true), ch('ANMF', Buffer.alloc(16), true)]))
   ]) assert.equal(await context.strip(new File([malformed], 'bad.webp', { type: 'image/webp' })), null, 'animation bit without control/pixel frames is refused');
+  for (const body of [ch('VP8 ', Buffer.alloc(0), true), Buffer.concat([ch('VP8 ', Buffer.from('x'), true), ch('VP8L', Buffer.from('x'), true)]), Buffer.concat(Array(4097).fill(ch('JUNK', Buffer.alloc(0), true)))]) {
+    assert.equal(await context.strip(new File([riff(body)], 'bad.webp', { type: 'image/webp' })), null, 'empty, duplicate and excessive WebP chunks are rejected');
+  }
+  const animatedHead = Buffer.concat([ch('VP8X', Buffer.from([2,0,0,0,0,0,0,0,0,0]), true), ch('ANIM', Buffer.alloc(6), true)]);
+  assert.equal(await context.strip(new File([riff(Buffer.concat([animatedHead, ...Array(513).fill(ch('ANMF', frame, true))]))], 'bad.webp', { type: 'image/webp' })), null, 'WebP frame budget is bounded independently of chunks');
+  const gifHead = Buffer.from('47494638396101000100800000000000ffffff', 'hex'), gifFrame = Buffer.from('2c0000000001000100000202440100', 'hex');
+  const gce = Buffer.from('21f9040107000000', 'hex'), text = Buffer.concat([Buffer.from([0x21,1,12]), Buffer.alloc(12), Buffer.from([1,65,0])]);
+  for (const extension of [text, Buffer.from([0x21,0xfe,1,65,0])]) {
+    const result = await strip(Buffer.concat([gifHead, gce, extension, gifFrame, Buffer.from([0x3b])]), 'image/gif');
+    assert.equal(result.bytes.includes(gce), extension !== text, 'plaintext consumes its graphics control, comments do not');
+  }
   const seg = (m, body) => Buffer.concat([Buffer.from([255,m,0,body.length + 2]), body]);
   const scans = Buffer.concat([seg(218, Buffer.alloc(0)), Buffer.from('scan'), ...[225,226,227,235,236,237,239].map(m => seg(m, Buffer.from('AUTHOR'))), seg(196, Buffer.from([255,217,1])), seg(218, Buffer.alloc(0)), Buffer.from([2,255,217])]);
   const jpeg = await strip(Buffer.concat([Buffer.from([255,216]), scans]), 'image/jpeg');
@@ -139,10 +150,10 @@ module.exports = async function imageReview() {
   assert.equal(await context.redraw(new File([], 'x.png', { type: 'image/png' })), null); assert.equal(closed, 1);
   context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(new Blob([Buffer.alloc(32)])) });
   const small = new Blob([Buffer.alloc(1)]), file = new File([], 'x.png', { type: 'image/png' });
-  assert.equal((await context.redraw(file, small, false)).size, 1, 'unscaled safe originals may win the size comparison');
+  assert.equal((await context.redraw(file, small, false)).size, 32, 'all stills export decoded pixels even when the original is smaller');
   assert.equal((await context.redraw(file, small, true)).size, 32, 'profiled stills must use converted canvas pixels');
   context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(null) });
-  assert.equal(await context.redraw(file, small, false), small, 'safe unchanged original can survive an optional null export');
+  assert.equal(await context.redraw(file, small, false), null, 'null exports fail closed instead of returning compressed source bytes');
   assert.equal(await context.redraw(file, small, true), null, 'required conversion still fails closed on null export');
   context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(new Blob([Buffer.alloc(32)])) });
   context.createImageBitmap = async () => ({ width: 4000, height: 2, close() {} });

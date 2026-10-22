@@ -4031,11 +4031,28 @@ def strip_image_metadata(blob, ext):
         raise ValueError("broken JPEG")
     if ext == "png":
         out, i = bytearray(blob[:8]), 8
+        import zlib
+        inflater, decoded = zlib.decompressobj(), 0
         fixed = {b"IHDR": 13, b"IEND": 0, b"gAMA": 4, b"cHRM": 32, b"sRGB": 1, b"pHYs": 9}
         while i + 12 <= len(blob):
             n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
             if i + 12 + n > len(blob):
                 raise ValueError("broken PNG")
+            if kind == b"IDAT":
+                # Validate the entire stream without retaining decompressed pixels. No ignored tails,
+                # incomplete streams or expansion beyond the fixed working budget may be saved.
+                data = blob[i + 8:i + 8 + n]
+                try:
+                    while data:
+                        if inflater.eof:
+                            raise ValueError("PNG data after zlib stream")
+                        pixels = inflater.decompress(data, min(65536, 64 * 1024 * 1024 + 1 - decoded))
+                        decoded += len(pixels)
+                        if decoded > 64 * 1024 * 1024 or inflater.unused_data:
+                            raise ValueError("PNG pixel stream exceeds limit or has trailing data")
+                        data = inflater.unconsumed_tail
+                except zlib.error as exc:
+                    raise ValueError("broken PNG pixel stream") from exc
             # APNG is saved as a still image: discard all animation streams and controls,
             # not just malformed relationships. The default PNG IDAT data remains decodable.
             if kind in (b"acTL", b"fcTL", b"fdAT"):
@@ -4056,21 +4073,35 @@ def strip_image_metadata(blob, ext):
                 raise ValueError("unknown critical PNG chunk")
             i += 12 + n
             if kind == b"IEND":
+                if not inflater.eof:
+                    raise ValueError("incomplete PNG pixel stream")
                 return bytes(out)
         raise ValueError("broken PNG")
     if ext == "webp":
+        chunk_count, frame_count = 0, 0
         def chunks(start, end, frame=False):
+            nonlocal chunk_count, frame_count
             out, i, vp8x = bytearray(), start, None
             animation, control, frames = False, False, 0
+            pixels, alpha = False, False
             while i + 8 <= end:
+                chunk_count += 1
+                if chunk_count > 4096:
+                    raise ValueError("too many WebP chunks")
                 kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
                 if i + size > end:
                     raise ValueError("broken WebP")
                 body = blob[i + 8:i + 8 + n]; chunk = None
                 if kind in (b"VP8 ", b"VP8L", b"ALPH"):
+                    if not n or (alpha if kind == b"ALPH" else pixels):
+                        raise ValueError("duplicate or empty WebP pixels")
+                    if kind == b"ALPH":
+                        alpha = True
+                    else:
+                        pixels = True
                     chunk = body
                 elif not frame and kind == b"VP8X":
-                    if n != 10:
+                    if n != 10 or vp8x is not None:
                         raise ValueError("broken WebP")
                     animation = bool(body[0] & 2)
                     chunk = bytes([body[0] & 0x12]) + b"\x00\x00\x00" + body[4:]
@@ -4083,13 +4114,16 @@ def strip_image_metadata(blob, ext):
                     if n < 16 or not control:
                         raise ValueError("broken WebP")
                     frames += 1
+                    frame_count += 1
+                    if frame_count > 512:
+                        raise ValueError("too many WebP frames")
                     inner = chunks(i + 24, i + 8 + n, frame=True)
-                    j, pixels = 0, False
+                    j, frame_pixels = 0, False
                     while j + 8 <= len(inner):
                         length = int.from_bytes(inner[j + 4:j + 8], "little")
-                        pixels |= inner[j:j + 4] in (b"VP8 ", b"VP8L") and length > 0
+                        frame_pixels |= inner[j:j + 4] in (b"VP8 ", b"VP8L") and length > 0
                         j += 8 + length + (length & 1)
-                    if not pixels:
+                    if not frame_pixels:
                         raise ValueError("broken WebP")
                     chunk = body[:16] + inner
                 elif not frame and kind == b"EXIF":
@@ -4102,7 +4136,7 @@ def strip_image_metadata(blob, ext):
                 if chunk is not None:
                     out += kind + len(chunk).to_bytes(4, "little") + chunk + (b"\x00" if len(chunk) & 1 else b"")
                 i += size
-            if i != end or (not frame and animation != (control and frames > 0)):
+            if i != end or (not frame and (animation != (control and frames > 0) or (animation and pixels))):
                 raise ValueError("broken WebP")
             return bytes(out)
         end = int.from_bytes(blob[4:8], "little") + 8
@@ -4115,6 +4149,7 @@ def strip_image_metadata(blob, ext):
             raise ValueError("broken GIF")
         i = 13 + (3 * (2 << (blob[10] & 7)) if blob[10] & 0x80 else 0)
         out = bytearray(blob[:i])
+        pending_control = b""
 
         def blocks(j):   # the end of a run of data sub-blocks starting at j
             while True:
@@ -4132,7 +4167,9 @@ def strip_image_metadata(blob, ext):
                 if label == b"\xf9":
                     if blob[i + 2] != 4 or end != i + 8:
                         raise ValueError("broken GIF")
-                    out += blob[i:end]
+                    pending_control = blob[i:end]
+                elif label == b"\x01":
+                    pending_control = b""
                 elif (label == b"\xff" and blob[i + 2] == 11
                       and blob[i + 3:i + 14] in (b"NETSCAPE2.0", b"ANIMEXTS1.0")
                       and blob[i + 14:i + 16] == b"\x03\x01" and end >= i + 19):
@@ -4142,7 +4179,7 @@ def strip_image_metadata(blob, ext):
                 if i + 10 > len(blob):
                     raise ValueError("broken GIF")
                 flags = blob[i + 9]; j = i + 10 + (3 * (2 << (flags & 7)) if flags & 0x80 else 0) + 1
-                end = blocks(j); out += blob[i:end]; i = end; continue
+                end = blocks(j); out += pending_control + blob[i:end]; pending_control = b""; i = end; continue
             raise ValueError("broken GIF")
         raise ValueError("broken GIF")
     return blob
