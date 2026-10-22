@@ -3527,7 +3527,7 @@ if (typeof window !== 'undefined') (() => {
       drawerSection('cDescSec', { title: 'Description', action: descActs, body: $('cDescParts') }),
       drawerSection('cRelSec', { title: 'Related cards', count: '', body: rel }),
       drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
-      drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkImage, linkHint] }),
+      drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint, linkImage] }),
       drawerSection('cContactSec', { title: 'Contacts', count: '', body: [contacts, contactAdd] }),
       drawerSection('cmSec', { title: 'Activity', count: '', action: histBtn, body: $('cmParts') })
     ];
