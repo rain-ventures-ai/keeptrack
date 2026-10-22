@@ -360,6 +360,11 @@ button.small { padding: 2px var(--sp-4); font-size: var(--fs-sm); }
 .ddesc { width: 100%; min-height: 110px; border-radius: var(--r-lg); resize: none; } .cbtns { display: flex; gap: var(--sp-3); align-items: center; margin-top: var(--sp-3); flex-wrap: wrap; }
 .composer textarea { width: 100%; resize: none; border-radius: var(--r-lg); min-height: 40px; padding: 9px var(--sp-5); overflow: hidden; }
 .cmlist { margin-top: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
+.cmthread { display: flex; flex-direction: column; gap: var(--sp-3); }
+.cmreplies { margin-left: 28px; display: flex; flex-direction: column; gap: var(--sp-3); }
+.cmreplyto { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-2); font-size: var(--fs-sm); color: var(--muted); }
+.mnreply { margin-left: var(--sp-2); color: var(--muted); font-size: var(--fs-sm); }
+body.ro #cLinkImage { display: none !important; }
 .cmcard { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--card); }
 .cmcard .cmhead { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--border); font-size: var(--fs-base); background: color-mix(in srgb, var(--panel) 50%, var(--card)); } .cmcard .cmhead .av { margin: 0; border: 0; width: 24px; height: 24px; } .cmcard .cmhead time { margin-left: auto; color: var(--muted); font-size: var(--fs-sm); }
 .cmcard .cmbody { padding: var(--sp-4) var(--sp-5); font-size: var(--fs-md); white-space: pre-wrap; word-break: break-word; } .cmcard .cmbody a { color: var(--accent); }

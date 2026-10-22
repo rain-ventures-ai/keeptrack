@@ -13,6 +13,7 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 KIT = os.path.join(REPO, "board", "kit")
+sys.path.insert(0, HERE)
 sys.path.insert(0, KIT)
 import keeptrack  # noqa: E402
 from board_fixtures import copy_board_fixture  # noqa: E402

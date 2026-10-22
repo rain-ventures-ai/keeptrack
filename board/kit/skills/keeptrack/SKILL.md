@@ -113,6 +113,8 @@ $B todo-done '#12' <N>                           # tick each checklist item when
 $B todo-edit '#12' <N> "<text>"                  # reword an item in place (keeps its place)
 $B todo-move '#12' <N> --details "<what it waits on>"   # a step that must wait: a new follow-up card, linked both ways
 $B comment '#12' "<question or update>"          # questions also need: heartbeat --status blocked
+$B comment '#12' "<answer>" --reply-to c_ab12cd  # one level under that comment, not under a reply or an activity line
+$B project-comment pr_ab12 "note"                # the project's own comment stream; project-comments reads it
 $B done '#12' --note "<result, link>"            # or: release '#12' --column todo
 $B review '#12' --who <login> --note -          # work done, a person decides (research, review, options): Pending review, not Done
 $B wait '#12' --on "<who: what>" --who <login-or-p_id>   # parked on a person or event; then comment @owner, assign, stop
