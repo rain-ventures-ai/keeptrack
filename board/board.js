@@ -186,7 +186,7 @@ if (typeof window !== 'undefined') (() => {
   const boardContext = () => localBoardJson('context');
   function saveBoardContext(patch) { if (SANDBOX || !cfg().repo) return; saveLocalBoardJson('context', { ...boardContext(), ...patch, at: nowIso() }); }
   // ---- move settings between browsers/devices: one pasteable code or a setup link (token included) --------------
-  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'mentions', 'list', 'cal', 'sched', 'activity'] } };
+  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
   const XFER_SECRETS = ['token', 'claude_token', 'cron_key'];   // left out of a code unless the person ticks "Include tokens and keys"
@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 95;
+  const PAGE_KIT = 96;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -551,7 +551,7 @@ if (typeof window !== 'undefined') (() => {
   const isTimeout = e => !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
   async function githubContents(method, body, cond, opt = {}) {
     if (HOSTED) throw new Error('capability_unavailable: GitHub Contents is disabled in hosted mode');   // opt: path (another file in the repo), accept, etag (for a conditional GET of that file)
-    const c = cfg(), path = opt.path || c.path, tag = opt.path ? opt.etag : etag;
+    const c = opt.at || cfg(), path = opt.path || c.path, tag = opt.path ? opt.etag : etag;   // opt.at: the board (repo, branch, path, token) captured when a save or archive run started
     const url = `${c.api}/repos/${c.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}` + (method === 'GET' ? `?ref=${encodeURIComponent(c.branch)}` : '');
     return fetch(url, { method, cache: 'no-store', signal: ghSignal(method), body: body ? JSON.stringify(body) : undefined,
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cond && tag ? { 'If-None-Match': tag } : {}) } });
@@ -572,7 +572,7 @@ if (typeof window !== 'undefined') (() => {
     api(...args) { return githubApi(...args); }
     snapshot(force = false, model = true) { return githubSnapshot(force, model); }
     async read(path) { const r = await this.contents('GET', null, false, { path: remotePath(path) }); return fileJson(r, remotePath(path)); }
-    commit(next, message, revision, extra, tree) { return githubSave(next, message, revision, extra, tree); }
+    commit(next, message, revision, extra, tree, ag) { return githubSave(next, message, revision, extra, tree, ag); }
     command() { throw new Error('capability_unavailable: GitHub uses existing lifecycle callbacks'); }
     changes() { throw new Error('capability_unavailable: GitHub uses conditional snapshots'); }
     whoami() { const c = cfg(); return fetch(`${c.api}/user`, { headers: { Authorization: `Bearer ${c.token}` }, cache: 'no-store' }); }
@@ -674,13 +674,13 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // The contents API sends no content for a file over 1 MB (encoding "none"); then read the same file raw (up to 100 MB).
-  async function fileJson(res, path) {
+  async function fileJson(res, path, at) {
     const d = await res.json();
-    const text = d.content || d.encoding !== 'none' ? b64d(d.content || '') : await (await gh('GET', null, false, { path: path || cfg().path, accept: 'application/vnd.github.raw+json' })).text();
+    const text = d.content || d.encoding !== 'none' ? b64d(d.content || '') : await (await gh('GET', null, false, { path: path || (at || cfg()).path, accept: 'application/vnd.github.raw+json', at })).text();
     return { d, raw: JSON.parse(text) };
   }
   const isSplit = o => !!o && o.version === 4 && o.layout === 'split';
-  const remotePath = rel => { const p = cfg().path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
+  const remotePath = (rel, at) => { const p = (at || cfg()).path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
   const wantedRel = p => p === 'tasks.json' || /^(cards|people|projects|proposals|archive)\/[^/]+$/.test(p);   // proposals: the Review Inbox, kept out of the model
   const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
   async function mapLimit(items, limit, fn) {
@@ -801,7 +801,9 @@ if (typeof window !== 'undefined') (() => {
     } catch (e) { console.error(e); setStatus('Could not load the demo board', 'err'); return false; }
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
-  async function load(quiet, first) {
+  // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
+  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } return ok; }
+  async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
     if (DEMO) return quiet ? true : loadDemo();
@@ -1106,49 +1108,59 @@ if (typeof window !== 'undefined') (() => {
     if (!meta.projectsLoaded) { for (const p of deletes) if (p.startsWith('projects/')) deletes.delete(p); }
     deletes.forEach(p => changes.delete(p)); return { changes, deletes };
   }
-  async function splitSave(next, message, meta, extra, forceTree = false) {   // forceTree: always one Git Data commit on the head that was read (Review Inbox decisions)
-    const { changes, deletes } = splitChanges(next, meta, extra), paths = [...changes.keys(), ...deletes];
+  // The board a save writes to is fixed when it starts (at: repo, branch, path, token), so a Settings change meanwhile can never
+  // send it to another branch; ag (archGen when the caller started) is checked before every write: a Forget token or another
+  // board since then writes nothing more ('gone').
+  async function splitSave(next, message, meta, extra, forceTree = false, ag = archGen, at = Object.assign({}, cfg())) {   // forceTree: always one Git Data commit on the head that was read (Review Inbox decisions)
+    const { changes, deletes } = splitChanges(next, meta, extra), paths = [...changes.keys(), ...deletes], gone = () => ag !== archGen;
+    if (gone()) return 'gone';
     if (!paths.length) { state = next; return 'ok'; }
     if (paths.length === 1 && !forceTree) {
-      const rel = paths[0], old = meta.files.get(rel), body = { message, branch: cfg().branch };
+      const rel = paths[0], old = meta.files.get(rel), body = { message, branch: at.branch };
       let res;
-      if (deletes.has(rel)) { body.sha = old.sha; res = await gh('DELETE', body, false, { path: remotePath(rel) }); }
-      else { body.content = b64e(changes.get(rel)); if (old) body.sha = old.sha; res = await gh('PUT', body, false, { path: remotePath(rel) }); }
+      if (deletes.has(rel)) { body.sha = old.sha; res = await gh('DELETE', body, false, { path: remotePath(rel, at), at }); }
+      else { body.content = b64e(changes.get(rel)); if (old) body.sha = old.sha; res = await gh('PUT', body, false, { path: remotePath(rel, at), at }); }
       if (!res.ok) return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
-      const out = await res.json(), files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
+      const out = await res.json(); if (gone()) return 'gone'; const files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
       const parent = ((out.commit.parents || [])[0] || {}).sha;
       splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
     }
-    const made = await mapLimit([...changes], 8, async ([rel, content]) => { const r = await ghApi('POST', '/git/blobs', { content, encoding: 'utf-8' }); if (!r.ok) throw new Error(`GitHub error ${r.status} creating ${rel}`); return [rel, content, (await r.json()).sha]; });
-    const entries = made.map(([rel, , blob]) => ({ path: remotePath(rel), mode: '100644', type: 'blob', sha: blob }));
-    deletes.forEach(rel => entries.push({ path: remotePath(rel), mode: '100644', type: 'blob', sha: null }));
-    const tr = await ghApi('POST', '/git/trees', { base_tree: meta.rootTree, tree: entries }); if (!tr.ok) return 'error:' + tr.status; const tree = (await tr.json()).sha;
-    const cr = await ghApi('POST', '/git/commits', { message, tree, parents: [meta.head] }); if (!cr.ok) return 'error:' + cr.status; const commit = (await cr.json()).sha;
-    const rr = await ghApi('PATCH', `/git/refs/heads/${encodeURIComponent(cfg().branch)}`, { sha: commit, force: false });
-    if (!rr.ok) return (rr.status === 409 || rr.status === 422) ? 'conflict' : 'error:' + rr.status;
-    const files = new Map(meta.files); made.forEach(([rel, text, blob]) => { files.set(rel, { sha: blob, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(blob), text); }); deletes.forEach(rel => files.delete(rel));
-    splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
+    const api = (method, endpoint, body) => { if (gone()) throw new Error('gone'); return ghApi(method, endpoint, body, {}, at); };
+    try {
+      const made = await mapLimit([...changes], 8, async ([rel, content]) => { const r = await api('POST', '/git/blobs', { content, encoding: 'utf-8' }); if (!r.ok) throw new Error(`GitHub error ${r.status} creating ${rel}`); return [rel, content, (await r.json()).sha]; });
+      const entries = made.map(([rel, , blob]) => ({ path: remotePath(rel, at), mode: '100644', type: 'blob', sha: blob }));
+      deletes.forEach(rel => entries.push({ path: remotePath(rel, at), mode: '100644', type: 'blob', sha: null }));
+      const tr = await api('POST', '/git/trees', { base_tree: meta.rootTree, tree: entries }); if (!tr.ok) return 'error:' + tr.status; const tree = (await tr.json()).sha;
+      const cr = await api('POST', '/git/commits', { message, tree, parents: [meta.head] }); if (!cr.ok) return 'error:' + cr.status; const commit = (await cr.json()).sha;
+      const rr = await api('PATCH', `/git/refs/heads/${encodeURIComponent(at.branch)}`, { sha: commit, force: false });
+      if (!rr.ok) return (rr.status === 409 || rr.status === 422) ? 'conflict' : 'error:' + rr.status;
+      if (gone()) return 'gone';
+      const files = new Map(meta.files); made.forEach(([rel, text, blob]) => { files.set(rel, { sha: blob, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(blob), text); }); deletes.forEach(rel => files.delete(rel));
+      splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
+    } catch (e) { if (gone()) return 'gone'; throw e; }
   }
 
-  async function githubSave(next, message, expectedSha = sha, extra = {}, tree = false) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in)
+  async function githubSave(next, message, expectedSha = sha, extra = {}, tree = false, ag = archGen) {   // expectedSha: the revision next was built from (never a SHA a later load swapped in); ag: see splitSave
     if (fromSnap) { setStatus('Syncing… try again in a moment'); return 'error:syncing'; }
     if (ro) { roToast(); return 'error:readonly'; }
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return 'error:schema'; }
+    const at = Object.assign({}, cfg()), gone = () => ag !== archGen;
+    if (gone()) return 'gone';
     if (isSplit(next)) {
       // A new split board has no tree metadata yet. Its first commit contains only the root/index file; cards and
       // CRM people get their own files when they are added. Subsequent writes load the branch tree as usual.
       if (!expectedSha && !splitMeta) {
         const root = clone(next); delete root.tasks; delete root.contacts; delete root.projects;
-        const res = await gh('PUT', { message, content: b64e(JSON.stringify(root, null, 2) + '\n'), branch: cfg().branch });
-        if (res.ok) { sha = (await res.json()).content.sha; etag = null; state = next; return 'ok'; }
+        const res = await gh('PUT', { message, content: b64e(JSON.stringify(root, null, 2) + '\n'), branch: at.branch }, false, { at }); if (gone()) return 'gone';
+        if (res.ok) { const got = (await res.json()).content.sha; if (gone()) return 'gone'; sha = got; etag = null; state = next; return 'ok'; }
         return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       }
-      try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra, tree); }
+      try { return await splitSave(next, message, expectedSha && expectedSha.files ? expectedSha : splitMeta, extra, tree, ag, at); }
       catch (e) { console.error(e); return isTimeout(e) ? 'error:timeout' : 'error:network'; }
     }
-    const body = { message, content: b64e(JSON.stringify(next, null, 2) + '\n'), branch: cfg().branch }; if (expectedSha) body.sha = expectedSha;
-    const res = await gh('PUT', body);
-    if (res.ok) { sha = (await res.json()).content.sha; etag = null; state = next; return 'ok'; }
+    const body = { message, content: b64e(JSON.stringify(next, null, 2) + '\n'), branch: at.branch }; if (expectedSha) body.sha = expectedSha;
+    const res = await gh('PUT', body, false, { at }); if (gone()) return 'gone';
+    if (res.ok) { const got = (await res.json()).content.sha; if (gone()) return 'gone'; sha = got; etag = null; state = next; return 'ok'; }
     if (res.status === 403 || res.status === 404) { const why = await res.text().catch(() => '');   // a token with Contents: Read only gets 403 (fine-grained) or 404 (classic) on a write
       if (res.status === 403 && !/rate limit/i.test(why) || res.status === 404 && sha) { LS.set(roKey(), '1'); ro = 'token'; applyRo(); toast('Not saved: this token can read the board but not change it.', true); return 'error:readonly'; } }
     return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
@@ -1163,6 +1175,7 @@ if (typeof window !== 'undefined') (() => {
   const sortKeys = v => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])])) : v;
   const jcanon = v => v === undefined ? '\0missing' : JSON.stringify(sortKeys(v));
   const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v), has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const reservedKey = k => k === '__proto__' || k === 'constructor' || k === 'prototype';   // never copied into, merged into or set on an object (a file could carry them as own keys)
   const itemKey = x => isObj(x) && typeof x.id === 'string' && x.id ? 'id:' + x.id : 'json:' + jcanon(x), keyName = k => k.slice(k.indexOf(':') + 1);
   function merge3(base, mine, theirs) { const clashes = []; const merged = merge3v(base, mine, theirs, [], clashes); return { merged, clashes }; }
   function merge3v(b, m, t, path, clashes) {
@@ -1173,8 +1186,8 @@ if (typeof window !== 'undefined') (() => {
     if (typeof last === 'string' && has(VOLATILE, last)) return VOLATILE[last] === 'max' && Number.isInteger(m) && Number.isInteger(t) ? Math.max(m, t) : m;
     if (isObj(m) && isObj(t)) {
       const bd = isObj(b) ? b : {}, out = {};
-      [...Object.keys(t), ...Object.keys(m).filter(k => !has(t, k)), ...Object.keys(bd).filter(k => !has(t, k) && !has(m, k))].forEach(k => {
-        const v = merge3v(bd[k], m[k], t[k], [...path, k], clashes); if (v !== undefined) out[k] = v; });
+      [...Object.keys(t), ...Object.keys(m).filter(k => !has(t, k)), ...Object.keys(bd).filter(k => !has(t, k) && !has(m, k))].filter(k => !reservedKey(k)).forEach(k => {
+        const v = merge3v(has(bd, k) ? bd[k] : undefined, has(m, k) ? m[k] : undefined, has(t, k) ? t[k] : undefined, [...path, k], clashes); if (v !== undefined) out[k] = v; });
       return out;
     }
     if (Array.isArray(m) && Array.isArray(t) && (Array.isArray(b) || b === undefined)) return merge3list(b || [], m, t, path, clashes);
@@ -1209,8 +1222,9 @@ if (typeof window !== 'undefined') (() => {
         if (end) { if (value === undefined) { if (idx >= 0) node.splice(idx, 1); } else if (idx >= 0) node[idx] = value; else node.push(value); return; }
         if (idx < 0) return; node = node[idx];
       } else {
+        if (!node || typeof node !== 'object' || reservedKey(seg)) return;
         if (end) { if (value === undefined) delete node[seg]; else node[seg] = value; return; }
-        if (!node[seg] || typeof node[seg] !== 'object') return; node = node[seg];
+        if (!has(node, seg) || !node[seg] || typeof node[seg] !== 'object') return; node = node[seg];
       }
     }
   }
@@ -1439,7 +1453,8 @@ if (typeof window !== 'undefined') (() => {
     if (ro) { roToast(); return false; }
     if (busy) { setStatus('Busy, try again', 'err'); return false; }
     if (fromSnap) { setStatus('Syncing… try again in a moment'); return false; }
-    busy = true; syncUndo(); loadGen++; const before = clone(state); let base = baseState || before;
+    busy = true; syncUndo(); loadGen++; const before = clone(state), ag = archGen; let base = baseState || before;
+    const back = (to = before) => { if (ag !== archGen) return; state = to; render(); };   // after a Forget token (or another board) meanwhile, the old board is never put back
     // A failure is also a toast: the status line alone is overwritten by the next queued save's "Saved".
     const fail = msg => { setStatus(msg, 'err'); toast(msg, true); };
     savingStatus();
@@ -1452,16 +1467,16 @@ if (typeof window !== 'undefined') (() => {
         if (isSplit(state) || splitMeta) { const got = await splitSnapshot(true); rawL = got.data; readSha = got.meta; viaTree = true;
           if (!isSplit(rawL)) { splitMeta = null; readSha = (got.meta.files.get('tasks.json') || {}).sha || null; } }   // no longer split: save it as one file
         else { res = await gh('GET');
-          if (!res.ok && res.status !== 404) { fail(`Not saved: GitHub error ${res.status}`); state = before; render(); return false; }
+          if (!res.ok && res.status !== 404) { fail(`Not saved: GitHub error ${res.status}`); back(); return false; }
           if (res.ok) { const got = await fileJson(res); readSha = got.d.sha; rawL = got.raw; boardSize = got.d.size || boardSize;
             if (isSplit(rawL)) { const sp = await splitSnapshot(true); rawL = sp.data; readSha = sp.meta; viaTree = true; } }   // migrated to split while this page was open
         }
         if (rawL && !(viaTree && isSplit(rawL))) {
-          if (Number.isInteger(rawL.version) && rawL.version > KNOWN_SCHEMA) { newerSchema = rawL.version; state = before; render(); checkKit(); setStatus('Not saved: board saved by newer tools', 'err'); return false; }
-          if (rawL.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); state = before; render(); roToast(); return false; }   // a demo file is never written
+          if (Number.isInteger(rawL.version) && rawL.version > KNOWN_SCHEMA) { newerSchema = rawL.version; back(); checkKit(); setStatus('Not saved: board saved by newer tools', 'err'); return false; }
+          if (rawL.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); back(); roToast(); return false; }   // a demo file is never written
           latest = normalise(rawL); }
         else if (rawL) latest = normalise(rawL);
-        if (rawL && minKitOf(rawL)) { setKitRo(rawL); state = before; render(); roToast(); return false; }   // the board now needs a newer kit than this page
+        if (rawL && minKitOf(rawL)) { setKitRo(rawL); back(); roToast(); return false; }   // the board now needs a newer kit than this page
         const pre = clone(latest);
         // Archival is conditional on an unchanged snapshot. Re-evaluate that condition against
         // each current revision rather than merging a stale optimistic task deletion.
@@ -1472,35 +1487,36 @@ if (typeof window !== 'undefined') (() => {
         // a choice covers only the revision that was shown, so a newer clash asks again
         const gone = deletedUnderMe(base, pre, targetIds), mg = merge3(base, mine, pre);
         if (gone.length && !mg.clashes.length) {
-          state = pre; render(); fail('That card was deleted by someone else; nothing changed'); return false;
+          back(pre); fail('That card was deleted by someone else; nothing changed'); return false;
         }
         latest = clone(mg.merged);
         if (mg.clashes.length) {
           setStatus('Waiting for your decision…', 'err');
           const pick = await askConflict(mg.clashes, { base, mine, pre });
-          if (pick === 'discard') { state = pre; render(); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
+          if (pick === 'discard') { back(pre); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
           mg.clashes.forEach((c, i) => { if (pick[i].side === 'mine') setAt(latest, c.path, c.mine === undefined ? undefined : clone(c.mine)); else if (pick[i].side === 'edit') setAt(latest, c.path, pick[i].value); });
         }
         const protectedRemoval = pre.contacts.find(p => memberOf(p, pre) && !latest.contacts.some(x => x.id === p.id));
-        if (protectedRemoval) { state = pre; render(); fail('Board members’ own records cannot be removed from the CRM.'); return false; }
+        if (protectedRemoval) { back(pre); fail('Board members’ own records cannot be removed from the CRM.'); return false; }
         const missingCompany = latest.people.find(m => memberCompanies(m).some(company => !latest.clients.includes(company)));
-        if (missingCompany) { state = pre; render(); fail('A board member company cannot be removed while linked. Explicitly unlink it in Board → Members first.'); return false; }
+        if (missingCompany) { back(pre); fail('A board member company cannot be removed while linked. Explicitly unlink it in Board → Members first.'); return false; }
         const removedCompanyMember = pre.people.find(m => memberCompanies(m).length && !latest.people.some(x => x.github === m.github));
-        if (removedCompanyMember) { state = pre; render(); fail('Explicitly unlink this member’s own companies before removing the member.'); return false; }
+        if (removedCompanyMember) { back(pre); fail('Explicitly unlink this member’s own companies before removing the member.'); return false; }
         const grewName = reservedGrew(pre, latest);
-        if (grewName != null) { state = pre; render(); fail(reservedSaveMsg(grewName, pre)); return false; }
+        if (grewName != null) { back(pre); fail(reservedSaveMsg(grewName, pre)); return false; }
         fixNums(latest, pre); ensureRanks(latest);
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
         autoLog(pre, latest); contactLog(pre, latest);
         let extra = {}, tree = !!options.recheck;   // options.extra: more files for the same commit (the Review Inbox writes the proposal with its record), checked on this revision
-        if (options.extra) { const r = options.extra(pre, readSha, latest); if (r && r.abort) { state = pre; render(); fail(r.abort); if (options.onAbort) options.onAbort(r.abort); return false; } extra = (r && r.files) || {}; tree = tree || !!(r && r.tree); }
-        const out = await save(latest, message, readSha, extra, tree);
+        if (options.extra) { const r = options.extra(pre, readSha, latest); if (r && r.abort) { back(pre); fail(r.abort); if (options.onAbort) options.onAbort(r.abort); return false; } extra = (r && r.files) || {}; tree = tree || !!(r && r.tree); }
+        const out = await save(latest, message, readSha, extra, tree, ag);
+        if (out === 'gone' || ag !== archGen) return false;
         if (out === 'ok') { if (options.remember !== false) rememberUndo(pre, latest, message); snapSave(cfg(), latest); if (waiting) savingStatus(); else setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); return true; }
-        if (out !== 'conflict') { fail(out === 'error:timeout' ? 'Not saved: GitHub did not answer in time' : 'Save failed (' + out + ')'); state = before; render(); return false; }
+        if (out !== 'conflict') { fail(out === 'error:timeout' ? 'Not saved: GitHub did not answer in time' : 'Save failed (' + out + ')'); back(); return false; }
         setStatus('Someone else changed the board, retrying…', 'err');
       }
-      fail('Could not save after retries'); state = before; render(); busy = false; await load(true); return false;
-    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); state = before; render(); return false; } finally { busy = false; syncUndo(); }
+      fail('Could not save after retries'); back(); busy = false; if (ag === archGen) await load(true); return false;
+    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); back(); return false; } finally { busy = false; syncUndo(); }
   }
 
   function boardId(prefix) {
@@ -2136,7 +2152,7 @@ if (typeof window !== 'undefined') (() => {
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
+      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, archive: renderArchiveView, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
@@ -2682,7 +2698,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
   // Each board remembers its last view in this browser. sessionStorage still wins while Back/Forward is active in one tab.
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
-  const ALL_VIEWS = ['today', 'people', 'companies', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
+  const ALL_VIEWS = ['today', 'people', 'companies', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'archive', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
   let view = SS.get('kb_view') || boardContext().view || 'today'; if (!ALL_VIEWS.includes(view)) view = 'today';
   // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
   // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
@@ -2691,7 +2707,8 @@ if (typeof window !== 'undefined') (() => {
     { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'companies', icon: 'building-2', label: 'Companies', title: 'Companies: each with its stage, people and next step' }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people or companies by stage' }] },
     { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'mentions', icon: 'at-sign', label: '@Mentions', title: '@Mentions: comments that mention you' },
       { value: 'list', icon: 'list', label: 'List', title: 'List' },
-      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' }] }
+      { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' },
+      { value: 'archive', icon: 'archive', label: 'Archive', title: 'Archive: archived cards, by archive year (newest year first)' }] }
   ];
   const tagViews = (tl, views) => { tl.querySelectorAll('.ui-tab').forEach((b, i) => { b.dataset.view = b.dataset.value; if (views[i].primary) b.classList.add('viewprimary'); }); return tl; };
   const viewTabs = {};   // group -> its ui.tabs in #viewSw
@@ -2729,6 +2746,7 @@ if (typeof window !== 'undefined') (() => {
     sub.hidden = views.length < 2; if (sub.hidden) return;
     if (sub.dataset.grp !== cur) { sub.textContent = ''; sub.dataset.grp = cur; sub.append(tagViews(ui.tabs({ items: views.map(({ value, label, title }) => ({ value, label, title })), value: view, label: 'Views in this section', onChange: v => setView(v) }), views)); }
     sub.firstChild.select(view);
+    if (sub.dataset.view !== view) { sub.dataset.view = view; const on = sub.querySelector('[aria-selected="true"]'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }   // a later view (Archive) is off the strip's right edge on a phone
   }
 
   // ---- "Show me around": a short tour that highlights one part of the real board at a time -------------------
@@ -2865,9 +2883,10 @@ if (typeof window !== 'undefined') (() => {
   const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
   const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
   function afterLinks(t) {
+    const ids = afterIds(t); if (!ids.length) return [];   // most cards: nothing to look up
     let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }   // declared further down this file; a stale copy counts as not loaded
-    const arch = new Map(((loaded && loaded.tasks) || []).map(x => [x.item.id, x.item]));
-    return afterIds(t).map(id => {
+    let arch = null; try { arch = loaded ? archIdMap() : null; } catch { arch = null; } arch = arch || new Map();
+    return ids.map(id => {
       const live = state.tasks.find(x => x.id === id);
       if (live) return { id, num: live.num, title: live.title || '', live: true, state: finishedDone(live) ? 'done' : live.column === doneColId() ? 'cancelled' : (colName(live.column) || live.column || '?') };
       const old = arch.get(id);   // the archive not loaded yet (and the board has one): unknown, not missing
@@ -3897,7 +3916,7 @@ if (typeof window !== 'undefined') (() => {
   function renderAfter(t) {
     const box = $('cAfter'); if (!box) return; box.textContent = ''; const links = afterLinks(t); box.hidden = !links.length; if (!links.length) return;
     let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }
-    if (links.some(x => !x.live) && !loaded && archYears().length) loadArchived().then(() => { if (editing === t.id) renderAfter(state.tasks.find(x => x.id === t.id) || t); }).catch(() => {});   // an archived Done card counts as done
+    if (links.some(x => !x.live) && !loaded && archYears().length && !archUi.err) archLoadStart().then(() => { if (editing === t.id && archFresh()) renderAfter(state.tasks.find(x => x.id === t.id) || t); });   // an archived Done card counts as done; a failed load is not retried on every poll (Archive view: Try again)
     const open = links.filter(x => x.state !== 'done');
     box.append(elI('span', 'dafter__label', 'arrow-right', open.length ? 'Runs after' : 'Runs after (all done: ready to approve)'));
     links.forEach(x => {
@@ -4135,7 +4154,7 @@ if (typeof window !== 'undefined') (() => {
   // only this allowlist is copied to navigation links (never tokens or setup payloads).
   const FILTER_SELECTS = { who: 'fWho', status: 'fStatus', completed: 'fDoneBy', label: 'fLabel', project: 'fProject', goal: 'fGoal', priority: 'fPrio' };
   const FILTER_CHECKS = { attention: 'fAttn', waiting: 'fWaiting', hide_done: 'fHideDone' };
-  const FILTER_KEYS = ['filters', 'client', ...Object.keys(FILTER_SELECTS), ...Object.keys(FILTER_CHECKS), 'unread', 'sort', 'layout', 'order', 'board_view', 'people_query', 'stage', 'activity_range', 'activity_day', 'activity_who', 'activity_agents', 'inbox_status', 'inbox_kind', 'inbox_source', 'inbox_reviewer'];
+  const FILTER_KEYS = ['filters', 'client', ...Object.keys(FILTER_SELECTS), ...Object.keys(FILTER_CHECKS), 'unread', 'sort', 'layout', 'order', 'board_view', 'people_query', 'stage', 'people_archived', 'activity_range', 'activity_day', 'activity_who', 'activity_agents', 'inbox_status', 'inbox_kind', 'inbox_source', 'inbox_reviewer'];
   let pendingFilterRoute = new URLSearchParams(location.search), filterRouteReady = false;
   const deferredFilterRoute = new Map();
   const routeBoardKey = () => [cfg().repo, cfg().branch, cfg().path].join('\n');
@@ -4161,7 +4180,7 @@ if (typeof window !== 'undefined') (() => {
       LS.set(sortKey(), ['smart', 'manual', 'due', 'newest'].includes(q.get('sort')) ? q.get('sort') : 'smart');
       LS.set(prioritiseKey(), q.get('layout') === 'prioritise' ? 'on' : 'off');
       LS.set(prioritiseKey() + ':sort', ['manual', 'score', 'due', 'newest'].includes(q.get('order')) ? q.get('order') : 'manual');
-      peopleQ = (q.get('people_query') || '').slice(0, 200); peopleStage = stages().includes(q.get('stage')) ? q.get('stage') : '';
+      peopleQ = (q.get('people_query') || '').slice(0, 200); peopleArchived = q.get('people_archived') === '1' || (q.get('stage') === ARCH_ROUTE && !stages().includes(ARCH_ROUTE)); peopleStage = !peopleArchived && stages().includes(q.get('stage')) ? q.get('stage') : '';   // stage=__archived: links made before people_archived
       actRange = ['today', 'yday', '7d', 'day'].includes(q.get('activity_range')) ? q.get('activity_range') : 'today';
       actDay = /^\d{4}-\d{2}-\d{2}$/.test(q.get('activity_day') || '') && !Number.isNaN(Date.parse(q.get('activity_day'))) ? q.get('activity_day') : todayIso();
       actWho = ['', '__me', '__agents', ...state.people.map(p => p.github)].includes(q.get('activity_who')) ? q.get('activity_who') : '__me';
@@ -4183,7 +4202,7 @@ if (typeof window !== 'undefined') (() => {
     q.set('sort', sortMode()); q.set('layout', prioritising() ? 'prioritise' : 'standard');
     q.set('order', ['manual', 'score', 'due', 'newest'].includes(LS.get(prioritiseKey() + ':sort')) ? LS.get(prioritiseKey() + ':sort') : 'manual');
     q.set('board_view', view);
-    if (peopleQ) q.set('people_query', peopleQ); if (peopleStage) q.set('stage', peopleStage);
+    if (peopleQ) q.set('people_query', peopleQ); if (peopleArchived) q.set('people_archived', '1'); else if (peopleStage) q.set('stage', peopleStage);
     q.set('activity_range', actRange); if (actRange === 'day') q.set('activity_day', actDay);
     if (actWho) q.set('activity_who', actWho); q.set('activity_agents', actAgents ? '1' : '0');
     Object.entries(inboxF).forEach(([k, v]) => { if (v) q.set('inbox_' + k, v); }); return q;
@@ -5554,21 +5573,28 @@ if (typeof window !== 'undefined') (() => {
   const saveBtnIdle = () => { const b = $('sSave'); b.disabled = false; (b.querySelector('.ui-btn__label') || b).textContent = 'Save & connect'; };
   $('sCancel').onclick = () => { connGen++; saveBtnIdle(); fillConn(); showEdit(false); };   // put the saved values back and fold the form
   $('dlgSettings').addEventListener('close', () => { connGen++; saveBtnIdle(); });
-  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return; loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Token removed'); };
+  $('sForget').onclick = async () => { if (!(await ask('Forget token?', ['Forget this board token from this browser?', 'The board is not changed, but you will need to add a working token before you can save again.'], 'Forget token', true))) return;
+    if (boardWorking()) { setStatus('Waiting for the save to finish before forgetting the token…'); await boardIdle(); }   // a save or archive run in flight finishes on this board first
+    loadGen++; LS.del('kb_token'); stashBoard(); LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; msArch = msArchFor = null; resetArchUi(); widgets = []; widgetMeta = { key: '', etag: '', problem: '' }; $('dlgSettings').close(); state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Token removed'); };
   $('sSave').onclick = async () => {
     if ($('board').className === 'v-welcome') endSetup();   // "I already have a board" from the wizard
     const nr = $('sRepo').value.trim(), moved = nr !== LS.get('kb_repo');
     if (!REPO_RE.test(nr)) { toast('The repository must look like owner/name', true); return; }
     // every value is read now: Cancel or closing the dialog while queued saves finish resets the fields
     const branch = $('sBranch').value.trim() || 'master', path = $('sPath').value.trim() || 'board/tasks.json', me = $('sMe').value.trim().replace(/^@/, ''), newTok = $('sToken').value.trim();
-    if (moved && saving) {   // another repo = another board, with its own token; queued saves finish on the old one first
+    // another repo, branch or file is another board: queued saves, an archive run or a Put back finish on the old one first,
+    // so none of them can write this board's state into the other one
+    if ((moved || branch !== cfg().branch || path !== cfg().path) && boardWorking()) {
       const gen = ++connGen, b = $('sSave'); b.disabled = true;
-      (b.querySelector('.ui-btn__label') || b).textContent = `Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`;
-      while (saving) await saving;
+      (b.querySelector('.ui-btn__label') || b).textContent = saving ? `Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…` : 'Waiting for the archive to finish…';
+      await boardIdle();
       if (gen !== connGen) return;   // cancelled or closed meanwhile
       saveBtnIdle();
     }
     if (moved) activateBoard(nr);
+    // another branch or file is another board: drop its archive, index and view state, and load no archive until that board is
+    // in (state is still the old board's until load() finishes: a render meanwhile must not build its archive from the old one)
+    const archSwitch = !moved && (branch !== cfg().branch || path !== cfg().path); if (archSwitch) { resetArchUi(); archHold = 1; }   // until a load succeeds (load() ends it)
     LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
     if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
     if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
@@ -6162,7 +6188,7 @@ if (typeof window !== 'undefined') (() => {
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
-  const CRM_VIEWS = ['people', 'companies', 'pipeline'], TASK_VIEWS = ['board', 'mentions', 'list', 'cal', 'sched', 'activity'];
+  const CRM_VIEWS = ['people', 'companies', 'pipeline'], TASK_VIEWS = ['board', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'];
   function syncModeSettings() {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
@@ -7564,12 +7590,18 @@ if (typeof window !== 'undefined') (() => {
   }
 
   let peopleQ = '', peopleStage = '';
+  const ARCH_PAGE = 50, ARCH_ROUTE = '__archived', Q_ARCH_KEY = 'kb_q_arch';   // Archive view and People → Archived (archive block below)
+  let peopleArchived = false;   // People → Archived: its own flag and its own address parameter (people_archived=1), never a stage value
+  const archUi = { q: '', project: '', label: '', year: '', outcome: '', shown: ARCH_PAGE, peopleShown: ARCH_PAGE, loading: null, err: '' };
   function renderPeopleView() {
     const board = $('board'), wrap = el('div', 'peoplev'), bar = el('div', 'pbar');
     const q = el('input', 'psearch'); q.type = 'search'; q.placeholder = 'Search people, companies, notes…'; q.value = peopleQ;
-    q.oninput = () => { peopleQ = q.value; const pos = q.selectionStart; render(); const nq = document.querySelector('.psearch'); if (nq) { nq.focus(); nq.setSelectionRange(pos, pos); } };
-    const st = el('select', 'pillsel'); [['', 'All stages'], ...stages().map(s => [s, s])].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; st.append(o); }); st.value = peopleStage; st.onchange = () => { peopleStage = st.value; render(); };
+    q.oninput = () => { peopleQ = q.value; if (peopleArchived) { archDebounce(q, () => { archUi.peopleShown = ARCH_PAGE; }); return; } const pos = q.selectionStart; render(); const nq = document.querySelector('.psearch'); if (nq) { nq.focus(); nq.setSelectionRange(pos, pos); } };
+    const st = el('select', 'pillsel'); st.setAttribute('aria-label', 'Stage');   // option values: '' all, 's:<stage>', 'archived'
+    [['', 'All stages'], ...stages().map(x => ['s:' + x, x]), ['archived', 'Archived']].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; st.append(o); });
+    st.value = peopleArchived ? 'archived' : peopleStage ? 's:' + peopleStage : ''; st.onchange = () => { peopleArchived = st.value === 'archived'; peopleStage = st.value.startsWith('s:') ? st.value.slice(2) : ''; archUi.peopleShown = ARCH_PAGE; render(); };
     bar.append(q, st); wrap.append(bar);
+    if (peopleArchived) { renderArchivedPeople(wrap); board.append(wrap); return; }   // people archived as Lost: Archive view block below
     const ql = peopleQ.toLowerCase();
     const items = state.contacts.filter(p => crmFilter(p) && (!peopleStage || p.stage === peopleStage) && (!ql || [p.name, p.company, p.role, p.notes, p.next, ...p.emails.map(x => x.value), ...p.phones.map(x => x.value), ...p.links.flatMap(x => [x.title, x.url])].join(' ').toLowerCase().includes(ql)))
       .sort((a, b) => (isMe(b) - isMe(a)) || (!!memberOf(b) - !!memberOf(a)) || a.name.localeCompare(b.name));   // you, then members, then contacts
@@ -8104,8 +8136,8 @@ if (typeof window !== 'undefined') (() => {
   // The same rules as `keeptrack.py archive`. The board file keeps an index (state.archive.files) so no folder listing is needed.
   const ARCH_DEF = { done_days: 90, lost_days: 180, keep_history: 20 };
   const archRules = () => { const r = Object.assign({}, ARCH_DEF), o = (state.settings || {}).archive || {}; Object.keys(ARCH_DEF).forEach(k => { if (Number.isInteger(o[k]) && o[k] >= 0) r[k] = o[k]; }); return r; };
-  const archPath = y => { const p = cfg().path, i = p.lastIndexOf('/'); return (i >= 0 ? p.slice(0, i + 1) : '') + 'archive/' + y + '.json'; };
-  const archYears = () => Object.keys(((state.archive || {}).files) || {}).sort().reverse();
+  const archPath = (y, at) => { const p = (at || cfg()).path, i = p.lastIndexOf('/'); return (i >= 0 ? p.slice(0, i + 1) : '') + 'archive/' + y + '.json'; };
+  const archYears = () => Object.keys(((state.archive || {}).files) || {}).filter(y => /^\d{4}$/.test(y)).sort().reverse();   // a year is four digits: a crafted key (../x) is never fetched
   const dayIso = n => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); };
   function archivePlan(d, rules) {   // takes what can be archived out of d; returns { year: { tasks, contacts, history: { id: [entries] } } }
     if (rules.taskId) {
@@ -8139,15 +8171,20 @@ if (typeof window !== 'undefined') (() => {
     return cur;
   }
   let archMem = {};   // year -> { data, sha, etag } for this page; IndexedDB keeps it between visits
-  const archKey = y => `kb_arch:${cfg().repo}:${cfg().branch}:${archPath(y)}`;
-  async function readArchive(y) {
-    if (HOSTED) { try { const file = await hostedStorage.read(`archive/${y}.json`); return { data: file.body, sha: file.rev }; } catch (e) { if (e.status === 404) return { data: null, sha: null }; throw e; } }   // a conditional GET: an unchanged file is a free 304 and comes from the cache
-    const key = archKey(y), have = archMem[key] || await idb.get(key);
-    const res = await gh('GET', null, !!(have && have.etag), { path: archPath(y), etag: have && have.etag });
+  const archKey = (y, at = cfg()) => `kb_arch:${at.repo}:${at.branch}:${archPath(y, at)}`;
+  async function readArchive(y, at) {   // at: the board captured when an archive run or Put back started (default: the board now)
+    if (HOSTED) { try { const file = await hostedStorage.read(`archive/${y}.json`); return { data: file.body, sha: file.rev }; } catch (e) { if (e.status === 404) return { data: null, sha: null }; throw e; } }   // hosted: the whole file each time; its revision keys loadArchived's normalised copy. GitHub, below: a conditional GET, an unchanged file is a free 304 from the cache
+    // path and cache key are fixed before the first await, so a branch or path switch meanwhile never files one board's
+    // copy under another's key; after every await, a Forget token or board change (archGen) drops the read: nothing is cached
+    at = at || Object.assign({}, cfg()); if (!/^\d{4}$/.test(String(y))) throw new Error('Not an archive year: ' + y);
+    const path = archPath(y, at), key = archKey(y, at), gen = archGen, gone = () => gen !== archGen, stop = () => { throw new Error('The board changed while the archive was loading.'); };
+    const have = archMem[key] || await idb.get(key); if (gone()) stop();
+    const res = await gh('GET', null, !!(have && have.etag), { path, etag: have && have.etag, at }); if (gone()) stop();
     if (res.status === 304 && have) return (archMem[key] = have);
     if (res.status === 404) return { data: null, sha: null };
-    if (!res.ok) throw new Error(`GitHub error ${res.status} reading ${archPath(y)}`);
-    const { d, raw } = await fileJson(res, archPath(y)), got = { data: raw, sha: d.sha, etag: res.headers.get('ETag') };
+    if (!res.ok) throw new Error(`GitHub error ${res.status} reading ${path}`);
+    const { d, raw } = await fileJson(res, path, at), got = { data: raw, sha: d.sha, etag: res.headers.get('ETag') };
+    if (gone()) stop();   // the body may finish after Forget token: still nothing in memory or IndexedDB
     archMem[key] = got; if (ro !== 'demo') idb.set(key, got); return got;
   }
   function writeBlocked() {   // every archive write checks this, like save() does for the board
@@ -8156,35 +8193,93 @@ if (typeof window !== 'undefined') (() => {
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return true; }
     return false;
   }
-  async function writeArchive(y, data, sha, message, text) {   // text: the already-built file text (the size check measured it), else built here
-    if (fromSnap || ro || newerSchema) return false;
-    const res = await gh('PUT', { message, content: b64e(text == null ? jsonText(data) : text), branch: cfg().branch, ...(sha ? { sha } : {}) }, false, { path: archPath(y) });
-    if (!res.ok) return false; const out = await res.json(); archMem[archKey(y)] = { data, sha: out.content.sha, etag: null }; return true;
+  // ag and at as in githubSave: the write goes to the board captured at the start, and nothing is written or cached once
+  // a Forget token or another board happened since (false; the caller checks ag). text: the already-built file text (the
+  // size check measured it), else built here
+  async function writeArchive(y, data, sha, message, ag = archGen, at = Object.assign({}, cfg()), text = null) {
+    if (fromSnap || ro || newerSchema || ag !== archGen) return false;
+    const res = await gh('PUT', { message, content: b64e(text == null ? jsonText(data) : text), branch: at.branch, ...(sha ? { sha } : {}) }, false, { path: archPath(y, at), at });
+    if (!res.ok || ag !== archGen) return false; const out = await res.json(); if (ag !== archGen) return false;
+    archMem[archKey(y, at)] = { data, sha: out.content.sha, etag: null }; return true;
   }
   // the archive's card ids when the loaded copy is current, an empty set when the board has no archive, else null (not loaded)
+  // archSigOf: what a loaded copy is current for: the index entries (counts) and the last archive run's time, so a run that
+  // leaves the counts the same (an edit put back and archived again elsewhere) still makes the loaded copy stale
+  const archSigOf = board => { const a = board.archive || {}; return JSON.stringify([a.files || {}, a.last_run || '']); };
   function archIdsNow(board) {
     const files = (board.archive || {}).files || {}; if (!Object.keys(files).length) return new Set();
-    return archived && archivedSig === JSON.stringify(files) ? new Set(archived.tasks.map(x => x.item.id)) : null;
+    return archived && archivedSig === archSigOf(board) ? new Set(archived.tasks.map(x => x.item.id)) : null;
   }
-  const archFresh = () => !!archived && archivedSig === JSON.stringify((state.archive || {}).files || {});
+  // archFresh: memoised on the index object, the loaded copy and its signature, so card faces (After chips) can ask cheaply
+  let archFreshMemo = { files: null, archived: null, sig: null, val: false };   // files: the board's archive object (files and last_run)
+  const archFresh = () => { const files = state.archive || null, m = archFreshMemo; if (files && m.files === files && m.archived === archived && m.sig === archivedSig) return m.val;
+    archFreshMemo = { files, archived, sig: archivedSig, val: !!archived && archivedSig === archSigOf(state) }; return archFreshMemo.val; };
   let archived = null, archivedSig = '';   // { tasks: [{ item, year }], contacts: [...] } once loaded; items still on the board are left out
+  // archGen: Forget token or another board drops archive reads still in flight (no cache write, no `archived`)
+  // archYearNorm: each year's normalised items, keyed on the SHA of the file they were built from (a Git blob SHA or the
+  // hosted revision: it changes whenever the file's content does). It never decides what is read: every year is still read
+  // (the split snapshot, or readArchive's conditional GET), and only the normalising is skipped for a file with the same SHA.
+  // No file data is kept here, only the normalised lists.
+  // archHold: the board is reloading after a branch or path change; no archive loads until a load succeeds (load() clears it)
+  let archGen = 0, archYearNorm = { board: '', years: {} }, archHold = 0;
+  const archArr = (v, ok) => Array.isArray(v) ? v.filter(ok) : [];
+  const isStr = x => typeof x === 'string';   // (isObj: above)
+  function archNorm(x, kind) {   // a hand-edited or damaged archive file never breaks the views: list fields become arrays of the right kind
+    const o = Object.assign({}, x); ['todos', 'comments', 'history', 'links'].forEach(k => { o[k] = archArr(x[k], isObj); });
+    if (kind === 'task') { o.labels = archArr(x.labels, isStr); o.assignees = archArr(x.assignees, isStr); }
+    else { o.emails = archArr(x.emails, isObj); o.phones = archArr(x.phones, isObj); }
+    ['title', 'name', 'details', 'client', 'company', 'role', 'notes', 'next', 'stage', 'column', 'due', 'project'].forEach(k => { if (k in o && !isStr(o[k])) o[k] = o[k] == null ? '' : String(o[k]); });
+    return o;
+  }
+  function archRawIn(data, kind, id) {   // one archived card or person as that year's file has it (Put back writes this; archNorm is for display only), with its older history lines; null when not there
+    const k = kind === 'task' ? 'tasks' : 'contacts', x = isObj(data) && Array.isArray(data[k]) ? data[k].find(x => isObj(x) && x.id === id) : null; if (!x) return null;
+    const own = Object.fromEntries(Object.entries(x).filter(([key]) => !reservedKey(key)));   // own keys only: a "__proto__" key in the file never reaches the board
+    own.history = archArr(isObj(data.history) && has(data.history, id) ? data.history[id] : null, isObj).concat(archArr(x.history, isObj));   // older lines first; only real entries
+    return own;
+  }
+  function restoredItem(src, kind) {   // the board's own per-card tolerance (normalise) for one restored card or person: missing lists filled, unknown and non-text fields kept
+    const k = kind === 'task' ? 'tasks' : 'contacts', x = normalise({ [k]: [clone(src)] })[k][0];
+    if (kind === 'task' && !Number.isInteger(src.num)) delete x.num;   // numbered by the board it joins (assignNums below), not by a one-card board
+    (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); return x;
+  }
+  function archYearItems(data, count = true) {   // one year's file as normalised lists (every id once), before the live-id filter
+    const out = { tasks: [], contacts: [] }; if (!isObj(data)) return out;
+    const hist = isObj(data.history) ? data.history : {};
+    const withHist = x => { const h = archArr(hist[x.id], isObj); return h.length ? Object.assign({}, x, { history: h.concat(x.history) }) : x; };   // older history lines kept in the same file
+    const seen = new Set(), first = x => isObj(x) && isStr(x.id) && !seen.has(x.id) && !!seen.add(x.id);   // one item per id in a year: a repeated id is skipped (search needs unique ids)
+    out.tasks = archArr(data.tasks, first).map(t => withHist(archNorm(t, 'task'))); seen.clear();
+    out.contacts = archArr(data.contacts, first).map(p => withHist(archNorm(p, 'contact')));
+    if (count) window.kbArchNormYears = (window.kbArchNormYears || 0) + 1; return out;
+  }
   async function loadArchived() {
-    const sig = JSON.stringify((state.archive || {}).files || {}); if (archived && archivedSig === sig) return archived;
+    if (archHold) throw new Error('The board is loading.');
+    const sig = archSigOf(state); if (archived && archivedSig === sig) return archived;
+    const gen = archGen, board = [cfg().repo, cfg().branch, cfg().path].join('|');
+    if (archYearNorm.board !== board) archYearNorm = { board, years: {} };
     const live = new Set([...state.tasks, ...(state.contacts || [])].map(x => x.id)), out = { tasks: [], contacts: [] };
-    for (const y of archYears()) { const { data } = await readArchive(y); if (!data) continue;
-      const withHist = x => { const h = (data.history || {})[x.id]; return h && h.length ? Object.assign({}, x, { history: h.concat(x.history || []) }) : x; };   // older history lines kept in the same file
-      (data.tasks || []).forEach(t => { if (!live.has(t.id)) out.tasks.push({ item: withHist(t), year: y }); });
-      (data.contacts || []).forEach(p => { if (!live.has(p.id)) out.contacts.push({ item: withHist(p), year: y }); }); }
+    // Each year comes from the split snapshot (already downloaded with the board) or a read (in parallel; built in year
+    // order). readArchive asks GitHub every time (a free 304 when unchanged), so a file that went back to the same counts
+    // with other content (put back, edited, archived again) is never served from an older copy.
+    const years = archYears(), c = cfg(), snap = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}` ? splitMeta.files : null;
+    const got = await Promise.all(years.map(y => { const f = snap && snap.get(`archive/${y}.json`);
+      return f && f.obj ? { data: f.obj, sha: f.sha } : readArchive(y); }));
+    if (gen !== archGen) throw new Error('The board changed while the archive was loading.');
+    const keep = {};
+    for (const [i, y] of years.entries()) { const { data, sha } = got[i], had = archYearNorm.years[y];
+      const items = sha && had && had.sha === sha ? had.items : archYearItems(data); if (sha) keep[y] = { sha, items };
+      items.tasks.forEach(t => { if (!live.has(t.id)) out.tasks.push({ item: t, year: y }); });
+      items.contacts.forEach(p => { if (!live.has(p.id)) out.contacts.push({ item: p, year: y }); }); }
+    archYearNorm = { board, years: keep };   // years no longer listed, and replaced files, are let go
     archived = out; archivedSig = sig; return out;
   }
   function archiveCounts() { const p = archivePlan(clone(state), archRules()), v = Object.values(p);
     return { tasks: v.reduce((n, x) => n + x.tasks.length, 0), contacts: v.reduce((n, x) => n + x.contacts.length, 0), history: v.reduce((n, x) => n + Object.values(x.history).reduce((m, h) => m + h.length, 0), 0) }; }
-  async function completeArchiveHistory(plan, rules, fresh, meta) {
+  async function completeArchiveHistory(plan, rules, fresh, meta, at) {
     if (!pickedIds(rules)) return;
     const files = [];
     for (const y of Object.keys((fresh.archive || {}).files || {}).sort()) {
       const entry = meta && meta.files.get(`archive/${y}.json`);
-      files.push(meta ? entry && entry.obj : (await readArchive(y)).data);
+      files.push(meta ? entry && entry.obj : /^\d{4}$/.test(y) ? (await readArchive(y, at)).data : null);
     }
     Object.values(plan).forEach(part => part.tasks.forEach(t => { const older = [], seen = new Set();
       files.forEach(data => older.push(...((data && data.history || {})[t.id] || [])));
@@ -8202,13 +8297,13 @@ if (typeof window !== 'undefined') (() => {
   const batchWhat = k => `${k} task${k === 1 ? '' : 's'}; nothing deleted, search Include archive to restore`;
   const pickedIds = rules => rules.taskIds || (rules.taskId ? [rules.taskId] : null);   // the cards a card-level archive moves; null: the rules-based clean-up
   async function archiveSplitNow(rules, what) {
-    const message = 'Archive board items'; setStatus('Archiving…');
+    const message = 'Archive board items', ag = archGen; setStatus('Archiving…');   // ag: a Forget token (or another board) meanwhile ends the run quietly, keeping nothing
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const got = await splitSnapshot(true);
+        const got = await splitSnapshot(true); if (ag !== archGen) return;
         if (minKitOf(got.data)) { setKitRo(got.data); setStatus(''); roToast(); return; }   // these saves skip mutate: the same kit check here
         const fresh = normalise(got.data), plan = archivePlan(clone(fresh), rules), years = Object.keys(plan);
-        await completeArchiveHistory(plan, rules, fresh, got.meta);
+        await completeArchiveHistory(plan, rules, fresh, got.meta); if (ag !== archGen) return;
         if (!years.length) { setStatus(''); toast(rules.taskIds ? 'Nothing archived: those cards left Done or an agent took them.' : 'Nothing to archive yet'); return; }
         const extras = {}, gone = new Set(), histories = {}, counts = {}, notes = [], heldIds = new Set(); let held = 0, heldYears = 0;
         years.forEach(y => { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
@@ -8222,10 +8317,10 @@ if (typeof window !== 'undefined') (() => {
         fresh.tasks = fresh.tasks.filter(x => !gone.has(x.id)); fresh.contacts = fresh.contacts.filter(x => !gone.has(x.id));
         [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
         fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, counts); fresh.archive.last_run = nowIso();
-        const out = await save(fresh, message, got.meta, extras);
-        if (out === 'ok') { archived = null; archivedSig = ''; snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); archiveNote = notes.join(' '); toast('Archived ' + (rules.taskIds ? batchWhat(gone.size) : what) + '.' + (notes.length ? ' ' + notes.join(' ') : ''), !!heldYears); return; }
+        const out = await save(fresh, message, got.meta, extras, false, ag); if (out === 'gone' || ag !== archGen) return;
+        if (out === 'ok') { archDrop(); snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); archiveNote = notes.join(' '); toast('Archived ' + (rules.taskIds ? batchWhat(gone.size) : what) + '.' + (notes.length ? ' ' + notes.join(' ') : ''), !!heldYears); return; }
         if (out !== 'conflict') throw new Error(out); setStatus('Someone else changed the board, retrying…', 'err');
-      } catch (e) { console.error(e); setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
+      } catch (e) { if (ag !== archGen) return; console.error(e); setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     }
     setStatus('Could not archive after retries', 'err'); toast('The board stayed busy. Try Archive again.', true);
   }
@@ -8278,9 +8373,15 @@ if (typeof window !== 'undefined') (() => {
     if (!(await ask(`Archive ${list.length} Done card${list.length === 1 ? '' : 's'}?`, [`${list.length === 1 ? 'It leaves' : 'They leave'} the active board. Nothing is deleted: search with Include archive, then choose Put back on the board to restore a card.`].concat(held ? [`${held} card${held === 1 ? '' : 's'} an agent holds ${held === 1 ? 'stays' : 'stay'} on the board.`] : []), 'Archive all'))) return;
     let run = null; list.forEach(t => { run = quickArchive(t.id) || run; }); return run;
   }
-  async function undoQuickArchive(tasks) {   // the archived copies, not tasks: they hold the history lines the archive took
+  function undoQuickArchive(tasks) { return trackRun(undoQuickArchiveRun(tasks)); }
+  async function undoQuickArchiveRun(tasks) {   // the archived copies, not tasks: they hold the history lines the archive took
+    archDrop(); await archLoadStart();   // one load for every card (restoreArchived reads each card's year fresh anyway)
+    if (!archFresh() && !archUi.err && !archHold) await archLoadStart();   // that was a load started before the archive commit: load once more
+    const a = archFresh() ? archived : null;
+    if (!a && archHold) { toast('The board changed; put it back from that branch.', true); return; }   // Settings switched branch or path meanwhile
+    if (!a) { toast('Could not put the card back: ' + (archUi.err || 'the archive did not load') + '. Search with Include archive to find it.', true); return; }
     for (const t of tasks) {
-      try { archived = null; archivedSig = ''; const a = await loadArchived(), hit = a.tasks.find(x => x.item.id === t.id);
+      try { const hit = a.tasks.find(x => x.item.id === t.id);
         if (!hit) { toast(`#${t.num} is not in the archive. Search with Include archive to find it.`, true); continue; }
         await restoreArchived('task', hit.item, hit.year, false);
       } catch (e) { console.error(e); toast('Could not put the card back: ' + (e.message || e), true); }
@@ -8293,7 +8394,14 @@ if (typeof window !== 'undefined') (() => {
     await archiveNow({ taskId: id });
     if (!state.tasks.some(x => x.id === id)) $('dlgCard').close();
   }
-  async function archiveNow(explicitRules) {
+  // Archive runs and Put backs write archive files outside the save queue: track them, so Settings can wait for them
+  // (boardIdle) before it switches branch or path or forgets the token
+  const archRuns = new Set();
+  const trackRun = p => { archRuns.add(p); const done = () => archRuns.delete(p); p.then(done, done); return p; };
+  const boardWorking = () => !!(saving || busy || archRuns.size || quickRun);
+  async function boardIdle() { while (boardWorking()) await Promise.race([saving, quickRun, ...archRuns].filter(Boolean).map(p => p.catch(() => {})).concat(new Promise(r => setTimeout(r, 100)))); }
+  function archiveNow(explicitRules) { return trackRun(archiveNowRun(explicitRules)); }
+  async function archiveNowRun(explicitRules) {
     if (HOSTED) {
       if (busy || saving || ro) return;
       if (explicitRules && pickedIds(explicitRules)) {
@@ -8316,32 +8424,35 @@ if (typeof window !== 'undefined') (() => {
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
     if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
+    // the board this run reads and writes is fixed now (at), and a Forget token or another board meanwhile (ag) ends it quietly
+    const at = Object.assign({}, cfg()), ag = archGen, gone = () => ag !== archGen;
     // plan from the board as it is on GitHub now, not from this page's copy, so nobody's newer comment or edit is archived away
     let fresh;
-    try { const res = await gh('GET'); if (!res.ok) throw new Error('GitHub error ' + res.status); const { raw } = await fileJson(res);
+    try { const res = await gh('GET', null, false, { at }); if (gone()) return; if (!res.ok) throw new Error('GitHub error ' + res.status); const { raw } = await fileJson(res, undefined, at); if (gone()) return;
       if (Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA) { newerSchema = raw.version; checkKit(); writeBlocked(); return; }
       if (raw.demo_base) { fileDemo = true; ro = 'demo'; applyRo(); roToast(); return; }
       if (minKitOf(raw)) { setKitRo(raw); setStatus(''); roToast(); return; }   // before the archive files are written
       fresh = normalise(raw);
-    } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
+    } catch (e) { if (gone()) return; setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
     let plan; try { plan = archivePlan(clone(fresh), rules); } catch (e) { setStatus('Archive failed', 'err'); toast(e.message, true); return; }
     const years = Object.keys(plan); if (!years.length) { setStatus(''); toast(rules.taskIds ? 'Nothing archived: those cards left Done or an agent took them.' : 'Nothing to archive yet'); return; }
     if (rules.taskIds) n = { tasks: years.reduce((k, y) => k + plan[y].tasks.length, 0), contacts: 0, history: 0 };
     const msg = `Archive ${n.tasks} tasks, ${n.contacts} people`, moved = new Map(), hist = {}, counts = {}, notes = []; let held = 0, heldYears = 0;
     try {
-      await completeArchiveHistory(plan, rules, fresh);
+      await completeArchiveHistory(plan, rules, fresh, null, at);
       for (const y of years) {   // archive files first: if the board save fails after this, the items are in both places and the board copy wins
         let skip = false;
-        for (let i = 0; i < 3; i++) { const { data, sha } = await readArchive(y), merged = archiveMerge(data ? clone(data) : null, plan[y], y);
+        for (let i = 0; i < 3; i++) { if (gone()) return; const { data, sha } = await readArchive(y, at), merged = archiveMerge(data ? clone(data) : null, plan[y], y);
           if (ids) plan[y].tasks.forEach(({ id }) => { const t = merged.tasks.find(x => x.id === id), seen = new Set(); t.history = (merged.history[id] || []).concat(t.history || []).filter(e => { const key = JSON.stringify(e); if (seen.has(key)) return false; seen.add(key); return true; }); delete merged.history[id]; });
           const text = jsonText(merged), bytes = archBytes(text);
           if (bytes > ARCH_MAX) { held += partCount(plan[y]); heldYears++; notes.push(heldNote(y, partCount(plan[y]), bytes)); skip = true; break; }   // this year's items stay on the board
-          if (await writeArchive(y, merged, sha, msg, text)) { counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes)); break; }   // the warning only once the file is written, not on a retry
-          delete archMem[archKey(y)]; if (i === 2) throw new Error('could not save ' + archPath(y)); }
+          if (await writeArchive(y, merged, sha, msg, ag, at, text)) { counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes)); break; }   // the warning only once the file is written, not on a retry
+          if (gone()) return; delete archMem[archKey(y, at)]; if (i === 2) throw new Error('could not save ' + archPath(y, at)); }
         if (skip) continue;
         plan[y].tasks.concat(plan[y].contacts).forEach(x => moved.set(x.id, JSON.stringify(ids ? fresh.tasks.find(t => t.id === x.id) : x))); Object.assign(hist, plan[y].history);
       }
-    } catch (e) { setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
+    } catch (e) { if (gone()) return; setStatus('Archive failed', 'err'); toast('Archive failed: ' + (e.message || e), true); return; }
+    if (gone()) return;
     if (!Object.keys(counts).length) { setStatus(''); toast('Nothing archived. ' + notes.join(' '), true); return; }   // every year was over the limit: nothing was written (a history-only year that was written still needs the board trimmed below)
     let kept = 0;   // changed since the read above: it stays on the board (the next run archives it again, replacing the copy by id)
     const ok = await mutate(d => { kept = 0;
@@ -8350,45 +8461,60 @@ if (typeof window !== 'undefined') (() => {
       [...d.tasks, ...d.contacts].forEach(x => { const h = hist[x.id]; if (!h || !x.history) return; const gone = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !gone.has(JSON.stringify(e))); });
       d.archive = Object.assign({}, d.archive); d.archive.files = Object.assign({}, d.archive.files, counts); d.archive.last_run = nowIso();
     }, msg, [], fresh, { recheckArchive: true });
-    archived = null; renderArchiveBox();
+    if (gone()) return;   // Forget token or another board while saving: no message about a board this page no longer shows
+    archDrop(); renderArchiveBox();
     if (!ok) { toast('The archive files were written, but the board was not saved. Nothing was removed from the board; run Archive again.', true); return; }
     archiveNote = notes.join(' ');
     const wrote = Object.keys(counts).map(y => plan[y]), sum = f => wrote.reduce((k, p) => k + f(p), 0),
       said = rules.taskIds ? batchWhat(n.tasks - kept - held) : heldYears ? `${sum(p => p.tasks.length)} done task${sum(p => p.tasks.length) === 1 ? '' : 's'}, ${sum(p => p.contacts.length)} Lost ${sum(p => p.contacts.length) === 1 ? 'person' : 'people'} and ${sum(p => Object.values(p.history).reduce((m, h) => m + h.length, 0))} old history lines` : what;   // held years are not counted as archived
     toast(`Archived ${said}.` + (kept ? ` ${kept} changed while archiving and stayed on the board.` : '') + (notes.length ? ' ' + notes.join(' ') : ''), !!heldYears);
   }
-  async function restoreArchived(kind, item, y, open = true) {
+  function restoreArchived(...args) { return trackRun(restoreArchivedRun(...args)); }
+  async function restoreArchivedRun(kind, item, y, open = true) {
     if (HOSTED) { const ok = await hostedArchive(item, y, true); if (ok && open && kind === 'task') openCard(item.id); return; }   // open: show the restored card or person afterwards
     if (writeBlocked()) return;
+    const ag = archGen, at = Object.assign({}, cfg()), gone = () => ag !== archGen, name = item.title || item.name;   // as archiveNow: this board, until a Forget token or another board
+    const refuse = onBoard => { archDrop(); $('dlgArch').close(); render(); toast(onBoard ? `${name} is already back on the board.` : `${name} was changed elsewhere and is not in that archive file now. Open the archive again and try again.`, true); };   // the archive file no longer holds it: never restore the page's copy
     if (isSplit(state)) {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
       for (let attempt = 0; attempt < 4; attempt++) {
-        try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } if (!entry) break; const nextArchive = clone(entry.obj), fresh = normalise(got.data);
-          const arch = (entry.obj[k] || []).find(x => x.id === item.id), h = (entry.obj.history || {})[item.id];   // the archive as it is now, not the copy the dialog showed
-          const src = arch ? (h && h.length ? Object.assign({}, arch, { history: h.concat(arch.history || []) }) : arch) : item;
+        try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } const fresh = normalise(got.data);
+          const src = entry && archRawIn(entry.obj, kind, item.id);   // the archive as it is now, never the copy the dialog showed
+          if (!src) { refuse(fresh[k].some(x => x.id === item.id)); return; }   // the card, or its whole year file, is gone
+          const nextArchive = clone(entry.obj);
           if (!fresh[k].some(x => x.id === item.id)) {
+            const x = restoredItem(src, kind);
             // kit v89 review: this save skips mutateNow, so it runs the reserved-name check itself before the record comes back
-            const grewName = reservedGrew(fresh, Object.assign({}, fresh, { [k]: fresh[k].concat([src]) }));
-            if (grewName != null) { toast(restoreRefusedMsg(grewName, k, src), true); return; }
-            const x = clone(src); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); fresh[k].push(x); ensureRanks(fresh); }
+            const grewName = reservedGrew(fresh, Object.assign({}, fresh, { [k]: fresh[k].concat([x]) }));
+            if (grewName != null) { toast(restoreRefusedMsg(grewName, k, x), true); return; }
+            fresh[k].push(x); if (kind === 'task' && !Number.isInteger(src.num)) assignNums(fresh); ensureRanks(fresh); }
           nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
           fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
-          const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) });
-          if (out === 'ok') { archived = null; archivedSig = ''; $('dlgArch').close(); render(); toast(`${item.title || item.name} is back on the board.`); if (open) { if (kind === 'task') openCard(item.id); else openContact(item.id); } return; }
+          const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) }, false, ag);
+          if (out === 'gone' || ag !== archGen) return;   // Forget token or another board meanwhile
+          if (out === 'ok') { archDrop(); $('dlgArch').close(); render(); toast(`${item.title || item.name} is back on the board.`); if (open) { if (kind === 'task') openCard(item.id); else openContact(item.id); } return; }
           if (out !== 'conflict') throw new Error(out);
-        } catch (e) { console.error(e); toast('Could not restore the archived item: ' + (e.message || e), true); return; }
+        } catch (e) { if (gone()) return; console.error(e); toast('Could not restore the archived item: ' + (e.message || e), true); return; }
       }
       toast('The board stayed busy. Try again.', true); return;
     }
-    const k = kind === 'task' ? 'tasks' : 'contacts';   // item already carries its archived history lines (loadArchived)
-    const grewName = restoreGrew(state, k, item);   // mutate refuses it too; checked here so the advice names the restore
-    if (grewName != null) { toast(restoreRefusedMsg(grewName, k, item), true); return; }
-    const ok = await mutate(d => { d[k] = d[k] || []; if (!d[k].some(x => x.id === item.id)) { const x = clone(item); (x.history = x.history || []).push({ at: nowIso(), by: cfg().me || 'web', text: 'restored from the archive' }); d[k].push(x); } }, `Restore ${item.title || item.name} from the archive`);
+    // single-file board: the card comes back as the archive file has it NOW, read fresh (a conditional GET), with its older
+    // history lines; never the copy this page loaded, which another tab, device or keeptrack.py may have replaced since
+    const k = kind === 'task' ? 'tasks' : 'contacts';
+    let src;
+    try { const { data } = await readArchive(y, at); if (gone()) return; src = archRawIn(data, kind, item.id); }
+    catch (e) { if (gone()) return; console.error(e); toast('Could not restore the archived item: ' + (e.message || e), true); return; }
+    if (!src) { refuse(!!(state[k] && state[k].some(x => x.id === item.id))); return; }
+    const grewName = restoreGrew(state, k, src);   // mutate refuses it too; checked here so the advice names the restore
+    if (grewName != null) { toast(restoreRefusedMsg(grewName, k, src), true); return; }
+    const ok = await mutate(d => { d[k] = d[k] || []; if (!d[k].some(x => x.id === item.id)) { d[k].push(restoredItem(src, kind)); if (kind === 'task' && !Number.isInteger(src.num)) assignNums(d); } }, `Restore ${name} from the archive`);
+    if (gone()) return;
     if (!ok) { toast('Not restored: the board could not be saved. The archived copy is unchanged.', true); return; }
-    try { for (let i = 0; i < 3; i++) { const { data, sha } = await readArchive(y); if (!data) break; const next = clone(data); next[k] = (next[k] || []).filter(x => x.id !== item.id); if (next.history) delete next.history[item.id];
-      if (await writeArchive(y, next, sha, `Restore ${item.id} from the archive`)) { await mutate(d => { d.archive = Object.assign({}, d.archive); d.archive.files = Object.assign({}, d.archive.files, { [y]: { tasks: (next.tasks || []).length, contacts: (next.contacts || []).length } }); }, 'Update the archive index'); break; }
-      delete archMem[archKey(y)]; } } catch (e) { console.error(e); }   // a leftover archive copy is harmless: the board copy wins and the next archive run replaces it
-    archived = null; $('dlgArch').close(); toast(`${item.title || item.name} is back on the board.`);
+    try { for (let i = 0; i < 3; i++) { const { data, sha } = await readArchive(y, at); if (gone()) return; if (!data) break; const next = clone(data); next[k] = (next[k] || []).filter(x => x.id !== item.id); if (next.history) delete next.history[item.id];
+      if (await writeArchive(y, next, sha, `Restore ${item.id} from the archive`, ag, at)) { await mutate(d => { d.archive = Object.assign({}, d.archive); d.archive.files = Object.assign({}, d.archive.files, { [y]: { tasks: (next.tasks || []).length, contacts: (next.contacts || []).length } }); }, 'Update the archive index'); break; }
+      if (gone()) return; delete archMem[archKey(y, at)]; } } catch (e) { if (gone()) return; console.error(e); }   // a leftover archive copy is harmless: the board copy wins and the next archive run replaces it
+    if (gone()) return;
+    archDrop(); $('dlgArch').close(); render(); toast(`${name} is back on the board.`);
     if (open) { if (kind === 'task') openCard(item.id); else openContact(item.id); }
   }
   function openArchived(kind, item, y) {   // archived cards are shown read-only, with one button to bring them back
@@ -8404,6 +8530,135 @@ if (typeof window !== 'undefined') (() => {
     $('dlgArch').showModal();
   }
   $('aClose').onclick = () => $('dlgArch').close();
+  // ---- Archive view (Tasks → Archive) and People → Archived: browse the archive without knowing what to search for ----
+  // The archive files load when one of these opens (loading and error states in the list), through loadArchived and its
+  // cache. A row opens the read-only archived card (openArchived), whose Put back is hidden on a read-only board.
+  // Order: by archive file year, newest year first (a card's year is when it was archived, or for the bulk clean-up the year it
+  // last changed), and within a year the file order reversed (an archive run appends). The pill shows that file year.
+  // (ARCH_PAGE, Q_ARCH_KEY, archUi and peopleArchived are declared next to the People view's state, above)
+  const archPill = (y, cls) => { const p = el('span', cls); p.append(svgIcon('archive'), 'Archived ' + y); p.title = `In the archive (archive/${y}.json)`; return p; };
+  const archWords = q => String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const archNewest = list => list.map((x, i) => ({ x, i })).sort((a, b) => String(b.x.year).localeCompare(String(a.x.year)) || b.i - a.i).map(o => o.x);
+  // Built once per loaded archive (archived changes identity whenever it reloads, and archivedSig with it): the newest-first
+  // order, one lower-cased search text per item and the filter options. Renders (typing, the minute tick, polls) only filter.
+  let archIdx = null; const archIndexBuilds = { n: 0 };   // archIndexBuilds: read by the browser test
+  function archIndex() {
+    if (archIdx && archIdx.src === archived && archIdx.sig === archivedSig) return archIdx;
+    archIndexBuilds.n++; window.kbArchIndexBuilds = archIndexBuilds.n;
+    const low = parts => parts.filter(Boolean).join('\n').toLowerCase();
+    const tasks = archNewest(archived.tasks).map(x => { const t = x.item, pr = t.project && projectById(t.project);
+      return { x, done: finishedDone(t), hay: low([t.num ? '#' + t.num : '', t.title, t.details, t.client, pr && pr.name, ...(t.labels || []), ...(t.assignees || []), ...(t.todos || []).map(d => d.text), commentText(t)]) }; });
+    const contacts = archNewest(archived.contacts).map(x => { const p = x.item;
+      return { x, hay: low([p.name, p.company, p.role, p.notes, p.next, p.email, p.phone, ...(p.emails || []).map(e => e.value), ...(p.phones || []).map(e => e.value), commentText(p)]) }; });
+    const uniq = xs => [...new Set(xs.filter(Boolean))];
+    const projects = uniq(archived.tasks.map(x => x.item.project)).map(id => ({ value: id, label: (projectById(id) || {}).name || id })).sort((a, b) => a.label.localeCompare(b.label));
+    const labels = uniq(archived.tasks.flatMap(x => x.item.labels || [])).sort((a, b) => a.localeCompare(b)).map(l => ({ value: l }));
+    const years = uniq(archived.tasks.map(x => x.year)).sort().reverse().map(y => ({ value: y }));
+    return (archIdx = { src: archived, sig: archivedSig, tasks, contacts, projects, labels, years });
+  }
+  const archMatch = (words, hay) => words.every(w => hay.includes(w));
+  // id → archived card, once per loaded archive (After chips on card faces ask for it on every render)
+  let archIdMapMemo = null;
+  function archIdMap() {
+    if (archIdMapMemo && archIdMapMemo.src === archived && archIdMapMemo.sig === archivedSig) return archIdMapMemo.map;
+    window.kbArchIdMapBuilds = (window.kbArchIdMapBuilds || 0) + 1;
+    archIdMapMemo = { src: archived, sig: archivedSig, map: new Map(archived.tasks.map(x => [x.item.id, x.item])) }; return archIdMapMemo.map;
+  }
+  function archLoadStart() {
+    if (archUi.loading) return archUi.loading;
+    if (archHold) return Promise.resolve();   // the board is reloading (another branch or path): the view shows Loading and loads once it is in
+    archUi.err = '';
+    const g = archGen, p = loadArchived().catch(e => { if (g !== archGen || archUi.loading !== p) return; console.error(e); archUi.err = (e && e.message) || String(e); })   // a load cancelled by Forget token or another board writes nothing
+      .finally(() => { if (g !== archGen || archUi.loading !== p) return; archUi.loading = null; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); });
+    archUi.loading = p; return p;
+  }
+  function archDrop() { archived = null; archivedSig = ''; msArch = msArchFor = null; archIdx = null; archIdMapMemo = null; archFreshMemo = { files: null, archived: null, sig: null, val: false }; }   // free the old copy and everything built from it (archYearNorm is keyed on file SHAs, so it stays until another board)
+  function resetArchUi() { archDrop(); archGen++; archMem = {}; archYearNorm = { board: '', years: {} };
+    ['aBody', 'aTitle', 'aMeta', 'qRes'].forEach(id => { const e = $(id); if (e) e.textContent = ''; }); if ($('qQ')) $('qQ').value = ''; if ($('dlgArch') && $('dlgArch').open) $('dlgArch').close();   // no archived text stays on the page
+    archIdMapMemo = null; Object.assign(archUi, { q: '', project: '', label: '', year: '', outcome: '', shown: ARCH_PAGE, peopleShown: ARCH_PAGE, loading: null, err: '' }); archIdx = null; clearTimeout(archTyping); }   // another board
+  function archReady(wrap, what) {   // true when the loaded archive is current; otherwise draws the empty, loading or error state
+    if (!archYears().length) { wrap.append(ui.empty({ text: `Nothing archived yet. Archived ${what} show here: archive a Done card from its menu, or old items in Settings → Board → Archive.`, icon: 'archive' })); return false; }
+    if (archFresh()) return true;
+    if (archUi.err && !archUi.loading) {
+      const e = ui.empty({ text: 'Could not load the archive: ' + archUi.err, icon: 'triangle-alert', action: { label: 'Try again', icon: 'refresh-cw', onClick: () => { archLoadStart(); render(); } } });
+      e.classList.add('archerr'); e.setAttribute('role', 'alert'); wrap.append(e); return false;
+    }
+    archLoadStart();
+    const e = ui.empty({ text: 'Loading the archive…', icon: 'loader-circle' }); e.classList.add('archload'); e.setAttribute('role', 'status'); e.setAttribute('aria-busy', 'true'); wrap.append(e); return false;
+  }
+  // Load more keeps the rows already drawn and appends only the next page (no re-render of the list).
+  function archPaged(wrap, list, items, key, makeRow, onCount) {
+    const draw = (from, to) => items.slice(from, to).forEach(x => list.append(makeRow(x)));
+    draw(0, Math.min(items.length, archUi[key])); wrap.append(list);
+    const more = ui.button({ label: 'Load more', variant: 'ghost', size: 'sm' }); more.classList.add('archmore');
+    const sync = () => { const shown = Math.min(items.length, archUi[key]); more.hidden = shown >= items.length; more.querySelector('.ui-btn__label').textContent = `Load more (${items.length - shown} not shown)`; onCount(shown); };
+    more.onclick = () => { const from = Math.min(items.length, archUi[key]); archUi[key] += ARCH_PAGE; draw(from, Math.min(items.length, archUi[key])); sync(); };
+    wrap.append(more); sync();
+  }
+  // Typing in an archive search box: kept in archUi at once (so a render meanwhile keeps the text), drawn after 80 ms of quiet
+  let archTyping = null;
+  function archDebounce(input, apply) {
+    clearTimeout(archTyping);
+    archTyping = setTimeout(() => { archTyping = null; const pos = input.selectionStart, cls = input.className.split(' ').pop(); apply(); render();
+      const nq = document.querySelector('.' + cls); if (nq) { nq.focus(); nq.setSelectionRange(pos, pos); } }, 80);
+  }
+  function archSelect(label, value, options, key) {
+    const s = ui.select({ label, value, options: [{ value: '', label: label === 'Done or cancelled' ? 'Done and cancelled' : 'Any ' + label.toLowerCase() }, ...options], onChange: v => { archUi[key] = v; archUi.shown = ARCH_PAGE; render(); } });
+    s.classList.add('archsel'); s.control.dataset.archFilter = key; if (s.value !== value) { archUi[key] = ''; s.value = ''; }   // a value no longer in the archive falls back to Any
+    return s;
+  }
+  function archivedTasks(idx) {   // the archived cards the filters and the top client filter let through, in archive order
+    const fc = clientValues(), words = archWords(archUi.q);
+    return idx.tasks.filter(({ x: { item: t, year }, done, hay }) => (!fc.length || fc.includes(t.client)) && (!archUi.project || t.project === archUi.project)
+      && (!archUi.label || (t.labels || []).includes(archUi.label)) && (!archUi.year || year === archUi.year) && (!archUi.outcome || (archUi.outcome === 'done') === done)
+      && archMatch(words, hay)).map(e => e.x);
+  }
+  function archTaskRow({ item: t, year }) {
+    const labels = (t.labels || []).map(l => ({ name: l, color: labelColor(l) })), todos = t.todos || [];
+    const row = ui.taskRow({ num: t.num, title: t.title, priority: t.priority, due: t.due, done: true, client: t.client, labels, todoTotal: todos.length, todoDone: todos.filter(d => d.done).length }, { density: 'row', onOpen: () => openArchived('task', t, year) });
+    row.classList.add('archrow'); row.dataset.archTask = t.id; row.setAttribute('aria-label', `#${t.num || ''} ${t.title || ''}, ${finishedDone(t) ? 'done' : 'cancelled'}, archived ${year}`);
+    const meta = row.querySelector('.ui-task__meta'), done = finishedDone(t);
+    meta.append(ui.pill({ text: done ? 'Done' : 'Cancelled', tone: done ? 'ok' : 'neutral', size: 'sm' }), archPill(year, 'ui-pill ui-pill--neutral ui-pill--sm archpill')); meta.hidden = false;
+    return row;
+  }
+  function renderArchiveView() {
+    const board = $('board'), wrap = el('div', 'archv');
+    const q = el('input', 'psearch archq'); q.type = 'search'; q.placeholder = 'Search archived cards…'; q.value = archUi.q; q.setAttribute('aria-label', 'Search archived cards');
+    q.oninput = () => { archUi.q = q.value; archDebounce(q, () => { archUi.shown = ARCH_PAGE; }); };
+    const bar = el('div', 'archbar'); bar.append(q); wrap.append(bar); board.append(wrap);
+    if (!archReady(wrap, 'cards')) return;
+    const idx = archIndex(), all = archived.tasks;
+    // a filter whose select is not shown filters nothing: its value is cleared
+    if (idx.projects.length) bar.append(archSelect('Project', archUi.project, idx.projects, 'project')); else archUi.project = '';
+    if (idx.labels.length) bar.append(archSelect('Label', archUi.label, idx.labels, 'label')); else archUi.label = '';
+    if (idx.years.length > 1) bar.append(archSelect('Year', archUi.year, idx.years, 'year')); else archUi.year = '';
+    bar.append(archSelect('Done or cancelled', archUi.outcome, [{ value: 'done', label: 'Done' }, { value: 'cancelled', label: 'Cancelled (not Done)' }], 'outcome'));
+    const items = archivedTasks(idx), narrowed = items.length !== all.length;
+    const fc = clientValues(), sum = el('div', 'archcount muted'); sum.setAttribute('role', 'status'); wrap.append(sum);
+    const count = shown => { sum.textContent = (narrowed ? `${items.length} of ${all.length} archived cards` : `${all.length} archived card${all.length === 1 ? '' : 's'}`) + (fc.length ? ` · ${fc.join(', ')}` : '') + (shown < items.length ? ` · showing ${shown}` : '') + (ro ? ' · read-only: you can look, not put back' : ''); };
+    if (!items.length) {
+      count(0);
+      const clear = () => { Object.assign(archUi, { q: '', project: '', label: '', year: '', outcome: '', shown: ARCH_PAGE }); render(); };
+      wrap.append(ui.empty({ text: all.length ? 'No archived cards match.' + (fc.length ? ' The client filter at the top applies here too.' : '') : 'No archived cards. Archived people are under People → Archived.', icon: 'archive', action: all.length && (archUi.q || archUi.project || archUi.label || archUi.year || archUi.outcome) ? { label: 'Clear filters', icon: 'x', onClick: clear } : undefined }));
+      return;
+    }
+    archPaged(wrap, el('div', 'archlist'), items, 'shown', archTaskRow, count);
+  }
+  function archPersonRow({ item: p, year }) {
+    const row = el('div', 'prow parch'); row.tabIndex = 0; row.setAttribute('role', 'button'); row.dataset.archPerson = p.id;
+    const open = () => openArchived('contact', p, year); row.onclick = open; row.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    const who = el('div', 'pwho'); who.append(el('b', null, p.name || '(no name)'), el('span', 'muted', [p.role, p.company].filter(Boolean).join(' · ')));
+    row.append(who, stagePill(p.stage), el('div', 'pnext muted', p.next || ''), archPill(year, 'plast muted archpill')); return row;
+  }
+  function renderArchivedPeople(wrap) {   // People → stage filter → Archived: people the archive moved out (Lost, unchanged for a while)
+    if (!archReady(wrap, 'people')) return;
+    const words = archWords(peopleQ), all = archived.contacts;
+    const items = archIndex().contacts.filter(({ x, hay }) => crmFilter(x.item) && archMatch(words, hay)).map(e => e.x);
+    const sum = el('div', 'archcount muted'); sum.setAttribute('role', 'status'); wrap.append(sum);
+    const count = shown => { sum.textContent = (items.length !== all.length ? `${items.length} of ${all.length} archived people` : `${all.length} archived ${all.length === 1 ? 'person' : 'people'}`) + (shown < items.length ? ` · showing ${shown}` : ''); };
+    if (!items.length) { count(0); wrap.append(ui.empty({ text: all.length ? 'No archived people match.' : 'No archived people. People at the stage Lost move to the archive after a while.', icon: 'users' })); return; }
+    archPaged(wrap, el('div', 'archplist'), items, 'peopleShown', archPersonRow, count);
+  }
   // ---- Settings → Board → Labels: rename, recolour, delete and add; each action is one mutate (one Undo) ----------------
   const LABEL_DEFAULT = '#6b778c', hex6 = c => { c = labelColorOf(c); return /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : /^#[0-9a-f]{3}$/i.test(c) ? '#' + [...c.slice(1)].map(x => x + x).join('').toLowerCase() : LABEL_DEFAULT; };
   const labelColorOf = c => typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : LABEL_DEFAULT;
@@ -8483,15 +8738,15 @@ if (typeof window !== 'undefined') (() => {
 
   // ---- search everything: people, tasks, notes, comments and (on request) the archive, with MiniSearch ---------------
   let msLib = null; const loadMs = () => msLib || (msLib = new Promise((ok, bad) => { if (window.MiniSearch) return ok(window.MiniSearch); const sc = document.createElement('script'); sc.src = 'vendor/minisearch-7.2.0.min.js'; sc.onload = () => ok(window.MiniSearch); sc.onerror = () => { msLib = null; bad(new Error('search library did not load')); }; document.head.append(sc); }));
-  let msIndex = null, msFor = null; const MS_MATCH = { prefix: true, fuzzy: 0.2, combineWith: 'AND' };   // word starts and small typos
+  let msIndex = null, msFor = null, msArch = null, msArchFor = null; const MS_MATCH = { prefix: true, fuzzy: 0.2, combineWith: 'AND' };   // word starts and small typos
   const commentText = x => (x.comments || []).map(c => c.text || '').join('\n');
-  function searchDocs(withArch) {
+  function searchDocs(fromArchive) {   // the live board's people and tasks, or (fromArchive) the loaded archive's: two indexes, so a live change never re-indexes the archive
     const docs = [], task = (t, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 't:' + t.id, kind: 'task', ref: t.id, year: y || '', num: t.num ? String(t.num) : '', title: t.title || '', who: (t.assignees || []).join(' '), client: t.client || '',
       text: [t.details, (t.todos || []).map(x => x.text).join('\n'), commentText(t), (t.links || []).map(l => l.title || l.url).join(' '), t.num ? '#' + t.num : ''].join('\n'), sub: [t.num ? '#' + t.num : '', colName(t.column), t.client, t.due ? 'due ' + fmtDue(t.due) : ''].filter(Boolean).join(' · ') });
     const person = (p, y) => docs.push({ id: (y ? 'a' + y + ':' : '') + 'p:' + p.id, kind: 'person', ref: p.id, year: y || '', title: p.name || '', who: [p.role, p.email, p.phone, p.source].filter(Boolean).join(' '), client: p.company || '',
       text: [p.notes, p.next, commentText(p), (p.links || []).map(l => l.title || l.url).join(' ')].join('\n'), sub: [p.role, p.company, p.stage, p.next ? 'next: ' + p.next : ''].filter(Boolean).join(' · ') });
-    state.tasks.forEach(t => task(t)); (state.contacts || []).forEach(p => person(p));
-    if (withArch && archived) { archived.tasks.forEach(x => task(x.item, x.year)); archived.contacts.forEach(x => person(x.item, x.year)); }
+    if (!fromArchive) { state.tasks.forEach(t => task(t)); (state.contacts || []).forEach(p => person(p)); }
+    else { archived.tasks.forEach(x => task(x.item, x.year)); archived.contacts.forEach(x => person(x.item, x.year)); }
     return docs;
   }
   function searchActions(query) {
@@ -8541,9 +8796,16 @@ if (typeof window !== 'undefined') (() => {
         if (!$('dlgSearch').open) return;
       }
     }
-    if (withArch && !archived && archYears().length) { $('qInfo').textContent = 'Loading the archive…'; try { await loadArchived(); } catch (e) { info = 'Could not load the archive: ' + (e.message || e); } }
+    // the archive loads only for a query; after a failed load it is not retried on every key, only when search opens again or the box is ticked again
+    const useArch = withArch && !!q && archYears().length > 0;
+    if (useArch && !archFresh()) {
+      if (archUi.err && !archUi.loading) info = 'Could not load the archive: ' + archUi.err + '. Tick Include archive again to retry.';
+      else { $('qInfo').textContent = 'Loading the archive…'; await archLoadStart(); if (!$('dlgSearch').open) return; if (archUi.err) info = 'Could not load the archive: ' + archUi.err; }
+    }
     let MS; try { MS = await loadMs(); } catch (e) { $('qInfo').textContent = e.message; return; }
-    const key = [state, withArch, archived]; if (!msIndex || msFor.some((v, i) => v !== key[i])) { msIndex = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'num', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, ...MS_MATCH } }); msIndex.addAll(searchDocs(withArch)); msFor = key; }
+    const newIndex = docs => { const ix = new MS({ fields: ['title', 'who', 'client', 'text'], storeFields: ['kind', 'ref', 'year', 'num', 'title', 'sub'], searchOptions: { boost: { title: 3, who: 2, client: 2 }, ...MS_MATCH } }); ix.addAll(docs); return ix; };
+    if (!msIndex || msFor !== state) { msIndex = newIndex(searchDocs(false)); msFor = state; }
+    const archOn = useArch && archFresh(); if (archOn && (!msArch || msArchFor !== archived)) { msArch = newIndex(searchDocs(true)); msArchFor = archived; window.kbArchSearchBuilds = (window.kbArchSearchBuilds || 0) + 1; }   // keyed on the loaded archive only
     res.textContent = '';
     // Views are part of search: an empty box lists them all ("Go to"), and typing "cal" offers Calendar first
     const ql = q.toLowerCase(), goes = VIEW_GROUPS.filter(g => !viewTabs[g.grp].hidden).flatMap(g => g.views).filter(v => !ql || v.label.toLowerCase().startsWith(ql));
@@ -8564,23 +8826,24 @@ if (typeof window !== 'undefined') (() => {
       places.forEach(x => { const b = el('button', 'qhit qplace'); b.type = 'button'; b.append(elI('span', 'qic', x.icon), el('span', 'qt', x.title), el('span', 'qsub', x.sub));
         b.onclick = () => { $('dlgSearch').close(); x.open(); }; res.append(b); }); }
     // People come before tasks, except for a number query, where the numbered card stays first
-    const hits = msIndex.search(q).sort((a, b) => numRank(a) - numRank(b)).slice(0, 60), byKind = k => hits.filter(h => h.kind === k);
+    const ranked = ix => ix.search(q).sort((a, b) => numRank(a) - numRank(b)).slice(0, 60);   // each index in its own score order: scores of two indexes do not compare
+    const liveHits = ranked(msIndex), archHits = archOn ? ranked(msArch) : [], hits = liveHits.concat(archHits), byKind = k => hits.filter(h => h.kind === k);
     const groups = numQ ? [['Tasks', byKind('task')], ['People', byKind('person')]] : [['People', byKind('person')], ['Tasks', byKind('task')]];
     const found = hits.length + places.length;
-    $('qInfo').textContent = info || (found ? `${found}${hits.length === 60 || morePlaces ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
-    groups.forEach(([head, list]) => { if (list.length) res.append(el('div', 'qhead', head)); list.forEach(h => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) b.append(el('span', 'qarch', 'archived ' + h.year)); b.append(el('span', 'qsub', h.sub));
-      b.onclick = () => { $('dlgSearch').close(); if (h.year) { const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
+    $('qInfo').textContent = info || (found ? `${found}${liveHits.length === 60 || archHits.length === 60 || morePlaces ? '+' : ''} found` : goes.length || actions.length ? '' : 'Nothing found. Check the spelling, or tick “Include archive”.');
+    groups.forEach(([head, list]) => { if (list.length) res.append(el('div', 'qhead', head)); list.forEach(h => { const b = el('button', 'qhit'); b.type = 'button'; b.append(elI('span', 'qic', h.kind === 'task' ? 'square-check' : 'user'), el('span', 'qt', h.title)); if (h.year) { b.classList.add('qhit-arch'); b.append(archPill(h.year, 'qarch')); } b.append(el('span', 'qsub', h.sub));
+      b.onclick = () => { $('dlgSearch').close(); if (h.year) { if (!archived) return; const list = h.kind === 'task' ? archived.tasks : archived.contacts, x = list.find(z => z.item.id === h.ref && z.year === h.year); if (x) openArchived(h.kind, x.item, h.year); }
         else if (h.kind === 'task') openCard(h.ref); else openContact(h.ref); };
       res.append(b); }); });
     const first = res.querySelector('.qhit'); if (first) first.classList.add('first');
   }
   let qTimer = null;
-  function openSearch() { const d = $('dlgSearch'); if (!d.open) d.showModal(); $('qQ').select(); runSearch(); }
+  function openSearch() { const d = $('dlgSearch'); if (!d.open) { $('qArch').checked = LS.get(Q_ARCH_KEY) === '1'; if (!archUi.loading) archUi.err = ''; d.showModal(); } $('qQ').select(); runSearch(); }   // Include archive: remembered in this browser
   $('qQ').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(runSearch, 80); });
   // Enter: preventDefault, or the key also presses the button that gets focus back when the dialog closes
   $('qQ').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const f = $('qRes').querySelector('.qhit'); if (f) f.click(); } else if (e.key === 'ArrowDown') { const f = $('qRes').querySelector('.qhit'); if (f) { e.preventDefault(); f.focus(); } } });
   $('qRes').addEventListener('keydown', e => { const all = [...$('qRes').querySelectorAll('.qhit')], i = all.indexOf(document.activeElement); if (e.key === 'ArrowDown' && all[i + 1]) { e.preventDefault(); all[i + 1].focus(); } if (e.key === 'ArrowUp') { e.preventDefault(); (all[i - 1] || $('qQ')).focus(); } });   // skips the section headings
-  $('qArch').onchange = runSearch; $('qClose').onclick = () => $('dlgSearch').close(); $('btnSearch').onclick = openSearch;
+  $('qArch').onchange = () => { LS.set(Q_ARCH_KEY, $('qArch').checked ? '1' : ''); if (!archUi.loading) archUi.err = ''; runSearch(); }; $('qClose').onclick = () => $('dlgSearch').close(); $('btnSearch').onclick = openSearch;
   ['btnUndo', 'pUndo', 'cUndo'].forEach(id => { $(id).onclick = () => undoLast(); }); syncUndo();
   document.addEventListener('keydown', e => {
     const t = e.target, typing = t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
@@ -8724,7 +8987,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function hostedLogout() {
     hostedStorage?.logout(); hostedIdentity = null; loadGen++; MEM.clear(); undoStack.length = 0;
-    state = DEFAULT(); splitMeta = null; archived = null; msIndex = msFor = null; lastSyncOk = false;
+    state = DEFAULT(); splitMeta = null; archived = null; msIndex = msFor = null; msArch = msArchFor = null; resetArchUi(); lastSyncOk = false;
     location.reload();
   }
   function hostedSignIn() {
@@ -8878,7 +9141,7 @@ if (typeof window !== 'undefined') (() => {
       try { envelope = await hostedStorage.read(`archive/${year}.json`); } catch (e) { if (e.status !== 404) throw e; }
       await hostedStorage.command({ kind: restoring ? 'unarchive' : 'archive', entity_id: entity.id, baseRev: file.rev,
         rootRev: hostedStorage.files.get('tasks.json').rev, archiveRev: envelope?.rev || null, year }, crypto.randomUUID());
-      archived = null; await hostedLoad(false); return true;
+      archDrop(); await hostedLoad(false); return true;
     } catch (e) { if (e.status === 412) await hostedLoad(false); hostedFailure(e); return false; }
   }
   function startHosted() {

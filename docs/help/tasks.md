@@ -17,6 +17,7 @@ If you selected **Tasks** when you made your board, you also have these views. T
 - **Kanban:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Click or tap a card to open it, or focus it and press Enter or Space. Inline controls still work without opening the card. Each card shows compact **Created** and **Active** ages; activity includes edits, comments, history and agent runs. Hover a relative time for its exact date and time.
 - **List**, **Calendar** and **Schedule:** the same tasks by group, by due date and by week.
 - **Activity:** what was done today, yesterday or on a day that you select, by you and your agents. **📋 Copy** gives it as Markdown.
+- **Archive:** the cards that were archived, by archive year (newest year first), with search and filters. Open one to read it or put it back on the board. See [Search and archive](search-and-archive.md).
 - **@Mentions:** every comment that mentions you (`@your-github-username`), newest first, with the task, its description and the comment. A mention on a project opens that project. A reply says who it is replying to. Your own comments are not shown. **New** means posted since you last opened that task or project. Click a row to open it at that comment. Today shows an **@Mentions** tile when you have mentions. The filters apply to task mentions.
 
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.

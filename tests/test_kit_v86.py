@@ -1,6 +1,5 @@
 """Kit v86: the Companies follow-up (review fixes for kit v84, private-tasks card #281). The behaviour is tested in
-test_kit_v84.py and tests/browser/crm-drawers.test.js; this file pins the version and its notes."""
-import json
+test_kit_v84.py and tests/browser/crm-drawers.test.js; this file checks its notes (the version itself: test_kit_v96.py)."""
 import os
 import sys
 import unittest
@@ -13,7 +12,7 @@ import keeptrack  # noqa: E402
 
 
 class Docs(unittest.TestCase):
-    def test_kit_v86_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v89.py
+    def test_kit_v86_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v96.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v86 = f.read().split("### v86 (schema 4)", 1)[1].split("### v8", 1)[0]
         for words in ("kit-update", "__proto__", "No migration", "Show only this company"):

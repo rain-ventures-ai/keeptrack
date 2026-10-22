@@ -25,6 +25,19 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v96 (schema 4)
+An Archive view to browse archived cards and people (private-tasks card #283). Web board only. No data change and no migration:
+it reads the archive files that `keeptrack.py archive` and the web board already write (`archive/<year>.json`).
+- Web board: **Archive**, the last tab of the Tasks views, lists archived cards by archive year (the year of
+  the archive file), newest year first, with search,
+  filters for project, label, year and Done or cancelled (the client filter at the top applies too), a count and
+  **Load more**. It loads the archive files when it opens. A row opens the archived card read-only, with **Put back on
+  the board** (hidden on a read-only board).
+- People: the stage filter has a last option, **Archived**, for the people the archive moved out (Lost people).
+- Search: the **Include archive** tick box is remembered in this browser, and archived results carry an "Archived
+  <year>" pill (the archive file year).
+- Run `kit-update` only. Check: `kit-check` says v96, and the web board shows Archive after Activity in the Tasks views.
+
 ### v95 (schema 4)
 Images on cards: the review fixes for v92 (private-tasks card #292). No migration and no data change.
 - Metadata is removed before an image is saved. The page draws every image again (which ones is decided by the file's
@@ -152,7 +165,7 @@ Archive files get their own size limit (private-tasks card #284). No migration, 
 - Run `kit-update` only. Check: `python3 board/keeptrack.py doctor` shows no `FILE_SIZE` error for the archive.
 
 ### v86 (schema 4)
-Companies follow-up: the review fixes for v84 (card #281 on the owner's board). No migration and no data change. v85
+Companies follow-up: the review fixes for v84 (card #281 on the owner's board). No migration and no data change. v96
 is the Archive view (card #283); the two can land in either order.
 - keeptrack.py never creates `__proto__`, `constructor` or `prototype` as a client or company name: every save is
   checked, and one that would store such a name in one more place than before is refused (commands, `init --client`,

@@ -186,7 +186,7 @@ class Page(unittest.TestCase):
 
 
 class Docs(unittest.TestCase):
-    def test_kit_v83_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v84.py
+    def test_kit_v83_upgrade_notes_and_changelog(self):   # the version itself: test_kit_v96.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v83 = f.read().split("### v83 (schema 4)", 1)[1].split("### v82", 1)[0]
         for words in ("kit-update", "goal-add", "task-set --goal", "GOAL_MISSING", "Older kits"):
