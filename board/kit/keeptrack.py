@@ -1460,6 +1460,9 @@ def hosted_dispatch(a):
                "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "archive", "unarchive", "review", "task-set", "approve", "settings", "settings-set"}
     if a.cmd not in allowed:
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
+    if a.cmd == "settings-set" and (any(getattr(a, key, None) is not None for key in DOCS_LEGACY_FLAGS)
+            or not (getattr(a, "docs_provider", None) is not None or getattr(a, "clear_docs_home", False))):
+        sys.exit("capability_unavailable: hosted settings-set supports docs-home-only flags; legacy settings flags are refused")
     adapter = storage_adapter()
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
@@ -7961,7 +7964,7 @@ def validate_docs_home(value):
                    "dropbox": host in ("dropbox.com", "www.dropbox.com"),
                    "onedrive": host in ("onedrive.live.com", "1drv.ms") or (host.endswith(".sharepoint.com") and host != ".sharepoint.com")}
         if (not re.match(r"^https://[^/]", root, re.I) or re.match(r"^https://[^/?#]*[@%]", root, re.I) or url.scheme.lower() != "https" or not allowed[provider] or url.username is not None
-                or url.password is not None or port not in (None, 443) or "\\" in root
+                or not url.netloc.isascii() or url.password is not None or port not in (None, 443) or "\\" in root
                 or any(c.isspace() for c in root)):
             raise ValueError("docs home needs an HTTPS URL on the selected provider, without credentials")
     return {"provider": provider, "root": root}
@@ -8000,6 +8003,26 @@ def cmd_settings(a):
     print(f"labels: {len(data.get('labels', []))}  clients: {len(data.get('clients', []))}  members: {len(data.get('people', []))}")
 
 
+DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
+                     "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit")
+
+
+def docs_home_confirmation(data, home, clear):
+    """Normal CLI workflow gate; repository writers retain their underlying capability."""
+    owner = kit_owner(data)
+    if not isinstance(owner, str) or not owner or default_user().casefold() != owner.casefold():
+        sys.exit("docs_home_owner_required: only the board kit owner (or first member) may choose the destination")
+    if os.environ.get("BOARD_AGENT") or not sys.stdin.isatty() or not sys.stdout.isatty():
+        sys.exit("docs_home_confirmation_required: owner must read back and confirm in their own terminal or web Settings")
+    settings = data.get("settings", {})
+    before = ("docs_home" in settings, copy.deepcopy(settings.get("docs_home")))
+    print("Current docs home: " + (json.dumps(before[1], ensure_ascii=True) if before[0] else "Not set"))
+    print("Proposed docs home: " + ("CLEAR (not set)" if clear else json.dumps(home, ensure_ascii=True)))
+    if input("Owner: type docs-home to confirm this destination change: ") != "docs-home":
+        sys.exit("docs_home_cancelled: nothing changed")
+    return owner, before
+
+
 def cmd_settings_set(a):
     """Change board settings: title, stale minutes, pipeline stages (with renames)."""
     provider, root = getattr(a, "docs_provider", None), getattr(a, "docs_root", None)
@@ -8010,8 +8033,15 @@ def cmd_settings_set(a):
     if provider is not None:
         try: home = validate_docs_home({"provider": provider, "root": root})
         except ValueError as e: sys.exit(str(e))
+    consent = None
+    if (home is not None or clear) and not (BACKEND == "hosted" and not FILE):
+        data, _ = load()
+        consent = docs_home_confirmation(data, home, clear)
     def fn(data):
         st = data.setdefault("settings", {})
+        if consent and (str(kit_owner(data) or "").casefold() != consent[0].casefold()
+                        or ("docs_home" in st, st.get("docs_home")) != consent[1]):
+            sys.exit("docs_home_changed: owner or destination changed; read back and confirm again")
         if home is not None: st["docs_home"] = dict(home); print("docs_home set")
         elif clear: st.pop("docs_home", None); print("docs_home cleared")
         if getattr(a, "setting", None) is not None:

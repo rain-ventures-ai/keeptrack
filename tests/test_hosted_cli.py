@@ -409,6 +409,14 @@ class HostedCLITest(unittest.TestCase):
         self.assertEqual(self.server.files['tasks.json']['settings']['docs_home'], home)
         self.assertEqual(len([c for c in self.server.calls if c[0] == 'POST']), 1)
 
+    def test_hosted_docs_home_cannot_smuggle_legacy_settings(self):
+        before = copy.deepcopy(self.server.files)
+        for flags in [('--rename-stage', 'New=Changed'), ('--title', 'Changed'), ('--min-kit', '103'), ('--stages', 'New,Won')]:
+            result = self.run_cli('settings-set', '--docs-provider', 'local', '--docs-root', '/docs/root', *flags, code=1)
+            self.assertIn('docs-home-only', result.stderr)
+        self.assertEqual(self.server.files, before)
+        self.assertFalse(any(c[0] == 'POST' for c in self.server.calls))
+
     def test_agent_attended_claim_is_refused(self):
         p = self.run_cli('claim', '#17', '--attended', code=1)
         self.assertIn('attended_forbidden', p.stderr)

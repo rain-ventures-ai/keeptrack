@@ -23,7 +23,11 @@ provider and exact existing root, or explicitly authorises creating one. Do not 
 connector can write. A local path requires a session on the computer with access; never expand/read it merely
 because it is stored. No file:// navigation or fallback copying document content onto the board.
 
-Show the proposed provider/root before saving. In a GitHub board checkout, use the normal command:
+Show the proposed provider/root before saving. The normal GitHub tool permits only the board kit_owner (or first
+member fallback) to choose or clear it, with a read-back in that owner’s live terminal or the web form. An agent
+never runs the confirmation through a proxy/PTY or clicks the web confirmation on the owner’s behalf; give
+the owner the command or form instead. This workflow is not
+cryptographic protection against a raw repository writer. In a GitHub board checkout, the owner runs:
 `keeptrack.py settings-set --docs-provider google-drive --docs-root 'https://drive.google.com/drive/folders/EXAMPLE'`
 Replace the example with the owner's chosen reference; provider/root must be paired. `--clear-docs-home` is an
 explicit removal, never part of failed setup. The web form is Settings → Board → Docs home.

@@ -229,8 +229,8 @@
     <div data-sec id="secDocsHome" data-icon="folder" data-title="Docs home" data-scope="board" data-purpose="Where research and documents live. This stores a reference; it does not create folders or grant access.">
       <p id="sDocsCurrent" class="hint"></p>
       <label>Provider <select id="sDocsProvider"><option value="google-drive">Google Drive</option><option value="dropbox">Dropbox</option><option value="onedrive">OneDrive</option><option value="local">Local path</option></select></label>
-      <label>Root folder <input id="sDocsRoot" type="text" maxlength="2048" placeholder="HTTPS folder link or absolute local path"></label>
-      <p class="hint">The root is your existing keeptrack folder. Local paths need a session with access on that machine. Documents stay there; the board stores links. Hosted boards: only the human board owner can change this setting.</p>
+      <label>Root folder <input id="sDocsRoot" type="text" maxlength="4096" placeholder="HTTPS folder link or absolute local path"></label>
+      <p class="hint">The root is your existing keeptrack folder. Local paths need a session with access on that machine. Documents stay there; the board stores links. Only the board owner can choose or clear this destination, after a read-back confirmation. Hosted boards enforce the human owner at the server.</p>
       <div class="sbtns"><button id="sDocsSave" type="button">Save docs home</button><button id="sDocsClear" type="button">Clear docs home</button></div>
     </div>
     <div data-sec id="memSec" data-icon="users" data-title="Members" data-scope="board" data-learn="tasks.md" data-purpose="The people work can be assigned to. Their work email and time zone tell Claude, Codex and email sync who is who, and what “tomorrow” means for them.">

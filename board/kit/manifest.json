@@ -80,7 +80,9 @@
     "board/keeptrack-notes/SKILL.md": "skills/keeptrack-notes/SKILL.md",
     "board/keeptrack-notes/references/routines.md": "skills/keeptrack-notes/references/routines.md",
     ".claude/skills/keeptrack-docs-home/SKILL.md": "skills/keeptrack-docs-home/SKILL.md",
-    "board/keeptrack-docs-home/SKILL.md": "skills/keeptrack-docs-home/SKILL.md"
+    "board/keeptrack-docs-home/SKILL.md": "skills/keeptrack-docs-home/SKILL.md",
+    ".claude/skills/keeptrack-docs-home/evals/cases.json": "skills/keeptrack-docs-home/evals/cases.json",
+    "board/keeptrack-docs-home/evals/cases.json": "skills/keeptrack-docs-home/evals/cases.json"
   },
   "optional": {
     "visibility-alarm": {

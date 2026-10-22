@@ -6541,22 +6541,25 @@ if (typeof window !== 'undefined') (() => {
       'Backlog auto-research: ' + (enabled ? `on, ${per} per run` : 'off'));
     syncModeSettings();
   }
+  let docsHomeDraft = false;
+  const docsOwner = () => HOSTED ? !hostedIdentity?.agent_id && hostedIdentity?.boards.find(b => b.id === hostedStorage?.board)?.role === 'owner' : typeof kitOwner() === 'string' && !!kitOwner() && me().toLowerCase() === kitOwner().toLowerCase();
   function docsHome(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'provider,root') throw Error('Docs home must contain provider and root.');
     const { provider, root } = value;
-    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 2048 || root.trim() !== root || (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(root) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root))) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
+    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 4096 || [...root].length > 2048 || root.trim() !== root || (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(root) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root))) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
     if (provider === 'local') {
       if (!root.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(root) && !/^\\\\[^\\/]+[\\/][^\\/]+/.test(root)) throw Error('Use an absolute local path.');
     } else {
       let u; try { u = new URL(root); } catch (_) { throw Error('Use an HTTPS folder URL.'); }
       const h = u.hostname.toLowerCase(), allowed = provider === 'google-drive' ? h === 'drive.google.com' : provider === 'dropbox' ? ['dropbox.com', 'www.dropbox.com'].includes(h) : ['onedrive.live.com', '1drv.ms'].includes(h) || (h.endsWith('.sharepoint.com') && h !== '.sharepoint.com');
-      if (!/^https:\/\/[^/]/i.test(root) || /^https:\/\/[^/?#]*[@%]/i.test(root) || u.protocol !== 'https:' || !allowed || u.username || u.password || (u.port && u.port !== '443') || /[\\\s]/.test(root)) throw Error('Use an HTTPS URL on the selected provider, without credentials.');
+      if (!/^[\x00-\x7f]*$/.test(root.match(/^https:\/\/([^/?#]*)/i)?.[1] || '') || !/^https:\/\/[^/]/i.test(root) || /^https:\/\/[^/?#]*[@%]/i.test(root) || u.protocol !== 'https:' || !allowed || u.username || u.password || (u.port && u.port !== '443') || /[\\\s]/.test(root)) throw Error('Use an HTTPS URL on the selected provider, without credentials.');
     }
     return { provider, root };
   }
   function syncDocsHome(locked = !!ro || !!newerSchema || busy, preserveDraft = false) {
     if (!$('sDocsCurrent')) return;
     const display = $('sDocsCurrent'); display.textContent = '';
+    locked ||= !docsOwner(); preserveDraft ||= docsHomeDraft;
     const raw = state.settings.docs_home;
     if (!Object.hasOwn(state.settings, 'docs_home')) { display.textContent = 'Not set. Ask the owner to choose an existing docs folder.'; if (!preserveDraft) $('sDocsRoot').value = ''; }
     else {
@@ -6570,15 +6573,20 @@ if (typeof window !== 'undefined') (() => {
     for (const id of ['sDocsProvider', 'sDocsRoot', 'sDocsSave', 'sDocsClear']) $(id).disabled = !!locked;
   }
   async function saveDocsHome(clear = false) {
-    if (ro || newerSchema || busy) { syncDocsHome(); return; }
+    if (ro || newerSchema || busy || !docsOwner()) { toast('Only the board owner may choose the docs destination.', true); syncDocsHome(); return; }
     let home;
     try { if (!clear) home = docsHome({ provider: $('sDocsProvider').value, root: $('sDocsRoot').value }); }
     catch (e) { toast(e.message, true); return; }
+    const before = JSON.stringify(state.settings.docs_home), owner = kitOwner();
+    const describe = value => value === undefined ? 'Not set' : JSON.stringify(value).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+    if (!(await ask(clear ? 'Clear docs home?' : 'Save docs home?', ['Current: ' + describe(state.settings.docs_home), 'Proposed: ' + (clear ? 'Not set (clear)' : describe(home)), 'This changes where authorised documents will be filed. It does not create folders or grant access.'], clear ? 'Confirm clear' : 'Confirm destination'))) return;
+    if (!docsOwner() || kitOwner() !== owner || JSON.stringify(state.settings.docs_home) !== before) { toast('Owner or destination changed. Read back and confirm again.', true); return; }
     for (const id of ['sDocsProvider', 'sDocsRoot', 'sDocsSave', 'sDocsClear']) $(id).disabled = true;
-    await mutate(d => { d.settings ||= {}; if (clear) delete d.settings.docs_home; else d.settings.docs_home = home; }, clear ? 'Clear docs home' : 'Set docs home');
+    const ok = await mutate(d => { if (!HOSTED && ((d.settings?.kit_owner || d.people?.[0]?.github || '').toLowerCase() !== owner.toLowerCase())) throw Error('Board owner changed; confirm again.'); if (JSON.stringify(d.settings?.docs_home) !== before) throw Error('Docs destination changed; confirm again.'); d.settings ||= {}; if (clear) delete d.settings.docs_home; else d.settings.docs_home = home; }, clear ? 'Clear docs home' : 'Set docs home', [], null, { recheck: true });
+    if (ok) docsHomeDraft = false;
     syncDocsHome();
   }
-  if ($('sDocsSave')) { $('sDocsSave').onclick = () => saveDocsHome(); $('sDocsClear').onclick = () => saveDocsHome(true); }
+  if ($('sDocsSave')) { $('sDocsRoot').oninput = $('sDocsProvider').onchange = () => { docsHomeDraft = true; }; $('sDocsSave').onclick = () => saveDocsHome(); $('sDocsClear').onclick = () => saveDocsHome(true); }
   // ---- Review Inbox (kit v42): proposals from agents and routines wait in <board>/proposals/<id>.json --------------
   // They are never part of state (tasks, contacts), so counts, views, search, Today, widgets and agents never see them.
   // A decision re-reads the proposal and its target, then writes the record and the proposal in ONE commit (Git Data,

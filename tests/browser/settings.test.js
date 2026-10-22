@@ -86,6 +86,8 @@ const visiblePanel = page => page.evaluate(() => [...document.querySelectorAll('
 const inView = (page, id) => page.evaluate(id => { const d = document.getElementById('dlgSettings').getBoundingClientRect(), r = document.getElementById(id).getBoundingClientRect(); return r.top >= d.top - 1 && r.top < d.bottom - 40; }, id);
 async function settle(page) { await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); await page.waitForTimeout(80); }
 
+async function waitStored(predicate) { const until = Date.now() + 5000; while (!predicate() && Date.now() < until) await new Promise(r => setTimeout(r, 20)); assert.ok(predicate(), 'shared board write completed'); }
+
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
@@ -96,26 +98,58 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
       await page.locator('#sDocsProvider').selectOption('google-drive');
       await page.locator('#sDocsRoot').fill('https://drive.google.com/drive/folders/existing-root');
-      await page.locator('#sDocsSave').click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
+      await page.locator('#sDocsSave').click(); await page.getByRole('button', { name: 'Confirm destination', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
       await page.waitForFunction(() => document.querySelector('#sDocsCurrent a')?.href.includes('existing-root'));
+      await waitStored(() => JSON.parse(page.api.files['tasks.json']).settings.docs_home?.provider === 'google-drive');
       assert.equal(JSON.parse(page.api.files['tasks.json']).settings.docs_home.provider, 'google-drive');
       await page.reload(); await page.waitForSelector('.card');
       if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
       assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/existing-root');
       const writes = page.api.writes;
+      await page.locator('#sDocsRoot').fill('https://drive.google.com/drive/folders/not-confirmed'); await page.locator('#sDocsSave').click();
+      await page.getByRole('alertdialog').waitFor(); assert.equal(page.api.writes, writes, 'read-back is before write');
+      assert.match(await page.getByRole('alertdialog').textContent(), /not-confirmed/);
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click(); assert.equal(page.api.writes, writes);
+      await page.locator('#sModeCrm').uncheck(); await settle(page);
+      assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/not-confirmed', 'unrelated setting save preserves destination draft');
+      await page.waitForFunction(() => !document.querySelector('#sModeCrm').disabled);
+      const afterOtherSettings = page.api.writes;
+      await page.locator('#sDocsRoot').fill('https://ｄｒｉｖｅ.google.com/root'); await page.locator('#sDocsSave').click(); await settle(page);
+      assert.equal(page.api.writes, afterOtherSettings, 'fullwidth host aliases are refused');
+
       await page.locator('#sDocsRoot').fill('https://evil.test/root'); await page.locator('#sDocsSave').click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
-      await settle(page); assert.equal(page.api.writes, writes, 'invalid provider host never writes');
-      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/work/<private>/keeptrack'); await page.locator('#sDocsSave').click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
+      await settle(page); assert.equal(page.api.writes, afterOtherSettings, 'invalid provider host never writes');
+      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/work/<private>/keeptrack'); await page.locator('#sDocsSave').click(); await page.getByRole('button', { name: 'Confirm destination', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
       await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.includes('/work/<private>/keeptrack'));
+      await waitStored(() => JSON.parse(page.api.files['tasks.json']).settings.docs_home?.provider === 'local');
       assert.equal(await page.locator('#sDocsCurrent a').count(), 0, 'local path remains text, never file navigation');
       assert.equal(await page.locator('#sDocsCurrent private').count(), 0, 'stored text is escaped');
-      await page.locator('#sDocsClear').click(); await page.waitForFunction(() => !document.querySelector('#sDocsClear').disabled); await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.startsWith('Not set'));
+      const astralRoot = '/docs/' + '😀'.repeat(2042);
+      await page.locator('#sDocsRoot').fill(astralRoot); await page.locator('#sDocsSave').click(); await page.getByRole('button', { name: 'Confirm destination', exact: true }).click();
+      await waitStored(() => JSON.parse(page.api.files['tasks.json']).settings.docs_home?.root === astralRoot);
+      const unicodeWrites = page.api.writes;
+      await page.locator('#sDocsRoot').fill(astralRoot + '😀'); await page.locator('#sDocsSave').click(); await settle(page);
+      assert.equal(page.api.writes, unicodeWrites, '2049 scalar root refused, 2048 accepted');
+
+      await page.locator('#sDocsClear').click(); await page.getByRole('button', { name: 'Confirm clear', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('#sDocsClear').disabled); await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.startsWith('Not set'));
+      await waitStored(() => !Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'));
       assert.equal(Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'), false);
       assert.deepEqual(page.errors, []); await page.close();
       const invalid = await open(browser, { settings: { docs_home: { provider: 'future', root: 'javascript:alert(1)' } } });
       await invalid.locator('#btnSettings').click(); await invalid.locator('#tabBoard').click();
       assert.match(await invalid.locator('#sDocsCurrent').textContent(), /Invalid stored docs home/);
       assert.equal(await invalid.locator('#sDocsCurrent a').count(), 0); await invalid.close();
+      const race = await open(browser);
+      await race.locator('#btnSettings').click(); await race.locator('#tabBoard').click();
+      await race.locator('#sDocsProvider').selectOption('local'); await race.locator('#sDocsRoot').fill('/docs/race'); await race.locator('#sDocsSave').click();
+      const changedOwner = JSON.parse(race.api.files['tasks.json']); changedOwner.settings.kit_owner = 'new-owner'; race.api.files['tasks.json'] = text(changedOwner); race.api.head = 'head-' + ++race.api.n;
+      const raceWrites = race.api.writes; await race.getByRole('button', { name: 'Confirm destination', exact: true }).click(); await settle(race);
+      await race.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
+      assert.equal(race.api.writes, raceWrites, 'owner changed after read-back; fresh revision refuses without write');
+      assert.equal(Object.hasOwn(JSON.parse(race.api.files['tasks.json']).settings, 'docs_home'), false); await race.close();
+      const nonowner = await open(browser, { settings: { kit_owner: 'someone-else' } });
+      await nonowner.locator('#btnSettings').click(); await nonowner.locator('#tabBoard').click();
+      assert.equal(await nonowner.locator('#sDocsSave').isDisabled(), true); assert.equal(nonowner.api.writes, 0); await nonowner.close();
       const demo = await open(browser, { demo: true });
       if (!await demo.locator('#dlgSettings').evaluate(e => e.open)) await demo.locator('#btnSettings').click(); await demo.locator('#tabBoard').click();
       assert.equal(await demo.locator('#sDocsSave').isDisabled(), true);
