@@ -33,8 +33,9 @@ For a one-line shortcut, type **Name | Company | Role | Email** in the add box a
 - **Next step** and its **date**. Use **Today**, **Tomorrow** or **+1 week** to set the date quickly, or **×** on the date for no date. Always give a date: Today uses it.
 - **Client, role, value, source and GitHub** in the same list.
 - **Emails** and **Phones:** as many as you need, each with a label. Click **+ Add email** or **+ Add phone**. The mail and phone icons write an email or call.
-- **Contact log:** each message, email, call and meeting.
+- **Contact log:** each message, email, call and meeting. An entry with a source link shows **Open in Gmail** (or **Open original**), which opens the original thread in a new tab.
 - **Notes**, **Tasks**, **Links** and the company's **Files**.
+- **Project activity:** for each project the person is in (their email is on the project, or one of its tasks names them), the newest comments and changes on its tasks. Click one to open the task.
 - **History:** who changed what, and when.
 
 Each field saves on its own when you leave it. There is no Save button.
@@ -45,6 +46,10 @@ Each field saves on its own when you leave it. There is no Save button.
 3. Click **Log it**.
 
 When you log a contact for a person at the first stage (**New**), the person moves to **Contacted**.
+
+To link an entry to the original email, click the link icon on the entry and paste the address of the thread (in Gmail, open the thread and copy the address bar). The pencil icon changes or removes it. From the terminal: `keeptrack.py touch <person> "<text>" --channel email --url <thread URL>`, or `keeptrack.py touch-url <person> <URL> [--touch <entry id>]` for an entry already logged.
+
+Every person also has their own link: see [Companies](companies.md#links-to-a-company-person-or-project).
 
 ## Drafts
 A draft is a message that you have not sent yet. It does **not** count as contact.

@@ -289,7 +289,7 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 87  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 88  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -5223,7 +5223,7 @@ HELP_TOPICS = {
     "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "history"],
-    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-source", "sent"],
+    "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-url", "touch-source", "sent"],
     "clients-projects": ["clients", "client-set", "client-link", "client-unlink", "client-rename", "client-rm",
                          "projects", "project", "project-add", "project-set", "project-link", "project-unlink",
                          "project-person", "project-remove"],
@@ -5800,6 +5800,7 @@ def cmd_person(a):
         print(f"  [{clean(str(c['at'])[:16], 16)}] {clean(c.get('channel', 'note'), 40)}{' DRAFT (not sent) ' + clean(c['id'], 40) if c.get('draft') else ''} "
               f"{clean(c.get('by', '?'), 80)}: {clean_lines(c['text'], '    ')}")
         if c.get("source_message_ids"): print("    source messages: " + ", ".join(clean(x, 200) for x in c["source_message_ids"]))
+        if isinstance(c.get("url"), str) and c["url"]: print(f"    source link ({clean(c['id'], 40)}): {clean(c['url'], 2000)}")
     tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
     for x in tasks: print("  task: " + line(data, x))
     by_who, cards = waiting_index(data)
@@ -5854,9 +5855,32 @@ def cmd_person_rm(a):
     mutate(fn, f"Delete person: {a.ref}")
 
 
+def check_touch_url(url):
+    """A contact log entry's source link (kit v88): the original message or thread, such as a Gmail thread URL. http(s) only."""
+    url = str(url or "").strip()
+    if url and (not re.match(r"^https?://[^\s/]+", url) or len(url) > 2000 or any(ch.isspace() for ch in url)):
+        sys.exit("source link must be one http(s) URL of at most 2000 characters, such as https://mail.google.com/mail/u/0/#all/<thread id>")
+    return url
+
+
+def cmd_touch_url(a):
+    """Set or clear ("") the source link of a contact log entry: the latest one, or --touch <id>."""
+    url = check_touch_url(a.url)
+    def fn(data):
+        p = find_person(data, a.ref); cs = p.get("comments", [])
+        c = next((x for x in cs if x.get("id") == a.touch), None) if a.touch else (cs[-1] if cs else None)
+        if not c: sys.exit(f"no contact log entry {a.touch} for {p['name']}" if a.touch else f"{p['name']} has no contact log entries")
+        if url: c["url"] = url
+        else: c.pop("url", None)
+        hist(p, f"source link {'set' if url else 'cleared'} on {c['id']}"); p["updated"] = now()
+        print(f"{'set' if url else 'cleared'} source link on {c['id']} for {p['name']}")
+    mutate(fn, f"Touch source link: {a.ref}")
+
+
 def cmd_touch(a):
     """Log a contact. --draft records a message that is not sent yet (it does not count as contact)."""
     event_at, source_id = check_event_time(getattr(a, "at", None)), check_source_id(getattr(a, "source_id", None))
+    touch_url = check_touch_url(getattr(a, "url", None))
     message_ids = sorted(set(check_source_id(x) for x in getattr(a, "source_message_id", []) or []))
     if message_ids and (a.draft or any(not x for x in message_ids)):
         sys.exit("source message keys require a non-draft touch and nonempty keys")
@@ -5876,6 +5900,7 @@ def cmd_touch(a):
         c = {"id": "c_" + uuid.uuid4().hex[:6], "at": event_at, "by": who_am_i(), "channel": a.channel, "text": a.text, "draft": bool(a.draft and a.channel != "note")}
         if source_id: c["source_id"] = source_id
         if message_ids: c["source_message_ids"] = message_ids
+        if touch_url: c["url"] = touch_url
         p.setdefault("comments", []).append(c)
         if not getattr(a, "preserve_stage", False) and not c["draft"] and a.channel != "note" and p.get("stage") == stages(data)[0] and len(stages(data)) > 1:
             hist(p, f"stage {p['stage']} -> {stages(data)[1]}"); p["stage"] = stages(data)[1]
@@ -10599,7 +10624,10 @@ def main():
     s.add_argument("--source-id", help="opaque retry key such as email:<sha256>; duplicate keys are not logged twice")
     s.add_argument("--source-message-id", action="append", default=[], help="hashed individual email message key, repeatable; refuses partial overlap")
     s.add_argument("--preserve-stage", action="store_true", help="import contact history without automatically advancing the stage")
+    s.add_argument("--url", help="source link: the original message or thread (http(s)), such as a Gmail thread URL; opens from the log entry")
     pf(s); s.set_defaults(f=cmd_touch)
+    s = sub.add_parser("touch-url", help="set or clear (\"\") a contact log entry's source link, such as its Gmail thread"); s.add_argument("ref"); s.add_argument("url")
+    s.add_argument("--touch", help="log entry id (default: the latest)"); s.set_defaults(f=cmd_touch_url)
     s = sub.add_parser("sent", help="mark a draft as sent (the human sent it)"); s.add_argument("ref"); s.add_argument("--touch", help="draft id (default: latest)"); pf(s); s.set_defaults(f=cmd_sent)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")

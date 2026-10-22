@@ -159,8 +159,15 @@ and the hidden content and sender checks are counted rather than guessed.
   keeptrack.py touch '<person id>' 'Email received: confirmed the Friday call.' --channel email \
     --at '2026-10-08T09:30:00Z' --preserve-stage \
     --source-message-id '<the Message key: line of email-view (with a connector: the output of email-key)>' \
-    --source-id 'email:<sha256 of provider account id + thread id + sorted new message ids in this touch>'
+    --source-id 'email:<sha256 of provider account id + thread id + sorted new message ids in this touch>' \
+    --url 'https://mail.google.com/mail/u/0/#all/<Gmail thread id>'
   ```
+
+- `--url` (kit v88) is the entry's source link: the board shows **Open in Gmail** on it, opening the thread in a new
+  tab for whoever owns that mailbox. Build it only from the provider's opaque thread id (Gmail: the thread id that
+  `email-search` printed second); never put an address, subject or search query in it. For Outlook, pass the
+  message's `webLink` only when the connector returns one. Skip it when you have no thread id. For an entry already
+  logged without one: `keeptrack.py touch-url '<person id>' '<URL>' --touch '<entry id>'`.
 
 - With gog, the key is the `Message key:` line `email-view` printed. With a connector, prefer
   `keeptrack.py email-key --stdin` for each message's canonical `rfc822:` key, passing the raw header as stdin

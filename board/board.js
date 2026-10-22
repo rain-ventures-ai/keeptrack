@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 87;
+  const PAGE_KIT = 88;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -3946,12 +3946,28 @@ if (typeof window !== 'undefined') (() => {
     if (!HOSTED && !DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
     const safe = (/^\d+$/.test(h) && Number.isSafeInteger(Number(h)) && Number(h) > 0) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
-      (q.has('view') && ALL_VIEWS.includes(q.get('view')) && [...q.keys()].length === 1) ||
+      (q.has('view') && ALL_VIEWS.includes(q.get('view')) && [...q.keys()].length === 1) || !!recordRoute(q) ||
       (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
     const t = state.tasks.find(t => String(t.num) === h); if (safeCardId(t?.id)) u.searchParams.set('card', t.id);
     u.hash = safe ? hash : '#view=' + view; return u.href;
   }
-  const routeHash = d => d.id === 'dlgCard' ? location.hash : '#' + (routeDialogs[d.id] || 'view=' + view) + (d.id === 'dlgSettings' ? '=' + settingsRoute : '');
+  // Deep links (card #290): a company, person or project drawer puts its record in the address, so the link opens it again
+  const RECORD_ROUTES = { company: 'dlgClient', person: 'dlgContact', project: 'dlgProject' };
+  const recordHash = (kind, key) => '#' + new URLSearchParams({ [kind]: key }).toString();
+  const recordOf = d => d.id === 'dlgClient' && editingClient ? recordHash('company', editingClient) : d.id === 'dlgContact' && editingContact ? recordHash('person', editingContact)
+    : d.id === 'dlgProject' && editingProject ? recordHash('project', editingProject) : '';
+  const routeHash = d => d.id === 'dlgCard' ? location.hash : recordOf(d) || '#' + (routeDialogs[d.id] || 'view=' + view) + (d.id === 'dlgSettings' ? '=' + settingsRoute : '');
+  const recordRoute = q => { const keys = [...q.keys()]; if (keys.length !== 1 || !Object.hasOwn(RECORD_ROUTES, keys[0])) return null; const key = q.get(keys[0]); return key && key.length <= 300 ? { kind: keys[0], key } : null; };
+  function openRecord({ kind, key }) {   // false: not on this board (yet)
+    if (kind === 'company') { if (!companyNames().includes(key)) return false; if (editingClient !== key || !$('dlgClient').open) openClient(key); return true; }
+    if (kind === 'person') { if (!state.contacts.some(p => p.id === key)) return false; if (editingContact !== key || !$('dlgContact').open) openContact(key); return true; }
+    if (!projectById(key)) return false; if (editingProject !== key || !$('dlgProject').open) openProject(key); return true;
+  }
+  function syncRecordUrl(id) {   // a drawer already open switched to another record: its history entry names the new one
+    const d = $(id), st = history.state || {}; if (!d || !d.open || st.kbDlg !== id || backStack[backStack.length - 1] !== id) return;
+    const url = bareUrl() + routeHash(d); if (url !== bareUrl() + location.hash) try { history.replaceState(st, '', url); } catch {}
+  }
+  const copyRecordLink = (kind, key, what) => copyText(navigationLink(recordHash(kind, key)), `Link to ${what} copied`);
   function applyRoute() {
     const h = location.hash.slice(1), q = new URLSearchParams(h);
     if (hashNum() !== null) { openFromHash(); return; }
@@ -3963,6 +3979,7 @@ if (typeof window !== 'undefined') (() => {
         // Restoring the same URL after a delayed load must not reset an open
         // settings section (e.g. collapse the connection form after token reuse).
         if (!alreadyOpen || settingsRoute !== valid) settingsTab(valid); }
+      else if (recordRoute(q)) { const r = recordRoute(q); if (!openRecord(r) && lastSyncOk) toast(`This ${r.kind} was not found on this board`, true); }   // before the board loads, the load applies it again
       else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
       else if (h === 'menu') { const docked = window.kbLayout && window.kbLayout.get() === 'dock', pop = docked ? 'dockPop' : 'morePop', trigger = docked ? 'dockMenu' : 'btnMore'; if ($(pop).hidden) $(trigger).click(); }
       else { const id = Object.keys(routeDialogs).find(id => routeDialogs[id] === h); if (id && $(id) && !$(id).open) { if (id === 'dlgSearch') openSearch(); else if (id === 'dlgAddPerson') openAddPersonForm(); else if (id === 'dlgCopy') $('btnCopy').click(); else $(id).showModal(); } }
@@ -5598,7 +5615,7 @@ if (typeof window !== 'undefined') (() => {
     const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
     const who = el('button', 'colink', p.name || '(no name)'); who.type = 'button'; who.title = `Open ${p.name}`; who.onclick = () => { $('dlgClient').close(); openContact(p.id); }; roKeep(who);
     head.append(elI('span', 'tchan', ic, label), who, el('span', 'muted', 'by ' + (cm.by || '?')), el('time', null, ago2(cm.sent_at || cm.at)));
-    head.lastChild.title = cm.sent_at || cm.at || '';
+    head.lastChild.title = cm.sent_at || cm.at || ''; if (touchUrl(cm)) head.append(touchSource(p, cm, false));
     if (cm.draft) head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
     const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); return row;
   }
@@ -5638,7 +5655,7 @@ if (typeof window !== 'undefined') (() => {
   function openClient(name) {
     if (editingClient !== name) clActMax = 10;
     editingClient = name; clSig = ''; resetCrmRows('cl'); fillClientDrawer(true);
-    if (!$('dlgClient').open) $('dlgClient').showModal(); $('clBody').scrollTop = 0; autosize($('clNotes'));
+    if (!$('dlgClient').open) $('dlgClient').showModal(); else syncRecordUrl('dlgClient'); $('clBody').scrollTop = 0; autosize($('clNotes'));
   }
   const STAGE_TONE_CL = (stored, v) => stored ? STAGE_TONE(v) : 'neutral';
   function fillClientDrawer(force) {
@@ -5690,7 +5707,8 @@ if (typeof window !== 'undefined') (() => {
     const co = editingClient; if (!co) return;
     const items = [
       { label: 'Show only this company', icon: 'eye', onSelect: () => { setClientValues([co]); $('dlgClient').close(); } },
-      { label: 'Copy company name', icon: 'copy', onSelect: () => copyText(co, 'Company name copied') }
+      { label: 'Copy company name', icon: 'copy', onSelect: () => copyText(co, 'Company name copied') },
+      { label: 'Copy link', icon: 'link', onSelect: () => copyRecordLink('company', co, co) }
     ];
     if (!ro && companyFacts(co).stored) items.push({ label: "Use people's stage", icon: 'users', onSelect: () => setCompanyStage(co, '') });
     ui.menu(anchor, items, { label: `Actions for ${co}` });
@@ -5743,7 +5761,7 @@ if (typeof window !== 'undefined') (() => {
   function syncProjectStatus(v) { const w = $('prStatus').parentElement; ['ok', 'warn', 'neutral'].forEach(x => w.classList.remove('ui-select--' + x)); w.classList.add('ui-select--' + (PROJECT_TONE[v] || 'neutral')); }
   function openProject(id) {
     editingProject = id; prSig = ''; resetCrmRows('pr'); $('prDoneSec').toggle(false); fillProjectDrawer(true);
-    $('dlgProject').showModal(); $('prBody').scrollTop = 0; autosize($('prName'));
+    if (!$('dlgProject').open) $('dlgProject').showModal(); else syncRecordUrl('dlgProject'); $('prBody').scrollTop = 0; autosize($('prName'));
   }
   function fillProjectDrawer(force) {
     const pr = projectById(editingProject); if (!pr) { $('dlgProject').close(); return; }
@@ -5799,7 +5817,7 @@ if (typeof window !== 'undefined') (() => {
   function openProjectMenu(anchor) {
     const pr = projectById(editingProject); if (!pr) return; const items = [];
     if (pr.client) items.push({ label: `Open client ${pr.client}`, icon: 'building-2', onSelect: () => { $('dlgProject').close(); openClient(pr.client); } });
-    items.push({ label: 'Copy project name', icon: 'copy', onSelect: () => copyText(pr.name, 'Project name copied') });
+    items.push({ label: 'Copy project name', icon: 'copy', onSelect: () => copyText(pr.name, 'Project name copied') }, { label: 'Copy link', icon: 'link', onSelect: () => copyRecordLink('project', pr.id, pr.name) });
     if (!ro) items.push({ separator: true }, { label: 'Delete project', icon: 'trash-2', danger: true, onSelect: deleteProject });
     ui.menu(anchor, items, { label: `Actions for ${pr.name}` });
   }
@@ -7240,9 +7258,10 @@ if (typeof window !== 'undefined') (() => {
   let coIdx = null;   // people and tasks by company, built once per board state (a big board has thousands of each)
   function companyIndex() {
     if (coIdx && coIdx.contacts === state.contacts && coIdx.tasks === state.tasks && coIdx.n === state.contacts.length + ':' + state.tasks.length) return coIdx;
-    const people = new Map(), tasks = new Map(), add = (m, k, x) => { if (!m.has(k)) m.set(k, []); m.get(k).push(x); };
+    const people = new Map(), tasks = new Map(), projects = new Map(), add = (m, k, x) => { if (!m.has(k)) m.set(k, []); m.get(k).push(x); };
     state.contacts.forEach(p => { if (p.company) add(people, p.company, p); }); state.tasks.forEach(t => { if (t.client) add(tasks, t.client, t); });
-    coIdx = { contacts: state.contacts, tasks: state.tasks, n: state.contacts.length + ':' + state.tasks.length, people, taskMap: tasks };
+    projectsOf().forEach(pr => { if (pr && pr.client) add(projects, pr.client, pr); });
+    coIdx = { contacts: state.contacts, tasks: state.tasks, n: state.contacts.length + ':' + state.tasks.length, people, taskMap: tasks, projects };
     queueMicrotask(() => { coIdx = null; });   // never outlives this pass: an edit in place keeps the arrays
     return coIdx;
   }
@@ -7252,7 +7271,8 @@ if (typeof window !== 'undefined') (() => {
     let derived = ''; contacts.forEach(p => { if (stages().includes(p.stage) && (!derived || stageRank(p.stage) > stageRank(derived))) derived = p.stage; });
     const tasks = ix.taskMap.get(name) || [], open = tasks.filter(t => t.column !== doneColId());
     const next = contacts.filter(p => p.next_due).sort((a, b) => a.next_due.localeCompare(b.next_due) || a.name.localeCompare(b.name))[0] || null;
-    return { name, info, people, contacts, stored, derived, stage: stored || derived, tasks, open, next,
+    const updated = [...people, ...tasks, ...(ix.projects.get(name) || [])].map(x => typeof x.updated === 'string' ? x.updated : '').reduce((a, b) => b > a ? b : a, '');   // its newest person, task or project change
+    return { name, info, people, contacts, stored, derived, stage: stored || derived, tasks, open, next, updated,
       last: contacts.map(lastTouch).filter(Boolean).sort().pop() || '', value: contacts.reduce((a, p) => a + money(p.value), 0), own: companyIdentity(name) };
   }
   const companyFilter = () => { const fc = clientValues(); return name => !fc.length || fc.includes(name); };   // reads the client pills once
@@ -7277,20 +7297,39 @@ if (typeof window !== 'undefined') (() => {
     const row = el('div', 'prow crow'); row.tabIndex = 0; row.dataset.company = f.name; row.onclick = () => openClient(f.name); row.onkeydown = e => { if (e.key === 'Enter') openClient(f.name); };
     const who = el('div', 'pwho'); who.append(el('b', null, f.name), el('span', 'muted', [plural(f.people.length, 'person', 'people'), plural(f.open.length, 'open task', 'open tasks')].join(' · ')));
     if (f.own) { row.classList.add('pmember'); const pill = el('span', 'stagepill memberpill', f.own); pill.title = `${f.own}: a board member's own company, not a client`; row.append(who, pill, el('div', 'pnext muted', 'Kept out of the pipeline'), el('span', 'plast muted', '')); return row; }
-    const lt = f.last, ago = el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
+    const lt = f.last, ago = companiesSort === 'updated' ? el('span', 'plast muted', f.updated ? `updated ${daysSince(f.updated)}d ago` : 'no changes yet')
+      : el('span', 'plast muted', lt ? `last contact ${daysSince(lt)}d ago` : 'never contacted');
     row.append(who, companyStagePill(f), companyNext(f), ago); return row;
   }
-  let companiesQ = '', companiesStage = '';
+  // Sort and contact filter (card #290): each viewer's choice, remembered per board like the pipeline mode
+  const COMPANY_SORTS = [['stage', 'Sort: stage'], ['contacted', 'Sort: recently contacted'], ['updated', 'Sort: recently updated'], ['name', 'Sort: name']];
+  const COMPANY_SEEN = [['', 'Any contact'], ['30d', 'Contacted in 30 days'], ['quiet', 'No contact in 30+ days'], ['never', 'Never contacted']];
+  const coSortKey = () => 'kb_co_sort:' + boardStoreId(), coSeenKey = () => 'kb_co_seen:' + boardStoreId();
+  let companiesQ = '', companiesStage = '', companiesSort = '', companiesSeen = '';
+  function companySorter(sort) {
+    const order = s => s ? stages().indexOf(s) : stages().length, byName = (a, b) => a.name.localeCompare(b.name), newest = k => (a, b) => String(b[k]).localeCompare(String(a[k]));
+    const rest = { stage: (a, b) => order(a.stage) - order(b.stage) || newest('last')(a, b), contacted: newest('last'), updated: newest('updated'), name: () => 0 }[sort] || (() => 0);
+    return (a, b) => (!!b.own - !!a.own) || rest(a, b) || byName(a, b);   // own companies first, as members are in People
+  }
+  function companySeen(f, seen) {
+    if (!seen) return true; if (seen === 'never') return !f.last;
+    const d = daysSince(f.last); return seen === '30d' ? f.last && d <= 30 : !!f.last && d > 30;
+  }
   function renderCompaniesView() {
     const board = $('board'), wrap = el('div', 'peoplev companiesv'), bar = el('div', 'pbar');
     const q = el('input', 'psearch'); q.type = 'search'; q.placeholder = 'Search companies, people, notes…'; q.value = companiesQ; q.setAttribute('aria-label', 'Search companies');
     q.oninput = () => { companiesQ = q.value; const pos = q.selectionStart; render(); const nq = document.querySelector('.psearch'); if (nq) { nq.focus(); nq.setSelectionRange(pos, pos); } };
-    const st = el('select', 'pillsel'); st.setAttribute('aria-label', 'Filter by stage'); [['', 'All stages'], ...stages().map(s => [s, s])].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; st.append(o); }); st.value = companiesStage; st.onchange = () => { companiesStage = st.value; render(); };
-    bar.append(q, st); wrap.append(bar);
-    const ql = companiesQ.toLowerCase(), order = s => s ? stages().indexOf(s) : stages().length;
+    const pick = (label, opts, value, onChange) => { const x = el('select', 'pillsel'); x.setAttribute('aria-label', label); opts.forEach(([v, l]) => { const o = el('option', null, l); o.value = v; x.append(o); }); x.value = value; if (x.value !== value) x.value = opts[0][0]; x.onchange = () => onChange(x.value); return x; };
+    if (!companiesSort) companiesSort = COMPANY_SORTS.some(([v]) => v === LS.get(coSortKey())) ? LS.get(coSortKey()) : 'stage';
+    if (!companiesSeen) companiesSeen = COMPANY_SEEN.some(([v]) => v && v === LS.get(coSeenKey())) ? LS.get(coSeenKey()) : '';
+    const st = pick('Filter by stage', [['', 'All stages'], ...stages().map(s => [s, s])], companiesStage, v => { companiesStage = v; render(); });
+    const seen = pick('Filter by last contact', COMPANY_SEEN, companiesSeen, v => { companiesSeen = v; LS.set(coSeenKey(), v); render(); });
+    const so = pick('Sort companies', COMPANY_SORTS, companiesSort, v => { companiesSort = v; LS.set(coSortKey(), v); render(); });
+    bar.classList.add('cbar'); bar.append(q, st, seen, so); wrap.append(bar);
+    const ql = companiesQ.toLowerCase();
     const pc = projectClients(), listed = companyNames().filter(companyFilter()).map(companyFacts).filter(f => listedCompany(f, pc));
-    const items = listed.filter(f => (!companiesStage || f.stage === companiesStage) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
-      .sort((a, b) => (!!b.own - !!a.own) || order(a.stage) - order(b.stage) || String(b.last).localeCompare(String(a.last)) || a.name.localeCompare(b.name));   // own companies first, as members are in People
+    const items = listed.filter(f => (!companiesStage || f.stage === companiesStage) && companySeen(f, companiesSeen) && (!ql || [f.name, f.info.domain, f.info.notes, f.info.north_star, ...f.people.flatMap(p => [p.name, p.role])].join(' ').toLowerCase().includes(ql)))
+      .sort(companySorter(companiesSort));
     capList('companies', items, companyRow, wrap);
     if (!items.length) wrap.append(ui.empty({ text: listed.length || companyNames().some(n => listedCompany(companyFacts(n), pc)) ? 'No company matches.' : 'No companies yet. A company appears when a person or a task names it.', icon: 'building-2' }));
     board.append(wrap);
@@ -7402,6 +7441,7 @@ if (typeof window !== 'undefined') (() => {
       crmSection('pLinkSec', { title: 'Links', body: [dlist('pLinks'), linkAdd, dhint('LinkedIn, company website, blog, portfolio, or another page about this person.')] }, 'pLinkCount', true),
       crmSection('pNorthSec', { title: 'Client north star', action: clientOpen, body: dnote('pNorthStar', 'Client north star', 'What we are trying to solve for this client and what success looks like.') }),
       crmSection('pProjSec', { title: 'Projects', body: dlist('pProjList') }, 'pProjCount'),
+      crmSection('pProjActSec', { title: 'Project activity', body: dlist('pProjAct') }, 'pProjActCount'),
       files,
       crmSection('pHistSec', { title: 'History', collapsible: true, open: false, body: hist }, 'pHistCount'),
       foot);
@@ -7411,7 +7451,7 @@ if (typeof window !== 'undefined') (() => {
     if (editingContact !== id) { const ta = $('pTouchText'); ta.value = ''; autosize(ta); $('pDraft').checked = false; $('pChan').value = CHANNELS[0][0]; }   // a half-written log entry never carries over to another person
     editingContact = id; pSig = ''; resetCrmRows('p'); $('pHistSec').toggle(false);
     fillContact(true);
-    const d = $('dlgContact'); if (!d.open) { d.showModal(); $('pBody').scrollTop = 0; }
+    const d = $('dlgContact'); if (!d.open) { d.showModal(); $('pBody').scrollTop = 0; } else syncRecordUrl('dlgContact');
     autosize($('pName')); autosize($('pNotes'));
   }
   const STAGE_TONE = s => /^won$/i.test(s) ? 'ok' : /^lost$/i.test(s) ? 'neutral' : s === stages()[0] ? 'neutral' : 'info';
@@ -7419,7 +7459,7 @@ if (typeof window !== 'undefined') (() => {
   const syncNextDue = v => paintDate('pNextDue', v, { empty: 'No date' });   // overdue is red, today amber, like a task's due date
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
-    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), modes()]); if (!force && sig === pSig) return; pSig = sig;
+    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), personProjects(p).map(x => [x.pr.id, x.tasks.map(t => [t.id, t.updated])]), modes()]); if (!force && sig === pSig) return; pSig = sig;
     const keep = id => document.activeElement === $(id);
     { const a = ui.avatar(p.name || '?', { size: 'lg' }); a.id = 'pAvatar'; $('pAvatar').replaceWith(a); }
     if (!keep('pName')) $('pName').value = p.name; autosize($('pName'));
@@ -7445,7 +7485,7 @@ if (typeof window !== 'undefined') (() => {
       renderLinkBox($('pFiles'), files, l => mutate(n => { const ci = ownInfo(n, co); if (ci) ci.links = (ci.links || []).filter(y => y.url !== l.url); }, `Files: ${co}`), true, 'company file/folder resource');
       setCount('pFileCount', files.length); $('pFilesSec').classList.toggle('is-empty', !files.length);
     }
-    renderTouches(p); renderPersonTasks(p);
+    renderTouches(p); renderPersonTasks(p); renderPersonProjects(p);
     renderHistory($('pHist'), $('pHistCount'), p.history);
     $('pCreated').textContent = p.created ? `Added ${new Date(p.created).toLocaleDateString('en-GB')}${p.createdBy ? ' by ' + p.createdBy : ''}` : '';
   }
@@ -7500,13 +7540,30 @@ if (typeof window !== 'undefined') (() => {
     p.comments.slice().reverse().forEach(cm => {
       const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
       head.append(elI('span', 'tchan', ic, label), el('b', null, cm.by || '?'), el('time', null, ago2(cm.at)));
-      head.lastChild.title = cm.at;
+      head.lastChild.title = cm.at; head.append(touchSource(p, cm, true));
       if (cm.draft) { head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
         const s = ui.button({ label: 'Mark sent', variant: 'primary', size: 'sm', onClick: () => markSent(p.id, cm.id) });
         const cp = roKeep(ui.button({ label: 'Copy', icon: 'clipboard-copy', variant: 'ghost', size: 'sm', onClick: () => copyText(cm.text, 'Draft copied. Paste it into ' + label + '.') }));
         const acts = el('div', 'cmacts'); acts.append(s, cp); head.append(acts); }
       const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); box.append(row);
     });
+  }
+  // A log entry's source link (card #290, kit v88): `url`, the original message or thread. It opens in a new tab;
+  // in the person record, an entry without one offers to add it.
+  const touchUrl = cm => typeof cm.url === 'string' && /^https?:\/\/[^\s/]+\S*$/i.test(cm.url) && cm.url.length <= 2000 ? cm.url : '';
+  function touchSource(p, cm, editable) {
+    const url = touchUrl(cm), box = el('span', 'tsrc');
+    if (url) { let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
+      const a = elI('a', 'tsrclink', 'arrow-up-right', /mail\.google\./.test(host) ? 'Open in Gmail' : 'Open original'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.title = `Open the original in a new tab: ${host || url}`; box.append(roKeep(a)); }
+    if (editable && !ro) box.append(ui.iconButton({ icon: url ? 'pencil' : 'link', label: url ? 'Change source link' : 'Add source link (for example the Gmail thread)', size: 'sm', onClick: () => setTouchUrl(p.id, cm.id, url) }));
+    return box;
+  }
+  async function setTouchUrl(pid, cmid, cur) {
+    const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the link to the original, such as the Gmail thread. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
+    if (v === null) return; const url = v.trim();
+    if (url && !touchUrl({ url })) { toast('Enter one link starting with https://', true); return; }
+    pedit(pid, x => { const c = x.comments.find(y => y.id === cmid); if (!c) return; if (url) c.url = url; else delete c.url; }, `Source link: ${nameOf(pid)}`);
   }
   async function markSent(pid, cmid) {
     const p = state.contacts.find(x => x.id === pid); if (!p) return;
@@ -7527,6 +7584,32 @@ if (typeof window !== 'undefined') (() => {
     const sec = $('pTasksSec'); sec.hidden = !modes().includes('tasks'); if (sec.hidden) return;
     const box = $('pTasks'), list = state.tasks.filter(t => t.contact === p.id); box.textContent = '';
     list.forEach(t => box.append(drawerTaskRow(t))); setCount('pTaskCount', list.length); sec.classList.toggle('is-empty', !list.length);
+  }
+  // Project activity (card #290): each project this person is in (their email is on it, or one of its tasks names them),
+  // with the newest comments and changes on its tasks
+  const PROJ_ACT_MAX = 3;
+  function personProjects(p) {
+    const mine = new Set((p.emails || []).map(x => String(x.value || '').toLowerCase()).filter(Boolean));
+    const byProject = new Map(); state.tasks.forEach(t => { if (t.project) { if (!byProject.has(t.project)) byProject.set(t.project, []); byProject.get(t.project).push(t); } });   // one pass, not one per project
+    return projectsOf().filter(pr => pr && pr.id).map(pr => ({ pr, tasks: byProject.get(pr.id) || [] }))
+      .filter(({ pr, tasks }) => (pr.people || []).some(e => mine.has(String(e).toLowerCase())) || tasks.some(t => t.contact === p.id));
+  }
+  function projectEvents(tasks) {   // newest first: comments and history lines on the project's tasks
+    return tasks.flatMap(t => [...(t.comments || []).map(c => ({ t, at: c.at || '', by: c.by, text: c.text, kind: 'comment' })), ...(t.history || []).map(h => ({ t, at: h.at || '', by: h.by, text: h.text, kind: 'change' }))])
+      .filter(e => typeof e.at === 'string' && e.at && typeof e.text === 'string').sort((a, b) => b.at.localeCompare(a.at));
+  }
+  function renderPersonProjects(p) {
+    const box = $('pProjAct'), list = personProjects(p); box.textContent = ''; $('pProjActSec').hidden = !list.length; setCount('pProjActCount', list.length); if (!list.length) return;
+    list.sort((a, b) => projectStatusOrder(a.pr.status) - projectStatusOrder(b.pr.status) || a.pr.name.localeCompare(b.pr.name)).forEach(({ pr, tasks }) => {
+      const grp = el('div', 'projact'); grp.append(projectNavRow(pr, () => openProject(pr.id)));
+      const evs = projectEvents(tasks).slice(0, PROJ_ACT_MAX), ul = el('div', 'projact__list');
+      evs.forEach(e => { const b = el('button', 'projact__ev'); b.type = 'button'; b.title = `Open #${e.t.num}`;
+        const txt = e.text.replace(/\s+/g, ' ').trim();
+        b.append(el('span', 'numchip', '#' + e.t.num), el('span', 'projact__text', `${e.kind === 'comment' ? (e.by || '?') + ': ' : ''}${txt.length > 140 ? txt.slice(0, 139) + '…' : txt}`), el('time', 'muted', ago2(e.at)));
+        b.lastChild.title = e.at; b.onclick = () => openCard(e.t.id); ul.append(roKeep(b)); });
+      if (!evs.length) ul.append(dempty(tasks.length ? 'No activity on its tasks yet.' : 'No tasks in this project yet.'));
+      grp.append(ul); box.append(grp);
+    });
   }
   function addPersonTask(v) {
     const p = contactNow(); if (!p) return false;
@@ -7569,7 +7652,7 @@ if (typeof window !== 'undefined') (() => {
   // the ⋯ menu: copy for AI, open the client, delete
   function openPersonMenu(anchor) {
     const p = contactNow(); if (!p) return;
-    const items = [{ label: 'Copy for AI', icon: 'bot', onSelect: copyPerson }];
+    const items = [{ label: 'Copy for AI', icon: 'bot', onSelect: copyPerson }, { label: 'Copy link', icon: 'link', onSelect: () => copyRecordLink('person', p.id, p.name || 'this person') }];
     if (p.company) items.push({ label: `Open client ${p.company}`, icon: 'building-2', onSelect: openPersonClient });
     if (!ro && !memberOf(p)) items.push({ separator: true }, { label: 'Delete person', icon: 'trash-2', danger: true, onSelect: deletePerson });
     ui.menu(anchor, items, { label: `Actions for ${p.name || 'this person'}` });

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v88: CRM gaps after Companies (private-tasks card #290). Companies gets a **Sort** menu (stage, recently
+contacted, recently updated, name) and a last-contact filter (contacted in 30 days, no contact in 30+ days, never
+contacted), remembered per viewer and board. A company, person or project record has its own address
+(`#company=<name>`, `#person=<id>`, `#project=<id>`): opening the record puts it in the address bar, opening the link
+opens it, and each record's ⋯ menu has **Copy link**. A contact log entry may carry `url`, the link to the original
+message or thread: `keeptrack.py touch --url`, the new `touch-url` command, and the page's link button set it; the person
+record and the company's Activity show **Open in Gmail** / **Open original** in a new tab (http(s) only), and `person`
+prints it. The `keeptrack-email` skill passes the Gmail thread link. A person's record shows **Project activity**: for
+each project they are in (their email is on it, or a task names them), the newest comments and changes on its tasks.
+No migration.
+
 Kit v87: an archive file has its own size limit (private-tasks card #284). `doctor` failed with `FILE_SIZE` as soon as
 `archive/<year>.json` passed 200 KB, and relay's `ci_checks.py` (which runs doctor) failed on every PR. An
 archive year file now has its own limit: `doctor` warns (`ARCHIVE_SIZE`) from 700 KB and fails (`FILE_SIZE`) above

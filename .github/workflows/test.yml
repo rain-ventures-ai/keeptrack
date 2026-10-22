@@ -60,6 +60,9 @@ jobs:
       - name: Person, client and project drawers
         working-directory: tests/browser
         run: node crm-drawers.test.js
+      - name: CRM links (Companies sort and filter, record deep links, source links, project activity)
+        working-directory: tests/browser
+        run: node crm-links.test.js
       - name: Main views on the shared components (tabs, priority/due pills, avatars, popovers)
         working-directory: tests/browser
         run: node views.test.js
