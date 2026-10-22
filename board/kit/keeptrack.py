@@ -4033,12 +4033,37 @@ def strip_image_metadata(blob, ext):
         out, i = bytearray(blob[:8]), 8
         import zlib
         inflater, decoded = zlib.decompressobj(), 0
+        raster = None
+        rows, row_bytes, row_left, row_count = [], 0, 0, 0
+        chunk_count = 0
         fixed = {b"IHDR": 13, b"IEND": 0, b"gAMA": 4, b"cHRM": 32, b"sRGB": 1, b"pHYs": 9}
         while i + 12 <= len(blob):
+            chunk_count += 1
+            if chunk_count > 4096:
+                raise ValueError("too many PNG chunks")
             n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
             if i + 12 + n > len(blob):
                 raise ValueError("broken PNG")
+            if kind == b"IHDR":
+                if raster is not None or n != 13:
+                    raise ValueError("broken PNG header")
+                width, height = int.from_bytes(blob[i + 8:i + 12], "big"), int.from_bytes(blob[i + 12:i + 16], "big")
+                depth, colour, compression, filtering, interlace = blob[i + 16:i + 21]
+                channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(colour)
+                legal = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
+                if not width or not height or depth not in legal.get(colour, ()) or compression or filtering or interlace not in (0, 1):
+                    raise ValueError("broken PNG header")
+                passes = ((0, 0, 1, 1),) if not interlace else ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+                for x, y, dx, dy in passes:
+                    w, h = max(0, (width - x + dx - 1) // dx), max(0, (height - y + dy - 1) // dy)
+                    if w and h:
+                        rows.append((h, 1 + (w * channels * depth + 7) // 8))
+                raster = sum(h * size for h, size in rows)
+                if raster > 64 * 1024 * 1024:
+                    raise ValueError("PNG raster exceeds 64 MB limit")
             if kind == b"IDAT":
+                if raster is None:
+                    raise ValueError("PNG pixels before header")
                 # Validate the entire stream without retaining decompressed pixels. No ignored tails,
                 # incomplete streams or expansion beyond the fixed working budget may be saved.
                 data = blob[i + 8:i + 8 + n]
@@ -4048,6 +4073,20 @@ def strip_image_metadata(blob, ext):
                             raise ValueError("PNG data after zlib stream")
                         pixels = inflater.decompress(data, min(65536, 64 * 1024 * 1024 + 1 - decoded))
                         decoded += len(pixels)
+                        if decoded > raster:
+                            raise ValueError("PNG data beyond declared raster")
+                        offset = 0
+                        while offset < len(pixels):
+                            if not row_left:
+                                if not row_count:
+                                    row_count, row_bytes = rows.pop(0)
+                                if pixels[offset] > 4:
+                                    raise ValueError("invalid PNG scanline filter")
+                                row_count -= 1
+                                row_left = row_bytes
+                            take = min(row_left, len(pixels) - offset)
+                            offset += take
+                            row_left -= take
                         if decoded > 64 * 1024 * 1024 or inflater.unused_data:
                             raise ValueError("PNG pixel stream exceeds limit or has trailing data")
                         data = inflater.unconsumed_tail
@@ -4073,7 +4112,7 @@ def strip_image_metadata(blob, ext):
                 raise ValueError("unknown critical PNG chunk")
             i += 12 + n
             if kind == b"IEND":
-                if not inflater.eof:
+                if not inflater.eof or decoded != raster:
                     raise ValueError("incomplete PNG pixel stream")
                 return bytes(out)
         raise ValueError("broken PNG")

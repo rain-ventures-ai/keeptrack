@@ -99,6 +99,7 @@ module.exports = async function imageReview() {
   const still = await strip(Buffer.concat([pngHead, ch('IDAT', Buffer.from('pixels-acTL-still')), ch('IEND', Buffer.alloc(0))]), 'image/png');
   assert.equal(still.animated, false, 'acTL in compressed pixel bytes does not mean animation');
   const stillChunks = [ch('IHDR', ihdr), ch('IDAT', Buffer.from('pixels'))];
+  assert.equal(await context.strip(new File([Buffer.concat([pngHead, ch('IHDR', ihdr), ...Array(4097).fill(ch('IDAT', Buffer.alloc(0))), ch('IEND', Buffer.alloc(0))])], 'many.png', { type: 'image/png' })), null, 'PNG chunk budget is checked before retaining views');
   const orphaned = await strip(Buffer.concat([pngHead, ...stillChunks, ch('fdAT', Buffer.from('HIDDEN-AUTHOR')), ch('IEND', Buffer.alloc(0))]), 'image/png');
   assert.equal(orphaned.animated, false); assert.equal(orphaned.bytes.includes('HIDDEN-AUTHOR'), false, 'ignored still-image fdAT data is dropped');
   for (const [kind, size] of [['cICP',4], ['mDCV',24], ['cLLI',8]]) {

@@ -115,6 +115,30 @@ class ImageReview(unittest.TestCase):
         split = head + chunk(b'IDAT', stream[:3]) + chunk(b'IDAT', stream[3:]) + chunk(b'IEND', b'')
         self.assertEqual(split, keeptrack.strip_image_metadata(split, 'png'))
 
+    def test_png_validates_exact_scanlines_including_adam7_and_packed_samples(self):
+        import struct
+        import zlib
+        def chunk(kind, body):
+            return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+        def image(raw, width=1, height=1, depth=8, colour=2, interlace=0):
+            return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, depth, colour, 0, 0, interlace))
+                    + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+        for raw in (b'\0\x11\x22\x33PRIVATE', b'\0\x11', b'\x05\x11\x22\x33'):
+            with self.assertRaises(ValueError):
+                keeptrack.strip_image_metadata(image(raw), 'png')
+        # An 8x8 one-bit greyscale Adam7 image: seven passes have 1,1,1,2,2,4,4 rows,
+        # each containing a filter byte and a single packed sample byte.
+        adam7 = image(b'\0\x55' * 15, 8, 8, 1, 0, 1)
+        self.assertEqual(adam7, keeptrack.strip_image_metadata(adam7, 'png'))
+        for delta in (-1, 1):
+            with self.assertRaises(ValueError):
+                keeptrack.strip_image_metadata(image(b'\0\x55' * (15 + delta), 8, 8, 1, 0, 1), 'png')
+        tiny = image(b'\0\x80', 1, 1, 1, 0)
+        self.assertEqual(tiny, keeptrack.strip_image_metadata(tiny, 'png'))
+        many = tiny[:-12] + chunk(b'IDAT', b'') * 4097 + tiny[-12:]
+        with self.assertRaises(ValueError):
+            keeptrack.strip_image_metadata(many, 'png')
+
     def test_gif_graphics_control_targets_removed_text_not_following_image(self):
         head = bytes.fromhex('47494638396101000100800000000000ffffff')
         frame = bytes.fromhex('2c0000000001000100000202440100')

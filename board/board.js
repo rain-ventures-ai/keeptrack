@@ -2743,15 +2743,16 @@ if (typeof window !== 'undefined') (() => {
     try {
       if (type === 'image/gif') { const blob = await gifWithoutMetadata(file); return blob ? { blob, animated, profiled, stillOnly } : null; }
       if (type === 'image/png') {
-        const parts = [b.subarray(0, 8)], posterParts = [b.subarray(0, 8)], keep = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'gAMA', 'cHRM', 'sRGB', 'pHYs', 'sBIT', 'bKGD']);
+        const parts = [b.subarray(0, 8)], keep = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'gAMA', 'cHRM', 'sRGB', 'pHYs', 'sBIT', 'bKGD']);
         const fixed = { IHDR: 13, IEND: 0, gAMA: 4, cHRM: 32, sRGB: 1, pHYs: 9 };
-        let i = 8;
+        let i = 8, chunkCount = 0, posterParts = null;
         while (i + 12 <= b.length) {
+          if (++chunkCount > 4096) return null;
           const n = v.getUint32(i), end = i + 12 + n, name = word(i + 4, 4); if (end > b.length) return null;
           // APNG is intentionally saved as a still image. Discard every animation payload,
           // including syntactically valid but undecodable fdAT, and force a browser pixel export.
-          if (['acTL', 'fcTL', 'fdAT'].includes(name)) { stillOnly = true; i = end; continue; }
-          posterParts.push(b.subarray(i, end));
+          if (['acTL', 'fcTL', 'fdAT'].includes(name)) { if (!posterParts) posterParts = [b.subarray(0, i)]; stillOnly = true; i = end; continue; }
+          if (posterParts) posterParts.push(b.subarray(i, end));
           if (name === 'eXIf') { const turn = orientation(b.subarray(i + 8, end - 4)); if (turn !== 1) parts.push(chunk('eXIf', tiff(turn))); }
           else if (keep.has(name)) {
             if (name in fixed && n !== fixed[name]) return null;
