@@ -42,14 +42,14 @@ class Github {
     if (p.startsWith('/contents/README.md')) return json({ message: 'Not Found' }, 404);
     if (p.startsWith('/contents/board/tasks.json') && method === 'GET') return json({ sha: this.sha('tasks.json'), size: Buffer.byteLength(this.files['tasks.json']), encoding: 'base64', content: Buffer.from(this.files['tasks.json']).toString('base64') });
     if (p.startsWith('/contents/board/') && method === 'GET') { const rel = p.slice('/contents/board/'.length); return this.files[rel] ? json({ sha: this.sha(rel), encoding: 'base64', content: Buffer.from(this.files[rel]).toString('base64') }) : json({ message: 'Not Found' }, 404); }
-    if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON(); this.files[rel] = Buffer.from(b.content, 'base64').toString(); this.head = 'head-' + ++this.n; return json({ content: { sha: this.sha(rel) }, commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
+    if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON(); if (b.sha && b.sha!==this.sha(rel)) { this.staleWrites=(this.staleWrites||0)+1; return json({message:'sha does not match'},409); } this.files[rel] = Buffer.from(b.content, 'base64').toString(); this.head = 'head-' + ++this.n; return json({ content: { sha: this.sha(rel) }, commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
     if (p.startsWith('/contents/board/') && method === 'DELETE') { delete this.files[p.slice('/contents/board/'.length)]; this.head = 'head-' + ++this.n; return json({ commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
     if (p === '/git/ref/heads/main' && method === 'GET') return json({ object: { sha: this.head } });
     if (p.startsWith('/git/commits/') && method === 'GET') return json({ tree: { sha: 'root-' + this.n } });
     if (p.startsWith('/git/trees/root-') && method === 'GET') return json({ tree: [{ path: 'board', type: 'tree', sha: 'board-' + this.n }] });
     if (p.startsWith('/git/trees/board-') && method === 'GET') return json({ truncated: false, tree: Object.entries(this.files).map(([f, c]) => ({ path: f, type: 'blob', sha: this.sha(f), size: Buffer.byteLength(c) })) });
     if (p.startsWith('/git/blobs/') && method === 'GET') { const sha = p.split('/').pop(), rel = Object.keys(this.files).find(x => this.sha(x) === sha); return json({ encoding: 'base64', content: Buffer.from(this.files[rel]).toString('base64') }); }
-    if (p === '/git/blobs' && method === 'POST') { const sha = 'new-blob-' + ++this.n; this.blobs[sha] = req.postDataJSON().content; return json({ sha }); }
+    if (p === '/git/blobs' && method === 'POST') { const content=req.postDataJSON().content, sha=crypto.createHash('sha1').update(content).digest('hex'); this.n++; this.blobs[sha]=content; return json({ sha }); }
     if (p === '/git/trees' && method === 'POST') { this.pending = req.postDataJSON().tree; return json({ sha: 'new-tree-' + ++this.n }); }
     if (p === '/git/commits' && method === 'POST') return json({ sha: 'new-commit-' + ++this.n });
     if (p === '/git/refs/heads/main' && method === 'PATCH') { for (const e of this.pending || []) { const rel = e.path.replace(/^board\//, ''); if (e.sha === null) delete this.files[rel]; else this.files[rel] = this.blobs[e.sha]; } this.head = req.postDataJSON().sha; return json({ object: { sha: this.head } }); }
@@ -68,12 +68,12 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
   const browser = await chromium.launch({ headless: true });
   try {
     // A packable oversized year is committed atomically with the live-card removal, for both layouts.
-    for (const split of [true, false]) {
+    for (const [split,minKit] of [[true,null],[false,'103'],[true,102.5],[false,true],[true,false],[false,0],[true,-1],[false,101]]) {
       const api = new Github(), year = String(new Date().getFullYear());
       api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, custom:{keep:true},
         tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{t_two:[{at:stampForTest(),text:'older evidence'}]} });
       const done = api.card('t_two'); done.details='x'.repeat(350000); api.files['cards/t_two.json']=text(done);
-      const meta=JSON.parse(api.files['tasks.json']); meta.archive={files:{[year]:{tasks:2,contacts:0}}};
+      const meta=JSON.parse(api.files['tasks.json']); meta.settings.min_kit=minKit; meta.archive={files:{[year]:{tasks:2,contacts:0}}};
       if (!split) { delete meta.layout; meta.version=3; meta.tasks=Object.keys(api.files).filter(p=>p.startsWith('cards/')).map(p=>JSON.parse(api.files[p])); meta.contacts=[]; }
       api.files['tasks.json']=text(meta);
       if (!split) for (const key of Object.keys(api.files)) if (/^(cards|people)\//.test(key)) delete api.files[key];
@@ -98,6 +98,14 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       await page.waitForFunction(()=>document.querySelector('.col[data-col="done"]')?.textContent.includes('Finished work'));
       const restored=split?api.card('t_two'):JSON.parse(api.files['tasks.json']).tasks.find(x=>x.id==='t_two');
       assert.equal(restored.details,'x'.repeat(350000)); assert.ok(restored.history.some(x=>x.text==='older evidence'));
+      if (!split) {
+        await page.locator('.col[data-col="todo"] .card',{hasText:'Open work'}).dblclick();
+        await page.locator('#cTitle').fill('Edited after atomic restore');
+        const edited=page.waitForResponse(r=>r.request().method()==='PUT' && r.url().includes('/contents/board/tasks.json')); await page.locator('#cTitle').blur(); await edited;
+        await page.waitForFunction(()=>document.querySelector('#status')?.textContent.includes('Saved'));
+        assert.equal(JSON.parse(api.files['tasks.json']).tasks.find(x=>x.id==='t_one').title,'Edited after atomic restore');
+        assert.equal(api.staleWrites||0,0,'the first ordinary edit uses the new legacy root SHA without retry');
+      }
       assert.deepEqual(errors,[]); await page.close();
     }
     for (const [kb, held] of [[905, true], [710, false]]) {

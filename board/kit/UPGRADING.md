@@ -30,10 +30,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 - The new keeptrack-docs-home skill handles owner-chosen setup and authorised filing, reusing the existing keeptrack root. Hosted setting changes require the human board owner; agent invalid_fence refusals must not be bypassed. Local paths remain text and need a session with access on that machine.
 
 ### v102 (schema 4)
-- Archive files are indexed without loading their bodies. Archive views, archived lookups, proposals and doctor hydrate them on demand. Old blob-cache entries absent from the captured repository tree are pruned; other repositories and non-SHA cache entries are retained.
+- Archive files are indexed without loading their bodies. Archive views, archived lookups, proposals and doctor hydrate them on demand. Old blob-cache entries absent from the captured repository tree are pruned; other repositories and non-SHA cache entries are retained. Blob caches are scoped by repository, so switching branches may prune blobs used only by another branch; returning to it fetches those immutable blobs again.
 - Oversized GitHub year files are packed into `archive/YYYY.json` and `archive/YYYY-N.json` parts, with the root index and live-record changes saved atomically. Existing part names, records, history and unknown envelope fields are retained. A single record or envelope too large to pack is held safely rather than discarded.
 - The first actual part-file write sets `settings.min_kit` to 102. Upgrade every writer to v102 before using sharding; older writers are then refused. Year-only archives remain compatible and are not migrated on upgrade or read.
-- Hosted archives retain year-only storage. A compatible server can provide metadata-only revisions; older servers fall back to full reads. GitHub part files must not be uploaded through the hosted year-file API.
+- Hosted archives retain year-only storage. A compatible server can provide metadata-only revisions; older servers fall back to full reads. GitHub part files must not be uploaded through the hosted year-file API. A hosted index containing unsupported part paths is refused on demand, rather than skipping parts or dropping their history.
 - Run `kit-update` only. Check normal board opening does not fetch archive bodies; open Archive to load them. No real board migration or manual cache deletion is required.
 
 ### v101 (schema 4)
