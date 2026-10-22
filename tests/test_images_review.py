@@ -45,7 +45,7 @@ class ImageReview(unittest.TestCase):
         self.assertIn(b'JFIF\x00\x01\x02\x00\x00\x01\x00\x01\x00\x00', out)
         self.assertIn(segment(0xee, adobe[:12]), out)
 
-    def test_png_preserves_pixels_and_animation_but_drops_unknown_or_profile_metadata(self):
+    def test_png_preserves_default_pixels_but_drops_animation_and_private_metadata(self):
         import struct
         import zlib
         def chunk(kind, body):
@@ -57,7 +57,7 @@ class ImageReview(unittest.TestCase):
                   + chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33')) + chunk(b'fcTL', control(1))
                   + chunk(b'fdAT', struct.pack('>I', 2) + zlib.compress(b'\0\x33\x22\x11')) + chunk(b'IEND', b''))
         private = b''.join(chunk(kind, b'AUTHOR') for kind in (b'vpAg', b'caBX', b'iCCP', b'tIME', b'tEXt'))
-        self.assertEqual(head + frames, keeptrack.strip_image_metadata(head + private + frames, 'png'))
+        self.assertEqual(head + ihdr + chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33')) + chunk(b'IEND', b''), keeptrack.strip_image_metadata(head + private + frames, 'png'))
         with self.assertRaises(ValueError):
             keeptrack.strip_image_metadata(head + chunk(b'AUTH', b'AUTHOR') + frames, 'png')
 
@@ -82,24 +82,32 @@ class ImageReview(unittest.TestCase):
         frame = b'\x2c\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0'
         self.assertEqual(head + loop + frame + b'\x3b', keeptrack.strip_image_metadata(head + unknown + loop + frame + b'\x3b', 'gif'))
 
-    def test_png_orphan_animation_payload_is_removed_and_invalid_apng_is_rejected(self):
+    def test_apng_streams_are_always_dropped_including_sequenced_plaintext_or_compressed_tails(self):
         import struct
         import zlib
         def chunk(kind, body):
             return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
         head = b'\x89PNG\r\n\x1a\n'
         ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
-        pixels = chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33'))
+        raw = b'\0\x11\x22\x33'
+        pixels = chunk(b'IDAT', zlib.compress(raw))
         end = chunk(b'IEND', b'')
-        secret = chunk(b'fdAT', b'HIDDEN-AUTHOR') + chunk(b'fcTL', b'PRIVATE-LOCATION')
-        self.assertEqual(head + ihdr + pixels + end, keeptrack.strip_image_metadata(head + ihdr + pixels + secret + end, 'png'))
-        control = lambda seq, w=1: struct.pack('>IIIIIHHBB', seq, w, 1, 0, 0, 1, 10, 0, 0)
-        animation = chunk(b'acTL', struct.pack('>II', 1, 0))
-        for malformed in (
-            head + ihdr + animation + chunk(b'fcTL', control(1)) + pixels + end,
-            head + ihdr + animation + chunk(b'fcTL', control(0, 2)) + pixels + end,
-            head + ihdr + animation + pixels + chunk(b'fdAT', b'SECRET') + end,
-            head + ihdr + animation + chunk(b'fcTL', control(0)) + end,
-        ):
+        control = lambda seq: struct.pack('>IIIIIHHBB', seq, 1, 1, 0, 0, 1, 10, 0, 0)
+        orphan = chunk(b'fdAT', b'HIDDEN-AUTHOR') + chunk(b'fcTL', b'PRIVATE-LOCATION')
+        self.assertEqual(head + ihdr + pixels + end, keeptrack.strip_image_metadata(head + ihdr + pixels + orphan + end, 'png'))
+        for stream in (b'PRIVATE-NON-ZLIB-FRAME', zlib.compress(raw) + b'PRIVATE-TRAILER'):
+            animation = (chunk(b'acTL', struct.pack('>II', 2, 0)) + chunk(b'fcTL', control(0))
+                         + pixels + chunk(b'fcTL', control(1)) + chunk(b'fdAT', struct.pack('>I', 2) + stream))
+            out = keeptrack.strip_image_metadata(head + ihdr + animation + end, 'png')
+            self.assertEqual(head + ihdr + pixels + end, out)
+            self.assertNotIn(b'PRIVATE', out)
+
+    def test_webp_animation_requires_control_and_nonempty_pixel_frames(self):
+        def chunk(kind, body):
+            return kind + len(body).to_bytes(4, 'little') + body + (b'\0' if len(body) % 2 else b'')
+        def riff(body):
+            return b'RIFF' + (len(body) + 4).to_bytes(4, 'little') + b'WEBP' + body
+        header = chunk(b'VP8X', bytes([2]) + b'\0' * 9)
+        for body in (header, header + chunk(b'ANIM', b'\0' * 6), header + chunk(b'ANIM', b'\0' * 6) + chunk(b'ANMF', b'\0' * 16)):
             with self.assertRaises(ValueError):
-                keeptrack.strip_image_metadata(malformed, 'png')
+                keeptrack.strip_image_metadata(riff(body), 'webp')

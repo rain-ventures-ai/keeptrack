@@ -3943,7 +3943,8 @@ def orientation_only_tiff(v):
 def strip_image_metadata(blob, ext):
     """The image without its metadata (EXIF: GPS position, device, owner; text chunks; XMP), so a photo or screenshot
     never commits that to the board repo (AGENTS rule 7). Pixels are untouched; a photo's EXIF Orientation is kept (alone),
-    so it still shows the right way up. ICC profiles are removed too, which may change colours.
+    so it still shows the right way up. APNG is saved as a still image.
+    ICC profiles are removed too, which may change colours.
     Raises ValueError on a broken file."""
     # Retain decoding data by format, rather than guessing every possible metadata container.
     # ICC profiles can carry names/device details: drop them too (CLI colours may change).
@@ -4001,57 +4002,21 @@ def strip_image_metadata(blob, ext):
         raise ValueError("broken JPEG")
     if ext == "png":
         out, i = bytearray(blob[:8]), 8
-        canvas, pixels, declared, frame_count, sequence, frame = None, False, 0, 0, 0, None
-        fixed = {b"IHDR": 13, b"IEND": 0, b"gAMA": 4, b"cHRM": 32, b"sRGB": 1, b"pHYs": 9, b"acTL": 8, b"fcTL": 26}
+        fixed = {b"IHDR": 13, b"IEND": 0, b"gAMA": 4, b"cHRM": 32, b"sRGB": 1, b"pHYs": 9}
         while i + 12 <= len(blob):
             n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
             if i + 12 + n > len(blob):
                 raise ValueError("broken PNG")
-            if kind == b"IHDR" and n == 13:
-                canvas = (int.from_bytes(blob[i + 8:i + 12], "big"), int.from_bytes(blob[i + 12:i + 16], "big"))
-            if kind == b"acTL":
-                count = int.from_bytes(blob[i + 8:i + 12], "big")
-                if pixels or declared or n != 8 or not canvas or not count:
-                    raise ValueError("broken APNG")
-                declared = count
-            elif kind == b"fcTL":
-                if not declared:
-                    i += 12 + n; continue
-                seq = int.from_bytes(blob[i + 8:i + 12], "big")
-                if n != 26 or (frame and not frame["data"]) or seq != sequence:
-                    raise ValueError("broken APNG")
-                sequence += 1
-                w, h, x, y = (int.from_bytes(blob[j:j + 4], "big") for j in (i + 12, i + 16, i + 20, i + 24))
-                if (not w or not h or x + w > canvas[0] or y + h > canvas[1]
-                        or blob[i + 32] > 2 or blob[i + 33] > 1
-                        or (not pixels and (x or y or w != canvas[0] or h != canvas[1]))):
-                    raise ValueError("broken APNG")
-                frame_count += 1
-                if frame_count > declared:
-                    raise ValueError("broken APNG")
-                frame = {"default": not pixels, "data": False}
-            elif kind == b"fdAT":
-                if not declared:
-                    i += 12 + n; continue
-                seq = int.from_bytes(blob[i + 8:i + 12], "big")
-                if not pixels or not frame or frame["default"] or n < 4 or seq != sequence:
-                    raise ValueError("broken APNG")
-                sequence += 1; frame["data"] |= n > 4
-            elif kind == b"IDAT":
-                if declared and frame:
-                    if not frame["default"]:
-                        raise ValueError("broken APNG")
-                    frame["data"] |= n > 0
-                pixels = True
-            elif kind == b"IEND" and declared:
-                if not pixels or not frame or not frame["data"] or frame_count != declared:
-                    raise ValueError("broken APNG")
+            # APNG is saved as a still image: discard all animation streams and controls,
+            # not just malformed relationships. The default PNG IDAT data remains decodable.
+            if kind in (b"acTL", b"fcTL", b"fdAT"):
+                i += 12 + n; continue
             if kind == b"eXIf":
                 turn = tiff_orientation(blob[i + 8:i + 8 + n])
                 if turn != 1:
                     d = orientation_only_tiff(turn)
                     out += len(d).to_bytes(4, "big") + b"eXIf" + d + (__import__("zlib").crc32(b"eXIf" + d) & 0xFFFFFFFF).to_bytes(4, "big")
-            elif kind in (b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"pHYs", b"sBIT", b"bKGD", b"acTL", b"fcTL", b"fdAT"):
+            elif kind in (b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"pHYs", b"sBIT", b"bKGD"):
                 if kind in fixed and n != fixed[kind]:
                     raise ValueError("broken PNG")
                 if ((kind == b"PLTE" and (n > 768 or n % 3)) or (kind == b"tRNS" and n > 256)
@@ -4067,6 +4032,7 @@ def strip_image_metadata(blob, ext):
     if ext == "webp":
         def chunks(start, end, frame=False):
             out, i, vp8x = bytearray(), start, None
+            animation, control, frames = False, False, 0
             while i + 8 <= end:
                 kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
                 if i + size > end:
@@ -4077,16 +4043,26 @@ def strip_image_metadata(blob, ext):
                 elif not frame and kind == b"VP8X":
                     if n != 10:
                         raise ValueError("broken WebP")
+                    animation = bool(body[0] & 2)
                     chunk = bytes([body[0] & 0x12]) + b"\x00\x00\x00" + body[4:]
                     vp8x = len(out)
                 elif not frame and kind == b"ANIM":
-                    if n != 6:
+                    if n != 6 or not animation or control:
                         raise ValueError("broken WebP")
-                    chunk = body
+                    control = True; chunk = body
                 elif not frame and kind == b"ANMF":
-                    if n < 16:
+                    if n < 16 or not control:
                         raise ValueError("broken WebP")
-                    chunk = body[:16] + chunks(i + 24, i + 8 + n, frame=True)
+                    frames += 1
+                    inner = chunks(i + 24, i + 8 + n, frame=True)
+                    j, pixels = 0, False
+                    while j + 8 <= len(inner):
+                        length = int.from_bytes(inner[j + 4:j + 8], "little")
+                        pixels |= inner[j:j + 4] in (b"VP8 ", b"VP8L") and length > 0
+                        j += 8 + length + (length & 1)
+                    if not pixels:
+                        raise ValueError("broken WebP")
+                    chunk = body[:16] + inner
                 elif not frame and kind == b"EXIF":
                     tiff = body[6:] if body.startswith(b"Exif\x00\x00") else body
                     turn = tiff_orientation(tiff)
@@ -4097,7 +4073,7 @@ def strip_image_metadata(blob, ext):
                 if chunk is not None:
                     out += kind + len(chunk).to_bytes(4, "little") + chunk + (b"\x00" if len(chunk) & 1 else b"")
                 i += size
-            if i != end:
+            if i != end or (not frame and animation != (control and frames > 0)):
                 raise ValueError("broken WebP")
             return bytes(out)
         end = int.from_bytes(blob[4:8], "little") + 8

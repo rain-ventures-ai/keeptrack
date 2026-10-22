@@ -19,7 +19,7 @@ module.exports = async function imageReview() {
     gh: async () => { requests++; return { ok: status === 200, status, headers: new Headers(status === 403 ? { 'x-ratelimit-remaining': '0' } : {}), text: async () => '', arrayBuffer: async () => new ArrayBuffer(8) }; }
   });
   const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
-  vm.runInContext(source.slice(source.indexOf('  const imgCache ='), source.indexOf('  function imgKind(')) + '\nthis.api = { assetBlobUrl, cacheImage, imageOwnerReady, disposeImageEntry, imgCache, imgOwned, imgFailures };', context);
+  vm.runInContext(source.slice(source.indexOf('  const imgCache ='), source.indexOf('  function imgKind(')) + '\nthis.api = { assetBlobUrl, cacheImage, cacheUploadedImage, imageOwnerReady, disposeImageEntry, imgCache, imgOwned, imgFailures };', context);
   const { api } = context;
   const load = async rel => { const owner = makeOwner(true); const url = await api.assetBlobUrl(rel, owner); owner.isConnected = false; api.imageOwnerReady(owner); await flush(); return url; };
   for (const code of [500, 429, 403, 404]) {
@@ -75,6 +75,18 @@ module.exports = async function imageReview() {
   await Promise.all(discarded); await flush();
   assert.equal(api.imgCache.size, 120); assert.equal(api.imgOwned.size, 0); assert.equal(revoked.length, 30);
 
+  api.imgCache.clear(); api.imgOwned.clear(); api.imgFailures.clear(); revoked = []; pending.length = 0;
+  const racingOwner = makeOwner(true), racing = api.assetBlobUrl('recreated.png', racingOwner);
+  assert.equal(pending.length, 1);
+  api.cacheUploadedImage('recreated.png', new Uint8Array([1,2,3]), 'image/png');
+  const uploadedUrl = api.imgCache.get('recreated.png').url;
+  for (let i = 0; i < 121; i++) api.cacheImage(`later${i}.png`, { settled: true, p: Promise.resolve(''), owners: new Map() });
+  assert.ok(!revoked.includes(uploadedUrl), 'supersession transfers pending leases before LRU eviction');
+  pending[0]({ ok: false, status: 404, headers: new Headers() });
+  assert.equal(await racing, uploadedUrl, 'older GET hands out uploaded bytes instead of a stale 404');
+  assert.equal(api.imgFailures.has('recreated.png'), false, 'superseded settlement cannot recreate failure history');
+  racingOwner.connected = false; api.imageOwnerReady(racingOwner);
+  assert.ok(revoked.includes(uploadedUrl), 'transferred lease releases normally after use');
   vm.runInContext(source.slice(source.indexOf('  async function redrawImage('), source.indexOf('  const b64 =')) + '\nthis.strip = strippedImage; this.redraw = redrawImage;', context);
   const ch = (kind, body, little = false) => { const b = Buffer.alloc(8 + body.length + (little ? body.length % 2 : 4)); b.write(kind, little ? 0 : 4); if (little) b.writeUInt32LE(body.length, 4); else b.writeUInt32BE(body.length, 0); body.copy(b, 8); return b; };
   const strip = async (b, type) => { const result = await context.strip(new File([b], 'image', { type })); assert.ok(result, `${type} parses`); return { ...result, bytes: Buffer.from(await result.blob.arrayBuffer()) }; };
@@ -83,7 +95,7 @@ module.exports = async function imageReview() {
   const control = sequence => { const b = Buffer.alloc(26); b.writeUInt32BE(sequence); b.writeUInt32BE(1, 4); b.writeUInt32BE(1, 8); return b; };
   const frames = Buffer.concat([ch('IHDR', ihdr), ch('acTL', Buffer.from([0,0,0,2,0,0,0,0])), ch('fcTL', control(0)), ch('IDAT', require('node:zlib').deflateSync(Buffer.from([0,17,34,51]))), ch('fcTL', control(1)), ch('fdAT', Buffer.concat([Buffer.from([0,0,0,2]), require('node:zlib').deflateSync(Buffer.from([0,51,34,17]))])), ch('IEND', Buffer.alloc(0))]);
   const apng = await strip(Buffer.concat([pngHead, ch('tEXt', Buffer.from('GPS')), ch('vpAg', Buffer.from('AUTHOR')), ch('iCCP', Buffer.from('PROFILE-AUTHOR')), frames]), 'image/png');
-  assert.deepEqual(apng.bytes, Buffer.concat([pngHead, frames])); assert.equal(apng.animated, true); assert.equal(apng.profiled, true);
+  assert.equal(apng.bytes.includes(Buffer.from('acTL')), false); assert.equal(apng.bytes.includes(Buffer.from('fdAT')), false); assert.equal(apng.animated, false); assert.equal(apng.stillOnly, true); assert.equal(apng.profiled, true);
   const still = await strip(Buffer.concat([pngHead, ch('IDAT', Buffer.from('pixels-acTL-still')), ch('IEND', Buffer.alloc(0))]), 'image/png');
   assert.equal(still.animated, false, 'acTL in compressed pixel bytes does not mean animation');
   const stillChunks = [ch('IHDR', ihdr), ch('IDAT', Buffer.from('pixels'))];
@@ -93,10 +105,10 @@ module.exports = async function imageReview() {
     const coloured = await strip(Buffer.concat([pngHead, ch('IHDR', ihdr), ch(kind, Buffer.alloc(size)), ch('IDAT', Buffer.from('pixels')), ch('IEND', Buffer.alloc(0))]), 'image/png');
     assert.equal(coloured.profiled, true, `${kind} removal requires canvas colour conversion`);
   }
-  for (const invalid of [
-    Buffer.concat([pngHead, ch('IHDR', ihdr), ch('acTL', Buffer.from([0,0,0,1,0,0,0,0])), ch('fcTL', control(1)), ch('IDAT', Buffer.from('pixels')), ch('IEND', Buffer.alloc(0))]),
-    Buffer.concat([pngHead, ch('IHDR', ihdr), ch('acTL', Buffer.from([0,0,0,1,0,0,0,0])), ch('IDAT', Buffer.from('pixels')), ch('fdAT', Buffer.from('SECRET')), ch('IEND', Buffer.alloc(0))])
-  ]) assert.equal(await context.strip(new File([invalid], 'bad.png', { type: 'image/png' })), null, 'invalid declared APNG is rejected');
+  const ignoredFrame = await strip(Buffer.concat([pngHead, ch('IHDR', ihdr), ch('acTL', Buffer.from([0,0,0,2,0,0,0,0])), ch('fcTL', control(0)),
+    ch('IDAT', require('node:zlib').deflateSync(Buffer.from([0,17,34,51]))), ch('fcTL', control(1)), ch('fdAT', Buffer.concat([Buffer.from([0,0,0,2]), Buffer.from('PRIVATE-NON-ZLIB-FRAME')])), ch('IEND', Buffer.alloc(0))]), 'image/png');
+  assert.equal(ignoredFrame.stillOnly, true); assert.equal(ignoredFrame.bytes.includes('PRIVATE'), false);
+  assert.equal(Buffer.from(await ignoredFrame.poster.arrayBuffer()).includes('PRIVATE'), false, 'canvas source also excludes every animation stream');
   const frame = Buffer.concat([Buffer.alloc(16), ch('VP8 ', Buffer.from('frame pixels'), true), ch('AUTH', Buffer.from('FRAME-AUTHOR'), true)]);
   const chunks = Buffer.concat([ch('VP8X', Buffer.from([46,0,0,0,0,0,0,0,0,0]), true), ch('ANIM', Buffer.alloc(6), true), ch('ANMF', frame, true), ch('ANMF', frame, true), ch('ICCP', Buffer.from('PROFILE-AUTHOR'), true), ch('AUTH', Buffer.from('AUTHOR'), true)]);
   const riff = chunks => { const h = Buffer.from('RIFF0000WEBP'); h.writeUInt32LE(chunks.length + 4, 4); return Buffer.concat([h, chunks]); };
@@ -107,6 +119,11 @@ module.exports = async function imageReview() {
     const simple = await strip(riff(ch(kind, Buffer.from([0x2f,1,2,3]), true)), 'image/webp');
     assert.equal(simple.animated, false, `${kind} payload bits are not VP8X flags`);
   }
+  for (const malformed of [
+    riff(ch('VP8X', Buffer.from([2,0,0,0,0,0,0,0,0,0]), true)),
+    riff(Buffer.concat([ch('VP8X', Buffer.from([2,0,0,0,0,0,0,0,0,0]), true), ch('ANIM', Buffer.alloc(6), true)])),
+    riff(Buffer.concat([ch('VP8X', Buffer.from([2,0,0,0,0,0,0,0,0,0]), true), ch('ANIM', Buffer.alloc(6), true), ch('ANMF', Buffer.alloc(16), true)]))
+  ]) assert.equal(await context.strip(new File([malformed], 'bad.webp', { type: 'image/webp' })), null, 'animation bit without control/pixel frames is refused');
   const seg = (m, body) => Buffer.concat([Buffer.from([255,m,0,body.length + 2]), body]);
   const scans = Buffer.concat([seg(218, Buffer.alloc(0)), Buffer.from('scan'), ...[225,226,227,235,236,237,239].map(m => seg(m, Buffer.from('AUTHOR'))), seg(196, Buffer.from([255,217,1])), seg(218, Buffer.alloc(0)), Buffer.from([2,255,217])]);
   const jpeg = await strip(Buffer.concat([Buffer.from([255,216]), scans]), 'image/jpeg');
@@ -124,6 +141,10 @@ module.exports = async function imageReview() {
   const small = new Blob([Buffer.alloc(1)]), file = new File([], 'x.png', { type: 'image/png' });
   assert.equal((await context.redraw(file, small, false)).size, 1, 'unscaled safe originals may win the size comparison');
   assert.equal((await context.redraw(file, small, true)).size, 32, 'profiled stills must use converted canvas pixels');
+  context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(null) });
+  assert.equal(await context.redraw(file, small, false), small, 'safe unchanged original can survive an optional null export');
+  assert.equal(await context.redraw(file, small, true), null, 'required conversion still fails closed on null export');
+  context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(new Blob([Buffer.alloc(32)])) });
   context.createImageBitmap = async () => ({ width: 4000, height: 2, close() {} });
   assert.equal((await context.redraw(file, small, false)).size, 32, 'small compressed originals cannot bypass required dimension scaling');
 

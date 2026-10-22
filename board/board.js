@@ -434,6 +434,21 @@ if (typeof window !== 'undefined') (() => {
       if (!value.settled || value.owners.size) imgOwned.set(old, value); else disposeImageEntry(value);
     }
   }
+  function cacheUploadedImage(rel, bytes, type) {
+    const previous = imgCache.get(rel) || imgOwned.get(rel);
+    if (previous && previous.settled && !previous.failed) return;
+    const url = URL.createObjectURL(new Blob([bytes], { type }));
+    const entry = { rel, url, p: Promise.resolve(url), owners: new Map(), settled: true, at: Date.now(), failed: false, final: false };
+    if (previous) {
+      previous.supersededBy = entry;
+      // An older GET may still be waiting. Its consumers own the newly saved bytes now, so those
+      // URLs cannot be evicted before the older promise hands them to their pending DOM callers.
+      for (const [owner, pending] of previous.owners) { entry.owners.set(owner, pending); imgOwners.set(owner, entry); }
+      previous.owners.clear();
+    }
+    imgFailures.delete(rel); cacheImage(rel, entry);
+    if (previous) disposeImageEntry(previous);
+  }
   function imageOwnerReady(owner) {
     const entry = imgOwners.get(owner); if (!entry) return;
     entry.owners.set(owner, Math.max(0, entry.owners.get(owner) - 1)); releaseImageOwner(owner, entry.failed);
@@ -450,16 +465,18 @@ if (typeof window !== 'undefined') (() => {
       const previous = imgCache.get(rel) || imgOwned.get(rel) || history;
       entry = { rel, at: Date.now(), failed: false, final: false, owners: new Map(), attempts: (previous && previous.attempts || 0) + 1, retryMs: IMG_RETRY_MS };
       entry.p = (async () => {
-        const fail = final => { entry.failed = true; entry.final = final; entry.at = Date.now();
+        const fail = final => { if (entry.supersededBy) return entry.supersededBy.url; entry.failed = true; entry.final = final; entry.at = Date.now();
           entry.retryMs = Math.min(30 * 60 * 1000, IMG_RETRY_MS * 2 ** Math.min(entry.attempts - 1, 6));
           imgFailures.delete(rel); imgFailures.set(rel, { attempts: entry.attempts, at: entry.at, retryMs: entry.retryMs, final });
           if (imgFailures.size > IMG_KEEP * 4) imgFailures.delete(imgFailures.keys().next().value);
           return ''; };
         try {
           const r = await gh('GET', null, false, { path: remotePath(rel), accept: 'application/vnd.github.raw+json' });
+          if (entry.supersededBy) return entry.supersededBy.p;
           if (!r.ok) { const limited = r.status === 403 && (r.headers.get('retry-after') || r.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(await r.text()));
             return fail(!(r.status === 404 || r.status === 429 || r.status >= 500 || limited)); }
           const bytes = new Uint8Array(await r.arrayBuffer()), type = IMG_TYPES[rel.split('.').pop().toLowerCase()];
+          if (entry.supersededBy) return entry.supersededBy.p;
           if (bytes.length > IMG_MAX || imgKind(bytes) !== type) return fail(true);
           imgFailures.delete(rel); entry.url = URL.createObjectURL(new Blob([bytes], { type })); return entry.url;
         } catch { return fail(false); } finally { entry.settled = true; disposeImageEntry(entry); }
@@ -2704,7 +2721,7 @@ if (typeof window !== 'undefined') (() => {
       const as = (type, q) => new Promise(res => cv.toBlob(res, type, q));
       let out = await as(file.type, 0.9); if (!out || out.size > IMG_MAX) out = await as('image/jpeg', 0.85);
       // A profile must be converted, and oversized dimensions must be scaled, regardless of compressed size.
-      return out && original && !profiled && k === 1 && original.size < out.size ? original : out;
+      return original && !profiled && k === 1 && (!out || original.size < out.size) ? original : out;
     } catch { return null; } finally { if (bmp) bmp.close(); }
   }
   // Only decoding/animation chunks and fixed colour fields survive. ICC profiles can contain author/device
@@ -2713,8 +2730,8 @@ if (typeof window !== 'undefined') (() => {
     const b = new Uint8Array(await file.arrayBuffer()), v = new DataView(b.buffer), type = file.type;
     const wordAt = (a, i, n) => String.fromCharCode(...a.subarray(i, i + n));
     const word = (i, n) => wordAt(b, i, n);
-    let animated = type === 'image/gif', profiled = false;
-    const finish = parts => ({ blob: new Blob(parts, { type }), animated, profiled });
+    let animated = type === 'image/gif', profiled = false, stillOnly = false;
+    const finish = parts => ({ blob: new Blob(parts, { type }), animated, profiled, stillOnly });
     const orientation = t => { try { const d = new DataView(t.buffer, t.byteOffset, t.byteLength), le = wordAt(t, 0, 2) === 'II';
       if (!le && wordAt(t, 0, 2) !== 'MM') return 1; const start = d.getUint32(4, le), count = d.getUint16(start, le);
       for (let k = 0; k < count; k++) { const e = start + 2 + 12 * k; if (d.getUint16(e, le) === 0x112 && d.getUint16(e + 2, le) === 3) { const n = d.getUint16(e + 8, le); return n >= 1 && n <= 8 ? n : 1; } }
@@ -2724,34 +2741,17 @@ if (typeof window !== 'undefined') (() => {
       out.set([...name].map(c => c.charCodeAt(0)), little ? 0 : 4); d.setUint32(little ? 4 : 0, data.length, little); out.set(data, 8);
       if (!little) { let crc = 0xffffffff; for (const x of out.subarray(4, 8 + data.length)) { crc ^= x; for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1; } d.setUint32(8 + data.length, (crc ^ 0xffffffff) >>> 0); } return out; };
     try {
-      if (type === 'image/gif') { const blob = await gifWithoutMetadata(file); return blob ? { blob, animated, profiled } : null; }
+      if (type === 'image/gif') { const blob = await gifWithoutMetadata(file); return blob ? { blob, animated, profiled, stillOnly } : null; }
       if (type === 'image/png') {
-        const parts = [b.subarray(0, 8)], keep = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'gAMA', 'cHRM', 'sRGB', 'pHYs', 'sBIT', 'bKGD', 'acTL', 'fcTL', 'fdAT']);
-        const fixed = { IHDR: 13, IEND: 0, gAMA: 4, cHRM: 32, sRGB: 1, pHYs: 9, acTL: 8, fcTL: 26 };
-        let i = 8, pixels = false, canvas = null, declaredFrames = 0, frameCount = 0, sequence = 0, frame = null;
+        const parts = [b.subarray(0, 8)], posterParts = [b.subarray(0, 8)], keep = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'gAMA', 'cHRM', 'sRGB', 'pHYs', 'sBIT', 'bKGD']);
+        const fixed = { IHDR: 13, IEND: 0, gAMA: 4, cHRM: 32, sRGB: 1, pHYs: 9 };
+        let i = 8;
         while (i + 12 <= b.length) {
           const n = v.getUint32(i), end = i + 12 + n, name = word(i + 4, 4); if (end > b.length) return null;
-          // Orphan animation chunks are ignored metadata on a still PNG. An APNG declaration,
-          // however, must describe complete, ordered frames inside the IHDR canvas.
-          if (name === 'IHDR' && n === 13) canvas = [v.getUint32(i + 8), v.getUint32(i + 12)];
-          if (name === 'acTL') {
-            if (pixels || declaredFrames || n !== 8 || !canvas || !(declaredFrames = v.getUint32(i + 8))) return null;
-          } else if (name === 'fcTL') {
-            if (!declaredFrames) { i = end; continue; }
-            if (n !== 26 || (frame && !frame.data) || v.getUint32(i + 8) !== sequence++) return null;
-            const w = v.getUint32(i + 12), h = v.getUint32(i + 16), x = v.getUint32(i + 20), y = v.getUint32(i + 24);
-            if (!w || !h || x + w > canvas[0] || y + h > canvas[1] || b[i + 32] > 2 || b[i + 33] > 1) return null;
-            if (!pixels && (x || y || w !== canvas[0] || h !== canvas[1])) return null;
-            if (++frameCount > declaredFrames) return null; frame = { default: !pixels, data: false };
-          } else if (name === 'fdAT') {
-            if (!declaredFrames) { i = end; continue; }
-            if (!pixels || !frame || frame.default || n < 4 || v.getUint32(i + 8) !== sequence++) return null;
-            frame.data ||= n > 4;
-          } else if (name === 'IDAT' && declaredFrames && frame) {
-            if (!frame.default) return null; frame.data ||= n > 0;
-          } else if (name === 'IEND' && declaredFrames) {
-            if (!pixels || !frame || !frame.data || frameCount !== declaredFrames) return null; animated = true;
-          }
+          // APNG is intentionally saved as a still image. Discard every animation payload,
+          // including syntactically valid but undecodable fdAT, and force a browser pixel export.
+          if (['acTL', 'fcTL', 'fdAT'].includes(name)) { stillOnly = true; i = end; continue; }
+          posterParts.push(b.subarray(i, end));
           if (name === 'eXIf') { const turn = orientation(b.subarray(i + 8, end - 4)); if (turn !== 1) parts.push(chunk('eXIf', tiff(turn))); }
           else if (keep.has(name)) {
             if (name in fixed && n !== fixed[name]) return null;
@@ -2760,23 +2760,24 @@ if (typeof window !== 'undefined') (() => {
           }
           else if (!(b[i + 4] & 32)) return null;   // unknown critical chunks cannot safely be dropped
           if (['iCCP', 'cICP', 'mDCV', 'cLLI', 'eXIf'].includes(name)) profiled = true;
-          if (name === 'IDAT') pixels = true;
-          i = end; if (name === 'IEND') return finish(parts);
+          i = end; if (name === 'IEND') { const result = finish(parts); if (stillOnly) result.poster = new Blob(posterParts, { type }); return result; }
         }
       } else if (type === 'image/webp') {
         const end = v.getUint32(4, true) + 8; if (end < 12 || end > b.length) return null;
         const chunks = (start, stop, frame = false) => {
-          const parts = []; let i = start, flags;
+          const parts = []; let i = start, flags, declaredAnimation = false, hasAnimationControl = false, frames = 0;
           while (i + 8 <= stop) {
             const n = v.getUint32(i + 4, true), next = i + 8 + n + n % 2, name = word(i, 4); if (next > stop) throw new Error('broken WebP');
             let data = null;
             if (['VP8 ', 'VP8L', 'ALPH'].includes(name)) data = b.subarray(i + 8, i + 8 + n);
             else if (!frame && name === 'VP8X') {
-              if (n !== 10) throw new Error('broken WebP'); data = b.slice(i + 8, i + 8 + n); animated = !!(data[0] & 2); data[0] &= 0x12; data.fill(0, 1, 4);
-            } else if (!frame && name === 'ANIM') { if (n !== 6) throw new Error('broken WebP'); data = b.subarray(i + 8, i + 8 + n); }
+              if (n !== 10) throw new Error('broken WebP'); data = b.slice(i + 8, i + 8 + n); declaredAnimation = !!(data[0] & 2); data[0] &= 0x12; data.fill(0, 1, 4);
+            } else if (!frame && name === 'ANIM') { if (n !== 6 || !declaredAnimation || hasAnimationControl) throw new Error('broken WebP'); hasAnimationControl = true; data = b.subarray(i + 8, i + 8 + n); }
             else if (!frame && name === 'ANMF') {
-              if (n < 16) throw new Error('broken WebP');
-              const inner = chunks(i + 24, i + 8 + n, true), size = inner.reduce((sum, c) => sum + c.length, 16);
+              if (n < 16 || !hasAnimationControl) throw new Error('broken WebP'); frames++;
+              const inner = chunks(i + 24, i + 8 + n, true);
+              if (!inner.some(c => ['VP8 ', 'VP8L'].includes(wordAt(c, 0, 4)) && new DataView(c.buffer).getUint32(4, true) > 0)) throw new Error('broken WebP');
+              const size = inner.reduce((sum, c) => sum + c.length, 16);
               data = new Uint8Array(size); data.set(b.subarray(i + 8, i + 24)); let pos = 16; for (const c of inner) { data.set(c, pos); pos += c.length; }
             } else if (!frame && name === 'EXIF') {
               let t = b.subarray(i + 8, i + 8 + n); if (wordAt(t, 0, 6) === 'Exif\0\0') t = t.subarray(6); const turn = orientation(t);
@@ -2786,7 +2787,8 @@ if (typeof window !== 'undefined') (() => {
             if (data) { const c = chunk(name, data, true); if (name === 'VP8X') flags = c; parts.push(c); }
             i = next;
           }
-          if (i !== stop) throw new Error('broken WebP'); return parts;
+          if (i !== stop || (!frame && declaredAnimation !== (hasAnimationControl && frames > 0))) throw new Error('broken WebP');
+          if (!frame) animated = declaredAnimation; return parts;
         };
         const parts = chunks(12, end), h = b.slice(0, 12); new DataView(h.buffer).setUint32(4, parts.reduce((n, p) => n + p.length, 4), true); return finish([h, ...parts]);
       } else if (type === 'image/jpeg') {
@@ -2839,7 +2841,10 @@ if (typeof window !== 'undefined') (() => {
     const typed = new File([file], file.name, { type: k0 }), stripped = await strippedImage(typed);
     // Animated uploads retain their frames; stills must apply profiles and the dimension limit.
     let blob = stripped && stripped.blob;
-    if (stripped && !stripped.animated) blob = await redrawImage(typed, stripped.blob, stripped.profiled);
+    if (stripped && !stripped.animated) {
+      const source = stripped.stillOnly ? new File([stripped.poster], file.name, { type: k0 }) : typed;
+      blob = await redrawImage(source, stripped.blob, stripped.profiled || stripped.stillOnly);
+    }
     if (!blob) { toast('That image could not be read. Try saving it again as PNG or JPEG.', true); return ''; }
     if (blob.size > IMG_MAX) { toast('That image is over 2 MB. Make it smaller, or put it in Drive and link it.', true); return ''; }
     const bytes = new Uint8Array(await blob.arrayBuffer()), kind = imgKind(bytes); if (!kind) { toast('That file is not a PNG, JPEG, GIF or WebP image.', true); return ''; }
@@ -2853,12 +2858,7 @@ if (typeof window !== 'undefined') (() => {
       const there = r.status === 422 && /sha/i.test(String((await r.json().catch(() => ({}))).message || ''));   // 422 asking for a sha: a file of this name (these bytes) is there
       if (!r.ok && !there) { toast(`The image was not saved (GitHub error ${r.status}).`, true); setStatus('Image not saved', 'err'); return ''; }
     } catch (e) { toast('The image was not saved: ' + (isTimeout(e) ? 'GitHub did not answer.' : e.message), true); setStatus('Image not saved', 'err'); return ''; }
-    const existing = imgCache.get(rel) || imgOwned.get(rel);
-    if (!existing || existing.failed) {
-      imgFailures.delete(rel);
-      const url = URL.createObjectURL(new Blob([bytes], { type: kind }));
-      cacheImage(rel, { url, p: Promise.resolve(url), settled: true, at: Date.now(), failed: false, final: false });
-    }
+    cacheUploadedImage(rel, bytes, kind);
     setStatus('Image saved', 'ok');
     return `![${alt}](${rel})`;
   }
@@ -2879,7 +2879,7 @@ if (typeof window !== 'undefined') (() => {
   function imagePicker(ta, label) {   // an Image button with a hidden file input
     const inp = el('input'); inp.type = 'file'; inp.accept = 'image/png,image/jpeg,image/gif,image/webp'; inp.multiple = true; inp.hidden = true;
     inp.onchange = () => { const fs = [...inp.files]; inp.value = ''; addImages(ta, fs); };
-    const b = el('button', 'mdtool imgpick', 'Image'); b.type = 'button'; b.title = label; b.setAttribute('aria-label', label); b.onmousedown = e => e.preventDefault(); b.onclick = () => { const why = imgUploadBlock(); if (why) toast(why, true); else inp.click(); };
+    const b = el('button', 'mdtool imgpick', 'Image'); b.type = 'button'; b.title = label + '. APNG is saved as a still image.'; b.setAttribute('aria-label', label); b.onmousedown = e => e.preventDefault(); b.onclick = () => { const why = imgUploadBlock(); if (why) toast(why, true); else inp.click(); };
     b.append(inp); return b;
   }
   imageTarget($('cmText'), () => { $('cmActions').hidden = false; });
