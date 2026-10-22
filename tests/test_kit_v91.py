@@ -59,6 +59,34 @@ class TouchUrl(unittest.TestCase):
         self.assertEqual(GMAIL, self.touches()[-1]["url"])
         self.assertIn(f"source link ({self.touches()[-1]['id']}): {GMAIL}", self.person())
 
+    def test_person_read_never_prints_legacy_private_gmail_routes_or_account_queries(self):
+        self.run_ok("touch", "Robin Linktest", "Reference.", "--channel", "email", "--url", GMAIL)
+        people_dir = os.path.join(self.dir, "people")
+        for filename in os.listdir(people_dir):
+            path = os.path.join(people_dir, filename)
+            with open(path) as fh:
+                person = json.load(fh)
+            if person.get("name") == "Robin Linktest":
+                break
+        for source, expected in (
+            ("https://mail.google.com/mail/u/0/?authuser=private%40example.test#label/PrivateClient/0123456789abcdef", "unavailable"),
+            ("https://mail.google.com/mail/u/0/?authuser=private%40example.test#search/PrivateClient/0123456789abcdef", "unavailable"),
+            ("https://mail.google.com/mail/u/0/?authuser=private%40example.test#inbox/abc123", "https://mail.google.com/mail/u/0/#all/abc123"),
+            ("javascript:alert(1)", "unavailable"),
+        ):
+            with self.subTest(source=source):
+                person["comments"][-1]["url"] = source
+                with open(path, "w") as fh:
+                    json.dump(person, fh)
+                with open(path, "rb") as fh:
+                    before = fh.read()
+                output = self.person()
+                self.assertIn(expected, output)
+                for private in ("private", "PrivateClient", "authuser", "#label", "#search", "javascript:"):
+                    self.assertNotIn(private, output)
+                with open(path, "rb") as fh:
+                    self.assertEqual(before, fh.read(), "a read never rewrites stored legacy sources")
+
     def test_gmail_sources_keep_only_the_thread_and_numeric_account(self):
         thread = "FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz"
         for source, target in (

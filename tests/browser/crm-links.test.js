@@ -210,6 +210,11 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
       assert.match(await pg.locator('#pTouches').textContent(), /Source link unavailable/);
       assert.doesNotMatch(await pg.locator('#pTouches').textContent(), /PrivateClient/);
       assert.equal(old.head, 'head-1', 'displaying a rejected old URL does not rewrite it');
+      await pg.locator('#pClose').click(); await pg.locator('#dlgContact').waitFor({ state: 'hidden' });
+      await pg.goto(base + '/board/index.html#company=Acme'); await pg.locator('#dlgClient[open]').waitFor();
+      assert.match(await pg.locator('#clActivity').textContent(), /Source link unavailable/);
+      assert.doesNotMatch(await pg.locator('#clActivity').textContent(), /PrivateClient/);
+      assert.equal(await pg.locator('#clActivity a.tsrclink').count(), 0);
       await pg.close();
     }
     // A Forward entry for a deleted person must not keep an old drawer marker.
