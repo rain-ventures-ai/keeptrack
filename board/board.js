@@ -2794,8 +2794,10 @@ if (typeof window !== 'undefined') (() => {
   }
   // Each view you switch to is a step in the browser's history, so Back and Forward move between views (and back out of a
   // card to the view it was opened from). fromHistory: the switch came from Back/Forward, so it adds no new step.
+  const listSel = new Set();   // list-view multi-select: this tab only, cleared on leaving List
   const setView = (v, fromHistory) => {
     const was = view; view = v; if (v !== 'board') cinemaCol = ''; SS.set('kb_view', v); saveBoardContext({ view: v });
+    if (was === 'list' && v !== 'list') listSel.clear();
     if (v !== was) { try { inboxPress.done.clear(); inboxPress.err.clear(); } catch { /* the Inbox code is not set up yet */ } }   // a press result shows for this visit only
     render();
     if (fromHistory || v === was) return;
@@ -2984,25 +2986,58 @@ if (typeof window !== 'undefined') (() => {
   const clientTag = t => (t.client ? ui.pill({ text: t.client, tone: 'accent', size: 'sm' }) : null);
   const projectTag = t => { const pr = t.project && projectById(t.project); if (!pr) return null; const p = ui.pill({ text: pr.name, outline: true, size: 'sm' }); if (pr.status === 'done' || pr.status === 'paused') { p.classList.add('tag-quiet'); p.title = `Project ${pr.status}`; } return p; };
   const changedDot = t => { if (!freshInfo(t).changed) return null; const d = el('span', 'cdot'); d.title = 'Changed since you last looked'; return d; };
-  function doneCircle(t, cls = '') {   // mark done / reopen, in list and schedule rows
-    const done = isDoneTask(t), b = el('button', 'circ' + cls + (done ? ' is-done' : ''), done ? '✓' : ''); b.type = 'button'; b.title = done ? 'Reopen' : 'Mark done'; b.setAttribute('aria-label', b.title);
-    b.onclick = e => { e.stopPropagation(); toggleDone(t); }; return b;
+  function listActivityAt(t) {   // newest of updated, the latest comment and the latest history entry
+    const stamps = [t && t.updated];
+    ((t && t.comments) || []).forEach(x => stamps.push(x && x.at));
+    ((t && t.history) || []).forEach(x => stamps.push(x && x.at));
+    return stamps.filter(x => Number.isFinite(Date.parse(x))).sort((a, b) => Date.parse(b) - Date.parse(a))[0] || '';
+  }
+  const LIST_STALE_MS = 14 * 24 * 60 * 60 * 1000;   // no activity for a fortnight: the row is easy to spot
+  const listActivityStale = iso => Number.isFinite(Date.parse(iso)) && Date.now() - Date.parse(iso) >= LIST_STALE_MS;
+  function activityStamp(t) {
+    const at = listActivityAt(t), stale = !!(at && listActivityStale(at) && !isDoneTask(t));
+    if (!at) { const s = el('span', 'lact none', '—'); s.title = 'No activity recorded'; return s; }
+    const tm = el('time', 'lact' + (stale ? ' stale' : ''), ago2(at));
+    tm.dateTime = at; tm.title = 'Last activity ' + fmtStamp(at); tm.dataset.listActivity = at; return tm;
+  }
+  function doneCircle(t, cls = '') {   // mark done / reopen: a square, so it is not mistaken for the list's select box
+    const done = isDoneTask(t);
+    const b = ui.iconButton({ icon: done ? 'square-check' : 'square', label: done ? `Reopen #${t.num}` : `Mark #${t.num} done`, size: 'sm', onClick: e => { e.stopPropagation(); toggleDone(t); } });
+    b.classList.add('donetick'); if (done) b.classList.add('is-done');
+    String(cls || '').trim().split(/\s+/).filter(Boolean).forEach(c => b.classList.add(c));
+    return b;
   }
   const emptyNote = (text, icon) => ui.empty({ text, icon, size: 'sm' });   // a column, day or list with nothing in it
   function colHead(name, count) {   // kanban and pipeline column header: dot, name, count (callers add their buttons)
     const h = el('h2'); h.append(el('span', 'dot'), el('span', 'cname', name), el('span', 'ui-count', String(count))); return h;
   }
 
+  function selectCell(t) {
+    const cell = el('div', 'c-select'), cb = el('input', 'lselect');
+    cb.type = 'checkbox'; cb.checked = listSel.has(t.id); cb.dataset.listSelect = t.id;
+    cb.setAttribute('aria-label', `Select #${t.num}`); cb.title = `Select #${t.num}`;
+    cb.addEventListener('click', e => e.stopPropagation());
+    cb.addEventListener('change', () => {
+      if (cb.checked) listSel.add(t.id); else listSel.delete(t.id);
+      render();
+      const next = [...document.querySelectorAll('[data-list-select]')].find(el => el.dataset.listSelect === t.id);
+      if (next) next.focus({ preventScroll: true });
+    });
+    cell.append(cb); return cell;
+  }
   function listRow(t) {
-    const row = paint(el('div', 'trow' + (isDoneTask(t) ? ' done' : '')), t);
+    const pick = view === 'list', at = listActivityAt(t);
+    const row = paint(el('div', 'trow' + (isDoneTask(t) ? ' done' : '') + (pick && listSel.has(t.id) ? ' is-selected' : '')), t);
+    if (at && listActivityStale(at) && !isDoneTask(t)) row.classList.add('is-stale');
     row.dataset.listTask = t.id;
     const c0 = el('div', 'c-check'); c0.append(doneCircle(t));
     const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); { const d = changedDot(t); if (d) title.prepend(d); } task.append(title);
-    const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title
+    const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title, including last activity
     if (t.due) mm.append(duePill(t));
     mm.append(prioPill(t));
     mm.append(...labelTags(t)); { const c = clientTag(t); if (c) mm.append(c); }
     [chipMention(t), chipWaiting(t), ...chipsAfter(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t), ...chipsGh(t)].forEach(x => x && mm.append(x));
+    mm.append(activityStamp(t));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t));
     const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
@@ -3010,11 +3045,12 @@ if (typeof window !== 'undefined') (() => {
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
     const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
     const pr = el('div', 'c-prio'); pr.append(prioPill(t));
+    const act = el('div', 'c-activity'); act.append(activityStamp(t));
     const more = el('div', 'c-more'); [chipWaiting(t), ...chipsAfter(t), chipTodo(t), chipComments(t), chipAgent(t), chipCompleted(t), chipOutcome(t)].forEach(x => x && more.append(x));
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     { const a = quickArchiveBtn(t); if (a) more.append(a); }
-    row.append(c0, task, desc, ppl, lab, due, pr, more); return row;
+    row.append(...(pick ? [selectCell(t)] : []), c0, task, desc, ppl, lab, due, pr, act, more); return row;
   }
 
   // ---- long lists: draw the first CAP items and a "Show more" button, so a huge board never builds 100,000s of elements ----
@@ -3025,9 +3061,68 @@ if (typeof window !== 'undefined') (() => {
     if (items.length > n) { const b = ui.button({ label: `Show ${Math.min(500, items.length - n)} more (${items.length - n} not shown)`, variant: 'ghost', size: 'sm', onClick: e => { e.stopPropagation(); shownMax[key] = n + 500; render(); } });
       b.classList.add('showmore'); box.append(b); }
   }
-  function tableOf(items, key = 'tbl') {   // header row + rows; on a phone the header disappears and rows reflow
-    const box = el('div', 'ttable'), hd = el('div', 'trow thead');
-    [[], ['notebook-pen', 'Task'], ['list', 'Description'], ['users', 'People'], ['tag', 'Labels'], ['calendar', 'Due'], ['flag', 'Priority'], []].forEach(([ic, x], i) => hd.append(elI('div', ['c-check', 'c-task', 'c-desc', 'c-people', 'c-labels', 'c-due', 'c-prio', 'c-more'][i], ic, x)));
+  function selectHead(items, key) {   // select-all for the rows this table is showing (the cap, not the ones behind Show more)
+    const cell = el('div', 'c-select'), cb = el('input', 'lselect'), ids = items.slice(0, shownMax[key] || CAP).map(t => t.id);
+    const on = ids.filter(id => listSel.has(id)).length;
+    cb.type = 'checkbox'; cb.checked = ids.length > 0 && on === ids.length; cb.indeterminate = on > 0 && on < ids.length;
+    cb.dataset.listSelectAll = key; cb.setAttribute('aria-label', 'Select all visible tasks'); cb.title = 'Select all visible tasks in this list';
+    cb.addEventListener('click', e => e.stopPropagation());
+    cb.addEventListener('change', () => {
+      ids.forEach(id => cb.checked ? listSel.add(id) : listSel.delete(id));
+      render();
+      const next = [...document.querySelectorAll('[data-list-select-all]')].find(el => el.dataset.listSelectAll === key);
+      if (next) next.focus({ preventScroll: true });
+    });
+    cell.append(cb); return cell;
+  }
+  function selectedListTasks() {
+    const live = new Set(state.tasks.map(t => t.id));
+    [...listSel].forEach(id => { if (!live.has(id)) listSel.delete(id); });
+    const out = [], seen = new Set();
+    state.columns.forEach(col => displayTasks(state.tasks.filter(t => t.column === col.id)).forEach(t => { if (listSel.has(t.id) && !seen.has(t.id)) { out.push(t); seen.add(t.id); } }));
+    state.tasks.forEach(t => { if (listSel.has(t.id) && !seen.has(t.id)) out.push(t); });
+    return out;
+  }
+  const listIdText = tasks => tasks.map(t => '#' + t.num).join(' ');
+  function bulkMove(ids, col) {
+    if (ro || !col || !ids.length) return;
+    const label = colName(col), moving = ids.filter(id => { const t = state.tasks.find(x => x.id === id); return t && t.column !== col; });
+    if (!moving.length) { toast('Those tasks are already in ' + label); return; }
+    listSel.clear();
+    mutate(board => { moving.forEach(id => place(board, id, col, null)); }, `Move ${moving.length} to ${label}`, moving);
+  }
+  function bulkDone(ids) {
+    if (ro || !ids.length) return;
+    const dest = doneColId(), moving = ids.filter(id => { const t = state.tasks.find(x => x.id === id); return t && t.column !== dest; });
+    if (!moving.length) { toast('Those tasks are already done'); return; }
+    listSel.clear();
+    mutate(board => { moving.forEach(id => place(board, id, dest, null)); }, `Done: ${moving.length}`, moving);
+  }
+  function listBulkBar() {
+    const tasks = selectedListTasks(); if (!tasks.length) return null;
+    const ids = tasks.map(t => t.id), bar = el('div', 'lbulk');
+    bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Selected tasks');
+    bar.append(el('span', 'lbulk__count', tasks.length === 1 ? '1 selected' : tasks.length + ' selected'));
+    const move = el('select', 'lbulk__move'); move.dataset.listBulk = 'move'; move.setAttribute('aria-label', 'Move to…');
+    const ph = el('option', null, 'Move to…'); ph.value = ''; move.append(ph);
+    state.columns.forEach(c => { const o = el('option', null, c.name); o.value = c.id; move.append(o); });
+    move.disabled = !!ro; move.title = ro ? 'This board is read-only' : 'Move the selected tasks to a column';
+    move.onchange = () => { if (move.value) bulkMove(ids, move.value); };
+    const done = ui.button({ label: 'Mark done', icon: 'square-check', size: 'sm', disabled: !!ro, title: ro ? 'This board is read-only' : 'Mark the selected tasks done', onClick: () => bulkDone(ids) });
+    done.dataset.listBulk = 'done';
+    const copy = ui.button({ label: 'Copy IDs', icon: 'copy', size: 'sm', title: 'Copy the selected task numbers', onClick: () => { const text = listIdText(selectedListTasks()); copyText(text, 'Copied ' + text); } });
+    copy.dataset.listBulk = 'copy';
+    const clear = ui.button({ label: 'Clear selection', variant: 'ghost', size: 'sm', onClick: () => { listSel.clear(); render(); } });
+    clear.dataset.listBulk = 'clear';
+    bar.append(move, done, copy, clear); return bar;
+  }
+  function tableOf(items, key = 'tbl') {   // header row + rows; on a phone the header keeps only the select-all box
+    const pick = view === 'list', box = el('div', 'ttable' + (pick ? ' picks' : '')), hd = el('div', 'trow thead');
+    box.dataset.listTable = key;
+    if (pick) hd.append(selectHead(items, key));
+    [['', 'c-check', ''], ['notebook-pen', 'c-task', 'Task'], ['list', 'c-desc', 'Description'], ['users', 'c-people', 'People'], ['tag', 'c-labels', 'Labels'], ['calendar', 'c-due', 'Due'], ['flag', 'c-prio', 'Priority'], ['history', 'c-activity', 'Activity'], ['', 'c-more', '']].forEach(([ic, cls, label]) => {
+      const cell = elI('div', cls, ic, label); if (cls === 'c-activity') cell.title = 'Newest of the last edit, comment or history entry'; hd.append(cell);
+    });
     box.append(hd); capList(key, items, listRow, box); return box;
   }
 
@@ -3047,6 +3142,7 @@ if (typeof window !== 'undefined') (() => {
       const hint = el('span', 'prioritise-hint muted', 'Score = value ÷ effort. Rank is your decision.'); toolbar.append(hint); board.append(toolbar); renderPrioritise(hideDone, sort.value); return;
     }
     board.append(toolbar);
+    const bulk = listBulkBar(); if (bulk) board.append(bulk);
     state.columns.forEach(col => {
       if (hideDone && col.id === 'done') return;
       const items = displayTasks(state.tasks.filter(t => t.column === col.id && filtered(t))), shut = collapsed.has(col.id);

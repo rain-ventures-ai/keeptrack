@@ -32,7 +32,14 @@ Image parsing, uploads and cache fixes ([private-tasks #305](https://rain-ventur
 - Browser uploads strip metadata without flattening APNG or animated WebP; GIF frames remain intact too. Still images use whichever is smaller: stripped compressed pixels or an oriented canvas export. Orientation is the only EXIF tag retained.
 - Temporary server/rate-limit image failures retry with backoff capped at 30 minutes. On-screen cache URLs are retained until they can be safely evicted.
 - Check: upload an EXIF-rotated photo, a progressive JPEG and animated PNG/WebP; verify orientation and animation, then simulate a temporary image-read failure and retry.
-- Version 97 is reserved for concurrent List-view work.
+- Includes the v97 List-view release.
+
+### v97 (schema 4)
+List view: select several tasks and see when each was last active (private-tasks card #307). Web board only. No data change and no migration.
+- Mark done is a square (the same `square` / `square-check` control as a task row in a person or project record), in List and in Schedule, so it is not mistaken for a select box. List adds a real tick box on each row and a select-all box for the rows that table is showing.
+- With rows selected, a bar stays at the top of the list: **Move to…** (a column), **Mark done**, **Copy IDs** (for example `#150 #96`) and **Clear selection**. Move and Mark done are off on a read-only board. The selection is kept only in this tab and clears when you leave List.
+- **Activity** is the newer of the card's last edit, its latest comment and its latest history entry, as a relative time (`3d ago`; hover for the exact time). A card with nothing for 14 days is marked so it is easy to spot. On a phone the time sits under the title.
+- Run `kit-update` only. Check: `kit-check` says v97, and List shows a select box and an Activity column.
 
 ### v96 (schema 4)
 An Archive view to browse archived cards and people (private-tasks card #283). Web board only. No data change and no migration:
