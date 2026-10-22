@@ -217,7 +217,7 @@ if (typeof window !== 'undefined') (() => {
     try { history.replaceState(null, '', location.pathname + location.search); } catch {}
     let o; try { o = parseCode('kbcfg1.' + m[1]); } catch (e) { setTimeout(() => toast('Could not import the settings link: ' + e.message, true)); return; }
     setTimeout(() => ask('Import settings?', [`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?`, 'This replaces the settings stored in this browser.'], 'Import')
-      .then(yes => { if (!yes) return; try { applyCode('kbcfg1.' + m[1]); location.reload(); } catch (e) { toast('Could not import the settings link: ' + e.message, true); } })); })();
+      .then(yes => { if (!yes) return; applyImportedSettings('kbcfg1.' + m[1]).catch(e => toast('Could not import the settings link: ' + e.message, true)); })); })();
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
     columns: [{ id: 'backlog', name: 'Backlog' }, { id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'pending-review', name: 'Pending review' }, { id: 'done', name: 'Done' }],
@@ -1407,6 +1407,21 @@ if (typeof window !== 'undefined') (() => {
     if (!saving) { markLeaving(); return go(); }   // every caller leaves the page (board switch, reload, import)
     toast(`Waiting for ${waiting + 1} change${waiting ? 's' : ''} to save…`); saving.then(() => { markLeaving(); go(); });
   }
+  // Import confirmed: show that we have the settings, finish queued saves, write them, then reload so the board boots with them.
+  async function applyImportedSettings(raw) {
+    const body = el('div', 'kb-ask');
+    body.append(el('p', 'ui-sheet__text', 'Got the settings. Loading the board…'));
+    const s = ui.sheet({ title: 'Applying settings…', body, side: 'center', removeOnClose: false });
+    s.el.classList.add('ui-sheet--alert');
+    s.el.setAttribute('role', 'status');
+    const close = s.el.querySelector('.ui-sheet__head > :last-child'); if (close) close.hidden = true;
+    s.el.addEventListener('cancel', e => e.preventDefault());
+    s.open();
+    await new Promise(res => whenSaved(res));
+    applyCode(raw);
+    await new Promise(r => setTimeout(r, 50));   // let the sheet paint before the reload blanks the page
+    location.reload();
+  }
   window.addEventListener('beforeunload', e => { if (saving || busy) { e.preventDefault(); e.returnValue = ''; } });
   async function mutateNow(fn, message, targetIds = [], baseState = null, options = {}) {
     if (HOSTED) return hostedMutate(fn, message, targetIds, baseState, options);
@@ -1601,6 +1616,48 @@ if (typeof window !== 'undefined') (() => {
   const goalCards = g => { const dc = doneColId(), cards = state.tasks.filter(t => t.goal === g.id); return { open: cards.filter(t => t.column !== dc).length, done: cards.filter(t => t.column === dc).length }; };
   const goalPickerLabel = g => (g.title || 'Untitled goal') + (goalStatus(g) !== 'active' ? ' · ' + goalStatus(g) : '');
   const setGoalFilter = v => { deferredFilterRoute.delete('goal'); $('fGoal').value = v; closePops(); render(); };
+  const setProjectFilter = v => { deferredFilterRoute.delete('project'); $('fProject').value = v; closePops(); render(); };
+  // Company and project drawers: jump to the board with matching filters (open tasks only).
+  function showBoardTasks({ clients = [], project = '' } = {}) {
+    deferredFilterRoute.delete('client'); deferredFilterRoute.delete('project'); deferredFilterRoute.delete('status');
+    setClientValues(clients.filter(Boolean));
+    if (project && ![...$('fProject').options].some(o => o.value === project)) {
+      const p = projectById(project); if (p) { const o = el('option', null, projectPickerLabel(p)); o.value = p.id; $('fProject').append(o); }
+    }
+    $('fProject').value = project || '';
+    $('fStatus').value = '__open'; $('fHideDone').checked = false;
+    closePops();
+    if ($('dlgProject') && $('dlgProject').open) $('dlgProject').close();
+    if ($('dlgClient') && $('dlgClient').open) $('dlgClient').close();
+    if (view !== 'board' && view !== 'list') setView('board'); else render();
+  }
+  // When one or more companies are selected (or a project filter is on), show that scope's projects as chips — same job as the client pills, for projects.
+  function renderProjectBar() {
+    let box = $('projectBar');
+    if (!box) {
+      const goal = $('goalBar'); if (!goal || !goal.parentNode) return;
+      box = el('div', 'goalbar'); box.id = 'projectBar'; box.hidden = true;
+      box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'Filter by project');
+      goal.parentNode.insertBefore(box, goal);
+    }
+    box.textContent = '';
+    const clients = clientValues(), fp = $('fProject').value, dc = doneColId();
+    let projects = sortedProjects().filter(p => (p.status || 'active') === 'active' || p.id === fp);
+    if (clients.length) projects = projects.filter(p => clients.includes(p.client) || p.id === fp);
+    else if (fp) projects = projects.filter(p => p.id === fp);
+    else projects = [];
+    const show = (view === 'board' || view === 'list') && !!projects.length;
+    box.hidden = !show; if (!show) return;
+    box.append(el('span', 'goalbar__label', 'Projects'));
+    projects.forEach(p => {
+      const on = fp === p.id, open = state.tasks.filter(t => t.project === p.id && t.column !== dc).length;
+      const b = el('button', 'goalchip' + (on ? ' on' : '')); b.type = 'button'; b.dataset.project = p.id; b.setAttribute('aria-pressed', String(on));
+      b.title = on ? `Clear project filter (${p.name})` : `Show only ${p.name} (${open} open)`;
+      b.append(el('strong', 'goalchip__title', p.name || 'Untitled project'));
+      b.append(el('span', 'goalchip__meta', [p.client, `${open} open`, p.status && p.status !== 'active' ? p.status : ''].filter(Boolean).join(' · ')));
+      b.onclick = () => setProjectFilter(on ? '' : p.id); box.append(b);
+    });
+  }
   function renderGoalBar() {
     const box = $('goalBar'); if (!box) return; box.textContent = '';
     const goals = activeGoals(), fg = $('fGoal').value, show = (view === 'board' || view === 'list') && (goals.length > 0 || !!fg);
@@ -2063,7 +2120,7 @@ if (typeof window !== 'undefined') (() => {
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
+      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderProjectBar(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
@@ -2100,7 +2157,7 @@ if (typeof window !== 'undefined') (() => {
       add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = open; board.append(c);
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
-    renderLegend(); renderGoalBar(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
+    renderLegend(); renderProjectBar(); renderGoalBar(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
@@ -4354,7 +4411,7 @@ if (typeof window !== 'undefined') (() => {
   $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
       if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ' (it holds no tokens: add yours again afterwards)'}? This replaces this browser's settings.`, 'Import'))) return;
-      await new Promise(res => whenSaved(res)); applyCode(m ? 'kbcfg1.' + m[1] : v); location.reload();   // queued saves finish before the settings change
+      await applyImportedSettings(m ? 'kbcfg1.' + m[1] : v);   // queued saves finish inside, before the settings change
     } catch (e) { toast(e.message); } };
   // ---- @ and # suggestions in comment/description boxes -----------------------------------------------------
   function attachSuggest(ta) {
@@ -5857,7 +5914,7 @@ if (typeof window !== 'undefined') (() => {
       crmSection('clNotesSec', { title: 'Notes', body: dnote('clNotes', 'Company notes', 'Anything to remember about this company.') }),
       crmSection('clPeopleSec', { title: 'People', body: dlist('clPeople') }, 'clPeopleCount'),
       crmSection('clActSec', { title: 'Activity', body: [acts, more] }, 'clActCount'),
-      crmSection('clTaskSec', { title: 'Open tasks', body: dlist('clTasks') }, 'clTaskCount'),
+      crmSection('clTaskSec', { title: 'Open tasks', action: (() => { const b = ui.button({ label: 'View on board', icon: 'square-kanban', variant: 'ghost', size: 'sm' }); b.id = 'clViewTasks'; b.onclick = () => { const co = editingClient; if (co) showBoardTasks({ clients: [co] }); }; return b; })(), body: dlist('clTasks') }, 'clTaskCount'),
       crmSection('clNorthSec', { title: 'North star', body: dnote('clNorth', 'North star', 'What we are trying to solve and what success looks like.', 4) }),
       crmSection('clProjSec', { title: 'Projects', body: [dlist('clProjects'), projAdd] }, 'clProjCount', true),
       files);
@@ -5905,7 +5962,7 @@ if (typeof window !== 'undefined') (() => {
     const tsec = $('clTaskSec'); tsec.hidden = !modes().includes('tasks');
     const tbox = $('clTasks'); tbox.textContent = ''; f.open.forEach(t => tbox.append(drawerTaskRow(t)));
     if (!f.open.length) tbox.append(dempty(tasks.length ? `No open tasks · ${tasks.length} done.` : 'No tasks for this company.'));
-    setCount('clTaskCount', f.open.length);
+    setCount('clTaskCount', f.open.length); $('clViewTasks').hidden = !f.open.length;
     if (force || !keep('clNorth')) $('clNorth').value = info.north_star || '';
     const box = $('clProjects'); box.textContent = '';
     prs.sort((a, b) => projectStatusOrder(a.status) - projectStatusOrder(b.status) || a.name.localeCompare(b.name)).forEach(pr => box.append(projectNavRow(pr, () => { $('dlgClient').close(); openProject(pr.id); })));
@@ -5971,7 +6028,7 @@ if (typeof window !== 'undefined') (() => {
       crmSection('prPeopleSec', { title: 'People', body: [dlist('prPeople'), sug, personAdd] }, 'prPeopleCount', true),
       crmSection('prLinkSec', { title: 'Links', body: [dlist('prLinks'), linkAdd] }, 'prLinkCount', true),
       crmSection('prCmSec', { title: 'Comments', body: [prComposer, prStream] }, 'prCmCount'),
-      crmSection('prTaskSec', { title: 'Open tasks', body: dlist('prTasks') }, 'prTaskCount'),
+      crmSection('prTaskSec', { title: 'Open tasks', action: (() => { const b = ui.button({ label: 'View on board', icon: 'square-kanban', variant: 'ghost', size: 'sm' }); b.id = 'prViewTasks'; b.onclick = () => { const pr = projectById(editingProject); if (pr) showBoardTasks({ clients: pr.client ? [pr.client] : [], project: pr.id }); }; return b; })(), body: dlist('prTasks') }, 'prTaskCount'),
       crmSection('prDoneSec', { title: 'Completed tasks', collapsible: true, open: false, body: dlist('prDoneTasks') }, 'prDoneCount'),
       foot);
   }
@@ -6020,7 +6077,7 @@ if (typeof window !== 'undefined') (() => {
     const dc = doneCol(), open = linked.filter(t => t.column !== dc), done = linked.filter(t => t.column === dc);
     const tbox = $('prTasks'); tbox.textContent = ''; open.forEach(t => tbox.append(drawerTaskRow(t))); if (!open.length) tbox.append(dempty('No open tasks linked to this project.'));
     const dbox = $('prDoneTasks'); dbox.textContent = ''; done.forEach(t => dbox.append(drawerTaskRow(t))); if (!done.length) dbox.append(dempty('No completed tasks linked to this project.'));
-    setCount('prTaskCount', open.length); setCount('prDoneCount', done.length);
+    setCount('prTaskCount', open.length); setCount('prDoneCount', done.length); $('prViewTasks').hidden = !open.length;
     $('prTaskSum').textContent = linked.length ? `${open.length} open · ${done.length} done` : 'No tasks yet';
     $('prCreated').textContent = pr.created ? 'Created ' + new Date(pr.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   }
@@ -6071,6 +6128,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function openProjectMenu(anchor) {
     const pr = projectById(editingProject); if (!pr) return; const items = [];
+    items.push({ label: 'Show only this project', icon: 'eye', onSelect: () => showBoardTasks({ clients: pr.client ? [pr.client] : [], project: pr.id }) });
     if (pr.client) items.push({ label: `Open client ${pr.client}`, icon: 'building-2', onSelect: () => { $('dlgProject').close(); openClient(pr.client); } });
     items.push({ label: 'Copy project name', icon: 'copy', onSelect: () => copyText(pr.name, 'Project name copied') }, { label: 'Copy link', icon: 'link', onSelect: () => copyRecordLink('project', pr.id, pr.name) });
     if (!ro) items.push({ separator: true }, { label: 'Delete project', icon: 'trash-2', danger: true, onSelect: deleteProject });

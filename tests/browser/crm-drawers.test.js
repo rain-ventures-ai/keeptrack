@@ -220,8 +220,27 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     await assertFits(page, 'dlgProject', 'project'); await page.locator('#prBody').evaluate(b => { b.scrollTop = 0; }); await shot(page, 'project-phone-light-writable');
     if (SHOTS) { await page.emulateMedia({ colorScheme: 'dark' }); await shot(page, 'project-phone-dark-writable'); await page.setViewportSize({ width: 1280, height: 860 }); await shot(page, 'project-desktop-dark-writable'); await page.emulateMedia({ colorScheme: 'light' }); await shot(page, 'project-desktop-light-writable'); await page.setViewportSize({ width: 390, height: 844 }); }
     // delete via ⋯: Cancel keeps it, Remove deletes it and clears it from its task
-    await page.locator('#prMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Open client Acme', 'Copy project name', 'Copy link', 'Delete project']);
-    await menu.locator('[role=menuitem]', { hasText: 'Delete project' }).click(); await confirmSheet.waitFor(); assert.match(await confirmSheet.textContent(), /Remove project "Launch v2" and clear it from 1 task/);
+    assert.equal(await page.locator('#prViewTasks').isVisible(), false, 'View on board hides when every linked task is done');
+    // reopen the task so View on board can filter to it
+    w = saved(); await page.locator('#prDoneTasks .dtask .ui-iconbtn').click(); await w;
+    assert.equal(await page.locator('#prViewTasks').isVisible(), true);
+    await page.locator('#prMore').click(); assert.deepEqual(await menu.locator('[role=menuitem]').allTextContents(), ['Show only this project', 'Open client Acme', 'Copy project name', 'Copy link', 'Delete project']);
+    await page.keyboard.press('Escape');
+    await page.locator('#prViewTasks').click();
+    await page.locator('#dlgProject').waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => document.getElementById('fProject').value), 'pr_one');
+    assert.deepEqual(await page.locator('#fClient').evaluate(s => [...s.selectedOptions].map(o => o.value)), ['Acme']);
+    assert.equal(await page.locator('#fStatus').inputValue(), '__open');
+    assert.equal(await page.locator('#projectBar').isVisible(), true);
+    assert.match(await page.locator('#projectBar .goalchip.on').textContent(), /Launch v2/);
+    // back to People without fighting the board history entry View on board pushed
+    await page.evaluate(() => { document.getElementById('fClear').click(); });
+    await page.locator('#viewSw [role=tab]', { hasText: 'People' }).click();
+    await page.waitForFunction(() => document.body.dataset.view === 'people');
+    await page.evaluate(() => { location.hash = 'project=pr_one'; });
+    await page.locator('#dlgProject[open]').waitFor();
+    // delete via ⋯: Cancel keeps it, Remove deletes it and clears it from its task
+    await page.locator('#prMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete project' }).click(); await confirmSheet.waitFor(); assert.match(await confirmSheet.textContent(), /Remove project "Launch v2" and clear it from 1 task/);
     await confirmSheet.locator('button', { hasText: 'Cancel' }).click(); await confirmSheet.waitFor({ state: 'detached' }); assert.ok(api.project(), 'Cancel keeps the project');
     await page.locator('#prMore').click(); await menu.locator('[role=menuitem]', { hasText: 'Delete project' }).click(); await confirmSheet.waitFor();
     w = saved(); await confirmSheet.locator('button.ui-btn--danger').click(); await w; await page.locator('#dlgProject').waitFor({ state: 'hidden' });
