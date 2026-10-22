@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v94: images on cards, the review fixes for v92 (private-tasks card #292). Uploaded images lose their metadata
+(EXIF: GPS position, device, owner; text chunks; XMP): the page draws every image again before upload and
+`keeptrack.py attach` strips those segments. `attach` falls back to a git push when the sandbox proxy blocks API writes,
+checks the card id and the board's read-only guard before writing, and reads the board once. The page treats a 422 as
+"already there" only when GitHub asks for a sha, tries a failed image read again, keeps at most 40 images in memory and
+refuses a non-image before redrawing it. No migration.
+
 Kit v93: meeting-notes name resolution. Auto-generated notes often garble spoken names in the body while keeping
 correct attendee emails. The keeptrack-notes skill, its recurring-import prompt and notes-folder-to-tasks now build a
 roster from header mailto/email addresses, match board people by email, derive names from email local parts, and rewrite

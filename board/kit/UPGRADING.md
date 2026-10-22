@@ -25,6 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v94 (schema 4)
+Images on cards: the review fixes for v92 (private-tasks card #292). No migration and no data change.
+- Metadata never reaches the repo: the page draws every image again before upload (no EXIF such as GPS position or
+  device; longest side at most 2000px; a GIF is kept as it is), and `attach` strips JPEG APP1/APP13/COM, PNG
+  eXIf/tEXt/zTXt/iTXt and WebP EXIF/XMP. A screenshot of a secret still goes into git history: the help says not to add one.
+- `attach` falls back to a git push when the sandbox proxy blocks API writes (as every other write does). It checks the
+  card id and the board's read-only guard before writing anything, and reads the board once.
+- Web board: a GitHub 422 counts as "this image is already there" only when GitHub asks for a sha; a failed image read is
+  tried again next time (no "not found" until reload); at most 40 images are kept in memory; a non-image is refused first.
+- Run `kit-update` only. Check: `kit-check` says v94.
+
 ### v93 (schema 4)
 Meeting-notes name resolution: auto-generated notes (Gemini and similar) often garble spoken names in the body while
 keeping correct attendee emails. The keeptrack-notes skill, its routine prompt and notes-folder-to-tasks now resolve
@@ -45,9 +56,6 @@ Images on cards (private-tasks card #292). No migration and no schema change.
   that is not an `assets/` path stays text: the page never loads an outside image. Not on hosted boards or the demo yet.
 - keeptrack.py: `attach <card> <image> ["comment text"] [--alt ".."] [--details]` writes the file (local folder, git
   clone or API) and adds it in a new comment, or at the end of the description.
-- Metadata is removed before an image is saved: the page draws it again (no EXIF, longest side at most 2000px; a GIF
-  is kept as it is), and `attach` strips JPEG APP1/APP13/COM, PNG eXIf/tEXt/zTXt/iTXt and WebP EXIF/XMP. A screenshot of a
-  secret still goes into git history: the help says not to add one.
 - Archiving a card keeps its images; nothing deletes an image automatically.
 - Run `kit-update` only. Check: `python3 board/keeptrack.py help checklists-comments` lists `attach`.
 
