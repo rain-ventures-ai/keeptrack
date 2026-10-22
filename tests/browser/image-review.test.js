@@ -140,6 +140,11 @@ module.exports = async function imageReview() {
   const scans = Buffer.concat([seg(218, Buffer.alloc(0)), Buffer.from('scan'), ...[225,226,227,235,236,237,239].map(m => seg(m, Buffer.from('AUTHOR'))), seg(196, Buffer.from([255,217,1])), seg(218, Buffer.alloc(0)), Buffer.from([2,255,217])]);
   const jpeg = await strip(Buffer.concat([Buffer.from([255,216]), scans]), 'image/jpeg');
   assert.equal(jpeg.bytes.includes(Buffer.from('AUTHOR')), false); assert.equal(jpeg.bytes.at(-3), 2, 'table bytes cannot truncate the final scan');
+  assert.equal(await context.strip(new File([Buffer.concat([Buffer.from([255,216]), ...Array(4097).fill(seg(221, Buffer.from([0,1]))), Buffer.from([255,217])])], 'many.jpg', { type: 'image/jpeg' })), null, 'JPEG segment budget precedes retained views');
+  const gifLoop = Buffer.from('21ff0b4e45545343415045322e300301000000', 'hex');
+  for (const body of [Buffer.concat(Array(4097).fill(gifLoop)), Buffer.concat(Array(513).fill(gifFrame)), Buffer.concat([Buffer.from([0x21,0xfe]), ...Array(131073).fill(Buffer.from([1,65])), Buffer.from([0])])]) {
+    assert.equal(await context.strip(new File([Buffer.concat([gifHead, body, Buffer.from([0x3b])])], 'many.gif', { type: 'image/gif' })), null, 'GIF block, frame and subblock budgets are bounded');
+  }
   const jfif = Buffer.concat([Buffer.from('JFIF\0'), Buffer.from([1,2,0,0,1,0,1,1,1]), Buffer.from('AUTHOR-THUMBNAIL')]);
   const tagged = await strip(Buffer.concat([Buffer.from([255,216]), seg(224, jfif), seg(226, Buffer.from('ICC_PROFILE\0PROFILE-AUTHOR')), scans]), 'image/jpeg');
   assert.equal(tagged.bytes.includes(Buffer.from('AUTHOR')), false); assert.equal(tagged.profiled, true);

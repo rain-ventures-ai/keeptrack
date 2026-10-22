@@ -148,6 +148,16 @@ class ImageReview(unittest.TestCase):
         for extension, expected in ((text, b''), (comment, control)):
             self.assertEqual(head + expected + frame + b'\x3b', keeptrack.strip_image_metadata(head + control + extension + frame + b'\x3b', 'gif'))
 
+    def test_jpeg_and_gif_parser_budgets(self):
+        with self.assertRaisesRegex(ValueError, 'too many JPEG'):
+            keeptrack.strip_image_metadata(b'\xff\xd8' + segment(221, b'\0\1') * 4097 + b'\xff\xd9', 'jpg')
+        head = bytes.fromhex('47494638396101000100800000000000ffffff')
+        frame = bytes.fromhex('2c0000000001000100000202440100')
+        loop = bytes.fromhex('21ff0b4e45545343415045322e300301000000')
+        for body in (loop * 4097, frame * 513, b'\x21\xfe' + b'\x01A' * 131073 + b'\0'):
+            with self.assertRaises(ValueError):
+                keeptrack.strip_image_metadata(head + body + b'\x3b', 'gif')
+
     def test_webp_rejects_duplicate_empty_and_excessive_chunks_before_retaining_them(self):
         def ch(kind, data):
             return kind + len(data).to_bytes(4, 'little') + data + (b'\0' if len(data) % 2 else b'')
