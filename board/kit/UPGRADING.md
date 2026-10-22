@@ -25,6 +25,20 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v92 (schema 4)
+Images on cards (private-tasks card #292). No migration and no schema change.
+- An image (PNG, JPEG, GIF or WebP, at most 2 MB) is a file in `assets/<card id>/` next to the board files, named
+  `<yyyymmdd>-<hash>.<ext>`, and referenced from a description or comment as `![alt](assets/<card id>/<file>)`. It is
+  never embedded in the board data, and the board loaders never read `assets/` (only `tasks.json` and the item folders).
+- Web board: paste or drop an image into a description or comment box, or press **Image**. A larger PNG or JPEG is
+  scaled down first. The page shows images by reading them through the GitHub API with its token (a private repo has no
+  public image URL); the file's first bytes must match its type, so an SVG or HTML file is never shown. A `![...](...)`
+  that is not an `assets/` path stays text: the page never loads an outside image. Not on hosted boards or the demo yet.
+- keeptrack.py: `attach <card> <image> ["comment text"] [--alt ".."] [--details]` writes the file (local folder, git
+  clone or API) and adds it in a new comment, or at the end of the description.
+- Archiving a card keeps its images; nothing deletes an image automatically.
+- Run `kit-update` only. Check: `python3 board/keeptrack.py help checklists-comments` lists `attach`.
+
 ### v91 (schema 4)
 CRM: Companies sort and filter, links to a company, person or project, source links on the contact log and project
 activity on a person (private-tasks card #290). No migration. One new optional field. v88 is another kit change

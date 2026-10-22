@@ -1614,3 +1614,10 @@ header .cpillgo { min-width: 0; min-height: 0; padding: 0; }   /* the 40px phone
 /* Review Inbox: a Markdown field (a card's details) renders as it will on the card (card #181) */
 .proptbl td.propmd > :first-child { margin-top: 0; } .proptbl td.propmd > :last-child { margin-bottom: 0; }
 .proptbl td.propmd .mdh { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-2); }
+
+/* Images on cards (card #292): shown from the board's assets/ folder, never wider than the text */
+.mdimglink { display: inline-block; max-width: 100%; margin: var(--sp-2) 0; border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--border); line-height: 0; cursor: zoom-in; vertical-align: top; }
+.mdimglink.loading { min-width: 120px; min-height: 80px; background: color-mix(in srgb, var(--panel) 70%, var(--card)); }
+.mdimg { max-width: 100%; max-height: 420px; height: auto; display: block; }
+.mdimgalt { color: var(--muted); font-style: italic; }
+#cmImage { margin-left: var(--sp-2); }

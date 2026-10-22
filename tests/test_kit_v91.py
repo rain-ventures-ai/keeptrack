@@ -94,20 +94,13 @@ class TouchUrl(unittest.TestCase):
 
 class Docs(unittest.TestCase):
     def test_kit_is_v91_with_upgrade_notes_and_changelog(self):
-        self.assertEqual(91, keeptrack.KIT_VERSION)
-        with open(os.path.join(KIT, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(91, json.load(f)["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            with open(os.path.join(KIT, plugin, "plugin.json"), encoding="utf-8") as f:
-                self.assertEqual("0.91.0", json.load(f)["version"], plugin)
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 91)   # the exact version is asserted by the newest tests/test_kit_v*.py
         with open(os.path.join(KIT, "UPGRADING.md"), encoding="utf-8") as f:
             v91 = f.read().split("### v91 (schema 4)", 1)[1].split("### v90", 1)[0]
         for words in ("kit-update", "touch-url", "#company=", "No migration", "noopener"):
             self.assertIn(words, v91)
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             self.assertIn("Kit v91", f.read())
-        with open(os.path.join(REPO, "board", "board.js"), encoding="utf-8") as f:
-            self.assertIn("const PAGE_KIT = 91;", f.read())
         with open(os.path.join(KIT, "skills", "keeptrack-email", "SKILL.md"), encoding="utf-8") as f:
             self.assertIn("--url 'https://mail.google.com/mail/u/0/#all/<Gmail thread id>'", f.read())
 
