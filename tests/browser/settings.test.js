@@ -92,14 +92,14 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
     // Docs home saves through ordinary shared-board mutation and survives a reload.
     {
       const page = await open(browser);
-      await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
+      if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
       await page.locator('#sDocsProvider').selectOption('google-drive');
       await page.locator('#sDocsRoot').fill('https://drive.google.com/drive/folders/existing-root');
       await page.locator('#sDocsSave').click();
       await page.waitForFunction(() => document.querySelector('#sDocsCurrent a')?.href.includes('existing-root'));
       assert.equal(JSON.parse(page.api.files['tasks.json']).settings.docs_home.provider, 'google-drive');
       await page.reload(); await page.waitForSelector('.card');
-      await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
+      if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
       assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/existing-root');
       const writes = page.api.writes;
       await page.locator('#sDocsRoot').fill('https://evil.test/root'); await page.locator('#sDocsSave').click();
@@ -112,7 +112,7 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
       assert.equal(Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'), false);
       assert.deepEqual(page.errors, []); await page.close();
       const demo = await open(browser, { demo: true });
-      await demo.locator('#btnSettings').click(); await demo.locator('#tabBoard').click();
+      if (!await demo.locator('#dlgSettings').evaluate(e => e.open)) await demo.locator('#btnSettings').click(); await demo.locator('#tabBoard').click();
       assert.equal(await demo.locator('#sDocsSave').isDisabled(), true);
       assert.equal(await demo.locator('#sDocsRoot').isDisabled(), true);
       assert.equal(demo.api.writes, 0); await demo.close();
