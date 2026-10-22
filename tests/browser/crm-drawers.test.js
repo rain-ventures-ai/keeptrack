@@ -231,8 +231,8 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     assert.equal(await page.evaluate(() => document.getElementById('fProject').value), 'pr_one');
     assert.deepEqual(await page.locator('#fClient').evaluate(s => [...s.selectedOptions].map(o => o.value)), ['Acme']);
     assert.equal(await page.locator('#fStatus').inputValue(), '__open');
-    assert.equal(await page.locator('#projectBar').isVisible(), true);
-    assert.match(await page.locator('#projectBar .goalchip.on').textContent(), /Launch v2/);
+    assert.equal(await page.locator('#projectBar').count(), 0, 'projects stay in the company control');
+    assert.match(await page.locator('.cpill.projtok').textContent(), /Launch v2/);
     // back to People without fighting the board history entry View on board pushed
     await page.evaluate(() => { document.getElementById('fClear').click(); });
     await page.locator('#viewSw [role=tab]', { hasText: 'People' }).click();

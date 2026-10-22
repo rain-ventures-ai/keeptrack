@@ -570,6 +570,14 @@ header .logo { flex: 0 0 auto; width: 32px; height: 32px; font-size: 17px; borde
 .cpill:hover { border-color: var(--cc, var(--accent)); } .cpill .cn { font-size: var(--fs-xs); color: var(--muted); } .cpill .cdotc, .cmenu .cdotc { width: 9px; height: 9px; border-radius: 50%; background: var(--cc, var(--muted)); flex: 0 0 auto; }
 .cpill.on { background: color-mix(in srgb, var(--cc, var(--accent)) 16%, var(--card)); border-color: var(--cc, var(--accent)); font-weight: 600; } .cpill.all.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .cpill.more { color: var(--muted); }
+.cpillproj { display: inline-flex; align-items: center; margin: 0 -4px 0 0; padding: 0; border: 0; background: transparent; color: inherit; }
+.cpillproj svg { width: 14px; height: 14px; }
+.cpill.projtok { max-width: 200px; gap: var(--sp-1); }
+.cpill.projtok svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.cpill.projtok .projtok__name { overflow: hidden; text-overflow: ellipsis; }
+#dock .dtab.has-kit, #btnMore.has-kit { position: relative; }
+#dock .dtab.has-kit::after, #btnMore.has-kit::after { content: ""; position: absolute; top: 6px; right: calc(50% - 18px); width: 8px; height: 8px; border-radius: 50%; background: var(--accent); border: 2px solid var(--header); }
+#btnMore.has-kit::after { top: -2px; right: -2px; }
 .popover { position: absolute; z-index: var(--z-popover); background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: 0 14px 36px rgba(0,0,0,.28); padding: var(--sp-3); min-width: 220px; }
 .popover[hidden] { display: none; }
 .clientpop { top: calc(100% + 6px); max-height: 60vh; overflow-y: auto; }

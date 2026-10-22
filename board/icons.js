@@ -24,6 +24,10 @@
   ICONS['sparkles'] = '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>';
   ICONS['shield-check'] = '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>';
   ICONS['workflow'] = '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>';
+  // Agent marks for the assignee row. Drawn for this board (not a vendor logo file).
+  ICONS['agent-claude'] = '<path d="M12 2.5 13.6 8.8 20 10.2 13.6 11.6 12 17.9 10.4 11.6 4 10.2 10.4 8.8Z"/><path d="M18.5 14.5 19.2 16.8 21.5 17.5 19.2 18.2 18.5 20.5 17.8 18.2 15.5 17.5 17.8 16.8Z"/>';
+  ICONS['agent-cursor'] = '<path d="M5 3.5 19 12 11.2 13.4 9.2 20.5Z"/>';
+  ICONS['agent-codex'] = '<path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="M13 6 11 18"/>';
   const svgIcon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`; return t.content.firstChild; };   // name -> <svg class="i">
   const setI = (e, icon, text) => { e.textContent = ''; e.append(svgIcon(icon)); if (text) e.append(' ' + text); };   // replace e's content with an icon and optional text
   const fillIcons = root => root.querySelectorAll('i[data-i]').forEach(i => i.replaceWith(svgIcon(i.dataset.i)));   // static markup: <i data-i="name"></i>

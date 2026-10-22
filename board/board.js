@@ -321,7 +321,8 @@ if (typeof window !== 'undefined') (() => {
     ['morePop', 'dockPop'].forEach(id => {
       const pop = $(id); if (!pop || pop.querySelector('[data-head-action], [data-tour-start]')) return;
       const items = HEAD_ACTIONS.map(a => { const b = el('button'); b.type = 'button'; if (a.tour) b.dataset.tourStart = ''; else b.dataset.headAction = a.id; b.append(svgIcon(a.icon), ' ' + a.menu); return b; });
-      pop.prepend(...items);
+      const up = el('button', 'kitmenu'); up.type = 'button'; up.hidden = true; up.append(svgIcon('puzzle'), el('span', 'kitmenu__label', ''));
+      pop.prepend(up, ...items);
     });
   })();
   const b64e = s => { const b = new TextEncoder().encode(s); let r = ''; b.forEach(x => r += String.fromCharCode(x)); return btoa(r); };
@@ -865,7 +866,7 @@ if (typeof window !== 'undefined') (() => {
   async function checkKit() {
     if (HOSTED) return;
     const c = cfg(), key = c.repo + '@' + c.branch, bar = $('kitBar'); if (!bar) return;
-    if (newerSchema) { showBar('kitBar', { tone: 'warn', text: `This board was saved by newer board tools (schema v${newerSchema}). It is read-only here until this page updates.` }); bar.dataset.schema = '1'; return; }
+    if (newerSchema) { showBar('kitBar', { tone: 'warn', text: `This board was saved by newer board tools (schema v${newerSchema}). It is read-only here until this page updates.` }); setKitMenu(null); bar.dataset.schema = '1'; return; }
     if (bar.dataset.schema) { delete bar.dataset.schema; bar.hidden = true; kitChecked = ''; }
     if (kitChecked === key) return; kitChecked = key;
     try {
@@ -877,12 +878,20 @@ if (typeof window !== 'undefined') (() => {
     } catch { /* offline or no kit published: say nothing */ }
   }
   const kitOwner = () => (state.settings && state.settings.kit_owner) || ((state.people[0] || {}).github || '');
+  // A kit that is behind is a menu item, not a band above the cards. The strip stays for a board this page cannot safely edit.
+  function setKitMenu(nudge) {
+    document.querySelectorAll('.kitmenu').forEach(b => {
+      b.hidden = !nudge; if (!nudge) return;
+      b.querySelector('.kitmenu__label').textContent = nudge.text;
+      b.onclick = () => { closePops(); if (nudge.onClick) nudge.onClick(); };
+    });
+    ['dockMenu', 'btnMore'].forEach(id => { const b = $(id); if (b) b.classList.toggle('has-kit', !!(nudge && nudge.badge)); });
+  }
   function renderKitBar(have, want) {
-    if (!(want > have)) { showBar('kitBar', null); return; }
+    if (!(want > have)) { showBar('kitBar', null); setKitMenu(null); return; }
+    showBar('kitBar', null);
     const owner = kitOwner(), title = `Upgrade board tools to kit v${want}`, card = state.tasks.find(t => t.title === title && t.column !== 'done');
-    const intro = `Board tools are out of date (this repo v${have}, latest v${want}). `, bar = o => showBar('kitBar', Object.assign({ tone: 'info', icon: 'puzzle' }, o));
-    if (card) { bar({ text: intro + `Upgrade card #${card.num} is with @${owner}.`, action: { label: `Open #${card.num}`, onClick: () => openCard(card.id, 'comments') } }); return; }
-    if (!owner || (me() || '').toLowerCase() !== owner.toLowerCase()) { bar({ text: intro + `The upgrade owner is @${owner || '?'}.` }); return; }
+    const mine = !!(owner && (me() || '').toLowerCase() === owner.toLowerCase());
     const make = async () => {
       const id = uid(), raw = HOME + '/board/kit/UPGRADING.md';
       await mutate(n => { if (n.tasks.some(t => t.title === title && t.column !== 'done')) return;
@@ -893,7 +902,9 @@ if (typeof window !== 'undefined') (() => {
       renderKitBar(have, want); const t = state.tasks.find(x => x.id === id);
       if (t) { openCard(id, 'comments'); $('cmText').value = '@claude upgrade the board kit'; autosize($('cmText')); }
     };
-    bar({ text: intro + 'You are the upgrade owner.', action: ui.button({ label: 'Make the upgrade card', variant: 'primary', size: 'sm', onClick: make }) });
+    if (card) setKitMenu({ text: `Upgrade board tools (v${have} → v${want}) · #${card.num}`, badge: mine, onClick: () => openCard(card.id, 'comments') });
+    else if (mine) setKitMenu({ text: `Upgrade board tools (v${have} → v${want})`, badge: true, onClick: make });
+    else setKitMenu({ text: `Board tools v${have}, latest v${want} · @${owner || '?'}`, badge: false });
   }
   // ---- relay kit: is this repo's relay/ older than the published relay kit? (only boards that have relay/KIT_VERSION) ----
   // Same shape as the board-kit bar above: one bar for everyone, the button only for the upgrade owner, one open card at a time.
@@ -1631,33 +1642,6 @@ if (typeof window !== 'undefined') (() => {
     if ($('dlgClient') && $('dlgClient').open) $('dlgClient').close();
     if (view !== 'board' && view !== 'list') setView('board'); else render();
   }
-  // When one or more companies are selected (or a project filter is on), show that scope's projects as chips — same job as the client pills, for projects.
-  function renderProjectBar() {
-    let box = $('projectBar');
-    if (!box) {
-      const goal = $('goalBar'); if (!goal || !goal.parentNode) return;
-      box = el('div', 'goalbar'); box.id = 'projectBar'; box.hidden = true;
-      box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'Filter by project');
-      goal.parentNode.insertBefore(box, goal);
-    }
-    box.textContent = '';
-    const clients = clientValues(), fp = $('fProject').value, dc = doneColId();
-    let projects = sortedProjects().filter(p => (p.status || 'active') === 'active' || p.id === fp);
-    if (clients.length) projects = projects.filter(p => clients.includes(p.client) || p.id === fp);
-    else if (fp) projects = projects.filter(p => p.id === fp);
-    else projects = [];
-    const show = (view === 'board' || view === 'list') && !!projects.length;
-    box.hidden = !show; if (!show) return;
-    box.append(el('span', 'goalbar__label', 'Projects'));
-    projects.forEach(p => {
-      const on = fp === p.id, open = state.tasks.filter(t => t.project === p.id && t.column !== dc).length;
-      const b = el('button', 'goalchip' + (on ? ' on' : '')); b.type = 'button'; b.dataset.project = p.id; b.setAttribute('aria-pressed', String(on));
-      b.title = on ? `Clear project filter (${p.name})` : `Show only ${p.name} (${open} open)`;
-      b.append(el('strong', 'goalchip__title', p.name || 'Untitled project'));
-      b.append(el('span', 'goalchip__meta', [p.client, `${open} open`, p.status && p.status !== 'active' ? p.status : ''].filter(Boolean).join(' · ')));
-      b.onclick = () => setProjectFilter(on ? '' : p.id); box.append(b);
-    });
-  }
   function renderGoalBar() {
     const box = $('goalBar'); if (!box) return; box.textContent = '';
     const goals = activeGoals(), fg = $('fGoal').value, show = (view === 'board' || view === 'list') && (goals.length > 0 || !!fg);
@@ -1776,10 +1760,35 @@ if (typeof window !== 'undefined') (() => {
     setClientValues(selected); render();
     document.querySelectorAll('#clientPop [data-client]').forEach(b => { const on = selected.has(b.dataset.client); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
   };
+  function clientProjects(name) {
+    const fp = $('fProject').value;
+    return sortedProjects().filter(p => p.client === name && ((p.status || 'active') === 'active' || p.id === fp));
+  }
+  function openClientProjects(anchor, name) {
+    const fp = $('fProject').value, dc = doneColId();
+    const items = clientProjects(name).map(p => {
+      const open = state.tasks.filter(t => t.project === p.id && t.column !== dc).length, on = fp === p.id;
+      return { label: `${p.name || 'Untitled'}${open ? ` (${open})` : ''}`, icon: on ? 'check' : 'flag', onSelect: () => setProjectFilter(on ? '' : p.id) };
+    });
+    if (items.length) ui.menu(anchor, items, { label: `Projects for ${name}` });
+  }
+  function projectToken() {
+    const p = projectById($('fProject').value); if (!p) return null;
+    const b = el('button', 'cpill projtok on'); b.type = 'button'; b.title = `Project: ${p.name}. Click to clear.`;
+    b.setAttribute('aria-label', `Clear project filter ${p.name}`);
+    b.append(svgIcon('flag'), el('span', 'projtok__name', p.name), el('span', 'cn', '×'));
+    b.onclick = () => setProjectFilter('');
+    return b;
+  }
   function clientPill(c) {
     const on = clientValues().includes(c.name), b = el('button', 'cpill' + (on ? ' on' : '')); b.type = 'button'; b.style.setProperty('--cc', `hsl(${clientHue(c.name)} 72% 52%)`); b.setAttribute('aria-pressed', String(on));
     b.title = on ? `Filter: click to remove ${c.name}` : `Filter: click to show only ${c.name} (${c.open} open) · use ▸ for client details`;
     b.append(el('i', 'cdotc'), document.createTextNode(c.name)); if (c.open) b.append(el('span', 'cn', String(c.open)));
+    if (on && clientProjects(c.name).length) {
+      const proj = el('button', 'cpillproj'); proj.type = 'button'; proj.title = `Projects for ${c.name}`; proj.setAttribute('aria-label', `Projects for ${c.name}`); proj.setAttribute('aria-haspopup', 'menu');
+      proj.append(svgIcon('chevron-down')); proj.onclick = e => { e.stopPropagation(); openClientProjects(proj, c.name); };
+      b.append(proj);
+    }
     const det = el('button', 'cpillgo'); det.type = 'button'; det.title = 'Client details'; det.setAttribute('aria-label', `Client details for ${c.name}`);
     det.append(svgIcon('panel-right-open')); det.onclick = e => { e.stopPropagation(); openClient(c.name); };
     b.append(det); b.onclick = () => toggleClient(c.name);
@@ -1791,6 +1800,8 @@ if (typeof window !== 'undefined') (() => {
     const agent = String(c.agent || 'agent'), name = agent.slice(0, 1).toUpperCase() + agent.slice(1);
     return name + (c.on_behalf_of ? ' for @' + c.on_behalf_of : '');
   };
+  const AGENT_ICON = { claude: 'agent-claude', codex: 'agent-codex', cursor: 'agent-cursor' };
+  const agentIcon = name => AGENT_ICON[String(name || '').toLowerCase()] || 'bot';
   function agentAssignments() {
     const found = new Map();
     state.tasks.forEach(t => { const claim = activeClaim(t); if (!claim) return; const value = agentFilterValue(claim), old = found.get(value); if (old) old.count++; else found.set(value, { value, agent: claim.agent || 'agent', owner: claim.on_behalf_of || '', label: agentLabel(claim), count: 1 }); });
@@ -1800,16 +1811,17 @@ if (typeof window !== 'undefined') (() => {
   function renderTopbar() {
     const box = $('clientBar'); if (!box || !state) return;
     const total = state.tasks.filter(t => t.column !== doneColId()).length, sel = clientValues(), selected = new Set(sel), list = clientRank(), agents = agentAssignments();
-    const sig = JSON.stringify([total, sel, box.clientWidth, list.map(c => [c.name, c.open, c.lvl]), state.people.map(p => p.github), agents.map(a => [a.value, a.count]), $('fWho').value]);
+    const sig = JSON.stringify([total, sel, $('fProject').value, sortedProjects().filter(p => selected.has(p.client)).map(p => [p.id, p.name, p.status]), box.clientWidth, list.map(c => [c.name, c.open, c.lvl]), state.people.map(p => p.github), agents.map(a => [a.value, a.count]), $('fWho').value]);
     if (sig === topSig && box.firstChild) return; topSig = sig; box.textContent = '';   // the pill fitting below forces layouts: skip it when nothing changed
     const all = el('button', 'cpill all' + (sel.length ? '' : ' on'), 'All'); all.type = 'button'; all.setAttribute('aria-pressed', String(!sel.length)); all.title = 'Clear client filters'; if (total) all.append(el('span', 'cn', String(total))); all.onclick = clearClients; box.append(all);
+    const tok = projectToken(); if (tok) box.append(tok);
     let n = 0;                                                    // n = how many pills fit, in their natural order (append all, then read once: one layout, not one per pill)
     const probe = list.map(c => { const b = clientPill(c); box.append(b); return b; }), left = box.getBoundingClientRect().left, lim = box.clientWidth + 1;
     for (const b of probe) { if (b.getBoundingClientRect().right - left > lim) break; n++; }
     // Active filters stay at the front so the current multi-client scope remains visible.
     const order = list.filter(c => selected.has(c.name)).concat(list.filter(c => !selected.has(c.name)));
     const fits = () => box.scrollWidth <= box.clientWidth + 1;
-    box.querySelectorAll('.cpill:not(.all)').forEach(b => b.remove()); const shown = [];
+    box.querySelectorAll('.cpill:not(.all):not(.projtok)').forEach(b => b.remove()); const shown = [];
     for (let i = 0; i < n; i++) { const b = clientPill(order[i]); box.append(b); shown.push(b); }
     while (!fits() && shown.length > 1) { shown.pop().remove(); n--; }
     let rest = order.slice(shown.length);
@@ -1830,7 +1842,11 @@ if (typeof window !== 'undefined') (() => {
     state.people.forEach(p => { const on = w === p.github, b = el('button', 'pq' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Show everyone' : `Only @${p.github}'s tasks`;
       b.append(avatar(p.github)); b.onclick = () => { $('fWho').value = on ? '' : p.github; render(); }; pq.append(b); });
     agents.forEach(a => { const on = w === a.value, b = el('button', 'pq agentq' + (on ? ' on' : '')); b.type = 'button'; b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Show every assignee' : `Only tasks assigned to ${a.label}`;
-      b.append(svgIcon('bot'), el('span', 'agentname', a.agent.slice(0, 1).toUpperCase() + a.agent.slice(1))); if (a.owner) b.append(avatar(a.owner)); b.append(el('span', 'agentcount', String(a.count)));
+      b.setAttribute('aria-label', b.title); b.append(svgIcon(agentIcon(a.agent)));
+      const same = agents.filter(x => String(x.agent).toLowerCase() === String(a.agent).toLowerCase());
+      const ownerOnBar = a.owner && state.people.some(p => String(p.github).toLowerCase() === String(a.owner).toLowerCase());
+      if (a.owner && (same.length > 1 || !ownerOnBar)) b.append(avatar(a.owner));
+      b.append(el('span', 'agentcount', String(a.count)));
       b.onclick = () => { $('fWho').value = on ? '' : a.value; render(); }; pq.append(b); });
   }
   // ---- header popovers (board switcher, client overflow, filters, More, dock Menu): one open at a time ------------------------
@@ -2120,7 +2136,7 @@ if (typeof window !== 'undefined') (() => {
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderProjectBar(); renderGoalBar(); renderStats();
+      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
       if ($('dlgCard').open) refreshDrawer(); return;
@@ -2157,7 +2173,7 @@ if (typeof window !== 'undefined') (() => {
       add.append(inp, btn); c.append(add); full.onclick = () => { cinemaCol = focused ? '' : col.id; render(); }; hb.onclick = open; board.append(c);
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
-    renderLegend(); renderProjectBar(); renderGoalBar(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
+    renderLegend(); renderGoalBar(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
