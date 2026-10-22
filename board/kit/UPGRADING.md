@@ -37,7 +37,9 @@ Archive size follow-ups (private-tasks card #288). No data change and no migrati
 Gmail source-link privacy and record navigation fixes. No data change or migration; `kit-update` copies the files.
 - New Gmail source links save only the thread ID as `#all/<id>` and an optional numeric account selector such as
   `/mail/u/0/`. Search words, label names, query parameters and account addresses are removed by the browser and CLI.
-  Gmail mailbox/search/label links without an individual thread are refused. Existing Gmail source links are shown
+  Gmail pagination and ambiguous mailbox/search/label/category links are refused. Recognition is deliberately limited
+  to full-width legacy 16-hex IDs and observed `FMfcgz` web IDs with a bounded suffix; other formats fail closed.
+  This does not verify that the thread exists in an account. Existing Gmail source links are shown
   with the same clean target; stored old entries are not rewritten until edited.
 - A missing record reached through Back/Forward resets its history entry to the current view, so the next person,
   company or project drawer creates its own entry. The CLI accepts uppercase `HTTPS://`, as the browser does.

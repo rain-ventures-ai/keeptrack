@@ -123,8 +123,8 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
     await page.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /https:/.test(x.textContent)));
     assert.equal(api.person().comments[1].url, undefined, 'a bad link is refused, nothing saved');
     await page.locator('#pTouches .touch').nth(0).locator('button[aria-label^="Add source link"]').click();
-    await sheet.locator('input').fill('HTTPS://MAIL.GOOGLE.COM/mail/u/0/?authuser=private%40example.test#search/private%40example.test/abc123'); let w = saved(); await sheet.locator('button', { hasText: 'Save' }).first().click(); await w;
-    assert.equal(api.person().comments[1].url, 'https://mail.google.com/mail/u/0/#all/abc123');
+    await sheet.locator('input').fill('HTTPS://MAIL.GOOGLE.COM/mail/u/0/?authuser=private%40example.test#search/private%40example.test/FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz'); let w = saved(); await sheet.locator('button', { hasText: 'Save' }).first().click(); await w;
+    assert.equal(api.person().comments[1].url, 'https://mail.google.com/mail/u/0/#all/FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz');
     await page.waitForFunction(() => document.querySelectorAll('#pTouches a.tsrclink').length === 2);
     assert.equal(await page.locator('#pProjActSec').isVisible(), true);
     assert.deepEqual(await page.locator('#pProjAct .projact .ui-listrow__text').allTextContents(), ['Launch']);
@@ -166,6 +166,22 @@ const day = n => new Date(Date.now() - n * 86400000).toISOString();
       await pg.reload(); await pg.waitForSelector('.crow'); await pg.waitForTimeout(500);
       assert.equal(await pg.locator('#dlgContact[open]').count(), 0, 'a reload after X does not reopen it');
       assert.deepEqual(errs, [], 'Back/X: no page errors'); await pg.close(); }
+    // Pagination, nested labels and search views are not individual Gmail threads.
+    for (const fragment of ['inbox/p2', 'search/private%40example.test/p2', 'label/Clients/Acme', 'search/from%3Aacme/renewal', 'search/private/ImportantRenewalNotesFromPrivateClient']) {
+      const pagination = new Github();
+      pagination.files['people/p_one.json'] = text({ ...person, comments: [{ id: 'c_page', at: day(0), by: 'alex', channel: 'email', text: 'Original reference.' }] });
+      const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+      await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => pagination.route(r));
+      await pg.goto(base + '/board/index.html#person=p_one'); await pg.locator('#dlgContact[open]').waitFor();
+      await pg.locator('#pTouches button[aria-label^="Add source link"]').click();
+      const form = pg.locator('dialog.ui-sheet[open]');
+      await form.locator('input').fill('https://mail.google.com/mail/u/0/#' + fragment);
+      await form.locator('button', { hasText: 'Save' }).first().click();
+      await pg.waitForFunction(() => [...document.querySelectorAll('.ui-toast, .toast')].some(x => /https:/.test(x.textContent)));
+      assert.equal(pagination.person().comments[0].url, undefined, 'ambiguous Gmail views never become stored thread links');
+      assert.equal(await pg.locator('#pTouches a.tsrclink').count(), 0);
+      await pg.close();
+    }
     // A Forward entry for a deleted person must not keep an old drawer marker.
     {
       const missing = new Github(); missing.files = { ...api.files };

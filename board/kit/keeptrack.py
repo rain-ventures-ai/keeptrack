@@ -6473,7 +6473,10 @@ def check_touch_url(url):
     mailboxes = {"all", "inbox", "sent", "drafts", "starred", "important", "snoozed", "spam", "trash", "scheduled"}
     count = 3 if route in {"search", "label", "category"} else 2 if route in mailboxes else 0
     thread = parts[-1].split("?", 1)[0]
-    if not count or len(parts) < count or not re.fullmatch(r"[A-Za-z0-9_-]+", thread):
+    # Recognise a conservative subset, not arbitrary final label/search words: full-width legacy
+    # hex IDs (https://developers.google.com/workspace/gmail/imap/imap-extensions#access_to_the_gmail_thread_id_x-gm-thrid)
+    # and observed FMfcgz-prefixed web IDs. Other/short ambiguous forms fail closed without account access.
+    if not count or len(parts) < count or re.fullmatch(r"p[0-9]+", thread, re.I) or not re.fullmatch(r"(?:[0-9a-fA-F]{16}|FMfcgz[A-Za-z0-9_-]{20,512})", thread):
         sys.exit("source link must identify one Gmail thread, not a mailbox, search or label")
     account = re.fullmatch(r"/mail/u/([0-9]+)/?", parsed.path)
     path = f"/mail/u/{account.group(1)}/" if account else "/mail/"
