@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 90;
+  const PAGE_KIT = 91;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -7571,7 +7571,7 @@ if (typeof window !== 'undefined') (() => {
       const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); box.append(row);
     });
   }
-  // A log entry's source link (card #290, kit v90): `url`, the original message or thread. It opens in a new tab;
+  // A log entry's source link (card #290, kit v91): `url`, the original message or thread. It opens in a new tab;
   // in the person record, an entry without one offers to add it.
   const touchUrl = cm => typeof cm.url === 'string' && /^https?:\/\/[^\s/]+\S*$/i.test(cm.url) && cm.url.length <= 2000 ? cm.url : '';
   function touchSource(p, cm, editable) {

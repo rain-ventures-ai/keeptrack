@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Kit v90: CRM gaps after Companies (private-tasks card #290; v88 is another change in flight). Companies gets a **Sort** menu (stage, recently
+Kit v91: CRM gaps after Companies (private-tasks card #290; v88 is another change in flight). Companies gets a **Sort** menu (stage, recently
 contacted, recently updated, name) and a last-contact filter (contacted in 30 days, no contact in 30+ days, never
 contacted), remembered per viewer and board. A company, person or project record has its own address
 (`#company=<name>`, `#person=<id>`, `#project=<id>`): opening the record puts it in the address bar, opening the link
@@ -16,6 +16,13 @@ record and the company's Activity show **Open in Gmail** / **Open original** in 
 prints it. The `keeptrack-email` skill passes the Gmail thread link. A person's record shows **Project activity**: for
 each project they are in (their email is on it, or a task names them), the newest comments and changes on its tasks.
 No migration.
+
+Kit v90: a folder's own token setting wins (private-tasks card #286; v88 is held by an open kit pull request).
+When `.keeptrack/config.json` names `token_env` and that variable is set, `keeptrack.py` uses its value even when
+`BOARD_TOKEN` is already set in the shell, and warns on stderr when it replaces a different value. A shell `BOARD_REPO`
+naming another board keeps the shell's `BOARD_TOKEN`, so the board and its token always come from the same place. `where` names the
+variable the token came from and which board won. In a board clone, a `BOARD_REPO` inherited from the shell that names
+another board than the clone's git remote now prints a warning (it still decides). No migration and no data change.
 
 Kit v89: the last gaps in the reserved client-name check (private-tasks card #287; v87 and v88 are other changes in
 flight). `archive` and `unarchive` save directly, so they now run the check themselves: an archived record whose client
