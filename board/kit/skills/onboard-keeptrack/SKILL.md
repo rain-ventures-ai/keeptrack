@@ -14,6 +14,10 @@ If the board repo is not available as a clone in the session, stop after connect
 open the next session on that repo: the onboarding plan, staging file and resume state belong in the board repo, not
 in an unrelated product repo.
 
+For docs-home setup or an authorised saved research/document output, use `keeptrack-docs-home`
+(the sibling skill, or `board/keeptrack-docs-home/SKILL.md` in a board checkout). Read `settings --json` first;
+malformed/access-denied settings need repair, not a replacement root. Ordinary searches stay read-only.
+
 ## Rules (always)
 1. **Read-only until the owner approves a plan.** The interview and the survey change nothing, in any place.
 2. **Files stay where they are.** Link to folders. Do not copy, move, rename or delete a file unless the owner asks for a tidy-up and approves a move plan (see `references/folders.md`). Never delete.

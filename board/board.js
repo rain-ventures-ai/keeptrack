@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 102;
+  const PAGE_KIT = 103;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -6520,7 +6520,7 @@ if (typeof window !== 'undefined') (() => {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
-    syncResearchSettings(locked);
+    syncResearchSettings(locked); syncDocsHome(locked);
   }
   // Backlog auto-research (kit v60): settings.backlog_research = { enabled, per_run }. Only `enabled: true` is on (as in
   // keeptrack.py backlog_research); the relay dispatcher reads it, the page only stores it. Guarded: an older cached
@@ -6541,6 +6541,44 @@ if (typeof window !== 'undefined') (() => {
       'Backlog auto-research: ' + (enabled ? `on, ${per} per run` : 'off'));
     syncModeSettings();
   }
+  function docsHome(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'provider,root') throw Error('Docs home must contain provider and root.');
+    const { provider, root } = value;
+    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 2048 || root.trim() !== root || /[\x00-\x1f\x7f]|%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root)) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
+    if (provider === 'local') {
+      if (!root.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(root) && !/^\\\\[^\\/]+[\\/][^\\/]+/.test(root)) throw Error('Use an absolute local path.');
+    } else {
+      let u; try { u = new URL(root); } catch (_) { throw Error('Use an HTTPS folder URL.'); }
+      const h = u.hostname.toLowerCase(), allowed = provider === 'google-drive' ? h === 'drive.google.com' : provider === 'dropbox' ? ['dropbox.com', 'www.dropbox.com'].includes(h) : ['onedrive.live.com', '1drv.ms'].includes(h) || (h.endsWith('.sharepoint.com') && h !== '.sharepoint.com');
+      if (!/^https:\/\/[^/]/i.test(root) || /^https:\/\/[^/?#]*[@%]/i.test(root) || u.protocol !== 'https:' || !allowed || u.username || u.password || (u.port && u.port !== '443') || /[\\\s]/.test(root)) throw Error('Use an HTTPS URL on the selected provider, without credentials.');
+    }
+    return { provider, root };
+  }
+  function syncDocsHome(locked = !!ro || !!newerSchema || busy) {
+    if (!$('sDocsCurrent')) return;
+    const display = $('sDocsCurrent'); display.textContent = '';
+    const raw = state.settings.docs_home;
+    if (!Object.hasOwn(state.settings, 'docs_home')) { display.textContent = 'Not set. Ask the owner to choose an existing docs folder.'; $('sDocsRoot').value = ''; }
+    else {
+      try {
+        const home = docsHome(raw); $('sDocsProvider').value = home.provider; $('sDocsRoot').value = home.root;
+        display.append(document.createTextNode(home.provider + ': '));
+        if (home.provider === 'local') display.append(document.createTextNode(home.root + ' — requires access on that machine.'));
+        else { const link = document.createElement('a'); link.href = home.root; link.textContent = home.root; link.target = '_blank'; link.rel = 'noopener noreferrer'; display.append(link); }
+      } catch (_) { display.textContent = 'Invalid stored docs home. Ask the owner to repair it before filing; do not create a replacement root.'; $('sDocsRoot').value = ''; }
+    }
+    for (const id of ['sDocsProvider', 'sDocsRoot', 'sDocsSave', 'sDocsClear']) $(id).disabled = !!locked;
+  }
+  async function saveDocsHome(clear = false) {
+    if (ro || newerSchema || busy) { syncDocsHome(); return; }
+    let home;
+    try { if (!clear) home = docsHome({ provider: $('sDocsProvider').value, root: $('sDocsRoot').value }); }
+    catch (e) { toast(e.message, true); return; }
+    for (const id of ['sDocsProvider', 'sDocsRoot', 'sDocsSave', 'sDocsClear']) $(id).disabled = true;
+    await mutate(d => { d.settings ||= {}; if (clear) delete d.settings.docs_home; else d.settings.docs_home = home; }, clear ? 'Clear docs home' : 'Set docs home');
+    syncDocsHome();
+  }
+  if ($('sDocsSave')) { $('sDocsSave').onclick = () => saveDocsHome(); $('sDocsClear').onclick = () => saveDocsHome(true); }
   // ---- Review Inbox (kit v42): proposals from agents and routines wait in <board>/proposals/<id>.json --------------
   // They are never part of state (tasks, contacts), so counts, views, search, Today, widgets and agents never see them.
   // A decision re-reads the proposal and its target, then writes the record and the proposal in ONE commit (Git Data,

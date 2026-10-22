@@ -1,0 +1,12 @@
+{
+  "label": "v4 frozen docs home (kit v103); optional reference preserved",
+  "schema": 4,
+  "layout": "split",
+  "kit_before_update": 102,
+  "counts": {
+    "tasks": 2,
+    "contacts": 1,
+    "clients": 1,
+    "projects": 1
+  }
+}

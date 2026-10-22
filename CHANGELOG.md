@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v103: one shared docs-home provider/root setting, validated CLI and web setup, safe read-only display, and a small setup/filing skill. Existing folders are reused; docs stay in storage and cards hold links. No live setting, external folder or document is changed by this release.
+
 Kit v102: archive bodies load only for archive views, archived lookups, proposals and explicit diagnostics; snapshots retain their paths, sizes and revisions. Stale SHA blob caches are pruned within the current board repository. GitHub archive writes split oversized years into bounded `YYYY-N.json` parts in the same atomic commit, retaining records, history and unknown envelope fields. Unpackable individual records stay safely held. The first part-file write sets `settings.min_kit` to 102; ordinary reads and year-only writes do not. Hosted archive storage keeps its year-only contract and uses a separate metadata revision endpoint, with full-body fallback for older servers. No automatic data migration.
 
 Kit v101: archive size follow-ups. Split-board toasts exclude held years, archived label/client/stage rewrites allow oversized files to shrink or remain unchanged, and size warnings appear once after save. Held CLI tasks and people retain list positions and can still trim history into a year with room. Hosted archive size enforcement remains server-side and is documented explicitly. No migration; includes v100.

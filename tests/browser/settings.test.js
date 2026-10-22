@@ -89,6 +89,34 @@ async function settle(page) { await page.evaluate(() => new Promise(r => request
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Docs home saves through ordinary shared-board mutation and survives a reload.
+    {
+      const page = await open(browser);
+      await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
+      await page.locator('#sDocsProvider').selectOption('google-drive');
+      await page.locator('#sDocsRoot').fill('https://drive.google.com/drive/folders/existing-root');
+      await page.locator('#sDocsSave').click();
+      await page.waitForFunction(() => document.querySelector('#sDocsCurrent a')?.href.includes('existing-root'));
+      assert.equal(JSON.parse(page.api.files['tasks.json']).settings.docs_home.provider, 'google-drive');
+      await page.reload(); await page.waitForSelector('.card');
+      await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
+      assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/existing-root');
+      const writes = page.api.writes;
+      await page.locator('#sDocsRoot').fill('https://evil.test/root'); await page.locator('#sDocsSave').click();
+      await settle(page); assert.equal(page.api.writes, writes, 'invalid provider host never writes');
+      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/work/<private>/keeptrack'); await page.locator('#sDocsSave').click();
+      await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.includes('/work/<private>/keeptrack'));
+      assert.equal(await page.locator('#sDocsCurrent a').count(), 0, 'local path remains text, never file navigation');
+      assert.equal(await page.locator('#sDocsCurrent private').count(), 0, 'stored text is escaped');
+      await page.locator('#sDocsClear').click(); await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.startsWith('Not set'));
+      assert.equal(Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'), false);
+      assert.deepEqual(page.errors, []); await page.close();
+      const demo = await open(browser, { demo: true });
+      await demo.locator('#btnSettings').click(); await demo.locator('#tabBoard').click();
+      assert.equal(await demo.locator('#sDocsSave').isDisabled(), true);
+      assert.equal(await demo.locator('#sDocsRoot').isDisabled(), true);
+      assert.equal(demo.api.writes, 0); await demo.close();
+    }
     // Saved routine reports are not live scheduler state; setup only copies a scoped, approval-first prompt.
     {
       const page = await open(browser, { width: 390, height: 844 });

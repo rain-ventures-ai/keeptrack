@@ -25,6 +25,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v103 (schema 4)
+- Optional `settings.docs_home` stores `{provider, root}` for google-drive, dropbox, onedrive or local. No migration or folder creation. CLI `settings --json`, paired `settings-set --docs-provider/--docs-root`, and explicit `--clear-docs-home`; web Settings → Board includes the same reference.
+- The new keeptrack-docs-home skill handles owner-chosen setup and authorised filing, reusing the existing keeptrack root. Hosted setting changes require the human board owner; agent invalid_fence refusals must not be bypassed. Local paths remain text and need a session with access on that machine.
+
 ### v102 (schema 4)
 - Archive files are indexed without loading their bodies. Archive views, archived lookups, proposals and doctor hydrate them on demand. Old blob-cache entries absent from the captured repository tree are pruned; other repositories and non-SHA cache entries are retained.
 - Oversized GitHub year files are packed into `archive/YYYY.json` and `archive/YYYY-N.json` parts, with the root index and live-record changes saved atomically. Existing part names, records, history and unknown envelope fields are retained. A single record or envelope too large to pack is held safely rather than discarded.

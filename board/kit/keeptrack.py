@@ -358,7 +358,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 102  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 103  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -7932,9 +7932,54 @@ def cmd_agent_rm(a):
     mutate(fn, f"Remove agent: {a.name}")
 
 
+DOCS_PROVIDERS = ("google-drive", "dropbox", "onedrive", "local")
+
+
+def validate_docs_home(value):
+    """Validate a reference only; never expand, access or create its destination."""
+    if not isinstance(value, dict) or set(value) != {"provider", "root"}:
+        raise ValueError("docs home must contain provider and root")
+    provider, root = value.get("provider"), value.get("root")
+    if provider not in DOCS_PROVIDERS or not isinstance(root, str) or not 1 <= len(root) <= 2048:
+        raise ValueError("docs home needs a supported provider and a root of 1-2048 characters")
+    if root != root.strip() or any(ord(c) < 32 or ord(c) == 127 for c in root) or re.search(r"%(?:0[0-9a-f]|1[0-9a-f]|7f)", root, re.I):
+        raise ValueError("docs home root must not contain controls or surrounding whitespace")
+    if provider == "local":
+        if not (root.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", root)
+                or re.match(r"^\\\\[^\\/]+[\\/][^\\/]+", root)):
+            raise ValueError("local docs home must be an absolute path")
+    else:
+        try:
+            from urllib.parse import urlsplit
+            url = urlsplit(root)
+            host = (url.hostname or "").lower()
+            port = url.port
+        except ValueError:
+            raise ValueError("invalid docs home URL") from None
+        allowed = {"google-drive": host == "drive.google.com",
+                   "dropbox": host in ("dropbox.com", "www.dropbox.com"),
+                   "onedrive": host in ("onedrive.live.com", "1drv.ms") or (host.endswith(".sharepoint.com") and host != ".sharepoint.com")}
+        if (not re.match(r"^https://[^/]", root, re.I) or re.match(r"^https://[^/?#]*[@%]", root, re.I) or url.scheme.lower() != "https" or not allowed[provider] or url.username is not None
+                or url.password is not None or port not in (None, 443) or "\\" in root
+                or any(c.isspace() for c in root)):
+            raise ValueError("docs home needs an HTTPS URL on the selected provider, without credentials")
+    return {"provider": provider, "root": root}
+
+
 def cmd_settings(a):
     data, _ = load()
     st = data.get("settings") or {}
+    if getattr(a, "json", False):
+        print(json.dumps(st, ensure_ascii=False, indent=2)); return
+    if "docs_home" not in st:
+        print("docs_home: not set")
+    else:
+        try:
+            home = validate_docs_home(st["docs_home"])
+            print(f"docs_home: {home['provider']} {home['root']}")
+            if home["provider"] == "local": print("Local paths require a session with access on that machine.")
+        except ValueError:
+            print("docs_home: INVALID stored setting; ask the owner to repair it before filing")
     print(f"title: {st.get('title', '')}")
     print(f"stale_after_minutes: {st.get('stale_after_minutes', 30)}")
     raw, lim = st.get("max_agent_claims"), claim_limit(data)
@@ -7956,8 +8001,18 @@ def cmd_settings(a):
 
 def cmd_settings_set(a):
     """Change board settings: title, stale minutes, pipeline stages (with renames)."""
+    provider, root = getattr(a, "docs_provider", None), getattr(a, "docs_root", None)
+    clear = getattr(a, "clear_docs_home", False)
+    if (provider is None) != (root is None) or (clear and provider is not None):
+        sys.exit("use paired --docs-provider and --docs-root, or --clear-docs-home on its own")
+    home = None
+    if provider is not None:
+        try: home = validate_docs_home({"provider": provider, "root": root})
+        except ValueError as e: sys.exit(str(e))
     def fn(data):
         st = data.setdefault("settings", {})
+        if home is not None: st["docs_home"] = dict(home); print("docs_home set")
+        elif clear: st.pop("docs_home", None); print("docs_home cleared")
         if getattr(a, "setting", None) is not None:
             require_review_storage(data)
             if a.setting != "review_inbox.enabled" or str(a.value).lower() not in ("true", "false"):
@@ -7994,7 +8049,7 @@ def cmd_settings_set(a):
                              "python3 board/keeptrack.py kit-update")
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
-                                                                  "rename_stage", "stages", "backlog_research", "research_per_run")):
+                                                                  "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root")) or clear:
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
@@ -11649,9 +11704,11 @@ def main():
     s = sub.add_parser("agents", help="list the board's agents (names used in filters and assignment)"); s.set_defaults(f=cmd_agents)
     s = sub.add_parser("agent-add", help="add an agent name"); s.add_argument("name"); s.set_defaults(f=cmd_agent_add)
     s = sub.add_parser("agent-rm", help="remove an agent name"); s.add_argument("name"); s.add_argument("--unassign", action="store_true", help="take it off its open tasks"); s.set_defaults(f=cmd_agent_rm)
-    s = sub.add_parser("settings", help="show board settings"); s.set_defaults(f=cmd_settings)
+    s = sub.add_parser("settings", help="show board settings"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_settings)
     s = sub.add_parser("settings-set", help="change title, stale minutes or pipeline stages"); s.add_argument("--title")
     s.add_argument("setting", nargs="?"); s.add_argument("value", nargs="?")
+    s.add_argument("--docs-provider", choices=DOCS_PROVIDERS); s.add_argument("--docs-root")
+    s.add_argument("--clear-docs-home", action="store_true")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
