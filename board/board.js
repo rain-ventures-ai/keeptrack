@@ -8679,13 +8679,13 @@ if (typeof window !== 'undefined') (() => {
       }
     }
     updates.forEach((item, id) => records.set(id, item)); absorbedIds.forEach(id => histories.delete(id));
-    const empty = cur => Object.assign({}, cur || { version: 3, archive: true, year }, { tasks: [], contacts: [], proposals: [], history: {} });
+    const empty = cur => ({ ...(cur || { version: 3, archive: true, year }), tasks: [], contacts: [], proposals: [], history: {} });
     const template = empty(), templateSize = archBytes(jsonText(template)), units = [];
     for (const [id, [kind, item]] of records) { const unit = empty(); unit[kind].push(item); if (histories.has(id)) { unit.history[id] = histories.get(id); histories.delete(id); } units.push(unit); }
     for (const [id, lines] of histories) { const unit = empty(); unit.history[id] = lines; units.push(unit); }
     const slots = new Map(keys.map(k => [k, empty(family.get(k))])), sizes = new Map([...slots].map(([k, value]) => [k, archBytes(jsonText(value))]));
     if ([...sizes.values()].some(n => n > ARCH_MAX)) throw new ArchiveUnpackable('Archive envelope metadata cannot fit a part');
-    let index = 0, nextPart = Math.max(1, ...keys.filter(k => k !== year).map(k => Number(k.slice(5)))) + 1;
+    let index = 0, nextPart = Math.max(0, ...keys.filter(k => k !== year).map(k => Number(k.slice(5)))) + 1;
     for (const unit of units) {
       const weight = archBytes(jsonText(unit)) - templateSize;
       if (templateSize + weight > ARCH_MAX) throw new ArchiveUnpackable('A single logical archive record cannot fit a part');

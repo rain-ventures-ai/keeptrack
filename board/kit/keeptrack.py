@@ -5038,13 +5038,12 @@ def _doctor_snapshot():
 
 
 LIVE_FILE_MAX = 200 * 1024      # a card, person, project or other board file: 200 KB
-# archive/<year>.json is a different kind of file. It is loaded with the board like every other file (cached by blob sha,
-# downloaded again after each archive change), so its size counts toward load cost; the 5 MB board total still caps that.
-# 900 KB is a chosen margin, not a GitHub limit: the real archive was 578 KB when this was set, and a year file is rewritten
-# whole by every archive run. The warning leaves time to act before the error.
+# Archive bodies are loaded on demand; doctor still measures their contribution to the 5 MB board total.
+# 900 KB is a chosen per-part margin, not a GitHub limit. Packable years split at write time; an individual
+# record or envelope that cannot fit remains held. The 700 KB warning still applies to ordinary year-only writes.
 ARCHIVE_FILE_MAX = 900 * 1024
 ARCHIVE_FILE_WARN = 700 * 1024
-ARCHIVE_FILE_RE = re.compile(r"archive/[0-9]{4}(?:-[1-9][0-9]{0,5})?\.json")   # the shape check_year allows; any other file in archive/ keeps 200 KB
+ARCHIVE_FILE_RE = re.compile(r"archive/[0-9]{4}(?:-[1-9][0-9]{0,5})?\.json")   # the shape check_archive_key allows; any other file in archive/ keeps 200 KB
 ARCHIVE_NEXT_STEP = ("Archive normally to split a large year into bounded parts. A single record or envelope metadata "
                      "that cannot fit stays unchanged; ask the board owner to review it. Do not edit archive files by hand.")
 
@@ -9919,7 +9918,7 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     sizes = {key: len(_json_text(value).encode()) for key, value in slots.items()}
     if any(size > ARCHIVE_FILE_MAX for size in sizes.values()):
         raise ArchiveUnpackable("archive envelope metadata cannot fit a part")
-    next_part = max([1] + [int(key[5:]) for key in keys if key != year]) + 1
+    next_part = max([0] + [int(key[5:]) for key in keys if key != year]) + 1
     index = 0
     for unit in units:
         weight = len(_json_text(unit).encode()) - template_size

@@ -18,6 +18,19 @@ def envelope(year='2020', **extra):
 
 
 class ArchiveLazyShards(unittest.TestCase):
+    def test_hosted_revision_uses_metadata_route_and_only_falls_back_for_unsupported_route(self):
+        adapter = object.__new__(k.HostedStorageAdapter); adapter.board = 'synthetic-board'
+        with mock.patch.object(adapter, 'request', return_value={'path': 'archive/2020.json', 'rev': 'r1'}) as request, mock.patch.object(adapter, 'read') as read:
+            self.assertEqual(adapter.revision('archive/2020.json')['rev'], 'r1')
+            self.assertTrue(request.call_args.args[1].endswith('/file-revisions/archive%2F2020.json'))
+            read.assert_not_called()
+        with mock.patch.object(adapter, 'request', side_effect=k.HostedError(404, {'code': 'not_found'})), mock.patch.object(adapter, 'read', return_value={'rev': 'r2', 'body': {}}):
+            self.assertEqual(adapter.revision('archive/2020.json')['full']['rev'], 'r2')
+        with mock.patch.object(adapter, 'request', side_effect=k.HostedError(403, {'code': 'forbidden'})), mock.patch.object(adapter, 'read') as read:
+            with self.assertRaises(k.HostedError):
+                adapter.revision('archive/2020.json')
+            read.assert_not_called()
+
     def test_cli_archive_parts_and_restore_preserve_history_and_opaque_fields(self):
         from board_fixtures import copy_board_fixture
         with tempfile.TemporaryDirectory() as folder:

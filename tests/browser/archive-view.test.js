@@ -372,7 +372,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       for (let i = 0; i < 80 && api.json('tasks.json').tasks.some(t => t.id === 't_shipped'); i++) await page.waitForTimeout(100);
       await page.evaluate(() => { const v = (id, x) => { document.getElementById(id).value = x; }; v('sRepo', 'acme/board'); v('sBranch', 'dev'); v('sPath', 'board/tasks.json'); v('sMe', 'alex'); document.getElementById('sSave').click(); });
       for (let i = 0; i < 100 && !hold; i++) await page.waitForTimeout(50); assert.ok(hold, 'the new board\'s read is in flight');
-      await page.evaluate(() => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Undo').click());
+      await page.locator('.ui-toast').getByRole('button', {name:'Undo', exact:true}).click();
       await page.locator('.ui-toast', { hasText: 'The board changed; put it back from that branch' }).waitFor();
       assert.equal(await page.locator('.ui-toast', { hasText: 'did not load' }).count(), 0, 'not "the archive did not load"');
       assert.deepEqual(writes, [], 'nothing is written'); hold();
@@ -413,7 +413,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
     //      changed it behind this page with the same counts (and no new last_run); the loaded copy is not what comes back ----
     { const api = new Github().single(); const page = await open(browser, api);
       await waitNums(page, ['#22', '#21', '#20', '#11', '#10']);
-      const a = api.json('archive/2026.json'); a.tasks = a.tasks.map(t => t.id === 'a26_one' ? { ...t, title: 'Invoice March v2', details: 'edited elsewhere' } : t); api.files['archive/2026.json'] = text(a);
+      const a = api.json('archive/2026.json'); a.tasks = a.tasks.map(t => t.id === 'a26_one' ? { ...t, title: 'Invoice March v2', details: 'edited elsewhere' } : t); api.files['archive/2026.json'] = text(a); api.head='external-edit-'+ ++api.n;
       await page.locator('.archrow', { hasText: 'Invoice March' }).click(); assert.equal(await page.locator('#aTitle').innerText(), '#20 Invoice March', 'the page still shows the copy it loaded');
       await page.locator('#aRestore').click(); await page.locator('#dlgArch').waitFor({ state: 'hidden' });
       const back = () => api.json('tasks.json').tasks.find(t => t.id === 'a26_one');
@@ -423,7 +423,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
       if (await page.evaluate(() => document.body.dataset.view) !== 'archive') await page.locator('#viewSw button[data-view="archive"]').click();
       await waitNums(page, ['#22', '#21', '#11', '#10']);
-      const b = api.json('archive/2025.json'); b.tasks = b.tasks.filter(t => t.id !== 'a25_one'); b.tasks.push(card('a25_other', 12, 'Another card', {})); api.files['archive/2025.json'] = text(b);
+      const b = api.json('archive/2025.json'); b.tasks = b.tasks.filter(t => t.id !== 'a25_one'); b.tasks.push(card('a25_other', 12, 'Another card', {})); api.files['archive/2025.json'] = text(b); api.head='external-edit-'+ ++api.n;
       await page.locator('.archrow', { hasText: 'Old website brief' }).click(); await page.locator('#aRestore').click();
       await page.locator('.ui-toast', { hasText: 'was changed elsewhere' }).waitFor();
       assert.ok(!api.json('tasks.json').tasks.some(t => t.id === 'a25_one'), 'not restored from the page\'s old copy');
@@ -524,11 +524,11 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
     { const api = new Github(); api.files['cards/t_shipped.json'] = text(card('t_shipped', 3, 'Shipped live', { column: 'done', client: 'Acme' })); api.single();
       let hold = null, held = false;
       const page = await open(browser, api, { view: 'board', route: async r => { const q = r.request();
-        if (q.method() === 'PUT' && /\/archive\/\d{4}\.json/.test(q.url()) && !held) { held = true; await new Promise(ok => { hold = ok; }); }
+        if (q.method() === 'PATCH' && q.url().endsWith('/git/refs/heads/main') && !held) { held = true; await new Promise(ok => { hold = ok; }); }
         return api.route(r); } });
       const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Shipped live' }); await shipped.waitFor();
       await shipped.hover(); await shipped.locator('.quickarch').click();
-      for (let i = 0; i < 100 && !hold; i++) await page.waitForTimeout(50); assert.ok(hold, 'the archive file write is in flight');
+      for (let i = 0; i < 100 && !hold; i++) await page.waitForTimeout(50); assert.ok(hold, 'the atomic archive commit is in flight');
       await page.evaluate(() => document.getElementById('sForget').click()); await page.locator('dialog[open]').getByRole('button', { name: 'Forget token' }).click();
       await page.waitForTimeout(300); assert.ok(await page.evaluate(() => localStorage.getItem('kb_token')), 'Forget token waits for the archive run');
       hold(); await page.waitForFunction(() => !localStorage.getItem('kb_token'), null, { timeout: 10000 }); await page.waitForTimeout(800);

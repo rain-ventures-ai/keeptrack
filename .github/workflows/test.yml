@@ -51,9 +51,12 @@ jobs:
       - name: Feedback components (in-page confirm, toasts with Undo, no native dialogs)
         working-directory: tests/browser
         run: node feedback.test.js
-      - name: Archive year file size limit (hold back past 900 KB, warn past 700 KB)
+      - name: Archive sizes, lazy reads, bounded shards and hosted revisions
         working-directory: tests/browser
-        run: node archive-size.test.js
+        run: |
+          node archive-size.test.js
+          node archive-lazy-shards.test.js
+          node archive-hosted-revisions.test.js
       - name: Task drawer
         working-directory: tests/browser
         run: node task-drawer.test.js

@@ -401,8 +401,9 @@ let base;
           return route.fulfill({ status: raw ? 200 : 404, contentType: 'application/json', body: JSON.stringify(raw ? { sha: archApi.sha(rel), encoding: 'base64', content: Buffer.from(raw).toString('base64') } : { message: 'Not Found' }) });
         }
         if (req.method() === 'PUT' && p.endsWith('/contents/board/tasks.json') && req.postDataJSON().sha !== archApi.sha('tasks.json')) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: 'sha does not match' }) });
-        if (race && !injected && req.method() === 'PUT' && p.includes('/contents/board/archive/')) {
-          injected = true; const newer = JSON.parse(archApi.files['tasks.json']); newer.tasks[0].comments.push({ id: 'new-comment', text: 'Concurrent comment', by: 'alex' }); archApi.files['tasks.json'] = text(newer);
+        if (race && !injected && req.method() === 'PATCH' && p.endsWith('/git/refs/heads/main')) {
+          injected = true; const newer = JSON.parse(archApi.files['tasks.json']); newer.tasks[0].comments.push({ id: 'new-comment', text: 'Concurrent comment', by: 'alex' }); archApi.files['tasks.json'] = text(newer); archApi.head='concurrent-'+ ++archApi.n;
+          return route.fulfill({status:422,contentType:'application/json',body:JSON.stringify({message:'Reference update failed'})});
         }
         return originalRoute(route);
       };
@@ -411,8 +412,8 @@ let base;
       assert.equal(Object.keys(JSON.parse(archApi.files['tasks.json']).archive.files).length, 2, 'archive index was persisted');
       const after = JSON.parse(archApi.files['tasks.json']), archivePath = Object.keys(archApi.files).find(p => p.startsWith('archive/') && p !== 'archive/2024.json'), archivedTask = JSON.parse(archApi.files[archivePath]).tasks[0];
       assert.deepEqual(archivedTask.history, [older, ...d.tasks[0].history]);
-      assert.equal(after.tasks.some(t => t.id === 't_one'), race);
-      if (race) assert.equal(after.tasks.find(t => t.id === 't_one').comments.at(-1).text, 'Concurrent comment');
+      assert.equal(after.tasks.some(t => t.id === 't_one'), false);
+      if (race) assert.equal(archivedTask.comments.at(-1).text, 'Concurrent comment', 'atomic retry archives the latest comment');
       else { await ap.locator('#btnSearch').click(); await ap.locator('#qArch').check(); await ap.locator('#qQ').fill('First'); await ap.locator('.qhit', { hasText: 'First' }).click(); await ap.locator('#aRestore').click(); await ap.locator('#dlgArch').waitFor({ state: 'hidden' }); assert.deepEqual(JSON.parse(archApi.files['tasks.json']).tasks.find(t => t.id === 't_one').history.slice(0, archivedTask.history.length), archivedTask.history); }
       await ap.close();
     }

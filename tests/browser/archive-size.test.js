@@ -1,6 +1,6 @@
 'use strict';
-// Archive year files have their own size limit (kit v86): past 900 KB the items bound for that year stay on the board,
-// past 700 KB the archive is written and the toast warns. Run: node archive-size.test.js
+// Archive files are bounded at 900 KB (kit v102): packable years split atomically; unpackable envelopes stay held.
+// Past 700 KB an unsplit archive is written and the toast warns. Run: node archive-size.test.js
 
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -18,6 +18,7 @@ const server = http.createServer((req, res) => {
   fs.readFile(file, (err, data) => { if (err) res.writeHead(404).end(); else { res.setHeader('Content-Type', mime[path.extname(file)] || 'application/octet-stream'); res.end(data); } });
 });
 
+const stampForTest=()=> '2020-01-01T00:00:00Z';
 const text = x => JSON.stringify(x, null, 2) + '\n';
 const root = { version: 4, layout: 'split', settings: { title: 'Drawer test' }, columns: [{ id: 'todo', name: 'To do' }, { id: 'done', name: 'Done' }], people: [{ github: 'alex', name: 'Alex' }, { github: 'sam', name: 'Sam' }], agents: [], clients: ['Acme', 'Bluebell Events', 'Northwind Traders'], labels: [{ name: 'pale', color: '#dce1e7' }, { name: 'dark', color: '#334155' }], client_info: {}, next_num: 4, archive: { files: {} } };
 const card = (id, num, title, extra) => ({ id, num, title, column: 'todo', client: '', priority: 'medium', due: '', labels: [], assignees: [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: '2026-10-01T08:00:00.000Z', updated: '2026-10-01T08:00:00.000Z', rank: 'a' + num, ...extra });
@@ -66,6 +67,39 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // A packable oversized year is committed atomically with the live-card removal, for both layouts.
+    for (const split of [true, false]) {
+      const api = new Github(), year = String(new Date().getFullYear());
+      api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, custom:{keep:true},
+        tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{t_two:[{at:stampForTest(),text:'older evidence'}]} });
+      const done = api.card('t_two'); done.details='x'.repeat(350000); api.files['cards/t_two.json']=text(done);
+      const meta=JSON.parse(api.files['tasks.json']); meta.archive={files:{[year]:{tasks:2,contacts:0}}};
+      if (!split) { delete meta.layout; meta.version=3; meta.tasks=Object.keys(api.files).filter(p=>p.startsWith('cards/')).map(p=>JSON.parse(api.files[p])); meta.contacts=[]; }
+      api.files['tasks.json']=text(meta);
+      if (!split) for (const key of Object.keys(api.files)) if (/^(cards|people)\//.test(key)) delete api.files[key];
+      let archiveReads=0;
+      const page=await browser.newPage({viewport:{width:1280,height:860}}), errors=[]; page.on('pageerror',e=>errors.push(e.message));
+      await page.addInitScript(init,'board'); await page.route('https://api.test/**',r=>{
+        const u=r.request().url(); if (r.request().method()==='GET' && (u.includes('/archive/') || u.endsWith('/git/blobs/'+api.sha(`archive/${year}.json`)))) archiveReads++;
+        return api.route(r);
+      });
+      await page.goto(base+'/board/index.html'); await page.waitForSelector('.card');
+      assert.equal(archiveReads,0,'normal board opening never downloads archive bodies');
+      const shipped=page.locator('.col[data-col="done"] .card',{hasText:'Finished work'}); await shipped.hover(); await shipped.locator('.quickarch').click();
+      await page.getByRole('button',{name:'Undo',exact:true}).waitFor();
+      const after=JSON.parse(api.files['tasks.json']), keys=Object.keys(after.archive.files);
+      assert.equal(after.settings.min_kit,102); assert.ok(keys.some(y=>y.startsWith(year+'-')));
+      const records=keys.flatMap(y=>{assert.ok(Buffer.byteLength(api.files[`archive/${y}.json`])<=900*1024);return JSON.parse(api.files[`archive/${y}.json`]).tasks;});
+      assert.deepEqual(records.map(x=>x.id).sort(),['t_old_a','t_old_b','t_two']);
+      assert.deepEqual(JSON.parse(api.files[`archive/${year}.json`]).custom,{keep:true});
+      assert.ok(api.pending.some(x=>/archive\/\d{4}-[1-9]/.test(x.path)),'part creation is in the same tree commit');
+      assert.ok(split ? !api.card('t_two') : !after.tasks.some(x=>x.id==='t_two'));
+      await page.getByRole('button',{name:'Undo',exact:true}).click();
+      await page.waitForFunction(()=>document.querySelector('.col[data-col="done"]')?.textContent.includes('Finished work'));
+      const restored=split?api.card('t_two'):JSON.parse(api.files['tasks.json']).tasks.find(x=>x.id==='t_two');
+      assert.equal(restored.details,'x'.repeat(350000)); assert.ok(restored.history.some(x=>x.text==='older evidence'));
+      assert.deepEqual(errors,[]); await page.close();
+    }
     for (const [kb, held] of [[905, true], [710, false]]) {
       const api = new Github(), year = String(new Date().getFullYear());   // the quick archive writes to today's year, whatever the card's date
       api.files[`archive/${year}.json`] = text({ version: 3, archive: true, year, tasks: [], contacts: [], history: {}, pad: 'x'.repeat(kb * 1024) });
