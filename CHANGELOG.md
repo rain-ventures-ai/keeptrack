@@ -12,7 +12,8 @@ Kit v101: archive size follow-ups. Split-board toasts exclude held years, archiv
 
 Kit v100: Gmail contact-log source links are saved with only a thread ID and optional numeric account selector.
 Search terms, labels, query parameters and account addresses are removed in the page and CLI; a Gmail view without
-an individual thread is refused. Existing Gmail links render with clean targets. Missing-record Back/Forward entries
+a recognised thread-ID shape is refused, including pagination and nested-label/search-only addresses. Legacy full-width
+hex and bounded `FMfcgz` web-ID shapes are supported conservatively; other forms fail closed. Existing Gmail links render with clean targets. Missing-record Back/Forward entries
 now discard stale drawer markers so the next drawer has its own history entry. CLI source links accept uppercase
 `HTTPS://`. No migration; old stored Gmail URLs are cleaned when edited rather than rewritten in bulk.
 

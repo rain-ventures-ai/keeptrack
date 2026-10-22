@@ -60,12 +60,14 @@ class TouchUrl(unittest.TestCase):
         self.assertIn(f"source link ({self.touches()[-1]['id']}): {GMAIL}", self.person())
 
     def test_gmail_sources_keep_only_the_thread_and_numeric_account(self):
-        thread = "FMfcgzQXabc123"
+        thread = "FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz"
         for source, target in (
             (f"HTTPS://MAIL.GOOGLE.COM/mail/u/2/?authuser=private%40example.test#search/private%40example.test/{thread}", f"https://mail.google.com/mail/u/2/#all/{thread}"),
             (f"https://mail.google.com/mail/u/0/#label/Private%20Client/{thread}?projector=1", f"https://mail.google.com/mail/u/0/#all/{thread}"),
             (f"https://mail.google.com/mail/u/private@example.test/#inbox/{thread}", f"https://mail.google.com/mail/#all/{thread}"),
             (f"https://mail.google.com/mail/#category/updates/{thread}", f"https://mail.google.com/mail/#all/{thread}"),
+            (f"https://mail.google.com/mail/u/0/#inbox/p2/{thread}", f"https://mail.google.com/mail/u/0/#all/{thread}"),
+            (f"https://mail.google.com/mail/#search/private/{thread}Longer", f"https://mail.google.com/mail/#all/{thread}Longer"),
         ):
             with self.subTest(source=source):
                 self.run_ok("touch", "Robin Linktest", "Thread reference.", "--channel", "email", "--url", source)
@@ -73,7 +75,7 @@ class TouchUrl(unittest.TestCase):
                 self.assertNotIn("private", self.touches()[-1]["url"].lower())
 
     def test_gmail_source_without_a_thread_is_refused(self):
-        for fragment in ("search/private", "label/PrivateClient", "settings/general", "inbox", "all/"):
+        for fragment in ("search/private", "label/PrivateClient", "settings/general", "inbox", "all/", "inbox/p2", "search/private/p2", "label/PrivateClient/P30", "label/Clients/Acme", "search/from%3Aacme/renewal", "search/private/ImportantRenewalNotesFromPrivateClient"):
             with self.subTest(fragment=fragment):
                 r = self.run_kt("touch", "Robin Linktest", "Thread reference.", "--channel", "email", "--url", "https://mail.google.com/mail/u/0/#" + fragment)
                 self.assertNotEqual(0, r.returncode)
@@ -104,8 +106,8 @@ class TouchUrl(unittest.TestCase):
         self.run_ok("touch", "Robin Linktest", "Second.", "--channel", "email")
         first, second = [c["id"] for c in self.touches()]
         self.assertIn(f"set source link on {second}", self.run_ok("touch-url", "Robin Linktest", GMAIL))
-        self.run_ok("touch-url", "Robin Linktest", GMAIL + "x", "--touch", first)
-        self.assertEqual([GMAIL + "x", GMAIL], [c.get("url") for c in self.touches()])
+        self.run_ok("touch-url", "Robin Linktest", GMAIL[:-1] + "2", "--touch", first)
+        self.assertEqual([GMAIL[:-1] + "2", GMAIL], [c.get("url") for c in self.touches()])
         self.assertIn("cleared", self.run_ok("touch-url", "Robin Linktest", "", "--touch", first))
         self.assertNotIn("url", self.touches()[0])
         r = self.run_kt("touch-url", "Robin Linktest", GMAIL, "--touch", "c_nope")

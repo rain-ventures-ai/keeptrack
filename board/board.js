@@ -8255,7 +8255,8 @@ if (typeof window !== 'undefined') (() => {
     const parts = parsed.hash.slice(1).split('/'), route = parts[0].toLowerCase();
     const count = ['search', 'label', 'category'].includes(route) ? 3 : ['all', 'inbox', 'sent', 'drafts', 'starred', 'important', 'snoozed', 'spam', 'trash', 'scheduled'].includes(route) ? 2 : 0;
     const thread = parts[parts.length - 1].split('?')[0];
-    if (!count || parts.length < count || !/^[A-Za-z0-9_-]+$/.test(thread)) return '';
+    // Match the CLI's conservative legacy/web ID shapes; arbitrary label/search words are not thread IDs.
+    if (!count || parts.length < count || /^p[0-9]+$/i.test(thread) || !/^(?:[0-9a-fA-F]{16}|FMfcgz[A-Za-z0-9_-]{20,512})$/.test(thread)) return '';
     const account = parsed.pathname.match(/^\/mail\/u\/([0-9]+)\/?$/);
     return 'https://mail.google.com' + (account ? `/mail/u/${account[1]}/` : '/mail/') + '#all/' + thread;
   }
@@ -8271,7 +8272,7 @@ if (typeof window !== 'undefined') (() => {
   async function setTouchUrl(pid, cmid, cur) {
     const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the original thread link. Gmail searches and labels are removed; only the thread link is saved. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
     if (v === null) return; const raw = v.trim(), url = touchUrl({ url: raw });
-    if (raw && !url) { toast('Enter one link starting with https://', true); return; }
+    if (raw && !url) { toast('Enter one link starting with https://. Gmail links must open an individual thread.', true); return; }
     pedit(pid, x => { const c = x.comments.find(y => y.id === cmid); if (!c) return; if (url) c.url = url; else delete c.url; }, `Source link: ${nameOf(pid)}`);
   }
   async function markSent(pid, cmid) {
