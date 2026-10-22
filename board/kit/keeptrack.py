@@ -3924,10 +3924,18 @@ def tiff_orientation(tiff):
     """EXIF Orientation (1-8) from a TIFF block (the body of an EXIF segment); 1 when absent or unreadable."""
     try:
         bo = {b"II": "little", b"MM": "big"}[tiff[:2]]
-        ifd = int.from_bytes(tiff[4:8], bo); count = int.from_bytes(tiff[ifd:ifd + 2], bo)
+        if len(tiff) < 8 or int.from_bytes(tiff[2:4], bo) != 42:
+            return 1
+        ifd = int.from_bytes(tiff[4:8], bo)
+        if ifd < 8 or ifd % 2 or ifd + 2 > len(tiff):
+            return 1
+        count = int.from_bytes(tiff[ifd:ifd + 2], bo)
+        if ifd + 2 + 12 * count + 4 > len(tiff):   # complete entries plus the next-IFD field, before looping
+            return 1
         for k in range(count):
             e = ifd + 2 + 12 * k
-            if int.from_bytes(tiff[e:e + 2], bo) == 0x0112 and int.from_bytes(tiff[e + 2:e + 4], bo) == 3:
+            if (int.from_bytes(tiff[e:e + 2], bo) == 0x0112 and int.from_bytes(tiff[e + 2:e + 4], bo) == 3
+                    and int.from_bytes(tiff[e + 4:e + 8], bo) == 1):
                 v = int.from_bytes(tiff[e + 8:e + 10], bo)
                 return v if 1 <= v <= 8 else 1
     except (KeyError, IndexError, ValueError):
@@ -3953,7 +3961,7 @@ def strip_image_metadata(blob, ext):
         out, i, turn = bytearray(blob[:2]), 2, 1
         segments = 0
         decoding = set(range(0xC0, 0xC8)) | set(range(0xC9, 0xD0)) | set(range(0xDA, 0xE0))
-        while i + 4 <= len(blob):
+        while i + 2 <= len(blob):
             segments += 1
             if segments > 4096:
                 raise ValueError("too many JPEG segments")
@@ -3966,6 +3974,8 @@ def strip_image_metadata(blob, ext):
                 return bytes(out + b"\xff\xd9")
             if 0xD0 <= marker <= 0xD9 or marker == 0x01:
                 out += blob[i:i + 2]; i += 2; continue
+            if i + 4 > len(blob):   # only length-carrying markers need four bytes
+                raise ValueError("broken JPEG")
             n = int.from_bytes(blob[i + 2:i + 4], "big")
             if n < 2 or i + 2 + n > len(blob):
                 raise ValueError("broken JPEG")
@@ -11222,7 +11232,8 @@ def main():
                        description="Recognised container metadata, comments and colour profiles are removed. GIF and animated "
                        "WebP retain compressed frame data, which may contain ignored bytes; removal of hidden identifying "
                        "information is not guaranteed. APNG is saved as a still image. Re-export a fresh still PNG/JPEG "
-                       "to discard the original animation payload. Browser still uploads separately re-encode decoded pixels.")
+                       "to discard the original animation payload. Browser still uploads separately re-encode decoded pixels. "
+                       "CLI PNG decoded scanlines are limited to 64 MiB; resize oversized images before attaching.")
     s.add_argument("id"); s.add_argument("path", help="the image file"); s.add_argument("text", nargs="?", default="", help="comment text to go with it, or the link title with --link")
     s.add_argument("--alt", help="a few words saying what the image shows (default: the file name)")
     s.add_argument("--details", action="store_true", help="append it to the description instead of a new comment")

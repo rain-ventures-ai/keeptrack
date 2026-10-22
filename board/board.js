@@ -2734,8 +2734,10 @@ if (typeof window !== 'undefined') (() => {
     let animated = type === 'image/gif', profiled = false, stillOnly = false;
     const finish = parts => ({ blob: new Blob(parts, { type }), animated, profiled, stillOnly });
     const orientation = t => { try { const d = new DataView(t.buffer, t.byteOffset, t.byteLength), le = wordAt(t, 0, 2) === 'II';
-      if (!le && wordAt(t, 0, 2) !== 'MM') return 1; const start = d.getUint32(4, le), count = d.getUint16(start, le);
-      for (let k = 0; k < count; k++) { const e = start + 2 + 12 * k; if (d.getUint16(e, le) === 0x112 && d.getUint16(e + 2, le) === 3) { const n = d.getUint16(e + 8, le); return n >= 1 && n <= 8 ? n : 1; } }
+      if ((!le && wordAt(t, 0, 2) !== 'MM') || t.length < 8 || d.getUint16(2, le) !== 42) return 1;
+      const start = d.getUint32(4, le); if (start < 8 || start % 2 || start + 2 > t.length) return 1;
+      const count = d.getUint16(start, le); if (start + 2 + 12 * count + 4 > t.length) return 1;
+      for (let k = 0; k < count; k++) { const e = start + 2 + 12 * k; if (d.getUint16(e, le) === 0x112 && d.getUint16(e + 2, le) === 3 && d.getUint32(e + 4, le) === 1) { const n = d.getUint16(e + 8, le); return n >= 1 && n <= 8 ? n : 1; } }
     } catch {} return 1; };
     const tiff = n => new Uint8Array([77,77,0,42,0,0,0,8,0,1,1,18,0,3,0,0,0,1,0,n,0,0,0,0,0,0]);
     const chunk = (name, data, little = false) => { const out = new Uint8Array(8 + data.length + (little ? data.length % 2 : 4)), d = new DataView(out.buffer);
