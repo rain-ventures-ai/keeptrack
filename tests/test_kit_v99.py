@@ -1,5 +1,4 @@
 """Kit v99: record a finished Inbox suggestion, and keep duplicate warnings on the item and the card."""
-import json
 import os
 import sys
 import unittest
@@ -18,11 +17,7 @@ def read(*parts):
 
 class Version(unittest.TestCase):
     def test_kit_is_v99_everywhere(self):
-        self.assertEqual(99, keeptrack.KIT_VERSION)
-        self.assertEqual(99, json.loads(read("board", "kit", "manifest.json"))["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            self.assertEqual("0.99.0", json.loads(read("board", "kit", plugin, "plugin.json"))["version"], plugin)
-        self.assertIn("const PAGE_KIT = 99;", read("board", "board.js"))
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 99)   # the exact version is asserted by the newest tests/test_kit_v*.py
 
     def test_upgrade_notes_and_changelog(self):
         v99 = read("board", "kit", "UPGRADING.md").split("### v99 (schema 4)", 1)[1].split("\n### v", 1)[0]

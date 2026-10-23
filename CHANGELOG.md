@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v101: `keeptrack.py watch` polls until a card changes, or until it reaches a column (`--until done`). One command can name several cards; `--all` waits until every one is in that column. A heartbeat on its own does not count. `--timeout` exits 2 when nothing changed. `--json` prints the card and what changed. It reads the board and does not register a listener. No data change and no migration.
+
+Kit v100: a split names the other card. Activity history that says `split from t_…` (or any other card id) shows that card as `#N` and its title, and opens it. `relate A B --kind follow-up` writes the same Follow-up and Split from links as `todo-move`, on both cards. Unlink asks first. Waiting for stays a person or an event, not a split. No data change and no migration.
+
 Kit v99: Review Inbox can record a new task as already done, and duplicate warnings stay put. **Task completed** creates the card in Done (outcome completed, checklist ticked, history `done: already completed when reviewed`) so a suggestion you review after the work is finished is not dropped by Ignore. The same action is `proposal-accept <id> --done`. A new-task item keeps its duplicate warning next to the decision: close open cards, close Inbox items, and a finished card with the same title (`already done`). Adding a card leaves the same warning on the card after the toast goes. No data change and no migration.
 
 Kit v98: List drops the per-row mark-done square (it looked the same as the select box; **Mark done** stays on the selection bar) and shows the description under the title. Markdown marks are stripped and line breaks are joined, so later lines stay visible (two lines on a wide screen, three on a phone). Calendar day lists and Schedule still mark one task done. No data change and no migration; keeptrack.py changes only its version.

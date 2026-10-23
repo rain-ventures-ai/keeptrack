@@ -25,6 +25,20 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v101 (schema 4)
+`keeptrack.py watch` polls until a card changes (web board unchanged apart from the kit version). No data change and no migration.
+- `watch ID [ID ...]` reads the board every 15 seconds ( `--every` ) and exits 0 when a comment, move, checklist tick, edit, claim status or history line changes. A heartbeat that changes nothing else does not count.
+- `--until COLUMN` waits until a card is in that column (`done` is the usual one). It exits at once when a named card is already there. `--all` waits until every named card is in that column.
+- `--timeout SEC` exits 2 when nothing changed. `--json` prints the card and the changes. A session that is not running `watch` is not woken.
+- Run `kit-update` only. Check: `kit-check` says v101, and `keeptrack.py watch --help` lists `--until`.
+
+### v100 (schema 4)
+A split is a linked card (web board and `relate --kind follow-up`). No data change and no migration.
+- Activity history that names a card id (`split from t_…`, `follow-up card: t_…`, and the same id in any other history line) shows `#N` and the title, and opens that card. An id that is not on the board stays as written.
+- `relate A B --kind follow-up` writes the same links as `todo-move`: "Follow-up #N" on A and "Split from #M" on B. A link to a card on this board opens that card. Waiting for is unchanged: it is a person or an event, not a split.
+- Unlink on a related card asks first (`Unlink #N and #M?`). Cancel leaves the link. A possible match still uses Not related with no extra step.
+- Run `kit-update` only. Check: `kit-check` says v100, and a history line `split from t_…` opens that card.
+
 ### v99 (schema 4)
 Review Inbox: record a finished suggestion, and keep duplicate warnings (web board and `proposal-accept --done`). No data change and no migration.
 - **Task completed** on a new-task item creates the card in Done, with the work recorded. Ignore still drops a suggestion that is not wanted. `keeptrack.py proposal-accept <id> --done` does the same; it is refused for anything that is not a new task.
