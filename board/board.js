@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 98;
+  const PAGE_KIT = 99;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -2298,7 +2298,7 @@ if (typeof window !== 'undefined') (() => {
   // One toast system (ui.toast): a newer message replaces an older plain one. An error, or any message once the Undo toast has
   // been up 1.5s, replaces the Undo toast too (Undo stays on the button and Ctrl+Z), so messages never wait behind it.
   let lastToast = null;
-  function toast(msg, bad) { if (lastToast) lastToast.dismiss(); if (bad || Date.now() - undoAt > 1500) hideUndo(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: 4500 } : { timeout: 2600 }); }
+  function toast(msg, bad, timeout) { if (lastToast) lastToast.dismiss(); if (bad || Date.now() - undoAt > 1500) hideUndo(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: timeout || 4500 } : { timeout: timeout || 2600 }); }
   function boardInfo() {
     const c = cfg(), repoUrl = `https://github.com/${c.repo}`, rawBase = `${repoUrl}/blob/${c.branch}`;
     return { c, repoUrl, skill: `${rawBase}/.claude/skills/board/SKILL.md`, agents: `${rawBase}/AGENTS.md`,
@@ -3628,7 +3628,7 @@ if (typeof window !== 'undefined') (() => {
     let hits = [];
     // recheckArchive: the marks change other cards, so a lost race runs the add again on the newer board (never a clash over a card you did not touch)
     return mutate(n => { const c = clone(t); n.tasks.push(c); hits = markSimilar(n, c); }, `Add task: ${title}`, [], null, { recheckArchive: true })
-      .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: open the card to merge, link or dismiss.`); return ok ? t.id : null; });
+      .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: it stays on this card and on any matching Review Inbox item.`, false, 8000); return ok ? t.id : null; });
   }
 
   // ---- new card (kit v61): the card drawer is the one card form. The card is saved with its title, then opens in the
@@ -3773,6 +3773,8 @@ if (typeof window !== 'undefined') (() => {
     [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
     goal.closest('.ui-props__row').id = 'cGoalRow';
     const after = el('div', 'dafter'); after.id = 'cAfter'; after.hidden = true;   // "Runs after": only on a card with after links
+    const dup = el('p', 'ddup'); dup.id = 'cDup'; dup.hidden = true;   // a possible duplicate stays here; the add toast does not
+    $('cTitle').after(dup);
     $('cProps').append(props, after);
     // sections: Description, Related cards, Checklist, Links, Contacts, Activity (comments and history in one timeline)
     const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
@@ -3994,6 +3996,15 @@ if (typeof window !== 'undefined') (() => {
   function renderRelated(t) {
     const box = $('cRelList'), sec = $('cRelSec'), rs = liveRelations(t); box.textContent = '';
     sec.hidden = !rs.length; sec.querySelector('.ui-count').textContent = rs.length ? String(rs.length) : '';
+    const note = $('cDup'), poss = rs.filter(r => r.status === 'possible');
+    if (note) {
+      note.hidden = !poss.length; note.textContent = '';
+      if (poss.length) {
+        const first = poss[0], o = state.tasks.find(x => x.id === first.id);
+        note.textContent = o ? `Possible ${first.kind || 'duplicate'} of #${o.num} ${o.title}. This stays on the card until you merge, link or mark it not related.` : '';
+        note.hidden = !note.textContent;
+      }
+    }
     rs.forEach(r => {
       const o = state.tasks.find(x => x.id === r.id), row = el('div', 'drel'), head = el('div', 'drel__head');
       const open = el('button', 'drel__title linkish', `#${o.num} ${o.title}`); open.type = 'button'; open.onclick = () => openCard(o.id);
@@ -6524,19 +6535,28 @@ if (typeof window !== 'undefined') (() => {
     if (inboxPress.done.has(p.id)) return el('p', 'prop__press prop__press--ok', '✓ ' + inboxPress.done.get(p.id));
     return null;
   }
-  const DONE_TEXT = { accept: 'Accepted', ignore: 'Ignored', undo: 'Undone', reopen: 'Reopened', edit: 'Accepted with your edits', merge: 'Merged' };
+  const DONE_TEXT = { accept: 'Accepted', complete: 'Recorded as done', ignore: 'Ignored', undo: 'Undone', reopen: 'Reopened', edit: 'Accepted with your edits', merge: 'Merged' };
   const answerDone = a => 'approved' in a ? (a.approved ? 'Approved' : 'Not approved') : 'Answered';
   let todayQueue = { key: '', order: [], visible: [], reviewed: new Map(), busy: new Set() };
   // Stored duplicates plus, for a pending new task, the open cards that are close to it NOW: a card added after the
   // proposal was made (a chat added it directly) still shows here, so Accept does not make a second copy.
   function proposalDuplicates(p) {
     const out = (p.likely_duplicates || []).filter(d => d && typeof d === 'object');
-    if (p.kind === 'task.create' && p.status === 'pending') {   // duplicates only: a looser "addition" never blocks an accept
-      const c = p.change || {}, title = c.title || p.title, add = (type, id, why) => { if (!out.some(d => d.type === type && d.id === id)) out.push({ type, id, why }); };
-      similarMatches(state, title, c.client || '', c.project || '', null, doneColId()).filter(h => h.kind === 'duplicate').slice(0, SIMILAR_MAX).forEach(h => add('task', h.id, 'similar title'));
+    if (p.kind === 'task.create' && p.status === 'pending') {   // open cards, finished cards, and other pending items: the warning stays on the item
+      const c = p.change || {}, title = c.title || p.title, add = (type, id, why) => { if (id && !out.some(d => d.type === type && d.id === id)) out.push({ type, id, why }); };
+      similarMatches(state, title, c.client || '', c.project || '', null, doneColId()).slice(0, SIMILAR_MAX).forEach(h => add('task', h.id, h.kind === 'addition' ? 'possible addition' : 'similar title'));
+      const doneCol = doneColId(), doneHits = [];
+      (state.tasks || []).forEach(t => {   // a finished card is still the same work: Ignore would drop that it was done
+        if (!t || t.column !== doneCol || t.outcome === 'cancelled') return;
+        const same = similarScope(c.client || '', c.project || '', t); if (same === null) return;
+        const score = similarScore(title, t.title); if (similarKind(score, same, title, t.title) !== 'duplicate') return;
+        doneHits.push({ id: t.id, num: t.num, score });
+      });
+      doneHits.sort((a, b) => b.score - a.score || (a.num || 0) - (b.num || 0)).slice(0, SIMILAR_MAX).forEach(h => add('task', h.id, 'already done'));
       inboxAll().filter(o => o.id !== p.id && o.kind === 'task.create' && o.status === 'pending').forEach(o => {   // another pending item for the same work
         const oc = o.change || {}, same = similarScope(c.client || '', c.project || '', oc); if (same === null) return;
-        const ot = oc.title || o.title, score = similarScore(title, ot); if (similarKind(score, same, title, ot) === 'duplicate') add('proposal', o.id, 'similar Inbox item');
+        const ot = oc.title || o.title, score = similarScore(title, ot), kind = similarKind(score, same, title, ot);
+        if (kind) add('proposal', o.id, kind === 'addition' ? 'possible addition' : 'similar Inbox item');
       });
     }
     return out;
@@ -6618,7 +6638,15 @@ if (typeof window !== 'undefined') (() => {
       appendUnique(t, 'todos', change.todos || []); appendUnique(t, 'comments', change.comments || []);
       ['value', 'effort', 'priority_rank'].forEach(k => { if (Object.hasOwn(change, k)) t[k] = clone(change[k]); });
       { const after = [...new Set((change.after || []).filter(x => typeof x === 'string' && x && x !== t.id))]; if (after.length) t.after = after; }   // ids: keeptrack.py's propose resolved them
-      histAdd(t, `created from proposal ${p.id}`); n.tasks.push(t); markSimilar(n, t); return;
+      histAdd(t, `created from proposal ${p.id}`);
+      if (action === 'complete') {   // the work was already finished when reviewed: keep that, in Done, instead of ignoring it
+        const done = n.columns.some(c => c.id === 'done') ? 'done' : (n.columns[n.columns.length - 1] || {}).id;
+        if (done) t.column = done;
+        t.outcome = 'completed';
+        (t.todos || []).forEach(d => { if (d && typeof d === 'object') d.done = true; });
+        histAdd(t, 'done: already completed when reviewed');
+      }
+      n.tasks.push(t); markSimilar(n, t); return;
     }
     if (p.kind === 'person.upsert' && !p.target) {
       if (n.contacts.some(x => x.id === ctx.resultId)) return;
@@ -6682,6 +6710,7 @@ if (typeof window !== 'undefined') (() => {
     const p = proposalIn(got.meta, id);
     if (!p) { inboxSay('That proposal is no longer on the board.', true); await load(true); return false; }
     if (p.status !== 'pending') { inboxSay(alreadyMsg(p), true); await load(true); return false; }
+    if (action === 'complete' && p.kind !== 'task.create') { inboxSay('Only a new task can be recorded as already done.', true); return false; }
     if (isAsk(p) && action !== 'ignore') { inboxSay('This is a question: answer it instead.', true); return false; }
     if (isAsk(p) && askDecider(p)) { inboxSay(`Only @${p.decider} can dismiss this question.`, true); return false; }
     if (opts.reviewed && !reviewedProposalMatches(p, opts.reviewed)) {
@@ -6709,7 +6738,7 @@ if (typeof window !== 'undefined') (() => {
     const resultId = creates ? await resultIdFor(p, p.kind === 'task.create' ? 't_' : 'p_') : '';
     const ref = action === 'ignore' ? null : action === 'merge' ? opts.into : creates ? { type: p.kind === 'task.create' ? 'task' : 'person', id: resultId } : p.target;
     const ctx = { resultId, into: opts.into, fields: opts.fields || [] };
-    const label = action === 'ignore' ? 'Ignore' : action === 'merge' ? 'Merge' : 'Accept';
+    const label = action === 'ignore' ? 'Ignore' : action === 'merge' ? 'Merge' : action === 'complete' ? 'Record done' : 'Accept';
     const message = `${label} proposal: ${p.title}`.slice(0, 120);
     const ok = await mutate(n => applyProposal(n, p, action, change, ctx), message, [], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta, latest) => {
       const cur = proposalIn(meta, id);
@@ -6908,7 +6937,9 @@ if (typeof window !== 'undefined') (() => {
       const txt = el('div', 'trow__text');
       const tags = el('div', 'trow__tags'); tags.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm', tone: 'neutral' }));
       if (p.kind === 'task.update' && p.target) { const target = findRef(state, p.target); tags.append(ui.pill({ text: 'Updates ' + (target && target.num ? '#' + target.num : refTitle(p.target)), size: 'sm', tone: 'info' })); }
-      if (otherProposalDuplicates(p).length) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
+      const dups = otherProposalDuplicates(p), finishedDup = d => { const t = d.type === 'task' && (state.tasks || []).find(x => x.id === d.id); return !!(t && finishedDone(t)); };
+      if (dups.some(d => !finishedDup(d))) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
+      if (dups.some(finishedDup)) tags.append(ui.pill({ text: 'Already done', size: 'sm', tone: 'warn' }));
       if (lapsedDays(p)) tags.append(ui.pill({ text: 'Lapsed', size: 'sm', tone: 'warn' }));
       const sameDay = sameDayTouches(p, items);
       if (sameDay) { const pl = ui.pill({ text: `${sameDay + 1} from this person this day`, size: 'sm', tone: 'info' }); pl.title = 'Different messages from the same person on the same day. Review each one.'; tags.append(pl); }
@@ -6950,7 +6981,7 @@ if (typeof window !== 'undefined') (() => {
       if (next) todayQueue.visible.push(next);
       if (pos.id === p.id) { pos.id = todayQueue.visible[Math.min(index, todayQueue.visible.length - 1)]; }
       if (pos.focus && pos.focus.id === p.id) pos.focus = { id: pos.id, review: true };
-      inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : act === 'answer' ? 'Answered. Use Undo to change your answer.' : 'Accepted.');
+      inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : act === 'complete' ? 'Recorded as done. The task stays on the board in Done.' : act === 'answer' ? 'Answered. Use Undo to change your answer.' : 'Accepted.');
     } else {
       if (!$('inboxLive') || !$('inboxLive').textContent) inboxSay('Not saved. The proposal is still pending; check your connection and try again.', true);
       inboxPress.err.set(p.id, $('inboxLive').textContent);   // shown on the item, not only in a toast
@@ -7062,10 +7093,10 @@ if (typeof window !== 'undefined') (() => {
     if (act === 'edit' || act === 'merge') { inboxOpen[p.id] = inboxOpen[p.id] === act ? '' : act; inboxFocus = p.id; render();
       const box = document.querySelector(`#board article.prop[data-id="${p.id}"] .propform`); const first = box && box.querySelector('input, select, textarea'); if (first) first.focus(); return; }
     if (act === 'leave') { inboxSay('Left pending.'); if (next) { inboxFocus = next.dataset.id; next.focus(); } return; }
-    const run = () => act === 'accept' || act === 'ignore' ? decideProposal(p.id, act) : act === 'undo' ? undoDecision(p.id) : act === 'reopen' ? reopenProposal(p.id) : false;
+    const run = () => act === 'accept' || act === 'ignore' || act === 'complete' ? decideProposal(p.id, act) : act === 'undo' ? undoDecision(p.id) : act === 'reopen' ? reopenProposal(p.id) : false;
     const ok = await pressRun(p.id, btn, run, act === 'ignore' && isAsk(p) ? 'Dismissed' : DONE_TEXT[act]);
     if (!ok) { render(); return; }
-    if (act === 'accept') inboxSay('Accepted.'); else if (act === 'ignore') inboxSay(isAsk(p) ? 'Dismissed.' : 'Ignored. It will not come back for this source.');
+    if (act === 'accept') inboxSay('Accepted.'); else if (act === 'complete') inboxSay('Recorded as done. The task stays on the board in Done.'); else if (act === 'ignore') inboxSay(isAsk(p) ? 'Dismissed.' : 'Ignored. It will not come back for this source.');
     inboxFocus = next ? next.dataset.id : ''; render();
   }
   // What Accept does, in plain words: one action, the record it touches, and whether it adds or edits.
@@ -7116,15 +7147,20 @@ if (typeof window !== 'undefined') (() => {
     if (p.reviewer) add('Reviewer', '@' + p.reviewer);
     if (meta.children.length) art.append(meta);
     const flags = el('ul', 'prop__flags');
-    otherProposalDuplicates(p).forEach(d => flags.append(el('li', 'propflag', `Looks like: ${refTitle(d)}${d.why ? ' (' + d.why + ')' : ''}`)));
+    otherProposalDuplicates(p).forEach(d => {
+      const task = d.type === 'task' ? (state.tasks || []).find(t => t.id === d.id) : null, finished = task && finishedDone(task);
+      const name = task && task.num ? `#${task.num} ${task.title || ''}`.trim() : refTitle(d);
+      const why = finished ? 'already done' : (d.why || '');
+      flags.append(el('li', 'propflag', `Looks like: ${name}${why ? ' (' + why + ')' : ''}`));
+    });
     if (p.previously_ignored) flags.append(el('li', 'propflag', `You ignored this on ${String(p.previously_ignored.at || '').slice(0, 10) || 'an earlier date'} (${p.previously_ignored.proposal}).`));
-    if (flags.children.length) art.append(flags);
     art.append(proposalChange(p));
-    if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', d.action === 'ignore' && relayedWords(d) ? withdrawnText(d) : `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
+    if (flags.children.length) art.append(flags);   // next to the decision, so a duplicate is still there when you choose
+    if (p.decision) { const d = p.decision; const verb = d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : d.action === 'complete' ? 'Recorded as done' : 'Accepted'; art.append(el('p', 'prop__decision muted', d.action === 'ignore' && relayedWords(d) ? withdrawnText(d) : `${verb} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
     const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: e => options.today ? todayInboxAct(p, act, undefined, e.currentTarget) : inboxAct(p, act, e.currentTarget) }); b.dataset.act = b.dataset.press = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).some(d => d.type !== 'proposal'))))) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
-    if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Leave pending if anything needs checking.')); btn('accept', plan.verb, 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
+    if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Leave pending if anything needs checking.')); btn('accept', plan.verb, 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); if (p.kind === 'task.create') btn('complete', 'Task completed', 'secondary', 'c'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
     else if (p.status === 'ignored' && p.change) btn('reopen', 'Reopen', 'secondary');
     if (acts.children.length) art.append(acts);
@@ -7153,7 +7189,7 @@ if (typeof window !== 'undefined') (() => {
     const all = inboxAll(), head = el('div', 'inbox__head');
     head.append(el('h2', null, 'Review Inbox'), el('span', 'inbox__count', `${all.filter(p => p.status === 'pending').length} pending`)); wrap.append(head);
     wrap.append(el('p', 'inbox__hint muted', 'Review proposed changes and answer questions from agents. Nothing changes on the board until you accept.'));
-    const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · e edits · m merges · i ignores · r picks the recommended answer')); wrap.append(keys);
+    const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · c records a new task as already done · e edits · m merges · i ignores · r picks the recommended answer')); wrap.append(keys);
     // kit v71: answer every question that recommends an option with that option, after one confirm. Each is saved on its
     // own, exactly as if picked by hand. Lapsed questions and ones for someone else are left for a person to look at.
     const recs = bulkCandidates().filter(p => !inboxBulk.queue.has(p.id));
@@ -7198,7 +7234,7 @@ if (typeof window !== 'undefined') (() => {
       if (e.key === 'Enter' && e.target === cur) { const p = all.find(x => x.id === cur.dataset.id), ref = p && ((p.decision && p.decision.result) || p.target); if (ref && findRef(state, ref)) { e.preventDefault(); if (ref.type === 'task') openCard(ref.id); else openContact(ref.id); return; }
         const first = cur.querySelector('.prop__actions button'); if (first) { e.preventDefault(); first.focus(); } return; }
       if (e.key === 'r') { const b = cur.querySelector('.ask__answers [data-recommended="true"]'); if (b && !b.disabled) { e.preventDefault(); b.click(); } return; }
-      const act = { a: 'accept', e: 'edit', m: 'merge', i: 'ignore' }[e.key]; if (!act) return;
+      const act = { a: 'accept', c: 'complete', e: 'edit', m: 'merge', i: 'ignore' }[e.key]; if (!act) return;
       const b = cur.querySelector(`.prop__actions [data-act="${act}"]`); if (b && !b.disabled) { e.preventDefault(); b.click(); }
     });
     if (inboxFocus && (document.activeElement === document.body || !document.activeElement)) { const f = wrap.querySelector(`article.prop[data-id="${inboxFocus}"]`); if (f) f.focus({ preventScroll: false }); }

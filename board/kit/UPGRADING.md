@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v99 (schema 4)
+Review Inbox: record a finished suggestion, and keep duplicate warnings (web board and `proposal-accept --done`). No data change and no migration.
+- **Task completed** on a new-task item creates the card in Done, with the work recorded. Ignore still drops a suggestion that is not wanted. `keeptrack.py proposal-accept <id> --done` does the same; it is refused for anything that is not a new task.
+- A new-task item lists close open cards, close Inbox items, and a finished card with the same title. The warning stays beside the decision. Adding a card keeps the same warning on the card.
+- Run `kit-update` only. Check: `kit-check` says v99, and a new-task Inbox item has **Task completed**.
+
 ### v98 (schema 4)
 List view: one tick box, and the description under the title (private-tasks follow-up to #307). Web board only. No data change and no migration.
 - The per-row mark-done square is gone from List. It looked the same as the select box. **Mark done** stays on the selection bar. Calendar day lists and Schedule still mark one task done with the square.

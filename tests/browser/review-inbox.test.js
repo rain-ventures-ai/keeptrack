@@ -168,7 +168,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
     assert.match(await createCard.textContent(), /Owner\s*alex/); assert.match(await createCard.textContent(), /Due\s*2026-10-20/);
     assert.match(await propCard(page, 'r_editme0001').textContent(), /OwnerUnassigned/, 'new tasks explicitly unassigned');
     assert.match(await propCard(page, 'r_update0001').textContent(), /OwnerUnchanged/, 'omitted update owner stays unchanged');
-    assert.match(await propCard(page, 'r_merge00001').textContent(), /Looks like: Second/);
+    assert.match(await propCard(page, 'r_merge00001').textContent(), /Looks like: #2 Second/);
     assert.match(await propCard(page, 'r_update0001').locator('table').textContent(), /priority\s*medium\s*high/, 'updates show current against proposed');
     api.edit('proposals/r_update0001.json', p => { p.source.revision = 'long-technical-revision-' + 'x'.repeat(120); p.change.comments = [{ text: 'Share the revised client summary with the team.' }]; });
     api.edit('cards/t_first.json', t => { t.comments = [{ text: 'Earlier context remains available. '.repeat(30) }]; });
@@ -278,7 +278,7 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       const targeted = propCard(badgePage, 'r_update0001');
       assert.match(await targeted.textContent(), /View #1/);
       assert(!/Looks like: First/.test(await targeted.textContent()), 'an update target is not its own duplicate');
-      assert.match(await targeted.textContent(), /Looks like: Second/, 'a different duplicate candidate is still visible');
+      assert.match(await targeted.textContent(), /Looks like: #2 Second/, 'a different duplicate candidate is still visible');
       await badgePage.locator('#viewSw [data-view="today"]').first().click();
       // The target badge is on the compact Today row, distinct from the full card's View link.
       const badgeFiles = fixture(); const badgeUpdate = JSON.parse(badgeFiles['proposals/r_update0001.json']);
@@ -632,10 +632,23 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
 
     // Kit v52: a card added AFTER a new-task item was proposed (its stored likely_duplicates is empty) still shows as a
     // possible duplicate when the item is shown, and Merge offers that card first. The private-tasks double-card case.
+    { const files = fixture();
+      files['cards/t_done.json'] = text(card('t_done', 9, 'Book the venue', { column: 'done', outcome: 'completed', history: [{ at: T0, by: 'alex', text: 'done: sent' }] }));
+      const apiDone = new Github(files), donePage = await openBoard(browser, apiDone, { view: 'inbox' });
+      const doneItem = propCard(donePage, 'r_race000001');
+      assert.match(await doneItem.textContent(), /Looks like: #9 Book the venue \(already done\)/, 'a finished card stays listed on the Inbox item');
+      await clearLive(donePage); await doneItem.locator('[data-act="complete"]').click(); await said(donePage, /Recorded as done/);
+      const recorded = apiDone.json('proposals/r_race000001.json');
+      assert.equal(recorded.status, 'accepted'); assert.equal(recorded.decision.action, 'complete');
+      const made = apiDone.json(`cards/${recorded.decision.result.id}.json`);
+      assert.equal(made.column, 'done'); assert.equal(made.outcome, 'completed');
+      assert.ok(made.history.some(h => String(h.text).startsWith('done:')), 'the card records that it was already done');
+      await donePage.close(); }
+
     { const files = fixture(); files['cards/t_late.json'] = text(card('t_late', 3, 'Send the revised plan'));
       const api2 = new Github(files), p2 = await openBoard(browser, api2); await inbox(p2);
       const item = propCard(p2, 'r_create0001');
-      assert.match(await item.textContent(), /Looks like: Send the revised plan \(similar title\)/, 'the item checks open cards again');
+      assert.match(await item.textContent(), /Looks like: #3 Send the revised plan \(similar title\)/, 'the item checks open cards again');
       await item.locator('[data-act="merge"]').click();
       assert.match(await item.locator('select').first().inputValue(), /t_late/, 'Merge offers the late card first');
       await p2.close(); }
