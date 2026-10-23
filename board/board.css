@@ -1455,6 +1455,7 @@ header .cpillgo, header .cpillproj { min-width: 0 !important; min-height: 0; pad
 .prop__meta dd { margin: 0; overflow-wrap: anywhere; }
 .prop__flags { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .propflag { background: var(--warn-soft); color: var(--text); border-radius: var(--r-sm, 6px); padding: 4px 8px; font-size: var(--fs-sm); }
+.ddup { margin: 8px 0 0; background: var(--warn-soft); color: var(--text); border-radius: var(--r-sm, 6px); padding: 8px 10px; font-size: var(--fs-sm); }
 .proptbl { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: var(--fs-sm); table-layout: fixed; }
 .proptbl th, .proptbl td { text-align: left; vertical-align: top; padding: 4px 6px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
 .proptbl thead th { color: var(--muted); font-weight: 600; border-top: 0; }

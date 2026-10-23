@@ -319,7 +319,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 98  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 99  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -8856,6 +8856,20 @@ def _new_task(data, proposal, change):
     return task, False
 
 
+def _record_already_done(data, task):
+    """A new task the reviewer already finished: keep it in Done, with the done history Activity reads."""
+    column = done_col(data)
+    task["column"] = column
+    ranks = [t.get("rank") for t in data.get("tasks", []) if t is not task and t.get("column") == column and valid_rank(t.get("rank"))]
+    task["rank"] = append_rank(ranks)
+    task["outcome"] = "completed"
+    for todo in task.get("todos") or []:
+        if isinstance(todo, dict):
+            todo["done"] = True
+    if not any(isinstance(h, dict) and str(h.get("text") or "").startswith("done:") for h in task.get("history") or []):
+        hist(task, "done: already completed when reviewed")
+
+
 def _new_person(data, proposal, change):
     ident = proposal_result_id(proposal, "p_")
     existing = next((p for p in data.get("contacts", []) if p.get("id") == ident), None)
@@ -9006,9 +9020,14 @@ def cmd_proposal_accept(a):
             if reserved_name(change.get(k)):
                 proposal_error(f"'{change[k].strip()}' cannot be a client or company name; edit the proposal (--edit) or reject it")
         kind = proposal["kind"]
+        if getattr(a, "done", False) and kind != "task.create":
+            proposal_error("--done records a new task as already completed; this proposal is not a new task")
         target = _check_proposal_base(data, proposal)
         before, recovered = copy.deepcopy(target), False
-        if kind == "task.create": result, recovered = _new_task(data, proposal, change); before = None
+        if kind == "task.create":
+            result, recovered = _new_task(data, proposal, change); before = None
+            if getattr(a, "done", False):
+                _record_already_done(data, result)
         elif kind == "person.upsert" and target is None: result, recovered = _new_person(data, proposal, change); before = None
         elif kind == "contact.touch": result = target; _apply_touch(result, proposal, change)
         else: result = target; _apply_update(data, result, proposal, change)
@@ -9018,11 +9037,12 @@ def cmd_proposal_accept(a):
         else:
             marks = []
         undo = {"before": before, "after": copy.deepcopy(result), "created": before is None}
-        _decide(proposal, "edit" if a.edit else "accept", result, edited, undo)
+        _decide(proposal, "complete" if getattr(a, "done", False) else "edit" if a.edit else "accept", result, edited, undo)
         if a.json:
             print(json.dumps({"proposal": proposal["id"], "status": proposal["status"], "decision": proposal["decision"]}, ensure_ascii=False))
         else:
-            print(("recovered" if recovered else "accepted") + f" {proposal['id']} -> {result['id']}")
+            word = "recorded done" if getattr(a, "done", False) else "recovered" if recovered else "accepted"
+            print(word + f" {proposal['id']} -> {result['id']}")
             for x in marks: print("  " + x)
     mutate(fn, f"Accept proposal: {a.id}")
 
@@ -11256,6 +11276,7 @@ def main():
     s.add_argument("id"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposal_show)
     s = sub.add_parser("proposal-accept", help="accept one pending proposal")
     s.add_argument("id"); s.add_argument("--edit", help="JSON object containing replacement proposed fields"); s.add_argument("--json", action="store_true")
+    s.add_argument("--done", action="store_true", help="a new task only: record it as already completed, in Done, so the work is kept")
     s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and named this item (kit v77)"); s.set_defaults(f=cmd_proposal_accept)
     s = sub.add_parser("proposal-merge", help="merge one pending proposal into an existing task or person")
     s.add_argument("id"); s.add_argument("--into", required=True); s.add_argument("--fields", help="comma-separated scalar fields to set")
