@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 99;
+  const PAGE_KIT = 101;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -2479,15 +2479,32 @@ if (typeof window !== 'undefined') (() => {
     const had = bar.hidden ? 0 : +bar.dataset.n || 0, total = had + n; bar.dataset.n = total;
     bar.querySelector('span').textContent = `${total} new update${total === 1 ? '' : 's'} on this card`; bar.hidden = false;
   }
-  const histIcon = x => /^moved|→/.test(x) ? 'arrow-right' : /^✓|\bdone\b|^review/i.test(x) ? 'circle-check' : /blocked|stuck|failed/i.test(x) ? 'triangle-alert'
+  const histIcon = x => /^split from|follow-up card/.test(x) ? 'arrow-up-right' : /^moved|→/.test(x) ? 'arrow-right' : /^✓|\bdone\b|^review/i.test(x) ? 'circle-check' : /blocked|stuck|failed/i.test(x) ? 'triangle-alert'
     : /wait/i.test(x) ? 'alarm-clock' : /claim|progress|heartbeat|session/i.test(x) ? 'bot' : /to-do/i.test(x) ? 'square-check' : /link/i.test(x) ? 'link'
     : /^due/.test(x) ? 'calendar' : /^priority|priority order/.test(x) ? 'flag' : /^labels/.test(x) ? 'tag' : /^(client|project)/.test(x) ? 'building-2'
     : /assignee|contact/i.test(x) ? 'user' : /renamed|edited|description/i.test(x) ? 'pencil' : /^created/.test(x) ? 'plus' : 'history';
   const newPill = () => { const p = el('span', 'cmnewpill', 'New'); p.title = 'Arrived while this card was open'; return p; };
+  // A history line names the other card by id ("split from t_…", "follow-up card: t_…"). Show that id as the card
+  // itself: #N and its title, opening the card here. An id that is not on the board stays as written.
+  function cardChip(id) {
+    const t = state.tasks.find(x => x.id === id); if (!t) return null;
+    const title = String(t.title || '').replace(/\s+/g, ' ').trim(), short = title.length > 60 ? title.slice(0, 59) + '…' : title;
+    const a = el('a', 'mref', short ? `#${t.num} ${short}` : `#${t.num}`);
+    a.href = cardUrl(t.num, t.id); a.title = `#${t.num}${title ? ' ' + title : ''}`;
+    a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; return a;
+  }
+  function appendHistText(parent, text) {
+    const re = /\bt_[a-z0-9]+\b/g; let last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) decorate(parent, text.slice(last, m.index));
+      parent.append(cardChip(m[0]) || document.createTextNode(m[0])); last = m.index + m[0].length;
+    }
+    if (last < text.length) decorate(parent, text.slice(last));
+  }
   function histRow(h, isNew) {
     const text = String(h.text || ''), row = el('div', 'cmhist' + (/blocked|stuck|failed/i.test(text) ? ' bad' : '') + (isNew ? ' cmnew' : ''));
     const tm = el('time', null, ago2(h.at)); tm.title = h.at || '';
-    const txt = el('span', 'cmhtext'); txt.append(el('b', null, (h.by || '?') + ' '), document.createTextNode(text));
+    const txt = el('span', 'cmhtext'); txt.append(el('b', null, (h.by || '?') + ' ')); appendHistText(txt, text);
     row.append(elI('span', 'cmhicon', histIcon(text)), txt, ...(isNew ? [newPill()] : []), tm); return row;
   }
   function histRun(run, fresh) {   // consecutive history entries (newest first) as one block on the timeline line
@@ -2548,7 +2565,8 @@ if (typeof window !== 'undefined') (() => {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
     if (HOSTED && hostedHistoryLoading($('cmStream'), [`cards/${t.id}.json`])) { cmSig = ''; $('cmCount').textContent = ''; return; }
     const hist = cmHist() ? (t.history || []) : [], hl = hist[hist.length - 1];
-    const sig = JSON.stringify(t.comments.map(m => m.id + (m.reply_to || '') + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : ''); if (sig === cmSig) return; cmSig = sig;
+    const histCards = [...new Set(hist.flatMap(h => String(h.text || '').match(/\bt_[a-z0-9]+\b/g) || []))].map(id => { const o = state.tasks.find(x => x.id === id); return o ? id + o.num + o.title : id; }).join(' ');
+    const sig = JSON.stringify(t.comments.map(m => m.id + (m.reply_to || '') + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : '') + '|' + histCards; if (sig === cmSig) return; cmSig = sig;
     $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
     const arrived = noteFresh(t), fresh = x => cmFresh.has(cmItemKey(x));
     // one list, oldest first (a stable sort keeps the saved order on equal times), then shown newest first: the composer stays at the top
@@ -4013,7 +4031,7 @@ if (typeof window !== 'undefined') (() => {
         const fwd = r.from === t.id;
         head.append(ui.pill({ text: fwd ? 'Follow-up' : 'Split from', icon: fwd ? 'arrow-right' : 'arrow-up-right', size: 'sm', tone: 'accent' }), open);
         row.append(head); row.dataset.kind = 'follow-up';
-        if (!ro) { const acts = el('div', 'drel__acts'), x = ui.button({ label: 'Unlink', variant: 'ghost', size: 'sm', onClick: () => answerRelation(t.id, o.id, r.kind, 'not-related') }); x.dataset.act = 'dismiss'; acts.append(x); row.append(acts); }
+        if (!ro) { const acts = el('div', 'drel__acts'), x = ui.button({ label: 'Unlink', variant: 'ghost', size: 'sm', onClick: () => confirmUnlink(t.id, o.id, r.kind) }); x.dataset.act = 'dismiss'; acts.append(x); row.append(acts); }
         box.append(row); return;
       }
       head.append(ui.pill({ text: r.status === 'possible' ? 'Possible ' + word : r.status === 'merged' ? 'Merged, not archived yet' : 'Linked: ' + word, icon: r.kind === 'duplicate' ? 'copy' : 'link', size: 'sm', tone: r.status === 'possible' ? 'warn' : 'neutral' }), open);
@@ -4027,11 +4045,16 @@ if (typeof window !== 'undefined') (() => {
         const b = (label, variant, fn) => { const x = ui.button({ label, variant, size: 'sm', onClick: fn }); acts.append(x); return x; };
         b(older ? `Merge into #${o.num}` : `Merge #${o.num} here`, 'primary', () => mergeCards(src.id, dst.id)).dataset.act = 'merge';
         if (r.status === 'possible') b('Link', 'secondary', () => answerRelation(t.id, o.id, r.kind, 'confirmed')).dataset.act = 'link';
-        b(r.status === 'possible' ? 'Not related' : 'Unlink', 'ghost', () => answerRelation(t.id, o.id, r.kind, 'not-related')).dataset.act = 'dismiss';
+        b(r.status === 'possible' ? 'Not related' : 'Unlink', 'ghost', () => r.status === 'possible' ? answerRelation(t.id, o.id, r.kind, 'not-related') : confirmUnlink(t.id, o.id, r.kind)).dataset.act = 'dismiss';
         row.append(acts);
       }
       box.append(row);
     });
+  }
+  async function confirmUnlink(aId, bId, kind) {
+    const a = state.tasks.find(x => x.id === aId), o = state.tasks.find(x => x.id === bId); if (!a || !o) return;
+    if (!(await ask(`Unlink #${a.num} and #${o.num}?`, [`Both cards stay on the board. This removes the link between #${a.num} ${a.title} and #${o.num} ${o.title}.`, UNDO_HINT], 'Unlink', true))) return;
+    return answerRelation(aId, bId, kind, 'not-related');
   }
   function answerRelation(aId, bId, kind, status) {
     const a = state.tasks.find(x => x.id === aId), o = state.tasks.find(x => x.id === bId); if (!a || !o) return;
@@ -4497,7 +4520,7 @@ if (typeof window !== 'undefined') (() => {
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
     fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; clearCardReply();
-    markSeen(id); $('dlgCard').showModal(); render();
+    markSeen(id); if (!$('dlgCard').open) $('dlgCard').showModal(); render();
     $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
     if (focus && focus.comment) setTimeout(() => {   // from @Mentions: show that one comment, briefly highlighted
@@ -8079,6 +8102,12 @@ if (typeof window !== 'undefined') (() => {
         a.onclick = e => { e.preventDefault(); assetBlobUrl(asset).then(u => { if (u) window.open(u, '_blank', 'noopener'); else toast('That image could not be opened.', true); }); };
       }
       if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
+      const cardNum = boardCardNum(l.url), card = cardNum != null && state.tasks.find(t => t.num === cardNum);
+      if (card) {   // a Follow-up / Split from link (or any link to a card on this board) opens that card here
+        const a = row.querySelector('a.ui-listrow__main');
+        if (a) { a.removeAttribute('target'); a.removeAttribute('rel'); a.title = `Open #${card.num}${card.title ? ' ' + card.title : ''}`; a.onclick = e => { e.preventDefault(); openCard(card.id); }; }
+        const meta = row.querySelector('.ui-listrow__meta'); if (meta && card.title) meta.textContent = card.title;
+      }
       box.append(row);
     });
   }

@@ -87,6 +87,17 @@ python3 board/keeptrack.py assign <id> <owner> --note "waiting on your decision"
 on someone else (`--who`): a person ends those. Never clear a wait to get past a refusal: comment and stop. Never
 message the other party yourself. `list --waiting` lists waiting cards; `list --waiting-on me` those waiting on you.
 
+## 4c. Watch another card
+When this session should continue only after another card changes, or after it reaches a column, block on `watch`.
+It polls. It does not register a listener, so a session that is not running it is not woken. A heartbeat on its own
+does not count. Exit 0 prints what changed. `--timeout` exits 2 when nothing changed.
+```bash
+python3 board/keeptrack.py watch '#31'                         # any comment, move, checklist tick or edit
+python3 board/keeptrack.py watch '#31' '#32' --until done      # exit when one of them is Done
+python3 board/keeptrack.py watch '#31' '#32' --until done --all --timeout 3600 --json
+```
+`watch` polls until another card changes or reaches a column.
+
 ## 5. Finish
 ```bash
 python3 board/keeptrack.py done <id> --note "<result and link to the file/PR>"

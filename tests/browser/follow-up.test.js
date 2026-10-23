@@ -30,7 +30,9 @@ class Github {
     this.files = { 'tasks.json': text(root),
       'cards/t_one.json': text(card('t_one', 1, 'Ship the widget', { client: 'Acme', labels: ['urgent'], priority: 'high', assignees: ['alex'], todos: [{ id: 'd_a', text: 'Build it', done: true }, { id: 'd_b', text: 'Owner turns it on', done: false }] })),
       'cards/t_two.json': text(card('t_two', 2, 'Write notes')),
-      'cards/t_three.json': text(card('t_three', 3, 'Call Casey')) };
+      'cards/t_three.json': text(card('t_three', 3, 'Call Casey', { history: [
+        { at: '2026-10-23T12:15:29.000Z', by: 'codex@osouthgate', text: 'split from t_one' },
+        { at: '2026-10-23T12:16:00.000Z', by: 'codex@osouthgate', text: 'split from t_missingnotonboard' }] })) };
     this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0;
   }
   sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
@@ -107,10 +109,27 @@ class Github {
     assert.deepEqual(chips.map(s => s.trim()).sort(), ['Follow-up #4', 'From #1']);
     await shot(page, 'follow-up-board');
 
-    // the follow-up's drawer reads "Split from #1"
+    // the follow-up's drawer reads "Split from #1", and its Split from link opens that card here
     await page.locator('.card', { hasText: 'Turn on the widget' }).locator('.t').click();
     await page.waitForSelector('#cRelSec:not([hidden]) .drel[data-kind=follow-up]');
     assert.match(await page.locator('#cRelList .drel').first().textContent(), /Split from.*#1 Ship the widget/);
+    await page.locator('#cRelList button[data-act=dismiss]').click();
+    const ask = page.getByRole('alertdialog'); await ask.waitFor();
+    assert.match(await ask.textContent(), /Unlink #4 and #1\?/);
+    await ask.getByRole('button', { name: 'Cancel' }).click(); await ask.waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#cRelList button[data-act=dismiss]').count(), 1, 'cancel leaves the link');
+    await page.locator('#cLinkList a', { hasText: 'Split from #1' }).click();
+    await page.waitForFunction(() => document.querySelector('#cTitle') && document.querySelector('#cTitle').value === 'Ship the widget');
+
+    // a "split from t_id" history line is that card, not the raw id; an unknown id stays as written
+    await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    await page.locator('.card', { hasText: 'Call Casey' }).locator('.t').click();
+    const linked = page.locator('#cmStream a.mref', { hasText: '#1' });
+    await linked.waitFor();
+    assert.match(await linked.textContent(), /#1 Ship the widget/);
+    assert.equal(await page.locator('#cmStream .cmhtext', { hasText: 't_missingnotonboard' }).locator('a').count(), 0);
+    await linked.click();
+    await page.waitForFunction(() => document.querySelector('#cTitle') && document.querySelector('#cTitle').value === 'Ship the widget');
 
     assert.deepEqual(errors, []);
     console.log('follow-up: all checks passed');

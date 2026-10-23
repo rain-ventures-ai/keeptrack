@@ -19,6 +19,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py link ID URL --title T   # add a link; link ID - reads one "URL<tab>title" per line from stdin (one save)
   keeptrack.py todo-done ID N          # tick item N (1-based, as shown by `show`); todo-undo / todo-rm work the same way
   keeptrack.py history ID              # print the card's history log
+  keeptrack.py watch ID [ID ...] [--until done] [--timeout SEC] [--json]   # poll until a card changes, or reaches a column
   keeptrack.py archived-history ID     # older history lines that `archive` moved to archive/<year>.json
   keeptrack.py comment ID "text" [--reply-to CID]   # post a comment; --reply-to replies one level under that comment
   keeptrack.py comments ID             # print the comment stream (replies indented under their parent)
@@ -319,7 +320,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 99  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 101  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1374,7 +1375,7 @@ _HOSTED_STORAGE = None
 
 def hosted_dispatch(a):
     """Route only phase-0 CLI commands. There is deliberately no GitHub fallback."""
-    allowed = {"list", "show", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
+    allowed = {"list", "show", "watch", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
                "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "archive", "unarchive", "review", "task-set", "approve"}
     if a.cmd not in allowed:
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
@@ -1382,7 +1383,7 @@ def hosted_dispatch(a):
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
         adapter.whoami()
-        if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list"):
+        if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list", "watch"):
             return a.f(a)
         data = adapter.snapshot()
         session = getattr(a, "session", None) or os.environ.get("BOARD_SESSION", "")
@@ -4159,6 +4160,145 @@ def cmd_history(a):
         print(f"{h['at'][:19]}  {h.get('by', '?'):<22} {h['text']}")
 
 
+def watch_view(t):
+    """What `watch` compares. A claim's heartbeat time is left out, so a beat on its own does not wake the watcher."""
+    if not isinstance(t, dict):
+        return None
+    c = t.get("claim") if isinstance(t.get("claim"), dict) else None
+    return {
+        "column": t.get("column") or "", "outcome": t.get("outcome") or "", "title": t.get("title") or "",
+        "details": t.get("details") or "", "priority": t.get("priority") or "", "due": t.get("due") or "",
+        "labels": list(t.get("labels") or []), "assignees": list(t.get("assignees") or []),
+        "todos": [(d.get("id"), d.get("text"), bool(d.get("done"))) for d in t.get("todos") or [] if isinstance(d, dict)],
+        "comments": [(x.get("id"), x.get("text")) for x in t.get("comments") or [] if isinstance(x, dict)],
+        "history": [(h.get("at"), h.get("by"), h.get("text")) for h in t.get("history") or [] if isinstance(h, dict)],
+        "waiting": waiting_of(t),
+        "claim": None if not c else {"status": c.get("status") or "", "agent": c.get("agent") or "", "note": c.get("note") or ""},
+        "links": [(x.get("title"), x.get("url")) for x in t.get("links") or [] if isinstance(x, dict)],
+    }
+
+
+def watch_changes(old, new):
+    """Short phrases for what changed between two watch_view values. [] when nothing a watcher cares about moved."""
+    if new is None:
+        return ["left the board"]
+    if old is None:
+        return ["on the board"]
+    out = []
+    if old["column"] != new["column"]:
+        out.append(f"column {old['column']} -> {new['column']}")
+    if old["outcome"] != new["outcome"]:
+        out.append("outcome " + (new["outcome"] or "cleared"))
+    if len(new["comments"]) > len(old["comments"]):
+        text = clean(new["comments"][-1][1], 80)
+        out.append(f"comment: {text}" if text else "comment")
+    elif new["comments"] != old["comments"]:
+        out.append("comment")
+    if new["todos"] != old["todos"]:
+        out.append("checklist")
+    if old["waiting"] != new["waiting"]:
+        out.append("wait ended" if old["waiting"] and not new["waiting"] else "waiting")
+    if old["claim"] != new["claim"]:
+        out.append("claim " + ((new["claim"] or {}).get("status") or "released"))
+    if new["history"] != old["history"]:
+        fresh = new["history"][len(old["history"]):] if new["history"][:len(old["history"])] == old["history"] else []
+        out.append(clean(fresh[-1][2], 80) if fresh else "history")
+    if old["title"] != new["title"]:
+        out.append("title")
+    if old["details"] != new["details"]:
+        out.append("details")
+    if old["links"] != new["links"]:
+        out.append("link")
+    if any(old[k] != new[k] for k in ("priority", "due", "labels", "assignees")):
+        out.append("fields")
+    return out
+
+
+def _watch_row(t, ident, changes, already):
+    if not isinstance(t, dict):
+        return {"id": ident, "num": None, "title": "", "column": "", "changes": changes, "already": already,
+                "line": f"{ident}: {'; '.join(changes)}"}
+    what = "already " + "; ".join(changes) if already else "; ".join(changes)
+    line = f"#{t.get('num')} {clean(t.get('title') or '', 100)}: {what}"
+    return {"id": t.get("id"), "num": t.get("num"), "title": t.get("title") or "", "column": t.get("column") or "",
+            "changes": changes, "already": already, "line": line}
+
+
+def _watch_emit(rows, as_json):
+    if as_json:
+        print(json.dumps(rows if len(rows) != 1 else rows[0], ensure_ascii=False))
+    else:
+        for row in rows:
+            print(row["line"])
+
+
+def cmd_watch(a):
+    """Poll the board until a watched card changes, or (with --until) reaches a column. Reads only.
+    A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when --timeout runs out."""
+    every = 15 if a.every is None else a.every
+    if not isinstance(every, (int, float)) or isinstance(every, bool) or every < 0.2 or every > 3600:
+        sys.exit("--every must be between 0.2 and 3600 seconds")
+    if a.timeout is not None and (not isinstance(a.timeout, (int, float)) or isinstance(a.timeout, bool) or a.timeout <= 0 or a.timeout > 86400):
+        sys.exit("--timeout must be greater than 0 and at most 86400 seconds")
+    if a.all and not a.until:
+        sys.exit("--all needs --until")
+    data, _ = load()
+    until = (a.until or "").strip()
+    if until:
+        cols = {c.get("id") for c in data.get("columns") or [] if isinstance(c, dict)}
+        if until not in cols:
+            sys.exit(f"no column '{until}'. Columns: " + ", ".join(sorted(cols)))
+    cards = [find(data, ref) for ref in a.ids]
+    if len({t["id"] for t in cards}) != len(cards):
+        sys.exit("a card is listed twice")
+    ids = [t["id"] for t in cards]
+    base = {t["id"]: watch_view(t) for t in cards}
+
+    def current(board):
+        by_id = {t.get("id"): t for t in board.get("tasks") or [] if isinstance(t, dict)}
+        return [(i, by_id.get(i)) for i in ids]
+
+    def ready(pairs):
+        hit = [(i, t) for i, t in pairs if isinstance(t, dict) and t.get("column") == until]
+        if a.all:
+            return hit if len(hit) == len(ids) else []
+        return hit[:1]
+
+    def report(pairs, already):
+        rows = []
+        for i, t in pairs:
+            changes = ["done" if until == "done" else f"column {until}"] if already else (watch_changes(base.get(i), watch_view(t)) or ["updated"])
+            rows.append(_watch_row(t, i, changes, already))
+        _watch_emit(rows, a.json)
+
+    if until:
+        got = ready(current(data))
+        if got:
+            report(got, True); return
+    print("watching " + ", ".join(f"#{t.get('num')}" for t in cards) + f" every {every:g}s"
+          + (f", until {until}" + (" (all)" if a.all else "") if until else "")
+          + (f", timeout {a.timeout:g}s" if a.timeout is not None else ""), file=sys.stderr)
+    deadline = None if a.timeout is None else time.monotonic() + a.timeout
+    while True:
+        now_m = time.monotonic()
+        if deadline is not None and now_m >= deadline:
+            print("timed out; no watched card changed", file=sys.stderr); sys.exit(2)
+        time.sleep(every if deadline is None else min(every, max(0, deadline - now_m)))
+        board, _ = load()
+        pairs = current(board)
+        if until:
+            got = ready(pairs)
+            if got:
+                report(got, False); return
+            if any(not isinstance(t, dict) for _, t in pairs):
+                gone = [(i, t) for i, t in pairs if not isinstance(t, dict)]
+                report(gone, False); return
+            continue
+        moved = [(i, t) for i, t in pairs if watch_changes(base.get(i), watch_view(t))]
+        if moved:
+            report(moved[:1], False); return
+
+
 def cmd_auto_heartbeat(a):
     """Hook entry point. Never fails loudly: a hook must not break the agent's session. The record's mtime is a cheap gate
     (at most one look a minute); each card entry keeps its own beat time (beat_at), so every session in the clone gets its
@@ -4456,11 +4596,11 @@ def cmd_relate(a):
     def fn(data):
         x, y = find(data, a.a), find(data, a.b)
         if x["id"] == y["id"]: sys.exit("a card cannot be related to itself")
-        fup = a.kind == "follow-up"
-        set_relation(x, y, "related" if fup else a.kind, "confirmed", src=x["id"] if fup else "")   # follow-up: B is A's follow-up
         if a.kind == "follow-up":
+            link_follow_up(x, y)   # B is A's follow-up: the relation, and a Follow-up #N / Split from #M link on each card
             hist(x, f"follow-up card: {y['id']}"); hist(y, f"split from {x['id']}")
             print(f"#{y.get('num')} is a follow-up of #{x.get('num')}"); return
+        set_relation(x, y, a.kind, "confirmed", src="")
         hist(x, f"related ({a.kind}) to {y['id']}"); hist(y, f"related ({a.kind}) to {x['id']}")
         print(f"#{x.get('num')} and #{y.get('num')} are linked ({a.kind})")
     mutate(fn, f"Relate: {a.a} {a.b}")
@@ -5584,7 +5724,7 @@ def _here(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
+    "tasks": ["list", "show", "watch", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "attach", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-url", "touch-source", "sent"],
@@ -5622,6 +5762,7 @@ COMMAND_HELP = {   # one line each, for commands whose parser has none
     "propose": "add proposals to the Review Inbox (alias for proposal-add)",
     "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention, --waiting, --waiting-on WHO; --links)",
     "show": "one card in full: details, links, checklist, claim, latest comments",
+    "watch": "poll until a card changes, or reaches a column (--until done); a heartbeat alone does not count",
     "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo, --after '#N')",
     "move": "move a card to a column, or reorder it (--before, --after, --top); --priority",
     "assign": "hand a card to people (replaces, or --add / --remove)",
@@ -11012,6 +11153,13 @@ def main():
     position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
     s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
+    s = sub.add_parser("watch", help="poll until a card changes, or reaches a column (--until done); a heartbeat alone does not count")
+    s.add_argument("ids", nargs="+", metavar="ID")
+    s.add_argument("--every", type=float, default=15, help="seconds between reads (default 15; 0.2 to 3600)")
+    s.add_argument("--timeout", type=float, help="stop after this many seconds and exit 2; omit to wait")
+    s.add_argument("--until", help="wait until a card is in this column (for example done) instead of any change")
+    s.add_argument("--all", action="store_true", help="with --until: wait until every named card is in that column")
+    s.add_argument("--json", action="store_true", help="print one JSON object (or a list, with --all)"); s.set_defaults(f=cmd_watch)
     s = sub.add_parser("research-suggest", help="backlog auto-research: put a card with no project in the Review Inbox (suggest a project, or ask)")
     s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--project", help="the project to suggest (id or name); its client comes with it")
