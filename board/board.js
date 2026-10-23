@@ -1238,28 +1238,53 @@ if (typeof window !== 'undefined') (() => {
   }
   const byId = (st, k = 'tasks') => new Map((st[k] || []).map(t => [t.id, t]));
   const KINDS = ['tasks', 'contacts', 'projects'];   // cards, people and projects
-  const show = v => v === undefined || v === null ? '(none)' : typeof v === 'string' ? (v || '(empty)') : JSON.stringify(v);
   // Move/edit aimed at a card that someone else deleted: fn is a no-op, so detect it by id.
   function deletedUnderMe(base, pre, ids) { const has = (st, id) => KINDS.some(k => byId(st, k).has(id)); return ids.filter(id => has(base, id) && !has(pre, id)); }
-  // Resolution screen: one block per clash with what you saw, your value and theirs. Resolves with
-  // 'discard' (drop my whole change) or an array with one {side: 'theirs' | 'mine' | 'edit', value} per clash.
+  // Resolution screen: one block per clash, in plain language. Resolves with 'discard' (drop the whole
+  // change) or an array with one {side: 'theirs' | 'mine' | 'edit', value} per clash. GitHub's value starts selected.
+  const CLASH_FIELD = { title: 'Title', name: 'Name', project: 'Project', client: 'Client', column: 'Column', priority: 'Priority', due: 'Due date', details: 'Description', assignees: 'Assignees', labels: 'Labels', status: 'Status', north_star: 'North star', value: 'Value', effort: 'Effort', goal: 'Goal', rank: 'Order', priority_rank: 'Priority order', waiting: 'Waiting on', claim: 'Claim' };
   function askConflict(clashes, views) {
     return new Promise(res => {
       const d = $('dlgConflict'), body = $('cfBody'); body.textContent = ''; const picks = clashes.map(() => ({ side: 'theirs' }));
       const isItem = c => KINDS.includes(c.path[0]) && c.path.length >= 2;
-      const nameOf = c => { const [k, id] = c.path; if (!isItem(c)) return 'Board settings'; const it = [views.pre, views.mine, views.base].map(s => byId(s, k).get(id)).find(Boolean) || {}; return `${k === 'tasks' ? 'Card' : k === 'contacts' ? 'Person' : 'Project'} “${it.title || it.name || id}”`; };
-      $('cfIntro').textContent = `${clashes.length === 1 ? 'One thing you are changing was' : clashes.length + ' things you are changing were'} also changed by someone else (or an agent) since you loaded the board. Everything else of yours merges on its own. Choose which version to keep for each.`;
+      const itemOf = c => { const [k, id] = c.path; return [views.pre, views.mine, views.base].map(s => byId(s, k).get(id)).find(Boolean) || {}; };
+      const named = (id, key, label) => { if (typeof id !== 'string' || !id) return ''; for (const b of [views.mine, views.pre, views.base, state]) { const hit = ((b && b[key]) || []).find(x => x && x.id === id && x[label]); if (hit) return hit[label]; } return ''; };
+      const clip = s => s.length > 72 ? s.slice(0, 69) + '…' : s;
+      const shown = (field, v) => {
+        const blank = { project: 'no project', client: 'no client', column: 'no column', goal: 'no goal', due: 'no date', assignees: 'nobody', labels: 'no labels' }[field] || 'nothing';
+        if (field === 'session_id') return v ? shortSid(v) : 'nothing';
+        if (v === undefined || v === null || v === '') return blank;
+        if (field === 'project') return named(v, 'projects', 'name') || v;
+        if (field === 'goal') return named(v, 'goals', 'title') || v;
+        if (field === 'column') { const n = (state.columns || []).find(c => c.id === v); return n && n.name || v; }
+        if (typeof v === 'string') return v;
+        if (Array.isArray(v)) return v.length ? v.map(x => typeof x === 'string' ? x : (x && (x.title || x.name || x.text)) || 'item').join(', ') : 'nothing';
+        return 'a longer value';
+      };
+      const quote = s => /^(nothing|empty|no |nobody)/.test(s) ? s : `“${s}”`;
+      $('cfIntro').textContent = clashes.length === 1
+        ? 'Someone else saved the same detail while you were editing. Your other edits are kept either way. Choose which value to save.'
+        : `Someone else saved ${clashes.length} of the same details while you were editing. Your other edits are kept either way. Choose which value to save for each.`;
       clashes.forEach((c, i) => {
-        const box = el('div', 'cfcard'), field = (isItem(c) ? c.path.slice(2) : c.path).join(' › ');
-        box.append(el('strong', null, nameOf(c) + (field ? ' · ' + field : '')));
-        if (isItem(c) && c.path.length === 2) { if (c.theirs === undefined) box.append(el('div', 'cfnote', 'Someone else deleted it.')); else if (c.mine === undefined) box.append(el('div', 'cfnote', 'You deleted it.')); }
-        const tb = el('table', 'cftable'), hr = el('tr'); ['You saw', 'Mine', 'Theirs (now on GitHub)'].forEach(h => hr.append(el('th', null, h))); tb.append(hr);
-        const leafSid = c.path[c.path.length - 1] === 'session_id', scrubIds = v => v && typeof v === 'object' ? (Array.isArray(v) ? v.map(scrubIds) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'session_id' ? shortSid(x) : scrubIds(x)]))) : v;   // a session id is shown only in part
-        const r = el('tr'); [c.base, c.mine, c.theirs].forEach(v => r.append(el('td', null, show(leafSid ? shortSid(v) : scrubIds(v))))); tb.append(r); box.append(tb);
+        const box = el('div', 'cfcard'), whole = isItem(c) && c.path.length === 2, fieldKey = whole ? '' : String((isItem(c) ? c.path.slice(2) : c.path).at(-1) || '');
+        const fieldWord = CLASH_FIELD[fieldKey] || (fieldKey ? fieldKey.replace(/_/g, ' ') : '');
+        const it = isItem(c) ? itemOf(c) : null, title = it ? (it.title || it.name || c.path[1]) : 'Board settings';
+        box.append(el('strong', null, !isItem(c) ? `Board setting${fieldWord ? ' · ' + fieldWord : ''}` : whole || !fieldWord ? `${c.path[0] === 'contacts' ? 'Person' : c.path[0] === 'projects' ? 'Project' : 'Card'} “${title}”` : `${fieldWord} on “${title}”`));
+        if (whole) { if (c.theirs === undefined) box.append(el('div', 'cfnote', 'Someone else deleted it.')); else if (c.mine === undefined) box.append(el('div', 'cfnote', 'You deleted it.')); }
+        const b = shown(fieldKey, c.base), m = shown(fieldKey, c.mine), t = shown(fieldKey, c.theirs), word = (fieldWord || 'value').toLowerCase();
+        const story = c.mine === undefined ? `You removed this. GitHub now has ${quote(t)}.`
+          : c.theirs === undefined ? `Someone else removed this. Your version is ${quote(m)}.`
+          : b === t ? `You changed the ${word} to ${quote(m)}. GitHub still has ${quote(t)}.`
+          : b === m ? `GitHub changed the ${word} to ${quote(t)}. You still have ${quote(m)}.`
+          : `You changed the ${word} to ${quote(m)}. GitHub now has ${quote(t)}. When you opened the board it was ${quote(b)}.`;
+        box.append(el('p', 'cfstory', story));
+        const dl = el('dl', 'cfvals');
+        [['When you opened it', b], ['Your change', m], ['On GitHub now', t]].forEach(([k, v]) => { const line = el('div'), dt = el('dt', null, k), dd = el('dd', null, v); line.append(dt, dd); dl.append(line); });
+        box.append(dl);
         const row = el('div', 'cfpick'), ta = el('textarea', 'cfedit'); ta.hidden = true; ta.rows = 2; ta.value = typeof c.theirs === 'string' ? c.theirs : JSON.stringify(c.theirs === undefined ? null : c.theirs);
-        [['theirs', 'Keep theirs'], ['mine', 'Keep mine'], ['edit', 'Edit…']].forEach(([side, label]) => {
+        [['theirs', `Keep GitHub’s: ${clip(t)}`], ['mine', `Keep yours: ${clip(m)}`], ['edit', 'Type a different value']].forEach(([side, label]) => {
           const lab = el('label'), rb = el('input'); rb.type = 'radio'; rb.name = 'cf' + i; rb.value = side; rb.checked = side === 'theirs';
-          rb.onchange = () => { picks[i].side = side; ta.hidden = side !== 'edit'; if (side === 'edit') ta.focus(); }; lab.append(rb, ' ' + label); row.append(lab); });
+          rb.onchange = () => { picks[i].side = side; ta.hidden = side !== 'edit'; if (side === 'edit') ta.focus(); }; lab.append(rb, document.createTextNode(label)); row.append(lab); });
         ta.oninput = () => { picks[i].text = ta.value; }; picks[i].text = ta.value; box.append(row, ta); body.append(box);
       });
       const finish = v => { d.close(); $('cfApply').onclick = $('cfDiscard').onclick = null; d.oncancel = null; res(v); };
@@ -3725,7 +3750,11 @@ if (typeof window !== 'undefined') (() => {
     const wait = el('span', 'dval dwait'); wait.id = 'cWaitVal';
     const who = el('span', 'dval'); who.id = 'cWho';
     const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
-    const work = el('button', 'dworkpick'); work.type = 'button'; work.id = 'cWorkPick'; work.onclick = openTaskWorkPicker;
+    const work = el('div', 'dwork'); work.id = 'cWork';
+    const workClient = el('button', 'dworklink'); workClient.type = 'button'; workClient.id = 'cWorkClient'; roKeep(workClient);
+    const workProject = el('button', 'dworklink'); workProject.type = 'button'; workProject.id = 'cWorkProject'; roKeep(workProject);
+    const workEdit = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm', onClick: openTaskWorkPicker }); workEdit.id = 'cWorkPick'; workEdit.classList.add('dwork__edit');
+    work.append(workClient, workProject, workEdit);
     const goal = drawerSelect('cGoal', 'Goal');
     const chips = el('span', 'dval'); chips.id = 'cLabelChips';
     const labelAdd = ghostAdd('cLabelAdd', 'Add', 'Add a label', () => { labelAdd.hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); });
@@ -3853,11 +3882,15 @@ if (typeof window !== 'undefined') (() => {
   $('cGoal').onchange = e => { const v = e.target.value; edit(editing, t => { if (v) t.goal = v; else delete t.goal; }, `Goal: ${titleOf(editing)}`); };
   $('cPrio').onchange = e => { const v = e.target.value; syncPrio(v); edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
   function renderTaskWork(t) {
-    const b = $('cWorkPick'), pr = projectById(t.project); b.textContent = '';
-    const text = el('span', 'dworkpick__text');
-    text.append(el('strong', null, t.client || (pr && pr.client) || 'No client'), el('span', null, pr ? pr.name : 'No project'));
-    b.append(text, ui.icon('chevron-right'));
-    b.setAttribute('aria-label', `Client and project: ${t.client || (pr && pr.client) || 'none'}, ${pr ? pr.name : 'none'}. Change`);
+    const pr = projectById(t.project), clientName = t.client || (pr && pr.client) || '';
+    const link = (id, kind, value, open) => {
+      const b = $(id); b.textContent = ''; b.classList.toggle('is-empty', !value);
+      b.append(el('span', 'dworklink__k', kind), el('span', 'dworklink__v', value || 'None'));
+      b.disabled = !value; b.onclick = value ? open : null;
+      b.setAttribute('aria-label', value ? `Open ${kind.toLowerCase()} ${value}` : `No ${kind.toLowerCase()}`);
+    };
+    link('cWorkClient', 'Client', clientName, () => openClient(clientName));
+    link('cWorkProject', 'Project', pr && (pr.name || pr.id), pr ? () => openProject(pr.id) : null);
   }
   let taskWorkSheet = null;
   function openTaskWorkPicker() {

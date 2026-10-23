@@ -22,8 +22,7 @@ If you selected **Tasks** when you made your board, you also have these views. T
 - **@Mentions:** every comment that mentions you (`@your-github-username`), newest first, with the task, its description and the comment. A mention on a project opens that project. A reply says who it is replying to. Your own comments are not shown. **New** means posted since you last opened that task or project. Click a row to open it at that comment. Today shows an **@Mentions** tile when you have mentions. The filters apply to task mentions.
 
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
-People, labels and the combined **Client & project** control use the full width. The client/project picker filters projects
-after you choose a client and keeps long names readable on a phone.
+People, labels and **Client & project** use the full width. The client name opens the company, the project name opens the project, and **Edit** opens the picker. The picker filters projects after you choose a client and keeps long names readable on a phone.
 
 Views and utility screens can be bookmarked: the address keeps the selected view or settings section. Help, Settings,
 Search and Copy offer **Copy link to this screen**; settings sections also offer their own links. Shared screen links

@@ -140,7 +140,15 @@ dialog input:not([type=checkbox]), dialog textarea, dialog select { width: 100%;
 .preview { font-size: var(--fs-base); background: var(--panel); border-radius: var(--r-sm); padding: 7px 9px; margin-top: var(--sp-1); white-space: pre-wrap; word-break: break-word; }
 .preview a { color: var(--accent); }
 .cfcard { border: 1px solid var(--border); border-radius: var(--r-md); padding: 9px 11px; margin: var(--sp-3) 0; } .cfnote { color: var(--danger); font-size: var(--fs-sm); margin: var(--sp-1) 0; }
-.cfpick { display: flex; gap: 14px; margin-top: var(--sp-3); font-size: var(--fs-base); } .cfpick label { display: flex; align-items: center; gap: var(--sp-1); cursor: pointer; } .cfedit { width: 100%; margin-top: var(--sp-2); font: inherit; font-size: var(--fs-base); box-sizing: border-box; }
+.cfstory { margin: var(--sp-2) 0 0; line-height: 1.45; }
+.cfvals { display: grid; gap: 4px; margin: var(--sp-3) 0 0; }
+.cfvals div { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: var(--sp-2); align-items: baseline; }
+.cfvals dt { margin: 0; color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
+.cfvals dd { margin: 0; overflow-wrap: anywhere; }
+.cfpick { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); font-size: var(--fs-base); }
+.cfpick label { display: flex; align-items: flex-start; gap: var(--sp-2); margin: 0; color: var(--text); font-size: var(--fs-base); font-weight: 400; cursor: pointer; }
+.cfpick input { width: auto; flex: 0 0 auto; margin-top: 3px; }
+.cfedit { width: 100%; margin-top: var(--sp-2); font: inherit; font-size: var(--fs-base); box-sizing: border-box; }
 .cftable { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); margin-top: var(--sp-2); }
 .cftable th, .cftable td { text-align: left; border-top: 1px solid var(--border); padding: var(--sp-1) var(--sp-2); vertical-align: top; word-break: break-word; }
 .cftable th { color: var(--muted); font-weight: 600; } .cftable td:first-child, .cftable th:first-child { white-space: nowrap; word-break: normal; }
@@ -895,12 +903,14 @@ a.mref { color: var(--accent); font-weight: 600; text-decoration: none; backgrou
 .dafter > .ui-pill { max-width: 100%; min-width: 0; }
 .dafter .ui-pill__main, .dafter .ui-pill__text { min-width: 0; }
 .dafter .ui-pill__text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dworkpick { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); width: 100%; min-height: 46px; padding: var(--sp-2) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel); color: var(--text); text-align: left; cursor: pointer; }
-.dworkpick:hover { border-color: var(--border-strong); background: var(--card-hover); }
-.dworkpick__text { display: grid; gap: 2px; min-width: 0; }
-.dworkpick__text strong, .dworkpick__text span { overflow-wrap: anywhere; }
-.dworkpick__text span { color: var(--muted); font-size: var(--fs-sm); }
-.dworkpick > .ui-i { flex: none; color: var(--muted); }
+.dwork { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--sp-3); align-items: center; width: 100%; min-width: 0; }
+.dworklink { grid-column: 1; display: flex; align-items: baseline; gap: var(--sp-3); width: 100%; min-width: 0; min-height: 32px; margin: 0; padding: 2px 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.dworklink__k { flex: 0 0 4.6em; color: var(--muted); font-size: var(--fs-sm); font-weight: 650; }
+.dworklink__v { min-width: 0; overflow-wrap: anywhere; font-weight: 650; }
+.dworklink:not(.is-empty):hover .dworklink__v { color: var(--accent); }
+.dworklink.is-empty { cursor: default; } .dworklink.is-empty .dworklink__v { color: var(--muted); font-weight: 500; }
+.dworklink:disabled { opacity: 1; }
+.dwork__edit { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 .dwaitform { display: grid; gap: var(--sp-5); }
 .dwaitform .ui-sheet__text { margin-bottom: var(--sp-1); }
 .dworkpicker { display: grid; gap: var(--sp-5); }
