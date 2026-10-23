@@ -283,9 +283,9 @@ body:not([data-view="board"]) #tabs { display: none !important; }
 .spill { padding: 3px var(--sp-5); border-radius: var(--r-md); background: var(--panel); color: var(--text); font-size: var(--fs-base); }
 .lsec[data-col="todo"] .spill { background: var(--accent-soft); color: var(--accent); } .lsec[data-col="in-progress"] .spill { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); } .lsec[data-col="done"] .spill { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .lhead .caret { border: 1px solid var(--border); border-radius: var(--r-sm); width: 26px; height: 26px; display: inline-grid; place-items: center; }
-.tscroll { overflow-x: auto; } .ttable { min-width: 1120px; } .ttable.picks { min-width: 1160px; }
-.trow { display: grid; grid-template-columns: 40px minmax(180px, 2.2fr) minmax(130px, 1.8fr) 88px minmax(100px, 1.1fr) 116px 80px 96px 150px; align-items: center; border-top: 1px solid var(--border); }
-.ttable.picks .trow { grid-template-columns: 36px 40px minmax(180px, 2.2fr) minmax(130px, 1.8fr) 88px minmax(100px, 1.1fr) 116px 80px 96px 150px; }
+.tscroll { overflow-x: auto; } .ttable, .ttable.picks { min-width: 980px; }
+.trow { display: grid; grid-template-columns: 40px minmax(280px, 3.6fr) 88px minmax(100px, 1.1fr) 108px 76px 92px 148px; align-items: center; border-top: 1px solid var(--border); }
+.ttable.picks .trow { grid-template-columns: 36px minmax(280px, 3.6fr) 88px minmax(100px, 1.1fr) 108px 76px 92px 148px; }
 .trow > div { padding: var(--sp-3) var(--sp-4); min-width: 0; border-left: 1px solid var(--border); } .trow > div:first-child { border-left: 0; padding-left: var(--sp-5); }
 .trow.thead { background: var(--panel); font-size: var(--fs-sm); color: var(--muted); font-weight: 600; } .trow.thead > div { padding: 7px var(--sp-4); }
 .trow:not(.thead):hover { background: color-mix(in srgb, var(--panel) 55%, transparent); }
@@ -294,7 +294,7 @@ body:not([data-view="board"]) #tabs { display: none !important; }
 .trow.done .lt { color: var(--muted); text-decoration: line-through; }
 .c-select, .c-check { display: flex; align-items: center; justify-content: center; }
 .lselect { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
-.c-desc { font-size: var(--fs-base); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ldesc { margin-top: 2px; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .c-activity { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lact.stale { color: var(--warn); font-weight: 700; } .lact.none { color: var(--muted); }
 .c-people { display: flex; padding-left: 14px !important; } .c-labels { display: flex; gap: var(--sp-1); flex-wrap: wrap; } .c-more { display: flex; gap: 5px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
@@ -349,7 +349,8 @@ body:not([data-view="board"]) #tabs { display: none !important; }
   .ttable.picks .trow.thead { display: flex; align-items: center; padding: 0 var(--sp-5) var(--sp-2); background: transparent; border-top: 0; }
   .ttable.picks .trow.thead > div { display: none; } .ttable.picks .trow.thead > .c-select { display: flex; }
   .trow { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); } .trow > div { border: 0 !important; padding: 0 !important; }
-  .c-desc, .c-labels, .c-due, .c-prio, .c-activity { display: none; } .c-select, .c-check { min-width: 44px; min-height: 44px; } .lselect { width: 22px; height: 22px; }
+  .c-labels, .c-due, .c-prio, .c-activity { display: none; } .c-select, .c-check { min-width: 44px; min-height: 44px; } .lselect { width: 22px; height: 22px; }
+  .ldesc { -webkit-line-clamp: 3; }
   .c-task { flex: 1; } .c-people { order: 3; } .c-more { order: 4; } .c-more .chip { display: none; }
   .m-only { display: flex; } .lmeta .lact { font-size: var(--fs-sm); } .lsec { border-radius: var(--r-lg); }
   .lbulk { top: 0; }

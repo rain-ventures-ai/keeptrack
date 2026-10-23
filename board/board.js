@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 97;
+  const PAGE_KIT = 98;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -2845,7 +2845,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
-  const firstLine = t => mdPlain((t.details || '').split('\n').find(x => x.trim() && !/^\s*(```|\|?\s*:?-{2,}[-|: ]*$|([-*_])(\s*\2){2,}\s*$)/.test(x)) || '').trim();
+  const listBlurb = t => mdPlain((t && t.details) || '').replace(/\s+/g, ' ').trim();   // one readable description: markdown marks and later lines stay visible
   // The chips a task shows in every view (kanban card, list row, schedule row). always: also show an empty checklist/comments chip (cards).
   function chipTodo(t, always) {
     const tc = todoCount(t); if (!tc.all && !always) return null;
@@ -2974,8 +2974,8 @@ if (typeof window !== 'undefined') (() => {
     const row = paint(el('div', 'trow' + (isDoneTask(t) ? ' done' : '') + (pick && listSel.has(t.id) ? ' is-selected' : '')), t);
     if (at && listActivityStale(at) && !isDoneTask(t)) row.classList.add('is-stale');
     row.dataset.listTask = t.id;
-    const c0 = el('div', 'c-check'); c0.append(doneCircle(t));
     const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); { const d = changedDot(t); if (d) title.prepend(d); } task.append(title);
+    const blurb = listBlurb(t); if (blurb) { const d = el('div', 'ldesc', blurb); d.title = blurb; task.append(d); }
     const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title, including last activity
     if (t.due) mm.append(duePill(t));
     mm.append(prioPill(t));
@@ -2984,7 +2984,6 @@ if (typeof window !== 'undefined') (() => {
     mm.append(activityStamp(t));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t));
-    const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
     const ppl = el('div', 'c-people'); t.assignees.forEach(a => ppl.append(avatar(a)));
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
     const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
@@ -2994,7 +2993,10 @@ if (typeof window !== 'undefined') (() => {
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     { const a = quickArchiveBtn(t); if (a) more.append(a); }
-    row.append(...(pick ? [selectCell(t)] : []), c0, task, desc, ppl, lab, due, pr, act, more); return row;
+    const lead = [];
+    if (pick) lead.push(selectCell(t));   // List: the tick box is the only control. Mark done lives on the selection bar.
+    else { const c0 = el('div', 'c-check'); c0.append(doneCircle(t)); lead.push(c0); }   // Calendar day lists still mark one task done
+    row.append(...lead, task, ppl, lab, due, pr, act, more); return row;
   }
 
   // ---- long lists: draw the first CAP items and a "Show more" button, so a huge board never builds 100,000s of elements ----
@@ -3064,7 +3066,8 @@ if (typeof window !== 'undefined') (() => {
     const pick = view === 'list', box = el('div', 'ttable' + (pick ? ' picks' : '')), hd = el('div', 'trow thead');
     box.dataset.listTable = key;
     if (pick) hd.append(selectHead(items, key));
-    [['', 'c-check', ''], ['notebook-pen', 'c-task', 'Task'], ['list', 'c-desc', 'Description'], ['users', 'c-people', 'People'], ['tag', 'c-labels', 'Labels'], ['calendar', 'c-due', 'Due'], ['flag', 'c-prio', 'Priority'], ['history', 'c-activity', 'Activity'], ['', 'c-more', '']].forEach(([ic, cls, label]) => {
+    else hd.append(el('div', 'c-check'));
+    [['notebook-pen', 'c-task', 'Task'], ['users', 'c-people', 'People'], ['tag', 'c-labels', 'Labels'], ['calendar', 'c-due', 'Due'], ['flag', 'c-prio', 'Priority'], ['history', 'c-activity', 'Activity'], ['', 'c-more', '']].forEach(([ic, cls, label]) => {
       const cell = elI('div', cls, ic, label); if (cls === 'c-activity') cell.title = 'Newest of the last edit, comment or history entry'; hd.append(cell);
     });
     box.append(hd); capList(key, items, listRow, box); return box;

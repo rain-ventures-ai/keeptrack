@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v98 (schema 4)
+List view: one tick box, and the description under the title (private-tasks follow-up to #307). Web board only. No data change and no migration.
+- The per-row mark-done square is gone from List. It looked the same as the select box. **Mark done** stays on the selection bar. Calendar day lists and Schedule still mark one task done with the square.
+- The Description column is gone. The task cell shows the description under the title: markdown marks stripped, line breaks joined, two lines on a wide screen and three on a phone. Hover shows the same plain text. The width the column and the extra box used goes to the task.
+- Run `kit-update` only. Check: `kit-check` says v98, and a List row has one tick box with the description under the title.
+
 ### v97 (schema 4)
 List view: select several tasks and see when each was last active (private-tasks card #307). Web board only. No data change and no migration.
 - Mark done is a square (the same `square` / `square-check` control as a task row in a person or project record), in List and in Schedule, so it is not mistaken for a select box. List adds a real tick box on each row and a select-all box for the rows that table is showing.
