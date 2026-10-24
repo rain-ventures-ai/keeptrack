@@ -11,6 +11,83 @@ def segment(marker, body):
 
 
 class ImageReview(unittest.TestCase):
+    def test_valid_highly_compressible_large_png_rasters_are_accepted(self):
+        import struct
+        import zlib
+        def chunk(kind, body):
+            return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+        # Valid non-interlaced 8-bit PNGs: each row has filter 0 followed by exactly width*channels samples.
+        # Build zlib input a row at a time, keeping test allocation independent of the full raster size.
+        for width, height, channels, colour in ((1920, 1080, 3, 2), (4000, 4000, 3, 2), (4095, 4096, 4, 6)):
+            with self.subTest(width=width, height=height, channels=channels):
+                row = b'\0' * (1 + width * channels)
+                compressor = zlib.compressobj()
+                pieces = [compressor.compress(row) for _ in range(height)]
+                pixels = b''.join(pieces) + compressor.flush()
+                self.assertLess(len(pixels) * 100, len(row) * height, 'exercise highly compressed valid raster data')
+                header = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, colour, 0, 0, 0))
+                # Consecutive IDAT chunks may split the one zlib stream anywhere, including before its header ends.
+                payload = chunk(b'IDAT', pixels[:1]) + chunk(b'IDAT', pixels[1:17]) + chunk(b'IDAT', pixels[17:])
+                clean = header + payload + chunk(b'IEND', b'')
+                tagged = header + chunk(b'tEXt', b'Author\0SYNTHETIC-OWNER') + payload + chunk(b'IEND', b'')
+                self.assertEqual(keeptrack.strip_image_metadata(clean, 'png'), clean)
+                self.assertEqual(keeptrack.strip_image_metadata(tagged, 'png'), clean)
+
+    def test_real_jpeg_terminal_fill_preserves_baseline_and_progressive_scans(self):
+        from pathlib import Path
+        for name in ('baseline-fill.jpg', 'progressive-fill.jpg'):
+            original = (Path(__file__).parent / 'fixtures' / 'images' / name).read_bytes()
+            self.assertTrue(original.endswith(b'\xff\xd9'))
+            if name.startswith('progressive'):
+                self.assertIn(b'\xff\xc2', original)
+            clean = keeptrack.strip_image_metadata(original, 'jpg')
+            for count in (1, 3):
+                with self.subTest(name=name, fill=count):
+                    filled = original[:-2] + b'\xff' * count + original[-2:]
+                    self.assertEqual(keeptrack.strip_image_metadata(filled, 'jpg'), clean)
+            for tail in (b'\xff', b'\xff\xff', b'\xff\xe1', b'\xff\xe1\x00'):
+                with self.assertRaises(ValueError):
+                    keeptrack.strip_image_metadata(original[:-2] + tail, 'jpg')
+
+    def test_tiff_directory_bounds_precede_entry_walk(self):
+        import struct
+        class Counted(bytes):
+            reads = 0
+            def __getitem__(self, key):
+                self.reads += 1
+                return super().__getitem__(key)
+        for order, tag in (('<', b'II'), ('>', b'MM')):
+            short = tag + struct.pack(order + 'HIH', 42, 8, 65535) + b'\0' * 4
+            counted = Counted(short)
+            self.assertEqual(keeptrack.tiff_orientation(counted), 1)
+            self.assertLessEqual(counted.reads, 4, 'no count-driven empty-slice loop')
+            for value in range(1, 9):
+                valid = tag + struct.pack(order + 'HIH', 42, 8, 1) + struct.pack(order + 'HHIHHI', 274, 3, 1, value, 0, 0)
+                self.assertEqual(keeptrack.tiff_orientation(valid), value)
+                self.assertEqual(keeptrack.tiff_orientation(valid[:-1]), 1, 'complete directory includes next-IFD field')
+            for magic, offset in ((0, 8), (42, 0), (42, 9), (42, 65535)):
+                self.assertEqual(keeptrack.tiff_orientation(tag + struct.pack(order + 'HIH', magic, offset, 65535)), 1)
+
+    def test_many_short_png_exif_directories_have_byte_bounded_work(self):
+        import struct
+        import zlib
+        from unittest.mock import patch
+        def chunk(kind, body):
+            return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+        header = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+        pixels = chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33')) + chunk(b'IEND', b'')
+        malformed = b'II' + struct.pack('<HIH', 42, 8, 65535) + b'\0' * 4
+        class Counted(bytes):
+            reads = 0
+            def __getitem__(self, key):
+                Counted.reads += 1
+                return super().__getitem__(key)
+        orientation = keeptrack.tiff_orientation
+        with patch.object(keeptrack, 'tiff_orientation', side_effect=lambda data: orientation(Counted(data))) as reader:
+            self.assertEqual(keeptrack.strip_image_metadata(header + chunk(b'eXIf', malformed) * 4000 + pixels, 'png'), header + pixels)
+        self.assertEqual(reader.call_count, 4000)
+        self.assertLessEqual(Counted.reads, 4 * 4000)
+
     def test_progressive_jpeg_filters_metadata_between_scans_without_truncating_tables(self):
         first = segment(218, b'') + b'scan\xff\x00\xd9\xff\xd0bytes'
         table = segment(196, b'table\xff\xd9more')

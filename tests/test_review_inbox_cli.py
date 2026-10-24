@@ -104,6 +104,23 @@ class ReviewInboxCli(unittest.TestCase):
         self.assertIn(f"exists {email['id']} ignored", rerun)
         self.assertEqual([], self.pending())
 
+    def test_done_records_a_completed_task(self):
+        self.kt("proposal-add", os.path.join(FIX, "meeting-proposals.json"))
+        create = next(p for p in self.pending() if p["title"] == "Send Acme the revised plan")
+        out = self.kt("proposal-accept", create["id"], "--done")
+        self.assertIn("recorded done", out.stdout)
+        accepted = json.loads(self.kt("proposal-show", create["id"]).stdout)
+        self.assertEqual("accepted", accepted["status"])
+        self.assertEqual("complete", accepted["decision"]["action"])
+        card = json.loads(self.snapshot("cards")[f"cards/{accepted['decision']['result']['id']}.json"])
+        self.assertEqual("done", card["column"])
+        self.assertEqual("completed", card["outcome"])
+        self.assertTrue(any(h.get("text", "").startswith("done:") for h in card["history"]))
+        update = next(p for p in self.pending() if p["kind"] == "task.update")
+        refused = self.kt("proposal-accept", update["id"], "--done", ok=False)
+        self.assertEqual(2, refused.returncode)
+        self.assertIn("not a new task", refused.stderr)
+
 
     def test_v3_board_refuses_with_the_schema_message(self):
         legacy = os.path.join(self.tmp.name, "v3")

@@ -1,5 +1,5 @@
 {
-  "label": "v4 frozen before Gmail source privacy and record history fixes (kit v100); unchanged schema",
+  "label": "v4 frozen before Gmail source privacy and record history fixes (kit v105); unchanged schema",
   "schema": 4,
   "layout": "split",
   "kit_before_update": 99,

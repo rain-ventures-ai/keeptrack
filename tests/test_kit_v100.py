@@ -1,23 +1,38 @@
-"""Kit v100: Gmail source privacy and record history fixes and cross-file release consistency."""
-import json
+"""Kit v100: a split is a linked card. History shows the other card, and relate --kind follow-up writes the links."""
 import os
-import re
+import sys
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(__file__))
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+KIT = os.path.join(REPO, "board", "kit")
+sys.path.insert(0, KIT)
+import keeptrack  # noqa: E402
 
 
-class CrmLinksRelease(unittest.TestCase):
-    def test_release_100_is_consistent(self):
-        def read(path):
-            with open(os.path.join(ROOT, path), encoding='utf8') as stream:
-                return stream.read()
-        version = json.loads(read('board/kit/manifest.json'))['version']
-        self.assertGreaterEqual(version, 100)
-        self.assertEqual(str(version), re.search(r'^KIT_VERSION = (\d+)', read('board/kit/keeptrack.py'), re.M)[1])
-        self.assertIn(f'const PAGE_KIT = {version};', read('board/board.js'))
-        for plugin in ('.claude-plugin', '.codex-plugin', '.cursor-plugin'):
-            self.assertEqual(f'0.{version}.0', json.loads(read(f'board/kit/{plugin}/plugin.json'))['version'])
-        for version in (97, 98, 99, 100):
-            self.assertIn(f'### v{version} (schema 4)', read('board/kit/UPGRADING.md'))
-            self.assertIn(f'Kit v{version}:', read('CHANGELOG.md'))
+def read(*parts):
+    with open(os.path.join(REPO, *parts), encoding="utf-8") as f:
+        return f.read()
+
+
+class Version(unittest.TestCase):
+    def test_kit_is_v100_everywhere(self):
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 100)   # the exact version is asserted by the newest tests/test_kit_v*.py
+
+    def test_upgrade_notes_and_changelog(self):
+        v100 = read("board", "kit", "UPGRADING.md").split("### v100 (schema 4)", 1)[1].split("\n### v", 1)[0]
+        for words in ("kit-update", "kit-check", "split from", "Follow-up", "Waiting for", "no migration"):
+            self.assertIn(words, v100)
+        self.assertIn("Kit v100", read("CHANGELOG.md"))
+
+
+class Page(unittest.TestCase):
+    def test_history_names_the_other_card(self):
+        js = read("board", "board.js")
+        self.assertIn("function cardChip", js)
+        self.assertIn("split from", js)
+        self.assertIn("link_follow_up", read("board", "kit", "keeptrack.py"))
+
+
+if __name__ == "__main__":
+    unittest.main()

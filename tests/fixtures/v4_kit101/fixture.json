@@ -1,5 +1,5 @@
 {
-  "label": "v4 frozen before archive size follow-ups (kit v101); unchanged data schema",
+  "label": "v4 frozen before archive size follow-ups (kit v106); unchanged data schema",
   "schema": 4,
   "layout": "split",
   "kit_before_update": 100,

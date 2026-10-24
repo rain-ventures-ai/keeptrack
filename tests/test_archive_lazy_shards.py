@@ -80,7 +80,7 @@ class ArchiveLazyShards(unittest.TestCase):
 
     def test_cli_archive_parts_and_restore_preserve_history_and_opaque_fields(self):
         from board_fixtures import copy_board_fixture
-        for min_kit in (None, '103', 102.5, True, False, 0, -1, 101):
+        for min_kit in (None, '108', 106.5, True, False, 0, -1, 106):
             with self.subTest(min_kit=min_kit):
                 with tempfile.TemporaryDirectory() as folder:
                     board = Path(folder) / 'board'; copy_board_fixture('v3', board)
@@ -101,7 +101,7 @@ class ArchiveLazyShards(unittest.TestCase):
                         return result
                     run('archive')
                     saved = json.loads(path.read_text()); self.assertEqual(saved['tasks'], [])
-                    self.assertEqual(saved['settings']['min_kit'], 102)
+                    self.assertEqual(saved['settings']['min_kit'], 107)
                     self.assertGreater(len(saved['archive']['files']), 1)
                     for year in saved['archive']['files']:
                         self.assertLessEqual((board / 'archive' / (year + '.json')).stat().st_size, k.ARCHIVE_FILE_MAX)

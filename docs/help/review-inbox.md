@@ -37,7 +37,8 @@ Each proposal shows:
 - the proposed change, and for a change to a record, the current value next to the proposed value;
 - why it was proposed, and a link to the source with its date;
 - the owner and due date, but only when the source stated them. Otherwise it says "Not stated";
-- a warning when it looks like an existing record, or when you ignored the same work before.
+- a warning when it looks like an existing record, including a task already in Done and a close open card or another Inbox item. The warning stays on the item, next to the decision. A short note that appears when you add a card also stays on that card until you merge, link or dismiss it.
+- a note when you ignored the same work before.
 
 For each proposal, pick one:
 
@@ -46,12 +47,13 @@ For each proposal, pick one:
 | **Accept** | The change is made on the board. |
 | **Edit & accept** | Change the proposed values first. The edited values are saved. |
 | **Merge…** | Add it to an existing task or person. Existing comments, checklist items and history stay. You choose which other fields to set. |
-| **Ignore** | Nothing changes on the board. The same suggestion from the same source will not come back. |
+| **Task completed** | For a new task only. The work is already finished, so the card is created in Done with that recorded. It is not dropped. |
+| **Ignore** | Nothing changes on the board. The same suggestion from the same source will not come back. Use this when the suggestion is not wanted. If the work was already done, use **Task completed** so that fact stays on the board. |
 | **Leave pending** | Nothing changes. Move on to the next one. |
 
 There is no "accept all" for proposals. Each change is a choice.
 
-Keys: **j** and **k** move between proposals. **a** accepts, **e** edits, **m** merges and **i** ignores. **Enter** opens the record, or moves to the buttons when there is no record yet.
+Keys: **j** and **k** move between proposals. **a** accepts, **c** records a new task as already done, **e** edits, **m** merges and **i** ignores. **Enter** opens the record, or moves to the buttons when there is no record yet.
 
 ## Answer questions
 
@@ -142,7 +144,7 @@ python3 board/keeptrack.py proposal-add proposals.json --dry-run
 python3 board/keeptrack.py proposal-add proposals.json
 python3 board/keeptrack.py proposals --status pending
 python3 board/keeptrack.py proposal-show <id>
-python3 board/keeptrack.py proposal-accept <id> [--edit edited.json]
+python3 board/keeptrack.py proposal-accept <id> [--edit edited.json] [--done]
 python3 board/keeptrack.py proposal-merge <id> --into <task or person id> [--fields title,due]
 python3 board/keeptrack.py proposal-ignore <id> [--reason "..."]
 python3 board/keeptrack.py proposal-reopen <id>
