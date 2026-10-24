@@ -185,6 +185,16 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(before, kt.load_board())
         self.assertEqual(0, kt.doctor_board(False)[2])
 
+    def test_v107_archive_parts_preserve_frozen_board(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit107", "fixture.json"))
+        self.use_fixture("v4_kit107", meta)
+        before = kt.load_board()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(0, kt.doctor_board(False)[2])
+        self.assertEqual(kt.read_archive('2020-1', None)[0]['tasks'][0]['id'], 't_archived102')
+
     def test_v3_migrate_then_verify(self):
         name, meta = next((n, m) for n, m in list_fixtures() if m.get("schema") == 3)
         board_dir, expect = self.use_fixture(name, meta)

@@ -361,7 +361,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 106  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 107  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -997,12 +997,43 @@ def _api_blob(sha):
     return text
 
 
+def _prune_blob_cache(live_shas):
+    """Drop only obsolete SHA-named blob cache files for this repository. Non-cache files and links stay untouched."""
+    folder = os.path.dirname(_blob_cache_file("placeholder"))
+    if os.path.islink(folder):
+        return
+    try:
+        with os.scandir(folder) as entries:
+            for item in entries:
+                if (re.fullmatch(r"[0-9a-f]{40}\.json", item.name) and item.name[:-5] not in live_shas
+                        and item.is_file(follow_symlinks=False)):
+                    try:
+                        os.unlink(item.path)
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+
+
 def _wanted_rel(rel):
     return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|projects|proposals|archive)/[^/]+", rel) is not None
 
 
-def _local_snapshot():
+# Set by each snapshot: the board folder holds another top-level board file (a one-file board such as alice.json next to
+# tasks.json). Such boards share archive/, so archive runs never repack a year into part files there.
+_SHARED_FOLDER = [False]
+
+
+def _other_root(name):
+    # the kit's own top-level files (the page's widgets.json, manifest.json) are not another board
+    return "/" not in name and name.lower().endswith(".json") and name not in ("tasks.json", "widgets.json", "manifest.json")
+
+
+def _local_snapshot(include_archive=False):
     files = {}
+    folder = os.path.dirname(_local_path("tasks.json"))
+    _SHARED_FOLDER[0] = any(_other_root(n) and n != os.path.basename(FILE) and os.path.isfile(os.path.join(folder, n))
+                            for n in (os.listdir(folder) if os.path.isdir(folder) else []))
     for rel in ["tasks.json"]:
         path = _local_path(rel)
         if os.path.isfile(path):
@@ -1016,12 +1047,14 @@ def _local_snapshot():
             full = _local_path(f"{folder}/{name}")
             if os.path.isfile(full):
                 rel = f"{folder}/{name}"
-                with open(full, encoding="utf-8", errors="replace") as f:
-                    files[rel] = {"text": f.read(), "sha": None, "size": os.path.getsize(full)}
+                files[rel] = {"sha": None, "size": os.path.getsize(full)}
+                if folder != "archive" or include_archive:
+                    with open(full, encoding="utf-8", errors="replace") as f:
+                        files[rel]["text"] = f.read()
     return files, None
 
 
-def _git_snapshot():
+def _git_snapshot(include_archive=False):
     _check_git_clone()
     rc, _, err = git("fetch", "-q", "origin", BRANCH)
     if rc:
@@ -1036,9 +1069,22 @@ def _git_snapshot():
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
     prefix = base + "/" if base else ""
+    # -z: raw names, never git's quoted form for non-ASCII names ("board/\303\251quipe.json" would not end in .json).
+    # Read as bytes: a name that is not UTF-8 counts as another board, and an unreadable listing counts as shared.
+    top = subprocess.run(["git", "-C", ROOT, "ls-tree", "-z", "--name-only", head, "--", prefix or "."], capture_output=True)
+    top_names = top.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    _SHARED_FOLDER[0] = bool(top.returncode) or any(
+        any(0xDC80 <= ord(c) <= 0xDCFF for c in n) or (_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/"))
+        for n in top_names if n)
     wanted = [(full, full[len(prefix):] if full.startswith(prefix) else full) for full in names.splitlines()]
     wanted = [(full, rel) for full, rel in wanted if _wanted_rel(rel)]
-    # One `git cat-file --batch` reads every board file; one process per file is slow on big boards.
+    # Preserve archive paths in the snapshot, but do not read their bodies until requested.
+    if not include_archive:
+        for _full, rel in wanted:
+            if rel.startswith("archive/"):
+                files[rel] = {"sha": None}
+        wanted = [(full, rel) for full, rel in wanted if not rel.startswith("archive/")]
+    # One `git cat-file --batch` reads live board files; one process per file is slow on big boards.
     p = subprocess.run(["git", "-C", ROOT, "cat-file", "--batch"], capture_output=True,
                        input="".join(f"{head}:{full}\n" for full, _ in wanted).encode())
     if p.returncode:
@@ -1056,7 +1102,7 @@ def _git_snapshot():
     return files, head
 
 
-def _api_snapshot():
+def _api_snapshot(include_archive=False):
     ref = urllib.parse.quote(BRANCH, safe="")
     rc, out, err = gh(f"repos/{REPO}/git/ref/heads/{ref}")
     if rc:
@@ -1083,14 +1129,20 @@ def _api_snapshot():
     if tree.get("truncated"):
         sys.exit("cannot read the board: the Git tree response was truncated")
     files = {}
+    own = os.path.basename(PATH)
+    _SHARED_FOLDER[0] = any(x.get("type") == "blob" and _other_root(x.get("path", "")) and x.get("path") != own for x in tree.get("tree", []))
     for item in tree.get("tree", []):
         rel = item.get("path", "")
         if item.get("type") != "blob" or not _wanted_rel(rel):
             continue
-        text = _api_blob(item["sha"])
-        files[rel] = {"text": text, "sha": item["sha"], "size": item.get("size", len(text.encode()))}
+        files[rel] = {"sha": item["sha"], "size": item.get("size", 0)}
+        if not rel.startswith("archive/") or include_archive:
+            text = _api_blob(item["sha"])
+            files[rel]["text"] = text
+            files[rel]["size"] = item.get("size", len(text.encode()))
     if "tasks.json" not in files:
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
+    _prune_blob_cache({x["sha"] for x in tree.get("tree", []) if x.get("type") == "blob" and x.get("sha")})
     return files, {"head": head, "base_tree": root_tree}
 
 
@@ -1146,7 +1198,7 @@ def _github_load_board():
         sort_tasks(data)
     state = {"mode": mode, "head": head.get("head") if isinstance(head, dict) else head,
              "base_tree": head.get("base_tree") if isinstance(head, dict) else None,
-             "files": files, "layout": layout,
+             "files": files, "layout": layout, "shared_folder": _SHARED_FOLDER[0],
              "root": root, "data_id": id(data)}
     _BOARD_STATES[id(data)] = state
     return data
@@ -1249,6 +1301,19 @@ class HostedStorageAdapter:
         sort_tasks(data)
         _BOARD_STATES[id(data)] = {"mode": "hosted", "files": self.files, "layout": "split"}
         return data
+
+    def revision(self, path):
+        """Metadata-only revision, with full-read compatibility for older hosted servers."""
+        try:
+            result = self.request("GET", self.route("/file-revisions/" + urllib.parse.quote(path, safe="")))
+            if result.get("path") != path or not isinstance(result.get("rev"), str) or not result["rev"]:
+                raise HostedError(400, {"code": "invalid_schema", "message": "invalid file revision response"})
+            return result
+        except HostedError as error:
+            if error.status not in (404, 405, 501):
+                raise
+            full = self.read(path)
+            return {"path": path, "rev": full["rev"], "full": full}
 
     def read(self, path, rev=None):
         result = self.request("GET", self.route("/files/" + urllib.parse.quote(path, safe="")))
@@ -2079,6 +2144,10 @@ def min_kit_needed(data):
     what = "Cards carry `waiting`"
     if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
         needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
+    files = data.get("archive", {}).get("files") if isinstance(data.get("archive"), dict) else None
+    if isinstance(files, dict) and any(isinstance(k, str) and re.fullmatch(r"[0-9]{4}-[1-9][0-9]{0,5}", k) for k in files):
+        # older writers only know YYYY archive keys: they would not see records in YYYY-N parts
+        needed, what = max(needed, ARCHIVE_PARTS_KIT), "The archive has year part files (YYYY-N)"
     return needed, what
 
 
@@ -5141,25 +5210,24 @@ def cmd_kit_update(a):
 
 def _doctor_snapshot():
     if FILE:
-        files, head = _local_snapshot(); mode = "local"
+        files, head = _local_snapshot(include_archive=True); mode = "local"
     elif WRITE == "git":
-        files, head = _git_snapshot(); mode = "git"
+        files, head = _git_snapshot(include_archive=True); mode = "git"
     else:
-        files, head = _api_snapshot(); mode = "api"
+        files, head = _api_snapshot(include_archive=True); mode = "api"
     return files, {"mode": mode, "head": head.get("head") if isinstance(head, dict) else head,
                    "base_tree": head.get("base_tree") if isinstance(head, dict) else None, "files": files}
 
 
 LIVE_FILE_MAX = 200 * 1024      # a card, person, project or other board file: 200 KB
-# archive/<year>.json is a different kind of file. It is loaded with the board like every other file (cached by blob sha,
-# downloaded again after each archive change), so its size counts toward load cost; the 5 MB board total still caps that.
-# 900 KB is a chosen margin, not a GitHub limit: the real archive was 578 KB when this was set, and a year file is rewritten
-# whole by every archive run. The warning leaves time to act before the error.
+# Archive bodies are loaded on demand; doctor still measures their contribution to the 5 MB board total.
+# 900 KB is a chosen per-part margin, not a GitHub limit. Packable years split at write time; an individual
+# record or envelope that cannot fit remains held. The 700 KB warning still applies to ordinary year-only writes.
 ARCHIVE_FILE_MAX = 900 * 1024
 ARCHIVE_FILE_WARN = 700 * 1024
-ARCHIVE_FILE_RE = re.compile(r"archive/[0-9]{4}\.json")   # the shape check_year allows; any other file in archive/ keeps 200 KB
-ARCHIVE_NEXT_STEP = ("Tell the board owner: splitting an archive year into parts is planned as a follow-up card. "
-                     "Until then do not edit the file by hand.")
+ARCHIVE_FILE_RE = re.compile(r"archive/[0-9]{4}(?:-[1-9][0-9]{0,5})?\.json")   # the shape check_archive_key allows; any other file in archive/ keeps 200 KB
+ARCHIVE_NEXT_STEP = ("Archive normally to split a large year into bounded parts. A single record or envelope metadata "
+                     "that cannot fit stays unchanged; ask the board owner to review it. Do not edit archive files by hand.")
 
 
 def archive_size_issue(rel, size):
@@ -8641,6 +8709,7 @@ PROPOSAL_KINDS = APPLY_KINDS | ASK_KINDS
 PROPOSAL_STATUSES = {"pending", "accepted", "answered", "ignored"}
 DECIDED_STATUSES = ("accepted", "answered", "ignored")
 ASK_KIT = 44               # the kit that understands ask.* items: the first one raises settings.min_kit to at least this
+ARCHIVE_PARTS_KIT = 107   # the first kit that reads and writes archive part files (YYYY-N)
 ASK_ANSWER_LIMIT = 2000
 PROPOSAL_SOURCE_KINDS = {"meeting", "email", "other"}
 PROPOSAL_DETAIL_LIMIT = 300
@@ -9094,11 +9163,11 @@ def _all_proposals(data):
     """Active and archived proposals, for identities that must survive an archive sweep."""
     out = list(data.get("proposals", []))
     state = _BOARD_STATES.get(id(data), {})
-    for rel, entry in state.get("files", {}).items():
-        if not (rel.startswith("archive/") and rel.endswith(".json")):
+    for rel, entry in list(state.get("files", {}).items()):
+        if not (rel.startswith("archive/") and rel.endswith(".json") and valid_archive_key(rel[8:-5])):
             continue
         try:
-            archived = entry.get("obj") or json.loads(entry["text"])
+            archived = read_archive(rel[len("archive/"):-5], state)[0] or {}
         except (ValueError, TypeError):
             continue
         out.extend(x for x in archived.get("proposals", []) if isinstance(x, dict))
@@ -9873,6 +9942,16 @@ def valid_year(y):
     return isinstance(y, str) and re.fullmatch(r"[0-9]{4}", y) is not None
 
 
+def valid_archive_key(key):
+    return isinstance(key, str) and re.fullmatch(r"[0-9]{4}(?:-[1-9][0-9]{0,5})?", key) is not None
+
+
+def check_archive_key(key):
+    if not valid_archive_key(key):
+        sys.exit(f"refusing archive key {key!r}: expected YYYY or YYYY-N, with a positive part number")
+    return key
+
+
 def check_year(y):
     """Archive keys become file names, so only exactly four ASCII digits are accepted ('2026', never '../x')."""
     if not valid_year(y):
@@ -9883,7 +9962,7 @@ def check_year(y):
 def local_archive_file(year):
     """--file mode: <board dir>/archive/<year>.json, checked to sit directly inside the archive folder (no symlink escape)."""
     base = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(FILE)), "archive"))
-    f = os.path.realpath(os.path.join(base, check_year(year) + ".json"))
+    f = os.path.realpath(os.path.join(base, check_archive_key(year) + ".json"))
     if os.path.dirname(f) != base:
         sys.exit(f"refusing archive file {f}: it is outside {base}")
     return f
@@ -9891,11 +9970,11 @@ def local_archive_file(year):
 
 def archive_years(data):
     """The years the board's archive index lists, newest first; keys that are not a plain year are ignored."""
-    return sorted((y for y in ((data.get("archive") or {}).get("files") or {}) if valid_year(y)), reverse=True)
+    return sorted((y for y in ((data.get("archive") or {}).get("files") or {}) if valid_archive_key(y)), reverse=True)
 
 
 def archive_path(year):
-    check_year(year)
+    check_archive_key(year)
     base = os.path.dirname(PATH)
     return f"{base + '/' if base else ''}archive/{year}.json"
 
@@ -10020,9 +10099,20 @@ def read_archive(year, base):
                 return None, None
             raise
     pth = archive_path(year)
-    rel = f"archive/{check_year(year)}.json"
+    rel = f"archive/{check_archive_key(year)}.json"
     if isinstance(base, dict) and rel in base.get("files", {}):
         entry = base["files"][rel]
+        if "text" not in entry:
+            if base.get("mode") == "api" and entry.get("sha"):
+                entry["text"] = _api_blob(entry["sha"])
+            elif base.get("mode") == "git":
+                rc, text, err = git("show", f"{base['head']}:{pth}")
+                if rc:
+                    sys.exit(f"cannot read captured archive {pth}: {err}")
+                entry["text"] = text
+            elif FILE:
+                with open(local_archive_file(year), encoding="utf-8") as src:
+                    entry["text"] = src.read()
         try:
             size = entry.get("size")
             size = size if type(size) is int and size >= 0 else len(entry["text"].encode("utf-8"))
@@ -10073,6 +10163,112 @@ def write_archive(year, cur, sha, message):
     sys.exit(f"write failed ({archive_path(year)}): {err.strip()} {out.strip()[:200]}")
 
 
+class ArchiveUnpackable(ValueError):
+    pass
+
+
+def valid_archive_records(cur):
+    """Validate ids before any set/dict membership in merge or packing."""
+    return isinstance(cur, dict) and all(
+        isinstance(cur.get(kind, []), list) and all(
+            isinstance(item, dict) and isinstance(item.get("id"), str) and SAFE_ID.fullmatch(item["id"])
+            for item in cur.get(kind, [])) for kind in ("tasks", "contacts", "proposals"))
+
+
+def shard_archive_family(year, current, current_sha, incoming, data, base, absorbed_ids=()):
+    """Pack a logical year atomically. Existing envelopes retain every unknown field and their file names; no
+    archive file is deleted. Entity and older history stay together. Per-unit size estimates are conservative,
+    computed once, so packing does not repeatedly serialize a growing archive."""
+    family = {year: (current, current_sha)}
+    for key in archive_years(data):
+        if key != year and key.startswith(year + "-"):
+            family[key] = read_archive(key, base)
+    keys = sorted(family, key=lambda key: 0 if key == year else int(key[5:]))
+    if any(not isinstance(family[key][0], dict) for key in keys):
+        raise ArchiveUnpackable("an indexed archive part is missing or invalid")
+    if any(not valid_archive_records(cur) for cur, _ in family.values()) or not valid_archive_records(incoming):
+        raise ArchiveUnpackable("an archive collection contains invalid records")
+    incoming_ids = {x["id"] for kind in ("tasks", "contacts", "proposals") for x in incoming.get(kind, [])}
+    records, histories, history_seen = {}, {}, {}
+    updates = {item["id"]: (kind, item) for kind in ("tasks", "contacts", "proposals")
+               for item in current.get(kind, []) if item.get("id") in incoming_ids}
+    # Stable file order avoids rotating every shard on each append. Incoming replacements/new records append last.
+    for key in keys:
+        cur = family[key][0]
+        for kind in ("tasks", "contacts", "proposals"):
+            if not isinstance(cur.get(kind, []), list):
+                raise ArchiveUnpackable("an archive collection is not a list")
+            for item in cur.get(kind, []):
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not SAFE_ID.fullmatch(item["id"]):
+                    raise ArchiveUnpackable("an archive record has no safe id")
+                ident = item["id"]
+                if ident in incoming_ids:
+                    continue
+                if ident in records and records[ident] != (kind, item) and ident not in incoming_ids:
+                    raise ArchiveUnpackable("conflicting archived copies need review")
+                records[ident] = (kind, item)
+        if not isinstance(cur.get("history", {}), dict):
+            raise ArchiveUnpackable("archive history is not an object")
+        for ident, lines in cur.get("history", {}).items():
+            if not SAFE_ID.fullmatch(ident) or not isinstance(lines, list):
+                raise ArchiveUnpackable("invalid archived history")
+            have = histories.setdefault(ident, [])
+            seen = history_seen.setdefault(ident, set())
+            for line in lines:
+                token = _canon(line)
+                if token not in seen:
+                    have.append(line); seen.add(token)
+    records.update(updates)
+    for ident in absorbed_ids:
+        histories.pop(ident, None)   # individual-card archive already moved these lines onto the card copy
+    def empty(cur=None):
+        out = dict(cur or {"version": ARCHIVE_SCHEMA, "archive": True, "year": year})
+        out.update(tasks=[], contacts=[], proposals=[], history={})
+        return out
+    template = empty()
+    template_size = len(_json_text(template).encode())
+    units = []
+    for ident, (kind, item) in records.items():
+        unit = empty(); unit[kind] = [item]
+        if ident in histories:
+            unit["history"][ident] = histories.pop(ident)
+        units.append(unit)
+    for ident, lines in histories.items():
+        unit = empty(); unit["history"][ident] = lines; units.append(unit)
+    slots = {key: empty(family[key][0]) for key in keys}
+    sizes = {key: len(_json_text(value).encode()) for key, value in slots.items()}
+    if any(size > ARCHIVE_FILE_MAX for size in sizes.values()):
+        raise ArchiveUnpackable("archive envelope metadata cannot fit a part")
+    # Never reuse the name of a part file that is already in the folder but not in this board's index (another one-file
+    # board in the same folder shares archive/): a new part must not overwrite it.
+    present = [rel[8:-5] for rel in _BOARD_STATES.get(id(data), {}).get("files", {})
+               if rel.startswith("archive/" + year + "-") and rel.endswith(".json") and valid_archive_key(rel[8:-5])]
+    next_part = max([0] + [int(key[5:]) for key in keys + present if key != year]) + 1
+    index = 0
+    for unit in units:
+        weight = len(_json_text(unit).encode()) - template_size
+        if template_size + weight > ARCHIVE_FILE_MAX:
+            raise ArchiveUnpackable("a single logical archive record cannot fit a part")
+        while sizes[keys[index]] + weight > ARCHIVE_FILE_MAX:
+            index += 1
+            if index == len(keys):
+                if next_part > 999999:
+                    raise ArchiveUnpackable("archive part-number limit reached")
+                key = f"{year}-{next_part}"; next_part += 1; keys.append(key)
+                slots[key] = empty(); sizes[key] = template_size
+        key = keys[index]
+        for kind in ("tasks", "contacts", "proposals"):
+            slots[key][kind].extend(unit[kind])
+        slots[key]["history"].update(unit["history"])
+        sizes[key] += weight
+    out = {}
+    for key, value in slots.items():
+        if len(_json_text(value).encode()) > ARCHIVE_FILE_MAX:
+            raise ArchiveUnpackable("archive sizing could not guarantee the part limit")
+        out[key] = (value, family.get(key, ({}, None))[1])
+    return out
+
+
 def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_history=0):
     """Build the text of every planned year file (read, merge, and for one card its history moved onto the card), and hold
     back each year that would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and the year leaves the plan; the
@@ -10085,12 +10281,29 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
         for y in sorted(plan):
             part, rel = plan[y], f"archive/{y}.json"
             cur, sha = read_archive(y, base)
+            if (cur is not None and not valid_archive_records(cur)) or not valid_archive_records(part):
+                sys.exit(f"not saved: {rel} contains invalid archive records; nothing changed")
             cur = archive_merge(cur, part, y)
             if ref_orig is not None:   # one card: the archive's lines for it move onto the card copy, as the write does
                 task = part["tasks"][0]
                 extra_history = cur.get("history", {}).pop(task["id"], [])
                 task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
             size = len(_json_text(cur).encode())
+            # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
+            # and repacking would move another board's records into parts its index never lists. They hold the year back.
+            split = data.get("version") == 4 and data.get("layout") == "split" \
+                and _BOARD_STATES.get(id(data), {}).get("shared_folder") is False   # unknown or shared: archive/ may hold another board's records
+            if split and (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
+                try:
+                    packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
+                except ArchiveUnpackable as exc:
+                    if any(key.startswith(y + "-") for key in archive_years(data)):
+                        sys.exit(f"not saved: archive parts for {y} cannot be repacked ({exc}); nothing changed")
+                    packed = None   # preserve the original year and all live records when one unit cannot fit
+                if packed:
+                    files.update(packed)
+                    warnings.append(f"split {rel} across {len(packed)} bounded archive part(s); older writers need kit v107")
+                    continue
             found = archive_size_issue(rel, size)
             if not found:
                 files[y] = (cur, sha); continue
@@ -10220,6 +10433,10 @@ def _cmd_archive(a):
         try:
             for y, (cur, _) in files.items():   # the same data the size check measured
                 archive_index(data, y, cur)
+            if any("-" in key for key in files):
+                settings = data.setdefault("settings", {})
+                current_min = settings.get("min_kit")
+                settings["min_kit"] = max(107, current_min) if type(current_min) is int and current_min > 0 else 107
             assign_nums(data)
             refuse_new_reserved_names(before, data)
             extra = {f"archive/{y}.json": _json_text(c) for y, (c, _) in files.items()}
@@ -10242,10 +10459,10 @@ def cmd_archived(a):
         cur, _ = read_archive(y, base)
         for t in (cur or {}).get("tasks", []):
             if not q or q in json.dumps(searchable(t)).lower():
-                print(f"{y}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
+                print(f"{y[:4]}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
         for p in (cur or {}).get("contacts", []):
             if not q or q in json.dumps(p).lower():
-                print(f"{y}  {p['id']}  {p['name']} ({p.get('company', '')})  [{p.get('stage', '')}]"); n += 1
+                print(f"{y[:4]}  {p['id']}  {p['name']} ({p.get('company', '')})  [{p.get('stage', '')}]"); n += 1
     if not n: print("(nothing archived" + (" matches" if q else "") + ")")
 
 
@@ -10268,7 +10485,7 @@ def cmd_archived_history(a):
             for x in cur.get(k, []):
                 if x["id"] == rid: entries += x.get("history") or []
         for h in sorted(entries, key=lambda h: h.get("at", "")):
-            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
+            print(f"{y[:4]}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
     if not n: print(f"(no archived history for '{a.ref}')")
 
 
@@ -10289,6 +10506,15 @@ def cmd_unarchive(a):
         return _cmd_unarchive(a)
 
 
+def _history_equality_token(value):
+    """Hashable JSON structure with Python equality: object order is irrelevant and 1, 1.0 and True agree."""
+    if isinstance(value, dict):
+        return ("object", frozenset((key, _history_equality_token(item)) for key, item in value.items()))
+    if isinstance(value, list):
+        return ("array", tuple(_history_equality_token(item) for item in value))
+    return ("scalar", value)
+
+
 def _cmd_unarchive(a):
     global WRITE
     for attempt in range(6):
@@ -10297,6 +10523,16 @@ def _cmd_unarchive(a):
         y, k, item, cur, sha = find_archived(data, base, a.ref.lstrip("#"))
         label = item.get("title") or item.get("name")
         if not any(x["id"] == item["id"] for x in data.setdefault(k, [])):
+            # Older history may occupy another part (or an older year). Restore a complete copy without
+            # deleting those historical records; subsequent reads deduplicate the retained archive evidence.
+            older, seen = [], set()
+            for key in reversed(archive_years(data)):
+                source = cur if key == y else read_archive(key, base)[0]
+                for line in (source or {}).get("history", {}).get(item["id"], []):
+                    token = _history_equality_token(line)
+                    if token not in seen:
+                        older.append(line); seen.add(token)
+            item["history"] = older + [line for line in item.get("history", []) if _history_equality_token(line) not in seen]
             if k == "tasks" and data.get("layout") == "split" and not valid_rank(item.get("rank")):
                 ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
                 item["rank"] = append_rank(ranks)

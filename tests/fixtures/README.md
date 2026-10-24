@@ -46,4 +46,6 @@ Add a case there when either changes.
 
 `v4_kit101` freezes unchanged split records before archive-size follow-ups (kit v106; the name is historical).
 
+`v4_kit107` freezes a split board with year and part archives, opaque envelope fields and older history (kit v107).
+
 `v4_kit98` freezes unchanged split board data before the image review fixes (kit v103; the name is historical).

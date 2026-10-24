@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 106;
+  const PAGE_KIT = 107;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -756,6 +756,10 @@ if (typeof window !== 'undefined') (() => {
   }
   const isSplit = o => !!o && o.version === 4 && o.layout === 'split';
   const remotePath = (rel, at) => { const p = (at || cfg()).path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
+  // The Git Data archive route reads `tasks.json` next to the archive folder, so it serves split boards and one-file boards named
+  // tasks.json only. A one-file board with another name keeps the Contents-API route on its own file, never a sibling board's.
+  const KIT_ROOT_JSON = new Set(['tasks.json', 'widgets.json', 'manifest.json']);   // top-level files a board folder may hold that are not another board
+  const gitDataArchive = () => !HOSTED && (isSplit(state) || /(^|\/)tasks\.json$/.test(cfg().path || ''));
   const wantedRel = p => p === 'tasks.json' || /^(cards|people|projects|proposals|archive)\/[^/]+$/.test(p);   // proposals: the Review Inbox, kept out of the model
   const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
   async function mapLimit(items, limit, fn) {
@@ -763,28 +767,46 @@ if (typeof window !== 'undefined') (() => {
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => { while (at < items.length) { const i = at++; out[i] = await fn(items[i], i); } }));
     return out;
   }
-  async function blobText(item) {
-    let text = await idb.get(blobKey(item.sha));
-    if (typeof text !== 'string') { const r = await ghApi('GET', `/git/blobs/${item.sha}`); if (!r.ok) throw new Error(`GitHub error ${r.status} reading ${item.path}`);
-      const d = await r.json(); text = d.encoding === 'base64' ? b64d(d.content || '') : d.content || ''; idb.set(blobKey(item.sha), text); }
+  const sameArchiveBoard = (at, gen) => gen === archGen && ['repo', 'branch', 'path'].every(k => at[k] === cfg()[k]);
+  async function blobText(item, at = Object.assign({}, cfg()), gen = archGen) {
+    const key = `kb_blob:${at.repo}:${item.sha}`;
+    let text = await idb.get(key);
+    if (!sameArchiveBoard(at, gen)) throw new Error('The board changed while reading a blob.');
+    if (typeof text !== 'string') { const r = await ghApi('GET', `/git/blobs/${item.sha}`, null, {}, at); if (!r.ok) throw new Error(`GitHub error ${r.status} reading ${item.path}`);
+      const d = await r.json(); text = d.encoding === 'base64' ? b64d(d.content || '') : d.content || '';
+      if (!sameArchiveBoard(at, gen)) throw new Error('The board changed while reading a blob.');
+      await idb.set(key, text); }
     return text;
   }
+  async function pruneBlobCache(shas, at, gen) {
+    const prefix = `kb_blob:${at.repo}:`, keys = await idb.keys();
+    if (!sameArchiveBoard(at, gen)) return;
+    await mapLimit(keys.filter(k => typeof k === 'string' && k.startsWith(prefix) && /^[0-9a-f]{40}$/.test(k.slice(prefix.length)) && !shas.has(k.slice(prefix.length))), 8,
+      k => sameArchiveBoard(at, gen) ? idb.del(k) : null);
+  }
+  async function archiveEntry(meta, y, at = Object.assign({}, cfg()), gen = archGen) {
+    const path = `archive/${y}.json`, entry = meta.files.get(path);
+    if (!entry || entry.obj) return entry;
+    const text = await blobText(Object.assign({ path }, entry), at, gen);
+    if (!sameArchiveBoard(at, gen)) throw new Error('The board changed while loading the archive.');
+    const full = Object.assign({}, entry, { text, obj: JSON.parse(text) }); meta.files.set(path, full); return full;
+  }
   let graphqlBlobsDenied = false;   // a token without GraphQL access should not retry on every poll
-  async function graphqlBlobTexts(items, texts) {
-    const c = cfg(), [owner, name] = c.repo.split('/'), batches = [];
+  async function graphqlBlobTexts(items, texts, c = Object.assign({}, cfg()), gen = archGen) {
+    const [owner, name] = c.repo.split('/'), batches = [];
     const valid = items.filter(x => /^[0-9a-f]{40}$/.test(x.sha));
     for (let i = 0; i < valid.length; i += 40) batches.push(valid.slice(i, i + 40));
     await mapLimit(batches, 4, async batch => {
-      if (graphqlBlobsDenied) return;
+      if (graphqlBlobsDenied || !sameArchiveBoard(c, gen)) return;
       const query = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${batch.map((x, i) => `b${i}:object(oid:"${x.sha}"){... on Blob{text isBinary isTruncated}}`).join(' ')}}}`;
       try {
         const r = await fetch(`${c.api}/graphql`, { method: 'POST', cache: 'no-store', signal: ghSignal('POST'), body: JSON.stringify({ query, variables: { owner, name } }),
           headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' } });
         if (r.status === 401 || r.status === 403) graphqlBlobsDenied = true;
         if (!r.ok) return;
-        const d = await r.json(); if (d.errors) return;
+        const d = await r.json(); if (d.errors || !sameArchiveBoard(c, gen)) return;
         batch.forEach((x, i) => { const b = d.data?.repository?.[`b${i}`];
-          if (b && !b.isBinary && !b.isTruncated && typeof b.text === 'string') { texts.set(x, b.text); idb.set(blobKey(x.sha), b.text); } });
+          if (b && !b.isBinary && !b.isTruncated && typeof b.text === 'string') { texts.set(x, b.text); idb.set(`kb_blob:${c.repo}:${x.sha}`, b.text); } });
       } catch {}   // REST still reads the blobs this batch could not supply
     });
   }
@@ -795,7 +817,7 @@ if (typeof window !== 'undefined') (() => {
     raw.tasks = tasks; raw.contacts = contacts; raw.projects = projects; return raw;
   }
   async function githubSnapshot(force = false, model = true) {
-    const c = cfg(), ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
+    const c = Object.assign({}, cfg()), gen = archGen, ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
     const rr = await ghApi('GET', `/git/ref/heads/${ref}`, null, !force && sameBoard && splitMeta.headEtag ? { etag: splitMeta.headEtag } : {});
     if (rr.status === 304 && sameBoard) return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta };
     if (!rr.ok) throw new Error(`GitHub error ${rr.status} reading branch`);
@@ -809,14 +831,20 @@ if (typeof window !== 'undefined') (() => {
     const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board files`);
     const td = await tr.json(); if (td.truncated) throw new Error('The board file list was too large for GitHub.');
     const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
-    const old = sameBoard ? splitMeta.files : new Map(), files = new Map(), changed = listed.filter(x => !old.has(x.path) || old.get(x.path).sha !== x.sha);
+    const old = sameBoard ? splitMeta.files : new Map(), files = new Map(), changed = listed.filter(x => !x.path.startsWith('archive/') && (!old.has(x.path) || old.get(x.path).sha !== x.sha));
+    listed.filter(x => x.path.startsWith('archive/')).forEach(x => files.set(x.path, { sha: x.sha, size: x.size }));
     old.forEach((v, k) => { const item = byPath.get(k); if (item && item.sha === v.sha) files.set(k, v); });
     const texts = new Map(), missing = [];
     await mapLimit(changed, 8, async item => { const text = await idb.get(blobKey(item.sha)); if (typeof text === 'string') texts.set(item, text); else missing.push(item); });
-    if (missing.length > 8 && !graphqlBlobsDenied) await graphqlBlobTexts(missing, texts);
-    await mapLimit(changed, 8, async item => { const text = texts.has(item) ? texts.get(item) : await blobText(item); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
+    if (missing.length > 8 && !graphqlBlobsDenied) await graphqlBlobTexts(missing, texts, c, gen);
+    await mapLimit(changed, 8, async item => { const text = texts.has(item) ? texts.get(item) : await blobText(item, c, gen); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
-    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true };
+    // another top-level board file in this folder (a one-file board such as alice.json): the boards share archive/.
+    // The kit's own files there (widgets.json, manifest.json) are not boards.
+    const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/i.test(x.path) && !KIT_ROOT_JSON.has(x.path) && x.path !== own);
+    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true, sharedFolder };
+    await pruneBlobCache(new Set((td.tree || []).filter(x => x.type === 'blob').map(x => x.sha)), c, gen);
+    if (!sameArchiveBoard(c, gen)) throw new Error('The board changed while loading.');
     return { unchanged: false, data: modelFromSplit(files), meta };
   }
   let boardSize = 0;   // bytes of the board file, or all split board files, from the last load
@@ -845,8 +873,8 @@ if (typeof window !== 'undefined') (() => {
     try { const raw = await Promise.race([idb.get(snapKey(c)), new Promise(r => setTimeout(r, 400))]); if (!raw || lastSyncOk) return;
       if (Number.isInteger(raw.version) && raw.version > KNOWN_SCHEMA) return; state = normalise(raw); fromSnap = true; setStatus('Showing the last copy, syncing…');
       if (isSplit(raw)) { const m = await idb.get(snapKey(c).replace('kb_snap:', 'kb_meta:')); if (m && m.key === `${c.repo}:${c.branch}:${c.path}` && Array.isArray(m.files)) {
-        const texts = await Promise.all(m.files.map(x => idb.get(blobKey(x.sha)))); if (texts.some(text => typeof text !== 'string')) return;   // incomplete blob caches take the full discovery path
-        const files = new Map(m.files.map((x, i) => [x.path, { sha: x.sha, size: x.size, text: texts[i], obj: JSON.parse(texts[i]) }]));
+        const texts = await Promise.all(m.files.map(x => x.path.startsWith('archive/') ? null : idb.get(blobKey(x.sha)))); if (texts.some((text, i) => !m.files[i].path.startsWith('archive/') && typeof text !== 'string')) return;   // incomplete blob caches take the full discovery path
+        const files = new Map(m.files.map((x, i) => [x.path, { sha: x.sha, size: x.size, ...(x.path.startsWith('archive/') ? {} : { text: texts[i], obj: JSON.parse(texts[i]) }) }]));
         if (files.has('tasks.json')) splitMeta = { ...m, files }; } } } catch {}
   }
   async function cardFirst() {
@@ -1159,6 +1187,11 @@ if (typeof window !== 'undefined') (() => {
   }
 
   function splitChanges(next, meta, extra = {}) {
+    if (!isSplit(next)) {   // legacy boards also archive atomically without changing layout
+      const desired = new Map([['tasks.json', jsonText(next)], ...Object.entries(extra)]), changes = new Map(), deletes = new Set();
+      desired.forEach((text, path) => { if (text === null) deletes.add(path); else if (meta.files.get(path)?.text !== text) changes.set(path, text); });
+      return { changes, deletes };
+    }
     let root = clone(next); delete root.tasks; delete root.contacts; delete root.projects;
     const oldRoot = (meta.files.get('tasks.json') || {}).obj || {}, defaults = DEFAULT();
     if (root.settings && oldRoot.settings) Object.keys(defaults.settings).forEach(k => { if (!(k in oldRoot.settings) && JSON.stringify(root.settings[k]) === JSON.stringify(defaults.settings[k])) delete root.settings[k]; });
@@ -1198,7 +1231,7 @@ if (typeof window !== 'undefined') (() => {
       if (!res.ok) return (res.status === 409 || res.status === 422) ? 'conflict' : 'error:' + res.status;
       const out = await res.json(); if (gone()) return 'gone'; const files = new Map(meta.files); if (deletes.has(rel)) files.delete(rel); else { const text = changes.get(rel); files.set(rel, { sha: out.content.sha, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(out.content.sha), text); }
       const parent = ((out.commit.parents || [])[0] || {}).sha;
-      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); state = next; return 'ok';
+      splitMeta = Object.assign({}, meta, { head: parent === meta.head ? out.commit.sha : null, headEtag: null, rootTree: out.commit.tree && out.commit.tree.sha || meta.rootTree, files }); if (!isSplit(next)) { sha = files.get('tasks.json')?.sha || null; etag = null; } state = next; return 'ok';
     }
     const api = (method, endpoint, body) => { if (gone()) throw new Error('gone'); return ghApi(method, endpoint, body, {}, at); };
     try {
@@ -1211,7 +1244,7 @@ if (typeof window !== 'undefined') (() => {
       if (!rr.ok) return (rr.status === 409 || rr.status === 422) ? 'conflict' : 'error:' + rr.status;
       if (gone()) return 'gone';
       const files = new Map(meta.files); made.forEach(([rel, text, blob]) => { files.set(rel, { sha: blob, size: new TextEncoder().encode(text).length, text, obj: JSON.parse(text) }); idb.set(blobKey(blob), text); }); deletes.forEach(rel => files.delete(rel));
-      splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); state = next; return 'ok';
+      splitMeta = Object.assign({}, meta, { head: commit, headEtag: null, rootTree: tree, files }); if (!isSplit(next)) { sha = files.get('tasks.json')?.sha || null; etag = null; } state = next; return 'ok';
     } catch (e) { if (gone()) return 'gone'; throw e; }
   }
 
@@ -1221,7 +1254,7 @@ if (typeof window !== 'undefined') (() => {
     if (newerSchema) { toast(`Not saved: this board uses newer board tools (schema v${newerSchema}). Reload the page; if it stays, the board kit needs an upgrade.`, true); return 'error:schema'; }
     const at = Object.assign({}, cfg()), gone = () => ag !== archGen;
     if (gone()) return 'gone';
-    if (isSplit(next)) {
+    if (isSplit(next) || (tree && expectedSha && expectedSha.files)) {
       // A new split board has no tree metadata yet. Its first commit contains only the root/index file; cards and
       // CRM people get their own files when they are added. Subsequent writes load the branch tree as usual.
       if (!expectedSha && !splitMeta) {
@@ -8563,7 +8596,8 @@ if (typeof window !== 'undefined') (() => {
   const ARCH_DEF = { done_days: 90, lost_days: 180, keep_history: 20 };
   const archRules = () => { const r = Object.assign({}, ARCH_DEF), o = (state.settings || {}).archive || {}; Object.keys(ARCH_DEF).forEach(k => { if (Number.isInteger(o[k]) && o[k] >= 0) r[k] = o[k]; }); return r; };
   const archPath = (y, at) => { const p = (at || cfg()).path, i = p.lastIndexOf('/'); return (i >= 0 ? p.slice(0, i + 1) : '') + 'archive/' + y + '.json'; };
-  const archYears = () => Object.keys(((state.archive || {}).files) || {}).filter(y => /^\d{4}$/.test(y)).sort().reverse();   // a year is four digits: a crafted key (../x) is never fetched
+  const archivePartKey = y => /^[0-9]{4}(?:-[1-9][0-9]{0,5})?$/.test(String(y));
+  const archYears = () => Object.keys(((state.archive || {}).files) || {}).filter(archivePartKey).sort().reverse();   // a year is four digits: a crafted key (../x) is never fetched
   const dayIso = n => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); };
   function archivePlan(d, rules) {   // takes what can be archived out of d; returns { year: { tasks, contacts, history: { id: [entries] } } }
     if (rules.taskId) {
@@ -8599,10 +8633,20 @@ if (typeof window !== 'undefined') (() => {
   let archMem = {};   // year -> { data, sha, etag } for this page; IndexedDB keeps it between visits
   const archKey = (y, at = cfg()) => `kb_arch:${at.repo}:${at.branch}:${archPath(y, at)}`;
   async function readArchive(y, at) {   // at: the board captured when an archive run or Put back started (default: the board now)
-    if (HOSTED) { try { const file = await hostedStorage.read(`archive/${y}.json`); return { data: file.body, sha: file.rev }; } catch (e) { if (e.status === 404) return { data: null, sha: null }; throw e; } }   // hosted: the whole file each time; its revision keys loadArchived's normalised copy. GitHub, below: a conditional GET, an unchanged file is a free 304 from the cache
+    if (HOSTED) {
+      if (!/^[0-9]{4}$/.test(y)) throw new Error('Not a hosted archive year: ' + y);
+      const adapter = hostedStorage, gen = archGen, path = `archive/${y}.json`, key = archKey(y), have = archMem[key];
+      const current = () => { if (adapter !== hostedStorage || gen !== archGen) throw new Error('The board changed while the archive was loading.'); };
+      try {
+        const meta = await adapter.revision(path, have?.sha); current();
+        if (have && (meta.unchanged || meta.rev === have.sha)) return have;
+        const file = meta.full || await adapter.read(path, meta.rev); current();
+        return (archMem[key] = { data: file.body, sha: file.rev });
+      } catch (e) { current(); if (e.status === 404) return { data: null, sha: null }; throw e; }
+    }
     // path and cache key are fixed before the first await, so a branch or path switch meanwhile never files one board's
     // copy under another's key; after every await, a Forget token or board change (archGen) drops the read: nothing is cached
-    at = at || Object.assign({}, cfg()); if (!/^\d{4}$/.test(String(y))) throw new Error('Not an archive year: ' + y);
+    at = at || Object.assign({}, cfg()); if (!archivePartKey(y)) throw new Error('Not an archive year: ' + y);
     const path = archPath(y, at), key = archKey(y, at), gen = archGen, gone = () => gen !== archGen, stop = () => { throw new Error('The board changed while the archive was loading.'); };
     const have = archMem[key] || await idb.get(key); if (gone()) stop();
     const res = await gh('GET', null, !!(have && have.etag), { path, etag: have && have.etag, at }); if (gone()) stop();
@@ -8658,10 +8702,26 @@ if (typeof window !== 'undefined') (() => {
     return o;
   }
   function archRawIn(data, kind, id) {   // one archived card or person as that year's file has it (Put back writes this; archNorm is for display only), with its older history lines; null when not there
-    const k = kind === 'task' ? 'tasks' : 'contacts', x = isObj(data) && Array.isArray(data[k]) ? data[k].find(x => isObj(x) && x.id === id) : null; if (!x) return null;
+    const k = kind === 'task' ? 'tasks' : 'contacts', x = isObj(data) && Array.isArray(data[k]) ? data[k].find(x => isObj(x) && safeCardId(x.id) && x.id === id) : null; if (!x) return null;
     const own = Object.fromEntries(Object.entries(x).filter(([key]) => !reservedKey(key)));   // own keys only: a "__proto__" key in the file never reaches the board
     own.history = archArr(isObj(data.history) && has(data.history, id) ? data.history[id] : null, isObj).concat(archArr(x.history, isObj));   // older lines first; only real entries
     return own;
+  }
+  async function restoreHistory(src, id, fresh, meta, at, gen) {
+    // A live record's trimmed history can predate the file holding its archived body. Read from this fresh
+    // snapshot, not the view/cache, and retain other files as historical evidence (as the CLI does).
+    const keys = Object.keys((fresh.archive || {}).files || {}).filter(archivePartKey)
+      .sort((a, b) => Number(a.slice(0, 4)) - Number(b.slice(0, 4)) || Number(a.slice(5) || 0) - Number(b.slice(5) || 0));
+    const files = await mapLimit(keys, 8, async key => {
+      const entry = await archiveEntry(meta, key, at, gen);
+      if (!entry) return null;   // an index key whose file is gone holds no history to bring back (as the CLI)
+      if (!isObj(entry.obj)) throw new Error('An indexed archive file is invalid. Nothing restored.');
+      return entry.obj;
+    });
+    const seen = new Set(), history = [];
+    const append = lines => { for (const line of archArr(lines, isObj)) { const token = JSON.stringify(line); if (!seen.has(token)) { seen.add(token); history.push(line); } } };
+    for (const file of files) if (file) append(isObj(file.history) && has(file.history, id) ? file.history[id] : null);
+    append(src.history); src.history = history; return src;
   }
   function restoredItem(src, kind) {   // the board's own per-card tolerance (normalise) for one restored card or person: missing lists filled, unknown and non-text fields kept
     const k = kind === 'task' ? 'tasks' : 'contacts', x = normalise({ [k]: [clone(src)] })[k][0];
@@ -8672,7 +8732,7 @@ if (typeof window !== 'undefined') (() => {
     const out = { tasks: [], contacts: [] }; if (!isObj(data)) return out;
     const hist = isObj(data.history) ? data.history : {};
     const withHist = x => { const h = archArr(hist[x.id], isObj); return h.length ? Object.assign({}, x, { history: h.concat(x.history) }) : x; };   // older history lines kept in the same file
-    const seen = new Set(), first = x => isObj(x) && isStr(x.id) && !seen.has(x.id) && !!seen.add(x.id);   // one item per id in a year: a repeated id is skipped (search needs unique ids)
+    const seen = new Set(), first = x => isObj(x) && safeCardId(x.id) && !seen.has(x.id) && !!seen.add(x.id);   // one item per id in a year: a repeated id is skipped (search needs unique ids)
     out.tasks = archArr(data.tasks, first).map(t => withHist(archNorm(t, 'task'))); seen.clear();
     out.contacts = archArr(data.contacts, first).map(p => withHist(archNorm(p, 'contact')));
     if (count) window.kbArchNormYears = (window.kbArchNormYears || 0) + 1; return out;
@@ -8683,12 +8743,14 @@ if (typeof window !== 'undefined') (() => {
     const gen = archGen, board = [cfg().repo, cfg().branch, cfg().path].join('|');
     if (archYearNorm.board !== board) archYearNorm = { board, years: {} };
     const live = new Set([...state.tasks, ...(state.contacts || [])].map(x => x.id)), out = { tasks: [], contacts: [] };
-    // Each year comes from the split snapshot (already downloaded with the board) or a read (in parallel; built in year
+    // Each year comes from the split snapshot (hydrated only on demand) or a read (in parallel; built in year
     // order). readArchive asks GitHub every time (a free 304 when unchanged), so a file that went back to the same counts
     // with other content (put back, edited, archived again) is never served from an older copy.
     const years = archYears(), c = cfg(), snap = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}` ? splitMeta.files : null;
-    const got = await Promise.all(years.map(y => { const f = snap && snap.get(`archive/${y}.json`);
-      return f && f.obj ? { data: f.obj, sha: f.sha } : readArchive(y); }));
+    const got = await mapLimit(years, 8, async y => {
+      if (snap) { const f = await archiveEntry({ files: snap }, y, Object.assign({}, c), gen); return f ? { data: f.obj, sha: f.sha } : { data: null, sha: null }; }
+      return readArchive(y);
+    });
     if (gen !== archGen) throw new Error('The board changed while the archive was loading.');
     const keep = {};
     for (const [i, y] of years.entries()) { const { data, sha } = got[i], had = archYearNorm.years[y];
@@ -8704,8 +8766,8 @@ if (typeof window !== 'undefined') (() => {
     if (!pickedIds(rules)) return;
     const files = [];
     for (const y of Object.keys((fresh.archive || {}).files || {}).sort()) {
-      const entry = meta && meta.files.get(`archive/${y}.json`);
-      files.push(meta ? entry && entry.obj : /^\d{4}$/.test(y) ? (await readArchive(y, at)).data : null);
+      const entry = meta && await archiveEntry(meta, y, at || Object.assign({}, cfg()));
+      files.push(meta ? entry && entry.obj : archivePartKey(y) ? (await readArchive(y, at)).data : null);
     }
     Object.values(plan).forEach(part => part.tasks.forEach(t => { const older = [], seen = new Set();
       files.forEach(data => older.push(...((data && data.history || {})[t.id] || [])));
@@ -8714,7 +8776,7 @@ if (typeof window !== 'undefined') (() => {
   // An archive year file has its own size limit (kit v87): past ARCH_WARN a warning, past ARCH_MAX the items bound for that
   // year stay on the board and the rest is archived. Sizes are UTF-8 bytes of the text that would be written.
   const ARCH_WARN = 700 * 1024, ARCH_MAX = 900 * 1024, archBytes = s => new TextEncoder().encode(s).length;
-  const archStep = 'Tell the board owner: splitting an archive year into parts is planned as a follow-up card.';
+  const archStep = 'Large years are split automatically. A single record or envelope metadata that cannot fit stays unchanged; ask the board owner to review it.';
   const partCount = p => p.tasks.length + p.contacts.length + (p.proposals || []).length;
   const heldNote = (y, n, bytes) => n ? `Held back ${n} item${n === 1 ? '' : 's'} from ${archPath(y)}: it would be ${Math.round(bytes / 1024)} KB, over the ${ARCH_MAX / 1024} KB limit. They stay on the board. ${archStep}`
     : `Kept the old history lines on the board: ${archPath(y)} would be ${Math.round(bytes / 1024)} KB, over the ${ARCH_MAX / 1024} KB limit. ${archStep}`;
@@ -8722,6 +8784,57 @@ if (typeof window !== 'undefined') (() => {
   let archiveNote = '';   // the size note of the last archive run, for the quick-archive toast (which replaces archiveNow's own)
   const batchWhat = k => `${k} task${k === 1 ? '' : 's'}; nothing deleted, search Include archive to restore`;
   const pickedIds = rules => rules.taskIds || (rules.taskId ? [rules.taskId] : null);   // the cards a card-level archive moves; null: the rules-based clean-up
+  class ArchiveUnpackable extends Error {}
+  async function shardArchiveFamily(year, current, incoming, fresh, meta, at, gen, absorbedIds = []) {
+    const keys = Object.keys((fresh.archive || {}).files || {}).filter(k => archivePartKey(k) && k.startsWith(year + '-'));
+    keys.push(year); keys.sort((a, b) => (a === year ? 0 : Number(a.slice(5))) - (b === year ? 0 : Number(b.slice(5))));
+    const family = new Map([[year, current]]);
+    await mapLimit(keys.filter(key => key !== year), 8, async key => { const entry = await archiveEntry(meta, key, at, gen); if (!entry || !isObj(entry.obj)) throw new ArchiveUnpackable('Missing archive part'); family.set(key, entry.obj); });
+    for (const cur of family.values()) {
+      if (!isObj(cur)) throw new ArchiveUnpackable('Invalid archive part');
+      for (const kind of ['tasks', 'contacts', 'proposals']) if (cur[kind] !== undefined && (!Array.isArray(cur[kind]) || cur[kind].some(item => !isObj(item)))) throw new ArchiveUnpackable('Invalid archive records');
+    }
+    const incomingIds = new Set(['tasks', 'contacts', 'proposals'].flatMap(k => (incoming[k] || []).map(x => x.id))), records = new Map(), histories = new Map(), historySeen = new Map(), updates = new Map();
+    for (const kind of ['tasks', 'contacts', 'proposals']) for (const item of current[kind] || []) if (incomingIds.has(item.id)) updates.set(item.id, [kind, item]);
+    for (const key of keys) {
+      const cur = family.get(key); if (!isObj(cur)) throw new ArchiveUnpackable('Invalid archive part');
+      for (const kind of ['tasks', 'contacts', 'proposals']) {
+        if (cur[kind] !== undefined && !Array.isArray(cur[kind])) throw new ArchiveUnpackable('Invalid archive collection');
+        for (const item of cur[kind] || []) {
+          if (!isObj(item) || !safeCardId(item.id)) throw new ArchiveUnpackable('Invalid archived id');
+          if (incomingIds.has(item.id)) continue;
+          const old = records.get(item.id); if (old && !sameJson(old, [kind, item]) && !incomingIds.has(item.id)) throw new ArchiveUnpackable('Conflicting archived copies');
+          records.set(item.id, [kind, item]);
+        }
+      }
+      if (cur.history !== undefined && !isObj(cur.history)) throw new ArchiveUnpackable('Invalid archive history');
+      for (const [id, lines] of Object.entries(cur.history || {})) {
+        if (!safeCardId(id) || !Array.isArray(lines)) throw new ArchiveUnpackable('Invalid archived history');
+        const have = histories.get(id) || [], seen = historySeen.get(id) || new Set(); historySeen.set(id, seen);
+        for (const line of lines) { const token = JSON.stringify(line); if (!seen.has(token)) { have.push(line); seen.add(token); } } histories.set(id, have);
+      }
+    }
+    updates.forEach((item, id) => records.set(id, item)); absorbedIds.forEach(id => histories.delete(id));
+    const empty = cur => ({ ...(cur || { version: 3, archive: true, year }), tasks: [], contacts: [], proposals: [], history: {} });
+    const template = empty(), templateSize = archBytes(jsonText(template)), units = [];
+    for (const [id, [kind, item]] of records) { const unit = empty(); unit[kind].push(item); if (histories.has(id)) { unit.history[id] = histories.get(id); histories.delete(id); } units.push(unit); }
+    for (const [id, lines] of histories) { const unit = empty(); unit.history[id] = lines; units.push(unit); }
+    const slots = new Map(keys.map(k => [k, empty(family.get(k))])), sizes = new Map([...slots].map(([k, value]) => [k, archBytes(jsonText(value))]));
+    if ([...sizes.values()].some(n => n > ARCH_MAX)) throw new ArchiveUnpackable('Archive envelope metadata cannot fit a part');
+    // never reuse the name of a part file already in the folder but not in this board's index (another one-file board there)
+    const present = [...((meta && meta.files) || new Map()).keys()].map(p => (/^archive\/(.+)\.json$/.exec(p) || [])[1]).filter(k => archivePartKey(k) && k.startsWith(year + '-'));
+    let index = 0, nextPart = Math.max(0, ...keys.concat(present).filter(k => k !== year).map(k => Number(k.slice(5)))) + 1;
+    for (const unit of units) {
+      const weight = archBytes(jsonText(unit)) - templateSize;
+      if (templateSize + weight > ARCH_MAX) throw new ArchiveUnpackable('A single logical archive record cannot fit a part');
+      while (sizes.get(keys[index]) + weight > ARCH_MAX) { index++;
+        if (index === keys.length) { if (nextPart > 999999) throw new ArchiveUnpackable('Archive part-number limit reached'); const key = `${year}-${nextPart++}`; keys.push(key); slots.set(key, empty()); sizes.set(key, templateSize); }
+      }
+      const key = keys[index], slot = slots.get(key); ['tasks', 'contacts', 'proposals'].forEach(k => slot[k].push(...unit[k])); Object.assign(slot.history, unit.history); sizes.set(key, sizes.get(key) + weight);
+    }
+    for (const value of slots.values()) if (archBytes(jsonText(value)) > ARCH_MAX) throw new ArchiveUnpackable('Archive sizing could not guarantee the part limit');
+    return slots;
+  }
   async function archiveSplitNow(rules, what) {
     const message = 'Archive board items', ag = archGen; setStatus('Archiving…');   // ag: a Forget token (or another board) meanwhile ends the run quietly, keeping nothing
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -8732,18 +8845,28 @@ if (typeof window !== 'undefined') (() => {
         await completeArchiveHistory(plan, rules, fresh, got.meta); if (ag !== archGen) return;
         if (!years.length) { setStatus(''); toast(rules.taskIds ? 'Nothing archived: those cards left Done or an agent took them.' : 'Nothing to archive yet'); return; }
         const extras = {}, gone = new Set(), histories = {}, counts = {}, notes = [], heldIds = new Set(); let held = 0, heldYears = 0;
-        years.forEach(y => { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
+        await mapLimit(years, 8, y => archiveEntry(got.meta, y));
+        for (const y of years) { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           if (pickedIds(rules)) pickedIds(rules).forEach(id => delete merged.history[id]);
-          const text = jsonText(merged), bytes = archBytes(text);
-          if (bytes > ARCH_MAX) { held += partCount(plan[y]); heldYears++; plan[y].tasks.forEach(x => heldIds.add(x.id)); notes.push(heldNote(y, partCount(plan[y]), bytes)); delete plan[y]; return; }
-          if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes));
-          extras[rel] = text; counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length };
-          plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); }); });
+          const text = jsonText(merged), bytes = archBytes(text); let packed = null;
+          // part files only on a split board known to be alone in its folder (metadata an older page cached does not say,
+          // so it holds back): boards that share a folder share its archive/, and
+          // repacking would move another board's records into parts its index never lists. They hold the year back.
+          if (isSplit(got.data) && got.meta.sharedFolder === false && (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-')))) {
+            try { packed = await shardArchiveFamily(y, merged, plan[y], fresh, got.meta, Object.assign({}, cfg()), ag, pickedIds(rules) || []); }
+            catch (e) { if (!(e instanceof ArchiveUnpackable) || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-'))) throw e; }
+          }
+          if (!packed && bytes > ARCH_MAX) { held += partCount(plan[y]); heldYears++; plan[y].tasks.forEach(x => heldIds.add(x.id)); notes.push(heldNote(y, partCount(plan[y]), bytes)); delete plan[y]; continue; }
+          if (packed) { packed.forEach((value, key) => { extras[`archive/${key}.json`] = jsonText(value); counts[key] = { tasks: value.tasks.length, contacts: value.contacts.length, ...(value.proposals.length ? { proposals: value.proposals.length } : {}) }; });
+            if ([...packed.keys()].some(k => k.includes('-'))) fresh.settings = Object.assign({}, fresh.settings, { min_kit: Number.isInteger(fresh.settings?.min_kit) && fresh.settings.min_kit > 0 ? Math.max(107, fresh.settings.min_kit) : 107 }); notes.push(`Split ${archPath(y)} across ${packed.size} bounded archive parts.`);
+          } else { if (bytes > ARCH_WARN) notes.push(warnNote(y, bytes)); extras[rel] = text; counts[y] = { tasks: merged.tasks.length, contacts: merged.contacts.length }; }
+          plan[y].tasks.concat(plan[y].contacts).forEach(x => gone.add(x.id)); Object.entries(plan[y].history || {}).forEach(([id, h]) => { histories[id] = (histories[id] || []).concat(h); });
+        }
         if (!Object.keys(plan).length) { setStatus(''); toast('Nothing archived. ' + notes.join(' '), true); return; }   // every year was over the limit: nothing is written
         fresh.tasks = fresh.tasks.filter(x => !gone.has(x.id)); fresh.contacts = fresh.contacts.filter(x => !gone.has(x.id));
         [...fresh.tasks, ...fresh.contacts].forEach(x => { const h = histories[x.id]; if (!h || !x.history) return; const old = new Set(h.map(e => JSON.stringify(e))); x.history = x.history.filter(e => !old.has(JSON.stringify(e))); });
         fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, counts); fresh.archive.last_run = nowIso();
-        const out = await save(fresh, message, got.meta, extras, false, ag); if (out === 'gone' || ag !== archGen) return;
+        const out = await save(fresh, message, got.meta, extras, true, ag); if (out === 'gone' || ag !== archGen) return;
         if (out === 'ok') { archDrop(); snapSave(cfg(), fresh); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); render(); archiveNote = notes.join(' ');
           const wrote = Object.values(plan), sum = f => wrote.reduce((n, part) => n + f(part), 0);
           const said = rules.taskIds ? batchWhat(gone.size) : heldYears ? `${sum(p => p.tasks.length)} done tasks, ${sum(p => p.contacts.length)} Lost people and ${sum(p => Object.values(p.history).reduce((n, h) => n + h.length, 0))} old history lines` : what;
@@ -8851,7 +8974,7 @@ if (typeof window !== 'undefined') (() => {
     const what = ids ? batchWhat(ids.length) : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
     if (!ids && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
-    if (isSplit(state)) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
+    if (gitDataArchive()) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
     // the board this run reads and writes is fixed now (at), and a Forget token or another board meanwhile (ag) ends it quietly
     const at = Object.assign({}, cfg()), ag = archGen, gone = () => ag !== archGen;
@@ -8900,26 +9023,27 @@ if (typeof window !== 'undefined') (() => {
   }
   function restoreArchived(...args) { return trackRun(restoreArchivedRun(...args)); }
   async function restoreArchivedRun(kind, item, y, open = true) {
+    if (!['task', 'contact'].includes(kind) || !isObj(item) || !safeCardId(item.id) || !archivePartKey(y)) { toast('Invalid archived item; nothing restored.', true); return; }
     if (HOSTED) { const ok = await hostedArchive(item, y, true); if (ok && open && kind === 'task') openCard(item.id); return; }   // open: show the restored card or person afterwards
     if (writeBlocked()) return;
     const ag = archGen, at = Object.assign({}, cfg()), gone = () => ag !== archGen, name = item.title || item.name;   // as archiveNow: this board, until a Forget token or another board
     const refuse = onBoard => { archDrop(); $('dlgArch').close(); render(); toast(onBoard ? `${name} is already back on the board.` : `${name} was changed elsewhere and is not in that archive file now. Open the archive again and try again.`, true); };   // the archive file no longer holds it: never restore the page's copy
-    if (isSplit(state)) {
+    if (gitDataArchive()) {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
       for (let attempt = 0; attempt < 4; attempt++) {
-        try { const got = await splitSnapshot(true), entry = got.meta.files.get(rel); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } const fresh = normalise(got.data);
+        try { const got = await splitSnapshot(true), entry = await archiveEntry(got.meta, y, at, ag); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } const fresh = normalise(got.data);
           const src = entry && archRawIn(entry.obj, kind, item.id);   // the archive as it is now, never the copy the dialog showed
           if (!src) { refuse(fresh[k].some(x => x.id === item.id)); return; }   // the card, or its whole year file, is gone
           const nextArchive = clone(entry.obj);
           if (!fresh[k].some(x => x.id === item.id)) {
-            const x = restoredItem(src, kind);
+            const x = restoredItem(await restoreHistory(src, item.id, fresh, got.meta, at, ag), kind);
             // kit v89 review: this save skips mutateNow, so it runs the reserved-name check itself before the record comes back
             const grewName = reservedGrew(fresh, Object.assign({}, fresh, { [k]: fresh[k].concat([x]) }));
             if (grewName != null) { toast(restoreRefusedMsg(grewName, k, x), true); return; }
             fresh[k].push(x); if (kind === 'task' && !Number.isInteger(src.num)) assignNums(fresh); ensureRanks(fresh); }
-          nextArchive[k] = (nextArchive[k] || []).filter(x => x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
+          nextArchive[k] = (nextArchive[k] || []).filter(x => !isObj(x) || x.id !== item.id); if (nextArchive.history) delete nextArchive.history[item.id];
           fresh.archive = Object.assign({}, fresh.archive); fresh.archive.files = Object.assign({}, fresh.archive.files, { [y]: { tasks: (nextArchive.tasks || []).length, contacts: (nextArchive.contacts || []).length } });
-          const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) }, false, ag);
+          const out = await save(fresh, `Restore ${item.id} from the archive`, got.meta, { [rel]: jsonText(nextArchive) }, true, ag);
           if (out === 'gone' || ag !== archGen) return;   // Forget token or another board meanwhile
           if (out === 'ok') { archDrop(); $('dlgArch').close(); render(); toast(`${item.title || item.name} is back on the board.`); if (open) { if (kind === 'task') openCard(item.id); else openContact(item.id); } return; }
           if (out !== 'conflict') throw new Error(out);
@@ -8948,7 +9072,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function openArchived(kind, item, y) {   // archived cards are shown read-only, with one button to bring them back
     $('aTitle').textContent = (kind === 'task' ? (item.num ? '#' + item.num + ' ' : '') + item.title : item.name);
-    $('aMeta').textContent = `Archived in ${y} · ` + (kind === 'task' ? [item.client, colName(item.column), item.due && 'due ' + fmtDue(item.due)].filter(Boolean).join(' · ') : [item.role, item.company, item.stage].filter(Boolean).join(' · '));
+    $('aMeta').textContent = `Archived in ${archYearOf(y)} · ` + (kind === 'task' ? [item.client, colName(item.column), item.due && 'due ' + fmtDue(item.due)].filter(Boolean).join(' · ') : [item.role, item.company, item.stage].filter(Boolean).join(' · '));
     const body = $('aBody'); body.textContent = '';
     const txt = kind === 'task' ? item.details : [item.email, item.phone, item.linkedin, item.notes].filter(Boolean).join('\n');
     if (txt) body.append(el('pre', 'atext', txt));
@@ -8965,7 +9089,8 @@ if (typeof window !== 'undefined') (() => {
   // Order: by archive file year, newest year first (a card's year is when it was archived, or for the bulk clean-up the year it
   // last changed), and within a year the file order reversed (an archive run appends). The pill shows that file year.
   // (ARCH_PAGE, Q_ARCH_KEY, archUi and peopleArchived are declared next to the People view's state, above)
-  const archPill = (y, cls) => { const p = el('span', cls); p.append(svgIcon('archive'), 'Archived ' + y); p.title = `In the archive (archive/${y}.json)`; return p; };
+  const archYearOf = key => String(key).slice(0, 4);   // a part file (2020-1) holds records of its year (2020): show and filter by the year
+  const archPill = (y, cls) => { const p = el('span', cls); p.append(svgIcon('archive'), 'Archived ' + archYearOf(y)); p.title = `In the archive (archive/${y}.json)`; return p; };
   const archWords = q => String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
   const archNewest = list => list.map((x, i) => ({ x, i })).sort((a, b) => String(b.x.year).localeCompare(String(a.x.year)) || b.i - a.i).map(o => o.x);
   // Built once per loaded archive (archived changes identity whenever it reloads, and archivedSig with it): the newest-first
@@ -8982,7 +9107,7 @@ if (typeof window !== 'undefined') (() => {
     const uniq = xs => [...new Set(xs.filter(Boolean))];
     const projects = uniq(archived.tasks.map(x => x.item.project)).map(id => ({ value: id, label: (projectById(id) || {}).name || id })).sort((a, b) => a.label.localeCompare(b.label));
     const labels = uniq(archived.tasks.flatMap(x => x.item.labels || [])).sort((a, b) => a.localeCompare(b)).map(l => ({ value: l }));
-    const years = uniq(archived.tasks.map(x => x.year)).sort().reverse().map(y => ({ value: y }));
+    const years = uniq(archived.tasks.map(x => archYearOf(x.year))).sort().reverse().map(y => ({ value: y }));
     return (archIdx = { src: archived, sig: archivedSig, tasks, contacts, projects, labels, years });
   }
   const archMatch = (words, hay) => words.every(w => hay.includes(w));
@@ -9039,13 +9164,13 @@ if (typeof window !== 'undefined') (() => {
   function archivedTasks(idx) {   // the archived cards the filters and the top client filter let through, in archive order
     const fc = clientValues(), words = archWords(archUi.q);
     return idx.tasks.filter(({ x: { item: t, year }, done, hay }) => (!fc.length || fc.includes(t.client)) && (!archUi.project || t.project === archUi.project)
-      && (!archUi.label || (t.labels || []).includes(archUi.label)) && (!archUi.year || year === archUi.year) && (!archUi.outcome || (archUi.outcome === 'done') === done)
+      && (!archUi.label || (t.labels || []).includes(archUi.label)) && (!archUi.year || archYearOf(year) === archUi.year) && (!archUi.outcome || (archUi.outcome === 'done') === done)
       && archMatch(words, hay)).map(e => e.x);
   }
   function archTaskRow({ item: t, year }) {
     const labels = (t.labels || []).map(l => ({ name: l, color: labelColor(l) })), todos = t.todos || [];
     const row = ui.taskRow({ num: t.num, title: t.title, priority: t.priority, due: t.due, done: true, client: t.client, labels, todoTotal: todos.length, todoDone: todos.filter(d => d.done).length }, { density: 'row', onOpen: () => openArchived('task', t, year) });
-    row.classList.add('archrow'); row.dataset.archTask = t.id; row.setAttribute('aria-label', `#${t.num || ''} ${t.title || ''}, ${finishedDone(t) ? 'done' : 'cancelled'}, archived ${year}`);
+    row.classList.add('archrow'); row.dataset.archTask = t.id; row.setAttribute('aria-label', `#${t.num || ''} ${t.title || ''}, ${finishedDone(t) ? 'done' : 'cancelled'}, archived ${archYearOf(year)}`);
     const meta = row.querySelector('.ui-task__meta'), done = finishedDone(t);
     meta.append(ui.pill({ text: done ? 'Done' : 'Cancelled', tone: done ? 'ok' : 'neutral', size: 'sm' }), archPill(year, 'ui-pill ui-pill--neutral ui-pill--sm archpill')); meta.hidden = false;
     return row;
@@ -9159,8 +9284,8 @@ if (typeof window !== 'undefined') (() => {
   function sizeBar() {   // a quiet nudge once the board file gets large
     const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
     if (!big) { showBar('sizeBar', null); return; }
-    const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\/[0-9]{4}\.json$/.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count
-    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: mostlyArchive ? `The board files are ${Math.round(boardSize / 1024)} KB, ${Math.round(arch / 1024)} KB of it archive. The archive loads with the board and counts toward the 5 MB total; archiving more items does not make it smaller.` : `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
+    const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\/[0-9]{4}(?:-[1-9][0-9]{0,5})?\.json$/.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count
+    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: mostlyArchive ? `The board files are ${Math.round(boardSize / 1024)} KB, ${Math.round(arch / 1024)} KB of it archive. The archive is stored with the board and counts toward the 5 MB total; archiving more items does not make it smaller.` : `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
       ...(mostlyArchive ? {} : { action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('archive'); } } }),
       onDismiss: () => LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))) });
   }

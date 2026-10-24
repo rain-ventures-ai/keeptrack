@@ -1,0 +1,26 @@
+'use strict';
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+const {HostedAdapter, HostedError} = require('../../board/storage-hosted.js');
+(async () => {
+  const adapter = new HostedAdapter({api:'http://localhost:54321',board:'30000000-0000-4000-8000-000000000001'}), calls=[];
+  adapter.request = async (...args) => { calls.push(args); return {path:'archive/2020.json',rev:'r1'}; };
+  assert.equal((await adapter.revision('archive/2020.json','r1')).rev,'r1');
+  assert.match(calls[0][1],/\/file-revisions\/archive%2F2020.json$/); assert.equal(calls[0][4],'"r1"');
+  adapter.request = async () => ({unchanged:true}); assert.equal((await adapter.revision('archive/2020.json','r1')).unchanged,true);
+  adapter.request = async () => { throw new HostedError(404,{code:'not_found'}); }; let reads=0;
+  adapter.read = async () => { reads++; return {rev:'r2',body:{tasks:[]}}; };
+  assert.equal((await adapter.revision('archive/2020.json')).full.rev,'r2'); assert.equal(reads,1);
+  adapter.request = async () => { throw new HostedError(403,{code:'forbidden'}); };
+  await assert.rejects(adapter.revision('archive/2020.json'),e=>e.status===403); assert.equal(reads,1,'auth denial cannot fall back to body read');
+  const source=fs.readFileSync(path.join(__dirname,'../../board/board.js'),'utf8'); let revisionCalls=0, bodyCalls=0, rev='r1';
+  const storage={revision:async (p,tag)=>{revisionCalls++;return tag===rev?{unchanged:true}:{path:p,rev};},read:async(p,r)=>{bodyCalls++;assert.equal(r,rev);return {rev,body:{tasks:[{id:'t_old',revision:rev}]}};}};
+  const context=vm.createContext({HOSTED:true,hostedStorage:storage,archGen:0,archMem:{},archKey:y=>'hosted:'+y});
+  vm.runInContext(source.slice(source.indexOf('  async function readArchive('),source.indexOf('  function writeBlocked('))+'\nthis.readArchive=readArchive;',context);
+  assert.equal((await context.readArchive('2020')).sha,'r1');
+  assert.equal((await context.readArchive('2020')).sha,'r1'); assert.equal(bodyCalls,1,'unchanged revision never hydrates body');
+  rev='r2'; assert.equal((await context.readArchive('2020')).sha,'r2'); assert.equal(bodyCalls,2); assert.equal(revisionCalls,3);
+  storage.revision=async()=>{throw new HostedError(401,{code:'invalid_credential'});};
+  await assert.rejects(context.readArchive('2020'),e=>e.status===401); assert.equal(bodyCalls,2);
+  await assert.rejects(context.readArchive('2020-1'),/hosted archive year/);
+  console.log('hosted archive revision tests passed');
+})().catch(e=>{console.error(e);process.exitCode=1;});

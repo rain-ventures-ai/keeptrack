@@ -72,7 +72,7 @@ class Github {
     if (p.startsWith('/git/trees/root-') && method === 'GET') return json({ tree: [{ path: 'board', type: 'tree', sha: 'board-' + this.n }] });
     if (p.startsWith('/git/trees/board-') && method === 'GET') return json({ truncated: false, tree: Object.entries(this.files).map(([f, c]) => ({ path: f, type: 'blob', sha: this.sha(f), size: Buffer.byteLength(c) })) });
     if (p.startsWith('/git/blobs/') && method === 'GET') { const sha = p.split('/').pop(), rel = Object.keys(this.files).find(x => this.sha(x) === sha); return json({ encoding: 'base64', content: Buffer.from(this.files[rel]).toString('base64') }); }
-    if (p === '/git/blobs' && method === 'POST') { const sha = 'new-blob-' + ++this.n; this.blobs[sha] = req.postDataJSON().content; return json({ sha }); }
+    if (p === '/git/blobs' && method === 'POST') { const content=req.postDataJSON().content, sha=crypto.createHash('sha1').update(content).digest('hex'); this.n++; this.blobs[sha]=content; return json({ sha }); }
     if (p === '/git/trees' && method === 'POST') { this.pending = req.postDataJSON().tree; return json({ sha: 'new-tree-' + ++this.n }); }
     if (p === '/git/commits' && method === 'POST') return json({ sha: 'new-commit-' + ++this.n });
     if (p === '/git/refs/heads/main' && method === 'PATCH') { for (const e of this.pending || []) { const rel = e.path.replace(/^board\//, ''); if (e.sha === null) delete this.files[rel]; else this.files[rel] = this.blobs[e.sha]; } this.head = req.postDataJSON().sha; return json({ object: { sha: this.head } }); }
@@ -168,6 +168,25 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await page.locator('#btnSearch').click(); assert.equal(await page.locator('#qArch').isChecked(), false, 'unticking is remembered too'); await page.locator('#qClose').click();
       assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
 
+    // ---- a year split into part files (2026 and 2026-1, kit v107): one year in the Year filter and the pills; Put back reads the part ----
+    { const api = new Github(), a26 = api.json('archive/2026.json'), moved = a26.tasks.splice(1, 1);
+      api.files['archive/2026.json'] = text(a26);
+      api.files['archive/2026-1.json'] = text({ version: 3, archive: true, year: '2026', history: {}, tasks: moved, contacts: [] });
+      const root = api.json('tasks.json'); root.archive.files = { '2025': { tasks: 2, contacts: 2 }, '2026': { tasks: 2, contacts: 0 }, '2026-1': { tasks: 1, contacts: 0 } };
+      root.settings.min_kit = 107; api.files['tasks.json'] = text(root);
+      const page = await open(browser, api); await page.locator('.archrow').first().waitFor();
+      assert.equal(await page.locator('.archcount').innerText(), '5 archived cards');
+      assert.deepEqual(await page.locator('select[data-arch-filter="year"] option').allTextContents(), ['Any year', '2026', '2025'], 'a part file is not a year of its own');
+      await pick(page, 'year', '2026'); assert.deepEqual((await nums(page)).sort(), ['#20', '#21', '#22'], 'the year filter includes the cards stored in its part files');
+      const row21 = page.locator('.archrow', { hasText: 'Cancelled run' });
+      assert.ok((await row21.locator('.archpill').innerText()).endsWith('Archived 2026'), 'the pill names the year, not the part');
+      assert.equal(await row21.locator('.archpill').getAttribute('title'), 'In the archive (archive/2026-1.json)', 'its tooltip names the file');
+      await row21.click(); await page.locator('#dlgArch[open]').waitFor(); assert.match(await page.locator('#aMeta').innerText(), /^Archived in 2026 ·/);
+      await page.locator('#aRestore').click(); await page.locator('#dlgArch').waitFor({ state: 'hidden' });
+      for (let i = 0; i < 50 && !api.json('cards/a26_two.json'); i++) await page.waitForTimeout(100);
+      assert.ok(api.json('cards/a26_two.json'), 'Put back from a part file writes the card'); assert.deepEqual(api.json('archive/2026-1.json').tasks, [], 'and removes it from that part');
+      assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
+
     // ---- People → stage filter → Archived: archived people, search and the client filter, open read-only with Put back ----
     { const api = new Github(), page = await open(browser, api, { view: 'people' });
       const stage = page.locator('.peoplev select.pillsel');
@@ -175,6 +194,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await stage.selectOption({ label: 'Archived' }); await page.locator('.parch').first().waitFor();
       assert.deepEqual(await page.locator('.parch .pwho b').allTextContents(), ['Omar Gone', 'Lena Lost'], 'newest archived first');
       assert.equal(await page.locator('.archcount').innerText(), '2 archived people');
+      await page.waitForFunction(() => [...document.querySelectorAll('.parch .archpill')].every(x => x.innerText));
       assert.equal(await page.locator('.parch', { hasText: 'Lena Lost' }).locator('.archpill').innerText(), 'Archived 2025');
       assert.equal(await page.locator('.peoplev .padd').count(), 0, 'no quick add in the archived list');
       await page.locator('.psearch').fill('agency'); await page.waitForFunction(() => document.querySelectorAll('.parch').length === 1);
@@ -327,11 +347,10 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await page.locator('#viewSw button[data-view="board"]').click(); const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Shipped live' });
       await shipped.hover(); await shipped.locator('.quickarch').click(); await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
       // the archive run itself reads every year (older history lines); from here on, only loading the view: every year is
-      // asked for again (a conditional GET, so a file that changed is never served from this page's copy), the unchanged
-      // year is a 304, and only the changed year is normalised again
-      const norms = await page.evaluate(() => window.kbArchNormYears), unchanged = api.notModified || 0;
+      // checked against the captured tree; the unchanged archive reuses its SHA body and only the changed year is normalised again
+      const norms = await page.evaluate(() => window.kbArchNormYears), beforeReads = { ...reads };
       await page.locator('#viewSw button[data-view="archive"]').click(); await page.locator('.archrow', { hasText: 'Shipped live' }).waitFor();
-      assert.ok((api.notModified || 0) > unchanged, `the ${other} file is a 304, not downloaded again`);
+      assert.equal(reads[other], beforeReads[other], `the unchanged ${other} archive reuses the immutable snapshot blob`);
       assert.equal(await page.evaluate(() => window.kbArchNormYears) - norms, 1, `only the ${year} file is normalised again`);
       assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
 
@@ -372,7 +391,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       for (let i = 0; i < 80 && api.json('tasks.json').tasks.some(t => t.id === 't_shipped'); i++) await page.waitForTimeout(100);
       await page.evaluate(() => { const v = (id, x) => { document.getElementById(id).value = x; }; v('sRepo', 'acme/board'); v('sBranch', 'dev'); v('sPath', 'board/tasks.json'); v('sMe', 'alex'); document.getElementById('sSave').click(); });
       for (let i = 0; i < 100 && !hold; i++) await page.waitForTimeout(50); assert.ok(hold, 'the new board\'s read is in flight');
-      await page.evaluate(() => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Undo').click());
+      await page.locator('.ui-toast').getByRole('button', {name:'Undo', exact:true}).click();
       await page.locator('.ui-toast', { hasText: 'The board changed; put it back from that branch' }).waitFor();
       assert.equal(await page.locator('.ui-toast', { hasText: 'did not load' }).count(), 0, 'not "the archive did not load"');
       assert.deepEqual(writes, [], 'nothing is written'); hold();
@@ -413,7 +432,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
     //      changed it behind this page with the same counts (and no new last_run); the loaded copy is not what comes back ----
     { const api = new Github().single(); const page = await open(browser, api);
       await waitNums(page, ['#22', '#21', '#20', '#11', '#10']);
-      const a = api.json('archive/2026.json'); a.tasks = a.tasks.map(t => t.id === 'a26_one' ? { ...t, title: 'Invoice March v2', details: 'edited elsewhere' } : t); api.files['archive/2026.json'] = text(a);
+      const a = api.json('archive/2026.json'); a.tasks = a.tasks.map(t => t.id === 'a26_one' ? { ...t, title: 'Invoice March v2', details: 'edited elsewhere' } : t); api.files['archive/2026.json'] = text(a); api.head='external-edit-'+ ++api.n;
       await page.locator('.archrow', { hasText: 'Invoice March' }).click(); assert.equal(await page.locator('#aTitle').innerText(), '#20 Invoice March', 'the page still shows the copy it loaded');
       await page.locator('#aRestore').click(); await page.locator('#dlgArch').waitFor({ state: 'hidden' });
       const back = () => api.json('tasks.json').tasks.find(t => t.id === 'a26_one');
@@ -423,7 +442,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await page.keyboard.press('Escape'); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
       if (await page.evaluate(() => document.body.dataset.view) !== 'archive') await page.locator('#viewSw button[data-view="archive"]').click();
       await waitNums(page, ['#22', '#21', '#11', '#10']);
-      const b = api.json('archive/2025.json'); b.tasks = b.tasks.filter(t => t.id !== 'a25_one'); b.tasks.push(card('a25_other', 12, 'Another card', {})); api.files['archive/2025.json'] = text(b);
+      const b = api.json('archive/2025.json'); b.tasks = b.tasks.filter(t => t.id !== 'a25_one'); b.tasks.push(card('a25_other', 12, 'Another card', {})); api.files['archive/2025.json'] = text(b); api.head='external-edit-'+ ++api.n;
       await page.locator('.archrow', { hasText: 'Old website brief' }).click(); await page.locator('#aRestore').click();
       await page.locator('.ui-toast', { hasText: 'was changed elsewhere' }).waitFor();
       assert.ok(!api.json('tasks.json').tasks.some(t => t.id === 'a25_one'), 'not restored from the page\'s old copy');
@@ -440,6 +459,36 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       assert.ok(back(), 'the card is back'); assert.deepEqual([back().notes, back().extra_field], [42, { kept: true }], 'the raw fields come back, not the normalised display copy');
       assert.equal(back().history[0].text, 'older line', 'the older history lines come back first');
       assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
+
+    // Put back rehydrates history across older years and part files in both layouts, even after the view cached them.
+    for (const layout of ['split', 'single']) {
+      const api = new Github();
+      const root = api.json('tasks.json'); root.archive.files['2025-2'] = { tasks: 0, contacts: 0 };
+      api.files['tasks.json'] = text(root);
+      const older = { at: '2025-01-01T00:00:00Z', by: 'alex', text: 'older year history' };
+      const middle = { at: '2025-02-01T00:00:00Z', by: 'alex', text: 'older part history' };
+      const own = { at: stamp, by: 'alex', text: 'own latest history' };
+      const a = api.json('archive/2026.json'); a.tasks.find(t => t.id === 'a26_one').history = [middle, own, own];
+      a.history.a26_one = [middle]; api.files['archive/2026.json'] = text(a);
+      const prev = api.json('archive/2025.json'); prev.history.a26_one = [older, older]; api.files['archive/2025.json'] = text(prev);
+      api.files['archive/2025-2.json'] = text({ version: 3, archive: true, year: '2025', tasks: [], contacts: [], history: { a26_one: [older, middle] } });
+      if (layout === 'single') api.single();
+      const page = await open(browser, api); await waitNums(page, ['#22', '#21', '#20', '#11', '#10']);
+      // Change older history after the Archive view loaded: Put back must use its own fresh reads.
+      const late = { at: '2025-03-01T00:00:00Z', by: 'alex', text: 'fresh older history' };
+      const changed = api.json('archive/2025-2.json'); changed.history.a26_one.push(late); api.files['archive/2025-2.json'] = text(changed);
+      api.head = 'head-' + ++api.n;   // a real external commit changes the immutable tree identity too
+      await page.locator('.archrow', { hasText: 'Invoice March' }).click(); await page.locator('#aRestore').click();
+      await page.locator('#dlgArch').waitFor({ state: 'hidden' });
+      const back = () => layout === 'split' ? api.json('cards/a26_one.json') : api.json('tasks.json').tasks.find(t => t.id === 'a26_one');
+      for (let i = 0; i < 80 && !back(); i++) await page.waitForTimeout(100);
+      assert.ok(back(), `${layout}: restored card exists`);
+      assert.deepEqual(back().history.slice(0, 4).map(h => h.text), [older.text, middle.text, late.text, own.text], `${layout}: all indexed history is hydrated fresh in year/part order`);
+      assert.equal(back().history.filter(h => h.text === middle.text).length, 1, `${layout}: repeated history is deduplicated`);
+      assert.equal(back().history.filter(h => h.text === own.text).length, 1, `${layout}: own duplicates are deduplicated`);
+      assert.equal(api.json('archive/2025.json').history.a26_one[0].text, older.text, 'other archive evidence is retained');
+      assert.deepEqual(page.errors, [], `${layout}: no page errors`); await page.done();
+    }
 
     // ---- split board: Put back reads the year file from a fresh snapshot. A card that left that file elsewhere (deleted or
     //      purged), or a year file that is gone, is refused, the archived card closes and nothing is written; the page's
@@ -466,6 +515,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       const api = new Github(); if (layout === 'single') api.single();
       const a = api.json('archive/2026.json');
       a.tasks = a.tasks.map(t => { if (t.id !== 'a26_one') return t; const x = { ...t, history: [null, { at: stamp, by: 'alex', text: 'own line' }] }; delete x.labels; delete x.links; delete x.todos; return x; });
+      a.tasks.unshift(null, { id: { invalid: true }, title: 'Malformed id' }, { id: '../unsafe', title: 'Unsafe id' });
       a.history = { a26_one: [null, { at: stamp, by: 'alex', text: 'older line' }, 'junk'] };
       api.files['archive/2026.json'] = text(a).replace('"id": "a26_one",', '"__proto__": { "polluted": true },\n      "constructor": { "polluted": true },\n      "id": "a26_one",');
       assert.ok(api.files['archive/2026.json'].includes('"__proto__"'), 'the fixture carries an own __proto__ key');
@@ -524,11 +574,11 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
     { const api = new Github(); api.files['cards/t_shipped.json'] = text(card('t_shipped', 3, 'Shipped live', { column: 'done', client: 'Acme' })); api.single();
       let hold = null, held = false;
       const page = await open(browser, api, { view: 'board', route: async r => { const q = r.request();
-        if (q.method() === 'PUT' && /\/archive\/\d{4}\.json/.test(q.url()) && !held) { held = true; await new Promise(ok => { hold = ok; }); }
+        if (q.method() === 'PATCH' && q.url().endsWith('/git/refs/heads/main') && !held) { held = true; await new Promise(ok => { hold = ok; }); }
         return api.route(r); } });
       const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Shipped live' }); await shipped.waitFor();
       await shipped.hover(); await shipped.locator('.quickarch').click();
-      for (let i = 0; i < 100 && !hold; i++) await page.waitForTimeout(50); assert.ok(hold, 'the archive file write is in flight');
+      for (let i = 0; i < 100 && !hold; i++) await page.waitForTimeout(50); assert.ok(hold, 'the atomic archive commit is in flight');
       await page.evaluate(() => document.getElementById('sForget').click()); await page.locator('dialog[open]').getByRole('button', { name: 'Forget token' }).click();
       await page.waitForTimeout(300); assert.ok(await page.evaluate(() => localStorage.getItem('kb_token')), 'Forget token waits for the archive run');
       hold(); await page.waitForFunction(() => !localStorage.getItem('kb_token'), null, { timeout: 10000 }); await page.waitForTimeout(800);

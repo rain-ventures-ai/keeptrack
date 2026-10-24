@@ -117,6 +117,17 @@
       if (rev !== undefined && full.rev !== rev) throw new HostedError(412, { code: 'revision_conflict', message: 'File changed during hydration; reload' });
       return full;
     }
+    async revision(path, rev) {
+      try {
+        const meta = await this.request('GET', this.route('/file-revisions/' + encodeURIComponent(path)), undefined, undefined, rev ? '"' + rev + '"' : undefined);
+        if (!meta.unchanged && (meta.path !== path || typeof meta.rev !== 'string' || !meta.rev)) throw new Error('Invalid file revision response');
+        return meta;
+      } catch (e) {
+        if (e.status !== 404 && e.status !== 405 && e.status !== 501) throw e;
+        // Older servers lack the metadata route. A full read also preserves a genuine missing-file error.
+        const full = await this.read(path); return { path, rev: full.rev, full };
+      }
+    }
     async hydrate(paths, entries = this.files) {
       // Explicit demand only. Capture every entry before reading and publish the batch atomically.
       const captured = [...new Set(paths)].map(path => [path, entries.get(path)]).filter(([, file]) => file?.omitted?.length);
