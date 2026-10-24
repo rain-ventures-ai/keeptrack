@@ -3033,7 +3033,7 @@ def cmd_show(a):
         for c in cms[-5:]: print(f"  [{c['at'][:16]}] {c.get('by', '?')}: {c['text']}")
     if hs:
         print(f"\nhistory (last 5 of {len(hs)}):")
-        for h in hs[-5:]: print(f"  {h['at'][:16]}  {h.get('by', '?')}: {h['text']}")
+        for h in hs[-5:]: print(f"  {h['at'][:16]}  {h.get('by', '?')}: {clean(h['text'])}")
 
 
 def cloud_session_url():
@@ -4157,7 +4157,7 @@ def cmd_comments(a):
 def cmd_history(a):
     data, _ = load(); t = find(data, a.id)
     for h in t.get("history", []):
-        print(f"{h['at'][:19]}  {h.get('by', '?'):<22} {h['text']}")
+        print(f"{h['at'][:19]}  {h.get('by', '?'):<22} {clean(h['text'])}")
 
 
 def watch_view(t):
@@ -5903,7 +5903,7 @@ def task_has_person(task, person):
     """Both legacy primary links and the web card's multi-contact list."""
     return task.get("contact") == person["id"] or any(
         isinstance(k, dict) and k.get("person_id") == person["id"]
-        for k in task.get("contacts", []))
+        for k in (task.get("contacts") or []))
 
 
 def contact_snapshot(person):
@@ -6429,7 +6429,7 @@ def cmd_person_rm(a):
         for t in tasks:
             if t.get("contact") == p["id"]:
                 t.pop("contact", None)
-            t["contacts"] = [k for k in t.get("contacts", []) if k.get("person_id") != p["id"]]
+            t["contacts"] = [k for k in (t.get("contacts") or []) if not isinstance(k, dict) or k.get("person_id") != p["id"]]
             hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
         data["contacts"] = [x for x in data["contacts"] if x is not p]
         print(f"deleted {p['id']} {p['name']}" + (f"; cleared as contact on {len(tasks)} tasks" if tasks else ""))
@@ -9951,7 +9951,7 @@ def cmd_archived_history(a):
             for x in cur.get(k, []):
                 if x["id"] == rid: entries += x.get("history") or []
         for h in sorted(entries, key=lambda h: h.get("at", "")):
-            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {h.get('text', '')}"); n += 1
+            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
     if not n: print(f"(no archived history for '{a.ref}')")
 
 

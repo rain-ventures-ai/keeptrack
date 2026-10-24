@@ -118,6 +118,8 @@ class ContactLinking(unittest.TestCase):
         result = self.run_cli('task-set', '#1', '--contact', 'p_sue')
         self.assertNotIn('\x1b', result.stdout)
         self.assertIn('\x1b', self.card()['history'][-1]['text'])
+        self.assertNotIn('\x1b', self.run_cli('history', '#1').stdout)
+        self.assertNotIn('\x1b', self.run_cli('show', '#1').stdout)
 
     def test_bad_contact_entries_refuse_without_rewriting_data(self):
         self.data['tasks'][0]['contacts'] = [None]
