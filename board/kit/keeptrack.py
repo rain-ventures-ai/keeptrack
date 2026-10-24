@@ -1019,8 +1019,21 @@ def _wanted_rel(rel):
     return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|projects|proposals|archive)/[^/]+", rel) is not None
 
 
+# Set by each snapshot: the board folder holds another top-level board file (a one-file board such as alice.json next to
+# tasks.json). Such boards share archive/, so archive runs never repack a year into part files there.
+_SHARED_FOLDER = [False]
+
+
+def _other_root(name):
+    # the kit's own top-level files (the page's widgets.json, manifest.json) are not another board
+    return "/" not in name and name.lower().endswith(".json") and name not in ("tasks.json", "widgets.json", "manifest.json")
+
+
 def _local_snapshot(include_archive=False):
     files = {}
+    folder = os.path.dirname(_local_path("tasks.json"))
+    _SHARED_FOLDER[0] = any(_other_root(n) and n != os.path.basename(FILE) and os.path.isfile(os.path.join(folder, n))
+                            for n in (os.listdir(folder) if os.path.isdir(folder) else []))
     for rel in ["tasks.json"]:
         path = _local_path(rel)
         if os.path.isfile(path):
@@ -1056,6 +1069,13 @@ def _git_snapshot(include_archive=False):
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
     prefix = base + "/" if base else ""
+    # -z: raw names, never git's quoted form for non-ASCII names ("board/\303\251quipe.json" would not end in .json).
+    # Read as bytes: a name that is not UTF-8 counts as another board, and an unreadable listing counts as shared.
+    top = subprocess.run(["git", "-C", ROOT, "ls-tree", "-z", "--name-only", head, "--", prefix or "."], capture_output=True)
+    top_names = top.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    _SHARED_FOLDER[0] = bool(top.returncode) or any(
+        any(0xDC80 <= ord(c) <= 0xDCFF for c in n) or (_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/"))
+        for n in top_names if n)
     wanted = [(full, full[len(prefix):] if full.startswith(prefix) else full) for full in names.splitlines()]
     wanted = [(full, rel) for full, rel in wanted if _wanted_rel(rel)]
     # Preserve archive paths in the snapshot, but do not read their bodies until requested.
@@ -1109,6 +1129,8 @@ def _api_snapshot(include_archive=False):
     if tree.get("truncated"):
         sys.exit("cannot read the board: the Git tree response was truncated")
     files = {}
+    own = os.path.basename(PATH)
+    _SHARED_FOLDER[0] = any(x.get("type") == "blob" and _other_root(x.get("path", "")) and x.get("path") != own for x in tree.get("tree", []))
     for item in tree.get("tree", []):
         rel = item.get("path", "")
         if item.get("type") != "blob" or not _wanted_rel(rel):
@@ -1176,7 +1198,7 @@ def _github_load_board():
         sort_tasks(data)
     state = {"mode": mode, "head": head.get("head") if isinstance(head, dict) else head,
              "base_tree": head.get("base_tree") if isinstance(head, dict) else None,
-             "files": files, "layout": layout,
+             "files": files, "layout": layout, "shared_folder": _SHARED_FOLDER[0],
              "root": root, "data_id": id(data)}
     _BOARD_STATES[id(data)] = state
     return data
@@ -10315,7 +10337,11 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     sizes = {key: len(_json_text(value).encode()) for key, value in slots.items()}
     if any(size > ARCHIVE_FILE_MAX for size in sizes.values()):
         raise ArchiveUnpackable("archive envelope metadata cannot fit a part")
-    next_part = max([0] + [int(key[5:]) for key in keys if key != year]) + 1
+    # Never reuse the name of a part file that is already in the folder but not in this board's index (another one-file
+    # board in the same folder shares archive/): a new part must not overwrite it.
+    present = [rel[8:-5] for rel in _BOARD_STATES.get(id(data), {}).get("files", {})
+               if rel.startswith("archive/" + year + "-") and rel.endswith(".json") and valid_archive_key(rel[8:-5])]
+    next_part = max([0] + [int(key[5:]) for key in keys + present if key != year]) + 1
     index = 0
     for unit in units:
         weight = len(_json_text(unit).encode()) - template_size
@@ -10361,7 +10387,11 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
                 extra_history = cur.get("history", {}).pop(task["id"], [])
                 task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
             size = len(_json_text(cur).encode())
-            if (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
+            # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
+            # and repacking would move another board's records into parts its index never lists. They hold the year back.
+            split = data.get("version") == 4 and data.get("layout") == "split" \
+                and _BOARD_STATES.get(id(data), {}).get("shared_folder") is False   # unknown or shared: archive/ may hold another board's records
+            if split and (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
                 try:
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
                 except ArchiveUnpackable as exc:
@@ -10527,10 +10557,10 @@ def cmd_archived(a):
         cur, _ = read_archive(y, base)
         for t in (cur or {}).get("tasks", []):
             if not q or q in json.dumps(searchable(t)).lower():
-                print(f"{y}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
+                print(f"{y[:4]}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
         for p in (cur or {}).get("contacts", []):
             if not q or q in json.dumps(p).lower():
-                print(f"{y}  {p['id']}  {p['name']} ({p.get('company', '')})  [{p.get('stage', '')}]"); n += 1
+                print(f"{y[:4]}  {p['id']}  {p['name']} ({p.get('company', '')})  [{p.get('stage', '')}]"); n += 1
     if not n: print("(nothing archived" + (" matches" if q else "") + ")")
 
 
@@ -10553,7 +10583,7 @@ def cmd_archived_history(a):
             for x in cur.get(k, []):
                 if x["id"] == rid: entries += x.get("history") or []
         for h in sorted(entries, key=lambda h: h.get("at", "")):
-            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
+            print(f"{y[:4]}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
     if not n: print(f"(no archived history for '{a.ref}')")
 
 

@@ -208,7 +208,7 @@ const server = http.createServer(async (req, res) => {
       if (failDrawer) await route.fulfill({ status: 500, json: { error: { code: 'synthetic_failure', message: 'Read failed' } } });
       else await route.continue();
     });
-    await page.evaluate(() => { location.hash = '#17'; }); await page.locator('#dlgCard[open]').waitFor();
+    await page.evaluate(() => { location.hash = '#17&comment=c_one'; }); await page.locator('#dlgCard[open]').waitFor();
     await page.getByText('Loading history and comments…', { exact: true }).waitFor();
     assert.equal(await page.locator('#cTitle').inputValue(), 'Synthetic contract sample', 'drawer renders before full read completes');
     releaseDrawer();
@@ -216,6 +216,11 @@ const server = http.createServer(async (req, res) => {
     assert.equal(await page.locator('#cTitle').inputValue(), 'Synthetic contract sample', 'failed drawer hydration preserves captured fields');
     failDrawer = false; await page.locator('#cmStream').getByRole('button', { name: 'Retry', exact: true }).click();
     await page.locator('#cmStream').getByText('Invented comment', { exact: true }).waitFor();
+    await page.locator('#cmStream [data-cid="c_one"].cmflash').waitFor();
+    const commentLink = new URL(await page.evaluate(() => window.kbNavigation.link()));
+    assert.equal(commentLink.searchParams.get('api'), base, 'comment links keep the hosted endpoint');
+    assert.equal(commentLink.searchParams.get('board'), BOARD);
+    assert.equal(commentLink.hash, '#17&comment=c_one', 'comment focus survives delayed history, a failed read and retry');
     assert.equal(drawerRequests, 2, 'one failed read and one explicit retry');
     await page.unroute('**/files/cards%2Ft_sample.json');
     assert.deepEqual(cardReads().slice(drawerReadsBefore).map(c => c.url.split('/files/')[1]), ['cards%2Ft_sample.json']);
@@ -276,7 +281,7 @@ const server = http.createServer(async (req, res) => {
 
 
     await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
-    await page.waitForFunction(() => !/^#\d+$/.test(location.hash));
+    await page.waitForFunction(() => !/^#\d/.test(location.hash));
     const relationReadsBefore = cardReads().length;
     await page.evaluate(() => { const url = new URL(location.href); url.searchParams.delete('card'); history.replaceState(history.state, '', url); location.hash = '#1003'; });
     await page.locator('#dlgCard[open]').waitFor();

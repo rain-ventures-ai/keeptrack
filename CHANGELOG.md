@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Kit v108: one shared docs-home provider/root setting, validated CLI and web setup, safe read-only display, and a small setup/filing skill. GitHub destination changes/clear use the owner’s live read-back confirmation; hosted CLI docs-home access is read-only for every identity, with changes confirmed by the human board owner in web Settings → Board → Docs home. Combined legacy settings flags are refused. Existing folders are reused; docs stay in storage and cards hold links. No live setting, external folder or document is changed by this release.
 
-Kit v107: archive bodies load only for archive views, archived lookups, proposals and explicit diagnostics; snapshots retain their paths, sizes and revisions. Stale SHA blob caches are pruned within the current board repository. GitHub archive writes split oversized years into bounded `YYYY-N.json` parts in the same atomic commit, retaining records, history and unknown envelope fields. Unpackable individual records stay safely held. The first part-file write sets `settings.min_kit` to 107; ordinary reads and year-only writes do not. Hosted archive storage keeps its year-only contract and uses a separate metadata revision endpoint, with full-body fallback for older servers. No automatic data migration. Review follow-ups validate malformed minimum-kit values, restore older history in linear time with dictionary equality preserved, reject malformed archive records cleanly, and carry the new legacy root revision into the next ordinary edit.
+Kit v107: archive bodies load only for archive views, archived lookups, proposals and explicit diagnostics; snapshots retain their paths, sizes and revisions. Stale SHA blob caches are pruned within the current board repository. On a split board alone in its folder, GitHub archive writes split oversized years into bounded `YYYY-N.json` parts in the same atomic commit (boards that share a folder, and so its archive, hold an oversized year back as before), retaining records, history and unknown envelope fields. Unpackable individual records stay safely held. The first part-file write sets `settings.min_kit` to 107; ordinary reads and year-only writes do not. Hosted archive storage keeps its year-only contract and uses a separate metadata revision endpoint, with full-body fallback for older servers. No automatic data migration. Review follow-ups validate malformed minimum-kit values, restore older history in linear time with dictionary equality preserved, reject malformed archive records cleanly, and carry the new legacy root revision into the next ordinary edit.
 
 Kit v106: archive size follow-ups. Split-board toasts exclude held years, archived label/client/stage rewrites allow oversized files to shrink or remain unchanged, and size warnings appear once after save. Held CLI tasks and people retain list positions and can still trim history into a year with room. Hosted archive size enforcement remains server-side and is documented explicitly. No migration; includes v100.
 
@@ -668,6 +668,10 @@ preserved through CLI edits, proposals and archiving; disabling the layout leave
 - No board schema migration or automatic Review Inbox decisions.
 
 ## Web board
+
+- **2026-10-24** — Comment entries in Activity include **Open comment**, which opens and highlights that comment in
+  its card. The link can be bookmarked, opened in another tab, or copied with Activity as Markdown. Existing comments,
+  including those without an ID, work without a migration.
 
 - **2026-10-12** — The task drawer groups Status with Priority and Due date with Waiting for, while People, Labels and
   Client & project keep the full width. Waiting for opens a focused phone-safe sheet, and Client & project opens a

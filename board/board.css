@@ -975,9 +975,10 @@ header .boardwrap { order: 0; }
 .mnwho { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); } .mnwho time { color: var(--muted); }
 .mnbody { white-space: pre-wrap; overflow-wrap: anywhere; }
 .newssheet .newsintro { margin: 0 0 var(--sp-3); } .newsrow .mnbody { white-space: normal; } .newschanges { gap: var(--sp-1); } .newschanges .mnbody { color: var(--muted); font-size: var(--fs-sm); }
-.cmcard.cmflash { animation: cmflash 2.4s ease-out; }
+.actcomment { display: inline-block; min-height: 24px; margin-inline-start: var(--sp-2); }
+.cmcard.cmflash, .cmact.cmflash { animation: cmflash 2.4s ease-out; }
 @keyframes cmflash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
-@media (prefers-reduced-motion: reduce) { .cmcard.cmflash { animation: none; outline: 3px solid var(--accent); } }
+@media (prefers-reduced-motion: reduce) { .cmcard.cmflash, .cmact.cmflash { animation: none; outline: 3px solid var(--accent); } }
 @media (max-width: 420px) { header { column-gap: var(--sp-1); } #viewSw .ui-tab { min-width: 29px !important; padding: var(--sp-2) 2px; } }   /* six task views still fit on one row */
 
 /* settings → checks */

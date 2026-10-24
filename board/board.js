@@ -756,6 +756,10 @@ if (typeof window !== 'undefined') (() => {
   }
   const isSplit = o => !!o && o.version === 4 && o.layout === 'split';
   const remotePath = (rel, at) => { const p = (at || cfg()).path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
+  // The Git Data archive route reads `tasks.json` next to the archive folder, so it serves split boards and one-file boards named
+  // tasks.json only. A one-file board with another name keeps the Contents-API route on its own file, never a sibling board's.
+  const KIT_ROOT_JSON = new Set(['tasks.json', 'widgets.json', 'manifest.json']);   // top-level files a board folder may hold that are not another board
+  const gitDataArchive = () => !HOSTED && (isSplit(state) || /(^|\/)tasks\.json$/.test(cfg().path || ''));
   const wantedRel = p => p === 'tasks.json' || /^(cards|people|projects|proposals|archive)\/[^/]+$/.test(p);   // proposals: the Review Inbox, kept out of the model
   const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
   async function mapLimit(items, limit, fn) {
@@ -835,7 +839,10 @@ if (typeof window !== 'undefined') (() => {
     if (missing.length > 8 && !graphqlBlobsDenied) await graphqlBlobTexts(missing, texts, c, gen);
     await mapLimit(changed, 8, async item => { const text = texts.has(item) ? texts.get(item) : await blobText(item, c, gen); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
-    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true };
+    // another top-level board file in this folder (a one-file board such as alice.json): the boards share archive/.
+    // The kit's own files there (widgets.json, manifest.json) are not boards.
+    const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/i.test(x.path) && !KIT_ROOT_JSON.has(x.path) && x.path !== own);
+    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true, sharedFolder };
     await pruneBlobCache(new Set((td.tree || []).filter(x => x.type === 'blob').map(x => x.sha)), c, gen);
     if (!sameArchiveBoard(c, gen)) throw new Error('The board changed while loading.');
     return { unchanged: false, data: modelFromSplit(files), meta };
@@ -2557,7 +2564,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- comments: an append-only stream per card, shown in its own dialog -------------------------
-  let commentsFor = null, cmSig = '', todoSig = '';
+  let commentsFor = null, cmSig = '', todoSig = '', cmFocus = null;
   // The drawer's Activity section is one timeline, newest first, like a GitHub pull request (kit v66): comments are full
   // cards and the card's history entries are compact rows between them. A run of more than HIST_RUN changes folds behind
   // "Show N more changes". History can be hidden per browser (kb_cm_hist = '0'); comments always show.
@@ -2684,6 +2691,7 @@ if (typeof window !== 'undefined') (() => {
       flush(); const cm = it.c;
       if (cm.type === 'activity') {   // a one-line event (for example "Claude started a session"), not a message
         const row = el('div', 'cmact' + (/failed/i.test(cm.text) ? ' bad' : '') + (fresh(it) ? ' cmnew' : '')), url = safeUrl(cm.session_url);
+        row.dataset.cid = cmKey(cm);
         row.append(elI('span', 'cmacti', /failed/i.test(cm.text) ? 'triangle-alert' : 'bot'), el('span', null, String(cm.text || '').replace(/[:.]?\s*(Session:\s*)?https?:\/\/\S+$/, '')));
         if (url) { const a = el('a', null, 'Open session ↗'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; row.append(a); }
         const tm = el('time', null, ago2(cm.at)); tm.title = cm.at; row.append(tm); box.append(row); return;
@@ -2693,6 +2701,7 @@ if (typeof window !== 'undefined') (() => {
     flush();
     if (!items.length) box.append(el('p', 'hint cmempty', cmHist() ? 'No comments or changes yet.' : 'No comments yet.'));
     if (arrived) showNewBar(arrived);
+    if (cmFocus) setTimeout(focusCardComment, 60);   // hosted comments can arrive after the drawer first opens
   }
   // A page a comment links to (a PR, a document, a file) can go into the card's links with one tap (kit v62), so it is
   // not lost in the stream. Links that open another page only: card links of this board and links the card has are skipped.
@@ -2709,6 +2718,13 @@ if (typeof window !== 'undefined') (() => {
     return row.childElementCount ? row : null;
   }
   function cmKey(c) { return c.id || (c.at || '') + '|' + (c.by || ''); }   // a comment's key in the drawer and in @Mentions (older comments may have no id)
+  const commentHash = (t, c) => '#' + t.num + '&comment=' + encodeURIComponent(cmKey(c));
+  function focusCardComment() {
+    if (!cmFocus || !$('dlgCard').open) return;
+    const row = [...$('cmStream').querySelectorAll('[data-cid]')].find(r => r.dataset.cid === cmFocus);
+    if (!row) return;
+    row.scrollIntoView({ block: 'center' }); row.classList.remove('cmflash'); void row.offsetWidth; row.classList.add('cmflash'); cmFocus = null;
+  }
   const openComments = id => openCard(id, 'comments');
   const pendingClaudeClaim = who => ({ agent: 'claude', on_behalf_of: who, session_id: 'pending-' + Date.now().toString(36), session_url: '', host: 'cron-job.org relay', status: 'running', note: `Assigned to Claude by @${who}; waiting for the routine to start (about 1 to 2 minutes)`, claimed_at: nowIso(), heartbeat_at: nowIso() });
   async function triggerClaude(t, who, cid) {
@@ -3499,8 +3515,9 @@ if (typeof window !== 'undefined') (() => {
     const sp = actSpan(), inR = x => { const ms = Date.parse(x.at); return ms >= sp.from && ms < sp.to && actMatch(x.by); };
     const cards = [], days = new Map(); let comments = 0;
     state.tasks.filter(filtered).forEach(t => {
+      const cardLink = navigationLink('#' + t.num);
       const ev = t.history.filter(inR).map(h => ({ at: h.at, by: h.by, text: h.text, done: isDoneEntry(h) }))
-        .concat(t.comments.filter(inR).map(c => ({ at: c.at, by: c.by, text: c.text, comment: true })))
+        .concat(t.comments.filter(inR).map(c => ({ at: c.at, by: c.by, text: c.text, comment: true, commentKey: cmKey(c), url: cardLink + '&comment=' + encodeURIComponent(cmKey(c)) })))
         .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
       if (!ev.length) return;
       comments += ev.filter(e => e.comment).length;
@@ -3549,7 +3566,10 @@ if (typeof window !== 'undefined') (() => {
         const ol = el('ol', 'actlog');
         ev.forEach(e => { const li = el('li', (e.comment ? 'cm' : '') + (e.done ? ' dn' : '')), tm = el('time', null, fmtTime(e.at)); tm.title = e.at;
           const who = el('b', AGENT_BY.test(String(e.by || '')) ? 'agent' : '', ' ' + (e.by || '?') + ' ');
-          li.append(tm, who); if (e.comment) li.append(elI('span', 'cmic', 'message-square'), ' '); linkify(li, e.text); ol.append(li); });
+          li.append(tm, who); if (e.comment) li.append(elI('span', 'cmic', 'message-square'), ' '); linkify(li, e.text);
+          if (e.comment) { const a = el('a', 'actcomment', 'Open comment'); a.href = e.url;
+            a.onclick = event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); openCard(t.id, { comment: e.commentKey }); }; li.append(' ', a); }
+          ol.append(li); });
         box.append(head, ol); sec.body.append(box);
       });
       wrap.append(sec);
@@ -3658,7 +3678,7 @@ if (typeof window !== 'undefined') (() => {
       L.push(`## ${fmtDay(d.day)}`, '');
       d.cards.forEach(({ t, ev }) => {
         L.push(`### #${t.num} ${mdLine(t.title)}`, `_${cardSub(t)}_`, '');
-        ev.forEach(e => L.push(`- ${fmtTime(e.at)} · ${e.by || '?'}${e.comment ? ' 💬' : ''}: ${e.comment ? mdIndent(e.text) : mdLine(e.text)}`));
+        ev.forEach(e => L.push(`- ${fmtTime(e.at)} · ${e.by || '?'}${e.comment ? ' 💬' : ''}: ${e.comment ? mdIndent(e.text) + ` ([Open comment](${e.url}))` : mdLine(e.text)}`));
         L.push('');
       });
     });
@@ -4540,8 +4560,10 @@ if (typeof window !== 'undefined') (() => {
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
   // deep links: the address carries the task number (#13) while a card is open, and loading a URL with #13 opens that card
-  const hashNum = () => { const m = /^#(\d+)$/.exec(location.hash), n = m ? Number(m[1]) : NaN; return Number.isSafeInteger(n) && n > 0 ? n : null; };
-  const setHash = h => { try { const u = new URL(location.href), t = state.tasks.find(t => '#' + t.num === h); u.searchParams.delete('card'); if (safeCardId(t?.id)) u.searchParams.set('card', t.id); u.hash = h; history.replaceState(history.state, '', u); } catch {} };   // keeps the Back-button entry (below)
+  const cardHash = h => { const m = /^#(\d+)(?:&comment=([^&]*))?$/.exec(h), num = m ? Number(m[1]) : NaN;
+    return Number.isSafeInteger(num) && num > 0 ? { num, comment: new URLSearchParams(h.slice(h.indexOf('&') + 1)).get('comment') || '' } : null; };
+  const hashNum = () => cardHash(location.hash)?.num ?? null;
+  const setHash = h => { try { const u = new URL(location.href), t = state.tasks.find(t => t.num === cardHash(h)?.num); u.searchParams.delete('card'); if (safeCardId(t?.id)) u.searchParams.set('card', t.id); u.hash = h; history.replaceState(history.state, '', u); } catch {} };   // keeps the Back-button entry (below)
 
   // The Back button closes what you opened. Opening a card, a person/client/project drawer, Settings, Help, Search,
   // Archive or Add a person adds one history entry, so Back closes it and returns to the board instead of leaving the
@@ -4632,10 +4654,10 @@ if (typeof window !== 'undefined') (() => {
     if (filterRouteReady) filterRouteParams().forEach((v, k) => u.searchParams.append(k, v));
     if (!HOSTED && !DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
-    const safe = (/^\d+$/.test(h) && Number.isSafeInteger(Number(h)) && Number(h) > 0) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
+    const safe = !!cardHash(hash) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
       (q.has('view') && ALL_VIEWS.includes(q.get('view')) && [...q.keys()].length === 1) || !!recordRoute(q) ||
       (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
-    const t = state.tasks.find(t => String(t.num) === h); if (safeCardId(t?.id)) u.searchParams.set('card', t.id);
+    const t = state.tasks.find(t => t.num === cardHash(hash)?.num); if (safeCardId(t?.id)) u.searchParams.set('card', t.id);
     u.hash = safe ? hash : '#view=' + view; return u.href;
   }
   // Deep links (card #290): a company, person or project drawer puts its record in the address, so the link opens it again
@@ -4704,7 +4726,9 @@ if (typeof window !== 'undefined') (() => {
     pendingFilterRoute = new URLSearchParams(location.search);
     restoreFilterRoute(); // restore before history's view wins, not inside setView's render
     if (backClosing) { backClosing--; render(); setTimeout(() => { closingHash = false; }, 0); if (backDone) backDone(); return; }   // restore the underlying filter snapshot even when closing a drawer
-    const want = (history.state || {}).kbDlg;
+    const want = (history.state || {}).kbDlg || (hashNum() !== null ? 'dlgCard' : undefined);
+    // A native fragment navigation has no state. Keep an open card while switching its comment target.
+    if (want === 'dlgCard' && !(history.state || {}).kbDlg) try { history.replaceState({ kbDlg: want, depth: backStack.length || 1, kbView: view }, ''); } catch {}
     while (backStack.length && backStack[backStack.length - 1] !== want) {   // close everything opened after the entry we are now on
       const d = $(backStack[backStack.length - 1]); backStack.pop();
       if (d && d.open) d.close();   // its close handler finds it already off the stack, so it won't go back again
@@ -4722,7 +4746,9 @@ if (typeof window !== 'undefined') (() => {
   function openFromHash() {
     const n = hashNum(); if (n === null || !state) return;
     const t = state.tasks.find(x => x.num === n); if (!t) { toast(`Task #${n} was not found on this board`, true); setHash(''); return; }
-    if (editing !== t.id || !$('dlgCard').open) openCard(t.id);
+    const comment = cardHash(location.hash)?.comment;
+    if (editing !== t.id || !$('dlgCard').open) openCard(t.id, comment ? { comment } : undefined);
+    else if (comment) { cmFocus = comment; focusCardComment(); }
   }
   let contextRestored = false;
   function restoreBoardContext() {
@@ -4736,7 +4762,7 @@ if (typeof window !== 'undefined') (() => {
 
   let backdropClicks = 0;
   function openCard(id, focus) {
-    backdropClicks = 0;
+    backdropClicks = 0; cmFocus = focus && focus.comment || null;
     if (HOSTED) { const file = hostedStorage?.files.get(`cards/${id}.json`); if (file) hostedHistoryErrors.delete(file); }
     const t = state.tasks.find(x => x.id === id); if (!t) return; editing = id; commentsFor = id; cmSig = ''; cmSeenFor = null; todoSig = ''; editingDesc = false; activeDraft = { title: false, details: false };
     $('descEdit').hidden = true; $('cDescView').hidden = false; $('cDescBtn').hidden = false; $('dSaved').textContent = '';
@@ -4744,13 +4770,9 @@ if (typeof window !== 'undefined') (() => {
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
     fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; clearCardReply();
     markSeen(id); if (!$('dlgCard').open) $('dlgCard').showModal(); render();
-    $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
+    $('cBody').scrollTop = 0; autosize($('cTitle')); setHash(cmFocus ? commentHash(t, { id: cmFocus }) : '#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
-    if (focus && focus.comment) setTimeout(() => {   // from @Mentions: show that one comment, briefly highlighted
-      const row = [...$('cmStream').querySelectorAll('.cmcard')].find(r => r.dataset.cid === focus.comment);
-      if (!row) { $('cmSec').scrollIntoView({ block: 'start' }); return; }
-      row.scrollIntoView({ block: 'center' }); row.classList.remove('cmflash'); void row.offsetWidth; row.classList.add('cmflash');
-    }, 60);
+    if (cmFocus) setTimeout(focusCardComment, 60);
   }
   $('cClose').onclick = () => { $('dlgCard').close(); }; // the normal close/Back path clears the URL after its history step, not before
   $('dlgCard').addEventListener('click', e => {
@@ -8753,12 +8775,13 @@ if (typeof window !== 'undefined') (() => {
       .sort((a, b) => Number(a.slice(0, 4)) - Number(b.slice(0, 4)) || Number(a.slice(5) || 0) - Number(b.slice(5) || 0));
     const files = await mapLimit(keys, 8, async key => {
       const entry = await archiveEntry(meta, key, at, gen);
-      if (!entry || !isObj(entry.obj)) throw new Error('An indexed archive file is missing or invalid. Nothing restored.');
+      if (!entry) return null;   // an index key whose file is gone holds no history to bring back (as the CLI)
+      if (!isObj(entry.obj)) throw new Error('An indexed archive file is invalid. Nothing restored.');
       return entry.obj;
     });
     const seen = new Set(), history = [];
     const append = lines => { for (const line of archArr(lines, isObj)) { const token = JSON.stringify(line); if (!seen.has(token)) { seen.add(token); history.push(line); } } };
-    for (const file of files) append(isObj(file.history) && has(file.history, id) ? file.history[id] : null);
+    for (const file of files) if (file) append(isObj(file.history) && has(file.history, id) ? file.history[id] : null);
     append(src.history); src.history = history; return src;
   }
   function restoredItem(src, kind) {   // the board's own per-card tolerance (normalise) for one restored card or person: missing lists filled, unknown and non-text fields kept
@@ -8859,7 +8882,9 @@ if (typeof window !== 'undefined') (() => {
     for (const [id, lines] of histories) { const unit = empty(); unit.history[id] = lines; units.push(unit); }
     const slots = new Map(keys.map(k => [k, empty(family.get(k))])), sizes = new Map([...slots].map(([k, value]) => [k, archBytes(jsonText(value))]));
     if ([...sizes.values()].some(n => n > ARCH_MAX)) throw new ArchiveUnpackable('Archive envelope metadata cannot fit a part');
-    let index = 0, nextPart = Math.max(0, ...keys.filter(k => k !== year).map(k => Number(k.slice(5)))) + 1;
+    // never reuse the name of a part file already in the folder but not in this board's index (another one-file board there)
+    const present = [...((meta && meta.files) || new Map()).keys()].map(p => (/^archive\/(.+)\.json$/.exec(p) || [])[1]).filter(k => archivePartKey(k) && k.startsWith(year + '-'));
+    let index = 0, nextPart = Math.max(0, ...keys.concat(present).filter(k => k !== year).map(k => Number(k.slice(5)))) + 1;
     for (const unit of units) {
       const weight = archBytes(jsonText(unit)) - templateSize;
       if (templateSize + weight > ARCH_MAX) throw new ArchiveUnpackable('A single logical archive record cannot fit a part');
@@ -8885,7 +8910,10 @@ if (typeof window !== 'undefined') (() => {
         for (const y of years) { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           if (pickedIds(rules)) pickedIds(rules).forEach(id => delete merged.history[id]);
           const text = jsonText(merged), bytes = archBytes(text); let packed = null;
-          if (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-'))) {
+          // part files only on a split board known to be alone in its folder (metadata an older page cached does not say,
+          // so it holds back): boards that share a folder share its archive/, and
+          // repacking would move another board's records into parts its index never lists. They hold the year back.
+          if (isSplit(got.data) && got.meta.sharedFolder === false && (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-')))) {
             try { packed = await shardArchiveFamily(y, merged, plan[y], fresh, got.meta, Object.assign({}, cfg()), ag, pickedIds(rules) || []); }
             catch (e) { if (!(e instanceof ArchiveUnpackable) || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-'))) throw e; }
           }
@@ -9007,7 +9035,7 @@ if (typeof window !== 'undefined') (() => {
     const what = ids ? batchWhat(ids.length) : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
     if (!ids && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
-    if (!HOSTED) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; if ($('dlgSettings')?.open) syncDocsHome(undefined, true); } return; }
+    if (gitDataArchive()) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; if ($('dlgSettings')?.open) syncDocsHome(undefined, true); } return; }
     setStatus('Archiving…');
     // the board this run reads and writes is fixed now (at), and a Forget token or another board meanwhile (ag) ends it quietly
     const at = Object.assign({}, cfg()), ag = archGen, gone = () => ag !== archGen;
@@ -9061,7 +9089,7 @@ if (typeof window !== 'undefined') (() => {
     if (writeBlocked()) return;
     const ag = archGen, at = Object.assign({}, cfg()), gone = () => ag !== archGen, name = item.title || item.name;   // as archiveNow: this board, until a Forget token or another board
     const refuse = onBoard => { archDrop(); $('dlgArch').close(); render(); toast(onBoard ? `${name} is already back on the board.` : `${name} was changed elsewhere and is not in that archive file now. Open the archive again and try again.`, true); };   // the archive file no longer holds it: never restore the page's copy
-    if (!HOSTED) {
+    if (gitDataArchive()) {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
       for (let attempt = 0; attempt < 4; attempt++) {
         try { const got = await splitSnapshot(true), entry = await archiveEntry(got.meta, y, at, ag); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } const fresh = normalise(got.data);
@@ -9105,7 +9133,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function openArchived(kind, item, y) {   // archived cards are shown read-only, with one button to bring them back
     $('aTitle').textContent = (kind === 'task' ? (item.num ? '#' + item.num + ' ' : '') + item.title : item.name);
-    $('aMeta').textContent = `Archived in ${y} · ` + (kind === 'task' ? [item.client, colName(item.column), item.due && 'due ' + fmtDue(item.due)].filter(Boolean).join(' · ') : [item.role, item.company, item.stage].filter(Boolean).join(' · '));
+    $('aMeta').textContent = `Archived in ${archYearOf(y)} · ` + (kind === 'task' ? [item.client, colName(item.column), item.due && 'due ' + fmtDue(item.due)].filter(Boolean).join(' · ') : [item.role, item.company, item.stage].filter(Boolean).join(' · '));
     const body = $('aBody'); body.textContent = '';
     const txt = kind === 'task' ? item.details : [item.email, item.phone, item.linkedin, item.notes].filter(Boolean).join('\n');
     if (txt) body.append(el('pre', 'atext', txt));
@@ -9122,7 +9150,8 @@ if (typeof window !== 'undefined') (() => {
   // Order: by archive file year, newest year first (a card's year is when it was archived, or for the bulk clean-up the year it
   // last changed), and within a year the file order reversed (an archive run appends). The pill shows that file year.
   // (ARCH_PAGE, Q_ARCH_KEY, archUi and peopleArchived are declared next to the People view's state, above)
-  const archPill = (y, cls) => { const p = el('span', cls); p.append(svgIcon('archive'), 'Archived ' + y); p.title = `In the archive (archive/${y}.json)`; return p; };
+  const archYearOf = key => String(key).slice(0, 4);   // a part file (2020-1) holds records of its year (2020): show and filter by the year
+  const archPill = (y, cls) => { const p = el('span', cls); p.append(svgIcon('archive'), 'Archived ' + archYearOf(y)); p.title = `In the archive (archive/${y}.json)`; return p; };
   const archWords = q => String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
   const archNewest = list => list.map((x, i) => ({ x, i })).sort((a, b) => String(b.x.year).localeCompare(String(a.x.year)) || b.i - a.i).map(o => o.x);
   // Built once per loaded archive (archived changes identity whenever it reloads, and archivedSig with it): the newest-first
@@ -9139,7 +9168,7 @@ if (typeof window !== 'undefined') (() => {
     const uniq = xs => [...new Set(xs.filter(Boolean))];
     const projects = uniq(archived.tasks.map(x => x.item.project)).map(id => ({ value: id, label: (projectById(id) || {}).name || id })).sort((a, b) => a.label.localeCompare(b.label));
     const labels = uniq(archived.tasks.flatMap(x => x.item.labels || [])).sort((a, b) => a.localeCompare(b)).map(l => ({ value: l }));
-    const years = uniq(archived.tasks.map(x => x.year)).sort().reverse().map(y => ({ value: y }));
+    const years = uniq(archived.tasks.map(x => archYearOf(x.year))).sort().reverse().map(y => ({ value: y }));
     return (archIdx = { src: archived, sig: archivedSig, tasks, contacts, projects, labels, years });
   }
   const archMatch = (words, hay) => words.every(w => hay.includes(w));
@@ -9196,13 +9225,13 @@ if (typeof window !== 'undefined') (() => {
   function archivedTasks(idx) {   // the archived cards the filters and the top client filter let through, in archive order
     const fc = clientValues(), words = archWords(archUi.q);
     return idx.tasks.filter(({ x: { item: t, year }, done, hay }) => (!fc.length || fc.includes(t.client)) && (!archUi.project || t.project === archUi.project)
-      && (!archUi.label || (t.labels || []).includes(archUi.label)) && (!archUi.year || year === archUi.year) && (!archUi.outcome || (archUi.outcome === 'done') === done)
+      && (!archUi.label || (t.labels || []).includes(archUi.label)) && (!archUi.year || archYearOf(year) === archUi.year) && (!archUi.outcome || (archUi.outcome === 'done') === done)
       && archMatch(words, hay)).map(e => e.x);
   }
   function archTaskRow({ item: t, year }) {
     const labels = (t.labels || []).map(l => ({ name: l, color: labelColor(l) })), todos = t.todos || [];
     const row = ui.taskRow({ num: t.num, title: t.title, priority: t.priority, due: t.due, done: true, client: t.client, labels, todoTotal: todos.length, todoDone: todos.filter(d => d.done).length }, { density: 'row', onOpen: () => openArchived('task', t, year) });
-    row.classList.add('archrow'); row.dataset.archTask = t.id; row.setAttribute('aria-label', `#${t.num || ''} ${t.title || ''}, ${finishedDone(t) ? 'done' : 'cancelled'}, archived ${year}`);
+    row.classList.add('archrow'); row.dataset.archTask = t.id; row.setAttribute('aria-label', `#${t.num || ''} ${t.title || ''}, ${finishedDone(t) ? 'done' : 'cancelled'}, archived ${archYearOf(year)}`);
     const meta = row.querySelector('.ui-task__meta'), done = finishedDone(t);
     meta.append(ui.pill({ text: done ? 'Done' : 'Cancelled', tone: done ? 'ok' : 'neutral', size: 'sm' }), archPill(year, 'ui-pill ui-pill--neutral ui-pill--sm archpill')); meta.hidden = false;
     return row;
@@ -9316,8 +9345,8 @@ if (typeof window !== 'undefined') (() => {
   function sizeBar() {   // a quiet nudge once the board file gets large
     const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
     if (!big) { showBar('sizeBar', null); return; }
-    const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\/[0-9]{4}\.json$/.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count
-    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: mostlyArchive ? `The board files are ${Math.round(boardSize / 1024)} KB, ${Math.round(arch / 1024)} KB of it archive. The archive loads with the board and counts toward the 5 MB total; archiving more items does not make it smaller.` : `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
+    const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\/[0-9]{4}(?:-[1-9][0-9]{0,5})?\.json$/.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count
+    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: mostlyArchive ? `The board files are ${Math.round(boardSize / 1024)} KB, ${Math.round(arch / 1024)} KB of it archive. The archive is stored with the board and counts toward the 5 MB total; archiving more items does not make it smaller.` : `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
       ...(mostlyArchive ? {} : { action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('archive'); } } }),
       onDismiss: () => LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))) });
   }
