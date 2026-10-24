@@ -5923,10 +5923,10 @@ def set_task_contact(data, task, ref, *, unlink=False):
         if not ref or not ref.strip():
             sys.exit(f"{option} needs a person ID or exact name; nothing saved")
         matches = [p for p in data.get("contacts", []) if p["id"] == ref]
-        if not matches:
-            matches = [p for p in data.get("contacts", []) if p.get("name", "").casefold() == ref.casefold()]
         if unlink and not matches and (task.get("contact") == ref or any(k.get("person_id") == ref for k in contacts)):
             matches = [{"id": ref, "name": next((k.get("name") or ref for k in contacts if k.get("person_id") == ref), ref)}]
+        if not matches:
+            matches = [p for p in data.get("contacts", []) if p.get("name", "").casefold() == ref.casefold()]
         if len(matches) != 1:
             sys.exit(f"{option} needs one exact person ID or unambiguous exact name; nothing saved")
         person = matches[0]
