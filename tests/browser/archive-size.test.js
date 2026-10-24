@@ -165,6 +165,23 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       assert.equal(api.files[`archive/${heldYear}.json`], heldBefore, 'the held year file is not touched');
       assert.deepEqual(errors, []); await page.close();
     }
+    // A one-file board whose file is not named tasks.json keeps the Contents-API route on its own file: a sibling
+    // tasks.json (another board in the same folder) is never read or written by its archive or Put back.
+    {
+      const api = new Github(), year = String(new Date().getFullYear()), other = api.files['tasks.json'];
+      const alice = { ...root, version: 3, archive: { files: {} }, contacts: [],
+        tasks: [card('t_one', 1, 'Open work'), card('t_two', 2, 'Finished work', { column: 'done' })] };
+      delete alice.layout; api.files = { 'tasks.json': other, 'alice.json': text(alice) };
+      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(init, 'board'); await page.addInitScript(() => localStorage.setItem('kb_path', 'board/alice.json'));
+      await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      const done = page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }); await done.hover(); await done.locator('.quickarch').click();
+      for (let i = 0; i < 50 && !api.files[`archive/${year}.json`]; i++) await page.waitForTimeout(100);
+      assert.equal(api.files['tasks.json'], other, 'the sibling board is untouched');
+      assert.ok(!JSON.parse(api.files['alice.json']).tasks.some(x => x.id === 't_two'), 'the card left its own board file');
+      assert.deepEqual(JSON.parse(api.files[`archive/${year}.json`]).tasks.map(x => x.id), ['t_two'], 'and went to the archive');
+      assert.deepEqual(errors, []); await page.close();
+    }
     console.log('archive-size browser tests passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

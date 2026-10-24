@@ -756,6 +756,9 @@ if (typeof window !== 'undefined') (() => {
   }
   const isSplit = o => !!o && o.version === 4 && o.layout === 'split';
   const remotePath = (rel, at) => { const p = (at || cfg()).path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
+  // The Git Data archive route reads `tasks.json` next to the archive folder, so it serves split boards and one-file boards named
+  // tasks.json only. A one-file board with another name keeps the Contents-API route on its own file, never a sibling board's.
+  const gitDataArchive = () => !HOSTED && (isSplit(state) || /(^|\/)tasks\.json$/.test(cfg().path || ''));
   const wantedRel = p => p === 'tasks.json' || /^(cards|people|projects|proposals|archive)\/[^/]+$/.test(p);   // proposals: the Review Inbox, kept out of the model
   const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
   async function mapLimit(items, limit, fn) {
@@ -8961,7 +8964,7 @@ if (typeof window !== 'undefined') (() => {
     const what = ids ? batchWhat(ids.length) : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
     if (!ids && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
-    if (!HOSTED) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
+    if (gitDataArchive()) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
     setStatus('Archiving…');
     // the board this run reads and writes is fixed now (at), and a Forget token or another board meanwhile (ag) ends it quietly
     const at = Object.assign({}, cfg()), ag = archGen, gone = () => ag !== archGen;
@@ -9015,7 +9018,7 @@ if (typeof window !== 'undefined') (() => {
     if (writeBlocked()) return;
     const ag = archGen, at = Object.assign({}, cfg()), gone = () => ag !== archGen, name = item.title || item.name;   // as archiveNow: this board, until a Forget token or another board
     const refuse = onBoard => { archDrop(); $('dlgArch').close(); render(); toast(onBoard ? `${name} is already back on the board.` : `${name} was changed elsewhere and is not in that archive file now. Open the archive again and try again.`, true); };   // the archive file no longer holds it: never restore the page's copy
-    if (!HOSTED) {
+    if (gitDataArchive()) {
       const k = kind === 'task' ? 'tasks' : 'contacts', rel = `archive/${y}.json`;
       for (let attempt = 0; attempt < 4; attempt++) {
         try { const got = await splitSnapshot(true), entry = await archiveEntry(got.meta, y, at, ag); if (minKitOf(got.data)) { setKitRo(got.data); roToast(); return; } const fresh = normalise(got.data);
@@ -9059,7 +9062,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function openArchived(kind, item, y) {   // archived cards are shown read-only, with one button to bring them back
     $('aTitle').textContent = (kind === 'task' ? (item.num ? '#' + item.num + ' ' : '') + item.title : item.name);
-    $('aMeta').textContent = `Archived in ${y} · ` + (kind === 'task' ? [item.client, colName(item.column), item.due && 'due ' + fmtDue(item.due)].filter(Boolean).join(' · ') : [item.role, item.company, item.stage].filter(Boolean).join(' · '));
+    $('aMeta').textContent = `Archived in ${archYearOf(y)} · ` + (kind === 'task' ? [item.client, colName(item.column), item.due && 'due ' + fmtDue(item.due)].filter(Boolean).join(' · ') : [item.role, item.company, item.stage].filter(Boolean).join(' · '));
     const body = $('aBody'); body.textContent = '';
     const txt = kind === 'task' ? item.details : [item.email, item.phone, item.linkedin, item.notes].filter(Boolean).join('\n');
     if (txt) body.append(el('pre', 'atext', txt));
@@ -9076,7 +9079,8 @@ if (typeof window !== 'undefined') (() => {
   // Order: by archive file year, newest year first (a card's year is when it was archived, or for the bulk clean-up the year it
   // last changed), and within a year the file order reversed (an archive run appends). The pill shows that file year.
   // (ARCH_PAGE, Q_ARCH_KEY, archUi and peopleArchived are declared next to the People view's state, above)
-  const archPill = (y, cls) => { const p = el('span', cls); p.append(svgIcon('archive'), 'Archived ' + y); p.title = `In the archive (archive/${y}.json)`; return p; };
+  const archYearOf = key => String(key).slice(0, 4);   // a part file (2020-1) holds records of its year (2020): show and filter by the year
+  const archPill = (y, cls) => { const p = el('span', cls); p.append(svgIcon('archive'), 'Archived ' + archYearOf(y)); p.title = `In the archive (archive/${y}.json)`; return p; };
   const archWords = q => String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
   const archNewest = list => list.map((x, i) => ({ x, i })).sort((a, b) => String(b.x.year).localeCompare(String(a.x.year)) || b.i - a.i).map(o => o.x);
   // Built once per loaded archive (archived changes identity whenever it reloads, and archivedSig with it): the newest-first
@@ -9093,7 +9097,7 @@ if (typeof window !== 'undefined') (() => {
     const uniq = xs => [...new Set(xs.filter(Boolean))];
     const projects = uniq(archived.tasks.map(x => x.item.project)).map(id => ({ value: id, label: (projectById(id) || {}).name || id })).sort((a, b) => a.label.localeCompare(b.label));
     const labels = uniq(archived.tasks.flatMap(x => x.item.labels || [])).sort((a, b) => a.localeCompare(b)).map(l => ({ value: l }));
-    const years = uniq(archived.tasks.map(x => x.year)).sort().reverse().map(y => ({ value: y }));
+    const years = uniq(archived.tasks.map(x => archYearOf(x.year))).sort().reverse().map(y => ({ value: y }));
     return (archIdx = { src: archived, sig: archivedSig, tasks, contacts, projects, labels, years });
   }
   const archMatch = (words, hay) => words.every(w => hay.includes(w));
@@ -9150,7 +9154,7 @@ if (typeof window !== 'undefined') (() => {
   function archivedTasks(idx) {   // the archived cards the filters and the top client filter let through, in archive order
     const fc = clientValues(), words = archWords(archUi.q);
     return idx.tasks.filter(({ x: { item: t, year }, done, hay }) => (!fc.length || fc.includes(t.client)) && (!archUi.project || t.project === archUi.project)
-      && (!archUi.label || (t.labels || []).includes(archUi.label)) && (!archUi.year || year === archUi.year) && (!archUi.outcome || (archUi.outcome === 'done') === done)
+      && (!archUi.label || (t.labels || []).includes(archUi.label)) && (!archUi.year || archYearOf(year) === archUi.year) && (!archUi.outcome || (archUi.outcome === 'done') === done)
       && archMatch(words, hay)).map(e => e.x);
   }
   function archTaskRow({ item: t, year }) {
@@ -9270,8 +9274,8 @@ if (typeof window !== 'undefined') (() => {
   function sizeBar() {   // a quiet nudge once the board file gets large
     const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
     if (!big) { showBar('sizeBar', null); return; }
-    const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\/[0-9]{4}\.json$/.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count
-    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: mostlyArchive ? `The board files are ${Math.round(boardSize / 1024)} KB, ${Math.round(arch / 1024)} KB of it archive. The archive loads with the board and counts toward the 5 MB total; archiving more items does not make it smaller.` : `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
+    const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\/[0-9]{4}(?:-[1-9][0-9]{0,5})?\.json$/.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count
+    showBar('sizeBar', { tone: 'neutral', icon: 'archive', text: mostlyArchive ? `The board files are ${Math.round(boardSize / 1024)} KB, ${Math.round(arch / 1024)} KB of it archive. The archive is stored with the board and counts toward the 5 MB total; archiving more items does not make it smaller.` : `The board ${isSplit(state) ? 'files are' : 'file is'} ${Math.round(boardSize / 1024)} KB. Archive old items to keep it fast.`,
       ...(mostlyArchive ? {} : { action: { label: 'Archive old items', onClick: () => { $('btnSettings').click(); settingsTab('archive'); } } }),
       onDismiss: () => LS.set('kb_sizebar_off', String(Math.floor(boardSize / 102400))) });
   }

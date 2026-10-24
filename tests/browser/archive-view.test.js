@@ -168,6 +168,25 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
       await page.locator('#btnSearch').click(); assert.equal(await page.locator('#qArch').isChecked(), false, 'unticking is remembered too'); await page.locator('#qClose').click();
       assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
 
+    // ---- a year split into part files (2026 and 2026-1, kit v107): one year in the Year filter and the pills; Put back reads the part ----
+    { const api = new Github(), a26 = api.json('archive/2026.json'), moved = a26.tasks.splice(1, 1);
+      api.files['archive/2026.json'] = text(a26);
+      api.files['archive/2026-1.json'] = text({ version: 3, archive: true, year: '2026', history: {}, tasks: moved, contacts: [] });
+      const root = api.json('tasks.json'); root.archive.files = { '2025': { tasks: 2, contacts: 2 }, '2026': { tasks: 2, contacts: 0 }, '2026-1': { tasks: 1, contacts: 0 } };
+      root.settings.min_kit = 107; api.files['tasks.json'] = text(root);
+      const page = await open(browser, api); await page.locator('.archrow').first().waitFor();
+      assert.equal(await page.locator('.archcount').innerText(), '5 archived cards');
+      assert.deepEqual(await page.locator('select[data-arch-filter="year"] option').allTextContents(), ['Any year', '2026', '2025'], 'a part file is not a year of its own');
+      await pick(page, 'year', '2026'); assert.deepEqual((await nums(page)).sort(), ['#20', '#21', '#22'], 'the year filter includes the cards stored in its part files');
+      const row21 = page.locator('.archrow', { hasText: 'Cancelled run' });
+      assert.ok((await row21.locator('.archpill').innerText()).endsWith('Archived 2026'), 'the pill names the year, not the part');
+      assert.equal(await row21.locator('.archpill').getAttribute('title'), 'In the archive (archive/2026-1.json)', 'its tooltip names the file');
+      await row21.click(); await page.locator('#dlgArch[open]').waitFor(); assert.match(await page.locator('#aMeta').innerText(), /^Archived in 2026 ·/);
+      await page.locator('#aRestore').click(); await page.locator('#dlgArch').waitFor({ state: 'hidden' });
+      for (let i = 0; i < 50 && !api.json('cards/a26_two.json'); i++) await page.waitForTimeout(100);
+      assert.ok(api.json('cards/a26_two.json'), 'Put back from a part file writes the card'); assert.deepEqual(api.json('archive/2026-1.json').tasks, [], 'and removes it from that part');
+      assert.deepEqual(page.errors, [], 'no page errors'); await page.done(); }
+
     // ---- People → stage filter → Archived: archived people, search and the client filter, open read-only with Put back ----
     { const api = new Github(), page = await open(browser, api, { view: 'people' });
       const stage = page.locator('.peoplev select.pillsel');

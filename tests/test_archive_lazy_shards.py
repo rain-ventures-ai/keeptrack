@@ -21,6 +21,31 @@ def envelope(year='2020', **extra):
 
 
 class ArchiveLazyShards(unittest.TestCase):
+    def test_unreadable_archive_file_does_not_block_proposals(self):
+        data = {'proposals': [{'id': 'r_live'}]}
+        k._BOARD_STATES[id(data)] = {'files': {'archive/2020.json': {}, 'archive/2020-1.json': {}}}
+        try:
+            def read(key, state):
+                if key == '2020': sys.exit('cannot read archive/2020.json: invalid JSON')
+                return {'proposals': [{'id': 'r_part'}]}, None
+            with mock.patch.object(k, 'read_archive', side_effect=read):
+                self.assertEqual([x['id'] for x in k._all_proposals(data)], ['r_live', 'r_part'])
+        finally:
+            k._BOARD_STATES.pop(id(data), None)
+
+    def test_archived_listing_names_the_year_of_a_part_file(self):
+        data = {'archive': {'files': {'2020-1': {}}}}
+        part = {'tasks': [{'id': 't_a', 'num': 7, 'title': 'Packed', 'client': ''}], 'contacts': [], 'history': {'t_a': [{'at': '2020-01-02T00:00:00Z', 'by': 'alex', 'text': 'old'}]}}
+        with mock.patch.object(k, 'load', return_value=(data, None)), mock.patch.object(k, 'archive_years', return_value=['2020-1']), \
+             mock.patch.object(k, 'read_archive', return_value=(part, None)):
+            for fn, args in ((k.cmd_archived, SimpleNamespace(q='')), (k.cmd_archived_history, SimpleNamespace(ref='t_a'))):
+                with self.subTest(fn=fn.__name__):
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        fn(args)
+                    self.assertTrue(out.getvalue().startswith('2020  '), out.getvalue())
+                    self.assertNotIn('2020-1', out.getvalue())
+
     def test_min_kit_floor_counts_archive_part_files(self):
         # settings-set --min-kit and doctor use this floor: a board with YYYY-N parts must never drop below the
         # first kit that reads them, or an older writer could miss records stored in the parts.

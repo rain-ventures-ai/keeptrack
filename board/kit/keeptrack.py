@@ -9146,7 +9146,7 @@ def _all_proposals(data):
             continue
         try:
             archived = read_archive(rel[len("archive/"):-5], state)[0] or {}
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, SystemExit):   # one unreadable archive file never blocks Review Inbox proposals
             continue
         out.extend(x for x in archived.get("proposals", []) if isinstance(x, dict))
     return out
@@ -10429,10 +10429,10 @@ def cmd_archived(a):
         cur, _ = read_archive(y, base)
         for t in (cur or {}).get("tasks", []):
             if not q or q in json.dumps(searchable(t)).lower():
-                print(f"{y}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
+                print(f"{y[:4]}  #{t.get('num')}  {t['title']}  [{t.get('client', '')}]"); n += 1
         for p in (cur or {}).get("contacts", []):
             if not q or q in json.dumps(p).lower():
-                print(f"{y}  {p['id']}  {p['name']} ({p.get('company', '')})  [{p.get('stage', '')}]"); n += 1
+                print(f"{y[:4]}  {p['id']}  {p['name']} ({p.get('company', '')})  [{p.get('stage', '')}]"); n += 1
     if not n: print("(nothing archived" + (" matches" if q else "") + ")")
 
 
@@ -10455,7 +10455,7 @@ def cmd_archived_history(a):
             for x in cur.get(k, []):
                 if x["id"] == rid: entries += x.get("history") or []
         for h in sorted(entries, key=lambda h: h.get("at", "")):
-            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
+            print(f"{y[:4]}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
     if not n: print(f"(no archived history for '{a.ref}')")
 
 
