@@ -40,4 +40,4 @@ Each fixture may include `fixture.json` with expected entity counts and the kit 
 option, when a question has lapsed) that `tests/test_inbox_rules_parity.py` runs through `keeptrack.py` and `board.js`.
 Add a case there when either changes.
 
-`v4_kit98` freezes unchanged split board data before the image review fixes (kit v96 → v98).
+`v4_kit98` freezes unchanged split board data before the image review fixes (kit v103; the name is historical).

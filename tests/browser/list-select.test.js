@@ -1,8 +1,8 @@
 'use strict';
-// List multi-select and last activity (kit v97, private-tasks card #307).
-// Mark done is a square. A real tick box selects rows. The bar can move them, mark them done,
-// copy "#150 #96" and clear. Activity is the newest of updated, comments and history (ago2);
-// 14 days with nothing marks the row. On a phone that time is in the meta row.
+// List multi-select, last activity, and the description under the title (kit v97–v98).
+// One tick box selects rows. The bar can move them, mark them done, copy "#150 #96" and clear.
+// The description is plain text under the title (markdown and line breaks joined, two lines).
+// Activity is the newest of updated, comments and history (ago2); 14 days with nothing marks the row.
 // Run: node list-select.test.js
 
 const assert = require('node:assert/strict');
@@ -29,7 +29,7 @@ function card(id, num, title, column, rank, extra) {
 }
 function files() {
   const cards = {
-    'cards/t_a.json': card('t_a', 150, 'Write the spring newsletter', 'todo', 'a0', { comments: [{ id: 'c1', at: ago(3 * DAY), by: 'alex', text: 'Draft is with the client' }], history: [{ at: ago(10 * DAY), by: 'alex', text: 'moved to To do' }] }),
+    'cards/t_a.json': card('t_a', 150, 'Write the spring newsletter', 'todo', 'a0', { details: '# Now\n\n**Then** the real outcome for this fictional task.\n- A later bullet that must stay visible', comments: [{ id: 'c1', at: ago(3 * DAY), by: 'alex', text: 'Draft is with the client' }], history: [{ at: ago(10 * DAY), by: 'alex', text: 'moved to To do' }] }),
     'cards/t_b.json': card('t_b', 96, 'Fix the contact form', 'todo', 'a1', { updated: ago(2 * 60 * 60 * 1000) }),
     'cards/t_c.json': card('t_c', 12, 'Retire the old landing page', 'todo', 'a2'),
     'cards/t_d.json': card('t_d', 7, 'Confirm the workshop date', 'in-progress', 'a3', { comments: [{ id: 'c2', at: ago(8 * DAY), by: 'alex', text: 'Asked Sam' }], history: [{ at: ago(DAY), by: 'alex', text: 'note added' }] }),
@@ -46,7 +46,7 @@ class Github {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
     const json = (body, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
-    if (p.startsWith('/contents/board/KIT_VERSION') && method === 'GET') return route.fulfill({ status: 200, body: '97' });
+    if (p.startsWith('/contents/board/KIT_VERSION') && method === 'GET') return route.fulfill({ status: 200, body: '98' });
     if (p.startsWith('/user/repos') && method === 'GET') return json([]);
     if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
     if (p.startsWith('/contents/README.md')) return json({ message: 'Not Found' }, 404);
@@ -85,11 +85,14 @@ let base;
     await page.locator('#listPrioritise').waitFor();
     await page.locator('[data-list-task="t_a"]').waitFor();
 
-    const tick = page.locator('[data-list-task="t_a"] .donetick');
-    assert.equal(await tick.getAttribute('aria-label'), 'Mark #150 done');
-    assert.equal(await tick.locator('svg').count(), 1);
-    assert.equal(await page.locator('.circ').count(), 0, 'mark done is no longer a circle');
+    assert.equal(await page.locator('[data-list-task] .donetick').count(), 0, 'List has no per-row mark-done control');
+    assert.equal(await page.locator('.trow .c-check').count(), 0, 'the select box is the only box');
+    assert.equal(await page.locator('.circ').count(), 0);
+    const blurb = page.locator('[data-list-task="t_a"] .ldesc');
+    assert.match(await blurb.innerText(), /Now Then the real outcome for this fictional task\. A later bullet that must stay visible/);
+    assert.equal(await blurb.evaluate(el => getComputedStyle(el).webkitLineClamp), '2');
     assert.match(await page.locator('.trow.thead .c-activity').first().innerText(), /Activity/);
+    assert.equal(/Description/.test(await page.locator('.trow.thead').first().innerText()), false);
 
     const activity = id => page.locator(`[data-list-task="${id}"] .c-activity .lact`).innerText();
     assert.equal(await activity('t_a'), '3d ago', 'newest of comment, history and updated');

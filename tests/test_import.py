@@ -54,6 +54,14 @@ class Import(unittest.TestCase):
     def read(self):
         return json.load(open(self.file))
 
+    def test_imported_contact_is_visible_in_web_card_contacts(self):
+        self.run_import()
+        data = self.read()
+        task = data["tasks"][0]
+        person = next(p for p in data["contacts"] if p["id"] == task["contact"])
+        self.assertEqual(task["contacts"][0]["person_id"], person["id"])
+        self.assertEqual(task["contacts"][0]["name"], person["name"])
+
     def test_dry_run_saves_nothing(self):
         before = open(self.file).read()
         out = self.run_import(dry=True)

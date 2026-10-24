@@ -25,7 +25,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v98 (schema 4)
+### v103 (schema 4)
 Image parsing, uploads and cache fixes ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). No migration: `kit-update` copies the files.
 - Progressive JPEG metadata is removed between every scan; JPEG tables containing EOI-like bytes stay intact.
 - WebP reads stop at the RIFF boundary, discard trailers and reject incomplete chunks, including missing required odd-chunk padding.
@@ -36,7 +36,40 @@ Image parsing, uploads and cache fixes ([private-tasks #305](https://rain-ventur
 - All Markdown and resource-link image readers hold/release DOM leases. A successful re-upload supersedes failed or in-flight reads, transfers pending leases, and prevents the older request from restoring stale failure history. Bounded retry history survives reusable-cache eviction. The DOM observer disconnects when no leases remain.
 - Still browser uploads also convert removed PNG cICP/HDR colour descriptions. Ignored GIF plaintext is stripped, and source uploads over 25 MB are refused before reading/encoding.
 - Check: upload an EXIF-rotated photo, a progressive JPEG an APNG and animated WebP; verify orientation, still APNG output and WebP animation, then simulate a temporary image-read failure and retry.
-- Includes the v97 List-view release.
+
+### v102 (schema 4)
+- Run kit-update only. No migration or automatic data rewrite.
+- `task-set --contact` resolves a person by exact name or ID and adds the web-compatible contact snapshot while retaining the legacy primary ID. Repeating the command repairs an old singular-only link without duplicating contacts.
+- Use `--unlink-contact <exact-name-or-id>` to remove a specific person, including plural-only web links and exact dangling IDs. Empty unlink references are refused. An empty `--contact` retains its legacy meaning and unlinks the current primary person only; other card contacts stay. Fuzzy, unknown or ambiguous write references now refuse without writing instead of storing arbitrary text.
+- Contact details use the existing web CRM snapshot format within the same board; they are copies and are not refreshed automatically.
+- Manual entries are enriched only with a matching name, a unique CRM email and no conflicting phone. Shared addresses, name-only entries and ambiguous matches remain separate.
+- Verify linking through CLI show, CLI person and the web card Contacts section. New activity includes names; existing activity resolves known person IDs at display time.
+
+### v101 (schema 4)
+`keeptrack.py watch` polls until a card changes (web board unchanged apart from the kit version). No data change and no migration.
+- `watch ID [ID ...]` reads the board every 15 seconds ( `--every` ) and exits 0 when a comment, move, checklist tick, edit, claim status or history line changes. A heartbeat that changes nothing else does not count.
+- `--until COLUMN` waits until a card is in that column (`done` is the usual one). It exits at once when a named card is already there. `--all` waits until every named card is in that column.
+- `--timeout SEC` exits 2 when nothing changed. `--json` prints the card and the changes. A session that is not running `watch` is not woken.
+- Run `kit-update` only. Check: `kit-check` says v101, and `keeptrack.py watch --help` lists `--until`.
+
+### v100 (schema 4)
+A split is a linked card (web board and `relate --kind follow-up`). No data change and no migration.
+- Activity history that names a card id (`split from t_…`, `follow-up card: t_…`, and the same id in any other history line) shows `#N` and the title, and opens that card. An id that is not on the board stays as written.
+- `relate A B --kind follow-up` writes the same links as `todo-move`: "Follow-up #N" on A and "Split from #M" on B. A link to a card on this board opens that card. Waiting for is unchanged: it is a person or an event, not a split.
+- Unlink on a related card asks first (`Unlink #N and #M?`). Cancel leaves the link. A possible match still uses Not related with no extra step.
+- Run `kit-update` only. Check: `kit-check` says v100, and a history line `split from t_…` opens that card.
+
+### v99 (schema 4)
+Review Inbox: record a finished suggestion, and keep duplicate warnings (web board and `proposal-accept --done`). No data change and no migration.
+- **Task completed** on a new-task item creates the card in Done, with the work recorded. Ignore still drops a suggestion that is not wanted. `keeptrack.py proposal-accept <id> --done` does the same; it is refused for anything that is not a new task.
+- A new-task item lists close open cards, close Inbox items, and a finished card with the same title. The warning stays beside the decision. Adding a card keeps the same warning on the card.
+- Run `kit-update` only. Check: `kit-check` says v99, and a new-task Inbox item has **Task completed**.
+
+### v98 (schema 4)
+List view: one tick box, and the description under the title (private-tasks follow-up to #307). Web board only. No data change and no migration.
+- The per-row mark-done square is gone from List. It looked the same as the select box. **Mark done** stays on the selection bar. Calendar day lists and Schedule still mark one task done with the square.
+- The Description column is gone. The task cell shows the description under the title: markdown marks stripped, line breaks joined, two lines on a wide screen and three on a phone. Hover shows the same plain text. The width the column and the extra box used goes to the task.
+- Run `kit-update` only. Check: `kit-check` says v98, and a List row has one tick box with the description under the title.
 
 ### v97 (schema 4)
 List view: select several tasks and see when each was last active (private-tasks card #307). Web board only. No data change and no migration.
@@ -60,7 +93,7 @@ it reads the archive files that `keeptrack.py archive` and the web board already
 
 ### v95 (schema 4)
 Images on cards: the review fixes for v92 (private-tasks card #292). No migration and no data change.
-- Recognised container metadata is removed before an image is saved. See v98 for current animation and compressed-payload limitations. The page draws every image again (which ones is decided by the file's
+- Recognised container metadata is removed before an image is saved. See v103 for current animation and compressed-payload limitations. The page draws every image again (which ones is decided by the file's
   bytes, not its name; longest side at most 2000px), and a GIF loses its comment and XMP extensions but keeps its frames.
   `attach` strips JPEG APP1/APP13/COM and anything after the end of the image (a second image, a vendor trailer), PNG
   eXIf/tEXt/zTXt/iTXt, WebP EXIF/XMP and GIF comment/XMP extensions. A photo's EXIF Orientation alone is kept, so it is
