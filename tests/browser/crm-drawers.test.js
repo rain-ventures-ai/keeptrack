@@ -83,8 +83,6 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
-  // Drawer fixtures mock the GitHub transport. The app-shell service worker is covered by pwa.test.js;
-  // block it here so it cannot intercept fixture reloads behind Playwright routes.
   try {
     // A real CLI write must be visible in the actual card drawer, and a plural-only web link in the person drawer.
     {
@@ -100,7 +98,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
         delete linked.contact; // prove the person drawer reads the web list without the legacy field
         linkedApi.files['cards/t_one.json'] = text(linked);
         linkedApi.files['people/p_one.json'] = text({ ...person, phones: [{ id: 'ph1', label: 'Work', value: '+440000000000' }] });
-        const ctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
+        const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
         try {
           const pg = await ctx.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => linkedApi.route(r));
           await pg.goto(base + '/board/index.html'); await pg.locator('.prow', { hasText: 'Casey Example' }).click();
@@ -127,7 +125,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       const b = { ...a, id: 'p_two' }, snapshot = p => ({ person_id: p.id, name: p.name, role: p.role, email: '', phone: '' });
       api.files['people/p_one.json'] = text(a); api.files['people/p_two.json'] = text(b);
       api.files['cards/t_one.json'] = text({ ...card, contact: b.id, contacts: [snapshot(a), snapshot(b)] });
-      const ctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
       try {
         const pg = await ctx.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api.route(r));
         await pg.goto(base + '/board/index.html?repo=acme%2Fboard&card=t_one#1'); await pg.locator('#dlgCard[open]').waitFor();
@@ -143,7 +141,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       } finally { await ctx.close(); }
     }
     const api = new Github();
-    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } }); const errors = [], native = [];
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = [], native = [];
     page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { native.push(d.type() + ': ' + d.message()); d.dismiss().catch(() => {}); });
     await page.addInitScript(INIT); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.prow');
     await page.evaluate(() => { window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); });
@@ -337,7 +335,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     // ---- a board member's own person record (v33): "You", never a follow-up, not in the pipeline, no contact help ----
     {
       const api2 = new Github(); api2.files['people/p_me.json'] = text({ ...person, id: 'p_me', name: 'Alex Member', company: 'Rain', role: '', github: 'ALEX', emails: [], next_due: '2020-01-01' });
-      const pg = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 860 } }); const errs = []; pg.on('pageerror', e => errs.push(e.message));
+      const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } }); const errs = []; pg.on('pageerror', e => errs.push(e.message));
       await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api2.route(r)); await pg.goto(base + '/board/index.html'); await pg.waitForSelector('.prow');
       assert.deepEqual(await pg.locator('.prow b').allTextContents(), ['Alex Member', 'Casey Example'], 'you come first in People');
       assert.equal(await pg.locator('.prow', { hasText: 'Alex Member' }).locator('.memberpill').textContent(), 'You');
@@ -353,7 +351,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.deepEqual(errs, []); await pg.close();
       // v34: a second person with the member's login hides neither: both stay contacts, no "You" pill
       const api3 = new Github(); api3.files['people/p_me.json'] = text({ ...person, id: 'p_me', name: 'Alex Member', github: 'alex' }); api3.files['people/p_one.json'] = text({ ...person, github: 'alex' });
-      const p3 = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 860 } }), errs3 = []; p3.on('pageerror', e => errs3.push(e.message)); await p3.addInitScript(INIT); await p3.route('https://api.test/**', r => api3.route(r));
+      const p3 = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errs3 = []; p3.on('pageerror', e => errs3.push(e.message)); await p3.addInitScript(INIT); await p3.route('https://api.test/**', r => api3.route(r));
       await p3.goto(base + '/board/index.html'); await p3.waitForSelector('.prow');
       assert.equal(await p3.locator('.memberpill').count(), 0, 'a duplicated member login marks nobody as the member');
       const peopleFiles = () => Object.keys(api3.files).filter(f => f.startsWith('people/')).length; const before = peopleFiles();
@@ -376,7 +374,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
         r.client_info['Beta Ltd'] = { stage: 'Gone', links: [] }; api4.files['tasks.json'] = text(r); }   // a stage the board no longer has
       api4.files['projects/pr_consult.json'] = text({ ...project, id: 'pr_consult', client: 'Consult Co', name: 'Discovery' });   // a client with only a project is a real client
       api4.files['cards/t_three.json'] = text({ ...card, id: 't_three', num: 3, title: 'Bucket task', client: 'Empty Co', project: '', rank: 'a3' });
-      const pg = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 860 } }), errs = [], nat = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => { nat.push(d.message()); d.dismiss().catch(() => {}); });
+      const pg = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errs = [], nat = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => { nat.push(d.message()); d.dismiss().catch(() => {}); });
       await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api4.route(r)); await pg.goto(base + '/board/index.html'); await pg.waitForSelector('.prow');
       const save = () => pg.waitForResponse(r => ['PUT', 'PATCH', 'DELETE'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
       const info = () => (api4.root().client_info || {}).Acme || {};
@@ -473,7 +471,9 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.equal((JSON.parse(api4.files['people/p_two.json'])).stage, 'Talking', 'its people keep their own stages');
       await ccol('Won').click(); await pg.locator('#dlgClient[open]').waitFor(); assert.equal(await pg.locator('#clStage').inputValue(), 'Won');
       await pg.keyboard.press('Escape'); await pg.locator('#dlgClient').waitFor({ state: 'hidden' });
-      await pg.reload({ waitUntil: 'domcontentloaded' }); await pg.waitForSelector('.ccard'); assert.equal(await pg.locator('#pipeMode [aria-selected="true"]').textContent(), 'Companies', 'still Companies after a reload');
+      // Closing a routed drawer schedules history.back(). Wait for that navigation before reloading.
+      await pg.waitForFunction(() => !(history.state || {}).kbDlg && !new URLSearchParams(location.hash.slice(1)).has('company'));
+      await pg.reload(); await pg.waitForSelector('.ccard'); assert.equal(await pg.locator('#pipeMode [aria-selected="true"]').textContent(), 'Companies', 'still Companies after a reload');
       await pg.setViewportSize({ width: 390, height: 844 }); await pg.waitForTimeout(150);
       assert.equal(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'company pipeline fits a phone');
       await shot(pg, 'pipeline-companies-phone-light');
@@ -487,7 +487,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     // ---- read-only demo board: fields disabled, add and remove controls hidden, copy and navigation still work, no Delete ----
     for (const vp of [{ width: 390, height: 844 }, { width: 1280, height: 860 }]) {
       for (const scheme of SHOTS ? ['light', 'dark'] : ['light']) {
-        const demo = await browser.newPage({ serviceWorkers: 'block', viewport: vp, colorScheme: scheme }); const demoErrors = []; demo.on('pageerror', e => demoErrors.push(e.message));
+        const demo = await browser.newPage({ viewport: vp, colorScheme: scheme }); const demoErrors = []; demo.on('pageerror', e => demoErrors.push(e.message));
         await demo.addInitScript(() => { try { localStorage.setItem('kb_tour_seen', '1'); localStorage.setItem('kb_tour', 'done'); } catch {} });
         await demo.goto(base + '/board/index.html?demo=crm'); await demo.locator('#roBar').waitFor();
         await demo.locator('.prow b').first().click(); await demo.locator('#dlgContact[open]').waitFor(); await demo.waitForTimeout(100);
@@ -535,7 +535,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       apiP.files['cards/t_one.json'] = text({ ...card, client: 'Rain Ventures', title: 'Rain task' });
       apiP.files['cards/t_two.json'] = text({ ...card, id: 't_two', num: 2, client: 'Beta', project: 'pr_two', title: 'Beta task', rank: 'a2' });
       apiP.files['cards/t_three.json'] = text({ ...card, id: 't_three', num: 3, client: 'Rain Ventures', project: '', title: 'Rain other', rank: 'a3' });
-      const pg = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 740, height: 800 } }); const errs = []; pg.on('pageerror', e => errs.push(e.message));
+      const pg = await browser.newPage({ viewport: { width: 740, height: 800 } }); const errs = []; pg.on('pageerror', e => errs.push(e.message));
       await pg.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour', 'done'); sessionStorage.setItem('kb_view', 'board'); });
       await pg.route('https://api.test/**', r => apiP.route(r)); await pg.goto(base + '/board/index.html'); await pg.locator('.card .t', { hasText: 'Rain task' }).waitFor();
       const company = name => pg.locator('#clientBar .cpill').filter({ has: pg.locator('.cdotc') }).filter({ hasText: name });

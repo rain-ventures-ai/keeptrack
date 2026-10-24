@@ -152,6 +152,26 @@ class ContactLinking(unittest.TestCase):
             self.assertEqual(self.card()['contacts'][0], manual)
             self.assertEqual(self.card()['contacts'][1]['person_id'], 'p_sue')
 
+    def test_empty_or_fuzzy_unlink_refuses_without_removing_primary(self):
+        self.run_cli('task-set', '#1', '--contact', 'p_sue')
+        for ref in ('', '   ', 'Sue'):
+            before = self.file.read_bytes()
+            self.run_cli('task-set', '#1', '--unlink-contact', ref, ok=False)
+            self.assertEqual(self.file.read_bytes(), before)
+
+    def test_exact_dangling_plural_id_can_be_unlinked_without_a_crm_record(self):
+        self.data['tasks'][0].update(contact='p_other', contacts=[dict(person_id='p_gone', name='Old contact'), dict(person_id='p_other', name='Other Example')])
+        self.write()
+        self.run_cli('task-set', '#1', '--unlink-contact', 'p_gone')
+        self.assertEqual(self.card()['contact'], 'p_other')
+        self.assertEqual([k['person_id'] for k in self.card()['contacts']], ['p_other'])
+
+    def test_unknown_legacy_primary_is_preserved_as_manual_text_not_a_fake_id(self):
+        self.data['tasks'][0]['contact'] = 'Sue from Acme'
+        self.write()
+        self.run_cli('task-set', '#1', '--contact', 'p_sue')
+        self.assertEqual(self.card()['contacts'][0], dict(name='Sue from Acme'))
+
     def test_split_storage_link_round_trip(self):
         self.data.update(version=4, layout='split')
         tasks, people = self.data.pop('tasks'), self.data.pop('contacts')

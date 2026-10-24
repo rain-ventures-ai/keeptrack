@@ -5907,6 +5907,7 @@ def task_has_person(task, person):
 
 
 def contact_snapshot(person):
+    """The existing web CRM picker snapshot, kept within the same board."""
     return {"person_id": person["id"], "name": person.get("name", ""), "role": person.get("role", ""),
             "email": next((x["value"] for x in person_methods(person, "email")), ""),
             "phone": next((x["value"] for x in person_methods(person, "phone")), "")}
@@ -5917,7 +5918,19 @@ def set_task_contact(data, task, ref, *, unlink=False):
     contacts = task.get("contacts", [])
     if not isinstance(contacts, list) or not all(isinstance(k, dict) for k in contacts):
         sys.exit("card contacts must be a list of contact objects; nothing saved")
-    person = find_person(data, ref) if ref else None  # validate before changing anything
+    if unlink:
+        if not ref or not ref.strip():
+            sys.exit("--unlink-contact needs a person ID or exact name; nothing saved")
+        matches = [p for p in data.get("contacts", []) if p["id"] == ref]
+        if not matches:
+            matches = [p for p in data.get("contacts", []) if p.get("name", "").casefold() == ref.casefold()]
+        if not matches and any(k.get("person_id") == ref for k in contacts):
+            matches = [{"id": ref, "name": next(k.get("name") or ref for k in contacts if k.get("person_id") == ref)}]
+        if len(matches) != 1:
+            sys.exit("--unlink-contact needs one exact person ID or unambiguous exact name; nothing saved")
+        person = matches[0]
+    else:
+        person = find_person(data, ref) if ref else None  # validate before changing anything
     if unlink or not ref:
         ident = person["id"] if person else task.get("contact")
         if not ident:
@@ -5935,7 +5948,7 @@ def set_task_contact(data, task, ref, *, unlink=False):
     primary = task.get("contact")
     if primary and primary != ident and not any(k.get("person_id") == primary for k in contacts):
         previous = next((p for p in data.get("contacts", []) if p["id"] == primary), None)
-        contacts.append(contact_snapshot(previous) if previous else {"person_id": primary, "name": primary})
+        contacts.append(contact_snapshot(previous) if previous else {"name": primary})
     emails = {x["value"].casefold() for x in person_methods(person, "email")}
     existing = next((k for k in contacts if k.get("person_id") == ident), None)
     if existing is None:
