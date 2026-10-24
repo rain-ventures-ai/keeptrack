@@ -5937,10 +5937,18 @@ def set_task_contact(data, task, ref, *, unlink=False):
         previous = next((p for p in data.get("contacts", []) if p["id"] == primary), None)
         contacts.append(contact_snapshot(previous) if previous else {"person_id": primary, "name": primary})
     emails = {x["value"].casefold() for x in person_methods(person, "email")}
-    unique_name = sum(p.get("name") == person.get("name") for p in data.get("contacts", [])) == 1
-    existing = next((k for k in contacts if k.get("person_id") == ident or (
-        not k.get("person_id") and ((isinstance(k.get("email"), str) and k["email"].casefold() in emails)
-        or (unique_name and not k.get("email") and k.get("name") == person.get("name"))))), None)
+    existing = next((k for k in contacts if k.get("person_id") == ident), None)
+    if existing is None:
+        phones = {x["value"] for x in person_methods(person, "phone")}
+        candidates = [k for k in contacts if not k.get("person_id") and k.get("name") == person.get("name")
+                      and isinstance(k.get("email"), str) and k["email"].casefold() in emails
+                      and (not k.get("phone") or k["phone"] in phones)]
+        if len(candidates) == 1:
+            email = candidates[0]["email"].casefold()
+            owners = [p["id"] for p in data.get("contacts", [])
+                      if any(x["value"].casefold() == email for x in person_methods(p, "email"))]
+            if owners == [ident]:
+                existing = candidates[0]  # never infer identity from a shared address or name alone
     changed = task.get("contact") != ident or existing is None or existing.get("person_id") != ident
     if existing is None:
         contacts.append(contact_snapshot(person))

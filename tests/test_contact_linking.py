@@ -128,6 +128,30 @@ class ContactLinking(unittest.TestCase):
         self.run_cli('task-set', '#1', '--contact', 'p_sue', ok=False)
         self.assertEqual(self.file.read_bytes(), before)
 
+    def test_shared_email_or_conflicting_name_never_claims_a_manual_contact(self):
+        for same_name, shared_email in [(False, False), (True, True), (False, True)]:
+            with self.subTest(same_name=same_name, shared_email=shared_email):
+                self.data['contacts'] = self.people[:]
+                if shared_email:
+                    self.data['contacts'] = self.people + [dict(id='p_shared', name='Sue Example' if same_name else 'Other Example',
+                                                              emails=[dict(value='sue@example.test')], phones=[])]
+                manual = dict(name='Sue Example' if same_name else 'Other Example', email='sue@example.test')
+                self.data['tasks'][0] = dict(id='t_one', num=1, title='CV', column='todo', contacts=[manual], history=[])
+                self.write()
+                self.run_cli('task-set', '#1', '--contact', 'p_sue')
+                self.assertEqual(self.card()['contacts'][0], manual)
+                self.assertEqual(self.card()['contacts'][1]['person_id'], 'p_sue')
+                self.run_cli('task-set', '#1', '--unlink-contact', 'p_sue')
+                self.assertEqual(self.card()['contacts'], [manual])
+
+    def test_name_only_or_conflicting_phone_manual_contact_stays_separate(self):
+        for manual in [dict(name='Sue Example', email=''), dict(name='Sue Example', email='sue@example.test', phone='different')]:
+            self.data['tasks'][0] = dict(id='t_one', num=1, title='CV', column='todo', contacts=[manual], history=[])
+            self.write()
+            self.run_cli('task-set', '#1', '--contact', 'p_sue')
+            self.assertEqual(self.card()['contacts'][0], manual)
+            self.assertEqual(self.card()['contacts'][1]['person_id'], 'p_sue')
+
     def test_split_storage_link_round_trip(self):
         self.data.update(version=4, layout='split')
         tasks, people = self.data.pop('tasks'), self.data.pop('contacts')
