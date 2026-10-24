@@ -84,6 +84,33 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // A real CLI write must be visible in the actual card drawer, and a plural-only web link in the person drawer.
+    {
+      const os = require('node:os'), cp = require('node:child_process');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keeptrack-contact-'));
+      const local = path.join(dir, 'tasks.json'), linkedApi = new Github();
+      try {
+        fs.writeFileSync(local, text({ ...root, version: 3, tasks: [card], contacts: [person], projects: [project] }));
+        cp.execFileSync('python3', [path.join(ROOT, 'board/kit/keeptrack.py'), '--file', local, 'task-set', '#1', '--contact', 'p_one'],
+          { env: { ...process.env, BOARD_USER: 'alex', BOARD_AGENT: 'codex', BOARD_SESSION: 'test-contact' } });
+        const linked = JSON.parse(fs.readFileSync(local)).tasks[0];
+        linked.history.push({ at: stamp, by: 'codex', text: 'contact: p_one' });
+        delete linked.contact; // prove the person drawer reads the web list without the legacy field
+        linkedApi.files['cards/t_one.json'] = text(linked);
+        const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+        try {
+          const pg = await ctx.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => linkedApi.route(r));
+          await pg.goto(base + '/board/index.html'); await pg.locator('.prow', { hasText: 'Casey Example' }).click();
+          await pg.locator('#pTasks .dtask', { hasText: 'Kick-off' }).waitFor();
+          await pg.locator('#pTasks .dtask', { hasText: 'Kick-off' }).click(); await pg.locator('#dlgCard[open]').waitFor();
+          assert.match(await pg.locator('#cContactList').textContent(), /Casey Example/);
+          const toggle = pg.locator('#cmHistBtn');
+          if (await toggle.getAttribute('aria-pressed') !== 'true') await toggle.click();
+          await pg.locator('.cmhist', { hasText: 'contact: Casey Example' }).waitFor();
+          assert.doesNotMatch(await pg.locator('#cmStream').textContent(), /contact: p_one/);
+        } finally { await ctx.close(); }
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    }
     const api = new Github();
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = [], native = [];
     page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { native.push(d.type() + ': ' + d.message()); d.dismiss().catch(() => {}); });
@@ -150,6 +177,7 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     await page.locator('#pTasks .dtask').waitFor();
     const newCard = Object.keys(api.files).filter(f => f.startsWith('cards/')).map(f => JSON.parse(api.files[f])).find(t => t.title === 'Send pricing');
     assert.ok(newCard && newCard.contact === 'p_one' && newCard.client === 'Acme', 'the task is linked to the person and their client');
+    assert.equal(newCard.contacts[0].person_id, 'p_one', 'a task added from a person is also linked in the card Contacts section');
 
     // History opens; the drawer still fits after all that
     await page.locator('#pHistSec .ui-section__toggle').click(); assert.equal(await page.locator('#pHist').isVisible(), true);

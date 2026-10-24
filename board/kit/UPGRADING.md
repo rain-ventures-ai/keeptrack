@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v102 (schema 4)
+- Run kit-update only. No migration or automatic data rewrite.
+- `task-set --contact` resolves a person by name or ID and adds the web-compatible contact snapshot while retaining the legacy primary ID. Repeating the command repairs an old singular-only link without duplicating contacts.
+- An empty `--contact` unlinks the current legacy primary person only; other card contacts stay.
+- Verify linking through CLI show, CLI person and the web card Contacts section. New activity includes names; existing activity resolves known person IDs at display time.
+
 ### v101 (schema 4)
 `keeptrack.py watch` polls until a card changes (web board unchanged apart from the kit version). No data change and no migration.
 - `watch ID [ID ...]` reads the board every 15 seconds ( `--every` ) and exits 0 when a comment, move, checklist tick, edit, claim status or history line changes. A heartbeat that changes nothing else does not count.

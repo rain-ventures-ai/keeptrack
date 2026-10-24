@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 101;
+  const PAGE_KIT = 102;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -2494,6 +2494,9 @@ if (typeof window !== 'undefined') (() => {
     a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; return a;
   }
   function appendHistText(parent, text) {
+    text = text.replace(/^contact: (p_[a-z0-9]+)$/, (all, id) => {
+      const p = state.contacts.find(p => p.id === id); return p ? 'contact: ' + (p.name || id) : all;
+    });
     const re = /\bt_[a-z0-9]+\b/g; let last = 0, m;
     while ((m = re.exec(text))) {
       if (m.index > last) decorate(parent, text.slice(last, m.index));
@@ -8027,7 +8030,7 @@ if (typeof window !== 'undefined') (() => {
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
     const projs = personProjects(p);
-    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), projs.map(x => [x.pr.id, x.tasks.map(t => [t.id, t.updated])]), modes()]); if (!force && sig === pSig) return; pSig = sig;
+    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => (t.contact === p.id || (t.contacts || []).some(k => k.person_id === p.id))), projs.map(x => [x.pr.id, x.tasks.map(t => [t.id, t.updated])]), modes()]); if (!force && sig === pSig) return; pSig = sig;
     const keep = id => document.activeElement === $(id);
     { const a = ui.avatar(p.name || '?', { size: 'lg' }); a.id = 'pAvatar'; $('pAvatar').replaceWith(a); }
     if (!keep('pName')) $('pName').value = p.name; autosize($('pName'));
@@ -8161,7 +8164,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderPersonTasks(p) {
     const sec = $('pTasksSec'); sec.hidden = !modes().includes('tasks'); if (sec.hidden) return;
-    const box = $('pTasks'), list = state.tasks.filter(t => t.contact === p.id); box.textContent = '';
+    const box = $('pTasks'), list = state.tasks.filter(t => (t.contact === p.id || (t.contacts || []).some(k => k.person_id === p.id))); box.textContent = '';
     list.forEach(t => box.append(drawerTaskRow(t))); setCount('pTaskCount', list.length); sec.classList.toggle('is-empty', !list.length);
   }
   // Project activity (card #290): each project this person is in (their email is on it, or one of its tasks names them),
@@ -8171,7 +8174,7 @@ if (typeof window !== 'undefined') (() => {
     const mine = new Set((p.emails || []).map(x => String(x.value || '').toLowerCase()).filter(Boolean));
     const byProject = new Map(); state.tasks.forEach(t => { if (t.project) { if (!byProject.has(t.project)) byProject.set(t.project, []); byProject.get(t.project).push(t); } });   // one pass, not one per project
     return projectsOf().filter(pr => pr && pr.id).map(pr => ({ pr, tasks: byProject.get(pr.id) || [] }))
-      .filter(({ pr, tasks }) => (pr.people || []).some(e => mine.has(String(e).toLowerCase())) || tasks.some(t => t.contact === p.id));
+      .filter(({ pr, tasks }) => (pr.people || []).some(e => mine.has(String(e).toLowerCase())) || tasks.some(t => (t.contact === p.id || (t.contacts || []).some(k => k.person_id === p.id))));
   }
   function projectEvents(tasks, max) {   // the newest `max` comments and history lines on the project's tasks, newest first (one pass, no full sort)
     const top = [], add = e => { if (typeof e.at !== 'string' || !e.at || typeof e.text !== 'string') return; if (top.length === max && e.at <= top[max - 1].at) return;
@@ -8194,7 +8197,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonTask(v) {
     const p = contactNow(); if (!p) return false;
-    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [{ person_id: p.id, name: p.name, role: p.role || '', email: p.email || '', phone: p.phone || '' }], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
     mutate(n => { n.tasks.push(t); }, `Add task: ${v}`);
   }
 
@@ -8226,7 +8229,7 @@ if (typeof window !== 'undefined') (() => {
     const own = contactNow(); if (own && memberOf(own)) { toast('Board members’ own records cannot be deleted from the CRM.', true); return; }
     const p = contactNow(); if (!p || ro || !(await ask('Delete person?', [`Delete the person “${p.name}”?`, 'This removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.'], 'Delete', true))) return;
     const id = p.id; $('dlgContact').close();
-    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`);
+    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; t.contacts = (t.contacts || []).filter(k => k.person_id !== id); }); }, `Delete person: ${p.name}`);
   }
   const copyPerson = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
   $('pAgent').onclick = copyPerson;

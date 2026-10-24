@@ -320,7 +320,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 101  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 102  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -5898,6 +5898,42 @@ def find_person(data, ref):
     return m[0]
 
 
+
+def task_has_person(task, person):
+    """Both legacy primary links and the web card's multi-contact list."""
+    return task.get("contact") == person["id"] or any(
+        isinstance(k, dict) and k.get("person_id") == person["id"]
+        for k in task.get("contacts", []))
+
+
+def set_task_contact(data, task, ref):
+    """Add a CRM person to the web list; empty clears the legacy primary link only."""
+    if not ref:
+        primary = task.get("contact")
+        if not primary:
+            return []
+        task.pop("contact", None)
+        task["contacts"] = [k for k in task.get("contacts", []) if k.get("person_id") != primary]
+        person = next((p for p in data.get("contacts", []) if p["id"] == primary), None)
+        return [f"contact removed: {(person or {}).get('name') or primary} ({primary})"]
+    person = find_person(data, ref)
+    ident = person["id"]
+    contacts = task.setdefault("contacts", [])
+    emails = {x["value"].casefold() for x in person_methods(person, "email")}
+    existing = next((k for k in contacts if k.get("person_id") == ident or (
+        not k.get("person_id") and ((k.get("email") and k["email"].casefold() in emails)
+        or (not k.get("email") and k.get("name") == person.get("name"))))), None)
+    changed = task.get("contact") != ident or existing is None or existing.get("person_id") != ident
+    if existing is None:
+        contacts.append({"person_id": ident, "name": person.get("name", ""), "role": person.get("role", ""),
+                         "email": next((x["value"] for x in person_methods(person, "email")), ""),
+                         "phone": next((x["value"] for x in person_methods(person, "phone")), "")})
+    elif not existing.get("person_id"):
+        existing["person_id"] = ident
+    task["contact"] = ident  # older readers still have a primary link
+    return [f"contact linked: {person['name']} ({ident})"] if changed else []
+
+
 def check_stage(data, s):
     if s is None:
         return None
@@ -6327,7 +6363,7 @@ def cmd_person(a):
               f"{clean(c.get('by', '?'), 80)}: {clean_lines(c['text'], '    ')}")
         if c.get("source_message_ids"): print("    source messages: " + ", ".join(clean(x, 200) for x in c["source_message_ids"]))
         if isinstance(c.get("url"), str) and c["url"]: print(f"    source link ({clean(c['id'], 40)}): {clean(c['url'], 2000)}")
-    tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
+    tasks = [x for x in data.get("tasks", []) if task_has_person(x, p)]
     for x in tasks: print("  task: " + line(data, x))
     by_who, cards = waiting_index(data)
     waits = person_waits(p, by_who, member_logins(data))
@@ -6370,12 +6406,15 @@ def cmd_person_rm(a):
         p = find_person(data, a.ref)
         if member_of(data, p):
             sys.exit("board members' own records cannot be deleted from the CRM")
-        tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
+        tasks = [t for t in data.get("tasks", []) if task_has_person(t, p)]
         if not a.yes:
             sys.exit(f"this deletes {person_line(p, data, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
                      f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
         for t in tasks:
-            t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
+            if t.get("contact") == p["id"]:
+                t.pop("contact", None)
+            t["contacts"] = [k for k in t.get("contacts", []) if k.get("person_id") != p["id"]]
+            hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
         data["contacts"] = [x for x in data["contacts"] if x is not p]
         print(f"deleted {p['id']} {p['name']}" + (f"; cleared as contact on {len(tasks)} tasks" if tasks else ""))
     mutate(fn, f"Delete person: {a.ref}")
@@ -7062,8 +7101,8 @@ def cmd_task_set(a):
                 else:
                     t.pop("goal", None)
                 changed.append(f"goal: {_flat(g.get('title')) if g else 'cleared'}")
-        if a.contact is not None and a.contact != t.get("contact", ""):
-            t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
+        if a.contact is not None:
+            changed.extend(set_task_contact(data, t, a.contact))
         if getattr(a, "title", None) is not None:
             if not a.title.strip() or _has_break(a.title):
                 sys.exit("a task needs a title on one line")
@@ -11352,7 +11391,7 @@ def main():
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
-    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact", help="link a CRM person by ID or name without removing other contacts; empty unlinks the legacy primary contact"); s.set_defaults(f=cmd_task_set)
     s.add_argument("--goal", help="goal id, id prefix or title; empty or 'none' clears")
     s.add_argument("--value", choices=["", "1", "2", "3", "4", "5"], help="optional value 1–5; empty clears")
     s.add_argument("--effort", choices=["", *EFFORT_WEIGHTS], help="optional effort size; empty clears")

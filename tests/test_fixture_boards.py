@@ -105,6 +105,16 @@ class FixtureBoards(unittest.TestCase):
         kt.WRITE = "local"
         return board_dir, meta["counts"]
 
+    def test_v102_contact_links_survive_upgrade(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit102", "fixture.json"))
+        folder, _ = self.use_fixture("v4_kit102", meta)
+        before = read_json(os.path.join(folder, "cards", "t_first.json"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        after = next(t for t in kt.load_board()["tasks"] if t["id"] == "t_first")
+        for field in ("contact", "contacts", "history"):
+            self.assertEqual(before[field], after[field])
+
     def test_fixture_disk_counts_match_metadata(self):
         for name, meta in list_fixtures():
             board_dir = os.path.join(FIXTURES, name)
