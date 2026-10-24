@@ -25,7 +25,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v100 (schema 4)
+### v105 (schema 4)
 Gmail source-link privacy and record navigation fixes. No data change or migration; `kit-update` copies the files.
 - New Gmail source links save only the thread ID as `#all/<id>` and an optional numeric account selector such as
   `/mail/u/0/`. Query parameters and account addresses are removed by the browser and CLI. Search, label and category routes are refused, even when their final word looks like a thread ID.
@@ -35,11 +35,10 @@ Gmail source-link privacy and record navigation fixes. No data change or migrati
   with a canonical target, or a neutral unavailable warning for rejected routes; stored old entries are not rewritten until edited.
 - A missing record reached through Back/Forward resets its history entry to the current view, so the next person,
   company or project drawer creates its own entry. The CLI accepts uppercase `HTTPS://`, as the browser does.
-- Check: `kit-check` reports v100. Save a mailbox/thread link and verify its saved URL uses `#all/<id>`; refuse a search/label view even with an ID-shaped final segment; navigate Forward to a deleted person, open another person, then Back should close that drawer.
+- Check: `kit-check` reports v105. Save a mailbox/thread link and verify its saved URL uses `#all/<id>`; refuse a search/label view even with an ID-shaped final segment; navigate Forward to a deleted person, open another person, then Back should close that drawer.
 
-### v99 (schema 4)
+### v104 (schema 4)
 Token and board selection edge cases. No data change and no migration; run `kit-update`.
-Includes the v97 List view and v98 image fixes.
 - A folder's `token_env` applies only when the resolved board matches its `repo` and `BOARD_API` uses the HTTPS
   github.com API. A different shell board, an empty `BOARD_REPO` resolving to another clone, or another API host
   never borrows the folder's token, even when the shell has no `BOARD_TOKEN`. `where` names the actual auth source
@@ -47,26 +46,63 @@ Includes the v97 List view and v98 image fixes.
 - New `use --token-env` settings must name a board-specific variable, such as `BOARD_TOKEN_PRIVATE`, rather than
   `BOARD_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`. Existing configs using
   these aliases still work for a matching board/API. When skipped, only this CLI process's alias is removed before
-  direct HTTP fallback or `gh` children can use it; a separately named shell credential remains usable. Invalid API
-  URLs also skip the folder credential without breaking `where` or local `--file` commands.
+  direct HTTP fallback or `gh` children can use it; a separately named shell credential remains usable. A legacy
+  `token_env` of `BOARD_TOKEN` is the shell's own variable and is never removed (a relay worker keeps its token, as
+  since v90). Invalid API URLs also skip the folder credential without breaking `where` or local `--file` commands.
+- A skipped folder token prints a one-line note on stderr (not in hooks). GitHub Enterprise or test-server users of
+  `token_env` export `BOARD_TOKEN` themselves. `gh auth token` (the github.com login) is never sent to another
+  `BOARD_API` host by the read cache.
 - Clone mismatch warnings recommend unsetting `BOARD_REPO` only for a clone already trusted by `use`, or whose
   own CLI is running. Nested clone warnings describe the clone the CLI itself would use.
 - Hosted commands skip the GitHub mismatch diagnostic; GitHub commands cache it with a two-second git budget.
-- Check: `kit-check` says v99. In a connected folder, run `where` with a different `BOARD_REPO` or `BOARD_API`;
+- Check: `kit-check` says v104. In a connected folder, run `where` with a different `BOARD_REPO` or `BOARD_API`;
   the folder's token must be reported as not used, without displaying token values.
 
-### v98 (schema 4)
+### v103 (schema 4)
 Image parsing, uploads and cache fixes ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). No migration: `kit-update` copies the files.
 - Progressive JPEG metadata is removed between every scan; JPEG tables containing EOI-like bytes stay intact.
 - WebP reads stop at the RIFF boundary, discard trailers and reject incomplete chunks, including missing required odd-chunk padding.
 - Browser and CLI uploads allow only decoding/animation chunks and fixed colour fields. Unknown/private chunks, JPEG APP11/APP12 provenance/author data and embedded JFIF thumbnails are discarded; Orientation is reconstructed alone. WebP animation frame subchunks are filtered too.
-- ICC colour profiles are stripped because they can carry author/device details. Browser still uploads apply colour conversion in canvas; CLI uploads and profile-stripped animations can look different. APNG is saved as a still image in the browser and CLI: all animation control/frame chunks are discarded. The browser exports the remaining default/poster image through canvas. GIF and animated WebP keep their frames; oversized animations are refused.
-- Animated WebP requires its VP8X declaration, ANIM control and actual ANMF pixel-frame chunks, never arbitrary payload bits. APNG frame preservation is intentionally unsupported, so ignored or invalid frame streams cannot retain hidden metadata. Still browser images are scaled to at most 2000px on the longest side and always exported from decoded canvas pixels; CLI PNG uploads validate the exact IHDR/Adam7 scanline raster and filter bytes, rejecting incomplete zlib streams, excess decoded data, ignored compressed tails and rasters over 64 MB. Both PNG paths reject more than 4096 chunks before retaining per-chunk views; APNG poster construction is lazy. WebP processing permits at most 4096 chunks and 512 frames and rejects empty or duplicate pixel chunks. JPEG processing permits at most 4096 marker segments; GIF permits 4096 blocks, 512 frames and 131072 data sub-blocks. All budgets are checked before retained output views are created. Removed GIF plaintext consumes its own graphics control.
+- ICC colour profiles are stripped because they can carry author/device details. Browser still uploads apply colour conversion in canvas; CLI uploads and profile-stripped animations can look different. APNG is saved as a still image in the browser and CLI: all animation control/frame chunks are discarded. The browser exports the remaining default/poster image through canvas. GIF and animated WebP keep their compressed frame data; oversized animations are refused. Recognised container metadata, comments and colour profiles are removed, but ignored bytes inside compressed GIF/WebP frame data may remain. This is not a guarantee that hidden identifying information is removed. Re-export a fresh still PNG/JPEG to discard the original animation payload.
+- Animated WebP requires its VP8X declaration, ANIM control and actual ANMF pixel-frame chunks, never arbitrary payload bits. APNG frame preservation is intentionally unsupported: its frame streams are discarded and the default/poster image is kept. Still browser images are scaled to at most 2000px on the longest side and always exported from decoded canvas pixels; CLI PNG uploads validate the exact IHDR/Adam7 scanline raster and filter bytes, rejecting incomplete zlib streams, excess decoded data, ignored compressed tails and rasters over 64 MiB (decoded scanlines, including filter bytes). Resize the image before attaching if it exceeds this decoded raster limit. Both PNG paths reject more than 4096 chunks before retaining per-chunk views; APNG poster construction is lazy. WebP processing permits at most 4096 chunks and 512 frames and rejects empty or duplicate pixel chunks. JPEG processing permits at most 4096 marker segments; GIF permits 4096 blocks, 512 frames and 131072 data sub-blocks. All budgets are checked before retained output views are created. Removed GIF plaintext consumes its own graphics control.
 - Temporary server/rate-limit image failures retry with backoff capped at 30 minutes. A bounded reusable LRU and explicit DOM leases retain displayed/pending-use URLs; per-entry settlement and removed-subtree handling revoke inactive overflow without full-owner sweeps or another image read.
 - All Markdown and resource-link image readers hold/release DOM leases. A successful re-upload supersedes failed or in-flight reads, transfers pending leases, and prevents the older request from restoring stale failure history. Bounded retry history survives reusable-cache eviction. The DOM observer disconnects when no leases remain.
 - Still browser uploads also convert removed PNG cICP/HDR colour descriptions. Ignored GIF plaintext is stripped, and source uploads over 25 MB are refused before reading/encoding.
 - Check: upload an EXIF-rotated photo, a progressive JPEG an APNG and animated WebP; verify orientation, still APNG output and WebP animation, then simulate a temporary image-read failure and retry.
-- Includes the v97 List-view release.
+
+### v102 (schema 4)
+- Run kit-update only. No migration or automatic data rewrite.
+- `task-set --contact` resolves a person by exact name or ID and adds the web-compatible contact snapshot while retaining the legacy primary ID. Repeating the command repairs an old singular-only link without duplicating contacts.
+- Use `--unlink-contact <exact-name-or-id>` to remove a specific person, including plural-only web links and exact dangling IDs. Empty unlink references are refused. An empty `--contact` retains its legacy meaning and unlinks the current primary person only; other card contacts stay. Fuzzy, unknown or ambiguous write references now refuse without writing instead of storing arbitrary text.
+- Contact details use the existing web CRM snapshot format within the same board; they are copies and are not refreshed automatically.
+- Manual entries are enriched only with a matching name, a unique CRM email and no conflicting phone. Shared addresses, name-only entries and ambiguous matches remain separate.
+- Verify linking through CLI show, CLI person and the web card Contacts section. New activity includes names; existing activity resolves known person IDs at display time.
+
+### v101 (schema 4)
+`keeptrack.py watch` polls until a card changes (web board unchanged apart from the kit version). No data change and no migration.
+- `watch ID [ID ...]` reads the board every 15 seconds ( `--every` ) and exits 0 when a comment, move, checklist tick, edit, claim status or history line changes. A heartbeat that changes nothing else does not count.
+- `--until COLUMN` waits until a card is in that column (`done` is the usual one). It exits at once when a named card is already there. `--all` waits until every named card is in that column.
+- `--timeout SEC` exits 2 when nothing changed. `--json` prints the card and the changes. A session that is not running `watch` is not woken.
+- Run `kit-update` only. Check: `kit-check` says v101, and `keeptrack.py watch --help` lists `--until`.
+
+### v100 (schema 4)
+A split is a linked card (web board and `relate --kind follow-up`). No data change and no migration.
+- Activity history that names a card id (`split from t_…`, `follow-up card: t_…`, and the same id in any other history line) shows `#N` and the title, and opens that card. An id that is not on the board stays as written.
+- `relate A B --kind follow-up` writes the same links as `todo-move`: "Follow-up #N" on A and "Split from #M" on B. A link to a card on this board opens that card. Waiting for is unchanged: it is a person or an event, not a split.
+- Unlink on a related card asks first (`Unlink #N and #M?`). Cancel leaves the link. A possible match still uses Not related with no extra step.
+- Run `kit-update` only. Check: `kit-check` says v100, and a history line `split from t_…` opens that card.
+
+### v99 (schema 4)
+Review Inbox: record a finished suggestion, and keep duplicate warnings (web board and `proposal-accept --done`). No data change and no migration.
+- **Task completed** on a new-task item creates the card in Done, with the work recorded. Ignore still drops a suggestion that is not wanted. `keeptrack.py proposal-accept <id> --done` does the same; it is refused for anything that is not a new task.
+- A new-task item lists close open cards, close Inbox items, and a finished card with the same title. The warning stays beside the decision. Adding a card keeps the same warning on the card.
+- Run `kit-update` only. Check: `kit-check` says v99, and a new-task Inbox item has **Task completed**.
+
+### v98 (schema 4)
+List view: one tick box, and the description under the title (private-tasks follow-up to #307). Web board only. No data change and no migration.
+- The per-row mark-done square is gone from List. It looked the same as the select box. **Mark done** stays on the selection bar. Calendar day lists and Schedule still mark one task done with the square.
+- The Description column is gone. The task cell shows the description under the title: markdown marks stripped, line breaks joined, two lines on a wide screen and three on a phone. Hover shows the same plain text. The width the column and the extra box used goes to the task.
+- Run `kit-update` only. Check: `kit-check` says v98, and a List row has one tick box with the description under the title.
 
 ### v97 (schema 4)
 List view: select several tasks and see when each was last active (private-tasks card #307). Web board only. No data change and no migration.
@@ -90,7 +126,7 @@ it reads the archive files that `keeptrack.py archive` and the web board already
 
 ### v95 (schema 4)
 Images on cards: the review fixes for v92 (private-tasks card #292). No migration and no data change.
-- Metadata is removed before an image is saved. The page draws every image again (which ones is decided by the file's
+- Recognised container metadata is removed before an image is saved. See v103 for current animation and compressed-payload limitations. The page draws every image again (which ones is decided by the file's
   bytes, not its name; longest side at most 2000px), and a GIF loses its comment and XMP extensions but keeps its frames.
   `attach` strips JPEG APP1/APP13/COM and anything after the end of the image (a second image, a vendor trailer), PNG
   eXIf/tEXt/zTXt/iTXt, WebP EXIF/XMP and GIF comment/XMP extensions. A photo's EXIF Orientation alone is kept, so it is
@@ -166,7 +202,7 @@ change; `kit-update` copies the files. (v88 is taken by an open kit pull request
   sent another board's commands with the wrong token. When it replaces a different value, commands print a warning on
   stderr (hooks stay silent). If `token_env` is named but its variable is not set, the shell's `BOARD_TOKEN` is still used.
   The folder's token wins only when the folder also decides the board: when the shell sets `BOARD_REPO` to another board
-  than the config's `repo` (a relay worker), the shell's `BOARD_TOKEN` stays, and a missing shell token no longer borrows the folder token (v99); `where` says so.
+  than the config's `repo` (a relay worker), the shell's `BOARD_TOKEN` stays, and a missing shell token no longer borrows the folder token (v104); `where` says so.
 - `keeptrack.py where` names the variable the token came from (`token from $VAR`, and whether it replaced the shell's
   `BOARD_TOKEN`), and says when a `BOARD_REPO` from the shell won over the board clone the folder is in.
 - In a board clone, a command warns on stderr when an inherited `BOARD_REPO` names another board than the clone's git
