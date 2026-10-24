@@ -320,7 +320,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 101  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 102  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3033,7 +3033,7 @@ def cmd_show(a):
         for c in cms[-5:]: print(f"  [{c['at'][:16]}] {c.get('by', '?')}: {c['text']}")
     if hs:
         print(f"\nhistory (last 5 of {len(hs)}):")
-        for h in hs[-5:]: print(f"  {h['at'][:16]}  {h.get('by', '?')}: {h['text']}")
+        for h in hs[-5:]: print(f"  {h['at'][:16]}  {h.get('by', '?')}: {clean(h['text'])}")
 
 
 def cloud_session_url():
@@ -4157,7 +4157,7 @@ def cmd_comments(a):
 def cmd_history(a):
     data, _ = load(); t = find(data, a.id)
     for h in t.get("history", []):
-        print(f"{h['at'][:19]}  {h.get('by', '?'):<22} {h['text']}")
+        print(f"{h['at'][:19]}  {h.get('by', '?'):<22} {clean(h['text'])}")
 
 
 def watch_view(t):
@@ -5898,6 +5898,80 @@ def find_person(data, ref):
     return m[0]
 
 
+
+def task_has_person(task, person):
+    """Both legacy primary links and the web card's multi-contact list."""
+    return task.get("contact") == person["id"] or any(
+        isinstance(k, dict) and k.get("person_id") == person["id"]
+        for k in (task.get("contacts") or []))
+
+
+def contact_snapshot(person):
+    """The existing web CRM picker snapshot, kept within the same board."""
+    return {"person_id": person["id"], "name": person.get("name", ""), "role": person.get("role", ""),
+            "email": next((x["value"] for x in person_methods(person, "email")), ""),
+            "phone": next((x["value"] for x in person_methods(person, "phone")), "")}
+
+
+def set_task_contact(data, task, ref, *, unlink=False):
+    """Link a CRM person; preserve old primary links and allow explicit unlinking."""
+    contacts = task.get("contacts", [])
+    if not isinstance(contacts, list) or not all(isinstance(k, dict) for k in contacts):
+        sys.exit("card contacts must be a list of contact objects; nothing saved")
+    if unlink or ref:
+        option = "--unlink-contact" if unlink else "--contact"
+        if not ref or not ref.strip():
+            sys.exit(f"{option} needs a person ID or exact name; nothing saved")
+        matches = [p for p in data.get("contacts", []) if p["id"] == ref]
+        if unlink and not matches and (task.get("contact") == ref or any(k.get("person_id") == ref for k in contacts)):
+            matches = [{"id": ref, "name": next((k.get("name") or ref for k in contacts if k.get("person_id") == ref), ref)}]
+        if not matches:
+            matches = [p for p in data.get("contacts", []) if p.get("name", "").casefold() == ref.casefold()]
+        if len(matches) != 1:
+            sys.exit(f"{option} needs one exact person ID or unambiguous exact name; nothing saved")
+        person = matches[0]
+    else:
+        person = None  # an empty --contact retains its explicit primary-clearing meaning
+    if unlink or not ref:
+        ident = person["id"] if person else task.get("contact")
+        if not ident:
+            return []
+        keep = [k for k in contacts if k.get("person_id") != ident]
+        changed = task.get("contact") == ident or keep != contacts
+        if task.get("contact") == ident:
+            task.pop("contact", None)
+        if keep != contacts:
+            task["contacts"] = keep
+        person = person or next((p for p in data.get("contacts", []) if p["id"] == ident), None)
+        return [f"contact removed: {(person or {}).get('name') or ident} ({ident})"] if changed else []
+    ident = person["id"]
+    contacts = task.setdefault("contacts", [])
+    primary = task.get("contact")
+    if primary and primary != ident and not any(k.get("person_id") == primary for k in contacts):
+        previous = next((p for p in data.get("contacts", []) if p["id"] == primary), None)
+        contacts.append(contact_snapshot(previous) if previous else {"name": primary})
+    emails = {x["value"].casefold() for x in person_methods(person, "email")}
+    existing = next((k for k in contacts if k.get("person_id") == ident), None)
+    if existing is None:
+        phones = {x["value"] for x in person_methods(person, "phone")}
+        candidates = [k for k in contacts if not k.get("person_id") and k.get("name") == person.get("name")
+                      and isinstance(k.get("email"), str) and k["email"].casefold() in emails
+                      and (not k.get("phone") or k["phone"] in phones)]
+        if len(candidates) == 1:
+            email = candidates[0]["email"].casefold()
+            owners = [p["id"] for p in data.get("contacts", [])
+                      if any(x["value"].casefold() == email for x in person_methods(p, "email"))]
+            if owners == [ident]:
+                existing = candidates[0]  # never infer identity from a shared address or name alone
+    changed = task.get("contact") != ident or existing is None or existing.get("person_id") != ident
+    if existing is None:
+        contacts.append(contact_snapshot(person))
+    elif not existing.get("person_id"):
+        existing["person_id"] = ident
+    task["contact"] = ident  # older readers still have a primary link
+    return [f"contact linked: {person['name']} ({ident})"] if changed else []
+
+
 def check_stage(data, s):
     if s is None:
         return None
@@ -6327,7 +6401,7 @@ def cmd_person(a):
               f"{clean(c.get('by', '?'), 80)}: {clean_lines(c['text'], '    ')}")
         if c.get("source_message_ids"): print("    source messages: " + ", ".join(clean(x, 200) for x in c["source_message_ids"]))
         if isinstance(c.get("url"), str) and c["url"]: print(f"    source link ({clean(c['id'], 40)}): {clean(c['url'], 2000)}")
-    tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
+    tasks = [x for x in data.get("tasks", []) if task_has_person(x, p)]
     for x in tasks: print("  task: " + line(data, x))
     by_who, cards = waiting_index(data)
     waits = person_waits(p, by_who, member_logins(data))
@@ -6370,12 +6444,15 @@ def cmd_person_rm(a):
         p = find_person(data, a.ref)
         if member_of(data, p):
             sys.exit("board members' own records cannot be deleted from the CRM")
-        tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
+        tasks = [t for t in data.get("tasks", []) if task_has_person(t, p)]
         if not a.yes:
             sys.exit(f"this deletes {person_line(p, data, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
                      f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
         for t in tasks:
-            t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
+            if t.get("contact") == p["id"]:
+                t.pop("contact", None)
+            t["contacts"] = [k for k in (t.get("contacts") or []) if not isinstance(k, dict) or k.get("person_id") != p["id"]]
+            hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
         data["contacts"] = [x for x in data["contacts"] if x is not p]
         print(f"deleted {p['id']} {p['name']}" + (f"; cleared as contact on {len(tasks)} tasks" if tasks else ""))
     mutate(fn, f"Delete person: {a.ref}")
@@ -7062,8 +7139,10 @@ def cmd_task_set(a):
                 else:
                     t.pop("goal", None)
                 changed.append(f"goal: {_flat(g.get('title')) if g else 'cleared'}")
-        if a.contact is not None and a.contact != t.get("contact", ""):
-            t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
+        if a.contact is not None:
+            changed.extend(set_task_contact(data, t, a.contact))
+        for ref in getattr(a, "unlink_contact", None) or []:
+            changed.extend(set_task_contact(data, t, ref, unlink=True))
         if getattr(a, "title", None) is not None:
             if not a.title.strip() or _has_break(a.title):
                 sys.exit("a task needs a title on one line")
@@ -7111,7 +7190,7 @@ def cmd_task_set(a):
         for x in changed:
             hist(t, x)
         t["updated"] = now()
-        print(f"#{t['num']} updated: " + "; ".join(changed))
+        print(f"#{t['num']} updated: " + "; ".join(clean(x, 1000) for x in changed))
     mutate(fn, f"Update task: {a.id}")
 
 
@@ -8260,7 +8339,7 @@ def apply_staging(data, st, label):
              "links": [{"title": _s(l.get("title")) or l["url"], "url": _s(l["url"])} for l in t.get("links") or []],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": _s(s), "done": False} for s in _list(t.get("todos")) if _s(s)],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
-        if contact: x["contact"] = contact
+        if contact: set_task_contact(data, x, contact)
         if data.get("layout") == "split":
             ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
             x["rank"] = append_rank(ranks)
@@ -9894,7 +9973,7 @@ def cmd_archived_history(a):
             for x in cur.get(k, []):
                 if x["id"] == rid: entries += x.get("history") or []
         for h in sorted(entries, key=lambda h: h.get("at", "")):
-            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {h.get('text', '')}"); n += 1
+            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
     if not n: print(f"(no archived history for '{a.ref}')")
 
 
@@ -11352,7 +11431,7 @@ def main():
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
-    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact", help="link a CRM person by exact ID or name without removing other contacts; empty unlinks the legacy primary contact"); s.add_argument("--unlink-contact", action="append", help="unlink a CRM person by ID or name, preserving other contacts"); s.set_defaults(f=cmd_task_set)
     s.add_argument("--goal", help="goal id, id prefix or title; empty or 'none' clears")
     s.add_argument("--value", choices=["", "1", "2", "3", "4", "5"], help="optional value 1–5; empty clears")
     s.add_argument("--effort", choices=["", *EFFORT_WEIGHTS], help="optional effort size; empty clears")

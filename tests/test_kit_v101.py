@@ -17,12 +17,12 @@ def read(*parts):
 
 
 class Version(unittest.TestCase):
-    def test_kit_is_v101_everywhere(self):
-        self.assertEqual(101, keeptrack.KIT_VERSION)
-        self.assertEqual(101, json.loads(read("board", "kit", "manifest.json"))["version"])
+    def test_current_kit_versions_agree_and_include_v101(self):
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 101)
+        self.assertEqual(keeptrack.KIT_VERSION, json.loads(read("board", "kit", "manifest.json"))["version"])
         for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            self.assertEqual("0.101.0", json.loads(read("board", "kit", plugin, "plugin.json"))["version"], plugin)
-        self.assertIn("const PAGE_KIT = 101;", read("board", "board.js"))
+            self.assertEqual(f"0.{keeptrack.KIT_VERSION}.0", json.loads(read("board", "kit", plugin, "plugin.json"))["version"], plugin)
+        self.assertIn(f"const PAGE_KIT = {keeptrack.KIT_VERSION};", read("board", "board.js"))
 
     def test_upgrade_notes_and_changelog(self):
         v101 = read("board", "kit", "UPGRADING.md").split("### v101 (schema 4)", 1)[1].split("\n### v", 1)[0]

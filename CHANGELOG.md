@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v102: CLI contact links now appear in the web card Contacts section and report the person’s name. Person task lists read both legacy primary links and multi-contact links. Linking preserves other people and rejects unknown or ambiguous references. Existing activity resolves person IDs to names without rewriting history. No schema change or migration.
+
 Kit v101: `keeptrack.py watch` polls until a card changes, or until it reaches a column (`--until done`). One command can name several cards; `--all` waits until every one is in that column. A heartbeat on its own does not count. `--timeout` exits 2 when nothing changed. `--json` prints the card and what changed. It reads the board and does not register a listener. No data change and no migration.
 
 Kit v100: a split names the other card. Activity history that says `split from t_…` (or any other card id) shows that card as `#N` and its title, and opens it. `relate A B --kind follow-up` writes the same Follow-up and Split from links as `todo-move`, on both cards. Unlink asks first. Waiting for stays a person or an event, not a split. No data change and no migration.
