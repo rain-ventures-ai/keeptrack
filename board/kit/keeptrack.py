@@ -281,22 +281,6 @@ for _k, _v in (("BOARD_REPO", "repo"), ("BOARD_BRANCH", "branch"), ("BOARD_PATH"
                ("BOARD_PROJECT", "project")):
     if PROJECT.get(_v):
         os.environ.setdefault(_k, str(PROJECT[_v]))
-TOKEN_REPLACED = ""   # kit v90: the token_env variable whose value replaced a different BOARD_TOKEN from the shell
-TOKEN_KEPT = ""       # kit v90: the shell's BOARD_REPO, when it names another board and so the shell's BOARD_TOKEN stays
-_tv = PROJECT.get("token_env")
-if _tv and _tv != "BOARD_TOKEN" and os.environ.get(_tv):   # the file names the variable that holds the token, never the token
-    # Kit v90 (#286): the folder's own setting wins over a BOARD_TOKEN inherited from the shell, so a shell set up for
-    # one board never sends another board's commands with the wrong token. main() says so when it replaced one.
-    # Only when the folder also decides the board: a shell BOARD_REPO naming another board keeps its own token, so the
-    # token and the board never come from different places (review round 1).
-    if not SHELL_REPO or SHELL_REPO.lower() == str(PROJECT.get("repo", "")).lower():
-        if os.environ.get("BOARD_TOKEN") and os.environ["BOARD_TOKEN"] != os.environ[_tv]:
-            TOKEN_REPLACED = _tv
-        os.environ["BOARD_TOKEN"] = os.environ[_tv]
-    elif os.environ.get("BOARD_TOKEN"):
-        TOKEN_KEPT = SHELL_REPO
-    else:
-        os.environ["BOARD_TOKEN"] = os.environ[_tv]   # as before v90: fills the gap only
 if os.path.basename(os.path.dirname(os.path.abspath(__file__))) != "board":
     ROOT = None   # this keeptrack.py is not inside a board repo (e.g. the Claude plugin): no git remote, no kit files
 if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a board repo clone: use that clone
@@ -306,21 +290,78 @@ if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a b
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
 
 
+# gh consumes both public-GitHub and Enterprise aliases automatically. These names cannot safely
+# identify a new board-specific credential; old configs are still read with the same isolation gate.
+GLOBAL_AUTH_TOKEN_ENVS = frozenset(("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"))
+TOKEN_REPLACED = ""
+TOKEN_SKIPPED = ""
+_tv = PROJECT.get("token_env")
+if _tv and os.environ.get(_tv):
+    # The config supplies a github.com credential only for its resolved board and API host.
+    # An empty BOARD_REPO falls back to the clone, rather than the config's repo.
+    try:
+        _api = urllib.parse.urlparse(os.environ.get("BOARD_API", "https://api.github.com"))
+    except ValueError:
+        _api = None   # invalid IPv6/user input must not break where or local --file commands
+    if not REPO or REPO.lower() != str(PROJECT.get("repo") or "").lower():
+        TOKEN_SKIPPED = "the resolved board differs from this folder's board"
+    elif (_api is None or _api.scheme != "https" or _api.hostname != "api.github.com" or _api.netloc.lower() not in ("api.github.com", "api.github.com:443")
+          or _api.username or _api.password):
+        TOKEN_SKIPPED = "BOARD_API is not the github.com API"
+    else:
+        if os.environ.get("BOARD_TOKEN") and os.environ["BOARD_TOKEN"] != os.environ[_tv]:
+            TOKEN_REPLACED = _tv
+        os.environ["BOARD_TOKEN"] = os.environ[_tv]
+    if TOKEN_SKIPPED and _tv in GLOBAL_AUTH_TOKEN_ENVS and _tv != "BOARD_TOKEN":
+        # Removing only this CLI process's copy closes token() fallback and gh-child inheritance.
+        # A separate explicit credential remains usable; the calling shell is untouched.
+        # BOARD_TOKEN is never removed: it is the shell's own board token (a relay worker's only credential, kept
+        # since v90), and removing it would silently move board calls to the broader gh login.
+        os.environ.pop(_tv, None)
+
+
+_MISMATCH = None
+_MISMATCH_TRUSTED = False
+
+
 def _repo_mismatch():
-    """Kit v90: (inherited BOARD_REPO, the clone's own board) when this folder is in a board clone whose git remote
-    names another board than the BOARD_REPO this process inherited; ("", "") otherwise. BOARD_REPO still decides
-    (a relay worker sets it on purpose); main() and `where` say which board won."""
-    if not SHELL_REPO:
+    """Describe the same clone repo_from_git() would use, with a cached two-second git budget.
+    Hosted boards and hooks do not need this GitHub-only diagnostic."""
+    global _MISMATCH, _MISMATCH_TRUSTED
+    if BACKEND != "github" or not SHELL_REPO:
         return "", ""
-    own = [r for c, r in sorted(_board_clones().items(), key=lambda x: len(x[0])) if r]   # innermost clone last
-    if own and SHELL_REPO.lower() not in own:
-        return SHELL_REPO, own[-1]
-    return "", ""
+    if _MISMATCH is not None:
+        return _MISMATCH
+    _MISMATCH = ("", "")
+    deadline = time.monotonic() + 2
+    try:
+        cwd = os.path.realpath(os.getcwd())
+        c = os.path.realpath(ROOT) if ROOT else subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+            timeout=max(0.001, deadline - time.monotonic())).stdout.strip()
+        if not c or not (cwd == c or cwd.startswith(c.rstrip(os.sep) + os.sep)):
+            return _MISMATCH
+        if not os.path.isfile(os.path.join(c, "board", "tasks.json")):
+            return _MISMATCH
+        p = subprocess.run(["git", "-C", c, "remote", "get-url", "origin"], capture_output=True, text=True,
+                           timeout=max(0.001, deadline - time.monotonic()))
+        m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", p.stdout.strip()) if p.returncode == 0 else None
+        if m and SHELL_REPO.lower() != m.group(1).lower():
+            _MISMATCH = (SHELL_REPO, m.group(1))
+            _MISMATCH_TRUSTED = _own_clone(c) or m.group(1).lower() in _trusted_board_repos()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return _MISMATCH
+
+
+def _mismatch_advice():
+    return ("unset BOARD_REPO to use the clone's board" if _MISMATCH_TRUSTED else
+            "connect this clone with `keeptrack.py use <owner/board-repo>` before using its board")
 
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 103  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 104  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -836,7 +877,8 @@ def _cache_token():
     """The same credentials keeptrack.py uses anyway: the token variables, else `gh auth token` (never stored or printed)."""
     if not _TOK:
         t = token() if use_http() else ""
-        if not t and shutil.which("gh"):
+        if not t and shutil.which("gh") and github_api_base().rstrip("/") == "https://api.github.com":
+            # `gh auth token` is the github.com login: never send it to another BOARD_API host
             p = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
             t = p.stdout.strip() if p.returncode == 0 else ""
         _TOK.append(t)
@@ -5812,6 +5854,11 @@ def cmd_init(a):
 
 def cmd_use(a):
     """Name this project's board (and optionally its board project) in .keeptrack/config.json, kept out of git."""
+    if a.token_env:
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", a.token_env):
+            sys.exit("--token-env takes the NAME of an environment variable (e.g. BOARD_TOKEN_PRIVATE), never the token")
+        if a.token_env in GLOBAL_AUTH_TOKEN_ENVS:
+            sys.exit("--token-env needs a board-specific variable, not an automatic auth alias; use BOARD_TOKEN_PRIVATE")
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
         sys.exit("repo must be owner/name, e.g. osouthgate/private-tasks")
     rc, top, _ = (lambda p: (p.returncode, p.stdout.strip(), p.stderr))(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True))
@@ -5828,8 +5875,6 @@ def cmd_use(a):
     if a.user: cfg["user"] = a.user
     if getattr(a, "project", None): cfg["project"] = a.project
     if a.token_env:
-        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", a.token_env):
-            sys.exit("--token-env takes the NAME of an environment variable (e.g. BOARD_TOKEN_PRIVATE), never the token")
         cfg["token_env"] = a.token_env
     try:
         ensure_local_dir(cfg_path)
@@ -5966,9 +6011,11 @@ def _auth_source():
     """Which variable the board token comes from (kit v90: named, so `where` shows which one won). Never the token."""
     tv = PROJECT.get("token_env")
     cfg = os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, "config.json") if PROJECT_DIR else "the config"
-    if tv and os.environ.get(tv) and TOKEN_KEPT:
-        return (f"token from $BOARD_TOKEN (from the shell: BOARD_REPO={_flat(TOKEN_KEPT)} from the shell is not this "
-                f"folder's board, so ${tv}, named in {cfg}, is not used)")
+    if tv and TOKEN_SKIPPED:
+        actual = "token from $BOARD_TOKEN (from the shell)" if os.environ.get("BOARD_TOKEN") else (
+            "gh login" if shutil.which("gh") else next(
+                (f"token from ${v}" for v in ("GH_TOKEN", "GITHUB_TOKEN") if os.environ.get(v)), "none"))
+        return f"{actual}; ${tv}, named in {cfg}, is not used: {TOKEN_SKIPPED}"
     if tv and os.environ.get(tv):
         return (f"token from ${tv} (token_env in {cfg})"
                 + ("; it replaced a different BOARD_TOKEN from the shell" if TOKEN_REPLACED else ""))
@@ -5993,7 +6040,7 @@ def cmd_where(a):
     mismatch = ("", "") if FILE else _repo_mismatch()   # --file uses no remote board
     if mismatch[0]:
         print(f"         (BOARD_REPO={_flat(mismatch[0])} from the shell won over this clone of {_flat(mismatch[1])}: "
-              f"unset BOARD_REPO to use the clone's board)")
+              f"{_mismatch_advice()})")
     print(f"auth:    {_auth_source()}")
     print(f"config:  {os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json') if PROJECT_DIR else '(no .keeptrack/config.json found)'}")
     if PARENT_CONFIG:
@@ -11737,11 +11784,14 @@ def main():
     if TOKEN_REPLACED and not quiet:
         print(f"warning: ${TOKEN_REPLACED} (token_env in {_flat(os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json'))}) "
               "replaced a different BOARD_TOKEN from the shell: this folder's own setting wins (kit v90).", file=sys.stderr)
+    if TOKEN_SKIPPED and _tv != "BOARD_TOKEN" and not quiet:
+        print(f"note: ${_tv} (token_env in {_flat(os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json'))}) was not used: "
+              f"{TOKEN_SKIPPED}. `keeptrack.py where` shows which credential is used instead (kit v104).", file=sys.stderr)
     if not FILE and not quiet and a.f is not cmd_use:
         shell_repo, clone_repo = _repo_mismatch()
         if shell_repo:
             print(f"warning: BOARD_REPO={_flat(shell_repo)} from the shell, but this folder is a clone of {_flat(clone_repo)}; "
-                  f"commands go to {_flat(shell_repo)}. Unset BOARD_REPO to use the clone's board.", file=sys.stderr)
+                  f"commands go to {_flat(shell_repo)}. {_mismatch_advice()}.", file=sys.stderr)
     if BACKEND not in ("github", "hosted"):
         sys.exit(f"unknown BOARD_BACKEND {BACKEND!r}: use github (the default) or hosted, or unset it")
     if BACKEND == "github" and not FILE:

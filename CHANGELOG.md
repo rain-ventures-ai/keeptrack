@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v104: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
+GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
+explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
+same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
+Malformed API URLs fail closed. New token configs reject global auth aliases; legacy alias credentials are removed
+from this CLI process when skipped, preventing HTTP/gh fallback from reusing them; a legacy `BOARD_TOKEN` setting
+is the shell's own token and stays. A skipped folder token is noted on stderr, and the read cache never sends the gh
+login's github.com token to another `BOARD_API` host.
+
 Kit v103: image review follow-ups ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). Progressive JPEG metadata is removed between scans without mistaking table bytes for the end of the image. Valid terminal JPEG marker fill is accepted, including progressive files. EXIF orientation is read only from complete, valid TIFF directories, so malformed entry counts cannot cause work beyond the supplied metadata bytes. WebP trailers outside the declared RIFF length are discarded. APNG is saved as a still image; browser and CLI discard every APNG animation chunk. GIF and animated WebP retain compressed frame data, which may contain ignored bytes. Recognised container metadata, comments and colour profiles are removed; this does not guarantee removal of hidden identifying information. Re-export a fresh still PNG/JPEG to discard the original animation payload. Browser still uploads re-encode decoded canvas pixels rather than retaining original compressed data. CLI PNG uploads validate exact scanline lengths, including Adam7, and reject incomplete or excess pixel streams. PNG/WebP chunk counts, JPEG segment counts and GIF block/frame/sub-block counts are bounded before output allocation. JPEG application metadata, private PNG/WebP chunks and ICC profiles are removed using format allowlists. Browser still images apply colour conversion; CLI uploads and profile-stripped animations can look different. Image reads retry server and rate-limit failures with bounded exponential backoff; a bounded reusable cache and explicit DOM leases revoke unused overflow per settled entry or removed subtree, without full-owner sweeps. APNG animation data is deliberately discarded, successful uploads supersede in-flight reads without restoring stale failure history, removed PNG colour descriptions force conversion, and image-resource link clicks hold leases too. Source uploads have a 25 MB ceiling. No migration. Includes the v97 List-view release.
 
 Kit v102: CLI contact links now appear in the web card Contacts section and report the person’s name. Person task lists read both legacy primary links and multi-contact links. Linking preserves other people and rejects unknown or ambiguous references. Existing activity resolves person IDs to names without rewriting history. No schema change or migration.
@@ -75,7 +84,7 @@ No migration.
 Kit v90: a folder's own token setting wins (private-tasks card #286; v88 is held by an open kit pull request).
 When `.keeptrack/config.json` names `token_env` and that variable is set, `keeptrack.py` uses its value even when
 `BOARD_TOKEN` is already set in the shell, and warns on stderr when it replaces a different value. A shell `BOARD_REPO`
-naming another board keeps the shell's `BOARD_TOKEN`, so the board and its token always come from the same place. `where` names the
+naming another board keeps the shell's `BOARD_TOKEN`, and v104 also stops borrowing the folder token when the shell token is missing. `where` names the
 variable the token came from and which board won. In a board clone, a `BOARD_REPO` inherited from the shell that names
 another board than the clone's git remote now prints a warning (it still decides). No migration and no data change.
 

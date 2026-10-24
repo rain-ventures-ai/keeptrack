@@ -25,6 +25,27 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v104 (schema 4)
+Token and board selection edge cases. No data change and no migration; run `kit-update`.
+- A folder's `token_env` applies only when the resolved board matches its `repo` and `BOARD_API` uses the HTTPS
+  github.com API. A different shell board, an empty `BOARD_REPO` resolving to another clone, or another API host
+  never borrows the folder's token, even when the shell has no `BOARD_TOKEN`. `where` names the actual auth source
+  and explains why the folder token was skipped.
+- New `use --token-env` settings must name a board-specific variable, such as `BOARD_TOKEN_PRIVATE`, rather than
+  `BOARD_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`. Existing configs using
+  these aliases still work for a matching board/API. When skipped, only this CLI process's alias is removed before
+  direct HTTP fallback or `gh` children can use it; a separately named shell credential remains usable. A legacy
+  `token_env` of `BOARD_TOKEN` is the shell's own variable and is never removed (a relay worker keeps its token, as
+  since v90). Invalid API URLs also skip the folder credential without breaking `where` or local `--file` commands.
+- A skipped folder token prints a one-line note on stderr (not in hooks). GitHub Enterprise or test-server users of
+  `token_env` export `BOARD_TOKEN` themselves. `gh auth token` (the github.com login) is never sent to another
+  `BOARD_API` host by the read cache.
+- Clone mismatch warnings recommend unsetting `BOARD_REPO` only for a clone already trusted by `use`, or whose
+  own CLI is running. Nested clone warnings describe the clone the CLI itself would use.
+- Hosted commands skip the GitHub mismatch diagnostic; GitHub commands cache it with a two-second git budget.
+- Check: `kit-check` says v104. In a connected folder, run `where` with a different `BOARD_REPO` or `BOARD_API`;
+  the folder's token must be reported as not used, without displaying token values.
+
 ### v103 (schema 4)
 Image parsing, uploads and cache fixes ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). No migration: `kit-update` copies the files.
 - Progressive JPEG metadata is removed between every scan; JPEG tables containing EOI-like bytes stay intact.
@@ -169,8 +190,7 @@ change; `kit-update` copies the files. (v88 is taken by an open kit pull request
   sent another board's commands with the wrong token. When it replaces a different value, commands print a warning on
   stderr (hooks stay silent). If `token_env` is named but its variable is not set, the shell's `BOARD_TOKEN` is still used.
   The folder's token wins only when the folder also decides the board: when the shell sets `BOARD_REPO` to another board
-  than the config's `repo` (a relay worker), the shell's `BOARD_TOKEN` stays, so the board and its token always come
-  from the same place; `where` says so.
+  than the config's `repo` (a relay worker), the shell's `BOARD_TOKEN` stays, and a missing shell token no longer borrows the folder token (v104); `where` says so.
 - `keeptrack.py where` names the variable the token came from (`token from $VAR`, and whether it replaced the shell's
   `BOARD_TOKEN`), and says when a `BOARD_REPO` from the shell won over the board clone the folder is in.
 - In a board clone, a command warns on stderr when an inherited `BOARD_REPO` names another board than the clone's git
