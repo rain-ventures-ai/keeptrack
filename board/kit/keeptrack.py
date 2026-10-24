@@ -1019,8 +1019,20 @@ def _wanted_rel(rel):
     return rel == "tasks.json" or re.fullmatch(r"(?:cards|people|projects|proposals|archive)/[^/]+", rel) is not None
 
 
+# Set by each snapshot: the board folder holds another top-level board file (a one-file board such as alice.json next to
+# tasks.json). Such boards share archive/, so archive runs never repack a year into part files there.
+_SHARED_FOLDER = [False]
+
+
+def _other_root(name):
+    return "/" not in name and name.endswith(".json") and name != "tasks.json"
+
+
 def _local_snapshot(include_archive=False):
     files = {}
+    folder = os.path.dirname(_local_path("tasks.json"))
+    _SHARED_FOLDER[0] = any(_other_root(n) and n != os.path.basename(FILE) and os.path.isfile(os.path.join(folder, n))
+                            for n in (os.listdir(folder) if os.path.isdir(folder) else []))
     for rel in ["tasks.json"]:
         path = _local_path(rel)
         if os.path.isfile(path):
@@ -1056,6 +1068,8 @@ def _git_snapshot(include_archive=False):
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
     prefix = base + "/" if base else ""
+    rc, top, _ = git("ls-tree", "--name-only", head, "--", prefix or ".")
+    _SHARED_FOLDER[0] = any(_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/") for n in (top.splitlines() if not rc else []))
     wanted = [(full, full[len(prefix):] if full.startswith(prefix) else full) for full in names.splitlines()]
     wanted = [(full, rel) for full, rel in wanted if _wanted_rel(rel)]
     # Preserve archive paths in the snapshot, but do not read their bodies until requested.
@@ -1109,6 +1123,8 @@ def _api_snapshot(include_archive=False):
     if tree.get("truncated"):
         sys.exit("cannot read the board: the Git tree response was truncated")
     files = {}
+    own = os.path.basename(PATH)
+    _SHARED_FOLDER[0] = any(x.get("type") == "blob" and _other_root(x.get("path", "")) and x.get("path") != own for x in tree.get("tree", []))
     for item in tree.get("tree", []):
         rel = item.get("path", "")
         if item.get("type") != "blob" or not _wanted_rel(rel):
@@ -1176,7 +1192,7 @@ def _github_load_board():
         sort_tasks(data)
     state = {"mode": mode, "head": head.get("head") if isinstance(head, dict) else head,
              "base_tree": head.get("base_tree") if isinstance(head, dict) else None,
-             "files": files, "layout": layout,
+             "files": files, "layout": layout, "shared_folder": _SHARED_FOLDER[0],
              "root": root, "data_id": id(data)}
     _BOARD_STATES[id(data)] = state
     return data
@@ -10269,7 +10285,8 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
             size = len(_json_text(cur).encode())
             # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
             # and repacking would move another board's records into parts its index never lists. They hold the year back.
-            split = data.get("version") == 4 and data.get("layout") == "split"
+            split = data.get("version") == 4 and data.get("layout") == "split" \
+                and not _BOARD_STATES.get(id(data), {}).get("shared_folder")   # another board file in the folder shares archive/
             if split and (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
                 try:
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())

@@ -160,6 +160,17 @@ class ArchiveLazyShards(unittest.TestCase):
             self.assertEqual((board / 'archive' / '2020.json').read_text(), before)
             self.assertNotEqual(saved['settings'].get('min_kit'), 107)
 
+    def test_cli_split_board_sharing_its_folder_with_a_one_file_board_holds_back(self):
+        # alice.json next to a split tasks.json shares archive/: repacking would hide alice's archived records
+        with tempfile.TemporaryDirectory() as folder:
+            board, path, run = self._large_board(folder, 'split')
+            (board / 'alice.json').write_text(json.dumps({'version': 3, 'tasks': [], 'contacts': [], 'archive': {'files': {'2020': {'tasks': 0, 'contacts': 0}}}}))
+            before = (board / 'archive' / '2020.json').read_text()
+            out = run('archive', ok=False)
+            self.assertEqual(len(list((board / 'cards').glob('*.json'))), 3, out.stdout + out.stderr)
+            self.assertEqual(sorted(p.name for p in (board / 'archive').glob('*.json')), ['2020.json'], 'no part file')
+            self.assertEqual((board / 'archive' / '2020.json').read_text(), before)
+
     def test_cli_archive_parts_and_restore_preserve_history_and_opaque_fields(self):
         for min_kit in (None, '108', 106.5, True, False, 0, -1, 106):
             with self.subTest(min_kit=min_kit):

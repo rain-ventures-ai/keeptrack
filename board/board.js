@@ -838,7 +838,9 @@ if (typeof window !== 'undefined') (() => {
     if (missing.length > 8 && !graphqlBlobsDenied) await graphqlBlobTexts(missing, texts, c, gen);
     await mapLimit(changed, 8, async item => { const text = texts.has(item) ? texts.get(item) : await blobText(item, c, gen); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
-    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true };
+    // another top-level board file in this folder (a one-file board such as alice.json): the boards share archive/
+    const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/.test(x.path) && x.path !== 'tasks.json' && x.path !== own);
+    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true, sharedFolder };
     await pruneBlobCache(new Set((td.tree || []).filter(x => x.type === 'blob').map(x => x.sha)), c, gen);
     if (!sameArchiveBoard(c, gen)) throw new Error('The board changed while loading.');
     return { unchanged: false, data: modelFromSplit(files), meta };
@@ -8710,12 +8712,13 @@ if (typeof window !== 'undefined') (() => {
       .sort((a, b) => Number(a.slice(0, 4)) - Number(b.slice(0, 4)) || Number(a.slice(5) || 0) - Number(b.slice(5) || 0));
     const files = await mapLimit(keys, 8, async key => {
       const entry = await archiveEntry(meta, key, at, gen);
-      if (!entry || !isObj(entry.obj)) throw new Error('An indexed archive file is missing or invalid. Nothing restored.');
+      if (!entry) return null;   // an index key whose file is gone holds no history to bring back (as the CLI)
+      if (!isObj(entry.obj)) throw new Error('An indexed archive file is invalid. Nothing restored.');
       return entry.obj;
     });
     const seen = new Set(), history = [];
     const append = lines => { for (const line of archArr(lines, isObj)) { const token = JSON.stringify(line); if (!seen.has(token)) { seen.add(token); history.push(line); } } };
-    for (const file of files) append(isObj(file.history) && has(file.history, id) ? file.history[id] : null);
+    for (const file of files) if (file) append(isObj(file.history) && has(file.history, id) ? file.history[id] : null);
     append(src.history); src.history = history; return src;
   }
   function restoredItem(src, kind) {   // the board's own per-card tolerance (normalise) for one restored card or person: missing lists filled, unknown and non-text fields kept
@@ -8844,9 +8847,9 @@ if (typeof window !== 'undefined') (() => {
         for (const y of years) { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           if (pickedIds(rules)) pickedIds(rules).forEach(id => delete merged.history[id]);
           const text = jsonText(merged), bytes = archBytes(text); let packed = null;
-          // part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
-          // and repacking would move another board's records into parts its index never lists. They hold the year back.
-          if (isSplit(got.data) && (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-')))) {
+          // part files only on a split board alone in its folder: boards that share a folder share its archive/, and
+          // repacking would move another board's records into parts its index never lists. They hold the year back.
+          if (isSplit(got.data) && !got.meta.sharedFolder && (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-')))) {
             try { packed = await shardArchiveFamily(y, merged, plan[y], fresh, got.meta, Object.assign({}, cfg()), ag, pickedIds(rules) || []); }
             catch (e) { if (!(e instanceof ArchiveUnpackable) || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-'))) throw e; }
           }

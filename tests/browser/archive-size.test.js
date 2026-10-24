@@ -67,7 +67,7 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
-    // A packable oversized year is committed atomically with the live-card removal, for both layouts.
+    // A packable oversized year is committed atomically with the live-card removal (split boards).
     // Part files are written on split boards only (one board per folder); a one-file board holds the year back (next case).
     for (const [split,minKit] of [[true,null],[true,'108'],[true,106.5],[true,true],[true,false],[true,0],[true,-1],[true,106]]) {
       const api = new Github(), year = String(new Date().getFullYear());
@@ -99,14 +99,6 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       await page.waitForFunction(()=>document.querySelector('.col[data-col="done"]')?.textContent.includes('Finished work'));
       const restored=split?api.card('t_two'):JSON.parse(api.files['tasks.json']).tasks.find(x=>x.id==='t_two');
       assert.equal(restored.details,'x'.repeat(350000)); assert.ok(restored.history.some(x=>x.text==='older evidence'));
-      if (!split) {
-        await page.locator('.col[data-col="todo"] .card',{hasText:'Open work'}).dblclick();
-        await page.locator('#cTitle').fill('Edited after atomic restore');
-        const edited=page.waitForResponse(r=>r.request().method()==='PUT' && r.url().includes('/contents/board/tasks.json')); await page.locator('#cTitle').blur(); await edited;
-        await page.waitForFunction(()=>document.querySelector('#status')?.textContent.includes('Saved'));
-        assert.equal(JSON.parse(api.files['tasks.json']).tasks.find(x=>x.id==='t_one').title,'Edited after atomic restore');
-        assert.equal(api.staleWrites||0,0,'the first ordinary edit uses the new legacy root SHA without retry');
-      }
       assert.deepEqual(errors,[]); await page.close();
     }
     for (const [kb, held] of [[905, true], [710, false]]) {
@@ -180,6 +172,39 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }); await shipped.hover(); await shipped.locator('.quickarch').click();
       await page.locator('.ui-toast__text', { hasText: 'Held back 1 item' }).waitFor();
       assert.equal(JSON.stringify(api.files), before, 'nothing written: no part file, the year file and the board are unchanged');
+      assert.deepEqual(errors, []); await page.close();
+    }
+    // A split board that shares its folder with a one-file board (alice.json) shares archive/ too: it holds the year back.
+    {
+      const api = new Github(), year = String(new Date().getFullYear());
+      api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{} });
+      api.files['alice.json'] = text({ version: 3, tasks: [], contacts: [], archive: { files: { [year]: { tasks: 0, contacts: 0 } } } });
+      const done = api.card('t_two'); done.details = 'x'.repeat(350000); api.files['cards/t_two.json'] = text(done);
+      const meta = JSON.parse(api.files['tasks.json']); meta.archive = { files: { [year]: { tasks: 2, contacts: 0 } } }; api.files['tasks.json'] = text(meta);
+      const before = JSON.stringify(api.files);
+      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(init, 'board'); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }); await shipped.hover(); await shipped.locator('.quickarch').click();
+      await page.locator('.ui-toast__text', { hasText: 'Held back 1 item' }).waitFor();
+      assert.equal(JSON.stringify(api.files), before, 'nothing written: no part file, alice.json and the year file are unchanged');
+      assert.deepEqual(errors, []); await page.close();
+    }
+    // A one-file board named tasks.json archives through one Git Data commit; the next ordinary edit uses the new root revision.
+    {
+      const api = new Github(), meta = JSON.parse(api.files['tasks.json']);
+      delete meta.layout; meta.version = 3; meta.tasks = [api.card('t_one'), api.card('t_two')]; meta.contacts = []; meta.archive = { files: {} };
+      api.files = { 'tasks.json': text(meta) };
+      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(init, 'board'); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }); await shipped.hover(); await shipped.locator('.quickarch').click();
+      await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
+      assert.ok(!JSON.parse(api.files['tasks.json']).tasks.some(x => x.id === 't_two'), 'the card left the board file');
+      await page.locator('.col[data-col="todo"] .card',{hasText:'Open work'}).dblclick();
+      await page.locator('#cTitle').fill('Edited after the archive commit');
+      const edited=page.waitForResponse(r=>r.request().method()==='PUT' && r.url().includes('/contents/board/tasks.json')); await page.locator('#cTitle').blur(); await edited;
+      await page.waitForFunction(()=>document.querySelector('#status')?.textContent.includes('Saved'));
+      assert.equal(JSON.parse(api.files['tasks.json']).tasks.find(x=>x.id==='t_one').title,'Edited after the archive commit');
+      assert.equal(api.staleWrites||0,0,'the first ordinary edit after the archive uses the new legacy root SHA without retry');
       assert.deepEqual(errors, []); await page.close();
     }
     // A part file already in the folder but not in this board's index (another board shares archive/) is never overwritten:
