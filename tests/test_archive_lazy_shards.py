@@ -21,6 +21,19 @@ def envelope(year='2020', **extra):
 
 
 class ArchiveLazyShards(unittest.TestCase):
+    def test_min_kit_floor_counts_archive_part_files(self):
+        # settings-set --min-kit and doctor use this floor: a board with YYYY-N parts must never drop below the
+        # first kit that reads them, or an older writer could miss records stored in the parts.
+        self.assertEqual(k.min_kit_needed({'archive': {'files': {'2020': {}}}})[0], 0)
+        for key in ('2020-1', '2021-999999'):
+            with self.subTest(key=key):
+                needed, what = k.min_kit_needed({'archive': {'files': {'2020': {}, key: {}}}})
+                self.assertEqual(needed, k.ARCHIVE_PARTS_KIT)
+                self.assertIn('part files', what)
+        for odd in ({'archive': None}, {'archive': {'files': ['2020-1']}}, {'archive': {'files': {'2020-0': {}, 'x-1': {}}}}):
+            with self.subTest(odd=odd):
+                self.assertEqual(k.min_kit_needed(odd)[0], 0)
+
     def test_restore_history_is_linear_and_keeps_dictionary_equality_and_order(self):
         class Counted(dict):
             comparisons = 0
@@ -80,7 +93,7 @@ class ArchiveLazyShards(unittest.TestCase):
 
     def test_cli_archive_parts_and_restore_preserve_history_and_opaque_fields(self):
         from board_fixtures import copy_board_fixture
-        for min_kit in (None, '103', 102.5, True, False, 0, -1, 101):
+        for min_kit in (None, '108', 106.5, True, False, 0, -1, 106):
             with self.subTest(min_kit=min_kit):
                 with tempfile.TemporaryDirectory() as folder:
                     board = Path(folder) / 'board'; copy_board_fixture('v3', board)
@@ -101,7 +114,7 @@ class ArchiveLazyShards(unittest.TestCase):
                         return result
                     run('archive')
                     saved = json.loads(path.read_text()); self.assertEqual(saved['tasks'], [])
-                    self.assertEqual(saved['settings']['min_kit'], 102)
+                    self.assertEqual(saved['settings']['min_kit'], 107)
                     self.assertGreater(len(saved['archive']['files']), 1)
                     for year in saved['archive']['files']:
                         self.assertLessEqual((board / 'archive' / (year + '.json')).stat().st_size, k.ARCHIVE_FILE_MAX)

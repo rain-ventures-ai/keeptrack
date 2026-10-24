@@ -84,6 +84,69 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // A real CLI write must be visible in the actual card drawer, and a plural-only web link in the person drawer.
+    {
+      const os = require('node:os'), cp = require('node:child_process');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keeptrack-contact-'));
+      const local = path.join(dir, 'tasks.json'), linkedApi = new Github();
+      try {
+        fs.writeFileSync(local, text({ ...root, version: 3, tasks: [card], contacts: [person], projects: [project] }));
+        cp.execFileSync('python3', [path.join(ROOT, 'board/kit/keeptrack.py'), '--file', local, 'task-set', '#1', '--contact', 'p_one'],
+          { env: { ...process.env, BOARD_USER: 'alex', BOARD_AGENT: 'codex', BOARD_SESSION: 'test-contact' } });
+        const linked = JSON.parse(fs.readFileSync(local)).tasks[0];
+        linked.history.push({ at: stamp, by: 'codex', text: 'contact: p_one' });
+        delete linked.contact; // prove the person drawer reads the web list without the legacy field
+        linkedApi.files['cards/t_one.json'] = text(linked);
+        linkedApi.files['people/p_one.json'] = text({ ...person, phones: [{ id: 'ph1', label: 'Work', value: '+440000000000' }] });
+        const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+        try {
+          const pg = await ctx.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => linkedApi.route(r));
+          await pg.goto(base + '/board/index.html'); await pg.locator('.prow', { hasText: 'Casey Example' }).click();
+          await pg.locator('#pTasks .dtask', { hasText: 'Kick-off' }).waitFor();
+          await pg.locator('#pTasksSec .ui-addrow__ghost').click(); await pg.locator('#pTaskNew').fill('Plural contact snapshot');
+          const saving = pg.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().includes('/repos/acme/board/'));
+          await pg.locator('#pTaskNew').press('Enter'); await saving;
+          const added = Object.entries(linkedApi.files).filter(([f]) => f.startsWith('cards/')).map(([,v]) => JSON.parse(v)).find(t => t.title === 'Plural contact snapshot');
+          assert.equal(added.contacts[0].email, 'casey@acme.test');
+          assert.equal(added.contacts[0].phone, '+440000000000');
+
+          await pg.locator('#pTasks .dtask', { hasText: 'Kick-off' }).click(); await pg.locator('#dlgCard[open]').waitFor();
+          assert.match(await pg.locator('#cContactList').textContent(), /Casey Example/);
+          const toggle = pg.locator('#cmHistBtn');
+          if (await toggle.getAttribute('aria-pressed') !== 'true') await toggle.click();
+          await pg.locator('.cmhist', { hasText: 'contact: Casey Example' }).waitFor();
+          assert.doesNotMatch(await pg.locator('#cmStream').textContent(), /contact: p_one/);
+        } finally { await ctx.close(); }
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    }
+    // Same display details must not let removing the second linked person remove the first.
+    {
+      const api = new Github(), a = { ...person, email: 'team@acme.test', phone: '', emails: [{ value: 'team@acme.test', label: 'Shared' }], phones: [] };
+      const b = { ...a, id: 'p_two' }, snapshot = p => ({ person_id: p.id, name: p.name, role: p.role, email: 'team@acme.test', phone: '' });
+      api.files['people/p_one.json'] = text(a); api.files['people/p_two.json'] = text(b);
+      api.files['cards/t_one.json'] = text({ ...card, contact: b.id, contacts: [snapshot(a), snapshot(b)] });
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      try {
+        const pg = await ctx.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api.route(r));
+        await pg.goto(base + '/board/index.html?repo=acme%2Fboard&card=t_one#1'); await pg.locator('#dlgCard[open]').waitFor();
+        const remove = pg.locator('#cContactList button[aria-label="Remove contact Casey Example"]');
+        assert.equal(await remove.count(), 2);
+        await remove.nth(1).click();
+        const saving = pg.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/'));
+        await pg.locator('dialog.ui-sheet--alert[open] button', { hasText: 'Remove' }).click(); await saving;
+        const saved = JSON.parse(api.files['cards/t_one.json']);
+        assert.deepEqual(saved.contacts.map(k => k.person_id), ['p_one']);
+        assert.equal(saved.contact, undefined);
+        assert.equal(await pg.locator('#cContactList button[aria-label="Remove contact Casey Example"]').count(), 1);
+        await pg.locator('#cContactSec .ui-addrow__ghost').click(); await pg.locator('#cContactNew').fill('Casey');
+        const suggestion = pg.locator('#cContactSuggestions [role="option"]');
+        await suggestion.waitFor(); assert.equal(await suggestion.count(), 1, 'the other shared-mailbox person remains available');
+        const adding = pg.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/'));
+        await suggestion.click(); await adding;
+        assert.deepEqual(JSON.parse(api.files['cards/t_one.json']).contacts.map(k => k.person_id), ['p_one', 'p_two']);
+
+      } finally { await ctx.close(); }
+    }
     const api = new Github();
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = [], native = [];
     page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { native.push(d.type() + ': ' + d.message()); d.dismiss().catch(() => {}); });
@@ -150,6 +213,9 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     await page.locator('#pTasks .dtask').waitFor();
     const newCard = Object.keys(api.files).filter(f => f.startsWith('cards/')).map(f => JSON.parse(api.files[f])).find(t => t.title === 'Send pricing');
     assert.ok(newCard && newCard.contact === 'p_one' && newCard.client === 'Acme', 'the task is linked to the person and their client');
+    assert.equal(newCard.contacts[0].person_id, 'p_one', 'a task added from a person is also linked in the card Contacts section');
+    assert.equal(newCard.contacts[0].email, api.person().emails[0].value, 'plural CRM emails survive into the card snapshot');
+    assert.equal(newCard.contacts[0].phone, (api.person().phones[0] || {}).value || '', 'plural CRM phones survive into the card snapshot');
 
     // History opens; the drawer still fits after all that
     await page.locator('#pHistSec .ui-section__toggle').click(); assert.equal(await page.locator('#pHist').isVisible(), true);
@@ -412,6 +478,8 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       assert.equal((JSON.parse(api4.files['people/p_two.json'])).stage, 'Talking', 'its people keep their own stages');
       await ccol('Won').click(); await pg.locator('#dlgClient[open]').waitFor(); assert.equal(await pg.locator('#clStage').inputValue(), 'Won');
       await pg.keyboard.press('Escape'); await pg.locator('#dlgClient').waitFor({ state: 'hidden' });
+      // Closing a routed drawer schedules history.back(). Wait for that navigation before reloading.
+      await pg.waitForFunction(() => !(history.state || {}).kbDlg && !new URLSearchParams(location.hash.slice(1)).has('company'));
       await pg.reload(); await pg.waitForSelector('.ccard'); assert.equal(await pg.locator('#pipeMode [aria-selected="true"]').textContent(), 'Companies', 'still Companies after a reload');
       await pg.setViewportSize({ width: 390, height: 844 }); await pg.waitForTimeout(150);
       assert.equal(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'company pipeline fits a phone');
@@ -492,7 +560,12 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       const pickProject = async (name, label) => {
         const pill = company(name);
         if (await pill.count() && await pill.locator('.cpillproj').count()) await pill.locator('.cpillproj').click();
-        else { await openCompanyOverflow(); await pg.locator(`#clientPop [aria-label="Projects for ${name}"]`).click(); }
+        else {
+          // Selecting an overflow company can leave this popover open while the bar reflows.
+          // Toggle only when closed; otherwise the test hides the very project button it needs.
+          if (!(await pg.locator('#clientPop').isVisible())) await pg.locator('.cpill.more').click();
+          await pg.locator(`#clientPop [aria-label="Projects for ${name}"]`).click();
+        }
         await pg.locator('.ui-menu [role=menuitem]', { hasText: label }).click();
       };
       const rain = company('Rain Ventures');

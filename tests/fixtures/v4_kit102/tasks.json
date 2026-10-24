@@ -9,7 +9,7 @@
       "Won",
       "Lost"
     ],
-    "min_kit": 102,
+    "min_kit": 44,
     "waiting_days": 5,
     "review_inbox": {
       "enabled": false
@@ -57,16 +57,6 @@
   },
   "next_num": 3,
   "archive": {
-    "files": {
-      "2020": {
-        "tasks": 0,
-        "contacts": 0
-      },
-      "2020-1": {
-        "tasks": 1,
-        "contacts": 0
-      }
-    },
-    "last_run": "2026-10-01T00:00:00Z"
+    "files": {}
   }
 }

@@ -1,5 +1,5 @@
 {
-  "label": "v4 frozen archive parts (kit v102); lazy bodies and bounded sharding",
+  "label": "Frozen before CLI/web contact parity (kit 101 to 102)",
   "schema": 4,
   "layout": "split",
   "kit_before_update": 101,

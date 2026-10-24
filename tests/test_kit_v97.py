@@ -1,6 +1,5 @@
 """Kit v97: List view multi-select and last activity (private-tasks card #307). The browser behaviour is tested in
 tests/browser/list-select.test.js; this file pins the version, the notes and the help."""
-import json
 import os
 import sys
 import unittest
@@ -19,11 +18,7 @@ def read(*parts):
 
 class Version(unittest.TestCase):
     def test_kit_is_v97_everywhere(self):
-        self.assertGreaterEqual(keeptrack.KIT_VERSION, 97)
-        self.assertEqual(keeptrack.KIT_VERSION, json.loads(read("board", "kit", "manifest.json"))["version"])
-        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
-            self.assertEqual(f"0.{keeptrack.KIT_VERSION}.0", json.loads(read("board", "kit", plugin, "plugin.json"))["version"], plugin)
-        self.assertIn(f"const PAGE_KIT = {keeptrack.KIT_VERSION};", read("board", "board.js"))
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 97)   # the exact version is asserted by the newest tests/test_kit_v*.py
 
     def test_upgrade_notes_and_changelog(self):
         v97 = read("board", "kit", "UPGRADING.md").split("### v97 (schema 4)", 1)[1].split("\n### v", 1)[0]

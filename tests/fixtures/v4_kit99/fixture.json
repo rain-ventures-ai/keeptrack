@@ -1,5 +1,5 @@
 {
-  "label": "v4 frozen before token/board edge-case hardening (kit v99); unchanged data schema",
+  "label": "v4 frozen before token/board edge-case hardening (kit v104); unchanged data schema",
   "schema": 4,
   "layout": "split",
   "kit_before_update": 96,

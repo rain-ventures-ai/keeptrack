@@ -1,5 +1,5 @@
 'use strict';
-// Archive files are bounded at 900 KB (kit v102): packable years split atomically; unpackable envelopes stay held.
+// Archive files are bounded at 900 KB (kit v107): packable years split atomically; unpackable envelopes stay held.
 // Past 700 KB an unsplit archive is written and the toast warns. Run: node archive-size.test.js
 
 const assert = require('node:assert/strict');
@@ -68,7 +68,7 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
   const browser = await chromium.launch({ headless: true });
   try {
     // A packable oversized year is committed atomically with the live-card removal, for both layouts.
-    for (const [split,minKit] of [[true,null],[false,'103'],[true,102.5],[false,true],[true,false],[false,0],[true,-1],[false,101]]) {
+    for (const [split,minKit] of [[true,null],[false,'108'],[true,106.5],[false,true],[true,false],[false,0],[true,-1],[false,106]]) {
       const api = new Github(), year = String(new Date().getFullYear());
       api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, custom:{keep:true},
         tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{t_two:[{at:stampForTest(),text:'older evidence'}]} });
@@ -88,7 +88,7 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       const shipped=page.locator('.col[data-col="done"] .card',{hasText:'Finished work'}); await shipped.hover(); await shipped.locator('.quickarch').click();
       await page.getByRole('button',{name:'Undo',exact:true}).waitFor();
       const after=JSON.parse(api.files['tasks.json']), keys=Object.keys(after.archive.files);
-      assert.equal(after.settings.min_kit,102); assert.ok(keys.some(y=>y.startsWith(year+'-')));
+      assert.equal(after.settings.min_kit,107); assert.ok(keys.some(y=>y.startsWith(year+'-')));
       const records=keys.flatMap(y=>{assert.ok(Buffer.byteLength(api.files[`archive/${y}.json`])<=900*1024);return JSON.parse(api.files[`archive/${y}.json`]).tasks;});
       assert.deepEqual(records.map(x=>x.id).sort(),['t_old_a','t_old_b','t_two']);
       assert.deepEqual(JSON.parse(api.files[`archive/${year}.json`]).custom,{keep:true});
