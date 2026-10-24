@@ -6,23 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Kit v101: archive size follow-ups. Split-board toasts exclude held years, archived label/client/stage rewrites allow oversized files to shrink or remain unchanged, and size warnings appear once after save. Held CLI tasks and people retain list positions and can still trim history into a year with room. Hosted archive size enforcement remains server-side and is documented explicitly. No migration; includes v100.
+Kit v106: archive size follow-ups. Split-board toasts exclude held years, archived label/client/stage rewrites allow oversized files to shrink or remain unchanged, and size warnings appear once after save. Held CLI tasks and people retain list positions and can still trim history into a year with room. Hosted archive size enforcement remains server-side and is documented explicitly. No migration; includes v100.
 
-Kit v100: Gmail contact-log source links are saved with only a thread ID and optional numeric account selector.
+Kit v105: Gmail contact-log source links are saved with only a thread ID and optional numeric account selector.
 Search terms, labels, query parameters and account addresses are removed in the page and CLI; a Gmail view without
 a recognised thread-ID shape is refused, including pagination and nested-label/search-only addresses. Legacy full-width
 hex and bounded `FMfcgz` web-ID shapes are supported conservatively; other forms fail closed. Existing Gmail links render with clean targets. Missing-record Back/Forward entries
 now discard stale drawer markers so the next drawer has its own history entry. CLI source links accept uppercase
 `HTTPS://`. No migration; old stored Gmail URLs are cleaned when edited rather than rewritten in bulk.
 
-Kit v99: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
+Kit v104: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
 GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
 explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
 same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
 Malformed API URLs fail closed. New token configs reject global auth aliases; legacy alias credentials are removed
-from this CLI process when skipped, preventing HTTP/gh fallback from reusing them. Includes the v97 List view and v98 image releases.
+from this CLI process when skipped, preventing HTTP/gh fallback from reusing them; a legacy `BOARD_TOKEN` setting
+is the shell's own token and stays. A skipped folder token is noted on stderr, and the read cache never sends the gh
+login's github.com token to another `BOARD_API` host.
 
-Kit v98: image review follow-ups ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). Progressive JPEG metadata is removed between scans without mistaking table bytes for the end of the image. WebP trailers outside the declared RIFF length are discarded. APNG is saved as a still image; browser and CLI discard every APNG animation chunk. GIF and animated WebP keep their frames. Still browser uploads always export decoded canvas pixels, preventing ignored compressed-stream tails from retaining identifying bytes. CLI PNG uploads validate exact scanline lengths, including Adam7, and reject incomplete or excess pixel streams. PNG/WebP chunk counts, JPEG segment counts and GIF block/frame/sub-block counts are bounded before output allocation. JPEG application metadata, private PNG/WebP chunks and ICC profiles are removed using format allowlists. Browser still images apply colour conversion; CLI uploads and profile-stripped animations can look different. Image reads retry server and rate-limit failures with bounded exponential backoff; a bounded reusable cache and explicit DOM leases revoke unused overflow per settled entry or removed subtree, without full-owner sweeps. APNG animation data is deliberately discarded, successful uploads supersede in-flight reads without restoring stale failure history, removed PNG colour descriptions force conversion, and image-resource link clicks hold leases too. Source uploads have a 25 MB ceiling. No migration. Includes the v97 List-view release.
+Kit v103: image review follow-ups ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). Progressive JPEG metadata is removed between scans without mistaking table bytes for the end of the image. Valid terminal JPEG marker fill is accepted, including progressive files. EXIF orientation is read only from complete, valid TIFF directories, so malformed entry counts cannot cause work beyond the supplied metadata bytes. WebP trailers outside the declared RIFF length are discarded. APNG is saved as a still image; browser and CLI discard every APNG animation chunk. GIF and animated WebP retain compressed frame data, which may contain ignored bytes. Recognised container metadata, comments and colour profiles are removed; this does not guarantee removal of hidden identifying information. Re-export a fresh still PNG/JPEG to discard the original animation payload. Browser still uploads re-encode decoded canvas pixels rather than retaining original compressed data. CLI PNG uploads validate exact scanline lengths, including Adam7, and reject incomplete or excess pixel streams. PNG/WebP chunk counts, JPEG segment counts and GIF block/frame/sub-block counts are bounded before output allocation. JPEG application metadata, private PNG/WebP chunks and ICC profiles are removed using format allowlists. Browser still images apply colour conversion; CLI uploads and profile-stripped animations can look different. Image reads retry server and rate-limit failures with bounded exponential backoff; a bounded reusable cache and explicit DOM leases revoke unused overflow per settled entry or removed subtree, without full-owner sweeps. APNG animation data is deliberately discarded, successful uploads supersede in-flight reads without restoring stale failure history, removed PNG colour descriptions force conversion, and image-resource link clicks hold leases too. Source uploads have a 25 MB ceiling. No migration. Includes the v97 List-view release.
+
+Kit v102: CLI contact links now appear in the web card Contacts section and report the person’s name. Person task lists read both legacy primary links and multi-contact links. Linking preserves other people and rejects unknown or ambiguous references. Existing activity resolves person IDs to names without rewriting history. No schema change or migration.
+
+Kit v101: `keeptrack.py watch` polls until a card changes, or until it reaches a column (`--until done`). One command can name several cards; `--all` waits until every one is in that column. A heartbeat on its own does not count. `--timeout` exits 2 when nothing changed. `--json` prints the card and what changed. It reads the board and does not register a listener. No data change and no migration.
+
+Kit v100: a split names the other card. Activity history that says `split from t_…` (or any other card id) shows that card as `#N` and its title, and opens it. `relate A B --kind follow-up` writes the same Follow-up and Split from links as `todo-move`, on both cards. Unlink asks first. Waiting for stays a person or an event, not a split. No data change and no migration.
+
+Kit v99: Review Inbox can record a new task as already done, and duplicate warnings stay put. **Task completed** creates the card in Done (outcome completed, checklist ticked, history `done: already completed when reviewed`) so a suggestion you review after the work is finished is not dropped by Ignore. The same action is `proposal-accept <id> --done`. A new-task item keeps its duplicate warning next to the decision: close open cards, close Inbox items, and a finished card with the same title (`already done`). Adding a card leaves the same warning on the card after the toast goes. No data change and no migration.
+
+Kit v98: List drops the per-row mark-done square (it looked the same as the select box; **Mark done** stays on the selection bar) and shows the description under the title. Markdown marks are stripped and line breaks are joined, so later lines stay visible (two lines on a wide screen, three on a phone). Calendar day lists and Schedule still mark one task done. No data change and no migration; keeptrack.py changes only its version.
 
 Kit v97: List view multi-select and last activity (private-tasks card #307). Mark done is a square, in List and Schedule, so it is not mistaken for a select box. List adds a tick box on each row and a select-all for the rows on screen. With a selection, a bar offers **Move to…**, **Mark done**, **Copy IDs** (for example `#150 #96`) and **Clear selection**. Move and Mark done are off on a read-only board. The selection stays in this tab and clears when you leave List. **Activity** is how long since the newest edit, comment or history entry (`3d ago`); a card quiet for 14 days is marked, and on a phone the time sits under the title. No data change and no migration; keeptrack.py changes only its version.
 
@@ -37,7 +49,7 @@ read-only board hides. People: the stage filter has a last option, **Archived**,
 moved out (Lost people) the same way. Search: **Include archive** is remembered in this browser, and archived results
 carry an "Archived <year>" pill with that archive file year. No data change and no migration; keeptrack.py changes only its version.
 
-Kit v95: images on cards, the review fixes for v92 (private-tasks card #292). Uploaded images lose their metadata
+Kit v95: images on cards, the review fixes for v92 (private-tasks card #292). Uploaded images lose recognised metadata containers
 (EXIF: GPS position, device, owner; text chunks; XMP; GIF comments; data after a JPEG's end): the page draws every image
 again before upload (chosen by its bytes, not its name) and `keeptrack.py attach` strips those segments, keeping only a
 photo's Orientation so it is not saved sideways. `attach` falls back to a git push when the sandbox proxy blocks API writes,
@@ -81,7 +93,7 @@ No migration.
 Kit v90: a folder's own token setting wins (private-tasks card #286; v88 is held by an open kit pull request).
 When `.keeptrack/config.json` names `token_env` and that variable is set, `keeptrack.py` uses its value even when
 `BOARD_TOKEN` is already set in the shell, and warns on stderr when it replaces a different value. A shell `BOARD_REPO`
-naming another board keeps the shell's `BOARD_TOKEN`, and v99 also stops borrowing the folder token when the shell token is missing. `where` names the
+naming another board keeps the shell's `BOARD_TOKEN`, and v104 also stops borrowing the folder token when the shell token is missing. `where` names the
 variable the token came from and which board won. In a board clone, a `BOARD_REPO` inherited from the shell that names
 another board than the clone's git remote now prints a warning (it still decides). No migration and no data change.
 
@@ -1019,11 +1031,5 @@ preserved through CLI edits, proposals and archiving; disabling the layout leave
 ## Repository tooling
 
 ### Unreleased
-
-Kit v99: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
-GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
-explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
-same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
-Includes the v97 List view and v98 image releases.
 
 - Frozen boards under `tests/fixtures/` and CI running Python + Playwright upgrade tests ([#46](https://github.com/rain-ventures-ai/keeptrack/issues/46)).

@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 101;
+  const PAGE_KIT = 106;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1313,28 +1313,53 @@ if (typeof window !== 'undefined') (() => {
   }
   const byId = (st, k = 'tasks') => new Map((st[k] || []).map(t => [t.id, t]));
   const KINDS = ['tasks', 'contacts', 'projects'];   // cards, people and projects
-  const show = v => v === undefined || v === null ? '(none)' : typeof v === 'string' ? (v || '(empty)') : JSON.stringify(v);
   // Move/edit aimed at a card that someone else deleted: fn is a no-op, so detect it by id.
   function deletedUnderMe(base, pre, ids) { const has = (st, id) => KINDS.some(k => byId(st, k).has(id)); return ids.filter(id => has(base, id) && !has(pre, id)); }
-  // Resolution screen: one block per clash with what you saw, your value and theirs. Resolves with
-  // 'discard' (drop my whole change) or an array with one {side: 'theirs' | 'mine' | 'edit', value} per clash.
+  // Resolution screen: one block per clash, in plain language. Resolves with 'discard' (drop the whole
+  // change) or an array with one {side: 'theirs' | 'mine' | 'edit', value} per clash. GitHub's value starts selected.
+  const CLASH_FIELD = { title: 'Title', name: 'Name', project: 'Project', client: 'Client', column: 'Column', priority: 'Priority', due: 'Due date', details: 'Description', assignees: 'Assignees', labels: 'Labels', status: 'Status', north_star: 'North star', value: 'Value', effort: 'Effort', goal: 'Goal', rank: 'Order', priority_rank: 'Priority order', waiting: 'Waiting on', claim: 'Claim' };
   function askConflict(clashes, views) {
     return new Promise(res => {
       const d = $('dlgConflict'), body = $('cfBody'); body.textContent = ''; const picks = clashes.map(() => ({ side: 'theirs' }));
       const isItem = c => KINDS.includes(c.path[0]) && c.path.length >= 2;
-      const nameOf = c => { const [k, id] = c.path; if (!isItem(c)) return 'Board settings'; const it = [views.pre, views.mine, views.base].map(s => byId(s, k).get(id)).find(Boolean) || {}; return `${k === 'tasks' ? 'Card' : k === 'contacts' ? 'Person' : 'Project'} “${it.title || it.name || id}”`; };
-      $('cfIntro').textContent = `${clashes.length === 1 ? 'One thing you are changing was' : clashes.length + ' things you are changing were'} also changed by someone else (or an agent) since you loaded the board. Everything else of yours merges on its own. Choose which version to keep for each.`;
+      const itemOf = c => { const [k, id] = c.path; return [views.pre, views.mine, views.base].map(s => byId(s, k).get(id)).find(Boolean) || {}; };
+      const named = (id, key, label) => { if (typeof id !== 'string' || !id) return ''; for (const b of [views.mine, views.pre, views.base, state]) { const hit = ((b && b[key]) || []).find(x => x && x.id === id && x[label]); if (hit) return hit[label]; } return ''; };
+      const clip = s => s.length > 72 ? s.slice(0, 69) + '…' : s;
+      const shown = (field, v) => {
+        const blank = { project: 'no project', client: 'no client', column: 'no column', goal: 'no goal', due: 'no date', assignees: 'nobody', labels: 'no labels' }[field] || 'nothing';
+        if (field === 'session_id') return v ? shortSid(v) : 'nothing';
+        if (v === undefined || v === null || v === '') return blank;
+        if (field === 'project') return named(v, 'projects', 'name') || v;
+        if (field === 'goal') return named(v, 'goals', 'title') || v;
+        if (field === 'column') { const n = (state.columns || []).find(c => c.id === v); return n && n.name || v; }
+        if (typeof v === 'string') return v;
+        if (Array.isArray(v)) return v.length ? v.map(x => typeof x === 'string' ? x : (x && (x.title || x.name || x.text)) || 'item').join(', ') : 'nothing';
+        return 'a longer value';
+      };
+      const quote = s => /^(nothing|empty|no |nobody)/.test(s) ? s : `“${s}”`;
+      $('cfIntro').textContent = clashes.length === 1
+        ? 'Someone else saved the same detail while you were editing. Your other edits are kept either way. Choose which value to save.'
+        : `Someone else saved ${clashes.length} of the same details while you were editing. Your other edits are kept either way. Choose which value to save for each.`;
       clashes.forEach((c, i) => {
-        const box = el('div', 'cfcard'), field = (isItem(c) ? c.path.slice(2) : c.path).join(' › ');
-        box.append(el('strong', null, nameOf(c) + (field ? ' · ' + field : '')));
-        if (isItem(c) && c.path.length === 2) { if (c.theirs === undefined) box.append(el('div', 'cfnote', 'Someone else deleted it.')); else if (c.mine === undefined) box.append(el('div', 'cfnote', 'You deleted it.')); }
-        const tb = el('table', 'cftable'), hr = el('tr'); ['You saw', 'Mine', 'Theirs (now on GitHub)'].forEach(h => hr.append(el('th', null, h))); tb.append(hr);
-        const leafSid = c.path[c.path.length - 1] === 'session_id', scrubIds = v => v && typeof v === 'object' ? (Array.isArray(v) ? v.map(scrubIds) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'session_id' ? shortSid(x) : scrubIds(x)]))) : v;   // a session id is shown only in part
-        const r = el('tr'); [c.base, c.mine, c.theirs].forEach(v => r.append(el('td', null, show(leafSid ? shortSid(v) : scrubIds(v))))); tb.append(r); box.append(tb);
+        const box = el('div', 'cfcard'), whole = isItem(c) && c.path.length === 2, fieldKey = whole ? '' : String((isItem(c) ? c.path.slice(2) : c.path).at(-1) || '');
+        const fieldWord = CLASH_FIELD[fieldKey] || (fieldKey ? fieldKey.replace(/_/g, ' ') : '');
+        const it = isItem(c) ? itemOf(c) : null, title = it ? (it.title || it.name || c.path[1]) : 'Board settings';
+        box.append(el('strong', null, !isItem(c) ? `Board setting${fieldWord ? ' · ' + fieldWord : ''}` : whole || !fieldWord ? `${c.path[0] === 'contacts' ? 'Person' : c.path[0] === 'projects' ? 'Project' : 'Card'} “${title}”` : `${fieldWord} on “${title}”`));
+        if (whole) { if (c.theirs === undefined) box.append(el('div', 'cfnote', 'Someone else deleted it.')); else if (c.mine === undefined) box.append(el('div', 'cfnote', 'You deleted it.')); }
+        const b = shown(fieldKey, c.base), m = shown(fieldKey, c.mine), t = shown(fieldKey, c.theirs), word = (fieldWord || 'value').toLowerCase();
+        const story = c.mine === undefined ? `You removed this. GitHub now has ${quote(t)}.`
+          : c.theirs === undefined ? `Someone else removed this. Your version is ${quote(m)}.`
+          : b === t ? `You changed the ${word} to ${quote(m)}. GitHub still has ${quote(t)}.`
+          : b === m ? `GitHub changed the ${word} to ${quote(t)}. You still have ${quote(m)}.`
+          : `You changed the ${word} to ${quote(m)}. GitHub now has ${quote(t)}. When you opened the board it was ${quote(b)}.`;
+        box.append(el('p', 'cfstory', story));
+        const dl = el('dl', 'cfvals');
+        [['When you opened it', b], ['Your change', m], ['On GitHub now', t]].forEach(([k, v]) => { const line = el('div'), dt = el('dt', null, k), dd = el('dd', null, v); line.append(dt, dd); dl.append(line); });
+        box.append(dl);
         const row = el('div', 'cfpick'), ta = el('textarea', 'cfedit'); ta.hidden = true; ta.rows = 2; ta.value = typeof c.theirs === 'string' ? c.theirs : JSON.stringify(c.theirs === undefined ? null : c.theirs);
-        [['theirs', 'Keep theirs'], ['mine', 'Keep mine'], ['edit', 'Edit…']].forEach(([side, label]) => {
+        [['theirs', `Keep GitHub’s: ${clip(t)}`], ['mine', `Keep yours: ${clip(m)}`], ['edit', 'Type a different value']].forEach(([side, label]) => {
           const lab = el('label'), rb = el('input'); rb.type = 'radio'; rb.name = 'cf' + i; rb.value = side; rb.checked = side === 'theirs';
-          rb.onchange = () => { picks[i].side = side; ta.hidden = side !== 'edit'; if (side === 'edit') ta.focus(); }; lab.append(rb, ' ' + label); row.append(lab); });
+          rb.onchange = () => { picks[i].side = side; ta.hidden = side !== 'edit'; if (side === 'edit') ta.focus(); }; lab.append(rb, document.createTextNode(label)); row.append(lab); });
         ta.oninput = () => { picks[i].text = ta.value; }; picks[i].text = ta.value; box.append(row, ta); body.append(box);
       });
       const finish = v => { d.close(); $('cfApply').onclick = $('cfDiscard').onclick = null; d.oncancel = null; res(v); };
@@ -2348,7 +2373,7 @@ if (typeof window !== 'undefined') (() => {
   // One toast system (ui.toast): a newer message replaces an older plain one. An error, or any message once the Undo toast has
   // been up 1.5s, replaces the Undo toast too (Undo stays on the button and Ctrl+Z), so messages never wait behind it.
   let lastToast = null;
-  function toast(msg, bad) { if (lastToast) lastToast.dismiss(); if (bad || Date.now() - undoAt > 1500) hideUndo(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: 4500 } : { timeout: 2600 }); }
+  function toast(msg, bad, timeout) { if (lastToast) lastToast.dismiss(); if (bad || Date.now() - undoAt > 1500) hideUndo(); lastToast = ui.toast(msg, bad ? { tone: 'danger', timeout: timeout || 4500 } : { timeout: timeout || 2600 }); }
   function boardInfo() {
     const c = cfg(), repoUrl = `https://github.com/${c.repo}`, rawBase = `${repoUrl}/blob/${c.branch}`;
     return { c, repoUrl, skill: `${rawBase}/.claude/skills/board/SKILL.md`, agents: `${rawBase}/AGENTS.md`,
@@ -2529,15 +2554,35 @@ if (typeof window !== 'undefined') (() => {
     const had = bar.hidden ? 0 : +bar.dataset.n || 0, total = had + n; bar.dataset.n = total;
     bar.querySelector('span').textContent = `${total} new update${total === 1 ? '' : 's'} on this card`; bar.hidden = false;
   }
-  const histIcon = x => /^moved|→/.test(x) ? 'arrow-right' : /^✓|\bdone\b|^review/i.test(x) ? 'circle-check' : /blocked|stuck|failed/i.test(x) ? 'triangle-alert'
+  const histIcon = x => /^split from|follow-up card/.test(x) ? 'arrow-up-right' : /^moved|→/.test(x) ? 'arrow-right' : /^✓|\bdone\b|^review/i.test(x) ? 'circle-check' : /blocked|stuck|failed/i.test(x) ? 'triangle-alert'
     : /wait/i.test(x) ? 'alarm-clock' : /claim|progress|heartbeat|session/i.test(x) ? 'bot' : /to-do/i.test(x) ? 'square-check' : /link/i.test(x) ? 'link'
     : /^due/.test(x) ? 'calendar' : /^priority|priority order/.test(x) ? 'flag' : /^labels/.test(x) ? 'tag' : /^(client|project)/.test(x) ? 'building-2'
     : /assignee|contact/i.test(x) ? 'user' : /renamed|edited|description/i.test(x) ? 'pencil' : /^created/.test(x) ? 'plus' : 'history';
   const newPill = () => { const p = el('span', 'cmnewpill', 'New'); p.title = 'Arrived while this card was open'; return p; };
+  // A history line names the other card by id ("split from t_…", "follow-up card: t_…"). Show that id as the card
+  // itself: #N and its title, opening the card here. An id that is not on the board stays as written.
+  function cardChip(id) {
+    const t = state.tasks.find(x => x.id === id); if (!t) return null;
+    const title = String(t.title || '').replace(/\s+/g, ' ').trim(), short = title.length > 60 ? title.slice(0, 59) + '…' : title;
+    const a = el('a', 'mref', short ? `#${t.num} ${short}` : `#${t.num}`);
+    a.href = cardUrl(t.num, t.id); a.title = `#${t.num}${title ? ' ' + title : ''}`;
+    a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; return a;
+  }
+  function appendHistText(parent, text) {
+    text = text.replace(/^contact: (p_[a-z0-9]+)$/, (all, id) => {
+      const p = state.contacts.find(p => p.id === id); return p ? 'contact: ' + (p.name || id) : all;
+    });
+    const re = /\bt_[a-z0-9]+\b/g; let last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) decorate(parent, text.slice(last, m.index));
+      parent.append(cardChip(m[0]) || document.createTextNode(m[0])); last = m.index + m[0].length;
+    }
+    if (last < text.length) decorate(parent, text.slice(last));
+  }
   function histRow(h, isNew) {
     const text = String(h.text || ''), row = el('div', 'cmhist' + (/blocked|stuck|failed/i.test(text) ? ' bad' : '') + (isNew ? ' cmnew' : ''));
     const tm = el('time', null, ago2(h.at)); tm.title = h.at || '';
-    const txt = el('span', 'cmhtext'); txt.append(el('b', null, (h.by || '?') + ' '), document.createTextNode(text));
+    const txt = el('span', 'cmhtext'); txt.append(el('b', null, (h.by || '?') + ' ')); appendHistText(txt, text);
     row.append(elI('span', 'cmhicon', histIcon(text)), txt, ...(isNew ? [newPill()] : []), tm); return row;
   }
   function histRun(run, fresh) {   // consecutive history entries (newest first) as one block on the timeline line
@@ -2598,7 +2643,8 @@ if (typeof window !== 'undefined') (() => {
     const t = state.tasks.find(x => x.id === commentsFor); if (!t) { $('dlgCard').close(); return; }
     if (HOSTED && hostedHistoryLoading($('cmStream'), [`cards/${t.id}.json`])) { cmSig = ''; $('cmCount').textContent = ''; return; }
     const hist = cmHist() ? (t.history || []) : [], hl = hist[hist.length - 1];
-    const sig = JSON.stringify(t.comments.map(m => m.id + (m.reply_to || '') + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : ''); if (sig === cmSig) return; cmSig = sig;
+    const histCards = [...new Set(hist.flatMap(h => String(h.text || '').match(/\bt_[a-z0-9]+\b/g) || []))].map(id => { const o = state.tasks.find(x => x.id === id); return o ? id + o.num + o.title : id; }).join(' ');
+    const sig = JSON.stringify(t.comments.map(m => m.id + (m.reply_to || '') + (m.session_url || ''))) + t.comments.length + '|' + (t.links || []).map(l => l.url).join(' ') + '|' + hist.length + (hl ? hl.at + hl.text : '') + '|' + histCards; if (sig === cmSig) return; cmSig = sig;
     $('cmCount').textContent = t.comments.length || ''; const box = $('cmStream'); box.textContent = '';
     const arrived = noteFresh(t), fresh = x => cmFresh.has(cmItemKey(x));
     // one list, oldest first (a stable sort keeps the saved order on equal times), then shown newest first: the composer stays at the top
@@ -2724,8 +2770,9 @@ if (typeof window !== 'undefined') (() => {
       return out;
     } catch { return null; } finally { if (bmp) bmp.close(); }
   }
-  // Only decoding/animation chunks and fixed colour fields survive. ICC profiles can contain author/device
-  // descriptions, so they are removed too. Still uploads use canvas colour conversion when one was present.
+  // Container allowlists remove recognised metadata/comments and ICC profiles, which can describe author/device.
+  // GIF/WebP compressed frame data is retained and may contain ignored bytes; hidden information is not ruled out.
+  // Browser still uploads separately re-encode decoded pixels; APNG is saved as a still image.
   async function strippedImage(file) {
     const b = new Uint8Array(await file.arrayBuffer()), v = new DataView(b.buffer), type = file.type;
     const wordAt = (a, i, n) => String.fromCharCode(...a.subarray(i, i + n));
@@ -2733,8 +2780,10 @@ if (typeof window !== 'undefined') (() => {
     let animated = type === 'image/gif', profiled = false, stillOnly = false;
     const finish = parts => ({ blob: new Blob(parts, { type }), animated, profiled, stillOnly });
     const orientation = t => { try { const d = new DataView(t.buffer, t.byteOffset, t.byteLength), le = wordAt(t, 0, 2) === 'II';
-      if (!le && wordAt(t, 0, 2) !== 'MM') return 1; const start = d.getUint32(4, le), count = d.getUint16(start, le);
-      for (let k = 0; k < count; k++) { const e = start + 2 + 12 * k; if (d.getUint16(e, le) === 0x112 && d.getUint16(e + 2, le) === 3) { const n = d.getUint16(e + 8, le); return n >= 1 && n <= 8 ? n : 1; } }
+      if ((!le && wordAt(t, 0, 2) !== 'MM') || t.length < 8 || d.getUint16(2, le) !== 42) return 1;
+      const start = d.getUint32(4, le); if (start < 8 || start % 2 || start + 2 > t.length) return 1;
+      const count = d.getUint16(start, le); if (start + 2 + 12 * count + 4 > t.length) return 1;
+      for (let k = 0; k < count; k++) { const e = start + 2 + 12 * k; if (d.getUint16(e, le) === 0x112 && d.getUint16(e + 2, le) === 3 && d.getUint32(e + 4, le) === 1) { const n = d.getUint16(e + 8, le); return n >= 1 && n <= 8 ? n : 1; } }
     } catch {} return 1; };
     const tiff = n => new Uint8Array([77,77,0,42,0,0,0,8,0,1,1,18,0,3,0,0,0,1,0,n,0,0,0,0,0,0]);
     const chunk = (name, data, little = false) => { const out = new Uint8Array(8 + data.length + (little ? data.length % 2 : 4)), d = new DataView(out.buffer);
@@ -3035,7 +3084,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
-  const firstLine = t => mdPlain((t.details || '').split('\n').find(x => x.trim() && !/^\s*(```|\|?\s*:?-{2,}[-|: ]*$|([-*_])(\s*\2){2,}\s*$)/.test(x)) || '').trim();
+  const listBlurb = t => mdPlain((t && t.details) || '').replace(/\s+/g, ' ').trim();   // one readable description: markdown marks and later lines stay visible
   // The chips a task shows in every view (kanban card, list row, schedule row). always: also show an empty checklist/comments chip (cards).
   function chipTodo(t, always) {
     const tc = todoCount(t); if (!tc.all && !always) return null;
@@ -3164,8 +3213,8 @@ if (typeof window !== 'undefined') (() => {
     const row = paint(el('div', 'trow' + (isDoneTask(t) ? ' done' : '') + (pick && listSel.has(t.id) ? ' is-selected' : '')), t);
     if (at && listActivityStale(at) && !isDoneTask(t)) row.classList.add('is-stale');
     row.dataset.listTask = t.id;
-    const c0 = el('div', 'c-check'); c0.append(doneCircle(t));
     const task = el('div', 'c-task'), title = el('div', 'lt'); title.append(el('span', 'numtag', '#' + t.num), document.createTextNode(t.title)); title.onclick = () => openCard(t.id); { const d = changedDot(t); if (d) title.prepend(d); } task.append(title);
+    const blurb = listBlurb(t); if (blurb) { const d = el('div', 'ldesc', blurb); d.title = blurb; task.append(d); }
     const mm = el('div', 'lmeta m-only');      // phone layout: everything under the title, including last activity
     if (t.due) mm.append(duePill(t));
     mm.append(prioPill(t));
@@ -3174,7 +3223,6 @@ if (typeof window !== 'undefined') (() => {
     mm.append(activityStamp(t));
     if (mm.childNodes.length) task.append(mm);
     if (openLists.has(t.id)) task.append(todoList(t));
-    const desc = el('div', 'c-desc', firstLine(t)); desc.title = t.details || '';
     const ppl = el('div', 'c-people'); t.assignees.forEach(a => ppl.append(avatar(a)));
     const lab = el('div', 'c-labels'); lab.append(...labelTags(t, 2));
     const due = el('div', 'c-due'); if (t.due) due.append(duePill(t));
@@ -3184,7 +3232,10 @@ if (typeof window !== 'undefined') (() => {
     const edit = elI('button', 'ico', 'pencil'); edit.title = 'Open task'; edit.setAttribute('aria-label', 'Open task'); edit.onclick = () => openCard(t.id); more.append(edit);
     const bot = elI('button', 'ico', 'bot'); bot.title = 'Copy instructions for an agent to work on this task'; bot.setAttribute('aria-label', 'Copy agent instructions for this task'); bot.onclick = () => copyText(agentPrompt(t), 'Task instructions copied for an agent'); more.append(bot);
     { const a = quickArchiveBtn(t); if (a) more.append(a); }
-    row.append(...(pick ? [selectCell(t)] : []), c0, task, desc, ppl, lab, due, pr, act, more); return row;
+    const lead = [];
+    if (pick) lead.push(selectCell(t));   // List: the tick box is the only control. Mark done lives on the selection bar.
+    else { const c0 = el('div', 'c-check'); c0.append(doneCircle(t)); lead.push(c0); }   // Calendar day lists still mark one task done
+    row.append(...lead, task, ppl, lab, due, pr, act, more); return row;
   }
 
   // ---- long lists: draw the first CAP items and a "Show more" button, so a huge board never builds 100,000s of elements ----
@@ -3254,7 +3305,8 @@ if (typeof window !== 'undefined') (() => {
     const pick = view === 'list', box = el('div', 'ttable' + (pick ? ' picks' : '')), hd = el('div', 'trow thead');
     box.dataset.listTable = key;
     if (pick) hd.append(selectHead(items, key));
-    [['', 'c-check', ''], ['notebook-pen', 'c-task', 'Task'], ['list', 'c-desc', 'Description'], ['users', 'c-people', 'People'], ['tag', 'c-labels', 'Labels'], ['calendar', 'c-due', 'Due'], ['flag', 'c-prio', 'Priority'], ['history', 'c-activity', 'Activity'], ['', 'c-more', '']].forEach(([ic, cls, label]) => {
+    else hd.append(el('div', 'c-check'));
+    [['notebook-pen', 'c-task', 'Task'], ['users', 'c-people', 'People'], ['tag', 'c-labels', 'Labels'], ['calendar', 'c-due', 'Due'], ['flag', 'c-prio', 'Priority'], ['history', 'c-activity', 'Activity'], ['', 'c-more', '']].forEach(([ic, cls, label]) => {
       const cell = elI('div', cls, ic, label); if (cls === 'c-activity') cell.title = 'Newest of the last edit, comment or history entry'; hd.append(cell);
     });
     box.append(hd); capList(key, items, listRow, box); return box;
@@ -3790,7 +3842,7 @@ if (typeof window !== 'undefined') (() => {
     let hits = [];
     // recheckArchive: the marks change other cards, so a lost race runs the add again on the newer board (never a clash over a card you did not touch)
     return mutate(n => { const c = clone(t); n.tasks.push(c); hits = markSimilar(n, c); }, `Add task: ${title}`, [], null, { recheckArchive: true })
-      .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: open the card to merge, link or dismiss.`); return ok ? t.id : null; });
+      .then(ok => { if (ok && hits.length) toast(`Added. Possible ${hits[0].kind} of #${hits[0].num}: it stays on this card and on any matching Review Inbox item.`, false, 8000); return ok ? t.id : null; });
   }
 
   // ---- new card (kit v61): the card drawer is the one card form. The card is saved with its title, then opens in the
@@ -3912,7 +3964,11 @@ if (typeof window !== 'undefined') (() => {
     const wait = el('span', 'dval dwait'); wait.id = 'cWaitVal';
     const who = el('span', 'dval'); who.id = 'cWho';
     const whoAdd = ghostAdd('cWhoAdd', 'Add', 'Assign a person or an agent', () => openPeopleMenu(whoAdd));
-    const work = el('button', 'dworkpick'); work.type = 'button'; work.id = 'cWorkPick'; work.onclick = openTaskWorkPicker;
+    const work = el('div', 'dwork'); work.id = 'cWork';
+    const workClient = el('button', 'dworklink'); workClient.type = 'button'; workClient.id = 'cWorkClient'; roKeep(workClient);
+    const workProject = el('button', 'dworklink'); workProject.type = 'button'; workProject.id = 'cWorkProject'; roKeep(workProject);
+    const workEdit = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm', onClick: openTaskWorkPicker }); workEdit.id = 'cWorkPick'; workEdit.classList.add('dwork__edit');
+    work.append(workClient, workProject, workEdit);
     const goal = drawerSelect('cGoal', 'Goal');
     const chips = el('span', 'dval'); chips.id = 'cLabelChips';
     const labelAdd = ghostAdd('cLabelAdd', 'Add', 'Add a label', () => { labelAdd.hidden = true; $('cLabelNew').hidden = false; $('cLabelNew').focus(); });
@@ -3931,6 +3987,8 @@ if (typeof window !== 'undefined') (() => {
     [...props.children].forEach((row, i) => row.classList.add(i < 4 ? 'dprop--half' : 'dprop--full'));
     goal.closest('.ui-props__row').id = 'cGoalRow';
     const after = el('div', 'dafter'); after.id = 'cAfter'; after.hidden = true;   // "Runs after": only on a card with after links
+    const dup = el('p', 'ddup'); dup.id = 'cDup'; dup.hidden = true;   // a possible duplicate stays here; the add toast does not
+    $('cTitle').after(dup);
     $('cProps').append(props, after);
     // sections: Description, Related cards, Checklist, Links, Contacts, Activity (comments and history in one timeline)
     const descBtn = ui.button({ label: 'Edit', icon: 'pencil', variant: 'ghost', size: 'sm' }); descBtn.id = 'cDescBtn';
@@ -4040,11 +4098,15 @@ if (typeof window !== 'undefined') (() => {
   $('cGoal').onchange = e => { const v = e.target.value; edit(editing, t => { if (v) t.goal = v; else delete t.goal; }, `Goal: ${titleOf(editing)}`); };
   $('cPrio').onchange = e => { const v = e.target.value; syncPrio(v); edit(editing, t => { t.priority = v; }, `Priority: ${titleOf(editing)}`); };
   function renderTaskWork(t) {
-    const b = $('cWorkPick'), pr = projectById(t.project); b.textContent = '';
-    const text = el('span', 'dworkpick__text');
-    text.append(el('strong', null, t.client || (pr && pr.client) || 'No client'), el('span', null, pr ? pr.name : 'No project'));
-    b.append(text, ui.icon('chevron-right'));
-    b.setAttribute('aria-label', `Client and project: ${t.client || (pr && pr.client) || 'none'}, ${pr ? pr.name : 'none'}. Change`);
+    const pr = projectById(t.project), clientName = t.client || (pr && pr.client) || '';
+    const link = (id, kind, value, open) => {
+      const b = $(id); b.textContent = ''; b.classList.toggle('is-empty', !value);
+      b.append(el('span', 'dworklink__k', kind), el('span', 'dworklink__v', value || 'None'));
+      b.disabled = !value; b.onclick = value ? open : null;
+      b.setAttribute('aria-label', value ? `Open ${kind.toLowerCase()} ${value}` : `No ${kind.toLowerCase()}`);
+    };
+    link('cWorkClient', 'Client', clientName, () => openClient(clientName));
+    link('cWorkProject', 'Project', pr && (pr.name || pr.id), pr ? () => openProject(pr.id) : null);
   }
   let taskWorkSheet = null;
   function openTaskWorkPicker() {
@@ -4148,6 +4210,15 @@ if (typeof window !== 'undefined') (() => {
   function renderRelated(t) {
     const box = $('cRelList'), sec = $('cRelSec'), rs = liveRelations(t); box.textContent = '';
     sec.hidden = !rs.length; sec.querySelector('.ui-count').textContent = rs.length ? String(rs.length) : '';
+    const note = $('cDup'), poss = rs.filter(r => r.status === 'possible');
+    if (note) {
+      note.hidden = !poss.length; note.textContent = '';
+      if (poss.length) {
+        const first = poss[0], o = state.tasks.find(x => x.id === first.id);
+        note.textContent = o ? `Possible ${first.kind || 'duplicate'} of #${o.num} ${o.title}. This stays on the card until you merge, link or mark it not related.` : '';
+        note.hidden = !note.textContent;
+      }
+    }
     rs.forEach(r => {
       const o = state.tasks.find(x => x.id === r.id), row = el('div', 'drel'), head = el('div', 'drel__head');
       const open = el('button', 'drel__title linkish', `#${o.num} ${o.title}`); open.type = 'button'; open.onclick = () => openCard(o.id);
@@ -4156,7 +4227,7 @@ if (typeof window !== 'undefined') (() => {
         const fwd = r.from === t.id;
         head.append(ui.pill({ text: fwd ? 'Follow-up' : 'Split from', icon: fwd ? 'arrow-right' : 'arrow-up-right', size: 'sm', tone: 'accent' }), open);
         row.append(head); row.dataset.kind = 'follow-up';
-        if (!ro) { const acts = el('div', 'drel__acts'), x = ui.button({ label: 'Unlink', variant: 'ghost', size: 'sm', onClick: () => answerRelation(t.id, o.id, r.kind, 'not-related') }); x.dataset.act = 'dismiss'; acts.append(x); row.append(acts); }
+        if (!ro) { const acts = el('div', 'drel__acts'), x = ui.button({ label: 'Unlink', variant: 'ghost', size: 'sm', onClick: () => confirmUnlink(t.id, o.id, r.kind) }); x.dataset.act = 'dismiss'; acts.append(x); row.append(acts); }
         box.append(row); return;
       }
       head.append(ui.pill({ text: r.status === 'possible' ? 'Possible ' + word : r.status === 'merged' ? 'Merged, not archived yet' : 'Linked: ' + word, icon: r.kind === 'duplicate' ? 'copy' : 'link', size: 'sm', tone: r.status === 'possible' ? 'warn' : 'neutral' }), open);
@@ -4170,11 +4241,16 @@ if (typeof window !== 'undefined') (() => {
         const b = (label, variant, fn) => { const x = ui.button({ label, variant, size: 'sm', onClick: fn }); acts.append(x); return x; };
         b(older ? `Merge into #${o.num}` : `Merge #${o.num} here`, 'primary', () => mergeCards(src.id, dst.id)).dataset.act = 'merge';
         if (r.status === 'possible') b('Link', 'secondary', () => answerRelation(t.id, o.id, r.kind, 'confirmed')).dataset.act = 'link';
-        b(r.status === 'possible' ? 'Not related' : 'Unlink', 'ghost', () => answerRelation(t.id, o.id, r.kind, 'not-related')).dataset.act = 'dismiss';
+        b(r.status === 'possible' ? 'Not related' : 'Unlink', 'ghost', () => r.status === 'possible' ? answerRelation(t.id, o.id, r.kind, 'not-related') : confirmUnlink(t.id, o.id, r.kind)).dataset.act = 'dismiss';
         row.append(acts);
       }
       box.append(row);
     });
+  }
+  async function confirmUnlink(aId, bId, kind) {
+    const a = state.tasks.find(x => x.id === aId), o = state.tasks.find(x => x.id === bId); if (!a || !o) return;
+    if (!(await ask(`Unlink #${a.num} and #${o.num}?`, [`Both cards stay on the board. This removes the link between #${a.num} ${a.title} and #${o.num} ${o.title}.`, UNDO_HINT], 'Unlink', true))) return;
+    return answerRelation(aId, bId, kind, 'not-related');
   }
   function answerRelation(aId, bId, kind, status) {
     const a = state.tasks.find(x => x.id === aId), o = state.tasks.find(x => x.id === bId); if (!a || !o) return;
@@ -4344,7 +4420,8 @@ if (typeof window !== 'undefined') (() => {
     pop.setAttribute('role', 'listbox'); pop.setAttribute('aria-label', 'CRM contacts'); row.append(pop); row.classList.add('sugwrap');
     input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-controls', pop.id); input.setAttribute('aria-expanded', 'false'); input.autocomplete = 'off';
     let items = [], index = -1;
-    const linked = (t, p) => t.contacts.some(k => k.person_id === p.id || (k.email && (p.emails || []).some(e => e.value.toLowerCase() === k.email.toLowerCase())) || (!k.person_id && k.name === p.name && !k.email));
+    // A CRM association is its ID. Shared names/mailboxes and manual snapshots are not identity.
+    const linked = (t, p) => t.contacts.some(k => k.person_id === p.id);
     const close = () => { pop.hidden = true; items = []; index = -1; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); };
     const collapse = row.collapse; row.collapse = () => { close(); collapse(); };
     const paint = () => {
@@ -4381,7 +4458,7 @@ if (typeof window !== 'undefined') (() => {
     const box = $('cContactList'); box.textContent = ''; $('cContactCount').textContent = t.contacts.length || '';
     t.contacts.forEach(k => {
       const row = ui.listRow({ text: k.name || '(no name)', meta: k.role || '', icon: 'user', removeLabel: `Remove contact ${k.name}`,
-        onRemove: async () => { const id = editing; if (!(await askRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(id)}`); } });
+        onRemove: async () => { const id = editing; if (!(await askRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => k.person_id ? y.person_id === k.person_id : !y.person_id && y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) { const removed = tt.contacts.splice(i, 1)[0]; if (removed.person_id && tt.contact === removed.person_id) delete tt.contact; } }, `Contacts: ${titleOf(id)}`); } });
       [[k.email, 'mailto:' + k.email, 'mail', 'Email'], [k.phone, 'tel:' + String(k.phone).replace(/\s+/g, ''), 'phone', 'Call']].forEach(([v, href, ic, verb]) => {
         if (!v) return; const a = el('a', 'ui-iconbtn ui-iconbtn--ghost ui-iconbtn--sm'); a.href = href; a.title = v; a.setAttribute('aria-label', `${verb} ${k.name}: ${v}`); a.append(ui.icon(ic)); row.insertBefore(a, row.lastChild); });
       box.append(row);
@@ -4640,7 +4717,7 @@ if (typeof window !== 'undefined') (() => {
     drawerAddRows.forEach(r => { r.input.value = ''; r.collapse(); }); closeLabelInput();
     $('dCreated').textContent = t.created ? 'Created ' + new Date(t.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (t.createdBy ? ' by ' + t.createdBy : '') : '';
     fillDrawer(t, true); restoreCardDrafts(t); $('cmText').value = ''; autosize($('cmText')); $('cmActions').hidden = true; $('cmHint').hidden = !!cfg().me; clearCardReply();
-    markSeen(id); $('dlgCard').showModal(); render();
+    markSeen(id); if (!$('dlgCard').open) $('dlgCard').showModal(); render();
     $('cBody').scrollTop = 0; autosize($('cTitle')); setHash('#' + t.num); saveBoardContext({ view, card: id });
     if (focus === 'comments') setTimeout(() => { $('cmSec').scrollIntoView({ block: 'start' }); $('cmText').focus(); }, 60);
     if (focus && focus.comment) setTimeout(() => {   // from @Mentions: show that one comment, briefly highlighted
@@ -6678,19 +6755,28 @@ if (typeof window !== 'undefined') (() => {
     if (inboxPress.done.has(p.id)) return el('p', 'prop__press prop__press--ok', '✓ ' + inboxPress.done.get(p.id));
     return null;
   }
-  const DONE_TEXT = { accept: 'Accepted', ignore: 'Ignored', undo: 'Undone', reopen: 'Reopened', edit: 'Accepted with your edits', merge: 'Merged' };
+  const DONE_TEXT = { accept: 'Accepted', complete: 'Recorded as done', ignore: 'Ignored', undo: 'Undone', reopen: 'Reopened', edit: 'Accepted with your edits', merge: 'Merged' };
   const answerDone = a => 'approved' in a ? (a.approved ? 'Approved' : 'Not approved') : 'Answered';
   let todayQueue = { key: '', order: [], visible: [], reviewed: new Map(), busy: new Set() };
   // Stored duplicates plus, for a pending new task, the open cards that are close to it NOW: a card added after the
   // proposal was made (a chat added it directly) still shows here, so Accept does not make a second copy.
   function proposalDuplicates(p) {
     const out = (p.likely_duplicates || []).filter(d => d && typeof d === 'object');
-    if (p.kind === 'task.create' && p.status === 'pending') {   // duplicates only: a looser "addition" never blocks an accept
-      const c = p.change || {}, title = c.title || p.title, add = (type, id, why) => { if (!out.some(d => d.type === type && d.id === id)) out.push({ type, id, why }); };
-      similarMatches(state, title, c.client || '', c.project || '', null, doneColId()).filter(h => h.kind === 'duplicate').slice(0, SIMILAR_MAX).forEach(h => add('task', h.id, 'similar title'));
+    if (p.kind === 'task.create' && p.status === 'pending') {   // open cards, finished cards, and other pending items: the warning stays on the item
+      const c = p.change || {}, title = c.title || p.title, add = (type, id, why) => { if (id && !out.some(d => d.type === type && d.id === id)) out.push({ type, id, why }); };
+      similarMatches(state, title, c.client || '', c.project || '', null, doneColId()).slice(0, SIMILAR_MAX).forEach(h => add('task', h.id, h.kind === 'addition' ? 'possible addition' : 'similar title'));
+      const doneCol = doneColId(), doneHits = [];
+      (state.tasks || []).forEach(t => {   // a finished card is still the same work: Ignore would drop that it was done
+        if (!t || t.column !== doneCol || t.outcome === 'cancelled') return;
+        const same = similarScope(c.client || '', c.project || '', t); if (same === null) return;
+        const score = similarScore(title, t.title); if (similarKind(score, same, title, t.title) !== 'duplicate') return;
+        doneHits.push({ id: t.id, num: t.num, score });
+      });
+      doneHits.sort((a, b) => b.score - a.score || (a.num || 0) - (b.num || 0)).slice(0, SIMILAR_MAX).forEach(h => add('task', h.id, 'already done'));
       inboxAll().filter(o => o.id !== p.id && o.kind === 'task.create' && o.status === 'pending').forEach(o => {   // another pending item for the same work
         const oc = o.change || {}, same = similarScope(c.client || '', c.project || '', oc); if (same === null) return;
-        const ot = oc.title || o.title, score = similarScore(title, ot); if (similarKind(score, same, title, ot) === 'duplicate') add('proposal', o.id, 'similar Inbox item');
+        const ot = oc.title || o.title, score = similarScore(title, ot), kind = similarKind(score, same, title, ot);
+        if (kind) add('proposal', o.id, kind === 'addition' ? 'possible addition' : 'similar Inbox item');
       });
     }
     return out;
@@ -6772,7 +6858,15 @@ if (typeof window !== 'undefined') (() => {
       appendUnique(t, 'todos', change.todos || []); appendUnique(t, 'comments', change.comments || []);
       ['value', 'effort', 'priority_rank'].forEach(k => { if (Object.hasOwn(change, k)) t[k] = clone(change[k]); });
       { const after = [...new Set((change.after || []).filter(x => typeof x === 'string' && x && x !== t.id))]; if (after.length) t.after = after; }   // ids: keeptrack.py's propose resolved them
-      histAdd(t, `created from proposal ${p.id}`); n.tasks.push(t); markSimilar(n, t); return;
+      histAdd(t, `created from proposal ${p.id}`);
+      if (action === 'complete') {   // the work was already finished when reviewed: keep that, in Done, instead of ignoring it
+        const done = n.columns.some(c => c.id === 'done') ? 'done' : (n.columns[n.columns.length - 1] || {}).id;
+        if (done) t.column = done;
+        t.outcome = 'completed';
+        (t.todos || []).forEach(d => { if (d && typeof d === 'object') d.done = true; });
+        histAdd(t, 'done: already completed when reviewed');
+      }
+      n.tasks.push(t); markSimilar(n, t); return;
     }
     if (p.kind === 'person.upsert' && !p.target) {
       if (n.contacts.some(x => x.id === ctx.resultId)) return;
@@ -6836,6 +6930,7 @@ if (typeof window !== 'undefined') (() => {
     const p = proposalIn(got.meta, id);
     if (!p) { inboxSay('That proposal is no longer on the board.', true); await load(true); return false; }
     if (p.status !== 'pending') { inboxSay(alreadyMsg(p), true); await load(true); return false; }
+    if (action === 'complete' && p.kind !== 'task.create') { inboxSay('Only a new task can be recorded as already done.', true); return false; }
     if (isAsk(p) && action !== 'ignore') { inboxSay('This is a question: answer it instead.', true); return false; }
     if (isAsk(p) && askDecider(p)) { inboxSay(`Only @${p.decider} can dismiss this question.`, true); return false; }
     if (opts.reviewed && !reviewedProposalMatches(p, opts.reviewed)) {
@@ -6863,7 +6958,7 @@ if (typeof window !== 'undefined') (() => {
     const resultId = creates ? await resultIdFor(p, p.kind === 'task.create' ? 't_' : 'p_') : '';
     const ref = action === 'ignore' ? null : action === 'merge' ? opts.into : creates ? { type: p.kind === 'task.create' ? 'task' : 'person', id: resultId } : p.target;
     const ctx = { resultId, into: opts.into, fields: opts.fields || [] };
-    const label = action === 'ignore' ? 'Ignore' : action === 'merge' ? 'Merge' : 'Accept';
+    const label = action === 'ignore' ? 'Ignore' : action === 'merge' ? 'Merge' : action === 'complete' ? 'Record done' : 'Accept';
     const message = `${label} proposal: ${p.title}`.slice(0, 120);
     const ok = await mutate(n => applyProposal(n, p, action, change, ctx), message, [], null, { recheckArchive: true, remember: false, onAbort: m => { const l = $('inboxLive'); if (l) l.textContent = m; }, extra: (pre, meta, latest) => {
       const cur = proposalIn(meta, id);
@@ -7062,7 +7157,9 @@ if (typeof window !== 'undefined') (() => {
       const txt = el('div', 'trow__text');
       const tags = el('div', 'trow__tags'); tags.append(ui.pill({ text: KIND_LABEL[p.kind] || p.kind, size: 'sm', tone: 'neutral' }));
       if (p.kind === 'task.update' && p.target) { const target = findRef(state, p.target); tags.append(ui.pill({ text: 'Updates ' + (target && target.num ? '#' + target.num : refTitle(p.target)), size: 'sm', tone: 'info' })); }
-      if (otherProposalDuplicates(p).length) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
+      const dups = otherProposalDuplicates(p), finishedDup = d => { const t = d.type === 'task' && (state.tasks || []).find(x => x.id === d.id); return !!(t && finishedDone(t)); };
+      if (dups.some(d => !finishedDup(d))) tags.append(ui.pill({ text: 'Possible duplicate', size: 'sm', tone: 'warn' }));
+      if (dups.some(finishedDup)) tags.append(ui.pill({ text: 'Already done', size: 'sm', tone: 'warn' }));
       if (lapsedDays(p)) tags.append(ui.pill({ text: 'Lapsed', size: 'sm', tone: 'warn' }));
       const sameDay = sameDayTouches(p, items);
       if (sameDay) { const pl = ui.pill({ text: `${sameDay + 1} from this person this day`, size: 'sm', tone: 'info' }); pl.title = 'Different messages from the same person on the same day. Review each one.'; tags.append(pl); }
@@ -7104,7 +7201,7 @@ if (typeof window !== 'undefined') (() => {
       if (next) todayQueue.visible.push(next);
       if (pos.id === p.id) { pos.id = todayQueue.visible[Math.min(index, todayQueue.visible.length - 1)]; }
       if (pos.focus && pos.focus.id === p.id) pos.focus = { id: pos.id, review: true };
-      inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : act === 'answer' ? 'Answered. Use Undo to change your answer.' : 'Accepted.');
+      inboxSay(act === 'ignore' ? 'Ignored. Use Undo to put it back.' : act === 'complete' ? 'Recorded as done. The task stays on the board in Done.' : act === 'answer' ? 'Answered. Use Undo to change your answer.' : 'Accepted.');
     } else {
       if (!$('inboxLive') || !$('inboxLive').textContent) inboxSay('Not saved. The proposal is still pending; check your connection and try again.', true);
       inboxPress.err.set(p.id, $('inboxLive').textContent);   // shown on the item, not only in a toast
@@ -7216,10 +7313,10 @@ if (typeof window !== 'undefined') (() => {
     if (act === 'edit' || act === 'merge') { inboxOpen[p.id] = inboxOpen[p.id] === act ? '' : act; inboxFocus = p.id; render();
       const box = document.querySelector(`#board article.prop[data-id="${p.id}"] .propform`); const first = box && box.querySelector('input, select, textarea'); if (first) first.focus(); return; }
     if (act === 'leave') { inboxSay('Left pending.'); if (next) { inboxFocus = next.dataset.id; next.focus(); } return; }
-    const run = () => act === 'accept' || act === 'ignore' ? decideProposal(p.id, act) : act === 'undo' ? undoDecision(p.id) : act === 'reopen' ? reopenProposal(p.id) : false;
+    const run = () => act === 'accept' || act === 'ignore' || act === 'complete' ? decideProposal(p.id, act) : act === 'undo' ? undoDecision(p.id) : act === 'reopen' ? reopenProposal(p.id) : false;
     const ok = await pressRun(p.id, btn, run, act === 'ignore' && isAsk(p) ? 'Dismissed' : DONE_TEXT[act]);
     if (!ok) { render(); return; }
-    if (act === 'accept') inboxSay('Accepted.'); else if (act === 'ignore') inboxSay(isAsk(p) ? 'Dismissed.' : 'Ignored. It will not come back for this source.');
+    if (act === 'accept') inboxSay('Accepted.'); else if (act === 'complete') inboxSay('Recorded as done. The task stays on the board in Done.'); else if (act === 'ignore') inboxSay(isAsk(p) ? 'Dismissed.' : 'Ignored. It will not come back for this source.');
     inboxFocus = next ? next.dataset.id : ''; render();
   }
   // What Accept does, in plain words: one action, the record it touches, and whether it adds or edits.
@@ -7270,15 +7367,20 @@ if (typeof window !== 'undefined') (() => {
     if (p.reviewer) add('Reviewer', '@' + p.reviewer);
     if (meta.children.length) art.append(meta);
     const flags = el('ul', 'prop__flags');
-    otherProposalDuplicates(p).forEach(d => flags.append(el('li', 'propflag', `Looks like: ${refTitle(d)}${d.why ? ' (' + d.why + ')' : ''}`)));
+    otherProposalDuplicates(p).forEach(d => {
+      const task = d.type === 'task' ? (state.tasks || []).find(t => t.id === d.id) : null, finished = task && finishedDone(task);
+      const name = task && task.num ? `#${task.num} ${task.title || ''}`.trim() : refTitle(d);
+      const why = finished ? 'already done' : (d.why || '');
+      flags.append(el('li', 'propflag', `Looks like: ${name}${why ? ' (' + why + ')' : ''}`));
+    });
     if (p.previously_ignored) flags.append(el('li', 'propflag', `You ignored this on ${String(p.previously_ignored.at || '').slice(0, 10) || 'an earlier date'} (${p.previously_ignored.proposal}).`));
-    if (flags.children.length) art.append(flags);
     art.append(proposalChange(p));
-    if (p.decision) { const d = p.decision; art.append(el('p', 'prop__decision muted', d.action === 'ignore' && relayedWords(d) ? withdrawnText(d) : `${d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : 'Accepted'} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
+    if (flags.children.length) art.append(flags);   // next to the decision, so a duplicate is still there when you choose
+    if (p.decision) { const d = p.decision; const verb = d.action === 'ignore' ? 'Ignored' : d.action === 'merge' ? 'Merged' : d.action === 'complete' ? 'Recorded as done' : 'Accepted'; art.append(el('p', 'prop__decision muted', d.action === 'ignore' && relayedWords(d) ? withdrawnText(d) : `${verb} by ${d.by || 'someone'} on ${whenText(d.at)}${d.result ? ' → ' + refTitle(d.result) : ''}`)); }
     const acts = el('div', 'prop__actions'); acts.setAttribute('role', 'group'); acts.setAttribute('aria-label', 'Decide after reviewing the proposed changes');
     const btn = (act, label, variant, key) => { const b = ui.button({ label, variant, size: 'sm', onClick: e => options.today ? todayInboxAct(p, act, undefined, e.currentTarget) : inboxAct(p, act, e.currentTarget) }); b.dataset.act = b.dataset.press = act; if (key) b.setAttribute('aria-keyshortcuts', key); if (ro || (options.today && (todayQueue.busy.has(p.id) || (act === 'accept' && otherProposalDuplicates(p).some(d => d.type !== 'proposal'))))) b.disabled = true; acts.append(b); };
     const metaOnly = (p.source || {}).kind === 'email' && !(p.source || {}).recipients_confirmed;   // private email: nothing to edit but metadata
-    if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Leave pending if anything needs checking.')); btn('accept', plan.verb, 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
+    if (p.status === 'pending') { art.append(el('p', 'prop__approval muted', 'Leave pending if anything needs checking.')); btn('accept', plan.verb, 'primary', 'a'); if (!metaOnly) btn('edit', 'Edit & accept', 'secondary', 'e'); btn('merge', 'Merge…', 'secondary', 'm'); if (p.kind === 'task.create') btn('complete', 'Task completed', 'secondary', 'c'); btn('ignore', 'Ignore', 'ghost', 'i'); btn('leave', 'Leave pending', 'ghost'); }
     else if (p.status === 'accepted' && p.decision && p.decision.undo) btn('undo', 'Undo', 'secondary');
     else if (p.status === 'ignored' && p.change) btn('reopen', 'Reopen', 'secondary');
     if (acts.children.length) art.append(acts);
@@ -7307,7 +7409,7 @@ if (typeof window !== 'undefined') (() => {
     const all = inboxAll(), head = el('div', 'inbox__head');
     head.append(el('h2', null, 'Review Inbox'), el('span', 'inbox__count', `${all.filter(p => p.status === 'pending').length} pending`)); wrap.append(head);
     wrap.append(el('p', 'inbox__hint muted', 'Review proposed changes and answer questions from agents. Nothing changes on the board until you accept.'));
-    const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · e edits · m merges · i ignores · r picks the recommended answer')); wrap.append(keys);
+    const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · c records a new task as already done · e edits · m merges · i ignores · r picks the recommended answer')); wrap.append(keys);
     // kit v71: answer every question that recommends an option with that option, after one confirm. Each is saved on its
     // own, exactly as if picked by hand. Lapsed questions and ones for someone else are left for a person to look at.
     const recs = bulkCandidates().filter(p => !inboxBulk.queue.has(p.id));
@@ -7352,7 +7454,7 @@ if (typeof window !== 'undefined') (() => {
       if (e.key === 'Enter' && e.target === cur) { const p = all.find(x => x.id === cur.dataset.id), ref = p && ((p.decision && p.decision.result) || p.target); if (ref && findRef(state, ref)) { e.preventDefault(); if (ref.type === 'task') openCard(ref.id); else openContact(ref.id); return; }
         const first = cur.querySelector('.prop__actions button'); if (first) { e.preventDefault(); first.focus(); } return; }
       if (e.key === 'r') { const b = cur.querySelector('.ask__answers [data-recommended="true"]'); if (b && !b.disabled) { e.preventDefault(); b.click(); } return; }
-      const act = { a: 'accept', e: 'edit', m: 'merge', i: 'ignore' }[e.key]; if (!act) return;
+      const act = { a: 'accept', c: 'complete', e: 'edit', m: 'merge', i: 'ignore' }[e.key]; if (!act) return;
       const b = cur.querySelector(`.prop__actions [data-act="${act}"]`); if (b && !b.disabled) { e.preventDefault(); b.click(); }
     });
     if (inboxFocus && (document.activeElement === document.body || !document.activeElement)) { const f = wrap.querySelector(`article.prop[data-id="${inboxFocus}"]`); if (f) f.focus({ preventScroll: false }); }
@@ -8122,7 +8224,7 @@ if (typeof window !== 'undefined') (() => {
   function fillContact(force) {
     const p = contactNow(); if (!p) { if ($('dlgContact').open) $('dlgContact').close(); return; }
     const projs = personProjects(p);
-    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => t.contact === p.id), projs.map(x => [x.pr.id, x.tasks.map(t => [t.id, t.updated])]), modes()]); if (!force && sig === pSig) return; pSig = sig;
+    const sig = JSON.stringify([p, p.company && ownInfo(state, p.company), p.company && projectsForClient(p.company), state.tasks.filter(t => (t.contact === p.id || (t.contacts || []).some(k => k.person_id === p.id))), projs.map(x => [x.pr.id, x.tasks.map(t => [t.id, t.updated])]), modes()]); if (!force && sig === pSig) return; pSig = sig;
     const keep = id => document.activeElement === $(id);
     { const a = ui.avatar(p.name || '?', { size: 'lg' }); a.id = 'pAvatar'; $('pAvatar').replaceWith(a); }
     if (!keep('pName')) $('pName').value = p.name; autosize($('pName'));
@@ -8200,6 +8302,12 @@ if (typeof window !== 'undefined') (() => {
         }); };
       }
       if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
+      const cardNum = boardCardNum(l.url), card = cardNum != null && state.tasks.find(t => t.num === cardNum);
+      if (card) {   // a Follow-up / Split from link (or any link to a card on this board) opens that card here
+        const a = row.querySelector('a.ui-listrow__main');
+        if (a) { a.removeAttribute('target'); a.removeAttribute('rel'); a.title = `Open #${card.num}${card.title ? ' ' + card.title : ''}`; a.onclick = e => { e.preventDefault(); openCard(card.id); }; }
+        const meta = row.querySelector('.ui-listrow__meta'); if (meta && card.title) meta.textContent = card.title;
+      }
       box.append(row);
     });
   }
@@ -8267,7 +8375,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderPersonTasks(p) {
     const sec = $('pTasksSec'); sec.hidden = !modes().includes('tasks'); if (sec.hidden) return;
-    const box = $('pTasks'), list = state.tasks.filter(t => t.contact === p.id); box.textContent = '';
+    const box = $('pTasks'), list = state.tasks.filter(t => (t.contact === p.id || (t.contacts || []).some(k => k.person_id === p.id))); box.textContent = '';
     list.forEach(t => box.append(drawerTaskRow(t))); setCount('pTaskCount', list.length); sec.classList.toggle('is-empty', !list.length);
   }
   // Project activity (card #290): each project this person is in (their email is on it, or one of its tasks names them),
@@ -8277,7 +8385,7 @@ if (typeof window !== 'undefined') (() => {
     const mine = new Set((p.emails || []).map(x => String(x.value || '').toLowerCase()).filter(Boolean));
     const byProject = new Map(); state.tasks.forEach(t => { if (t.project) { if (!byProject.has(t.project)) byProject.set(t.project, []); byProject.get(t.project).push(t); } });   // one pass, not one per project
     return projectsOf().filter(pr => pr && pr.id).map(pr => ({ pr, tasks: byProject.get(pr.id) || [] }))
-      .filter(({ pr, tasks }) => (pr.people || []).some(e => mine.has(String(e).toLowerCase())) || tasks.some(t => t.contact === p.id));
+      .filter(({ pr, tasks }) => (pr.people || []).some(e => mine.has(String(e).toLowerCase())) || tasks.some(t => (t.contact === p.id || (t.contacts || []).some(k => k.person_id === p.id))));
   }
   function projectEvents(tasks, max) {   // the newest `max` comments and history lines on the project's tasks, newest first (one pass, no full sort)
     const top = [], add = e => { if (typeof e.at !== 'string' || !e.at || typeof e.text !== 'string') return; if (top.length === max && e.at <= top[max - 1].at) return;
@@ -8300,7 +8408,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonTask(v) {
     const p = contactNow(); if (!p) return false;
-    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [{ person_id: p.id, name: p.name, role: p.role || '', email: ((p.emails || [])[0] || {}).value || p.email || '', phone: ((p.phones || [])[0] || {}).value || p.phone || '' }], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
     mutate(n => { n.tasks.push(t); }, `Add task: ${v}`);
   }
 
@@ -8332,7 +8440,7 @@ if (typeof window !== 'undefined') (() => {
     const own = contactNow(); if (own && memberOf(own)) { toast('Board members’ own records cannot be deleted from the CRM.', true); return; }
     const p = contactNow(); if (!p || ro || !(await ask('Delete person?', [`Delete the person “${p.name}”?`, 'This removes their contact details, touches and history from the current board and saves to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button. Git history also keeps older versions.'], 'Delete', true))) return;
     const id = p.id; $('dlgContact').close();
-    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; }); }, `Delete person: ${p.name}`);
+    mutate(n => { n.contacts = n.contacts.filter(x => x.id !== id); n.tasks.forEach(t => { if (t.contact === id) delete t.contact; t.contacts = (t.contacts || []).filter(k => k.person_id !== id); }); }, `Delete person: ${p.name}`);
   }
   const copyPerson = () => { const p = contactNow(); if (!p) return; copyText(personPrompt(p), 'Copied. Paste it into Claude, Codex or ChatGPT.'); };
   $('pAgent').onclick = copyPerson;

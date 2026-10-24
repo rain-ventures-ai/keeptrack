@@ -191,7 +191,7 @@ async function assertFits(page, where) {
     await page.locator('#cLabelAdd').click(); await page.locator('#cLabelNew').fill('urgent'); w = saved(); await page.locator('#cLabelNew').press('Enter'); await w; assert.deepEqual(api.card().labels, ['dark', 'urgent']);
     assert.ok(JSON.parse(api.files['tasks.json']).labels.some(l => l.name === 'urgent'), 'a new label joins the board labels');
 
-    // Client and project share one full-width summary. Its picker filters projects by client and gives long names room.
+    // Client and project are two links. Edit opens the picker, which filters projects by client and gives long names room.
     await page.locator('#cWorkPick').click(); const workSheet = page.locator('dialog.dworksheet[open]'); await workSheet.waitFor();
     assert.deepEqual(await workSheet.locator('.dworkcol h3').allTextContents(), ['Client', 'Project']);
     assert.equal(await workSheet.locator('.dworkcol').first().locator('.dworkchoice', { hasText: 'Acme' }).count(), 1);
@@ -221,7 +221,13 @@ async function assertFits(page, where) {
     await shot(page, 'phone-client-project-picker');
     w = saved(); await page.locator('#cWorkDone').click(); await w; await workSheet.waitFor({ state: 'detached' });
     const proj = api.card().project; assert.ok(proj, 'the task gets the new project'); assert.equal(api.card().client, 'Beta Ltd'); assert.ok(JSON.parse(api.files['tasks.json']).clients.includes('Beta Ltd'));
-    assert.match(await page.locator('#cWorkPick').textContent(), /Beta Ltd.*Launch with a deliberately long project name/s);
+    assert.match(await page.locator('#cWork').textContent(), /Client\s*Beta Ltd\s*Project\s*Launch with a deliberately long project name/);
+    await page.locator('#cWorkClient').click(); await page.locator('#dlgClient[open]').waitFor();
+    assert.equal(await page.locator('#clName').textContent(), 'Beta Ltd');
+    await page.locator('#clClose').click(); await page.locator('#dlgClient').waitFor({ state: 'hidden' }); await page.locator('#dlgCard[open]').waitFor();
+    await page.locator('#cWorkProject').click(); await page.locator('#dlgProject[open]').waitFor();
+    assert.equal(await page.locator('#prName').inputValue(), 'Launch with a deliberately long project name');
+    await page.locator('#prClose').click(); await page.locator('#dlgProject').waitFor({ state: 'hidden' }); await page.locator('#dlgCard[open]').waitFor();
     await assertFits(page, 'long client and project');
 
     // checklist, links and contacts: empty sections show one ghost add row

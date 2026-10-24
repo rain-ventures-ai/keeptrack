@@ -1,5 +1,5 @@
 {
-  "label": "v4 frozen before image review fixes (kit v98); board schema unchanged",
+  "label": "v4 frozen before image review fixes (kit v103); board schema unchanged",
   "schema": 4,
   "layout": "split",
   "kit_before_update": 96,

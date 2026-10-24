@@ -68,13 +68,11 @@ class TokenBoardEdges(v90.FolderTokenWins):
                 self.assertNotIn("folder-value", r.stdout + r.stderr)
 
     def test_skipped_global_aliases_do_not_reach_direct_http(self):
-        aliases = ("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+        aliases = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")   # BOARD_TOKEN: below
         for alias in aliases:
             d = self.alias_folder(alias)
             for target in ({"BOARD_REPO": "o/other"}, {"BOARD_API": "https://ghe.example/api/v3"}):
                 for shell in ("", "shell-value"):
-                    if alias == "BOARD_TOKEN" and shell:
-                        continue
                     env = self.env(BOARD_TOKEN=shell, **target)
                     env[alias] = "folder-value"
                     code = """import contextlib, io, sys
@@ -103,7 +101,7 @@ print('safe')
                         self.assertEqual("folder-value", env[alias], "the calling environment stays unchanged")
 
     def test_skipped_global_aliases_are_removed_before_gh_children(self):
-        aliases = ("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+        aliases = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")   # BOARD_TOKEN: below
         bindir = pathlib.Path(self.tmp.name, "bin")
         bindir.mkdir()
         gh = bindir / "gh"
@@ -122,6 +120,39 @@ print('safe')
                     where = self.run_kt(d, env, "where")
                     self.assertIn("not used", self.line(where.stdout, "auth:"))
                     self.assertNotIn("folder-value", where.stdout + where.stderr)
+
+    def test_legacy_board_token_config_keeps_a_workers_own_token(self):
+        # A legacy token_env of BOARD_TOKEN names the shell's own variable: a relay worker for another board (or
+        # another BOARD_API) keeps it, rather than being moved silently to the broader gh login (v90 behaviour).
+        d = self.alias_folder("BOARD_TOKEN")
+        for target in ({"BOARD_REPO": "o/other"}, {"BOARD_API": "https://ghe.example/api/v3"}):
+            with self.subTest(target=target):
+                self.assertEqual("worker-value", self.token_in(d, self.env(BOARD_TOKEN="worker-value", **target)))
+                where = self.run_kt(d, self.env(BOARD_TOKEN="worker-value", **target), "where")
+                self.assertNotIn("worker-value", where.stdout + where.stderr)
+
+    def test_skipped_folder_token_is_noted_on_stderr(self):
+        d = self.folder({"repo": "o/board", "token_env": "KT_V90_TOKEN"})
+        copy = pathlib.Path(self.tmp.name, "copy.json")
+        copy.write_text('{"tasks": []}')
+        r = self.run_kt(d, self.env(BOARD_REPO="o/other", KT_V90_TOKEN="folder-value"), "--file", str(copy), "list")
+        self.assertIn("$KT_V90_TOKEN", r.stderr)
+        self.assertIn("was not used", r.stderr)
+        self.assertNotIn("folder-value", r.stdout + r.stderr)
+
+    def test_gh_login_token_is_not_sent_to_another_api_host(self):
+        bindir = pathlib.Path(self.tmp.name, "bin-cache")
+        bindir.mkdir()
+        gh = bindir / "gh"
+        gh.write_text("#!" + sys.executable + "\nprint('gh-login-value')\n")
+        gh.chmod(0o700)
+        d = self.folder({"repo": "o/board"})
+        code = f"import sys; sys.path.insert(0, {KIT!r}); import keeptrack as k; print(repr(k._cache_token()))"
+        for api, want in (("https://ghe.example/api/v3", "''"), ("https://api.github.com", "'gh-login-value'")):
+            with self.subTest(api=api):
+                env = self.env(PATH=str(bindir) + os.pathsep + os.environ["PATH"], BOARD_API=api, BOARD_REPO="o/board")
+                r = subprocess.run([sys.executable, "-c", code], cwd=d, env=env, capture_output=True, text=True)
+                self.assertEqual(want, r.stdout.strip(), r.stderr)
 
     def test_matching_legacy_global_aliases_remain_usable(self):
         for alias in ("BOARD_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
