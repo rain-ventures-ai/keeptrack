@@ -8197,7 +8197,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonTask(v) {
     const p = contactNow(); if (!p) return false;
-    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [{ person_id: p.id, name: p.name, role: p.role || '', email: p.email || '', phone: p.phone || '' }], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [{ person_id: p.id, name: p.name, role: p.role || '', email: ((p.emails || [])[0] || {}).value || p.email || '', phone: ((p.phones || [])[0] || {}).value || p.phone || '' }], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
     mutate(n => { n.tasks.push(t); }, `Add task: ${v}`);
   }
 
