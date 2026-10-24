@@ -1026,7 +1026,7 @@ _SHARED_FOLDER = [False]
 
 def _other_root(name):
     # the kit's own top-level files (the page's widgets.json, manifest.json) are not another board
-    return "/" not in name and name.endswith(".json") and name not in ("tasks.json", "widgets.json", "manifest.json")
+    return "/" not in name and name.lower().endswith(".json") and name not in ("tasks.json", "widgets.json", "manifest.json")
 
 
 def _local_snapshot(include_archive=False):
@@ -1069,10 +1069,13 @@ def _git_snapshot(include_archive=False):
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
     prefix = base + "/" if base else ""
-    # -z: raw names, never git's quoted form for non-ASCII names ("board/\303\251quipe.json" would not end in .json)
-    rc, top, _ = git("ls-tree", "-z", "--name-only", head, "--", prefix or ".")
-    # an unreadable folder listing counts as shared: archive runs then hold an oversized year back rather than repack it
-    _SHARED_FOLDER[0] = bool(rc) or any(_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/") for n in top.split("\0") if n)
+    # -z: raw names, never git's quoted form for non-ASCII names ("board/\303\251quipe.json" would not end in .json).
+    # Read as bytes: a name that is not UTF-8 counts as another board, and an unreadable listing counts as shared.
+    top = subprocess.run(["git", "-C", ROOT, "ls-tree", "-z", "--name-only", head, "--", prefix or "."], capture_output=True)
+    top_names = top.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    _SHARED_FOLDER[0] = bool(top.returncode) or any(
+        any(0xDC80 <= ord(c) <= 0xDCFF for c in n) or (_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/"))
+        for n in top_names if n)
     wanted = [(full, full[len(prefix):] if full.startswith(prefix) else full) for full in names.splitlines()]
     wanted = [(full, rel) for full, rel in wanted if _wanted_rel(rel)]
     # Preserve archive paths in the snapshot, but do not read their bodies until requested.

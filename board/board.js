@@ -841,7 +841,7 @@ if (typeof window !== 'undefined') (() => {
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
     // another top-level board file in this folder (a one-file board such as alice.json): the boards share archive/.
     // The kit's own files there (widgets.json, manifest.json) are not boards.
-    const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/.test(x.path) && !KIT_ROOT_JSON.has(x.path) && x.path !== own);
+    const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/i.test(x.path) && !KIT_ROOT_JSON.has(x.path) && x.path !== own);
     const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true, sharedFolder };
     await pruneBlobCache(new Set((td.tree || []).filter(x => x.type === 'blob').map(x => x.sha)), c, gen);
     if (!sameArchiveBoard(c, gen)) throw new Error('The board changed while loading.');
