@@ -39,6 +39,61 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Comment activity links keep the saved comment identity, including replies, agents and pre-ID comments.
+    for (const [viewport, theme] of [[DESKTOP, 'light'], [PHONE, 'dark'], [DESKTOP, 'dark'], [PHONE, 'light']]) {
+      const ctx = await browser.newContext({ viewport }), page = await ctx.newPage(), errors = [];
+      page.on('pageerror', e => errors.push(e.message));
+      const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'demo/board/tasks.json'), 'utf8'));
+      delete fixture.demo_base;
+      const at = new Date().toISOString(), legacyKey = at + '|sam-demo';
+      fixture.tasks = [{ ...fixture.tasks[0], id: 't_activity', num: 1, title: 'A long comment activity title with existing content and dense metadata',
+        history: [{ at, by: 'sam-demo', text: 'Created the card' }], comments: [
+          { id: 'c_person', at, by: 'sam-demo', text: 'Saved a person comment https://example.com/reference' },
+          { id: 'c_agent', at, by: 'codex@sam-demo', text: 'Saved an agent reply', reply_to: 'c_person' },
+          { at, by: 'sam-demo', text: 'An older comment without an ID' },
+          { id: 'c_activity', at, by: 'claude', type: 'activity', text: 'Claude started a session' }
+        ] }];
+      await ctx.route('**/demo/board/tasks.json', r => r.fulfill({ json: fixture }));
+      await page.addInitScript(theme => { localStorage.setItem('kb_tour_seen', '1'); localStorage.setItem('kb_act_who', ''); localStorage.setItem('kb_theme', theme); }, theme);
+      const start = base + '/board/index.html?demo=board#view=activity';
+      await page.goto(start); await page.locator('.actlog .actcomment').first().waitFor();
+      assert.equal(await page.locator('.actlog .actcomment').count(), 4);
+      assert.match(await page.locator('.actlog li:not(.cm)').innerText(), /Created the card/);
+      assert.equal(await page.locator('.actlog a[href="https://example.com/reference"]').count(), 1, 'existing links remain readable');
+      const links = await page.locator('.actlog .actcomment').evaluateAll(xs => xs.map(a => a.href));
+      assert.deepEqual(links.map(x => new URLSearchParams(new URL(x).hash.slice(3)).get('comment')), ['c_person', 'c_agent', legacyKey, 'c_activity']);
+      for (const link of links) {
+        const u = new URL(link); assert.equal(u.searchParams.get('card'), 't_activity'); assert.equal(u.searchParams.get('demo'), 'board');
+        assert.equal(u.searchParams.has('token'), false);
+      }
+      await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copied = text; } } }); });
+      await page.getByRole('button', { name: 'Copy as Markdown', exact: true }).click();
+      const copied = await page.evaluate(() => window.__copied);
+      links.forEach(url => assert.ok(copied.includes(`[Open comment](${url})`), 'Markdown export includes the exact comment URL'));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow');
+      if (process.env.SHOTS) { fs.mkdirSync(process.env.SHOTS, { recursive: true }); await page.locator('.act').screenshot({ path: path.join(process.env.SHOTS, `activity-comments-${viewport.width}-${theme}.png`) });
+        await page.locator('.actlog').scrollIntoViewIfNeeded(); await page.locator('.actlog').screenshot({ path: path.join(process.env.SHOTS, `activity-comment-links-${viewport.width}-${theme}.png`) }); }
+      // Keyboard activation opens the exact nested agent reply and keeps its address for copying/reloading.
+      await page.locator('.actcomment').nth(1).focus(); await page.keyboard.press('Enter');
+      await page.locator('#cmStream [data-cid="c_agent"].cmflash').waitFor();
+      assert.equal(page.url(), links[1]);
+      assert.equal(await page.locator('#cmStream .cmreplies [data-cid="c_agent"]').count(), 1);
+      // Following each saved href in a fresh page is independent of a click handler or the originating view.
+      for (const [i, key] of ['c_person', 'c_agent', legacyKey, 'c_activity'].entries()) {
+        const next = await ctx.newPage(); await next.goto(links[i]);
+        await next.locator('#dlgCard[open]').waitFor();
+        await next.waitForFunction(key => [...document.querySelectorAll('#cmStream [data-cid]')].some(r => r.dataset.cid === key && r.classList.contains('cmflash')), key);
+        assert.equal(new URL(next.url()).hash, new URL(links[i]).hash, 'initial route retains the specific comment');
+        await next.close();
+      }
+      // Closing the comment returns to Activity; changing the hash also works when this card is already open.
+      await page.goBack(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+      await page.locator('.actcomment').first().click(); await page.locator('#cmStream [data-cid="c_person"].cmflash').waitFor();
+      await page.evaluate(hash => { location.hash = hash; }, new URL(links[1]).hash);
+      await page.locator('#cmStream [data-cid="c_agent"].cmflash').waitFor();
+      assert.deepEqual(errors, []); await ctx.close();
+    }
+
     // Navigation destinations are bookmarkable; actions and private search/filter state are not URL inputs.
     {
       const page = await open(browser, { view: 'today', layout: 'dock' });

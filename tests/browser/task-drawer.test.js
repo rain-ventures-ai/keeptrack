@@ -441,6 +441,25 @@ async function assertFits(page, where) {
       await p.close();
     }
 
+    // A person posts a real comment: its Activity link uses the ID saved by the page and opens that comment.
+    {
+      const api = new Github(), page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board'); });
+      await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html#1');
+      await page.locator('#dlgCard[open]').waitFor(); await page.locator('#cmText').fill('A newly saved comment');
+      const saved = page.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
+      await page.locator('#cmPost').click(); await saved;
+      const postedId = api.card().comments.at(-1).id;
+      await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => !/^#\d/.test(location.hash));
+      await page.locator('#viewSw [data-view="activity"]').click();
+      const link = page.locator('.actlog li.cm', { hasText: 'A newly saved comment' }).getByRole('link', { name: 'Open comment' });
+      const url = new URL(await link.getAttribute('href'));
+      assert.equal(url.hash, '#1&comment=' + postedId); assert.equal(url.searchParams.get('repo'), 'acme/board');
+      await link.click(); await page.locator(`#cmStream [data-cid="${postedId}"].cmflash`).waitFor();
+      await page.close();
+    }
+
     console.log('task-drawer: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

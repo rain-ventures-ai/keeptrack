@@ -643,6 +643,10 @@ preserved through CLI edits, proposals and archiving; disabling the layout leave
 
 ## Web board
 
+- **2026-10-24** — Comment entries in Activity include **Open comment**, which opens and highlights that comment in
+  its card. The link can be bookmarked, opened in another tab, or copied with Activity as Markdown. Existing comments,
+  including those without an ID, work without a migration.
+
 - **2026-10-12** — The task drawer groups Status with Priority and Due date with Waiting for, while People, Labels and
   Client & project keep the full width. Waiting for opens a focused phone-safe sheet, and Client & project opens a
   linked picker with wrapping names instead of two cramped permanent rows.
