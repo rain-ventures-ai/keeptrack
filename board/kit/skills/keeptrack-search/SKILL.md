@@ -9,6 +9,10 @@ The board holds links, not documents. This skill turns a question into a search 
 client, project, card or person, using the connectors available in this session, and answers with a source for
 every fact. It only reads: never edit, move, share or delete anything it opens.
 
+For docs-home setup or an authorised saved research/document output, use `keeptrack-docs-home`
+(the sibling skill, or `board/keeptrack-docs-home/SKILL.md` in a board checkout). Read `settings --json` first;
+malformed/access-denied settings need repair, not a replacement root. Ordinary searches stay read-only.
+
 ## Find keeptrack.py
 - In a board repo clone: `B="python3 board/keeptrack.py"`.
 - Claude Code plugin: `B="python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py"`.

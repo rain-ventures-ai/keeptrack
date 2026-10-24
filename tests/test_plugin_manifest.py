@@ -30,6 +30,16 @@ class ClaudePlugin(unittest.TestCase):
             self.assertEqual(manifest["files"][".claude/skills/keeptrack-automation-create/" + relative], path.relative_to(kit).as_posix())
         self.assertIn("name: keeptrack-automation-create", (skill / "SKILL.md").read_text())
 
+    def test_docs_home_skill_is_discoverable_and_copied_to_boards(self):
+        from pathlib import Path
+        kit = Path(KIT)
+        manifest = json.loads((kit / "manifest.json").read_text())
+        source = "skills/keeptrack-docs-home/SKILL.md"
+        self.assertTrue((kit / source).is_file())
+        self.assertEqual(manifest["files"][".claude/skills/keeptrack-docs-home/SKILL.md"], source)
+        self.assertEqual(manifest["files"]["board/keeptrack-docs-home/SKILL.md"], source)
+        self.assertEqual(json.loads((kit / ".codex-plugin/plugin.json").read_text())["skills"], "./skills/")
+
     def test_hooks_run_a_script_inside_the_plugin(self):
         hooks = json.load(open(os.path.join(KIT, "hooks", "hooks.json")))["hooks"]
         for groups in hooks.values():

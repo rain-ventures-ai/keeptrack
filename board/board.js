@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 107;
+  const PAGE_KIT = 108;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1649,7 +1649,7 @@ if (typeof window !== 'undefined') (() => {
         setStatus('Someone else changed the board, retrying…', 'err');
       }
       fail('Could not save after retries'); back(); busy = false; if (ag === archGen) await load(true); return false;
-    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); back(); return false; } finally { busy = false; syncUndo(); }
+    } catch (e) { console.error(e); fail(isTimeout(e) ? 'Not saved: GitHub did not answer in time' : 'Save failed'); back(); return false; } finally { busy = false; syncUndo(); if ($('dlgSettings')?.open) syncDocsHome(undefined, true); }
   }
 
   function boardId(prefix) {
@@ -2294,7 +2294,7 @@ if (typeof window !== 'undefined') (() => {
     writeFilterRoute();
     renderMemberBar();
     if ($('dlgCard').open && editing) markSeen(editing);
-    applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox();
+    applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox(); if ($('dlgSettings').open) syncDocsHome(undefined, !!$('secDocsHome')?.contains(document.activeElement));
     if (view !== 'board') {
       const listPos = listPosition();
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
@@ -6619,7 +6619,7 @@ if (typeof window !== 'undefined') (() => {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
     $('sModeTasks').disabled = locked; $('sModeCrm').disabled = locked;
-    syncResearchSettings(locked);
+    syncResearchSettings(locked); syncDocsHome(locked);
   }
   // Backlog auto-research (kit v60): settings.backlog_research = { enabled, per_run }. Only `enabled: true` is on (as in
   // keeptrack.py backlog_research); the relay dispatcher reads it, the page only stores it. Guarded: an older cached
@@ -6640,6 +6640,52 @@ if (typeof window !== 'undefined') (() => {
       'Backlog auto-research: ' + (enabled ? `on, ${per} per run` : 'off'));
     syncModeSettings();
   }
+  let docsHomeDraft = false;
+  const docsOwner = () => HOSTED ? !hostedIdentity?.agent_id && hostedIdentity?.boards.find(b => b.id === hostedStorage?.board)?.role === 'owner' : typeof kitOwner() === 'string' && !!kitOwner() && me().toLowerCase() === kitOwner().toLowerCase();
+  function docsHome(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'provider,root') throw Error('Docs home must contain provider and root.');
+    const { provider, root } = value;
+    if (!['google-drive', 'dropbox', 'onedrive', 'local'].includes(provider) || typeof root !== 'string' || root.length < 1 || root.length > 4096 || [...root].length > 2048 || root.trim() !== root || (/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(root) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(root))) throw Error('Choose a provider and a root of 1–2048 characters without controls.');
+    if (provider === 'local') {
+      if (!root.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(root) && !/^\\\\[^\\/]+[\\/][^\\/]+/.test(root)) throw Error('Use an absolute local path.');
+    } else {
+      let u; try { u = new URL(root); } catch (_) { throw Error('Use an HTTPS folder URL.'); }
+      const h = u.hostname.toLowerCase(), allowed = provider === 'google-drive' ? h === 'drive.google.com' : provider === 'dropbox' ? ['dropbox.com', 'www.dropbox.com'].includes(h) : ['onedrive.live.com', '1drv.ms'].includes(h) || (h.endsWith('.sharepoint.com') && h !== '.sharepoint.com');
+      if (!/^[\x00-\x7f]*$/.test(root.match(/^https:\/\/([^/?#]*)/i)?.[1] || '') || !/^https:\/\/[^/]/i.test(root) || /^https:\/\/[^/?#]*[@%]/i.test(root) || u.protocol !== 'https:' || !allowed || u.username || u.password || (u.port && u.port !== '443') || /[\\\s]/.test(root)) throw Error('Use an HTTPS URL on the selected provider, without credentials.');
+    }
+    return { provider, root };
+  }
+  function syncDocsHome(locked = !!ro || !!newerSchema || busy, preserveDraft = false) {
+    if (!$('sDocsCurrent')) return;
+    const display = $('sDocsCurrent'); display.textContent = '';
+    locked ||= !docsOwner(); preserveDraft ||= docsHomeDraft;
+    const raw = state.settings.docs_home;
+    if (!Object.hasOwn(state.settings, 'docs_home')) { display.textContent = 'Not set. Ask the owner to choose an existing docs folder.'; if (!preserveDraft) $('sDocsRoot').value = ''; }
+    else {
+      try {
+        const home = docsHome(raw); if (!preserveDraft) { $('sDocsProvider').value = home.provider; $('sDocsRoot').value = home.root; }
+        display.append(document.createTextNode(home.provider + ': '));
+        if (home.provider === 'local') display.append(document.createTextNode(home.root + ' — requires access on that machine.'));
+        else { const link = document.createElement('a'); link.href = home.root; link.textContent = home.root; link.target = '_blank'; link.rel = 'noopener noreferrer'; display.append(link); }
+      } catch (_) { display.textContent = 'Invalid stored docs home. Ask the owner to repair it before filing; do not create a replacement root.'; if (!preserveDraft) $('sDocsRoot').value = ''; }
+    }
+    for (const id of ['sDocsProvider', 'sDocsRoot', 'sDocsSave', 'sDocsClear']) $(id).disabled = !!locked;
+  }
+  async function saveDocsHome(clear = false) {
+    if (ro || newerSchema || busy || !docsOwner()) { toast('Only the board owner may choose the docs destination.', true); syncDocsHome(); return; }
+    let home;
+    try { if (!clear) home = docsHome({ provider: $('sDocsProvider').value, root: $('sDocsRoot').value }); }
+    catch (e) { toast(e.message, true); return; }
+    const before = JSON.stringify(state.settings.docs_home), owner = kitOwner();
+    const describe = value => value === undefined ? 'Not set' : JSON.stringify(value).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+    if (!(await ask(clear ? 'Clear docs home?' : 'Save docs home?', ['Current: ' + describe(state.settings.docs_home), 'Proposed: ' + (clear ? 'Not set (clear)' : describe(home)), 'This changes where authorised documents will be filed. It does not create folders or grant access.'], clear ? 'Confirm clear' : 'Confirm destination'))) return;
+    if (!docsOwner() || kitOwner() !== owner || JSON.stringify(state.settings.docs_home) !== before) { toast('Owner or destination changed. Read back and confirm again.', true); return; }
+    for (const id of ['sDocsProvider', 'sDocsRoot', 'sDocsSave', 'sDocsClear']) $(id).disabled = true;
+    const ok = await mutate(d => { if (!HOSTED && ((d.settings?.kit_owner || d.people?.[0]?.github || '').toLowerCase() !== owner.toLowerCase())) throw Error('Board owner changed; confirm again.'); if (JSON.stringify(d.settings?.docs_home) !== before) throw Error('Docs destination changed; confirm again.'); d.settings ||= {}; if (clear) delete d.settings.docs_home; else d.settings.docs_home = home; }, clear ? 'Clear docs home' : 'Set docs home', [], null, { recheck: true });
+    if (ok) docsHomeDraft = false;
+    syncDocsHome();
+  }
+  if ($('sDocsSave')) { $('sDocsRoot').oninput = $('sDocsProvider').onchange = () => { docsHomeDraft = true; }; $('sDocsSave').onclick = () => saveDocsHome(); $('sDocsClear').onclick = () => saveDocsHome(true); }
   // ---- Review Inbox (kit v42): proposals from agents and routines wait in <board>/proposals/<id>.json --------------
   // They are never part of state (tasks, contacts), so counts, views, search, Today, widgets and agents never see them.
   // A decision re-reads the proposal and its target, then writes the record and the proposal in ONE commit (Git Data,
@@ -8989,7 +9035,7 @@ if (typeof window !== 'undefined') (() => {
     const what = ids ? batchWhat(ids.length) : `${n.tasks} done task${n.tasks === 1 ? '' : 's'} (done more than ${rules.done_days} days ago), ${n.contacts} Lost ${n.contacts === 1 ? 'person' : 'people'} (no change for ${rules.lost_days} days) and ${n.history} old history lines`;
     if (!ids && !(await ask('Archive old items?', [`Archive ${what}?`, `They move to ${archPath('0000').replace(/\d{4}\.json$/, '<year>.json')}. You can still search them and bring them back.`], 'Archive'))) return;
     if (writeBlocked()) return; if (busy) { toast('Busy, try again', true); return; }   // a save may have started while the dialog was open
-    if (gitDataArchive()) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; } return; }
+    if (gitDataArchive()) { busy = true; loadGen++; try { await archiveSplitNow(rules, what); } finally { busy = false; if ($('dlgSettings')?.open) syncDocsHome(undefined, true); } return; }
     setStatus('Archiving…');
     // the board this run reads and writes is fixed now (at), and a Forget token or another board meanwhile (ag) ends it quietly
     const at = Object.assign({}, cfg()), ag = archGen, gone = () => ag !== archGen;
@@ -9695,7 +9741,7 @@ if (typeof window !== 'undefined') (() => {
       }
       throw new Error('revision_conflict: board stayed busy; read and retry');
     } catch (e) { state = before; render(); hostedFailure(e); return false; }
-    finally { busy = false; syncUndo(); }
+    finally { busy = false; syncUndo(); if ($('dlgSettings')?.open) syncDocsHome(undefined, true); }
   }
   async function hostedArchive(entity, year, restoring = false) {
     if (restoring) {   // kit v89 review: the server restores it from a command, so check here that it adds no reserved client or company
