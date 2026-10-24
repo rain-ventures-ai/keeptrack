@@ -68,6 +68,10 @@ class FollowUpCli(unittest.TestCase):
         self.kt("relate", "#1", "#3", "--kind", "follow-up")
         self.assertIn("Follow-up #3", self.kt("related", "#1").stdout)
         self.assertIn("Split from #1", self.kt("related", "#3").stdout)
+        one, three = self.card("#1"), self.card("#3")
+        self.assertTrue(any(l["title"] == "Follow-up #3" and l["url"].endswith("#3") for l in one["links"]))
+        self.assertTrue(any(l["title"] == "Split from #1" and l["url"].endswith("#1") for l in three["links"]))
+        self.assertIn(f"split from {one['id']}", self.kt("show", "#3").stdout)
         self.assertNotIn("RELATED", self.kt("doctor", ok=False).stdout)
 
     def test_done_links_a_hand_moved_todo_and_refuses_a_missing_card(self):

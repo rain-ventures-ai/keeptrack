@@ -90,6 +90,27 @@ module.exports = async function imageReview() {
   vm.runInContext(source.slice(source.indexOf('  async function redrawImage('), source.indexOf('  const b64 =')) + '\nthis.strip = strippedImage; this.redraw = redrawImage;', context);
   const ch = (kind, body, little = false) => { const b = Buffer.alloc(8 + body.length + (little ? body.length % 2 : 4)); b.write(kind, little ? 0 : 4); if (little) b.writeUInt32LE(body.length, 4); else b.writeUInt32BE(body.length, 0); body.copy(b, 8); return b; };
   const strip = async (b, type) => { const result = await context.strip(new File([b], 'image', { type })); assert.ok(result, `${type} parses`); return { ...result, bytes: Buffer.from(await result.blob.arrayBuffer()) }; };
+  // Exercise the actual TIFF reader independently: malformed counts must be rejected before entry access.
+  context.wordAt = (a, i, n) => String.fromCharCode(...a.subarray(i, i + n));
+  vm.runInContext(source.slice(source.indexOf('    const orientation ='), source.indexOf('    const tiff =')) + '\nthis.readOrientation = orientation;', context);
+  let entryReads = 0;
+  context.DataView = class extends DataView { getUint16(offset, ...rest) { if (offset >= 10) entryReads++; return super.getUint16(offset, ...rest); } };
+  for (const hex of ['49492a0008000000ffff00000000', '4d4d002a00000008ffff00000000', '4d4d0000000000080000']) {
+    assert.equal(context.readOrientation(new Uint8Array(Buffer.from(hex, 'hex'))), 1);
+  }
+  assert.equal(entryReads, 0, 'invalid TIFF directory never walks entries');
+  const validOrientation = Buffer.from('4d4d002a00000008000101120003000000010006000000000000', 'hex');
+  assert.equal(context.readOrientation(new Uint8Array(validOrientation)), 6);
+  assert.equal(context.readOrientation(new Uint8Array(validOrientation.subarray(0, -1))), 1, 'next-IFD field must be complete');
+  context.DataView = DataView;
+  for (const name of ['baseline-fill.jpg', 'progressive-fill.jpg']) {
+    const original = fs.readFileSync(path.join(__dirname, '../fixtures/images', name));
+    const clean = await strip(original, 'image/jpeg');
+    for (const count of [1, 3]) {
+      const filled = Buffer.concat([original.subarray(0, -2), Buffer.alloc(count, 255), original.subarray(-2)]);
+      assert.deepEqual((await strip(filled, 'image/jpeg')).bytes, clean.bytes, `${name} terminal marker fill preserves scans`);
+    }
+  }
   const pngHead = Buffer.from([137,80,78,71,13,10,26,10]);
   const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(1, 0); ihdr.writeUInt32BE(1, 4); ihdr[8] = 8; ihdr[9] = 2;
   const control = sequence => { const b = Buffer.alloc(26); b.writeUInt32BE(sequence); b.writeUInt32BE(1, 4); b.writeUInt32BE(1, 8); return b; };
@@ -154,16 +175,21 @@ module.exports = async function imageReview() {
   context.createImageBitmap = async () => ({ width: 10, height: 10, close: () => { closed++; } });
   context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: () => { throw new Error('export failed'); } });
   assert.equal(await context.redraw(new File([], 'x.png', { type: 'image/png' })), null); assert.equal(closed, 1);
-  context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(new Blob([Buffer.alloc(32)])) });
-  const small = new Blob([Buffer.alloc(1)]), file = new File([], 'x.png', { type: 'image/png' });
-  assert.equal((await context.redraw(file, small, false)).size, 32, 'all stills export decoded pixels even when the original is smaller');
-  assert.equal((await context.redraw(file, small, true)).size, 32, 'profiled stills must use converted canvas pixels');
+  const canvasBlob = new Blob([Buffer.alloc(32)]), file = new File([Buffer.alloc(1)], 'x.png', { type: 'image/png' });
+  let canvas, drawn, exportType;
+  context.document.createElement = () => (canvas = { getContext: () => ({ drawImage: (...args) => { drawn = args; } }),
+    toBlob: (callback, type) => { exportType = type; callback(canvasBlob); } });
+  assert.equal(await context.redraw(file), canvasBlob, 'returns the actual canvas export even when compressed input is smaller');
+  assert.equal(canvas.width, 10); assert.equal(canvas.height, 10);
+  assert.deepEqual(drawn.slice(1), [0, 0, 10, 10]); assert.equal(exportType, 'image/png');
   context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(null) });
-  assert.equal(await context.redraw(file, small, false), null, 'null exports fail closed instead of returning compressed source bytes');
-  assert.equal(await context.redraw(file, small, true), null, 'required conversion still fails closed on null export');
-  context.document.createElement = () => ({ getContext: () => ({ drawImage() {} }), toBlob: callback => callback(new Blob([Buffer.alloc(32)])) });
+  assert.equal(await context.redraw(file), null, 'null exports fail closed instead of returning compressed source bytes');
   context.createImageBitmap = async () => ({ width: 4000, height: 2, close() {} });
-  assert.equal((await context.redraw(file, small, false)).size, 32, 'small compressed originals cannot bypass required dimension scaling');
+  context.document.createElement = () => (canvas = { getContext: () => ({ drawImage: (...args) => { drawn = args; } }), toBlob: callback => callback(canvasBlob) });
+  assert.equal(await context.redraw(file), canvasBlob);
+  assert.equal(canvas.width, 2000); assert.equal(canvas.height, 1);
+  assert.deepEqual(drawn.slice(1), [0, 0, 2000, 1], 'small compressed originals still draw at the bounded canvas dimensions');
+
 
 };
 if (require.main === module) module.exports().then(() => console.log('image-review: all checks passed')).catch(e => { console.error(e); process.exitCode = 1; });

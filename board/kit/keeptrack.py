@@ -19,6 +19,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py link ID URL --title T   # add a link; link ID - reads one "URL<tab>title" per line from stdin (one save)
   keeptrack.py todo-done ID N          # tick item N (1-based, as shown by `show`); todo-undo / todo-rm work the same way
   keeptrack.py history ID              # print the card's history log
+  keeptrack.py watch ID [ID ...] [--until done] [--timeout SEC] [--json]   # poll until a card changes, or reaches a column
   keeptrack.py archived-history ID     # older history lines that `archive` moved to archive/<year>.json
   keeptrack.py comment ID "text" [--reply-to CID]   # post a comment; --reply-to replies one level under that comment
   keeptrack.py comments ID             # print the comment stream (replies indented under their parent)
@@ -358,7 +359,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 99  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 104  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1413,7 +1414,7 @@ _HOSTED_STORAGE = None
 
 def hosted_dispatch(a):
     """Route only phase-0 CLI commands. There is deliberately no GitHub fallback."""
-    allowed = {"list", "show", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
+    allowed = {"list", "show", "watch", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
                "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "archive", "unarchive", "review", "task-set", "approve"}
     if a.cmd not in allowed:
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
@@ -1421,7 +1422,7 @@ def hosted_dispatch(a):
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
         adapter.whoami()
-        if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list"):
+        if a.cmd in ("assign", "link", "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "task-set", "list", "watch"):
             return a.f(a)
         data = adapter.snapshot()
         session = getattr(a, "session", None) or os.environ.get("BOARD_SESSION", "")
@@ -3071,7 +3072,7 @@ def cmd_show(a):
         for c in cms[-5:]: print(f"  [{c['at'][:16]}] {c.get('by', '?')}: {c['text']}")
     if hs:
         print(f"\nhistory (last 5 of {len(hs)}):")
-        for h in hs[-5:]: print(f"  {h['at'][:16]}  {h.get('by', '?')}: {h['text']}")
+        for h in hs[-5:]: print(f"  {h['at'][:16]}  {h.get('by', '?')}: {clean(h['text'])}")
 
 
 def cloud_session_url():
@@ -3963,10 +3964,18 @@ def tiff_orientation(tiff):
     """EXIF Orientation (1-8) from a TIFF block (the body of an EXIF segment); 1 when absent or unreadable."""
     try:
         bo = {b"II": "little", b"MM": "big"}[tiff[:2]]
-        ifd = int.from_bytes(tiff[4:8], bo); count = int.from_bytes(tiff[ifd:ifd + 2], bo)
+        if len(tiff) < 8 or int.from_bytes(tiff[2:4], bo) != 42:
+            return 1
+        ifd = int.from_bytes(tiff[4:8], bo)
+        if ifd < 8 or ifd % 2 or ifd + 2 > len(tiff):
+            return 1
+        count = int.from_bytes(tiff[ifd:ifd + 2], bo)
+        if ifd + 2 + 12 * count + 4 > len(tiff):   # complete entries plus the next-IFD field, before looping
+            return 1
         for k in range(count):
             e = ifd + 2 + 12 * k
-            if int.from_bytes(tiff[e:e + 2], bo) == 0x0112 and int.from_bytes(tiff[e + 2:e + 4], bo) == 3:
+            if (int.from_bytes(tiff[e:e + 2], bo) == 0x0112 and int.from_bytes(tiff[e + 2:e + 4], bo) == 3
+                    and int.from_bytes(tiff[e + 4:e + 8], bo) == 1):
                 v = int.from_bytes(tiff[e + 8:e + 10], bo)
                 return v if 1 <= v <= 8 else 1
     except (KeyError, IndexError, ValueError):
@@ -3992,7 +4001,7 @@ def strip_image_metadata(blob, ext):
         out, i, turn = bytearray(blob[:2]), 2, 1
         segments = 0
         decoding = set(range(0xC0, 0xC8)) | set(range(0xC9, 0xD0)) | set(range(0xDA, 0xE0))
-        while i + 4 <= len(blob):
+        while i + 2 <= len(blob):
             segments += 1
             if segments > 4096:
                 raise ValueError("too many JPEG segments")
@@ -4005,6 +4014,8 @@ def strip_image_metadata(blob, ext):
                 return bytes(out + b"\xff\xd9")
             if 0xD0 <= marker <= 0xD9 or marker == 0x01:
                 out += blob[i:i + 2]; i += 2; continue
+            if i + 4 > len(blob):   # only length-carrying markers need four bytes
+                raise ValueError("broken JPEG")
             n = int.from_bytes(blob[i + 2:i + 4], "big")
             if n < 2 or i + 2 + n > len(blob):
                 raise ValueError("broken JPEG")
@@ -4363,7 +4374,146 @@ def cmd_comments(a):
 def cmd_history(a):
     data, _ = load(); t = find(data, a.id)
     for h in t.get("history", []):
-        print(f"{h['at'][:19]}  {h.get('by', '?'):<22} {h['text']}")
+        print(f"{h['at'][:19]}  {h.get('by', '?'):<22} {clean(h['text'])}")
+
+
+def watch_view(t):
+    """What `watch` compares. A claim's heartbeat time is left out, so a beat on its own does not wake the watcher."""
+    if not isinstance(t, dict):
+        return None
+    c = t.get("claim") if isinstance(t.get("claim"), dict) else None
+    return {
+        "column": t.get("column") or "", "outcome": t.get("outcome") or "", "title": t.get("title") or "",
+        "details": t.get("details") or "", "priority": t.get("priority") or "", "due": t.get("due") or "",
+        "labels": list(t.get("labels") or []), "assignees": list(t.get("assignees") or []),
+        "todos": [(d.get("id"), d.get("text"), bool(d.get("done"))) for d in t.get("todos") or [] if isinstance(d, dict)],
+        "comments": [(x.get("id"), x.get("text")) for x in t.get("comments") or [] if isinstance(x, dict)],
+        "history": [(h.get("at"), h.get("by"), h.get("text")) for h in t.get("history") or [] if isinstance(h, dict)],
+        "waiting": waiting_of(t),
+        "claim": None if not c else {"status": c.get("status") or "", "agent": c.get("agent") or "", "note": c.get("note") or ""},
+        "links": [(x.get("title"), x.get("url")) for x in t.get("links") or [] if isinstance(x, dict)],
+    }
+
+
+def watch_changes(old, new):
+    """Short phrases for what changed between two watch_view values. [] when nothing a watcher cares about moved."""
+    if new is None:
+        return ["left the board"]
+    if old is None:
+        return ["on the board"]
+    out = []
+    if old["column"] != new["column"]:
+        out.append(f"column {old['column']} -> {new['column']}")
+    if old["outcome"] != new["outcome"]:
+        out.append("outcome " + (new["outcome"] or "cleared"))
+    if len(new["comments"]) > len(old["comments"]):
+        text = clean(new["comments"][-1][1], 80)
+        out.append(f"comment: {text}" if text else "comment")
+    elif new["comments"] != old["comments"]:
+        out.append("comment")
+    if new["todos"] != old["todos"]:
+        out.append("checklist")
+    if old["waiting"] != new["waiting"]:
+        out.append("wait ended" if old["waiting"] and not new["waiting"] else "waiting")
+    if old["claim"] != new["claim"]:
+        out.append("claim " + ((new["claim"] or {}).get("status") or "released"))
+    if new["history"] != old["history"]:
+        fresh = new["history"][len(old["history"]):] if new["history"][:len(old["history"])] == old["history"] else []
+        out.append(clean(fresh[-1][2], 80) if fresh else "history")
+    if old["title"] != new["title"]:
+        out.append("title")
+    if old["details"] != new["details"]:
+        out.append("details")
+    if old["links"] != new["links"]:
+        out.append("link")
+    if any(old[k] != new[k] for k in ("priority", "due", "labels", "assignees")):
+        out.append("fields")
+    return out
+
+
+def _watch_row(t, ident, changes, already):
+    if not isinstance(t, dict):
+        return {"id": ident, "num": None, "title": "", "column": "", "changes": changes, "already": already,
+                "line": f"{ident}: {'; '.join(changes)}"}
+    what = "already " + "; ".join(changes) if already else "; ".join(changes)
+    line = f"#{t.get('num')} {clean(t.get('title') or '', 100)}: {what}"
+    return {"id": t.get("id"), "num": t.get("num"), "title": t.get("title") or "", "column": t.get("column") or "",
+            "changes": changes, "already": already, "line": line}
+
+
+def _watch_emit(rows, as_json):
+    if as_json:
+        print(json.dumps(rows if len(rows) != 1 else rows[0], ensure_ascii=False))
+    else:
+        for row in rows:
+            print(row["line"])
+
+
+def cmd_watch(a):
+    """Poll the board until a watched card changes, or (with --until) reaches a column. Reads only.
+    A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when --timeout runs out."""
+    every = 15 if a.every is None else a.every
+    if not isinstance(every, (int, float)) or isinstance(every, bool) or every < 0.2 or every > 3600:
+        sys.exit("--every must be between 0.2 and 3600 seconds")
+    if a.timeout is not None and (not isinstance(a.timeout, (int, float)) or isinstance(a.timeout, bool) or a.timeout <= 0 or a.timeout > 86400):
+        sys.exit("--timeout must be greater than 0 and at most 86400 seconds")
+    if a.all and not a.until:
+        sys.exit("--all needs --until")
+    data, _ = load()
+    until = (a.until or "").strip()
+    if until:
+        cols = {c.get("id") for c in data.get("columns") or [] if isinstance(c, dict)}
+        if until not in cols:
+            sys.exit(f"no column '{until}'. Columns: " + ", ".join(sorted(cols)))
+    cards = [find(data, ref) for ref in a.ids]
+    if len({t["id"] for t in cards}) != len(cards):
+        sys.exit("a card is listed twice")
+    ids = [t["id"] for t in cards]
+    base = {t["id"]: watch_view(t) for t in cards}
+
+    def current(board):
+        by_id = {t.get("id"): t for t in board.get("tasks") or [] if isinstance(t, dict)}
+        return [(i, by_id.get(i)) for i in ids]
+
+    def ready(pairs):
+        hit = [(i, t) for i, t in pairs if isinstance(t, dict) and t.get("column") == until]
+        if a.all:
+            return hit if len(hit) == len(ids) else []
+        return hit[:1]
+
+    def report(pairs, already):
+        rows = []
+        for i, t in pairs:
+            changes = ["done" if until == "done" else f"column {until}"] if already else (watch_changes(base.get(i), watch_view(t)) or ["updated"])
+            rows.append(_watch_row(t, i, changes, already))
+        _watch_emit(rows, a.json)
+
+    if until:
+        got = ready(current(data))
+        if got:
+            report(got, True); return
+    print("watching " + ", ".join(f"#{t.get('num')}" for t in cards) + f" every {every:g}s"
+          + (f", until {until}" + (" (all)" if a.all else "") if until else "")
+          + (f", timeout {a.timeout:g}s" if a.timeout is not None else ""), file=sys.stderr)
+    deadline = None if a.timeout is None else time.monotonic() + a.timeout
+    while True:
+        now_m = time.monotonic()
+        if deadline is not None and now_m >= deadline:
+            print("timed out; no watched card changed", file=sys.stderr); sys.exit(2)
+        time.sleep(every if deadline is None else min(every, max(0, deadline - now_m)))
+        board, _ = load()
+        pairs = current(board)
+        if until:
+            got = ready(pairs)
+            if got:
+                report(got, False); return
+            if any(not isinstance(t, dict) for _, t in pairs):
+                gone = [(i, t) for i, t in pairs if not isinstance(t, dict)]
+                report(gone, False); return
+            continue
+        moved = [(i, t) for i, t in pairs if watch_changes(base.get(i), watch_view(t))]
+        if moved:
+            report(moved[:1], False); return
 
 
 def cmd_auto_heartbeat(a):
@@ -4663,11 +4813,11 @@ def cmd_relate(a):
     def fn(data):
         x, y = find(data, a.a), find(data, a.b)
         if x["id"] == y["id"]: sys.exit("a card cannot be related to itself")
-        fup = a.kind == "follow-up"
-        set_relation(x, y, "related" if fup else a.kind, "confirmed", src=x["id"] if fup else "")   # follow-up: B is A's follow-up
         if a.kind == "follow-up":
+            link_follow_up(x, y)   # B is A's follow-up: the relation, and a Follow-up #N / Split from #M link on each card
             hist(x, f"follow-up card: {y['id']}"); hist(y, f"split from {x['id']}")
             print(f"#{y.get('num')} is a follow-up of #{x.get('num')}"); return
+        set_relation(x, y, a.kind, "confirmed", src="")
         hist(x, f"related ({a.kind}) to {y['id']}"); hist(y, f"related ({a.kind}) to {x['id']}")
         print(f"#{x.get('num')} and #{y.get('num')} are linked ({a.kind})")
     mutate(fn, f"Relate: {a.a} {a.b}")
@@ -5794,7 +5944,7 @@ def _here(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
+    "tasks": ["list", "show", "watch", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "attach", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-url", "touch-source", "sent"],
@@ -5832,6 +5982,7 @@ COMMAND_HELP = {   # one line each, for commands whose parser has none
     "propose": "add proposals to the Review Inbox (alias for proposal-add)",
     "list": "list cards (filters: -q text, --column, --assignee, --project, --client, --label, --unclaimed, --attention, --waiting, --waiting-on WHO; --links)",
     "show": "one card in full: details, links, checklist, claim, latest comments",
+    "watch": "poll until a card changes, or reaches a column (--until done); a heartbeat alone does not count",
     "add": "add a card (--assign, --label, --due, --client, --project, --details, --todo, --after '#N')",
     "move": "move a card to a column, or reorder it (--before, --after, --top); --priority",
     "assign": "hand a card to people (replaces, or --add / --remove)",
@@ -5967,6 +6118,80 @@ def find_person(data, ref):
     if len(m) != 1:
         sys.exit(f"no person matches '{ref}'" if not m else f"'{ref}' matches several people: " + "; ".join(f"{p['id']} {p['name']} ({p.get('company', '')})" for p in m))
     return m[0]
+
+
+
+def task_has_person(task, person):
+    """Both legacy primary links and the web card's multi-contact list."""
+    return task.get("contact") == person["id"] or any(
+        isinstance(k, dict) and k.get("person_id") == person["id"]
+        for k in (task.get("contacts") or []))
+
+
+def contact_snapshot(person):
+    """The existing web CRM picker snapshot, kept within the same board."""
+    return {"person_id": person["id"], "name": person.get("name", ""), "role": person.get("role", ""),
+            "email": next((x["value"] for x in person_methods(person, "email")), ""),
+            "phone": next((x["value"] for x in person_methods(person, "phone")), "")}
+
+
+def set_task_contact(data, task, ref, *, unlink=False):
+    """Link a CRM person; preserve old primary links and allow explicit unlinking."""
+    contacts = task.get("contacts", [])
+    if not isinstance(contacts, list) or not all(isinstance(k, dict) for k in contacts):
+        sys.exit("card contacts must be a list of contact objects; nothing saved")
+    if unlink or ref:
+        option = "--unlink-contact" if unlink else "--contact"
+        if not ref or not ref.strip():
+            sys.exit(f"{option} needs a person ID or exact name; nothing saved")
+        matches = [p for p in data.get("contacts", []) if p["id"] == ref]
+        if unlink and not matches and (task.get("contact") == ref or any(k.get("person_id") == ref for k in contacts)):
+            matches = [{"id": ref, "name": next((k.get("name") or ref for k in contacts if k.get("person_id") == ref), ref)}]
+        if not matches:
+            matches = [p for p in data.get("contacts", []) if p.get("name", "").casefold() == ref.casefold()]
+        if len(matches) != 1:
+            sys.exit(f"{option} needs one exact person ID or unambiguous exact name; nothing saved")
+        person = matches[0]
+    else:
+        person = None  # an empty --contact retains its explicit primary-clearing meaning
+    if unlink or not ref:
+        ident = person["id"] if person else task.get("contact")
+        if not ident:
+            return []
+        keep = [k for k in contacts if k.get("person_id") != ident]
+        changed = task.get("contact") == ident or keep != contacts
+        if task.get("contact") == ident:
+            task.pop("contact", None)
+        if keep != contacts:
+            task["contacts"] = keep
+        person = person or next((p for p in data.get("contacts", []) if p["id"] == ident), None)
+        return [f"contact removed: {(person or {}).get('name') or ident} ({ident})"] if changed else []
+    ident = person["id"]
+    contacts = task.setdefault("contacts", [])
+    primary = task.get("contact")
+    if primary and primary != ident and not any(k.get("person_id") == primary for k in contacts):
+        previous = next((p for p in data.get("contacts", []) if p["id"] == primary), None)
+        contacts.append(contact_snapshot(previous) if previous else {"name": primary})
+    emails = {x["value"].casefold() for x in person_methods(person, "email")}
+    existing = next((k for k in contacts if k.get("person_id") == ident), None)
+    if existing is None:
+        phones = {x["value"] for x in person_methods(person, "phone")}
+        candidates = [k for k in contacts if not k.get("person_id") and k.get("name") == person.get("name")
+                      and isinstance(k.get("email"), str) and k["email"].casefold() in emails
+                      and (not k.get("phone") or k["phone"] in phones)]
+        if len(candidates) == 1:
+            email = candidates[0]["email"].casefold()
+            owners = [p["id"] for p in data.get("contacts", [])
+                      if any(x["value"].casefold() == email for x in person_methods(p, "email"))]
+            if owners == [ident]:
+                existing = candidates[0]  # never infer identity from a shared address or name alone
+    changed = task.get("contact") != ident or existing is None or existing.get("person_id") != ident
+    if existing is None:
+        contacts.append(contact_snapshot(person))
+    elif not existing.get("person_id"):
+        existing["person_id"] = ident
+    task["contact"] = ident  # older readers still have a primary link
+    return [f"contact linked: {person['name']} ({ident})"] if changed else []
 
 
 def check_stage(data, s):
@@ -6398,7 +6623,7 @@ def cmd_person(a):
               f"{clean(c.get('by', '?'), 80)}: {clean_lines(c['text'], '    ')}")
         if c.get("source_message_ids"): print("    source messages: " + ", ".join(clean(x, 200) for x in c["source_message_ids"]))
         if isinstance(c.get("url"), str) and c["url"]: print(f"    source link ({clean(c['id'], 40)}): {clean(c['url'], 2000)}")
-    tasks = [x for x in data.get("tasks", []) if x.get("contact") == p["id"]]
+    tasks = [x for x in data.get("tasks", []) if task_has_person(x, p)]
     for x in tasks: print("  task: " + line(data, x))
     by_who, cards = waiting_index(data)
     waits = person_waits(p, by_who, member_logins(data))
@@ -6441,12 +6666,15 @@ def cmd_person_rm(a):
         p = find_person(data, a.ref)
         if member_of(data, p):
             sys.exit("board members' own records cannot be deleted from the CRM")
-        tasks = [t for t in data.get("tasks", []) if t.get("contact") == p["id"]]
+        tasks = [t for t in data.get("tasks", []) if task_has_person(t, p)]
         if not a.yes:
             sys.exit(f"this deletes {person_line(p, data, today=board_today(data))} for good (notes and history included); rerun with --yes to confirm. "
                      f"It clears the contact on {len(tasks)} task(s). For someone who is simply not a fit, set the stage to Lost instead")
         for t in tasks:
-            t.pop("contact", None); hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
+            if t.get("contact") == p["id"]:
+                t.pop("contact", None)
+            t["contacts"] = [k for k in (t.get("contacts") or []) if not isinstance(k, dict) or k.get("person_id") != p["id"]]
+            hist(t, f"contact {p['name']} removed (person deleted)"); t["updated"] = now()
         data["contacts"] = [x for x in data["contacts"] if x is not p]
         print(f"deleted {p['id']} {p['name']}" + (f"; cleared as contact on {len(tasks)} tasks" if tasks else ""))
     mutate(fn, f"Delete person: {a.ref}")
@@ -7133,8 +7361,10 @@ def cmd_task_set(a):
                 else:
                     t.pop("goal", None)
                 changed.append(f"goal: {_flat(g.get('title')) if g else 'cleared'}")
-        if a.contact is not None and a.contact != t.get("contact", ""):
-            t["contact"] = a.contact; changed.append(f"contact: {a.contact or 'cleared'}")
+        if a.contact is not None:
+            changed.extend(set_task_contact(data, t, a.contact))
+        for ref in getattr(a, "unlink_contact", None) or []:
+            changed.extend(set_task_contact(data, t, ref, unlink=True))
         if getattr(a, "title", None) is not None:
             if not a.title.strip() or _has_break(a.title):
                 sys.exit("a task needs a title on one line")
@@ -7182,7 +7412,7 @@ def cmd_task_set(a):
         for x in changed:
             hist(t, x)
         t["updated"] = now()
-        print(f"#{t['num']} updated: " + "; ".join(changed))
+        print(f"#{t['num']} updated: " + "; ".join(clean(x, 1000) for x in changed))
     mutate(fn, f"Update task: {a.id}")
 
 
@@ -8331,7 +8561,7 @@ def apply_staging(data, st, label):
              "links": [{"title": _s(l.get("title")) or l["url"], "url": _s(l["url"])} for l in t.get("links") or []],
              "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": _s(s), "done": False} for s in _list(t.get("todos")) if _s(s)],
              "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
-        if contact: x["contact"] = contact
+        if contact: set_task_contact(data, x, contact)
         if data.get("layout") == "split":
             ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
             x["rank"] = append_rank(ranks)
@@ -9068,6 +9298,20 @@ def _new_task(data, proposal, change):
     return task, False
 
 
+def _record_already_done(data, task):
+    """A new task the reviewer already finished: keep it in Done, with the done history Activity reads."""
+    column = done_col(data)
+    task["column"] = column
+    ranks = [t.get("rank") for t in data.get("tasks", []) if t is not task and t.get("column") == column and valid_rank(t.get("rank"))]
+    task["rank"] = append_rank(ranks)
+    task["outcome"] = "completed"
+    for todo in task.get("todos") or []:
+        if isinstance(todo, dict):
+            todo["done"] = True
+    if not any(isinstance(h, dict) and str(h.get("text") or "").startswith("done:") for h in task.get("history") or []):
+        hist(task, "done: already completed when reviewed")
+
+
 def _new_person(data, proposal, change):
     ident = proposal_result_id(proposal, "p_")
     existing = next((p for p in data.get("contacts", []) if p.get("id") == ident), None)
@@ -9218,9 +9462,14 @@ def cmd_proposal_accept(a):
             if reserved_name(change.get(k)):
                 proposal_error(f"'{change[k].strip()}' cannot be a client or company name; edit the proposal (--edit) or reject it")
         kind = proposal["kind"]
+        if getattr(a, "done", False) and kind != "task.create":
+            proposal_error("--done records a new task as already completed; this proposal is not a new task")
         target = _check_proposal_base(data, proposal)
         before, recovered = copy.deepcopy(target), False
-        if kind == "task.create": result, recovered = _new_task(data, proposal, change); before = None
+        if kind == "task.create":
+            result, recovered = _new_task(data, proposal, change); before = None
+            if getattr(a, "done", False):
+                _record_already_done(data, result)
         elif kind == "person.upsert" and target is None: result, recovered = _new_person(data, proposal, change); before = None
         elif kind == "contact.touch": result = target; _apply_touch(result, proposal, change)
         else: result = target; _apply_update(data, result, proposal, change)
@@ -9230,11 +9479,12 @@ def cmd_proposal_accept(a):
         else:
             marks = []
         undo = {"before": before, "after": copy.deepcopy(result), "created": before is None}
-        _decide(proposal, "edit" if a.edit else "accept", result, edited, undo)
+        _decide(proposal, "complete" if getattr(a, "done", False) else "edit" if a.edit else "accept", result, edited, undo)
         if a.json:
             print(json.dumps({"proposal": proposal["id"], "status": proposal["status"], "decision": proposal["decision"]}, ensure_ascii=False))
         else:
-            print(("recovered" if recovered else "accepted") + f" {proposal['id']} -> {result['id']}")
+            word = "recorded done" if getattr(a, "done", False) else "recovered" if recovered else "accepted"
+            print(word + f" {proposal['id']} -> {result['id']}")
             for x in marks: print("  " + x)
     mutate(fn, f"Accept proposal: {a.id}")
 
@@ -9945,7 +10195,7 @@ def cmd_archived_history(a):
             for x in cur.get(k, []):
                 if x["id"] == rid: entries += x.get("history") or []
         for h in sorted(entries, key=lambda h: h.get("at", "")):
-            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {h.get('text', '')}"); n += 1
+            print(f"{y}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
     if not n: print(f"(no archived history for '{a.ref}')")
 
 
@@ -11204,6 +11454,13 @@ def main():
     position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
     s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
+    s = sub.add_parser("watch", help="poll until a card changes, or reaches a column (--until done); a heartbeat alone does not count")
+    s.add_argument("ids", nargs="+", metavar="ID")
+    s.add_argument("--every", type=float, default=15, help="seconds between reads (default 15; 0.2 to 3600)")
+    s.add_argument("--timeout", type=float, help="stop after this many seconds and exit 2; omit to wait")
+    s.add_argument("--until", help="wait until a card is in this column (for example done) instead of any change")
+    s.add_argument("--all", action="store_true", help="with --until: wait until every named card is in that column")
+    s.add_argument("--json", action="store_true", help="print one JSON object (or a list, with --all)"); s.set_defaults(f=cmd_watch)
     s = sub.add_parser("research-suggest", help="backlog auto-research: put a card with no project in the Review Inbox (suggest a project, or ask)")
     s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--project", help="the project to suggest (id or name); its client comes with it")
@@ -11266,7 +11523,8 @@ def main():
                        description="Recognised container metadata, comments and colour profiles are removed. GIF and animated "
                        "WebP retain compressed frame data, which may contain ignored bytes; removal of hidden identifying "
                        "information is not guaranteed. APNG is saved as a still image. Re-export a fresh still PNG/JPEG "
-                       "to discard the original animation payload. Browser still uploads separately re-encode decoded pixels.")
+                       "to discard the original animation payload. Browser still uploads separately re-encode decoded pixels. "
+                       "CLI PNG decoded scanlines are limited to 64 MiB; resize oversized images before attaching.")
     s.add_argument("id"); s.add_argument("path", help="the image file"); s.add_argument("text", nargs="?", default="", help="comment text to go with it, or the link title with --link")
     s.add_argument("--alt", help="a few words saying what the image shows (default: the file name)")
     s.add_argument("--details", action="store_true", help="append it to the description instead of a new comment")
@@ -11400,7 +11658,7 @@ def main():
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
-    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact"); s.set_defaults(f=cmd_task_set)
+    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact", help="link a CRM person by exact ID or name without removing other contacts; empty unlinks the legacy primary contact"); s.add_argument("--unlink-contact", action="append", help="unlink a CRM person by ID or name, preserving other contacts"); s.set_defaults(f=cmd_task_set)
     s.add_argument("--goal", help="goal id, id prefix or title; empty or 'none' clears")
     s.add_argument("--value", choices=["", "1", "2", "3", "4", "5"], help="optional value 1–5; empty clears")
     s.add_argument("--effort", choices=["", *EFFORT_WEIGHTS], help="optional effort size; empty clears")
@@ -11472,6 +11730,7 @@ def main():
     s.add_argument("id"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_proposal_show)
     s = sub.add_parser("proposal-accept", help="accept one pending proposal")
     s.add_argument("id"); s.add_argument("--edit", help="JSON object containing replacement proposed fields"); s.add_argument("--json", action="store_true")
+    s.add_argument("--done", action="store_true", help="a new task only: record it as already completed, in Done, so the work is kept")
     s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and named this item (kit v77)"); s.set_defaults(f=cmd_proposal_accept)
     s = sub.add_parser("proposal-merge", help="merge one pending proposal into an existing task or person")
     s.add_argument("id"); s.add_argument("--into", required=True); s.add_argument("--fields", help="comma-separated scalar fields to set")
