@@ -166,6 +166,13 @@ class ContactLinking(unittest.TestCase):
         self.assertEqual(self.card()['contact'], 'p_other')
         self.assertEqual([k['person_id'] for k in self.card()['contacts']], ['p_other'])
 
+    def test_exact_dangling_legacy_primary_can_be_unlinked(self):
+        self.data['tasks'][0].update(contact='p_gone', contacts=[dict(person_id='p_other', name='Other Example')])
+        self.write()
+        self.run_cli('task-set', '#1', '--unlink-contact', 'p_gone')
+        self.assertNotIn('contact', self.card())
+        self.assertEqual([k['person_id'] for k in self.card()['contacts']], ['p_other'])
+
     def test_unknown_legacy_primary_is_preserved_as_manual_text_not_a_fake_id(self):
         self.data['tasks'][0]['contact'] = 'Sue from Acme'
         self.write()
