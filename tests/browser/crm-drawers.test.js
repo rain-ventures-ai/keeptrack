@@ -121,8 +121,8 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
     }
     // Same display details must not let removing the second linked person remove the first.
     {
-      const api = new Github(), a = { ...person, email: '', phone: '', emails: [], phones: [] };
-      const b = { ...a, id: 'p_two' }, snapshot = p => ({ person_id: p.id, name: p.name, role: p.role, email: '', phone: '' });
+      const api = new Github(), a = { ...person, email: 'team@acme.test', phone: '', emails: [{ value: 'team@acme.test', label: 'Shared' }], phones: [] };
+      const b = { ...a, id: 'p_two' }, snapshot = p => ({ person_id: p.id, name: p.name, role: p.role, email: 'team@acme.test', phone: '' });
       api.files['people/p_one.json'] = text(a); api.files['people/p_two.json'] = text(b);
       api.files['cards/t_one.json'] = text({ ...card, contact: b.id, contacts: [snapshot(a), snapshot(b)] });
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -138,6 +138,13 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
         assert.deepEqual(saved.contacts.map(k => k.person_id), ['p_one']);
         assert.equal(saved.contact, undefined);
         assert.equal(await pg.locator('#cContactList button[aria-label="Remove contact Casey Example"]').count(), 1);
+        await pg.locator('#cContactSec .ui-addrow__ghost').click(); await pg.locator('#cContactNew').fill('Casey');
+        const suggestion = pg.locator('#cContactSuggestions [role="option"]');
+        await suggestion.waitFor(); assert.equal(await suggestion.count(), 1, 'the other shared-mailbox person remains available');
+        const adding = pg.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/'));
+        await suggestion.click(); await adding;
+        assert.deepEqual(JSON.parse(api.files['cards/t_one.json']).contacts.map(k => k.person_id), ['p_one', 'p_two']);
+
       } finally { await ctx.close(); }
     }
     const api = new Github();

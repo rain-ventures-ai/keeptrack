@@ -4227,7 +4227,8 @@ if (typeof window !== 'undefined') (() => {
     pop.setAttribute('role', 'listbox'); pop.setAttribute('aria-label', 'CRM contacts'); row.append(pop); row.classList.add('sugwrap');
     input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-controls', pop.id); input.setAttribute('aria-expanded', 'false'); input.autocomplete = 'off';
     let items = [], index = -1;
-    const linked = (t, p) => t.contacts.some(k => k.person_id === p.id || (k.email && (p.emails || []).some(e => e.value.toLowerCase() === k.email.toLowerCase())) || (!k.person_id && k.name === p.name && !k.email));
+    // A CRM association is its ID. Shared names/mailboxes and manual snapshots are not identity.
+    const linked = (t, p) => t.contacts.some(k => k.person_id === p.id);
     const close = () => { pop.hidden = true; items = []; index = -1; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); };
     const collapse = row.collapse; row.collapse = () => { close(); collapse(); };
     const paint = () => {
