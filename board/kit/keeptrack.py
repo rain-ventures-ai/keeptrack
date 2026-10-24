@@ -1069,9 +1069,10 @@ def _git_snapshot(include_archive=False):
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err}")
     files = {}
     prefix = base + "/" if base else ""
-    rc, top, _ = git("ls-tree", "--name-only", head, "--", prefix or ".")
+    # -z: raw names, never git's quoted form for non-ASCII names ("board/\303\251quipe.json" would not end in .json)
+    rc, top, _ = git("ls-tree", "-z", "--name-only", head, "--", prefix or ".")
     # an unreadable folder listing counts as shared: archive runs then hold an oversized year back rather than repack it
-    _SHARED_FOLDER[0] = bool(rc) or any(_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/") for n in top.splitlines())
+    _SHARED_FOLDER[0] = bool(rc) or any(_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/") for n in top.split("\0") if n)
     wanted = [(full, full[len(prefix):] if full.startswith(prefix) else full) for full in names.splitlines()]
     wanted = [(full, rel) for full, rel in wanted if _wanted_rel(rel)]
     # Preserve archive paths in the snapshot, but do not read their bodies until requested.
@@ -10288,7 +10289,7 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
             # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
             # and repacking would move another board's records into parts its index never lists. They hold the year back.
             split = data.get("version") == 4 and data.get("layout") == "split" \
-                and not _BOARD_STATES.get(id(data), {}).get("shared_folder")   # another board file in the folder shares archive/
+                and _BOARD_STATES.get(id(data), {}).get("shared_folder") is False   # unknown or shared: archive/ may hold another board's records
             if split and (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
                 try:
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
