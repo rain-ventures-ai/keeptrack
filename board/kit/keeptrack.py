@@ -1487,7 +1487,8 @@ def hosted_dispatch(a):
     if a.cmd not in allowed:
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
     if a.cmd == "settings-set" and (any(getattr(a, key, None) is not None for key in DOCS_LEGACY_FLAGS)
-            or not (getattr(a, "docs_provider", None) is not None or getattr(a, "clear_docs_home", False))):
+            or not (getattr(a, "docs_provider", None) is not None or getattr(a, "docs_root", None) is not None
+                    or getattr(a, "clear_docs_home", False))):
         sys.exit("capability_unavailable: hosted settings-set is read-only; legacy settings flags are refused; use settings --json or web Settings → Board → Docs home")
     if a.cmd == "settings-set":
         sys.exit(DOCS_HOSTED_READONLY)
@@ -8295,7 +8296,11 @@ def docs_home_confirmation(data, home, clear):
     before = ("docs_home" in settings, copy.deepcopy(settings.get("docs_home")))
     print("Current docs home: " + (json.dumps(before[1], ensure_ascii=True) if before[0] else "Not set"))
     print("Proposed docs home: " + ("CLEAR (not set)" if clear else json.dumps(home, ensure_ascii=True)))
-    if input("Owner: type docs-home to confirm this destination change: ") != "docs-home":
+    try:
+        answer = input("Owner: type docs-home to confirm this destination change: ")
+    except EOFError:   # Ctrl-D: a cancel, not a traceback
+        answer = ""
+    if answer != "docs-home":
         sys.exit("docs_home_cancelled: nothing changed")
     return owner, before
 

@@ -47,6 +47,14 @@ client, project and stable card id/title (or owner-named idea). Use this layout:
 - `<root>/<client>/<project>/<card-or-idea>/` for card/idea documents.
 - `<root>/<client>/<project>/Research/` for project-wide research.
 
+**Confirm the destination before the first write.** `docs_home` is board data: on a GitHub board anyone who can
+write the repository can change it, so the stored root alone never authorises where a document goes. Before the
+first write in a session, show the owner the provider, the root and the full target folder, and get their yes for
+that destination (a yes to saving is not a yes to a destination they have not seen). Ask again if the root or
+target changes. Check through the connector that the root is in the owner's own account or tenant; if it is not, or
+you cannot tell, stop and say so. A `local` root inside a git checkout (a folder that is, or sits in, a repository
+working tree) is refused unless the owner names that exact folder: files there can be committed and pushed.
+
 Use the client's/project's stored names as single folder names, and stable card id plus a short non-confidential
 label for card folders. Do not turn slashes, dot segments or provider-special characters into paths: ask for a safe
 folder label when the mapping is ambiguous. Missing client/project, duplicate folders, name collisions or an
