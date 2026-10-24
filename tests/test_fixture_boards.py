@@ -87,6 +87,9 @@ def seed_board_repo(temp_root, fixture_name, meta):
 
 
 class FixtureBoards(unittest.TestCase):
+    def test_image_review_fixture_is_registered(self):
+        self.assertIn("v4_kit98", [name for name, _ in list_fixtures()])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.saved = {k: getattr(kt, k) for k in ("FILE", "ROOT", "REPO", "BRANCH", "WRITE")}

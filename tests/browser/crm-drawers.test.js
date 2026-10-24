@@ -546,10 +546,16 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       await pg.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour', 'done'); sessionStorage.setItem('kb_view', 'board'); });
       await pg.route('https://api.test/**', r => apiP.route(r)); await pg.goto(base + '/board/index.html'); await pg.locator('.card .t', { hasText: 'Rain task' }).waitFor();
       const company = name => pg.locator('#clientBar .cpill').filter({ has: pg.locator('.cdotc') }).filter({ hasText: name });
+      const openCompanyOverflow = async () => {
+        // Selecting an overflow company deliberately leaves its menu open. Toggle only when
+        // closed: clicking More unconditionally would hide the Projects button we need next.
+        if (!(await pg.locator('#clientPop').isVisible())) await pg.locator('.cpill.more').click();
+        await pg.locator('#clientPop').waitFor({ state: 'visible' });
+      };
       const pickCompany = async name => {
         const pill = company(name);
         if (await pill.count()) { await pill.click({ position: { x: 24, y: 16 } }); return; }
-        await pg.locator('.cpill.more').click(); await pg.locator(`#clientPop .cmenu[data-client="${name}"]`).click();
+        await openCompanyOverflow(); await pg.locator(`#clientPop .cmenu[data-client="${name}"]`).click();
       };
       const pickProject = async (name, label) => {
         const pill = company(name);
@@ -574,6 +580,13 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       await pickCompany('Beta');
       await pg.locator('.card .t', { hasText: 'Beta task' }).waitFor();
       assert.equal(await pg.locator('.card .t', { hasText: 'Rain other' }).count(), 0, 'the first company stays narrowed to its project');
+      // Force the overflow branch on every machine, independent of available fonts and pill widths.
+      await pg.setViewportSize({ width: 390, height: 800 });
+      await pg.locator('.cpill.more').waitFor();
+      await openCompanyOverflow();
+      await pg.locator('#clientPop [aria-label="Projects for Beta"]').waitFor();
+      await openCompanyOverflow();
+      assert.equal(await pg.locator('#clientPop').isVisible(), true, 'opening an already open company menu keeps its project controls visible');
       await pickProject('Beta', 'Beta site');
       assert.equal(await pg.locator('.card .t', { hasText: 'Beta task' }).count(), 1);
       assert.equal(await pg.locator('.card .t', { hasText: 'Rain other' }).count(), 1, 'the other selected company stays whole');

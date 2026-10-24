@@ -320,7 +320,7 @@ def _repo_mismatch():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 102  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 103  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3925,10 +3925,18 @@ def tiff_orientation(tiff):
     """EXIF Orientation (1-8) from a TIFF block (the body of an EXIF segment); 1 when absent or unreadable."""
     try:
         bo = {b"II": "little", b"MM": "big"}[tiff[:2]]
-        ifd = int.from_bytes(tiff[4:8], bo); count = int.from_bytes(tiff[ifd:ifd + 2], bo)
+        if len(tiff) < 8 or int.from_bytes(tiff[2:4], bo) != 42:
+            return 1
+        ifd = int.from_bytes(tiff[4:8], bo)
+        if ifd < 8 or ifd % 2 or ifd + 2 > len(tiff):
+            return 1
+        count = int.from_bytes(tiff[ifd:ifd + 2], bo)
+        if ifd + 2 + 12 * count + 4 > len(tiff):   # complete entries plus the next-IFD field, before looping
+            return 1
         for k in range(count):
             e = ifd + 2 + 12 * k
-            if int.from_bytes(tiff[e:e + 2], bo) == 0x0112 and int.from_bytes(tiff[e + 2:e + 4], bo) == 3:
+            if (int.from_bytes(tiff[e:e + 2], bo) == 0x0112 and int.from_bytes(tiff[e + 2:e + 4], bo) == 3
+                    and int.from_bytes(tiff[e + 4:e + 8], bo) == 1):
                 v = int.from_bytes(tiff[e + 8:e + 10], bo)
                 return v if 1 <= v <= 8 else 1
     except (KeyError, IndexError, ValueError):
@@ -3942,24 +3950,33 @@ def orientation_only_tiff(v):
 
 
 def strip_image_metadata(blob, ext):
-    """The image without its metadata (EXIF: GPS position, device, owner; text chunks; XMP), so a photo or screenshot
-    never commits that to the board repo (AGENTS rule 7). Pixels are untouched; a photo's EXIF Orientation is kept (alone),
-    so it still shows the right way up. Raises ValueError on a broken file."""
-    if ext == "jpg":   # keep every segment but APP1 (EXIF/XMP), APP13 (IPTC) and COM; the scan data from SOS to the end of the image
+    """Remove recognised container metadata, comments and colour profiles; retain EXIF Orientation alone.
+    GIF and animated WebP retain compressed frame data, which may contain ignored bytes. This is not a guarantee
+    that hidden identifying information is removed. APNG is saved as a still image; CLI pixels are otherwise
+    retained, and removing ICC profiles may change colours. Re-export a fresh still PNG/JPEG to discard the
+    original animation payload. Browser still uploads separately re-encode decoded pixels.
+    Raises ValueError on a broken file or a parser/raster budget violation."""
+    # Retain decoding data by format, rather than guessing every possible metadata container.
+    # ICC profiles can carry names/device details: drop them too (CLI colours may change).
+    if ext == "jpg":   # filter metadata between every scan as well as before the first scan
         out, i, turn = bytearray(blob[:2]), 2, 1
-        while i + 4 <= len(blob):
+        segments = 0
+        decoding = set(range(0xC0, 0xC8)) | set(range(0xC9, 0xD0)) | set(range(0xDA, 0xE0))
+        while i + 2 <= len(blob):
+            segments += 1
+            if segments > 4096:
+                raise ValueError("too many JPEG segments")
             if blob[i] != 0xFF:
                 raise ValueError("broken JPEG")
             while i + 2 < len(blob) and blob[i + 1] == 0xFF:   # fill bytes before a marker
                 i += 1
             marker = blob[i + 1]
-            if marker == 0xDA:   # start of scan: image data to the end of the image; anything after it (a second image, a vendor trailer) is dropped
-                end = blob.find(b"\xff\xd9", i)
-                if end < 0:
-                    raise ValueError("broken JPEG")
-                out += blob[i:end + 2]; return bytes(out)
+            if marker == 0xD9:
+                return bytes(out + b"\xff\xd9")
             if 0xD0 <= marker <= 0xD9 or marker == 0x01:
                 out += blob[i:i + 2]; i += 2; continue
+            if i + 4 > len(blob):   # only length-carrying markers need four bytes
+                raise ValueError("broken JPEG")
             n = int.from_bytes(blob[i + 2:i + 4], "big")
             if n < 2 or i + 2 + n > len(blob):
                 raise ValueError("broken JPEG")
@@ -3968,77 +3985,236 @@ def strip_image_metadata(blob, ext):
                 if turn != 1:   # straight after SOI, where EXIF belongs
                     body = b"Exif\x00\x00" + orientation_only_tiff(turn)
                     out[2:2] = b"\xff\xe1" + (len(body) + 2).to_bytes(2, "big") + body
-            elif marker not in (0xE1, 0xED, 0xFE):
+            elif marker == 0xE0 and blob[i + 4:i + 9] == b"JFIF\x00" and n >= 16:
+                # Fixed JFIF fields only, never its embedded thumbnail or vendor trailer.
+                body = b"JFIF\x00\x01\x02" + blob[i + 11:i + 16] + b"\x00\x00"
+                out += b"\xff\xe0\x00\x10" + body
+            elif marker == 0xEE and blob[i + 4:i + 9] == b"Adobe" and n >= 14:
+                transform = blob[i + 15]
+                if transform > 2:
+                    raise ValueError("broken JPEG colour transform")
+                out += b"\xff\xee\x00\x0eAdobe\x00\x64\x00\x00\x00\x00" + bytes([transform])
+            elif marker in decoding:
                 out += blob[i:i + 2 + n]
             i += 2 + n
+            if marker == 0xDA:   # copy entropy bytes, including stuffing and restart markers, until a real marker
+                start = i
+                while i < len(blob):
+                    if blob[i] != 0xFF:
+                        i += 1
+                        continue
+                    j = i + 1
+                    while j < len(blob) and blob[j] == 0xFF:
+                        j += 1
+                    if j >= len(blob):
+                        raise ValueError("broken JPEG")
+                    if blob[j] == 0 or 0xD0 <= blob[j] <= 0xD7:
+                        i = j + 1
+                        continue
+                    break
+                out += blob[start:i]
+        if blob[i:i + 2] == b"\xff\xd9":
+            return bytes(out + b"\xff\xd9")
         raise ValueError("broken JPEG")
-    if ext == "png":   # drop eXIf and the text chunks (tEXt, zTXt, iTXt)
+    if ext == "png":
         out, i = bytearray(blob[:8]), 8
+        import zlib
+        inflater, decoded = zlib.decompressobj(), 0
+        raster = None
+        rows, row_bytes, row_left, row_count = [], 0, 0, 0
+        chunk_count = 0
+        fixed = {b"IHDR": 13, b"IEND": 0, b"gAMA": 4, b"cHRM": 32, b"sRGB": 1, b"pHYs": 9}
         while i + 12 <= len(blob):
+            chunk_count += 1
+            if chunk_count > 4096:
+                raise ValueError("too many PNG chunks")
             n = int.from_bytes(blob[i:i + 4], "big"); kind = blob[i + 4:i + 8]
             if i + 12 + n > len(blob):
                 raise ValueError("broken PNG")
+            if kind == b"IHDR":
+                if raster is not None or n != 13:
+                    raise ValueError("broken PNG header")
+                width, height = int.from_bytes(blob[i + 8:i + 12], "big"), int.from_bytes(blob[i + 12:i + 16], "big")
+                depth, colour, compression, filtering, interlace = blob[i + 16:i + 21]
+                channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(colour)
+                legal = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
+                if not width or not height or depth not in legal.get(colour, ()) or compression or filtering or interlace not in (0, 1):
+                    raise ValueError("broken PNG header")
+                passes = ((0, 0, 1, 1),) if not interlace else ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+                for x, y, dx, dy in passes:
+                    w, h = max(0, (width - x + dx - 1) // dx), max(0, (height - y + dy - 1) // dy)
+                    if w and h:
+                        rows.append((h, 1 + (w * channels * depth + 7) // 8))
+                raster = sum(h * size for h, size in rows)
+                if raster > 64 * 1024 * 1024:
+                    raise ValueError("PNG raster exceeds 64 MB limit")
+            if kind == b"IDAT":
+                if raster is None:
+                    raise ValueError("PNG pixels before header")
+                # Validate the entire stream without retaining decompressed pixels. No ignored tails,
+                # incomplete streams or expansion beyond the fixed working budget may be saved.
+                data = blob[i + 8:i + 8 + n]
+                try:
+                    while data:
+                        if inflater.eof:
+                            raise ValueError("PNG data after zlib stream")
+                        pixels = inflater.decompress(data, min(65536, 64 * 1024 * 1024 + 1 - decoded))
+                        decoded += len(pixels)
+                        if decoded > raster:
+                            raise ValueError("PNG data beyond declared raster")
+                        offset = 0
+                        while offset < len(pixels):
+                            if not row_left:
+                                if not row_count:
+                                    row_count, row_bytes = rows.pop(0)
+                                if pixels[offset] > 4:
+                                    raise ValueError("invalid PNG scanline filter")
+                                row_count -= 1
+                                row_left = row_bytes
+                            take = min(row_left, len(pixels) - offset)
+                            offset += take
+                            row_left -= take
+                        if decoded > 64 * 1024 * 1024 or inflater.unused_data:
+                            raise ValueError("PNG pixel stream exceeds limit or has trailing data")
+                        data = inflater.unconsumed_tail
+                except zlib.error as exc:
+                    raise ValueError("broken PNG pixel stream") from exc
+            # APNG is saved as a still image: discard all animation streams and controls,
+            # not just malformed relationships. The default PNG IDAT data remains decodable.
+            if kind in (b"acTL", b"fcTL", b"fdAT"):
+                i += 12 + n; continue
             if kind == b"eXIf":
                 turn = tiff_orientation(blob[i + 8:i + 8 + n])
                 if turn != 1:
                     d = orientation_only_tiff(turn)
                     out += len(d).to_bytes(4, "big") + b"eXIf" + d + (__import__("zlib").crc32(b"eXIf" + d) & 0xFFFFFFFF).to_bytes(4, "big")
-            elif kind not in (b"tEXt", b"zTXt", b"iTXt"):
+            elif kind in (b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"pHYs", b"sBIT", b"bKGD"):
+                if kind in fixed and n != fixed[kind]:
+                    raise ValueError("broken PNG")
+                if ((kind == b"PLTE" and (n > 768 or n % 3)) or (kind == b"tRNS" and n > 256)
+                        or (kind == b"sBIT" and n > 4) or (kind == b"bKGD" and n > 6)):
+                    raise ValueError("broken PNG")
                 out += blob[i:i + 12 + n]
+            elif not kind[0] & 0x20:
+                raise ValueError("unknown critical PNG chunk")
             i += 12 + n
             if kind == b"IEND":
+                if not inflater.eof or decoded != raster:
+                    raise ValueError("incomplete PNG pixel stream")
                 return bytes(out)
         raise ValueError("broken PNG")
-    if ext == "webp":   # drop the EXIF and XMP chunks and clear their flags in VP8X
-        out, i, vp8x = bytearray(), 12, None
-        while i + 8 <= len(blob):
-            kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
-            if i + 8 + n > len(blob):
+    if ext == "webp":
+        chunk_count, frame_count = 0, 0
+        def chunks(start, end, frame=False):
+            nonlocal chunk_count, frame_count
+            out, i, vp8x = bytearray(), start, None
+            animation, control, frames = False, False, 0
+            pixels, alpha = False, False
+            while i + 8 <= end:
+                chunk_count += 1
+                if chunk_count > 4096:
+                    raise ValueError("too many WebP chunks")
+                kind = blob[i:i + 4]; n = int.from_bytes(blob[i + 4:i + 8], "little"); size = 8 + n + (n & 1)
+                if i + size > end:
+                    raise ValueError("broken WebP")
+                body = blob[i + 8:i + 8 + n]; chunk = None
+                if kind in (b"VP8 ", b"VP8L", b"ALPH"):
+                    if not n or (alpha if kind == b"ALPH" else pixels):
+                        raise ValueError("duplicate or empty WebP pixels")
+                    if kind == b"ALPH":
+                        alpha = True
+                    else:
+                        pixels = True
+                    chunk = body
+                elif not frame and kind == b"VP8X":
+                    if n != 10 or vp8x is not None:
+                        raise ValueError("broken WebP")
+                    animation = bool(body[0] & 2)
+                    chunk = bytes([body[0] & 0x12]) + b"\x00\x00\x00" + body[4:]
+                    vp8x = len(out)
+                elif not frame and kind == b"ANIM":
+                    if n != 6 or not animation or control:
+                        raise ValueError("broken WebP")
+                    control = True; chunk = body
+                elif not frame and kind == b"ANMF":
+                    if n < 16 or not control:
+                        raise ValueError("broken WebP")
+                    frames += 1
+                    frame_count += 1
+                    if frame_count > 512:
+                        raise ValueError("too many WebP frames")
+                    inner = chunks(i + 24, i + 8 + n, frame=True)
+                    j, frame_pixels = 0, False
+                    while j + 8 <= len(inner):
+                        length = int.from_bytes(inner[j + 4:j + 8], "little")
+                        frame_pixels |= inner[j:j + 4] in (b"VP8 ", b"VP8L") and length > 0
+                        j += 8 + length + (length & 1)
+                    if not frame_pixels:
+                        raise ValueError("broken WebP")
+                    chunk = body[:16] + inner
+                elif not frame and kind == b"EXIF":
+                    tiff = body[6:] if body.startswith(b"Exif\x00\x00") else body
+                    turn = tiff_orientation(tiff)
+                    if turn != 1:
+                        chunk = orientation_only_tiff(turn)
+                        if vp8x is not None:
+                            out[vp8x + 8] |= 0x08
+                if chunk is not None:
+                    out += kind + len(chunk).to_bytes(4, "little") + chunk + (b"\x00" if len(chunk) & 1 else b"")
+                i += size
+            if i != end or (not frame and (animation != (control and frames > 0) or (animation and pixels))):
                 raise ValueError("broken WebP")
-            chunk = bytearray(blob[i:i + size])
-            if kind == b"VP8X" and len(chunk) > 8:
-                chunk[8] &= ~0x0C & 0xFF   # EXIF (0x08) and XMP (0x04) flags; EXIF set again below if Orientation stays
-                vp8x = len(out)
-            if kind == b"EXIF":
-                tiff = blob[i + 8:i + 8 + n]; tiff = tiff[6:] if tiff[:6] == b"Exif\x00\x00" else tiff
-                turn = tiff_orientation(tiff)
-                if turn != 1:
-                    d = orientation_only_tiff(turn)
-                    out += b"EXIF" + len(d).to_bytes(4, "little") + d + (b"\x00" if len(d) & 1 else b"")
-                    if vp8x is not None:
-                        out[vp8x + 8] |= 0x08
-            elif kind != b"XMP ":
-                out += chunk
-            i += size
-        return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + bytes(out)
-    if ext == "gif":   # drop comment extensions and the XMP application extension; frames kept as they are
+            return bytes(out)
+        end = int.from_bytes(blob[4:8], "little") + 8
+        if end < 12 or end > len(blob):
+            raise ValueError("broken WebP")
+        out = chunks(12, end)
+        return b"RIFF" + (len(out) + 4).to_bytes(4, "little") + b"WEBP" + out
+    if ext == "gif":   # keep graphic controls and reconstructed standard animation loops
         if len(blob) < 13:
             raise ValueError("broken GIF")
         i = 13 + (3 * (2 << (blob[10] & 7)) if blob[10] & 0x80 else 0)
         out = bytearray(blob[:i])
+        pending_control = b""
+        block_count, frame_count, subblock_count = 0, 0, 0
 
         def blocks(j):   # the end of a run of data sub-blocks starting at j
+            nonlocal subblock_count
             while True:
-                if j >= len(blob):
+                subblock_count += 1
+                if subblock_count > 131072 or j >= len(blob):
                     raise ValueError("broken GIF")
                 n = blob[j]; j += 1 + n
                 if n == 0:
                     return j
         while i < len(blob):
+            block_count += 1
+            if block_count > 4096:
+                raise ValueError("too many GIF blocks")
             b = blob[i]
             if b == 0x3B:
                 out += blob[i:i + 1]; return bytes(out)
             if b == 0x21:
                 label = blob[i + 1:i + 2]; end = blocks(i + 2)
-                xmp = label == b"\xff" and blob[i + 3:i + 14] == b"XMP DataXMP"
-                if label != b"\xfe" and not xmp:
-                    out += blob[i:end]
+                if label == b"\xf9":
+                    if blob[i + 2] != 4 or end != i + 8:
+                        raise ValueError("broken GIF")
+                    pending_control = blob[i:end]
+                elif label == b"\x01":
+                    pending_control = b""
+                elif (label == b"\xff" and blob[i + 2] == 11
+                      and blob[i + 3:i + 14] in (b"NETSCAPE2.0", b"ANIMEXTS1.0")
+                      and blob[i + 14:i + 16] == b"\x03\x01" and end >= i + 19):
+                    out += blob[i:i + 18] + b"\x00"
                 i = end; continue
             if b == 0x2C:
+                frame_count += 1
+                if frame_count > 512:
+                    raise ValueError("too many GIF frames")
                 if i + 10 > len(blob):
                     raise ValueError("broken GIF")
                 flags = blob[i + 9]; j = i + 10 + (3 * (2 << (flags & 7)) if flags & 0x80 else 0) + 1
-                end = blocks(j); out += blob[i:end]; i = end; continue
+                end = blocks(j); out += pending_control + blob[i:end]; pending_control = b""; i = end; continue
             raise ValueError("broken GIF")
         raise ValueError("broken GIF")
     return blob
@@ -4104,7 +4280,9 @@ def save_asset(rel, blob, message, state):
 
 def cmd_attach(a):
     """Add an image (screenshot) to a card: written to assets/<card id>/, then shown in a new comment, appended to the
-    description with --details, or added to the card's Links with --link. Its metadata (EXIF and the like) is removed first."""
+    description with --details, or added to the card's Links with --link. Recognised container metadata, comments and
+    colour profiles are removed first. GIF/animated WebP keep compressed frame data, which may contain ignored bytes;
+    this does not guarantee removal of hidden identifying information. APNG is saved as a still image."""
     if getattr(a, "link", False) and a.details:
         sys.exit("--link adds the image to the card's Links; it cannot be combined with --details")
     if BACKEND == "hosted":
@@ -11297,7 +11475,12 @@ def main():
     s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin")
     s.add_argument("--reply-to", dest="reply_to", help="reply one level under this comment id (not under a reply or an activity line)"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
-    s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, the description with --details, or Links with --link")
+    s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, the description with --details, or Links with --link",
+                       description="Recognised container metadata, comments and colour profiles are removed. GIF and animated "
+                       "WebP retain compressed frame data, which may contain ignored bytes; removal of hidden identifying "
+                       "information is not guaranteed. APNG is saved as a still image. Re-export a fresh still PNG/JPEG "
+                       "to discard the original animation payload. Browser still uploads separately re-encode decoded pixels. "
+                       "CLI PNG decoded scanlines are limited to 64 MiB; resize oversized images before attaching.")
     s.add_argument("id"); s.add_argument("path", help="the image file"); s.add_argument("text", nargs="?", default="", help="comment text to go with it, or the link title with --link")
     s.add_argument("--alt", help="a few words saying what the image shows (default: the file name)")
     s.add_argument("--details", action="store_true", help="append it to the description instead of a new comment")

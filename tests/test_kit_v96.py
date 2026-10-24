@@ -1,5 +1,6 @@
 """Kit v96: an Archive view to browse archived cards and people (private-tasks card #283). Web board only: the browser
 behaviour is tested in tests/browser/archive-view.test.js; this file checks the version, the notes and the help."""
+import json
 import os
 import sys
 import unittest
@@ -18,7 +19,11 @@ def read(*parts):
 
 class Version(unittest.TestCase):
     def test_kit_is_v96_everywhere(self):
-        self.assertGreaterEqual(keeptrack.KIT_VERSION, 96)   # the exact version is asserted by the newest tests/test_kit_v*.py
+        self.assertGreaterEqual(keeptrack.KIT_VERSION, 96)
+        self.assertEqual(keeptrack.KIT_VERSION, json.loads(read("board", "kit", "manifest.json"))["version"])
+        for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
+            self.assertEqual(f"0.{keeptrack.KIT_VERSION}.0", json.loads(read("board", "kit", plugin, "plugin.json"))["version"], plugin)
+        self.assertIn(f"const PAGE_KIT = {keeptrack.KIT_VERSION};", read("board", "board.js"))
 
     def test_upgrade_notes_and_changelog(self):
         v96 = read("board", "kit", "UPGRADING.md").split("### v96 (schema 4)", 1)[1].split("\n### v", 1)[0]
