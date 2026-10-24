@@ -160,6 +160,27 @@ class ArchiveLazyShards(unittest.TestCase):
             self.assertEqual((board / 'archive' / '2020.json').read_text(), before)
             self.assertNotEqual(saved['settings'].get('min_kit'), 107)
 
+    def test_git_mode_shared_folder_listing(self):
+        # git mode reads the board folder with ls-tree -z: non-ASCII and non-UTF-8 names count, kit files do not
+        def snapshot(extra):
+            with tempfile.TemporaryDirectory() as tmp:
+                origin, clone = Path(tmp) / 'origin', Path(tmp) / 'clone'
+                run = lambda *a, cwd=tmp: subprocess.run(['git', *a], cwd=cwd, check=True, capture_output=True)
+                run('init', '-q', '-b', 'main', str(origin)); (origin / 'board').mkdir()
+                (origin / 'board' / 'tasks.json').write_text('{"version": 4, "layout": "split"}')
+                for name in extra: (origin / 'board' / os.fsdecode(name)).write_bytes(b'{}')
+                run('add', '-A', cwd=origin); run('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'x', cwd=origin)
+                run('clone', '-q', str(origin), str(clone))
+                with mock.patch.object(k, 'ROOT', str(clone)), mock.patch.object(k, 'BRANCH', 'main'), \
+                     mock.patch.object(k, 'PATH', 'board/tasks.json'), mock.patch.object(k, '_check_git_clone', lambda: None):
+                    k._git_snapshot()
+                return k._SHARED_FOLDER[0]
+        self.assertIs(snapshot([]), False, 'alone')
+        self.assertIs(snapshot([b'widgets.json', b'manifest.json']), False, "the kit's own files are not boards")
+        self.assertIs(snapshot(['\u00e9quipe.json'.encode()]), True, 'a non-ASCII board name is not missed')
+        self.assertIs(snapshot([b'Alice.JSON']), True, 'case-insensitive')
+        self.assertIs(snapshot([b'\xe9quipe.json']), True, 'a name that is not UTF-8 counts as shared, without crashing')
+
     def test_cli_split_board_sharing_its_folder_with_a_one_file_board_holds_back(self):
         # alice.json next to a split tasks.json shares archive/: repacking would hide alice's archived records
         with tempfile.TemporaryDirectory() as folder:
