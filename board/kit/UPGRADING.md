@@ -34,8 +34,12 @@ Token and board selection edge cases. No data change and no migration; run `kit-
 - New `use --token-env` settings must name a board-specific variable, such as `BOARD_TOKEN_PRIVATE`, rather than
   `BOARD_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`. Existing configs using
   these aliases still work for a matching board/API. When skipped, only this CLI process's alias is removed before
-  direct HTTP fallback or `gh` children can use it; a separately named shell credential remains usable. Invalid API
-  URLs also skip the folder credential without breaking `where` or local `--file` commands.
+  direct HTTP fallback or `gh` children can use it; a separately named shell credential remains usable. A legacy
+  `token_env` of `BOARD_TOKEN` is the shell's own variable and is never removed (a relay worker keeps its token, as
+  since v90). Invalid API URLs also skip the folder credential without breaking `where` or local `--file` commands.
+- A skipped folder token prints a one-line note on stderr (not in hooks). GitHub Enterprise or test-server users of
+  `token_env` export `BOARD_TOKEN` themselves. `gh auth token` (the github.com login) is never sent to another
+  `BOARD_API` host by the read cache.
 - Clone mismatch warnings recommend unsetting `BOARD_REPO` only for a clone already trusted by `use`, or whose
   own CLI is running. Nested clone warnings describe the clone the CLI itself would use.
 - Hosted commands skip the GitHub mismatch diagnostic; GitHub commands cache it with a two-second git budget.

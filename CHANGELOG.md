@@ -11,7 +11,9 @@ GitHub API; another shell board or API host never borrows it, including when the
 explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
 same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
 Malformed API URLs fail closed. New token configs reject global auth aliases; legacy alias credentials are removed
-from this CLI process when skipped, preventing HTTP/gh fallback from reusing them.
+from this CLI process when skipped, preventing HTTP/gh fallback from reusing them; a legacy `BOARD_TOKEN` setting
+is the shell's own token and stays. A skipped folder token is noted on stderr, and the read cache never sends the gh
+login's github.com token to another `BOARD_API` host.
 
 Kit v103: image review follow-ups ([private-tasks #305](https://rain-ventures-ai.github.io/keeptrack/board/?repo=osouthgate%2Fprivate-tasks&card=t_sh4ypf9u09#305), `t_sh4ypf9u09`). Progressive JPEG metadata is removed between scans without mistaking table bytes for the end of the image. Valid terminal JPEG marker fill is accepted, including progressive files. EXIF orientation is read only from complete, valid TIFF directories, so malformed entry counts cannot cause work beyond the supplied metadata bytes. WebP trailers outside the declared RIFF length are discarded. APNG is saved as a still image; browser and CLI discard every APNG animation chunk. GIF and animated WebP retain compressed frame data, which may contain ignored bytes. Recognised container metadata, comments and colour profiles are removed; this does not guarantee removal of hidden identifying information. Re-export a fresh still PNG/JPEG to discard the original animation payload. Browser still uploads re-encode decoded canvas pixels rather than retaining original compressed data. CLI PNG uploads validate exact scanline lengths, including Adam7, and reject incomplete or excess pixel streams. PNG/WebP chunk counts, JPEG segment counts and GIF block/frame/sub-block counts are bounded before output allocation. JPEG application metadata, private PNG/WebP chunks and ICC profiles are removed using format allowlists. Browser still images apply colour conversion; CLI uploads and profile-stripped animations can look different. Image reads retry server and rate-limit failures with bounded exponential backoff; a bounded reusable cache and explicit DOM leases revoke unused overflow per settled entry or removed subtree, without full-owner sweeps. APNG animation data is deliberately discarded, successful uploads supersede in-flight reads without restoring stale failure history, removed PNG colour descriptions force conversion, and image-resource link clicks hold leases too. Source uploads have a 25 MB ceiling. No migration. Includes the v97 List-view release.
 
@@ -1020,11 +1022,5 @@ preserved through CLI edits, proposals and archiving; disabling the layout leave
 ## Repository tooling
 
 ### Unreleased
-
-Kit v99: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
-GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
-explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the
-same clone as the CLI, skips hosted commands, and caches git lookups within a two-second budget. No migration.
-Includes the v97 List view and v98 image releases.
 
 - Frozen boards under `tests/fixtures/` and CI running Python + Playwright upgrade tests ([#46](https://github.com/rain-ventures-ai/keeptrack/issues/46)).

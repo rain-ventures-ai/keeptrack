@@ -312,9 +312,11 @@ if _tv and os.environ.get(_tv):
         if os.environ.get("BOARD_TOKEN") and os.environ["BOARD_TOKEN"] != os.environ[_tv]:
             TOKEN_REPLACED = _tv
         os.environ["BOARD_TOKEN"] = os.environ[_tv]
-    if TOKEN_SKIPPED and _tv in GLOBAL_AUTH_TOKEN_ENVS:
+    if TOKEN_SKIPPED and _tv in GLOBAL_AUTH_TOKEN_ENVS and _tv != "BOARD_TOKEN":
         # Removing only this CLI process's copy closes token() fallback and gh-child inheritance.
         # A separate explicit credential remains usable; the calling shell is untouched.
+        # BOARD_TOKEN is never removed: it is the shell's own board token (a relay worker's only credential, kept
+        # since v90), and removing it would silently move board calls to the broader gh login.
         os.environ.pop(_tv, None)
 
 
@@ -875,7 +877,8 @@ def _cache_token():
     """The same credentials keeptrack.py uses anyway: the token variables, else `gh auth token` (never stored or printed)."""
     if not _TOK:
         t = token() if use_http() else ""
-        if not t and shutil.which("gh"):
+        if not t and shutil.which("gh") and github_api_base().rstrip("/") == "https://api.github.com":
+            # `gh auth token` is the github.com login: never send it to another BOARD_API host
             p = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
             t = p.stdout.strip() if p.returncode == 0 else ""
         _TOK.append(t)
@@ -11781,6 +11784,9 @@ def main():
     if TOKEN_REPLACED and not quiet:
         print(f"warning: ${TOKEN_REPLACED} (token_env in {_flat(os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json'))}) "
               "replaced a different BOARD_TOKEN from the shell: this folder's own setting wins (kit v90).", file=sys.stderr)
+    if TOKEN_SKIPPED and _tv != "BOARD_TOKEN" and not quiet:
+        print(f"note: ${_tv} (token_env in {_flat(os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, 'config.json'))}) was not used: "
+              f"{TOKEN_SKIPPED}. `keeptrack.py where` shows which credential is used instead (kit v104).", file=sys.stderr)
     if not FILE and not quiet and a.f is not cmd_use:
         shell_repo, clone_repo = _repo_mismatch()
         if shell_repo:
