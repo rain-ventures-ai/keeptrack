@@ -74,6 +74,7 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, custom:{keep:true},
         tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{t_two:[{at:stampForTest(),text:'older evidence'}]} });
       const done = api.card('t_two'); done.details='x'.repeat(350000); api.files['cards/t_two.json']=text(done);
+      api.files['widgets.json']=text({widgets:[]});   // the kit's own top-level file: not another board, the year still splits
       const meta=JSON.parse(api.files['tasks.json']); meta.settings.min_kit=minKit; meta.archive={files:{[year]:{tasks:2,contacts:0}}};
       if (!split) { delete meta.layout; meta.version=3; meta.tasks=Object.keys(api.files).filter(p=>p.startsWith('cards/')).map(p=>JSON.parse(api.files[p])); meta.contacts=[]; }
       api.files['tasks.json']=text(meta);

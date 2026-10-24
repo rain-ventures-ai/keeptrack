@@ -758,6 +758,7 @@ if (typeof window !== 'undefined') (() => {
   const remotePath = (rel, at) => { const p = (at || cfg()).path, i = p.lastIndexOf('/'), base = i < 0 ? '' : p.slice(0, i + 1); return base + rel; };
   // The Git Data archive route reads `tasks.json` next to the archive folder, so it serves split boards and one-file boards named
   // tasks.json only. A one-file board with another name keeps the Contents-API route on its own file, never a sibling board's.
+  const KIT_ROOT_JSON = new Set(['tasks.json', 'widgets.json', 'manifest.json']);   // top-level files a board folder may hold that are not another board
   const gitDataArchive = () => !HOSTED && (isSplit(state) || /(^|\/)tasks\.json$/.test(cfg().path || ''));
   const wantedRel = p => p === 'tasks.json' || /^(cards|people|projects|proposals|archive)\/[^/]+$/.test(p);   // proposals: the Review Inbox, kept out of the model
   const blobKey = x => `kb_blob:${cfg().repo}:${x}`;
@@ -838,8 +839,9 @@ if (typeof window !== 'undefined') (() => {
     if (missing.length > 8 && !graphqlBlobsDenied) await graphqlBlobTexts(missing, texts, c, gen);
     await mapLimit(changed, 8, async item => { const text = texts.has(item) ? texts.get(item) : await blobText(item, c, gen); let obj; try { obj = JSON.parse(text); } catch (e) { throw new Error(`${item.path} is not valid JSON: ${e.message}`); }
       files.set(item.path, { sha: item.sha, size: item.size == null ? new TextEncoder().encode(text).length : item.size, text, obj }); });
-    // another top-level board file in this folder (a one-file board such as alice.json): the boards share archive/
-    const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/.test(x.path) && x.path !== 'tasks.json' && x.path !== own);
+    // another top-level board file in this folder (a one-file board such as alice.json): the boards share archive/.
+    // The kit's own files there (widgets.json, manifest.json) are not boards.
+    const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/.test(x.path) && !KIT_ROOT_JSON.has(x.path) && x.path !== own);
     const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true, sharedFolder };
     await pruneBlobCache(new Set((td.tree || []).filter(x => x.type === 'blob').map(x => x.sha)), c, gen);
     if (!sameArchiveBoard(c, gen)) throw new Error('The board changed while loading.');

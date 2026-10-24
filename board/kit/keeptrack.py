@@ -1025,7 +1025,8 @@ _SHARED_FOLDER = [False]
 
 
 def _other_root(name):
-    return "/" not in name and name.endswith(".json") and name != "tasks.json"
+    # the kit's own top-level files (the page's widgets.json, manifest.json) are not another board
+    return "/" not in name and name.endswith(".json") and name not in ("tasks.json", "widgets.json", "manifest.json")
 
 
 def _local_snapshot(include_archive=False):
