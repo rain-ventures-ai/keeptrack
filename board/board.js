@@ -8847,9 +8847,10 @@ if (typeof window !== 'undefined') (() => {
         for (const y of years) { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           if (pickedIds(rules)) pickedIds(rules).forEach(id => delete merged.history[id]);
           const text = jsonText(merged), bytes = archBytes(text); let packed = null;
-          // part files only on a split board alone in its folder: boards that share a folder share its archive/, and
+          // part files only on a split board known to be alone in its folder (metadata an older page cached does not say,
+          // so it holds back): boards that share a folder share its archive/, and
           // repacking would move another board's records into parts its index never lists. They hold the year back.
-          if (isSplit(got.data) && !got.meta.sharedFolder && (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-')))) {
+          if (isSplit(got.data) && got.meta.sharedFolder === false && (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-')))) {
             try { packed = await shardArchiveFamily(y, merged, plan[y], fresh, got.meta, Object.assign({}, cfg()), ag, pickedIds(rules) || []); }
             catch (e) { if (!(e instanceof ArchiveUnpackable) || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-'))) throw e; }
           }

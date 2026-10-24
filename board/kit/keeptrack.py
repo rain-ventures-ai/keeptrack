@@ -1069,7 +1069,8 @@ def _git_snapshot(include_archive=False):
     files = {}
     prefix = base + "/" if base else ""
     rc, top, _ = git("ls-tree", "--name-only", head, "--", prefix or ".")
-    _SHARED_FOLDER[0] = any(_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/") for n in (top.splitlines() if not rc else []))
+    # an unreadable folder listing counts as shared: archive runs then hold an oversized year back rather than repack it
+    _SHARED_FOLDER[0] = bool(rc) or any(_other_root(n[len(prefix):] if n.startswith(prefix) else n) and n != PATH.strip("/") for n in top.splitlines())
     wanted = [(full, full[len(prefix):] if full.startswith(prefix) else full) for full in names.splitlines()]
     wanted = [(full, rel) for full, rel in wanted if _wanted_rel(rel)]
     # Preserve archive paths in the snapshot, but do not read their bodies until requested.
