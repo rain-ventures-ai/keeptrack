@@ -90,6 +90,42 @@ class ContactLinking(unittest.TestCase):
         self.assertEqual(self.card()['contact'], 'p_other')
         self.assertEqual([k['person_id'] for k in self.card()['contacts']], ['p_other'])
 
+    def test_adding_person_preserves_a_different_legacy_only_primary(self):
+        self.data['tasks'][0]['contact'] = 'p_other'
+        self.write()
+        self.run_cli('task-set', '#1', '--contact', 'p_sue')
+        self.assertEqual([k['person_id'] for k in self.card()['contacts']], ['p_other', 'p_sue'])
+        self.assertIn('CV', self.run_cli('person', 'p_other').stdout)
+
+    def test_explicit_unlink_works_for_plural_only_and_keeps_others(self):
+        self.data['tasks'][0]['contacts'] = [dict(person_id=p['id'], name=p['name']) for p in self.people]
+        self.write()
+        self.run_cli('task-set', '#1', '--unlink-contact', 'Sue Example')
+        self.assertEqual([k['person_id'] for k in self.card()['contacts']], ['p_other'])
+        self.assertNotIn('CV', self.run_cli('person', 'p_sue').stdout)
+
+    def test_name_only_manual_contact_is_not_claimed_when_name_is_ambiguous(self):
+        self.data['contacts'].append(dict(id='p_sue2', name='Sue Example', emails=[], phones=[]))
+        self.data['tasks'][0]['contacts'] = [dict(name='Sue Example', email='')]
+        self.write()
+        self.run_cli('task-set', '#1', '--contact', 'p_sue')
+        self.assertNotIn('person_id', self.card()['contacts'][0])
+        self.assertEqual(self.card()['contacts'][1]['person_id'], 'p_sue')
+
+    def test_terminal_controls_are_sanitised_but_history_preserves_name(self):
+        self.data['contacts'][0]['name'] = 'Sue\x1b[2J Example'
+        self.write()
+        result = self.run_cli('task-set', '#1', '--contact', 'p_sue')
+        self.assertNotIn('\x1b', result.stdout)
+        self.assertIn('\x1b', self.card()['history'][-1]['text'])
+
+    def test_bad_contact_entries_refuse_without_rewriting_data(self):
+        self.data['tasks'][0]['contacts'] = [None]
+        self.write()
+        before = self.file.read_bytes()
+        self.run_cli('task-set', '#1', '--contact', 'p_sue', ok=False)
+        self.assertEqual(self.file.read_bytes(), before)
+
     def test_split_storage_link_round_trip(self):
         self.data.update(version=4, layout='split')
         tasks, people = self.data.pop('tasks'), self.data.pop('contacts')

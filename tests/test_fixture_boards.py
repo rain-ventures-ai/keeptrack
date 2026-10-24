@@ -114,6 +114,16 @@ class FixtureBoards(unittest.TestCase):
         after = next(t for t in kt.load_board()["tasks"] if t["id"] == "t_first")
         for field in ("contact", "contacts", "history"):
             self.assertEqual(before[field], after[field])
+        data = kt.load_board()
+        legacy = next(t for t in data["tasks"] if t["id"] == after["id"])
+        legacy["contacts"] = []  # the legacy-only shape that caused the actual bug
+        self.assertTrue(kt.save_changes(data, message="Legacy fixture"))
+        person = kt.load_board()["contacts"][0]
+        args = Args(id=after["id"], client=None, project=None, contact=person["id"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_task_set(args)
+        repaired = next(t for t in kt.load_board()["tasks"] if t["id"] == after["id"])
+        self.assertEqual(person["id"], repaired["contacts"][0]["person_id"])
 
     def test_fixture_disk_counts_match_metadata(self):
         for name, meta in list_fixtures():

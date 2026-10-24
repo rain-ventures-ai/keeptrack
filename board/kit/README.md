@@ -257,7 +257,7 @@ Schema 3 (migration step 2 to 3) adds the Keeptrack CRM: `contacts` (default `[]
                  "text": "…", "draft": false, "sent_at": "…" }],   // a draft is not a contact until marked sent; sent_at is when it was sent
   "history": [{ "at": "…", "by": "…", "text": "…" }], "created": "…", "updated": "…", "createdBy": "…" }
 ```
-A task links CRM people through `contacts[]` entries with `person_id` and a name/role/email/phone snapshot. `task-set --contact <name-or-id>` adds a link without removing other people and retains `"contact": "<person id>"` as the legacy primary link. An empty `--contact` removes that primary link and its matching snapshot only. Last contact is the newest `sent_at` (else `at`) of a comment that has a channel other than `note` and is not a draft.
+A task links CRM people through `contacts[]` entries with `person_id` and a name/role/email/phone snapshot. `task-set --contact <name-or-id>` adds a link without removing other people and retains `"contact": "<person id>"` as the legacy primary link. Use `--unlink-contact <name-or-id>` to remove a specific linked person. An empty `--contact` removes the primary link and its matching snapshot only. Last contact is the newest `sent_at` (else `at`) of a comment that has a channel other than `note` and is not a draft.
 
 For imported contact events, `touch` accepts `--at <ISO timestamp with timezone>` so the contact log keeps the real
 event time, and `--source-id email:<16-to-64 hex characters>` so retries do not create duplicates. Hash provider

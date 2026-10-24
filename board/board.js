@@ -4264,7 +4264,7 @@ if (typeof window !== 'undefined') (() => {
     const box = $('cContactList'); box.textContent = ''; $('cContactCount').textContent = t.contacts.length || '';
     t.contacts.forEach(k => {
       const row = ui.listRow({ text: k.name || '(no name)', meta: k.role || '', icon: 'user', removeLabel: `Remove contact ${k.name}`,
-        onRemove: async () => { const id = editing; if (!(await askRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) tt.contacts.splice(i, 1); }, `Contacts: ${titleOf(id)}`); } });
+        onRemove: async () => { const id = editing; if (!(await askRemoval(`the task contact “${k.name}”`)) || editing !== id) return; edit(id, tt => { const i = tt.contacts.findIndex(y => y.name === k.name && y.email === k.email && y.phone === k.phone); if (i >= 0) { tt.contacts.splice(i, 1); if (k.person_id && tt.contact === k.person_id) delete tt.contact; } }, `Contacts: ${titleOf(id)}`); } });
       [[k.email, 'mailto:' + k.email, 'mail', 'Email'], [k.phone, 'tel:' + String(k.phone).replace(/\s+/g, ''), 'phone', 'Call']].forEach(([v, href, ic, verb]) => {
         if (!v) return; const a = el('a', 'ui-iconbtn ui-iconbtn--ghost ui-iconbtn--sm'); a.href = href; a.title = v; a.setAttribute('aria-label', `${verb} ${k.name}: ${v}`); a.append(ui.icon(ic)); row.insertBefore(a, row.lastChild); });
       box.append(row);
