@@ -167,6 +167,15 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(before, kt.load_board())
         self.assertEqual(0, kt.doctor_board(False)[2])
 
+    def test_v100_crm_links_changes_preserve_frozen_board(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit100", "fixture.json"))
+        self.use_fixture("v4_kit100", meta)
+        before = kt.load_board()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_v3_migrate_then_verify(self):
         name, meta = next((n, m) for n, m in list_fixtures() if m.get("schema") == 3)
         board_dir, expect = self.use_fixture(name, meta)

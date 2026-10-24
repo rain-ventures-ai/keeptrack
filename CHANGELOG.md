@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v105: Gmail contact-log source links are saved with only a thread ID and optional numeric account selector.
+Search terms, labels, query parameters and account addresses are removed in the page and CLI; a Gmail view without
+a recognised thread-ID shape is refused, including pagination and nested-label/search-only addresses. Legacy full-width
+hex and bounded `FMfcgz` web-ID shapes are supported conservatively; other forms fail closed. Existing Gmail links render with clean targets. Missing-record Back/Forward entries
+now discard stale drawer markers so the next drawer has its own history entry. CLI source links accept uppercase
+`HTTPS://`. No migration; old stored Gmail URLs are cleaned when edited rather than rewritten in bulk.
+
 Kit v104: resolve the board before choosing its token. The folder token is used only for its own board at the HTTPS
 GitHub API; another shell board or API host never borrows it, including when the shell token is absent. `where`
 explains the skipped variable and actual authentication source. Clone mismatch advice respects trust, identifies the

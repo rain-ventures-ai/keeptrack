@@ -25,6 +25,18 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v105 (schema 4)
+Gmail source-link privacy and record navigation fixes. No data change or migration; `kit-update` copies the files.
+- New Gmail source links save only the thread ID as `#all/<id>` and an optional numeric account selector such as
+  `/mail/u/0/`. Query parameters and account addresses are removed by the browser and CLI. Search, label and category routes are refused, even when their final word looks like a thread ID.
+  Gmail pagination and ambiguous mailbox/search/label/category links are refused. Recognition is deliberately limited
+  to legacy 1-16-hex IDs and observed `FMfcgz` web IDs with a bounded suffix; other formats fail closed.
+  This does not verify that the thread exists in an account. Existing Gmail source links in the browser and CLI person output are shown
+  with a canonical target, or a neutral unavailable warning for rejected routes; stored old entries are not rewritten until edited.
+- A missing record reached through Back/Forward resets its history entry to the current view, so the next person,
+  company or project drawer creates its own entry. The CLI accepts uppercase `HTTPS://`, as the browser does.
+- Check: `kit-check` reports v105. Save a mailbox/thread link and verify its saved URL uses `#all/<id>`; refuse a search/label view even with an ID-shaped final segment; navigate Forward to a deleted person, open another person, then Back should close that drawer.
+
 ### v104 (schema 4)
 Token and board selection edge cases. No data change and no migration; run `kit-update`.
 - A folder's `token_env` applies only when the resolved board matches its `repo` and `BOARD_API` uses the HTTPS

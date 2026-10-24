@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 104;
+  const PAGE_KIT = 105;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -4640,7 +4640,7 @@ if (typeof window !== 'undefined') (() => {
         // Restoring the same URL after a delayed load must not reset an open
         // settings section (e.g. collapse the connection form after token reuse).
         if (!alreadyOpen || settingsRoute !== valid) settingsTab(valid); }
-      else if (recordRoute(q)) { const r = recordRoute(q); if (!openRecord(r) && lastSyncOk) { toast(`This ${r.kind} was not found on this board`, true); try { history.replaceState({ ...(history.state || {}), kbView: view }, '', bareUrl() + '#view=' + view); } catch {} } }   // before the board loads, the load applies it again
+      else if (recordRoute(q)) { const r = recordRoute(q); if (!openRecord(r) && lastSyncOk) { toast(`This ${r.kind} was not found on this board`, true); try { history.replaceState({ kbView: view }, '', bareUrl() + '#view=' + view); } catch {} } }   // before the board loads, the load applies it again
       else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
       else if (h === 'menu') { const docked = window.kbLayout && window.kbLayout.get() === 'dock', pop = docked ? 'dockPop' : 'morePop', trigger = docked ? 'dockMenu' : 'btnMore'; if ($(pop).hidden) $(trigger).click(); }
       else { const id = Object.keys(routeDialogs).find(id => routeDialogs[id] === h); if (id && $(id) && !$(id).open) { if (id === 'dlgSearch') openSearch(); else if (id === 'dlgAddPerson') openAddPersonForm(); else if (id === 'dlgCopy') $('btnCopy').click(); else $(id).showModal(); } }
@@ -6303,7 +6303,7 @@ if (typeof window !== 'undefined') (() => {
     const [, ic, label] = chan(cm.channel || 'note'), row = el('div', 'cmcard touch' + (cm.draft ? ' draft' : '')), head = el('div', 'cmhead');
     const who = el('button', 'colink', p.name || '(no name)'); who.type = 'button'; who.title = `Open ${p.name}`; who.onclick = () => { $('dlgClient').close(); openContact(p.id); }; roKeep(who);
     head.append(elI('span', 'tchan', ic, label), who, el('span', 'muted', 'by ' + (cm.by || '?')), el('time', null, ago2(cm.sent_at || cm.at)));
-    head.lastChild.title = cm.sent_at || cm.at || ''; if (touchUrl(cm)) head.append(touchSource(p, cm, false));
+    head.lastChild.title = cm.sent_at || cm.at || ''; if (cm.url) head.append(touchSource(p, cm, false));
     if (cm.draft) head.append(ui.pill({ text: 'Draft, not sent', tone: 'warn' }));
     const body = el('div', 'cmbody'); richText(body, cm.text); row.append(head, body); return row;
   }
@@ -8329,19 +8329,33 @@ if (typeof window !== 'undefined') (() => {
   }
   // A log entry's source link (card #290, kit v91): `url`, the original message or thread. It opens in a new tab;
   // in the person record, an entry without one offers to add it.
-  const touchUrl = cm => typeof cm.url === 'string' && /^https?:\/\/[^\s/]+\S*$/i.test(cm.url) && cm.url.length <= 2000 ? cm.url : '';
+  function touchUrl(cm) {
+    const url = cm.url;
+    if (typeof url !== 'string' || !/^https?:\/\/[^\s/]+\S*$/i.test(url) || url.length > 2000 || url.includes('\\')) return '';
+    let parsed; try { parsed = new URL(url); } catch { return ''; }
+    if (parsed.hostname.toLowerCase().replace(/\.+$/, '') !== 'mail.google.com') return url;
+    const parts = parsed.hash.slice(1).split('/'), route = parts[0].toLowerCase();
+    const mailbox = ['all', 'inbox', 'sent', 'drafts', 'starred', 'important', 'snoozed', 'spam', 'trash', 'scheduled'].includes(route);
+    const thread = parts[parts.length - 1].split('?')[0];
+    // Match CLI mailbox/thread-only routes; an ID-shaped label/search word is still private view data.
+    if (!mailbox || parts.length !== 2 || !/^(?:[0-9a-fA-F]{1,16}|FMfcgz[A-Za-z0-9_-]{20,512})$/.test(thread)) return '';
+    const account = parsed.pathname.match(/^\/mail\/u\/([0-9]+)\/?$/);
+    return 'https://mail.google.com' + (account ? `/mail/u/${account[1]}/` : '/mail/') + '#all/' + thread;
+  }
+
   function touchSource(p, cm, editable) {
     const url = touchUrl(cm), box = el('span', 'tsrc');
     if (url) { let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
       const a = elI('a', 'tsrclink', 'arrow-up-right', host === 'mail.google.com' ? 'Open in Gmail' : 'Open original'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
       a.title = `Open the original in a new tab: ${host || url}`; box.append(roKeep(a)); }
+    if (cm.url && !url) box.append(el('span', 'muted', 'Source link unavailable; use a canonical mailbox/thread link.'));
     if (editable && !ro) box.append(ui.iconButton({ icon: url ? 'pencil' : 'link', label: url ? 'Change source link' : 'Add source link (for example the Gmail thread)', size: 'sm', onClick: () => setTouchUrl(p.id, cm.id, url) }));
     return box;
   }
   async function setTouchUrl(pid, cmid, cur) {
-    const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the link to the original, such as the Gmail thread. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
-    if (v === null) return; const url = v.trim();
-    if (url && !touchUrl({ url })) { toast('Enter one link starting with https://', true); return; }
+    const v = await ui.promptText({ title: cur ? 'Change source link' : 'Add source link', body: 'Paste the original thread link. Use a Gmail mailbox/thread link (for example #all/<thread id>); search, label, category and pagination views are refused. Leave it empty to remove the link.', label: 'Link', type: 'url', value: cur, placeholder: 'https://mail.google.com/…', confirmLabel: 'Save' });
+    if (v === null) return; const raw = v.trim(), url = touchUrl({ url: raw });
+    if (raw && !url) { toast('Enter one link starting with https://. Gmail links must use mailbox/thread only; search, label, category, pagination and extra segments are refused.', true); return; }
     pedit(pid, x => { const c = x.comments.find(y => y.id === cmid); if (!c) return; if (url) c.url = url; else delete c.url; }, `Source link: ${nameOf(pid)}`);
   }
   async function markSent(pid, cmid) {

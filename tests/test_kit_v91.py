@@ -59,6 +59,65 @@ class TouchUrl(unittest.TestCase):
         self.assertEqual(GMAIL, self.touches()[-1]["url"])
         self.assertIn(f"source link ({self.touches()[-1]['id']}): {GMAIL}", self.person())
 
+    def test_person_read_never_prints_legacy_private_gmail_routes_or_account_queries(self):
+        self.run_ok("touch", "Robin Linktest", "Reference.", "--channel", "email", "--url", GMAIL)
+        people_dir = os.path.join(self.dir, "people")
+        for filename in os.listdir(people_dir):
+            path = os.path.join(people_dir, filename)
+            with open(path) as fh:
+                person = json.load(fh)
+            if person.get("name") == "Robin Linktest":
+                break
+        for source, expected in (
+            ("https://mail.google.com/mail/u/0/?authuser=private%40example.test#label/PrivateClient/0123456789abcdef", "unavailable"),
+            ("https://mail.google.com/mail/u/0/?authuser=private%40example.test#search/PrivateClient/0123456789abcdef", "unavailable"),
+            ("https://mail.google.com/mail/u/0/?authuser=private%40example.test#inbox/abc123", "https://mail.google.com/mail/u/0/#all/abc123"),
+            ("javascript:alert(1)", "unavailable"),
+        ):
+            with self.subTest(source=source):
+                person["comments"][-1]["url"] = source
+                with open(path, "w") as fh:
+                    json.dump(person, fh)
+                with open(path, "rb") as fh:
+                    before = fh.read()
+                output = self.person()
+                self.assertIn(expected, output)
+                for private in ("private", "PrivateClient", "authuser", "#label", "#search", "javascript:"):
+                    self.assertNotIn(private, output)
+                with open(path, "rb") as fh:
+                    self.assertEqual(before, fh.read(), "a read never rewrites stored legacy sources")
+
+    def test_gmail_sources_keep_only_the_thread_and_numeric_account(self):
+        thread = "FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz"
+        for source, target in (
+            (f"HTTPS://MAIL.GOOGLE.COM/mail/u/2/?authuser=private%40example.test#inbox/{thread}", f"https://mail.google.com/mail/u/2/#all/{thread}"),
+            (f"https://mail.google.com/mail/u/0/#sent/{thread}?projector=1", f"https://mail.google.com/mail/u/0/#all/{thread}"),
+            (f"https://mail.google.com/mail/u/private@example.test/#inbox/{thread}", f"https://mail.google.com/mail/#all/{thread}"),
+            ("https://mail.google.com/mail/#inbox/a", "https://mail.google.com/mail/#all/a"),
+            ("https://mail.google.com/mail/#sent/abc123", "https://mail.google.com/mail/#all/abc123"),
+            ("https://mail.google.com/mail/#all/0123456789abcdef", "https://mail.google.com/mail/#all/0123456789abcdef"),
+        ):
+            with self.subTest(source=source):
+                self.run_ok("touch", "Robin Linktest", "Thread reference.", "--channel", "email", "--url", source)
+                self.assertEqual(target, self.touches()[-1]["url"])
+                self.assertNotIn("private", self.touches()[-1]["url"].lower())
+
+    def test_gmail_source_without_a_thread_is_refused(self):
+        for fragment in ("label/Clients/0123456789abcdef", "search/private/FMfcgzABCDEFGHIJKLMNOPQRSTUVWXyz", "category/0123456789abcdef", "inbox/p2/0123456789abcdef", "all/0123456789abcdef/extra", "all/0123456789abcdef/", "search/private", "label/PrivateClient", "settings/general", "inbox", "all/", "inbox/p2", "search/private/p2", "label/PrivateClient/P30", "label/Clients/Acme", "search/from%3Aacme/renewal", "search/private/ImportantRenewalNotesFromPrivateClient"):
+            with self.subTest(fragment=fragment):
+                r = self.run_kt("touch", "Robin Linktest", "Thread reference.", "--channel", "email", "--url", "https://mail.google.com/mail/u/0/#" + fragment)
+                self.assertNotEqual(0, r.returncode)
+                self.assertIn("Gmail thread", r.stderr)
+        self.assertEqual([], self.touches())
+
+    def test_uppercase_https_is_accepted_and_other_hosts_stay_unchanged(self):
+        source = "HTTPS://other.example.test/original?label=keep#part"
+        self.run_ok("touch", "Robin Linktest", "Original reference.", "--channel", "note", "--url", source)
+        self.assertEqual(source, self.touches()[-1]["url"])
+        lookalike = "https://mail.google.com.evil.example/search/private/thread123"
+        self.run_ok("touch-url", "Robin Linktest", lookalike)
+        self.assertEqual(lookalike, self.touches()[-1]["url"])
+
     def test_touch_without_url_has_no_field(self):
         self.run_ok("touch", "Robin Linktest", "Called.", "--channel", "call")
         self.assertNotIn("url", self.touches()[-1])
@@ -75,8 +134,8 @@ class TouchUrl(unittest.TestCase):
         self.run_ok("touch", "Robin Linktest", "Second.", "--channel", "email")
         first, second = [c["id"] for c in self.touches()]
         self.assertIn(f"set source link on {second}", self.run_ok("touch-url", "Robin Linktest", GMAIL))
-        self.run_ok("touch-url", "Robin Linktest", GMAIL + "x", "--touch", first)
-        self.assertEqual([GMAIL + "x", GMAIL], [c.get("url") for c in self.touches()])
+        self.run_ok("touch-url", "Robin Linktest", GMAIL[:-1] + "2", "--touch", first)
+        self.assertEqual([GMAIL[:-1] + "2", GMAIL], [c.get("url") for c in self.touches()])
         self.assertIn("cleared", self.run_ok("touch-url", "Robin Linktest", "", "--touch", first))
         self.assertNotIn("url", self.touches()[0])
         r = self.run_kt("touch-url", "Robin Linktest", GMAIL, "--touch", "c_nope")

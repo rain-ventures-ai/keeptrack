@@ -42,4 +42,6 @@ Add a case there when either changes.
 
 `v4_kit99` freezes unchanged split records before token selection hardening (kit v104; the name is historical).
 
+`v4_kit100` freezes unchanged split board data before Gmail source privacy and record history fixes (kit v105; the name is historical).
+
 `v4_kit98` freezes unchanged split board data before the image review fixes (kit v103; the name is historical).
