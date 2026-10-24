@@ -535,7 +535,12 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
       const pickProject = async (name, label) => {
         const pill = company(name);
         if (await pill.count() && await pill.locator('.cpillproj').count()) await pill.locator('.cpillproj').click();
-        else { await pg.locator('.cpill.more').click(); await pg.locator(`#clientPop [aria-label="Projects for ${name}"]`).click(); }
+        else {
+          // Selecting an overflow company can leave this popover open while the bar reflows.
+          // Toggle only when closed; otherwise the test hides the very project button it needs.
+          if (!(await pg.locator('#clientPop').isVisible())) await pg.locator('.cpill.more').click();
+          await pg.locator(`#clientPop [aria-label="Projects for ${name}"]`).click();
+        }
         await pg.locator('.ui-menu [role=menuitem]', { hasText: label }).click();
       };
       const rain = company('Rain Ventures');
