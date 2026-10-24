@@ -9146,7 +9146,7 @@ def _all_proposals(data):
             continue
         try:
             archived = read_archive(rel[len("archive/"):-5], state)[0] or {}
-        except (ValueError, TypeError, SystemExit):   # one unreadable archive file never blocks Review Inbox proposals
+        except (ValueError, TypeError):
             continue
         out.extend(x for x in archived.get("proposals", []) if isinstance(x, dict))
     return out
@@ -10217,7 +10217,11 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     sizes = {key: len(_json_text(value).encode()) for key, value in slots.items()}
     if any(size > ARCHIVE_FILE_MAX for size in sizes.values()):
         raise ArchiveUnpackable("archive envelope metadata cannot fit a part")
-    next_part = max([0] + [int(key[5:]) for key in keys if key != year]) + 1
+    # Never reuse the name of a part file that is already in the folder but not in this board's index (another one-file
+    # board in the same folder shares archive/): a new part must not overwrite it.
+    present = [rel[8:-5] for rel in _BOARD_STATES.get(id(data), {}).get("files", {})
+               if rel.startswith("archive/" + year + "-") and rel.endswith(".json") and valid_archive_key(rel[8:-5])]
+    next_part = max([0] + [int(key[5:]) for key in keys + present if key != year]) + 1
     index = 0
     for unit in units:
         weight = len(_json_text(unit).encode()) - template_size

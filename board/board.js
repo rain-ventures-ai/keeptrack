@@ -8816,7 +8816,9 @@ if (typeof window !== 'undefined') (() => {
     for (const [id, lines] of histories) { const unit = empty(); unit.history[id] = lines; units.push(unit); }
     const slots = new Map(keys.map(k => [k, empty(family.get(k))])), sizes = new Map([...slots].map(([k, value]) => [k, archBytes(jsonText(value))]));
     if ([...sizes.values()].some(n => n > ARCH_MAX)) throw new ArchiveUnpackable('Archive envelope metadata cannot fit a part');
-    let index = 0, nextPart = Math.max(0, ...keys.filter(k => k !== year).map(k => Number(k.slice(5)))) + 1;
+    // never reuse the name of a part file already in the folder but not in this board's index (another one-file board there)
+    const present = [...((meta && meta.files) || new Map()).keys()].map(p => (/^archive\/(.+)\.json$/.exec(p) || [])[1]).filter(k => archivePartKey(k) && k.startsWith(year + '-'));
+    let index = 0, nextPart = Math.max(0, ...keys.concat(present).filter(k => k !== year).map(k => Number(k.slice(5)))) + 1;
     for (const unit of units) {
       const weight = archBytes(jsonText(unit)) - templateSize;
       if (templateSize + weight > ARCH_MAX) throw new ArchiveUnpackable('A single logical archive record cannot fit a part');
@@ -9160,7 +9162,7 @@ if (typeof window !== 'undefined') (() => {
   function archTaskRow({ item: t, year }) {
     const labels = (t.labels || []).map(l => ({ name: l, color: labelColor(l) })), todos = t.todos || [];
     const row = ui.taskRow({ num: t.num, title: t.title, priority: t.priority, due: t.due, done: true, client: t.client, labels, todoTotal: todos.length, todoDone: todos.filter(d => d.done).length }, { density: 'row', onOpen: () => openArchived('task', t, year) });
-    row.classList.add('archrow'); row.dataset.archTask = t.id; row.setAttribute('aria-label', `#${t.num || ''} ${t.title || ''}, ${finishedDone(t) ? 'done' : 'cancelled'}, archived ${year}`);
+    row.classList.add('archrow'); row.dataset.archTask = t.id; row.setAttribute('aria-label', `#${t.num || ''} ${t.title || ''}, ${finishedDone(t) ? 'done' : 'cancelled'}, archived ${archYearOf(year)}`);
     const meta = row.querySelector('.ui-task__meta'), done = finishedDone(t);
     meta.append(ui.pill({ text: done ? 'Done' : 'Cancelled', tone: done ? 'ok' : 'neutral', size: 'sm' }), archPill(year, 'ui-pill ui-pill--neutral ui-pill--sm archpill')); meta.hidden = false;
     return row;

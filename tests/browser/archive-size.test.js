@@ -165,6 +165,23 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       assert.equal(api.files[`archive/${heldYear}.json`], heldBefore, 'the held year file is not touched');
       assert.deepEqual(errors, []); await page.close();
     }
+    // A part file already in the folder but not in this board's index (another board shares archive/) is never overwritten:
+    // the new parts are numbered after it.
+    {
+      const api = new Github(), year = String(new Date().getFullYear()), foreign = text({ version: 3, archive: true, year, tasks: [card('t_other', 90, 'Other board record')], contacts: [], history: {} });
+      api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{} });
+      api.files[`archive/${year}-1.json`] = foreign;
+      const done = api.card('t_two'); done.details = 'x'.repeat(350000); api.files['cards/t_two.json'] = text(done);
+      const meta = JSON.parse(api.files['tasks.json']); meta.archive = { files: { [year]: { tasks: 2, contacts: 0 } } }; api.files['tasks.json'] = text(meta);
+      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(init, 'board'); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }); await shipped.hover(); await shipped.locator('.quickarch').click();
+      await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
+      const keys = Object.keys(JSON.parse(api.files['tasks.json']).archive.files);
+      assert.equal(api.files[`archive/${year}-1.json`], foreign, 'the other board\'s part file is untouched');
+      assert.ok(!keys.includes(`${year}-1`), 'and is not taken into this board\'s index'); assert.ok(keys.includes(`${year}-2`), 'new parts are numbered after it: ' + keys);
+      assert.deepEqual(errors, []); await page.close();
+    }
     // A one-file board whose file is not named tasks.json keeps the Contents-API route on its own file: a sibling
     // tasks.json (another board in the same folder) is never read or written by its archive or Put back.
     {

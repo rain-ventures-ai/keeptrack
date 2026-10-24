@@ -21,17 +21,22 @@ def envelope(year='2020', **extra):
 
 
 class ArchiveLazyShards(unittest.TestCase):
-    def test_unreadable_archive_file_does_not_block_proposals(self):
-        data = {'proposals': [{'id': 'r_live'}]}
-        k._BOARD_STATES[id(data)] = {'files': {'archive/2020.json': {}, 'archive/2020-1.json': {}}}
+    def test_new_part_never_reuses_a_part_file_another_board_left_in_the_folder(self):
+        # two one-file boards in one folder share archive/: 2020-1 and 2020-3 are there but not in this board's index
+        cur = envelope()
+        cur['tasks'] = [{'id': f't_{n}', 'details': 'x' * 350} for n in range(5)]
+        data = {'archive': {'files': {'2020': {}}}}
+        k._BOARD_STATES[id(data)] = {'files': {'archive/2020.json': {}, 'archive/2020-1.json': {}, 'archive/2020-3.json': {},
+                                                'archive/2021-9.json': {}, 'archive/notes.json': {}}}
         try:
-            def read(key, state):
-                if key == '2020': sys.exit('cannot read archive/2020.json: invalid JSON')
-                return {'proposals': [{'id': 'r_part'}]}, None
-            with mock.patch.object(k, 'read_archive', side_effect=read):
-                self.assertEqual([x['id'] for x in k._all_proposals(data)], ['r_live', 'r_part'])
+            with mock.patch.object(k, 'ARCHIVE_FILE_MAX', 1000):
+                parts = k.shard_archive_family('2020', cur, 'old-sha', {}, data, None)
         finally:
             k._BOARD_STATES.pop(id(data), None)
+        new = sorted(key for key in parts if key != '2020')
+        self.assertTrue(new, 'the year needed new parts')
+        self.assertNotIn('2020-1', new); self.assertNotIn('2020-3', new)
+        self.assertEqual(new[0], '2020-4', 'numbering continues after the highest part already in the folder')
 
     def test_archived_listing_names_the_year_of_a_part_file(self):
         data = {'archive': {'files': {'2020-1': {}}}}
