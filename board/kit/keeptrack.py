@@ -361,7 +361,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 105  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 106  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1863,15 +1863,17 @@ def rewrite_archives(data, edit):
     n = 0
     for y in archive_years(data):
         cur, _ = read_archive(y, _MUT["base"])
+        before_size = getattr(cur, "stored_bytes", None) if cur is not None else 0
         k = edit(cur) if cur else 0
         if k:
             text = _json_text(cur)
             found = archive_size_issue(f"archive/{y}.json", len(text.encode()))
-            if found and found[0] == "FILE_SIZE":
+            if found and found[0] == "FILE_SIZE" and (before_size is None or len(text.encode()) > before_size):
                 sys.exit(f"not saved: archive/{y}.json would be {len(text.encode()) // 1024} KB, over its {ARCHIVE_FILE_MAX // 1024} KB limit, "
                          "so this change to the archive is refused and nothing was written. " + ARCHIVE_NEXT_STEP)
             if found:
-                print(f"warning: archive/{y}.json: {found[1]}", file=sys.stderr)
+                note = f"warning: archive/{y}.json: {found[1]}"
+                _MUT["after"].append(lambda saved, note=note: print(note, file=sys.stderr))
             _MUT["extra"][f"archive/{y}.json"] = text; n += k
     return n
 
@@ -9995,12 +9997,24 @@ def archive_index(data, year, cur):
     a["last_run"] = now()
 
 
+class ArchiveRead(dict):
+    """Parsed archive with transport byte metadata outside the JSON schema."""
+    def __init__(self, body, stored_bytes):
+        super().__init__(body)
+        self.stored_bytes = stored_bytes
+
+
+def archive_decoded(text, stored_bytes):
+    body = json.loads(text)
+    return ArchiveRead(body, stored_bytes) if isinstance(body, dict) else body
+
+
 def read_archive(year, base):
     """(data or None, sha) of one archive file, from the same place as the board file."""
     if BACKEND == "hosted" and not FILE:
         try:
             file = storage_adapter().read(f"archive/{check_year(year)}.json")
-            return file["body"], file["rev"]
+            return (ArchiveRead(file["body"], None) if isinstance(file["body"], dict) else file["body"]), file["rev"]
         except HostedError as e:
             if e.status == 404:
                 return None, None
@@ -10010,29 +10024,37 @@ def read_archive(year, base):
     if isinstance(base, dict) and rel in base.get("files", {}):
         entry = base["files"][rel]
         try:
-            return json.loads(entry["text"]), entry.get("sha")
+            size = entry.get("size")
+            size = size if type(size) is int and size >= 0 else len(entry["text"].encode("utf-8"))
+            return archive_decoded(entry["text"], size), entry.get("sha")
         except ValueError as e:
             sys.exit(f"cannot read {pth}: invalid JSON ({e})")
     if FILE:
         f = local_archive_file(year)
         if not os.path.exists(f):
             return None, None
-        with open(f, encoding="utf-8") as src:
-            return json.load(src), None
+        with open(f, "rb") as src:
+            raw = src.read()
+        return archive_decoded(raw.decode("utf-8"), len(raw)), None
     if WRITE == "git":
         head = base.get("head") if isinstance(base, dict) else base
         rc, raw, _ = git("show", f"{head}:{pth}")
-        return (json.loads(raw) if rc == 0 else None), None
+        if rc:
+            return None, None
+        size_rc, size, _ = git("cat-file", "-s", f"{head}:{pth}")
+        return archive_decoded(raw, int(size) if size_rc == 0 and size.isdigit() else None), None
     hit = cached_read(pth)
     if hit:
-        return json.loads(hit[0]), hit[1]
+        return archive_decoded(hit[0], len(hit[0].encode("utf-8"))), hit[1]
     rc, out, err = gh(f"repos/{REPO}/contents/{pth}?ref={BRANCH}")
     if rc:
         if "404" in err or "Not Found" in out:
             return None, None
         sys.exit(f"cannot read {pth}: {err.strip() or out.strip()}")
     d = json.loads(out)
-    return json.loads(content_text(pth, d)), d["sha"]
+    text = content_text(pth, d)
+    size = d.get("size")
+    return archive_decoded(text, size if type(size) is int and size >= 0 else None), d["sha"]
 
 
 def write_archive(year, cur, sha, message):
@@ -10051,13 +10073,13 @@ def write_archive(year, cur, sha, message):
     sys.exit(f"write failed ({archive_path(year)}): {err.strip()} {out.strip()[:200]}")
 
 
-def archive_check_sizes(data, plan, base, ref_orig=None):
+def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_history=0):
     """Build the text of every planned year file (read, merge, and for one card its history moved onto the card), and hold
     back each year that would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and the year leaves the plan; the
     other years are archived as planned. Returns (held, warnings, files): text lines, and {year: (archive data, sha)} for
     the years to write, so the size checked is the text written. History lines of a held year go back to their items (on the
     board, or in another planned year, which is then measured again)."""
-    held = []
+    held, blocked_years = [], set()
     while True:
         warnings, files, again = [], {}, False
         for y in sorted(plan):
@@ -10082,6 +10104,17 @@ def archive_check_sizes(data, plan, base, ref_orig=None):
             if part.get("proposals"):
                 data.setdefault("proposals", []).extend(part["proposals"])
             del plan[y]
+            blocked_years.add(y)
+            # Held entities keep their original list position. They are live again, so their
+            # old history can still move to this year's file when that year has room.
+            history_year = str(board_today(data).year)
+            if keep_history and history_year not in blocked_years:
+                for entity in part["tasks"] + part["contacts"]:
+                    history = entity.get("history") or []
+                    if len(history) > keep_history:
+                        history_part = plan.setdefault(history_year, {"tasks": [], "contacts": [], "proposals": [], "history": {}})
+                        history_part["history"].setdefault(entity["id"], []).extend(history[:-keep_history])
+                        entity["history"] = history[-keep_history:]
             owners = {x["id"]: x for x in data["tasks"] + data["contacts"] if isinstance(x, dict) and "id" in x}
             for q in plan.values():
                 owners.update({x["id"]: x for x in q["tasks"] + q["contacts"] if isinstance(x, dict) and x.get("id") not in owners})
@@ -10099,6 +10132,10 @@ def archive_check_sizes(data, plan, base, ref_orig=None):
                             + ARCHIVE_NEXT_STEP.replace(" Until then do not edit the file by hand.", ""))
             again = True; break   # the plan changed: measure the remaining years again
         if not again:
+            if held and positions:
+                for kind in ("tasks", "contacts"):
+                    order = positions[kind]
+                    data[kind].sort(key=lambda x: order.get(x["id"], len(order)))
             return held, warnings, files
 
 
@@ -10113,6 +10150,7 @@ def _cmd_archive(a):
     for attempt in range(6):
         data, base = load()
         guard_schema(data, write=not getattr(a, "dry_run", False)); migrate_data(data, min(SCHEMA, 3))
+        positions = {kind: {x["id"]: i for i, x in enumerate(data.get(kind, []))} for kind in ("tasks", "contacts")}
         before = reserved_snapshot(data)   # kit v89: archive saves directly, so it runs the reserved-name check itself
         rules = archive_rules(data)
         for k in ("done_days", "lost_days", "keep_history"):
@@ -10144,7 +10182,7 @@ def _cmd_archive(a):
         else:
             proposals_before = copy.deepcopy(data.get("proposals", []))
             plan = archive_plan(data, rules)
-        held, size_warnings, files = archive_check_sizes(data, plan, base, ref_orig)   # a year over its limit: its items stay on the board
+        held, size_warnings, files = archive_check_sizes(data, plan, base, ref_orig, positions, 0 if ref else rules["keep_history"])   # a year over its limit: its items stay on the board
         if not ref:   # after the check: a held proposal goes back on the board already slimmed, and that slimming is saved
             slimmed = sum(1 for old in proposals_before for new in data.get("proposals", [])
                           if old.get("id") == new.get("id") and old != new)

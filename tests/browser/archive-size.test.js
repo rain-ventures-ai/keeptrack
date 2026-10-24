@@ -90,12 +90,17 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
     }
     // A one-file board: one year over the limit is held back, a history-only year (today's) is written. The page must still
     // trim the history on the board, update the archive index and say what it did.
-    {
+    for (const split of [false, true]) {
       const thisYear = String(new Date().getFullYear()), oldIso = new Date(Date.now() - 400 * 864e5).toISOString(), heldYear = oldIso.slice(0, 4);
       const hist = Array.from({ length: 30 }, (_, i) => ({ at: '2026-09-01T08:00:' + String(i).padStart(2, '0') + '.000Z', by: 'alex', text: 'step ' + i }));
       const api = new Github(), one = { ...root, layout: undefined, archive: { files: { [heldYear]: { tasks: 0, contacts: 0 } } }, contacts: [],
         tasks: [card('t_one', 1, 'Open work', { history: hist }), card('t_old', 2, 'Old finished work', { column: 'done', created: oldIso, updated: oldIso })] };
       delete one.layout; api.files = { 'tasks.json': text(one), [`archive/${heldYear}.json`]: text({ version: 3, archive: true, year: heldYear, tasks: [], contacts: [], history: {}, pad: 'x'.repeat(905 * 1024) }) };
+      if (split) {
+        const meta = { ...one, layout: 'split' }; delete meta.tasks; delete meta.contacts;
+        api.files['tasks.json'] = text(meta);
+        for (const task of one.tasks) api.files[`cards/${task.id}.json`] = text(task);
+      }
       const heldBefore = api.files[`archive/${heldYear}.json`];
       const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
       await page.addInitScript(init, 'board'); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
@@ -107,6 +112,7 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       assert.doesNotMatch(t, /Nothing archived/); assert.match(t, /Held back 1 item/); assert.match(t, new RegExp(`archive/${heldYear}\\.json`));
       assert.match(t, /0 done tasks, 0 Lost people and 10 old history lines/, 'the toast counts only what was written');
       const board = JSON.parse(api.files['tasks.json']);
+      if (split) board.tasks = Object.entries(api.files).filter(([p]) => p.startsWith('cards/')).map(([,v]) => JSON.parse(v));
       assert.ok(board.tasks.some(x => x.id === 't_old'), 'the held card is still on the board');
       assert.equal(board.tasks.find(x => x.id === 't_one').history.length, 20, 'history trimmed on the board');
       assert.deepEqual(board.archive.files[thisYear], { tasks: 0, contacts: 0 }, 'the index lists the year that was written');

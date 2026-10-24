@@ -1,0 +1,89 @@
+{
+  "id": "t_first",
+  "num": 1,
+  "title": "Call Acme",
+  "column": "in-progress",
+  "client": "Acme",
+  "project": "pr_pilot01ab",
+  "priority": "high",
+  "due": "2026-10-20",
+  "labels": [
+    "call"
+  ],
+  "assignees": [
+    "alex"
+  ],
+  "details": "Confirm the next step.",
+  "links": [],
+  "contacts": [
+    {
+      "person_id": "p_acme",
+      "name": "Casey Example",
+      "role": "Buyer",
+      "email": "casey@example.invalid",
+      "phone": ""
+    }
+  ],
+  "todos": [
+    {
+      "id": "d_one",
+      "text": "Prepare notes",
+      "done": false
+    }
+  ],
+  "comments": [
+    {
+      "id": "c_one",
+      "at": "2026-10-01T09:00:00.000Z",
+      "by": "alex",
+      "text": "Please call in the morning."
+    }
+  ],
+  "history": [
+    {
+      "at": "2026-10-01T08:00:00.000Z",
+      "by": "alex",
+      "text": "created"
+    },
+    {
+      "at": "2026-10-05T09:30:00.000Z",
+      "by": "claude@alex",
+      "text": "waiting on Acme finance (quote approval) (p_acme), chase 2026-10-09"
+    }
+  ],
+  "claim": {
+    "agent": "claude",
+    "on_behalf_of": "alex",
+    "session_id": "fixture01",
+    "session_url": "",
+    "host": "h",
+    "cwd": "/w",
+    "branch": "main",
+    "status": "blocked",
+    "blocked_by_wait": true,
+    "note": "waiting on Acme finance (quote approval)",
+    "claimed_at": "2026-10-05T09:00:00.000Z",
+    "heartbeat_at": "2026-10-05T09:30:00.000Z"
+  },
+  "last_run": null,
+  "created": "2026-10-01T08:00:00.000Z",
+  "updated": "2026-10-01T09:00:00.000Z",
+  "rank": "a0",
+  "waiting": {
+    "on": "Acme finance (quote approval)",
+    "who": "p_acme",
+    "since": "2026-10-05",
+    "nudge": "2026-10-09",
+    "note": "asked on the call",
+    "by": "claude@alex",
+    "by_session": "5d41402abc4b"
+  },
+  "agent_cleared": [
+    {
+      "what": "wait on a live claim",
+      "by": "codex@alex",
+      "session": "7c4a8d09ca37",
+      "at": "2026-10-06T10:00:00.000Z"
+    }
+  ]
+}
