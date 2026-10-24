@@ -68,7 +68,8 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
   const browser = await chromium.launch({ headless: true });
   try {
     // A packable oversized year is committed atomically with the live-card removal, for both layouts.
-    for (const [split,minKit] of [[true,null],[false,'108'],[true,106.5],[false,true],[true,false],[false,0],[true,-1],[false,106]]) {
+    // Part files are written on split boards only (one board per folder); a one-file board holds the year back (next case).
+    for (const [split,minKit] of [[true,null],[true,'108'],[true,106.5],[true,true],[true,false],[true,0],[true,-1],[true,106]]) {
       const api = new Github(), year = String(new Date().getFullYear());
       api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, custom:{keep:true},
         tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{t_two:[{at:stampForTest(),text:'older evidence'}]} });
@@ -163,6 +164,22 @@ const opacity = loc => loc.evaluate(e => Number(getComputedStyle(e).opacity));
       const written = JSON.parse(api.files[`archive/${thisYear}.json`]);
       assert.equal(written.history.t_one.length, 10, 'the old lines are in the archive');
       assert.equal(api.files[`archive/${heldYear}.json`], heldBefore, 'the held year file is not touched');
+      assert.deepEqual(errors, []); await page.close();
+    }
+    // A one-file board can share its folder (and archive/) with another board: an oversized year is held back, never split.
+    {
+      const api = new Github(), year = String(new Date().getFullYear());
+      api.files[`archive/${year}.json`] = text({ version:3, archive:true, year, tasks:[card('t_old_a',20,'Old A',{details:'x'.repeat(350000)}),card('t_old_b',21,'Old B',{details:'x'.repeat(350000)})],contacts:[],history:{} });
+      const done = api.card('t_two'); done.details = 'x'.repeat(350000);
+      const meta = JSON.parse(api.files['tasks.json']); delete meta.layout; meta.version = 3; meta.archive = { files: { [year]: { tasks: 2, contacts: 0 } } };
+      meta.tasks = [api.card('t_one'), done]; meta.contacts = []; api.files['tasks.json'] = text(meta);
+      for (const key of Object.keys(api.files)) if (/^(cards|people)\//.test(key)) delete api.files[key];
+      const before = JSON.stringify(api.files);
+      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } }), errors = []; page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(init, 'board'); await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card');
+      const shipped = page.locator('.col[data-col="done"] .card', { hasText: 'Finished work' }); await shipped.hover(); await shipped.locator('.quickarch').click();
+      await page.locator('.ui-toast__text', { hasText: 'Held back 1 item' }).waitFor();
+      assert.equal(JSON.stringify(api.files), before, 'nothing written: no part file, the year file and the board are unchanged');
       assert.deepEqual(errors, []); await page.close();
     }
     // A part file already in the folder but not in this board's index (another board shares archive/) is never overwritten:

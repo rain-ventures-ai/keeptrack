@@ -10267,7 +10267,10 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
                 extra_history = cur.get("history", {}).pop(task["id"], [])
                 task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
             size = len(_json_text(cur).encode())
-            if (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
+            # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
+            # and repacking would move another board's records into parts its index never lists. They hold the year back.
+            split = data.get("version") == 4 and data.get("layout") == "split"
+            if split and (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
                 try:
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
                 except ArchiveUnpackable as exc:

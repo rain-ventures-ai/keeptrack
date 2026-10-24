@@ -121,36 +121,59 @@ class ArchiveLazyShards(unittest.TestCase):
                 adapter.revision('archive/2020.json')
             read.assert_not_called()
 
-    def test_cli_archive_parts_and_restore_preserve_history_and_opaque_fields(self):
+    def _large_board(self, folder, layout, min_kit=None):
         from board_fixtures import copy_board_fixture
+        board = Path(folder) / 'board'; copy_board_fixture('v4' if layout == 'split' else 'v3', board)
+        path = board / 'tasks.json'; data = json.loads(path.read_text())
+        tasks = [dict(id=f't_large{n}', num=n, title=f'Synthetic {n}', column='done',
+                      updated='2020-01-01T00:00:00Z', details='x' * 400000,
+                      history=[{'at': '2019-01-01T00:00:00Z', 'text': 'own history'}]) for n in range(1, 4)]
+        if layout == 'split':
+            for old in (board / 'cards').glob('*.json'): old.unlink()
+            for old in (board / 'people').glob('*.json'): old.unlink()
+            for t in tasks: (board / 'cards' / (t['id'] + '.json')).write_text(json.dumps(t))
+            data['next_num'] = 4
+        else:
+            data['tasks'] = tasks; data['contacts'] = []
+        data.setdefault('settings', {})['min_kit'] = min_kit
+        data['archive'] = {'files': {'2020': {'tasks': 0, 'contacts': 0}}}
+        path.write_text(json.dumps(data)); (board / 'archive').mkdir(exist_ok=True)
+        (board / 'archive' / '2020.json').write_text(json.dumps(envelope(custom={'opaque': True}, history={'t_large2': [{'at': '2018-01-01T00:00:00Z', 'text': 'older history'}]})))
+        env = dict(os.environ, BOARD_USER='alex', BOARD_AGENT='codex', BOARD_SESSION='archive102test', BOARD_WRITE='local', BOARD_PROJECT='')
+        for key in ('BOARD_REPO', 'BOARD_TOKEN', 'BOARD_HOSTED_API', 'BOARD_API'):
+            env.pop(key, None)
+        def run(*args, ok=True):
+            result = subprocess.run([sys.executable, k.__file__, '--file', str(path), *args], cwd=folder, env=env, capture_output=True, text=True)
+            if ok: self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result
+        return board, path, run
+
+    def test_cli_one_file_board_holds_an_oversized_year_instead_of_writing_parts(self):
+        # one-file boards can share a folder (and its archive/): only split boards write part files
+        with tempfile.TemporaryDirectory() as folder:
+            board, path, run = self._large_board(folder, 'one-file')
+            before = (board / 'archive' / '2020.json').read_text()
+            out = run('archive', ok=False)
+            saved = json.loads(path.read_text())
+            self.assertEqual(len(saved['tasks']), 3, out.stdout + out.stderr)
+            self.assertEqual(sorted(p.name for p in (board / 'archive').glob('*.json')), ['2020.json'], 'no part file')
+            self.assertEqual((board / 'archive' / '2020.json').read_text(), before)
+            self.assertNotEqual(saved['settings'].get('min_kit'), 107)
+
+    def test_cli_archive_parts_and_restore_preserve_history_and_opaque_fields(self):
         for min_kit in (None, '108', 106.5, True, False, 0, -1, 106):
             with self.subTest(min_kit=min_kit):
                 with tempfile.TemporaryDirectory() as folder:
-                    board = Path(folder) / 'board'; copy_board_fixture('v3', board)
-                    path = board / 'tasks.json'; data = json.loads(path.read_text())
-                    data['tasks'] = [dict(id=f't_large{n}', num=n, title=f'Synthetic {n}', column='done',
-                                          updated='2020-01-01T00:00:00Z', details='x' * 400000,
-                                          history=[{'at': '2019-01-01T00:00:00Z', 'text': 'own history'}]) for n in range(1, 4)]
-                    data.setdefault('settings', {})['min_kit'] = min_kit
-                    data['contacts'] = []; data['archive'] = {'files': {'2020': {'tasks': 0, 'contacts': 0}}}
-                    path.write_text(json.dumps(data)); (board / 'archive').mkdir(exist_ok=True)
-                    (board / 'archive' / '2020.json').write_text(json.dumps(envelope(custom={'opaque': True}, history={'t_large2': [{'at': '2018-01-01T00:00:00Z', 'text': 'older history'}]})))
-                    env = dict(os.environ, BOARD_USER='alex', BOARD_AGENT='codex', BOARD_SESSION='archive102test', BOARD_WRITE='local', BOARD_PROJECT='')
-                    for key in ('BOARD_REPO', 'BOARD_TOKEN', 'BOARD_HOSTED_API', 'BOARD_API'):
-                        env.pop(key, None)
-                    def run(*args):
-                        result = subprocess.run([sys.executable, k.__file__, '--file', str(path), *args], cwd=folder, env=env, capture_output=True, text=True)
-                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                        return result
+                    board, path, run = self._large_board(folder, 'split', min_kit)
                     run('archive')
-                    saved = json.loads(path.read_text()); self.assertEqual(saved['tasks'], [])
+                    saved = json.loads(path.read_text()); self.assertEqual(list((board / 'cards').glob('*.json')), [])
                     self.assertEqual(saved['settings']['min_kit'], 107)
                     self.assertGreater(len(saved['archive']['files']), 1)
                     for year in saved['archive']['files']:
                         self.assertLessEqual((board / 'archive' / (year + '.json')).stat().st_size, k.ARCHIVE_FILE_MAX)
                     self.assertEqual(json.loads((board / 'archive' / '2020.json').read_text())['custom'], {'opaque': True})
                     run('unarchive', 't_large2')
-                    restored = json.loads(path.read_text())['tasks'][0]
+                    restored = json.loads((board / 'cards' / 't_large2.json').read_text())
                     self.assertEqual(restored['details'], 'x' * 400000)
                     self.assertEqual([line['text'] for line in restored['history'][:2]], ['older history', 'own history'])
                     remaining = [item['id'] for file in (board / 'archive').glob('*.json') for item in json.loads(file.read_text()).get('tasks', [])]

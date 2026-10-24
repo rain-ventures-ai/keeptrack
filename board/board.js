@@ -8844,7 +8844,9 @@ if (typeof window !== 'undefined') (() => {
         for (const y of years) { const rel = `archive/${y}.json`, old = got.meta.files.get(rel), merged = archiveMerge(old ? clone(old.obj) : null, plan[y], y);
           if (pickedIds(rules)) pickedIds(rules).forEach(id => delete merged.history[id]);
           const text = jsonText(merged), bytes = archBytes(text); let packed = null;
-          if (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-'))) {
+          // part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
+          // and repacking would move another board's records into parts its index never lists. They hold the year back.
+          if (isSplit(got.data) && (bytes > ARCH_MAX || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-')))) {
             try { packed = await shardArchiveFamily(y, merged, plan[y], fresh, got.meta, Object.assign({}, cfg()), ag, pickedIds(rules) || []); }
             catch (e) { if (!(e instanceof ArchiveUnpackable) || Object.keys((fresh.archive || {}).files || {}).some(k => archivePartKey(k) && k.startsWith(y + '-'))) throw e; }
           }
