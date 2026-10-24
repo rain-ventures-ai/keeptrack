@@ -21,6 +21,19 @@ def envelope(year='2020', **extra):
 
 
 class ArchiveLazyShards(unittest.TestCase):
+    def test_min_kit_floor_counts_archive_part_files(self):
+        # settings-set --min-kit and doctor use this floor: a board with YYYY-N parts must never drop below the
+        # first kit that reads them, or an older writer could miss records stored in the parts.
+        self.assertEqual(k.min_kit_needed({'archive': {'files': {'2020': {}}}})[0], 0)
+        for key in ('2020-1', '2021-999999'):
+            with self.subTest(key=key):
+                needed, what = k.min_kit_needed({'archive': {'files': {'2020': {}, key: {}}}})
+                self.assertEqual(needed, k.ARCHIVE_PARTS_KIT)
+                self.assertIn('part files', what)
+        for odd in ({'archive': None}, {'archive': {'files': ['2020-1']}}, {'archive': {'files': {'2020-0': {}, 'x-1': {}}}}):
+            with self.subTest(odd=odd):
+                self.assertEqual(k.min_kit_needed(odd)[0], 0)
+
     def test_restore_history_is_linear_and_keeps_dictionary_equality_and_order(self):
         class Counted(dict):
             comparisons = 0

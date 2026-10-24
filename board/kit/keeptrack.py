@@ -2122,6 +2122,10 @@ def min_kit_needed(data):
     what = "Cards carry `waiting`"
     if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
         needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
+    files = data.get("archive", {}).get("files") if isinstance(data.get("archive"), dict) else None
+    if isinstance(files, dict) and any(isinstance(k, str) and re.fullmatch(r"[0-9]{4}-[1-9][0-9]{0,5}", k) for k in files):
+        # older writers only know YYYY archive keys: they would not see records in YYYY-N parts
+        needed, what = max(needed, ARCHIVE_PARTS_KIT), "The archive has year part files (YYYY-N)"
     return needed, what
 
 
@@ -8683,6 +8687,7 @@ PROPOSAL_KINDS = APPLY_KINDS | ASK_KINDS
 PROPOSAL_STATUSES = {"pending", "accepted", "answered", "ignored"}
 DECIDED_STATUSES = ("accepted", "answered", "ignored")
 ASK_KIT = 44               # the kit that understands ask.* items: the first one raises settings.min_kit to at least this
+ARCHIVE_PARTS_KIT = 107   # the first kit that reads and writes archive part files (YYYY-N)
 ASK_ANSWER_LIMIT = 2000
 PROPOSAL_SOURCE_KINDS = {"meeting", "email", "other"}
 PROPOSAL_DETAIL_LIMIT = 300
