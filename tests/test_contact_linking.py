@@ -152,6 +152,14 @@ class ContactLinking(unittest.TestCase):
             self.assertEqual(self.card()['contacts'][0], manual)
             self.assertEqual(self.card()['contacts'][1]['person_id'], 'p_sue')
 
+    def test_fuzzy_or_whitespace_link_refuses_without_changing_card(self):
+        for ref in ('Sue', 'p_su', '   '):
+            before = self.file.read_bytes()
+            self.run_cli('task-set', '#1', '--contact', ref, ok=False)
+            self.assertEqual(self.file.read_bytes(), before)
+        self.run_cli('task-set', '#1', '--contact', 'sue example')
+        self.assertEqual(self.card()['contacts'][0]['person_id'], 'p_sue')
+
     def test_empty_or_fuzzy_unlink_refuses_without_removing_primary(self):
         self.run_cli('task-set', '#1', '--contact', 'p_sue')
         for ref in ('', '   ', 'Sue'):

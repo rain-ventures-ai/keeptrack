@@ -5918,19 +5918,20 @@ def set_task_contact(data, task, ref, *, unlink=False):
     contacts = task.get("contacts", [])
     if not isinstance(contacts, list) or not all(isinstance(k, dict) for k in contacts):
         sys.exit("card contacts must be a list of contact objects; nothing saved")
-    if unlink:
+    if unlink or ref:
+        option = "--unlink-contact" if unlink else "--contact"
         if not ref or not ref.strip():
-            sys.exit("--unlink-contact needs a person ID or exact name; nothing saved")
+            sys.exit(f"{option} needs a person ID or exact name; nothing saved")
         matches = [p for p in data.get("contacts", []) if p["id"] == ref]
         if not matches:
             matches = [p for p in data.get("contacts", []) if p.get("name", "").casefold() == ref.casefold()]
-        if not matches and (task.get("contact") == ref or any(k.get("person_id") == ref for k in contacts)):
+        if unlink and not matches and (task.get("contact") == ref or any(k.get("person_id") == ref for k in contacts)):
             matches = [{"id": ref, "name": next((k.get("name") or ref for k in contacts if k.get("person_id") == ref), ref)}]
         if len(matches) != 1:
-            sys.exit("--unlink-contact needs one exact person ID or unambiguous exact name; nothing saved")
+            sys.exit(f"{option} needs one exact person ID or unambiguous exact name; nothing saved")
         person = matches[0]
     else:
-        person = find_person(data, ref) if ref else None  # validate before changing anything
+        person = None  # an empty --contact retains its explicit primary-clearing meaning
     if unlink or not ref:
         ident = person["id"] if person else task.get("contact")
         if not ident:
@@ -11430,7 +11431,7 @@ def main():
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--due", help="YYYY-MM-DD, today or +N; empty string clears"); s.add_argument("--label", action="append", help="add a label (repeatable; created if new)")
     s.add_argument("--unlabel", action="append", help="remove a label (repeatable)")
-    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact", help="link a CRM person by ID or name without removing other contacts; empty unlinks the legacy primary contact"); s.add_argument("--unlink-contact", action="append", help="unlink a CRM person by ID or name, preserving other contacts"); s.set_defaults(f=cmd_task_set)
+    s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--contact", help="link a CRM person by exact ID or name without removing other contacts; empty unlinks the legacy primary contact"); s.add_argument("--unlink-contact", action="append", help="unlink a CRM person by ID or name, preserving other contacts"); s.set_defaults(f=cmd_task_set)
     s.add_argument("--goal", help="goal id, id prefix or title; empty or 'none' clears")
     s.add_argument("--value", choices=["", "1", "2", "3", "4", "5"], help="optional value 1–5; empty clears")
     s.add_argument("--effort", choices=["", *EFFORT_WEIGHTS], help="optional effort size; empty clears")

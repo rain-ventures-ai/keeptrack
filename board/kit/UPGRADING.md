@@ -27,8 +27,8 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ## Versions
 ### v102 (schema 4)
 - Run kit-update only. No migration or automatic data rewrite.
-- `task-set --contact` resolves a person by name or ID and adds the web-compatible contact snapshot while retaining the legacy primary ID. Repeating the command repairs an old singular-only link without duplicating contacts.
-- Use `--unlink-contact <exact-name-or-id>` to remove a specific person, including plural-only web links and exact dangling IDs. Empty unlink references are refused. An empty `--contact` retains its legacy meaning and unlinks the current primary person only; other card contacts stay. Unknown or ambiguous references now refuse without writing instead of storing arbitrary text.
+- `task-set --contact` resolves a person by exact name or ID and adds the web-compatible contact snapshot while retaining the legacy primary ID. Repeating the command repairs an old singular-only link without duplicating contacts.
+- Use `--unlink-contact <exact-name-or-id>` to remove a specific person, including plural-only web links and exact dangling IDs. Empty unlink references are refused. An empty `--contact` retains its legacy meaning and unlinks the current primary person only; other card contacts stay. Fuzzy, unknown or ambiguous write references now refuse without writing instead of storing arbitrary text.
 - Contact details use the existing web CRM snapshot format within the same board; they are copies and are not refreshed automatically.
 - Manual entries are enriched only with a matching name, a unique CRM email and no conflicting phone. Shared addresses, name-only entries and ambiguous matches remain separate.
 - Verify linking through CLI show, CLI person and the web card Contacts section. New activity includes names; existing activity resolves known person IDs at display time.
