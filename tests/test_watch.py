@@ -145,5 +145,60 @@ class WatchCli(unittest.TestCase):
             self.assertNotIn("watching", p.stderr)
 
 
+    def test_a_github_board_is_polled_at_most_every_ten_seconds(self):
+        env = {k: v for k, v in self.env.items() if k != "BOARD_FILE"}
+        p = subprocess.run([sys.executable, KT, "watch", "#1", "--every", "1"], capture_output=True, text=True, env=env)
+        self.assertNotEqual(0, p.returncode)
+        self.assertIn("between 10 and 3600", p.stderr)
+
+
+class WatchApiBudget(unittest.TestCase):
+    """In process: a fake clock, a fake board and a fake branch head. No network."""
+    def setUp(self):
+        sys.path.insert(0, os.path.join(HERE, "..", "board", "kit"))
+        import keeptrack
+        self.k = keeptrack
+        self.board = {"columns": [{"id": "todo"}, {"id": "done"}],
+                      "tasks": [{"id": "t_a", "num": 1, "title": "A", "column": "todo", "comments": [], "todos": []}]}
+        self.loads = 0
+        self.heads = []
+
+        class Clock:
+            now = 0.0
+            def monotonic(self): return Clock.now
+            def sleep(self, s): Clock.now += s
+        self.clock = Clock()
+
+    def run_watch(self, heads, timeout=None):
+        k = self.k
+        self.heads = list(heads)
+        def load():
+            self.loads += 1
+            return json.loads(json.dumps(self.board)), None
+        def head():
+            return self.heads.pop(0) if len(self.heads) > 1 else self.heads[0]
+        from types import SimpleNamespace
+        from unittest import mock
+        a = SimpleNamespace(ids=["#1"], every=15, timeout=timeout, until=None, all=False, json=False)
+        with mock.patch.object(k, "FILE", None), mock.patch.object(k, "load", load), mock.patch.object(k, "_watch_head", head), \
+             mock.patch.object(k, "time", self.clock), mock.patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as stop:
+                k.cmd_watch(a)
+        return stop.exception.code
+
+    def test_an_unchanged_head_never_reloads_and_the_default_timeout_ends_the_watch(self):
+        self.assertEqual(2, self.run_watch(["sha-1"]))
+        self.assertEqual(1, self.loads, "only the first read loads the board")
+        self.assertAlmostEqual(self.k.WATCH_TIMEOUT, self.clock.now, delta=15)
+
+    def test_a_new_head_reloads_the_board(self):
+        self.assertEqual(2, self.run_watch(["sha-1", "sha-1", "sha-2", "sha-2"], timeout=100))
+        self.assertEqual(2, self.loads, "one reload after the head moved, none while it stayed")
+
+    def test_an_unknown_head_reloads_every_poll(self):
+        self.assertEqual(2, self.run_watch([None], timeout=60))
+        self.assertEqual(1 + 4, self.loads)
+
+
 if __name__ == "__main__":
     unittest.main()

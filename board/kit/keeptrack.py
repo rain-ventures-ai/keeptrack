@@ -361,7 +361,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 108  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 109  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -4529,16 +4529,41 @@ def _watch_emit(rows, as_json):
             print(row["line"])
 
 
+WATCH_TIMEOUT = 3600       # watch stops by itself after an hour unless --timeout says otherwise (at most a day)
+WATCH_MIN_EVERY = 10       # seconds between reads of a GitHub or hosted board; a local --file board may poll faster
+
+
+def _watch_head():
+    """The board branch's head commit, read cheaply, or None when it cannot be (hosted, --file, an error): then the
+    caller reloads. One small ref read per poll instead of a whole-board reload when nothing was committed."""
+    if FILE or BACKEND != "github":
+        return None
+    try:
+        if WRITE == "git":
+            rc, out, _ = git("ls-remote", "origin", f"refs/heads/{BRANCH}")
+            return out.split()[0] if not rc and out else None
+        rc, out, _ = gh(f"repos/{REPO}/git/ref/heads/{urllib.parse.quote(BRANCH, safe='')}")
+        return json.loads(out)["object"]["sha"] if not rc else None
+    except (ValueError, KeyError, IndexError, TypeError, OSError, SystemExit):
+        return None   # the full load then reports the real problem
+
+
 def cmd_watch(a):
     """Poll the board until a watched card changes, or (with --until) reaches a column. Reads only.
-    A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when --timeout runs out."""
+    A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when the timeout runs out (default an
+    hour). Every poll shares the board token's API allowance with heartbeats and saves: a GitHub or hosted board is read
+    at most every 10 seconds, and only the branch head is read while nothing new was committed."""
     every = 15 if a.every is None else a.every
-    if not isinstance(every, (int, float)) or isinstance(every, bool) or every < 0.2 or every > 3600:
-        sys.exit("--every must be between 0.2 and 3600 seconds")
-    if a.timeout is not None and (not isinstance(a.timeout, (int, float)) or isinstance(a.timeout, bool) or a.timeout <= 0 or a.timeout > 86400):
+    floor = 0.2 if FILE else WATCH_MIN_EVERY
+    if not isinstance(every, (int, float)) or isinstance(every, bool) or every < floor or every > 3600:
+        sys.exit(f"--every must be between {floor:g} and 3600 seconds" + ("" if FILE else " for a GitHub or hosted board"))
+    if a.timeout is None:
+        a.timeout = WATCH_TIMEOUT
+    if not isinstance(a.timeout, (int, float)) or isinstance(a.timeout, bool) or a.timeout <= 0 or a.timeout > 86400:
         sys.exit("--timeout must be greater than 0 and at most 86400 seconds")
     if a.all and not a.until:
         sys.exit("--all needs --until")
+    head = _watch_head()
     data, _ = load()
     until = (a.until or "").strip()
     if until:
@@ -4574,13 +4599,17 @@ def cmd_watch(a):
             report(got, True); return
     print("watching " + ", ".join(f"#{t.get('num')}" for t in cards) + f" every {every:g}s"
           + (f", until {until}" + (" (all)" if a.all else "") if until else "")
-          + (f", timeout {a.timeout:g}s" if a.timeout is not None else ""), file=sys.stderr)
+          + f", timeout {a.timeout:g}s", file=sys.stderr)
     deadline = None if a.timeout is None else time.monotonic() + a.timeout
     while True:
         now_m = time.monotonic()
         if deadline is not None and now_m >= deadline:
             print("timed out; no watched card changed", file=sys.stderr); sys.exit(2)
         time.sleep(every if deadline is None else min(every, max(0, deadline - now_m)))
+        now_head = _watch_head()
+        if head is not None and now_head == head:
+            continue   # nothing committed since the last read: no board reload
+        head = now_head
         board, _ = load()
         pairs = current(board)
         if until:
@@ -11868,8 +11897,8 @@ def main():
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
     s = sub.add_parser("watch", help="poll until a card changes, or reaches a column (--until done); a heartbeat alone does not count")
     s.add_argument("ids", nargs="+", metavar="ID")
-    s.add_argument("--every", type=float, default=15, help="seconds between reads (default 15; 0.2 to 3600)")
-    s.add_argument("--timeout", type=float, help="stop after this many seconds and exit 2; omit to wait")
+    s.add_argument("--every", type=float, default=15, help="seconds between reads (default 15; 10 to 3600, or 0.2 to 3600 for a --file board)")
+    s.add_argument("--timeout", type=float, help="stop after this many seconds and exit 2 (default 3600, at most 86400)")
     s.add_argument("--until", help="wait until a card is in this column (for example done) instead of any change")
     s.add_argument("--all", action="store_true", help="with --until: wait until every named card is in that column")
     s.add_argument("--json", action="store_true", help="print one JSON object (or a list, with --all)"); s.set_defaults(f=cmd_watch)
