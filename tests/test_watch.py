@@ -270,6 +270,12 @@ class WatchHead(unittest.TestCase):
         self.assertEqual(keeptrack.WATCH_HEAD_TIMEOUT, kw["timeout"])
         self.assertEqual("0", kw["env"]["GIT_TERMINAL_PROMPT"])
 
+    def test_git_reads_only_the_exact_branch_ref(self):
+        out = "bad\trefs/heads/x/refs/heads/main\nbad2\trefs/tags/x/refs/heads/main\ngood\trefs/heads/main\n"
+        self.assertEqual("good", self.run_git((0, out))[0])
+        self.assertIsNone(self.run_git((0, "bad\trefs/heads/x/refs/heads/main\n"))[0])
+        self.assertIsNone(self.run_git((0, ""))[0])
+
     def test_a_hung_git_or_gh_head_read_gives_none(self):
         self.assertIsNone(self.run_git(subprocess.TimeoutExpired(["git"], 30))[0])
         self.assertIsNone(self.run_git((128, ""))[0])
@@ -285,6 +291,17 @@ class WatchHead(unittest.TestCase):
         with mock.patch.multiple(keeptrack, FILE=None, BACKEND="github"):
             self.assertEqual("sha-9", keeptrack._loaded_head(board))
         self.assertNotIn(id(board), keeptrack._BOARD_STATES, "a long watch must not keep every reloaded board")
+        keeptrack._BOARD_STATES[id(board)] = {"mode": "hosted", "files": {}}
+        with mock.patch.multiple(keeptrack, FILE=None, BACKEND="hosted"):
+            self.assertIsNone(keeptrack._loaded_head(board))
+        self.assertNotIn(id(board), keeptrack._BOARD_STATES, "hosted and --file reloads are freed too")
+
+    def test_the_http_probe_does_not_retry_a_rate_limit(self):
+        from unittest import mock
+        seen = []
+        with mock.patch.object(keeptrack, "use_http", lambda: True):
+            self.head(http=lambda *a, **k: seen.append(k) or (1, "", "HTTP 429: rate limited"))
+        self.assertEqual([{"retries": 0}], seen)
 
     def test_failures_and_boards_without_a_cheap_head_give_none(self):
         boom = lambda *a, **k: (_ for _ in ()).throw(SystemExit("rate limited"))

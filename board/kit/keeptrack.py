@@ -553,7 +553,7 @@ def hosted_api_url():
 _HOSTED_API_NOTE = False
 
 
-def http(method, path, body=None, accept="application/vnd.github+json"):
+def http(method, path, body=None, accept="application/vnd.github+json", retries=None):
     if BACKEND == "hosted" and not FILE:
         sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
     t = token()
@@ -564,7 +564,8 @@ def http(method, path, body=None, accept="application/vnd.github+json"):
                                  headers={"Authorization": f"Bearer {t}", "Accept": accept,
                                           "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "board-cli",
                                           **({"Content-Type": "application/json"} if body is not None else {})})
-    for attempt in range(RATE_TRIES + 1):
+    tries = RATE_TRIES if retries is None else retries
+    for attempt in range(tries + 1):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return 0, r.read().decode(), ""
@@ -573,7 +574,7 @@ def http(method, path, body=None, accept="application/vnd.github+json"):
             wait = _rate_wait(e.code, e.headers, out, attempt)
             if wait is None:
                 return 1, out, f"HTTP {e.code}: {e.reason}"
-            if attempt == RATE_TRIES:
+            if attempt == tries:
                 return 1, out, f"HTTP {e.code}: rate limited"
             time.sleep(wait)
         except (urllib.error.URLError, OSError) as e:
@@ -4545,11 +4546,13 @@ def _watch_head():
             p = subprocess.run(["git", "-C", ROOT, "ls-remote", "origin", f"refs/heads/{BRANCH}"], stdin=subprocess.DEVNULL,
                                capture_output=True, text=True, timeout=WATCH_HEAD_TIMEOUT,
                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-            out = p.stdout.strip()
-            return out.split()[0] if not p.returncode and out else None
+            if p.returncode:
+                return None
+            want = f"refs/heads/{BRANCH}"   # ls-remote matches a pattern's tail: refs/heads/x/refs/heads/main matches too
+            return next((f[0] for f in (ln.split() for ln in p.stdout.splitlines()) if len(f) == 2 and f[1] == want), None)
         ref = f"repos/{REPO}/git/ref/heads/{urllib.parse.quote(BRANCH, safe='')}"
         if use_http():
-            rc, out, _ = http("GET", ref)
+            rc, out, _ = http("GET", ref, retries=0)   # a rate-limited probe skips the poll; it never waits or retries
         else:   # the gh CLI, bounded the same way and without gh()'s rate-limit retries: a failed probe just skips a poll
             p = subprocess.run(["gh", "api", ref], stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                timeout=WATCH_HEAD_TIMEOUT)
@@ -4563,9 +4566,10 @@ def _loaded_head(data):
     """The branch head a load() just read, kept as the next poll's baseline (a commit landing during the reload is not
     missed). Drops the load's save state: watch never saves, and a long watch must not keep every reloaded board.
     None for hosted and --file boards, which have no cheap head and reload each poll."""
+    state = _BOARD_STATES.pop(id(data), None) or {}
     if FILE or BACKEND != "github":
         return None
-    head = (_BOARD_STATES.pop(id(data), None) or {}).get("head")
+    head = state.get("head")
     return head if isinstance(head, str) and head else None
 
 
