@@ -4545,7 +4545,16 @@ def _watch_head():
         rc, out, _ = gh(f"repos/{REPO}/git/ref/heads/{urllib.parse.quote(BRANCH, safe='')}")
         return json.loads(out)["object"]["sha"] if not rc else None
     except (ValueError, KeyError, IndexError, TypeError, OSError, SystemExit):
-        return None   # the full load then reports the real problem
+        return None   # unknown: the caller skips this poll (or reloads when it never knew a head)
+
+
+def _loaded_head(data):
+    """The branch head a load() just read (its own ref read), so a reload costs no second ref read. None for hosted
+    and --file boards, which have no cheap head and reload each poll."""
+    if FILE or BACKEND != "github":
+        return None
+    head = _BOARD_STATES.get(id(data), {}).get("head")
+    return head if isinstance(head, str) and head else None
 
 
 def cmd_watch(a):
@@ -4555,16 +4564,17 @@ def cmd_watch(a):
     at most every 10 seconds, and only the branch head is read while nothing new was committed."""
     every = 15 if a.every is None else a.every
     floor = 0.2 if FILE else WATCH_MIN_EVERY
-    if not isinstance(every, (int, float)) or isinstance(every, bool) or every < floor or every > 3600:
+    finite = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v not in (float("inf"), float("-inf"))
+    if not finite(every) or every < floor or every > 3600:
         sys.exit(f"--every must be between {floor:g} and 3600 seconds" + ("" if FILE else " for a GitHub or hosted board"))
     if a.timeout is None:
         a.timeout = WATCH_TIMEOUT
-    if not isinstance(a.timeout, (int, float)) or isinstance(a.timeout, bool) or a.timeout <= 0 or a.timeout > 86400:
+    if not finite(a.timeout) or a.timeout <= 0 or a.timeout > 86400:   # nan would pass both comparisons
         sys.exit("--timeout must be greater than 0 and at most 86400 seconds")
     if a.all and not a.until:
         sys.exit("--all needs --until")
-    head = _watch_head()
     data, _ = load()
+    head = _loaded_head(data)
     until = (a.until or "").strip()
     if until:
         cols = {c.get("id") for c in data.get("columns") or [] if isinstance(c, dict)}
@@ -4606,11 +4616,12 @@ def cmd_watch(a):
         if deadline is not None and now_m >= deadline:
             print("timed out; no watched card changed", file=sys.stderr); sys.exit(2)
         time.sleep(every if deadline is None else min(every, max(0, deadline - now_m)))
-        now_head = _watch_head()
-        if head is not None and now_head == head:
-            continue   # nothing committed since the last read: no board reload
-        head = now_head
+        if head is not None:
+            now_head = _watch_head()
+            if now_head is None or now_head == head:
+                continue   # nothing committed, or the head read failed: no board reload this poll
         board, _ = load()
+        head = _loaded_head(board)
         pairs = current(board)
         if until:
             got = ready(pairs)

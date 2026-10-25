@@ -146,22 +146,30 @@ class WatchCli(unittest.TestCase):
 
 
     def test_a_github_board_is_polled_at_most_every_ten_seconds(self):
-        env = {k: v for k, v in self.env.items() if k != "BOARD_FILE"}
-        p = subprocess.run([sys.executable, KT, "watch", "#1", "--every", "1"], capture_output=True, text=True, env=env)
+        p = subprocess.run([sys.executable, KT, "watch", "#1", "--every", "1"], capture_output=True, text=True, env=self.env)
         self.assertNotEqual(0, p.returncode)
         self.assertIn("between 10 and 3600", p.stderr)
+
+    def test_nan_and_infinite_values_are_refused(self):
+        for args in (["--timeout", "nan"], ["--timeout", "inf"], ["--every", "nan"], ["--every", "inf"]):
+            p = self.kt("watch", "#1", *args, ok=False)
+            self.assertNotEqual(0, p.returncode, args)
+            self.assertNotIn("watching", p.stderr, args)
+
+
+KIT = os.path.join(HERE, "..", "board", "kit")
+if KIT not in sys.path:
+    sys.path.insert(0, KIT)
+import keeptrack  # noqa: E402
 
 
 class WatchApiBudget(unittest.TestCase):
     """In process: a fake clock, a fake board and a fake branch head. No network."""
     def setUp(self):
-        sys.path.insert(0, os.path.join(HERE, "..", "board", "kit"))
-        import keeptrack
         self.k = keeptrack
         self.board = {"columns": [{"id": "todo"}, {"id": "done"}],
                       "tasks": [{"id": "t_a", "num": 1, "title": "A", "column": "todo", "comments": [], "todos": []}]}
         self.loads = 0
-        self.heads = []
 
         class Clock:
             now = 0.0
@@ -169,18 +177,21 @@ class WatchApiBudget(unittest.TestCase):
             def sleep(self, s): Clock.now += s
         self.clock = Clock()
 
-    def run_watch(self, heads, timeout=None):
-        k = self.k
-        self.heads = list(heads)
+    def run_watch(self, polled, loaded="sha-1", timeout=None):
+        """polled: what each cheap head read returns (the last value repeats); loaded: the head each load() reads."""
+        k, polled = self.k, list(polled)
         def load():
             self.loads += 1
             return json.loads(json.dumps(self.board)), None
-        def head():
-            return self.heads.pop(0) if len(self.heads) > 1 else self.heads[0]
+        def watch_head():
+            return polled.pop(0) if len(polled) > 1 else polled[0]
+        def loaded_head(_data):
+            return loaded(self.loads) if callable(loaded) else loaded
         from types import SimpleNamespace
         from unittest import mock
         a = SimpleNamespace(ids=["#1"], every=15, timeout=timeout, until=None, all=False, json=False)
-        with mock.patch.object(k, "FILE", None), mock.patch.object(k, "load", load), mock.patch.object(k, "_watch_head", head), \
+        with mock.patch.object(k, "FILE", None), mock.patch.object(k, "load", load), \
+             mock.patch.object(k, "_watch_head", watch_head), mock.patch.object(k, "_loaded_head", loaded_head), \
              mock.patch.object(k, "time", self.clock), mock.patch("sys.stderr"):
             with self.assertRaises(SystemExit) as stop:
                 k.cmd_watch(a)
@@ -191,14 +202,40 @@ class WatchApiBudget(unittest.TestCase):
         self.assertEqual(1, self.loads, "only the first read loads the board")
         self.assertAlmostEqual(self.k.WATCH_TIMEOUT, self.clock.now, delta=15)
 
-    def test_a_new_head_reloads_the_board(self):
-        self.assertEqual(2, self.run_watch(["sha-1", "sha-1", "sha-2", "sha-2"], timeout=100))
-        self.assertEqual(2, self.loads, "one reload after the head moved, none while it stayed")
+    def test_a_new_head_reloads_the_board_once(self):
+        self.assertEqual(2, self.run_watch(["sha-1", "sha-2"], loaded=lambda n: "sha-1" if n == 1 else "sha-2", timeout=100))
+        self.assertEqual(2, self.loads, "one reload after the head moved; the reload's own head is kept")
 
-    def test_an_unknown_head_reloads_every_poll(self):
-        self.assertEqual(2, self.run_watch([None], timeout=60))
+    def test_a_failed_head_read_skips_the_poll_instead_of_reloading(self):
+        self.assertEqual(2, self.run_watch([None], timeout=100))
+        self.assertEqual(1, self.loads)
+
+    def test_a_board_without_a_cheap_head_reloads_every_poll(self):
+        self.assertEqual(2, self.run_watch(["unused"], loaded=None, timeout=60))
         self.assertEqual(1 + 4, self.loads)
 
+
+class WatchHead(unittest.TestCase):
+    """_watch_head reads one ref, or gives None (never raises) so the watch skips or reloads."""
+    def head(self, **patch):
+        from unittest import mock
+        base = {"FILE": None, "BACKEND": "github", "WRITE": "api", "REPO": "acme/board", "BRANCH": "main"}
+        base.update(patch.pop("env", {}))
+        with mock.patch.multiple(keeptrack, **base), mock.patch.multiple(keeptrack, **patch):
+            return keeptrack._watch_head()
+
+    def test_api_and_git_reads(self):
+        self.assertEqual("abc", self.head(gh=lambda *a, **k: (0, '{"object": {"sha": "abc"}}', "")))
+        self.assertEqual("def", self.head(env={"WRITE": "git"}, git=lambda *a, **k: (0, "def\trefs/heads/main", "")))
+
+    def test_failures_and_boards_without_a_cheap_head_give_none(self):
+        boom = lambda *a, **k: (_ for _ in ()).throw(SystemExit("rate limited"))
+        self.assertIsNone(self.head(gh=lambda *a, **k: (1, "", "HTTP 429")))
+        self.assertIsNone(self.head(gh=lambda *a, **k: (0, "not json", "")))
+        self.assertIsNone(self.head(gh=boom))
+        self.assertIsNone(self.head(env={"WRITE": "git"}, git=lambda *a, **k: (128, "", "no remote")))
+        self.assertIsNone(self.head(env={"FILE": "/tmp/board.json"}, gh=boom))
+        self.assertIsNone(self.head(env={"BACKEND": "hosted"}, gh=boom))
 
 if __name__ == "__main__":
     unittest.main()
