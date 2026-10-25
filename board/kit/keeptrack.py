@@ -4531,6 +4531,8 @@ def _watch_emit(rows, as_json):
 
 WATCH_TIMEOUT = 3600       # watch stops by itself after an hour unless --timeout says otherwise (at most a day)
 WATCH_MIN_EVERY = 10       # seconds between reads of a GitHub or hosted board; a local --file board may poll faster
+WATCH_HEAD_TIMEOUT = 30    # seconds a git ls-remote head read may take before the poll counts as failed
+WATCH_HEAD_FAILS = 3       # failed head reads in a row before the watch reloads the board, so a lasting error shows
 
 
 def _watch_head():
@@ -4539,12 +4541,15 @@ def _watch_head():
     if FILE or BACKEND != "github":
         return None
     try:
-        if WRITE == "git":
-            rc, out, _ = git("ls-remote", "origin", f"refs/heads/{BRANCH}")
-            return out.split()[0] if not rc and out else None
+        if WRITE == "git":   # bounded and never prompts: a hung remote or credential prompt must not stall the watch
+            p = subprocess.run(["git", "-C", ROOT, "ls-remote", "origin", f"refs/heads/{BRANCH}"], stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=WATCH_HEAD_TIMEOUT,
+                               env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+            out = p.stdout.strip()
+            return out.split()[0] if not p.returncode and out else None
         rc, out, _ = gh(f"repos/{REPO}/git/ref/heads/{urllib.parse.quote(BRANCH, safe='')}")
         return json.loads(out)["object"]["sha"] if not rc else None
-    except (ValueError, KeyError, IndexError, TypeError, OSError, SystemExit):
+    except (ValueError, KeyError, IndexError, TypeError, OSError, SystemExit, subprocess.TimeoutExpired):
         return None   # unknown: the caller skips this poll (or reloads when it never knew a head)
 
 
@@ -4561,7 +4566,7 @@ def cmd_watch(a):
     """Poll the board until a watched card changes, or (with --until) reaches a column. Reads only.
     A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when the timeout runs out (default an
     hour). Every poll shares the board token's API allowance with heartbeats and saves: a GitHub or hosted board is read
-    at most every 10 seconds, and only the branch head is read while nothing new was committed."""
+    at most every 10 seconds, and a GitHub board reads only the branch head while nothing new was committed."""
     every = 15 if a.every is None else a.every
     floor = 0.2 if FILE else WATCH_MIN_EVERY
     finite = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v not in (float("inf"), float("-inf"))
@@ -4611,6 +4616,7 @@ def cmd_watch(a):
           + (f", until {until}" + (" (all)" if a.all else "") if until else "")
           + f", timeout {a.timeout:g}s", file=sys.stderr)
     deadline = None if a.timeout is None else time.monotonic() + a.timeout
+    fails = 0
     while True:
         now_m = time.monotonic()
         if deadline is not None and now_m >= deadline:
@@ -4618,8 +4624,10 @@ def cmd_watch(a):
         time.sleep(every if deadline is None else min(every, max(0, deadline - now_m)))
         if head is not None:
             now_head = _watch_head()
-            if now_head is None or now_head == head:
+            fails = fails + 1 if now_head is None else 0
+            if now_head == head or (now_head is None and fails < WATCH_HEAD_FAILS):
                 continue   # nothing committed, or the head read failed: no board reload this poll
+            fails = 0      # a moved head, or failures enough in a row: reload, which stops with the error if it lasts
         board, _ = load()
         head = _loaded_head(board)
         pairs = current(board)

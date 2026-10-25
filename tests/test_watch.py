@@ -207,8 +207,15 @@ class WatchApiBudget(unittest.TestCase):
         self.assertEqual(2, self.loads, "one reload after the head moved; the reload's own head is kept")
 
     def test_a_failed_head_read_skips_the_poll_instead_of_reloading(self):
+        self.assertEqual(2, self.run_watch([None, None, "sha-1"], timeout=100))
+        self.assertEqual(1, self.loads, "two failures, then the same head: no reload")
+
+    def test_failed_head_reads_in_a_row_reload_the_board_so_a_lasting_error_shows(self):
         self.assertEqual(2, self.run_watch([None], timeout=100))
-        self.assertEqual(1, self.loads)
+        self.assertEqual(1 + 2, self.loads, "seven polls in 100 s: a reload after the 3rd and the 6th failed read")
+        self.loads = 0
+        self.assertEqual(2, self.run_watch([None, None, "sha-1", None, None, "sha-1"], timeout=100))
+        self.assertEqual(1, self.loads, "a good read resets the count")
 
     def test_a_board_without_a_cheap_head_reloads_every_poll(self):
         self.assertEqual(2, self.run_watch(["unused"], loaded=None, timeout=60))
@@ -221,19 +228,41 @@ class WatchHead(unittest.TestCase):
         from unittest import mock
         base = {"FILE": None, "BACKEND": "github", "WRITE": "api", "REPO": "acme/board", "BRANCH": "main"}
         base.update(patch.pop("env", {}))
-        with mock.patch.multiple(keeptrack, **base), mock.patch.multiple(keeptrack, **patch):
+        base.update(patch)
+        with mock.patch.multiple(keeptrack, **base):
             return keeptrack._watch_head()
+
+    def run_git(self, result):
+        from unittest import mock
+        calls = []
+        def run(cmd, **kw):
+            calls.append((cmd, kw))
+            if isinstance(result, BaseException):
+                raise result
+            return subprocess.CompletedProcess(cmd, result[0], result[1], "")
+        with mock.patch.object(keeptrack.subprocess, "run", run):
+            got = self.head(env={"WRITE": "git", "ROOT": "/repo"})
+        return got, calls
 
     def test_api_and_git_reads(self):
         self.assertEqual("abc", self.head(gh=lambda *a, **k: (0, '{"object": {"sha": "abc"}}', "")))
-        self.assertEqual("def", self.head(env={"WRITE": "git"}, git=lambda *a, **k: (0, "def\trefs/heads/main", "")))
+        got, calls = self.run_git((0, "def\trefs/heads/main\n"))
+        self.assertEqual("def", got)
+        cmd, kw = calls[0]
+        self.assertEqual(["git", "-C", "/repo", "ls-remote", "origin", "refs/heads/main"], cmd)
+        self.assertEqual(subprocess.DEVNULL, kw["stdin"])
+        self.assertEqual(keeptrack.WATCH_HEAD_TIMEOUT, kw["timeout"])
+        self.assertEqual("0", kw["env"]["GIT_TERMINAL_PROMPT"])
+
+    def test_a_hung_git_head_read_gives_none(self):
+        self.assertIsNone(self.run_git(subprocess.TimeoutExpired(["git"], 30))[0])
+        self.assertIsNone(self.run_git((128, ""))[0])
 
     def test_failures_and_boards_without_a_cheap_head_give_none(self):
         boom = lambda *a, **k: (_ for _ in ()).throw(SystemExit("rate limited"))
         self.assertIsNone(self.head(gh=lambda *a, **k: (1, "", "HTTP 429")))
         self.assertIsNone(self.head(gh=lambda *a, **k: (0, "not json", "")))
         self.assertIsNone(self.head(gh=boom))
-        self.assertIsNone(self.head(env={"WRITE": "git"}, git=lambda *a, **k: (128, "", "no remote")))
         self.assertIsNone(self.head(env={"FILE": "/tmp/board.json"}, gh=boom))
         self.assertIsNone(self.head(env={"BACKEND": "hosted"}, gh=boom))
 

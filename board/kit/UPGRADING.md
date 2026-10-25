@@ -28,7 +28,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v109 (schema 4)
 `keeptrack.py watch` shares the board token's API allowance safely. No data change and no migration.
 - On a GitHub or hosted board, `--every` is 10 to 3600 seconds (default 15). A local `--file` board still allows 0.2.
-- While the branch head is unchanged, a poll reads only the head (one small request), not the whole board.
+- On a GitHub board, while the branch head is unchanged, a poll reads only the head (one small request), not the whole board. A hosted board still reloads at each poll. Three failed head reads in a row reload the board, so a lasting error ends the watch with that error.
 - `--timeout` defaults to 3600 seconds (exit 2), at most 86400. A forgotten watch no longer polls for ever.
 - Run `kit-update` only. Check: `kit-check` says v109, and `keeptrack.py watch --help` shows the new `--every` range.
 
