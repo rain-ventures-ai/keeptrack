@@ -35,6 +35,7 @@ class Github {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (method !== 'GET') this.writes++;
+    if (this.failWrite && method !== 'GET') return json({ message: 'Synthetic write failure' }, 500);
     if (this.raw && method === 'GET' && Object.hasOwn(this.raw, decodeURIComponent(p))) return json(this.raw[decodeURIComponent(p)]);
     if (this.puts && method === 'PUT' && p.startsWith('/contents/automation/')) { this.puts.push({ path: p, body: req.postDataJSON() }); return json({ content: { sha: 'put-' + this.puts.length } }); }
     if (this.extra && Object.hasOwn(this.extra, p) && method === 'GET') { const x = this.extra[p]; return x === 404 ? json({ message: 'Not Found' }, 404) : json(Array.isArray(x) ? x : { content: Buffer.from(text(x)).toString('base64') }); }
@@ -66,8 +67,9 @@ class Github {
 let base;
 const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); } };
 const TABS = ['Prefs', 'Board', 'Conn', 'Agents'];
-async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board', query = '' } = {}) {
+async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board', query = '', settings = null } = {}) {
   const api = new Github(), page = await browser.newPage({ viewport: { width, height } }), errors = [];
+  if (settings) { const data = JSON.parse(api.files['tasks.json']); Object.assign(data.settings, settings); api.files['tasks.json'] = text(data); }
   page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { errors.push('native dialog: ' + d.message()); d.dismiss(); });
   await page.addInitScript(([token, repo]) => {
     if (repo) { localStorage.setItem('kb_repo', repo); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); }
@@ -85,10 +87,104 @@ const visiblePanel = page => page.evaluate(() => [...document.querySelectorAll('
 const inView = (page, id) => page.evaluate(id => { const d = document.getElementById('dlgSettings').getBoundingClientRect(), r = document.getElementById(id).getBoundingClientRect(); return r.top >= d.top - 1 && r.top < d.bottom - 40; }, id);
 async function settle(page) { await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); await page.waitForTimeout(80); }
 
+async function waitStored(predicate) { const until = Date.now() + 5000; while (!predicate() && Date.now() < until) await new Promise(r => setTimeout(r, 20)); assert.ok(predicate(), 'shared board write completed'); }
+
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Unrelated Settings saves finish with docs controls enabled and preserve the user's dirty draft.
+    for (const fail of [false, true]) {
+      const page = await open(browser);
+      await page.evaluate(() => window.kbSettings.open('labels'));
+      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/docs/unsaved draft');
+      page.api.failWrite = fail;
+      await page.locator('#labelBox input[aria-label="New label name"]').fill(fail ? 'refused-label' : 'saved-label');
+      const attempted = page.waitForResponse(r => r.request().method() !== 'GET' && r.url().startsWith('https://api.test/'));
+      await page.locator('#labelBox button', { hasText: 'Add label' }).click(); await attempted;
+      if (!fail) await waitStored(() => JSON.parse(page.api.files['tasks.json']).labels.some(l => l.name === 'saved-label'));
+      else await page.waitForFunction(() => [...document.querySelectorAll('.toast,.ui-toast')].some(x => /Save failed/.test(x.textContent)));
+      await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled && !document.querySelector('#sDocsRoot').disabled);
+      assert.equal(await page.locator('#dlgSettings').evaluate(e => e.open), true, 'Settings stays open throughout mutation');
+      assert.equal(await page.locator('#sDocsProvider').inputValue(), 'local');
+      assert.equal(await page.locator('#sDocsRoot').inputValue(), '/docs/unsaved draft', `${fail ? 'failure' : 'success'} preserves dirty destination`);
+      assert.equal(await page.locator('#sDocsClear').isEnabled(), true);
+      assert.equal(JSON.parse(page.api.files['tasks.json']).labels.some(l => l.name === 'refused-label'), false);
+      assert.equal(Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'), false, 'unrelated save never files the draft');
+      assert.deepEqual(page.errors, []); await page.close();
+    }
+
+    // Docs home saves through ordinary shared-board mutation and survives a reload.
+    {
+      const page = await open(browser);
+      if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
+      await page.locator('#sDocsProvider').selectOption('google-drive');
+      await page.locator('#sDocsRoot').fill('https://drive.google.com/drive/folders/existing-root');
+      await page.locator('#sDocsSave').click(); await page.getByRole('button', { name: 'Confirm destination', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
+      await page.waitForFunction(() => document.querySelector('#sDocsCurrent a')?.href.includes('existing-root'));
+      await waitStored(() => JSON.parse(page.api.files['tasks.json']).settings.docs_home?.provider === 'google-drive');
+      assert.equal(JSON.parse(page.api.files['tasks.json']).settings.docs_home.provider, 'google-drive');
+      await page.reload(); await page.waitForSelector('.card');
+      if (!await page.locator('#dlgSettings').evaluate(e => e.open)) await page.locator('#btnSettings').click(); await page.locator('#tabBoard').click();
+      assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/existing-root');
+      const writes = page.api.writes;
+      await page.locator('#sDocsRoot').fill('https://drive.google.com/drive/folders/not-confirmed'); await page.locator('#sDocsSave').click();
+      await page.getByRole('alertdialog').waitFor(); assert.equal(page.api.writes, writes, 'read-back is before write');
+      assert.match(await page.getByRole('alertdialog').textContent(), /not-confirmed/);
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click(); assert.equal(page.api.writes, writes);
+      await page.locator('#sModeCrm').uncheck(); await settle(page);
+      assert.equal(await page.locator('#sDocsRoot').inputValue(), 'https://drive.google.com/drive/folders/not-confirmed', 'unrelated setting save preserves destination draft');
+      await page.waitForFunction(() => !document.querySelector('#sModeCrm').disabled);
+      const beforeSurrogate = page.api.writes;
+      await page.locator('#sDocsProvider').selectOption('local');
+      await page.evaluate(() => { const input = document.querySelector('#sDocsRoot'); input.value = '/docs/' + String.fromCharCode(0xd800); input.dispatchEvent(new Event('input', { bubbles: true })); });
+      await page.locator('#sDocsSave').click(); await settle(page);
+      assert.equal(await page.getByRole('alertdialog').count(), 0, 'lone surrogate is refused before destination confirmation');
+      assert.equal(page.api.writes, beforeSurrogate, 'lone surrogate destination writes nothing');
+      await page.locator('#sDocsProvider').selectOption('google-drive');
+      const afterOtherSettings = page.api.writes;
+      await page.locator('#sDocsRoot').fill('https://ｄｒｉｖｅ.google.com/root'); await page.locator('#sDocsSave').click(); await settle(page);
+      assert.equal(page.api.writes, afterOtherSettings, 'fullwidth host aliases are refused');
+
+      await page.locator('#sDocsRoot').fill('https://evil.test/root'); await page.locator('#sDocsSave').click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
+      await settle(page); assert.equal(page.api.writes, afterOtherSettings, 'invalid provider host never writes');
+      await page.locator('#sDocsProvider').selectOption('local'); await page.locator('#sDocsRoot').fill('/work/<private>/keeptrack'); await page.locator('#sDocsSave').click(); await page.getByRole('button', { name: 'Confirm destination', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
+      await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.includes('/work/<private>/keeptrack'));
+      await waitStored(() => JSON.parse(page.api.files['tasks.json']).settings.docs_home?.provider === 'local');
+      assert.equal(await page.locator('#sDocsCurrent a').count(), 0, 'local path remains text, never file navigation');
+      assert.equal(await page.locator('#sDocsCurrent private').count(), 0, 'stored text is escaped');
+      const astralRoot = '/docs/' + '😀'.repeat(2042);
+      await page.locator('#sDocsRoot').fill(astralRoot); await page.locator('#sDocsSave').click(); await page.getByRole('button', { name: 'Confirm destination', exact: true }).click();
+      await waitStored(() => JSON.parse(page.api.files['tasks.json']).settings.docs_home?.root === astralRoot);
+      const unicodeWrites = page.api.writes;
+      await page.locator('#sDocsRoot').fill(astralRoot + '😀'); await page.locator('#sDocsSave').click(); await settle(page);
+      assert.equal(page.api.writes, unicodeWrites, '2049 scalar root refused, 2048 accepted');
+
+      await page.locator('#sDocsClear').click(); await page.getByRole('button', { name: 'Confirm clear', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('#sDocsClear').disabled); await page.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.startsWith('Not set'));
+      await waitStored(() => !Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'));
+      assert.equal(Object.hasOwn(JSON.parse(page.api.files['tasks.json']).settings, 'docs_home'), false);
+      assert.deepEqual(page.errors, []); await page.close();
+      const invalid = await open(browser, { settings: { docs_home: { provider: 'future', root: 'javascript:alert(1)' } } });
+      await invalid.locator('#btnSettings').click(); await invalid.locator('#tabBoard').click();
+      assert.match(await invalid.locator('#sDocsCurrent').textContent(), /Invalid stored docs home/);
+      assert.equal(await invalid.locator('#sDocsCurrent a').count(), 0); await invalid.close();
+      const race = await open(browser);
+      await race.locator('#btnSettings').click(); await race.locator('#tabBoard').click();
+      await race.locator('#sDocsProvider').selectOption('local'); await race.locator('#sDocsRoot').fill('/docs/race'); await race.locator('#sDocsSave').click();
+      const changedOwner = JSON.parse(race.api.files['tasks.json']); changedOwner.settings.kit_owner = 'new-owner'; race.api.files['tasks.json'] = text(changedOwner); race.api.head = 'head-' + ++race.api.n;
+      const raceWrites = race.api.writes; await race.getByRole('button', { name: 'Confirm destination', exact: true }).click(); await settle(race);
+      await race.waitForFunction(() => !document.querySelector('#sDocsSave').disabled);
+      assert.equal(race.api.writes, raceWrites, 'owner changed after read-back; fresh revision refuses without write');
+      assert.equal(Object.hasOwn(JSON.parse(race.api.files['tasks.json']).settings, 'docs_home'), false); await race.close();
+      const nonowner = await open(browser, { settings: { kit_owner: 'someone-else' } });
+      await nonowner.locator('#btnSettings').click(); await nonowner.locator('#tabBoard').click();
+      assert.equal(await nonowner.locator('#sDocsSave').isDisabled(), true); assert.equal(nonowner.api.writes, 0); await nonowner.close();
+      const demo = await open(browser, { demo: true });
+      if (!await demo.locator('#dlgSettings').evaluate(e => e.open)) await demo.locator('#btnSettings').click(); await demo.locator('#tabBoard').click();
+      assert.equal(await demo.locator('#sDocsSave').isDisabled(), true);
+      assert.equal(await demo.locator('#sDocsRoot').isDisabled(), true);
+      assert.equal(demo.api.writes, 0); await demo.close();
+    }
     // Saved routine reports are not live scheduler state; setup only copies a scoped, approval-first prompt.
     {
       const page = await open(browser, { width: 390, height: 844 });

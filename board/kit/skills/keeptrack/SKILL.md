@@ -25,6 +25,10 @@ durable last-run checkpoint. Do not use it merely to draft one message.
 
 If the board shows errors, a save fails, or a migration has just run, use `$B doctor`. Run `$B doctor --fix` only after the user agrees.
 
+For docs-home setup or an authorised saved research/document output, use `keeptrack-docs-home`
+(the sibling skill, or `board/keeptrack-docs-home/SKILL.md` in a board checkout). Read `settings --json` first;
+malformed/access-denied settings need repair, not a replacement root. Ordinary searches stay read-only.
+
 ## Find keeptrack.py
 - Claude Code plugin: `B="python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py"`.
 - Codex, Cursor or another tool: `keeptrack.py` is two folders above this file (`../../keeptrack.py` from this SKILL.md). Use its full path in `B`.

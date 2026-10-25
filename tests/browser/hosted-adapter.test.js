@@ -11,7 +11,7 @@ const ACTOR = { user_id: '10000000-0000-4000-8000-000000000001', agent_id: null 
 const TOKEN = 'synthetic-hosted-jwt-never-to-github';
 const clone = x => JSON.parse(JSON.stringify(x));
 const FIXTURE_FILES = {"tasks.json": {"version": 4, "layout": "split", "next_num": 900000, "columns": [{"id": "backlog", "name": "Backlog"}, {"id": "todo", "name": "To do"}, {"id": "in-progress", "name": "In progress"}, {"id": "pending-review", "name": "Pending review"}, {"id": "done", "name": "Done"}], "people": [{"github": "synthetic-a", "name": "Example A"}, {"github": "synthetic-b", "name": "Example B"}], "settings": {"max_agent_claims": 2, "stale_after_minutes": 30, "review_inbox": {"enabled": true}}, "archive": {"files": {"2025": {"tasks": 1, "contacts": 0}}}, "x-synthetic": {"absent-is-not-null": null, "ordered": [2, 1]}, "x-keeptrack-hosted-attribution": {"version": 1, "records": {"cards/t_sample.json#": {"createdBy": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "updatedBy": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}}, "archive/2025.json#/tasks/0": {"createdBy": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "updatedBy": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "on_behalf_of": "10000000-0000-4000-8000-000000000002"}, "archive/2025.json#/tasks/0/comments/0": {"createdBy": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "updatedBy": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "on_behalf_of": "10000000-0000-4000-8000-000000000002"}}, "changes": [{"actor": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "command": "claim", "at": "2026-01-02T03:04:05.000+00:00", "on_behalf_of": "10000000-0000-4000-8000-000000000002", "paths": ["archive/2025.json"]}]}}, "cards/t_sample.json": {"id": "t_sample", "num": 17, "title": "Synthetic contract sample", "column": "backlog", "rank": "a0", "details": "Only invented content.", "assignees": ["synthetic-a"], "todos": [{"id": "d_one", "text": "Check synthetic example", "done": false}], "links": [], "contacts": ["p_sample"], "project": "pr_sample", "value": 4, "effort": "M", "created": "2026-01-02T03:04:05.000+00:00", "updated": "2026-01-02T03:04:05.000+00:00", "comments": [{"id": "c_one", "text": "Invented comment", "by": "example-agent@synthetic-a", "at": "2026-01-02T03:04:05.000+00:00", "actor": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}}], "history": [{"at": "2026-01-02T03:04:05.000+00:00", "by": "example-agent@synthetic-a", "text": "Created", "actor": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}}], "x-sample": {"null": null, "ordered": [3, 1, 2]}}, "people/p_sample.json": {"id": "p_sample", "name": "Synthetic Person", "company": "Example Company", "stage": "New", "next": "Review invented material", "next_due": "2026-02-01", "links": [], "comments": [], "history": [], "x-sample": null}, "projects/pr_sample.json": {"id": "pr_sample", "name": "Synthetic Project", "client": "Example Company", "people": ["p_sample"], "status": "active", "links": []}, "proposals/r_sample.json": {"id": "r_sample", "version": 1, "kind": "task.create", "status": "pending", "title": "Synthetic proposal", "action_key": "synthetic-action", "work_key": "synthetic-work", "change": {"title": "Invented task"}, "target": null, "decision": null, "history": [], "createdBy": "legacy-example"}, "archive/2025.json": {"version": 3, "archive": true, "year": "2025", "tasks": [{"id": "t_old", "num": 2, "title": "Synthetic contract sample", "column": "done", "rank": "a0", "details": "Only invented content.", "assignees": ["synthetic-a"], "todos": [], "links": [], "contacts": [], "project": "", "value": 4, "effort": "M", "created": "2026-01-02T03:04:05.000+00:00", "updated": "2026-01-02T03:04:05.000+00:00", "comments": [{"id": "c_old", "text": "Archived invented comment", "at": "2026-01-02T03:04:05.000+00:00", "actor": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "on_behalf_of": "10000000-0000-4000-8000-000000000002"}], "history": [], "x-sample": {"null": null, "ordered": [3, 1, 2]}}], "contacts": [], "history": {"t_old": [{"at": "2026-01-02T03:04:05.000+00:00", "text": "Old history", "actor": {"user_id": "10000000-0000-4000-8000-000000000001", "agent_id": "20000000-0000-4000-8000-000000000001"}, "on_behalf_of": "10000000-0000-4000-8000-000000000002"}]}, "x-preserve": {"empty": [], "null": null}}};
-let files, revs, version, calls, receipts, conflict, lockRetry, denyApprove, omit, changed, expired;
+let files, revs, version, calls, receipts, conflict, lockRetry, denyApprove, omit, changed, expired, ownerSettings = false, rejectSettings = false;
 function reset() { files = clone(FIXTURE_FILES); revs = Object.fromEntries(Object.keys(files).map(p => [p, 'r1-' + p])); version = 1; calls = []; receipts = new Map(); conflict = lockRetry = denyApprove = changed = expired = false; omit = true; }
 reset();
 // Enough omitted cards to expose accidental fan-out, without using real board data.
@@ -82,7 +82,7 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/auth/v1/token') return send({ access_token: TOKEN, refresh_token: 'must-not-persist' });
     if (expired) return error('invalid_credential', 401);
     assert.equal(req.headers.authorization, 'Bearer ' + TOKEN);
-    if (u.pathname === '/v1/me') return send({ ...ACTOR, boards: [{ id: BOARD, role: 'editor', handle: 'synthetic-a' }], token_scopes: ['read', 'write', 'claim'] });
+    if (u.pathname === '/v1/me') return send({ ...ACTOR, boards: [{ id: BOARD, role: ownerSettings ? 'owner' : 'editor', handle: 'synthetic-a' }], token_scopes: ['read', 'write', 'claim'] });
     const suffix = u.pathname.replace('/v1/boards/' + BOARD, '');
     if (suffix === '/snapshot') return send(snapshot());
     if (suffix.startsWith('/files/')) { const p = decodeURIComponent(suffix.slice(7)); return files[p] ? send(file(p)) : error('not_found', 404); }
@@ -99,6 +99,7 @@ const server = http.createServer(async (req, res) => {
       if (conflict) { conflict = false; files['cards/t_sample.json'].title = 'Their changed title'; revs['cards/t_sample.json'] = 'concurrent-r2'; return error('revision_conflict', 412); }
       const updates = []; let result;
       if (suffix === '/commits') {
+        if (rejectSettings) return error('validation_failed', 400);
         for (const op of body.ops) {
           if (op.kind === 'create-card') {
             assert.equal(op.card.num, undefined); assert.equal(op.card.column, 'backlog');
@@ -368,6 +369,38 @@ const server = http.createServer(async (req, res) => {
     assert.equal(new URL(legacy.url()).pathname, '/board/hosted.html'); assert.equal(new URL(legacy.url()).hash, '#17');
     assert.equal(new URL(legacy.url()).searchParams.get('api'), base); await legacy.close();
     ok('legacy hosted links redirect to strict entry with query and hash intact');
+
+    // An actual hosted owner Settings route re-enables docs controls after unrelated success and failure.
+    reset(); ownerSettings = true;   // separate synthetic board after the preceding archive scenarios
+    const owner = await browser.newPage(); const ownerErrors = []; owner.on('pageerror', e => ownerErrors.push(e.message));
+    await owner.addInitScript(() => { sessionStorage.setItem('kb_view', 'board'); localStorage.setItem('kb_layout', 'classic'); });
+    await owner.goto(`${base}/board/hosted.html?api=${encodeURIComponent(base)}&board=${BOARD}`);
+    await owner.locator('#hostedSignIn').waitFor();
+    await owner.locator('#hostedKey').fill('synthetic'); await owner.locator('#hostedEmail').fill('synthetic@example.test'); await owner.locator('#hostedPassword').fill('synthetic'); await owner.locator('#hostedSignIn').click();
+    await owner.getByText('Synthetic contract sample', { exact: true }).first().waitFor(); await owner.evaluate(() => window.kbSettings.open('labels'));
+    await owner.locator('#sDocsProvider').selectOption('local'); await owner.locator('#sDocsRoot').fill('/docs/hosted draft');
+    for (const fail of [false, true]) {
+      rejectSettings = fail;
+      const label = fail ? 'hosted-refused-label' : 'hosted-saved-label';
+      await owner.locator('#labelBox input[aria-label="New label name"]').fill(label);
+      const attempted = owner.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/commits'));
+      await owner.locator('#labelBox button', { hasText: 'Add label' }).click(); await attempted;
+      await owner.waitForFunction(() => !document.querySelector('#sDocsSave').disabled && !document.querySelector('#sDocsRoot').disabled);
+      assert.equal(await owner.locator('#dlgSettings').evaluate(e => e.open), true);
+      assert.equal(await owner.locator('#sDocsRoot').inputValue(), '/docs/hosted draft');
+      assert.equal(await owner.locator('#sDocsClear').isEnabled(), true);
+      assert.equal(files['tasks.json'].labels.some(l => l.name === label), !fail);
+      assert.equal(Object.hasOwn(files['tasks.json'].settings, 'docs_home'), false);
+    }
+    rejectSettings = false;
+    await owner.locator('#sDocsSave').click();
+    await owner.getByRole('alertdialog').waitFor();
+    assert.equal(Object.hasOwn(files['tasks.json'].settings, 'docs_home'), false, 'hosted destination still waits for read-back');
+    await owner.getByRole('button', { name: 'Confirm destination', exact: true }).click();
+    await owner.waitForFunction(() => document.querySelector('#sDocsCurrent')?.textContent.includes('/docs/hosted draft'));
+    assert.deepEqual(files['tasks.json'].settings.docs_home, { provider: 'local', root: '/docs/hosted draft' });
+    assert.deepEqual(ownerErrors, []); await owner.close(); ownerSettings = false;
+    ok('hosted owner docs form retains its confirmation and draft across unrelated mutation success/failure');
 
     const stale = await browser.newPage();
     await stale.addInitScript(() => sessionStorage.setItem('kb_markup_reload', String(Date.now())));

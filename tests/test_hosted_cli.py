@@ -392,6 +392,34 @@ class HostedCLITest(unittest.TestCase):
         self.assertEqual(len(posts), 2)
         self.assertEqual(posts[0][3]['Idempotency-Key'], posts[1][3]['Idempotency-Key'])
 
+    def test_docs_home_read_and_all_hosted_cli_writes_refuse_before_post(self):
+        home = {"provider": "google-drive", "root": "https://drive.google.com/drive/folders/synthetic-root"}
+        self.server.files['tasks.json']['settings']['docs_home'] = home
+        before = copy.deepcopy(self.server.files)
+        for identity in ({**ACTOR, 'agent_id': None}, ACTOR):
+            self.server.identity.update(identity)
+            self.server.identity['boards'][0]['role'] = 'owner'
+            with self.subTest(identity=identity):
+                self.assertEqual(json.loads(self.run_cli('settings', '--json').stdout)['docs_home'], home)
+                self.assertIn('docs_home:', self.run_cli('settings').stdout)
+                for flags in (('--docs-provider', 'local', '--docs-root', '/work/keeptrack'), ('--clear-docs-home',)):
+                    result = self.run_cli('settings-set', *flags, code=1)
+                    self.assertIn('docs_home_confirmation_required', result.stderr)
+                    self.assertIn('web Settings → Board → Docs home', result.stderr)
+                    self.assertEqual(self.server.files, before)
+                    self.assertFalse(any(c[0] == 'POST' for c in self.server.calls))
+
+    def test_hosted_docs_home_cannot_smuggle_legacy_settings(self):
+        before = copy.deepcopy(self.server.files)
+        for identity in ({**ACTOR, 'agent_id': None}, ACTOR):
+            self.server.identity.update(identity); self.server.identity['boards'][0]['role'] = 'owner'
+            for docs in (('--docs-provider', 'local', '--docs-root', '/docs/root'), ('--clear-docs-home',)):
+                for flags in [('--rename-stage', 'New=Changed'), ('--title', 'Changed'), ('--min-kit', '103'), ('--stages', 'New,Won')]:
+                    result = self.run_cli('settings-set', *docs, *flags, code=1)
+                    self.assertIn('legacy settings flags are refused', result.stderr)
+        self.assertEqual(self.server.files, before)
+        self.assertFalse(any(c[0] == 'POST' for c in self.server.calls))
+
     def test_agent_attended_claim_is_refused(self):
         p = self.run_cli('claim', '#17', '--attended', code=1)
         self.assertIn('attended_forbidden', p.stderr)
