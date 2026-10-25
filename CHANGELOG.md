@@ -667,6 +667,9 @@ preserved through CLI edits, proposals and archiving; disabling the layout leave
 
 ## Web board
 
+- **2026-10-25** — Comment activity builds links only for cards with comments in range. Copied Markdown keeps
+  comment links ahead of the comment text and escapes older comment keys safely, including parentheses.
+
 - **2026-10-24** — Comment entries in Activity include **Open comment**, which opens and highlights that comment in
   its card. The link can be bookmarked, opened in another tab, or copied with Activity as Markdown. Existing comments,
   including those without an ID, work without a migration.

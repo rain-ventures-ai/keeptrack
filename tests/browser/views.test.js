@@ -49,7 +49,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       fixture.tasks = [{ ...fixture.tasks[0], id: 't_activity', num: 1, title: 'A long comment activity title with existing content and dense metadata',
         history: [{ at, by: 'sam-demo', text: 'Created the card' }], comments: [
           { id: 'c_person', at, by: 'sam-demo', text: 'Saved a person comment https://example.com/reference' },
-          { id: 'c_agent', at, by: 'codex@sam-demo', text: 'Saved an agent reply', reply_to: 'c_person' },
+          { id: 'c_agent', at, by: 'codex@sam-demo', text: 'Saved an agent reply\n```text\nUnclosed code block', reply_to: 'c_person' },
           { at, by: 'sam-demo (legacy)', text: 'An older comment without an ID' },
           { id: 'c_activity', at, by: 'claude', type: 'activity', text: 'Claude started a session' }
         ] }];
@@ -70,6 +70,7 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await page.getByRole('button', { name: 'Copy as Markdown', exact: true }).click();
       const copied = await page.evaluate(() => window.__copied);
       links.forEach(url => assert.ok(copied.includes(`[Open comment](<${url}>)`), 'Markdown export includes the exact comment URL'));
+      assert.ok(copied.indexOf(`[Open comment](<${links[1]}>)`) < copied.indexOf('```text'), 'the comment link precedes an unclosed code block');
       assert.ok(!links[2].includes('(') && !links[2].includes(')'), 'legacy comment keys cannot terminate Markdown links');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow');
       if (process.env.SHOTS) { fs.mkdirSync(process.env.SHOTS, { recursive: true }); await page.locator('.act').screenshot({ path: path.join(process.env.SHOTS, `activity-comments-${viewport.width}-${theme}.png`) });
