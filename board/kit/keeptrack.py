@@ -4531,7 +4531,7 @@ def _watch_emit(rows, as_json):
 
 WATCH_TIMEOUT = 3600       # watch stops by itself after an hour unless --timeout says otherwise (at most a day)
 WATCH_MIN_EVERY = 10       # seconds between reads of a GitHub or hosted board; a local --file board may poll faster
-WATCH_HEAD_TIMEOUT = 30    # seconds a git ls-remote head read may take before the poll counts as failed
+WATCH_HEAD_TIMEOUT = 30    # seconds a head read (git ls-remote or gh api) may take before the poll counts as failed
 WATCH_HEAD_FAILS = 3       # failed head reads in a row before the watch reloads the board, so a lasting error shows
 
 
@@ -4547,18 +4547,25 @@ def _watch_head():
                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
             out = p.stdout.strip()
             return out.split()[0] if not p.returncode and out else None
-        rc, out, _ = gh(f"repos/{REPO}/git/ref/heads/{urllib.parse.quote(BRANCH, safe='')}")
+        ref = f"repos/{REPO}/git/ref/heads/{urllib.parse.quote(BRANCH, safe='')}"
+        if use_http():
+            rc, out, _ = http("GET", ref)
+        else:   # the gh CLI, bounded the same way and without gh()'s rate-limit retries: a failed probe just skips a poll
+            p = subprocess.run(["gh", "api", ref], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=WATCH_HEAD_TIMEOUT)
+            rc, out = p.returncode, p.stdout
         return json.loads(out)["object"]["sha"] if not rc else None
     except (ValueError, KeyError, IndexError, TypeError, OSError, SystemExit, subprocess.TimeoutExpired):
         return None   # unknown: the caller skips this poll (or reloads when it never knew a head)
 
 
 def _loaded_head(data):
-    """The branch head a load() just read (its own ref read), so a reload costs no second ref read. None for hosted
-    and --file boards, which have no cheap head and reload each poll."""
+    """The branch head a load() just read, kept as the next poll's baseline (a commit landing during the reload is not
+    missed). Drops the load's save state: watch never saves, and a long watch must not keep every reloaded board.
+    None for hosted and --file boards, which have no cheap head and reload each poll."""
     if FILE or BACKEND != "github":
         return None
-    head = _BOARD_STATES.get(id(data), {}).get("head")
+    head = (_BOARD_STATES.pop(id(data), None) or {}).get("head")
     return head if isinstance(head, str) and head else None
 
 

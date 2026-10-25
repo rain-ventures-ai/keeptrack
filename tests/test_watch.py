@@ -232,7 +232,8 @@ class WatchHead(unittest.TestCase):
         with mock.patch.multiple(keeptrack, **base):
             return keeptrack._watch_head()
 
-    def run_git(self, result):
+    def run_cli(self, result, **env):
+        """Patch subprocess.run: the git ls-remote (WRITE git) or gh api (no BOARD_TOKEN) head read."""
         from unittest import mock
         calls = []
         def run(cmd, **kw):
@@ -240,12 +241,27 @@ class WatchHead(unittest.TestCase):
             if isinstance(result, BaseException):
                 raise result
             return subprocess.CompletedProcess(cmd, result[0], result[1], "")
-        with mock.patch.object(keeptrack.subprocess, "run", run):
-            got = self.head(env={"WRITE": "git", "ROOT": "/repo"})
+        with mock.patch.object(keeptrack.subprocess, "run", run), mock.patch.object(keeptrack, "use_http", lambda: False):
+            got = self.head(env=env)
         return got, calls
 
+    def run_git(self, result):
+        return self.run_cli(result, WRITE="git", ROOT="/repo")
+
+    def api(self, result):
+        from unittest import mock
+        with mock.patch.object(keeptrack, "use_http", lambda: True):
+            return self.head(http=result if callable(result) else lambda *a, **k: result)
+
     def test_api_and_git_reads(self):
-        self.assertEqual("abc", self.head(gh=lambda *a, **k: (0, '{"object": {"sha": "abc"}}', "")))
+        self.assertEqual("abc", self.api((0, '{"object": {"sha": "abc"}}', "")))
+        got, calls = self.run_cli((0, '{"object": {"sha": "cli"}}'))
+        self.assertEqual("cli", got)
+        cmd, kw = calls[0]
+        self.assertEqual(["gh", "api", "repos/acme/board/git/ref/heads/main"], cmd)
+        self.assertEqual(subprocess.DEVNULL, kw["stdin"])
+        self.assertEqual(keeptrack.WATCH_HEAD_TIMEOUT, kw["timeout"])
+        self.assertEqual(1, len(calls), "a failed probe is not retried")
         got, calls = self.run_git((0, "def\trefs/heads/main\n"))
         self.assertEqual("def", got)
         cmd, kw = calls[0]
@@ -254,17 +270,29 @@ class WatchHead(unittest.TestCase):
         self.assertEqual(keeptrack.WATCH_HEAD_TIMEOUT, kw["timeout"])
         self.assertEqual("0", kw["env"]["GIT_TERMINAL_PROMPT"])
 
-    def test_a_hung_git_head_read_gives_none(self):
+    def test_a_hung_git_or_gh_head_read_gives_none(self):
         self.assertIsNone(self.run_git(subprocess.TimeoutExpired(["git"], 30))[0])
         self.assertIsNone(self.run_git((128, ""))[0])
+        self.assertIsNone(self.run_cli(subprocess.TimeoutExpired(["gh"], 30))[0])
+        got, calls = self.run_cli((1, ""))
+        self.assertIsNone(got)
+        self.assertEqual(1, len(calls))
+
+    def test_the_loaded_head_frees_the_load_state(self):
+        from unittest import mock
+        board = {}
+        keeptrack._BOARD_STATES[id(board)] = {"head": "sha-9", "files": {"cards/a.json": "{}"}}
+        with mock.patch.multiple(keeptrack, FILE=None, BACKEND="github"):
+            self.assertEqual("sha-9", keeptrack._loaded_head(board))
+        self.assertNotIn(id(board), keeptrack._BOARD_STATES, "a long watch must not keep every reloaded board")
 
     def test_failures_and_boards_without_a_cheap_head_give_none(self):
         boom = lambda *a, **k: (_ for _ in ()).throw(SystemExit("rate limited"))
-        self.assertIsNone(self.head(gh=lambda *a, **k: (1, "", "HTTP 429")))
-        self.assertIsNone(self.head(gh=lambda *a, **k: (0, "not json", "")))
-        self.assertIsNone(self.head(gh=boom))
-        self.assertIsNone(self.head(env={"FILE": "/tmp/board.json"}, gh=boom))
-        self.assertIsNone(self.head(env={"BACKEND": "hosted"}, gh=boom))
+        self.assertIsNone(self.api((1, "", "HTTP 429")))
+        self.assertIsNone(self.api((0, "not json", "")))
+        self.assertIsNone(self.api(boom))
+        self.assertIsNone(self.head(env={"FILE": "/tmp/board.json"}, http=boom))
+        self.assertIsNone(self.head(env={"BACKEND": "hosted"}, http=boom))
 
 if __name__ == "__main__":
     unittest.main()
