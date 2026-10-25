@@ -45,12 +45,12 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       page.on('pageerror', e => errors.push(e.message));
       const fixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'demo/board/tasks.json'), 'utf8'));
       delete fixture.demo_base;
-      const at = new Date().toISOString(), legacyKey = at + '|sam-demo';
+      const at = new Date().toISOString(), legacyKey = at + '|sam-demo (legacy)';
       fixture.tasks = [{ ...fixture.tasks[0], id: 't_activity', num: 1, title: 'A long comment activity title with existing content and dense metadata',
         history: [{ at, by: 'sam-demo', text: 'Created the card' }], comments: [
           { id: 'c_person', at, by: 'sam-demo', text: 'Saved a person comment https://example.com/reference' },
-          { id: 'c_agent', at, by: 'codex@sam-demo', text: 'Saved an agent reply', reply_to: 'c_person' },
-          { at, by: 'sam-demo', text: 'An older comment without an ID' },
+          { id: 'c_agent', at, by: 'codex@sam-demo', text: 'Saved an agent reply\n```text\nUnclosed code block', reply_to: 'c_person' },
+          { at, by: 'sam-demo (legacy)', text: 'An older comment without an ID' },
           { id: 'c_activity', at, by: 'claude', type: 'activity', text: 'Claude started a session' }
         ] }];
       await ctx.route('**/demo/board/tasks.json', r => r.fulfill({ json: fixture }));
@@ -69,7 +69,9 @@ const bg = (page, sel) => page.locator(sel).first().evaluate(e => getComputedSty
       await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.__copied = text; } } }); });
       await page.getByRole('button', { name: 'Copy as Markdown', exact: true }).click();
       const copied = await page.evaluate(() => window.__copied);
-      links.forEach(url => assert.ok(copied.includes(`[Open comment](${url})`), 'Markdown export includes the exact comment URL'));
+      links.forEach(url => assert.ok(copied.includes(`[Open comment](<${url}>)`), 'Markdown export includes the exact comment URL'));
+      assert.ok(copied.indexOf(`[Open comment](<${links[1]}>)`) < copied.indexOf('```text'), 'the comment link precedes an unclosed code block');
+      assert.ok(!links[2].includes('(') && !links[2].includes(')'), 'legacy comment keys cannot terminate Markdown links');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow');
       if (process.env.SHOTS) { fs.mkdirSync(process.env.SHOTS, { recursive: true }); await page.locator('.act').screenshot({ path: path.join(process.env.SHOTS, `activity-comments-${viewport.width}-${theme}.png`) });
         await page.locator('.actlog').scrollIntoViewIfNeeded(); await page.locator('.actlog').screenshot({ path: path.join(process.env.SHOTS, `activity-comment-links-${viewport.width}-${theme}.png`) }); }

@@ -2718,7 +2718,7 @@ if (typeof window !== 'undefined') (() => {
     return row.childElementCount ? row : null;
   }
   function cmKey(c) { return c.id || (c.at || '') + '|' + (c.by || ''); }   // a comment's key in the drawer and in @Mentions (older comments may have no id)
-  const commentHash = (t, c) => '#' + t.num + '&comment=' + encodeURIComponent(cmKey(c));
+  const commentHash = (t, c) => '#' + t.num + '&' + new URLSearchParams({ comment: cmKey(c) });
   function focusCardComment() {
     if (!cmFocus || !$('dlgCard').open) return;
     const row = [...$('cmStream').querySelectorAll('[data-cid]')].find(r => r.dataset.cid === cmFocus);
@@ -3513,11 +3513,12 @@ if (typeof window !== 'undefined') (() => {
   }
   function activityData() {
     const sp = actSpan(), inR = x => { const ms = Date.parse(x.at); return ms >= sp.from && ms < sp.to && actMatch(x.by); };
-    const cards = [], days = new Map(); let comments = 0;
+    const cards = [], days = new Map(), linkBase = navigationLink('#view=activity'); let comments = 0;
     state.tasks.filter(filtered).forEach(t => {
-      const cardLink = navigationLink('#' + t.num);
+      const rangeComments = t.comments.filter(inR); let cardLink = '';
+      if (rangeComments.length) { const u = new URL(linkBase); if (safeCardId(t.id)) u.searchParams.set('card', t.id); u.hash = '#' + t.num; cardLink = u.href; }
       const ev = t.history.filter(inR).map(h => ({ at: h.at, by: h.by, text: h.text, done: isDoneEntry(h) }))
-        .concat(t.comments.filter(inR).map(c => ({ at: c.at, by: c.by, text: c.text, comment: true, commentKey: cmKey(c), url: cardLink + '&comment=' + encodeURIComponent(cmKey(c)) })))
+        .concat(rangeComments.map(c => ({ at: c.at, by: c.by, text: c.text, comment: true, commentKey: cmKey(c), url: cardLink + '&' + new URLSearchParams({ comment: cmKey(c) }) })))
         .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
       if (!ev.length) return;
       comments += ev.filter(e => e.comment).length;
@@ -3678,7 +3679,7 @@ if (typeof window !== 'undefined') (() => {
       L.push(`## ${fmtDay(d.day)}`, '');
       d.cards.forEach(({ t, ev }) => {
         L.push(`### #${t.num} ${mdLine(t.title)}`, `_${cardSub(t)}_`, '');
-        ev.forEach(e => L.push(`- ${fmtTime(e.at)} · ${e.by || '?'}${e.comment ? ' 💬' : ''}: ${e.comment ? mdIndent(e.text) + ` ([Open comment](${e.url}))` : mdLine(e.text)}`));
+        ev.forEach(e => L.push(`- ${fmtTime(e.at)} · ${e.by || '?'}${e.comment ? ` 💬 [Open comment](<${e.url}>)` : ''}: ${e.comment ? mdIndent(e.text) : mdLine(e.text)}`));
         L.push('');
       });
     });
@@ -4845,7 +4846,7 @@ if (typeof window !== 'undefined') (() => {
     } catch (e) { toast('Could not reach GitHub', true); } finally { issueBusy = false; }
   }
   function copyForAgent() { const t = taskNow(); if (!t) return; const cx = codexWanted(t); copyText(agentPrompt(t, cx ? 'codex' : undefined), cx ? 'Copied for Codex. Paste it into Codex.' : 'Task instructions copied for an agent'); }
-  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null && !backPending) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // pending Back clears the old hash only once its close has settled
+  $('dlgCard').addEventListener('close', () => { ui.closeMenu(); if (hashNum() !== null && !backPending) setHash(''); commitTitle(); closeDesc(true); commentsFor = null; cmFocus = null; if (!leaving) saveBoardContext({ view, card: '' }); });   // pending Back clears the old hash only once its close has settled
   async function deleteTask() {
     const id = editing, title = titleOf(id);
     const body = el('div'); body.append(el('p', 'ui-sheet__text', `“${title}” and its details, checklist, comments and history are removed from the board and saved to GitHub immediately. You can undo it with Ctrl+Z, Cmd+Z, or the Undo button.`));
