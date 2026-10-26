@@ -2155,6 +2155,9 @@ def min_kit_needed(data):
     if isinstance(files, dict) and any(isinstance(k, str) and re.fullmatch(r"[0-9]{4}-[1-9][0-9]{0,5}", k) for k in files):
         # older writers only know YYYY archive keys: they would not see records in YYYY-N parts
         needed, what = max(needed, ARCHIVE_PARTS_KIT), "The archive has year part files (YYYY-N)"
+    if (data.get("settings") or {}).get("card_contact_details") is False and CONTACT_DETAILS_KIT > needed:
+        # older writers would still copy email and phone into cards
+        needed, what = CONTACT_DETAILS_KIT, "settings.card_contact_details is off"
     return needed, what
 
 
@@ -8377,15 +8380,36 @@ def docs_home_confirmation(data, home, clear):
     return owner, before
 
 
+def _board_checkouts():
+    """The working trees of the board in use: the board repo clone this keeptrack.py runs in (ROOT, None for a plugin
+    or ~/.agents copy run elsewhere) and the git checkout holding a --file board."""
+    tops = [ROOT] if ROOT else []
+    if FILE:
+        try:
+            top = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(FILE)), "rev-parse", "--show-toplevel"],
+                                 capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            top = ""
+        if top:
+            tops.append(top)
+    return tops
+
+
 def _inside_board_checkout(path):
-    """True when a local docs-home path is this board repo's working tree or sits in it. Compares paths only: the
-    destination is never created, listed or read."""
-    if not ROOT:
-        return False
-    def norm(x):
-        return os.path.normcase(os.path.realpath(os.path.abspath(x)))
-    top, target = norm(ROOT), norm(path)
-    return target == top or target.startswith(top.rstrip(os.sep) + os.sep)
+    """True when a local docs-home path is a board checkout's working tree or sits in it. Compares path text only:
+    the destination is never resolved, created, listed or read (no realpath on it: on Windows that would open a UNC
+    host). Case-insensitive on macOS and Windows, whose usual filesystems are."""
+    fold = sys.platform in ("darwin", "win32")
+    def norm(x, resolve):
+        x = os.path.realpath(x) if resolve else os.path.normpath(os.path.abspath(x))
+        x = os.path.normcase(x)
+        return x.casefold() if fold else x
+    target = norm(path, False)
+    for top in _board_checkouts():
+        for t in {norm(top, False), norm(top, True)}:
+            if target == t or target.startswith(t.rstrip(os.sep) + os.sep):
+                return True
+    return False
 
 
 def cmd_settings_set(a):
@@ -8463,6 +8487,9 @@ def cmd_settings_set(a):
             st["min_kit"] = a.min_kit; print(f"min_kit: {a.min_kit}")
         if getattr(a, "card_contact_details", None) is not None:
             st["card_contact_details"] = a.card_contact_details == "on"
+            mk = st.get("min_kit")
+            if not st["card_contact_details"] and not (isinstance(mk, int) and not isinstance(mk, bool) and mk >= CONTACT_DETAILS_KIT):
+                st["min_kit"] = CONTACT_DETAILS_KIT   # older CLIs and pages would still copy the details: they stop writing
             print("card_contact_details: " + ("on" if st["card_contact_details"] else
                                                "off (new links keep only the person id, name and role; existing cards are not changed)"))
         if getattr(a, "backlog_research", None) is not None or getattr(a, "research_per_run", None) is not None:
@@ -8904,6 +8931,7 @@ PROPOSAL_STATUSES = {"pending", "accepted", "answered", "ignored"}
 DECIDED_STATUSES = ("accepted", "answered", "ignored")
 ASK_KIT = 44               # the kit that understands ask.* items: the first one raises settings.min_kit to at least this
 ARCHIVE_PARTS_KIT = 107   # the first kit that reads and writes archive part files (YYYY-N)
+CONTACT_DETAILS_KIT = 110  # the first kit that honours settings.card_contact_details false: turning it off raises min_kit
 ASK_ANSWER_LIMIT = 2000
 PROPOSAL_SOURCE_KINDS = {"meeting", "email", "other"}
 PROPOSAL_DETAIL_LIMIT = 300
