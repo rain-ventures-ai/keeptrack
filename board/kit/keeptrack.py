@@ -8382,17 +8382,21 @@ def docs_home_confirmation(data, home, clear):
 
 def _board_checkouts():
     """The working trees of the board in use: the board repo clone this keeptrack.py runs in (ROOT, None for a plugin
-    or ~/.agents copy run elsewhere) and the git checkout holding a --file board."""
+    or ~/.agents copy run elsewhere), the git checkout holding a --file board, and a board repo clone (one with
+    board/tasks.json) the command is run from, whatever BOARD_REPO says."""
+    def top_of(folder):
+        try:
+            return subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
     tops = [ROOT] if ROOT else []
     if FILE:
-        try:
-            top = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(FILE)), "rev-parse", "--show-toplevel"],
-                                 capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            top = ""
-        if top:
-            tops.append(top)
-    return tops
+        tops.append(top_of(os.path.dirname(os.path.abspath(FILE))))
+    here = top_of(os.getcwd())
+    if here and os.path.isfile(os.path.join(here, "board", "tasks.json")):
+        tops.append(here)
+    return [t for t in tops if t]
 
 
 def _inside_board_checkout(path):

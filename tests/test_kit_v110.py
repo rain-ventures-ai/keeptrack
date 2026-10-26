@@ -73,6 +73,19 @@ class DocsHomeCheckout(unittest.TestCase):
                 self.assertTrue(keeptrack._inside_board_checkout(os.path.join(clone, "notes")))
                 self.assertFalse(keeptrack._inside_board_checkout(clone + "-docs"))
 
+    def test_a_board_clone_the_command_runs_in_is_inside_whatever_board_repo_says(self):
+        with tempfile.TemporaryDirectory() as clone:
+            subprocess.run(["git", "init", "-q", clone], check=True)
+            os.makedirs(os.path.join(clone, "board"))
+            open(os.path.join(clone, "board", "tasks.json"), "w").close()
+            here = os.getcwd()
+            try:
+                os.chdir(clone)
+                with mock.patch.object(keeptrack, "ROOT", None), mock.patch.object(keeptrack, "FILE", None):
+                    self.assertTrue(keeptrack._inside_board_checkout(os.path.join(clone, "docs")))
+            finally:
+                os.chdir(here)
+
     def test_settings_set_refuses_a_local_root_in_the_checkout_before_any_read(self):
         from types import SimpleNamespace
         a = SimpleNamespace(docs_provider="local", docs_root=os.path.join(keeptrack.ROOT or "/x", "docs"), clear_docs_home=False)
@@ -148,7 +161,7 @@ class CardContactDetails(unittest.TestCase):
 
 class JpegScanCopy(unittest.TestCase):
     def test_a_large_scan_copies_byte_for_byte_in_few_loop_steps(self):
-        scan = bytes(range(0, 255)) * 8000 + b"\xff\x00" + b"\x10" * 100000 + b"\xff\xd3" + b"\x20" * 1000   # ~2 MB, 8000 0xFF bytes
+        scan = bytes(range(256)) * 8000 + b"\xff\x00" + b"\x10" * 100000 + b"\xff\xd3" + b"\x20" * 1000   # ~2 MB, 8000 0xFF 0x00 stuffing pairs
         sos = b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"
         blob = b"\xff\xd8" + sos + scan + b"\xff\xd9"
         steps = [0]

@@ -110,6 +110,20 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
           assert.equal(added.contacts[0].email, 'casey@acme.test');
           assert.equal(added.contacts[0].phone, '+440000000000');
 
+          // kit v110: with settings.card_contact_details false the person drawer's Add task keeps email and phone off the card
+          const rootNow = JSON.parse(linkedApi.files['tasks.json']);
+          linkedApi.files['tasks.json'] = text({ ...rootNow, settings: { ...rootNow.settings, card_contact_details: false, min_kit: 110 } });
+          linkedApi.head = 'head-' + ++linkedApi.n;
+          await pg.reload(); await pg.locator('.prow', { hasText: 'Casey Example' }).waitFor(); if (!await pg.locator('#dlgContact[open]').count()) await pg.locator('.prow', { hasText: 'Casey Example' }).click();
+          await pg.locator('#pTasks .dtask', { hasText: 'Kick-off' }).waitFor();
+          await pg.locator('#pTasksSec .ui-addrow__ghost').click(); await pg.locator('#pTaskNew').fill('No contact details');
+          const savingOff = pg.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().includes('/repos/acme/board/'));
+          await pg.locator('#pTaskNew').press('Enter'); await savingOff;
+          const bare = Object.entries(linkedApi.files).filter(([f]) => f.startsWith('cards/')).map(([,v]) => JSON.parse(v)).find(t => t.title === 'No contact details');
+          assert.deepEqual(bare.contacts, [{ person_id: 'p_one', name: 'Casey Example', role: bare.contacts[0].role }], 'id, name and role only');
+          linkedApi.files['tasks.json'] = text(rootNow); linkedApi.head = 'head-' + ++linkedApi.n;
+          await pg.reload(); await pg.locator('.prow', { hasText: 'Casey Example' }).waitFor(); if (!await pg.locator('#dlgContact[open]').count()) await pg.locator('.prow', { hasText: 'Casey Example' }).click();
+
           await pg.locator('#pTasks .dtask', { hasText: 'Kick-off' }).click(); await pg.locator('#dlgCard[open]').waitFor();
           assert.match(await pg.locator('#cContactList').textContent(), /Casey Example/);
           const toggle = pg.locator('#cmHistBtn');

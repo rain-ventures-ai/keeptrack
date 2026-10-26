@@ -8513,8 +8513,9 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonTask(v) {
     const p = contactNow(); if (!p) return false;
-    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [contactSnapshot(p, board)], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
-    mutate(n => { n.tasks.push(t); }, `Add task: ${v}`);
+    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+    // the snapshot reads settings.card_contact_details from the board being saved, so a retried save checks it again
+    mutate(n => { n.tasks.push({ ...t, contacts: [contactSnapshot(p, n)] }); }, `Add task: ${v}`);
   }
 
   $('pName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) pedit(editingContact, x => { x.name = v; }); });

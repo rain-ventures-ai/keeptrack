@@ -56,7 +56,8 @@ target changes. Check through the connector that the root is in the owner's own 
 you cannot tell, stop and say so. A `local` root inside the board repo's own checkout is always refused (`settings-set` refuses
 it too), even when the owner names it: board repos can be private but are shared, and files there get committed
 and pushed with the board. A `local` root inside any other git checkout (a folder that is, or sits in, a repository
-working tree) is refused unless the owner names that exact folder.
+working tree) is refused unless the owner names that exact folder. `settings-set` compares path text only and
+never resolves the destination, so check yourself that the folder is not a link or alias into a board checkout.
 
 Use the client's/project's stored names as single folder names, and stable card id plus a short non-confidential
 label for card folders. Do not turn slashes, dot segments or provider-special characters into paths: ask for a safe
