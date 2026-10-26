@@ -361,7 +361,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 109  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 110  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -4120,8 +4120,9 @@ def strip_image_metadata(blob, ext):
             if marker == 0xDA:   # copy entropy bytes, including stuffing and restart markers, until a real marker
                 start = i
                 while i < len(blob):
-                    if blob[i] != 0xFF:
-                        i += 1
+                    if blob[i] != 0xFF:   # jump to the next 0xFF in C, not one byte at a time in Python
+                        k = blob.find(b"\xff", i)
+                        i = len(blob) if k < 0 else k
                         continue
                     j = i + 1
                     while j < len(blob) and blob[j] == 0xFF:
@@ -6266,11 +6267,20 @@ def task_has_person(task, person):
         for k in (task.get("contacts") or []))
 
 
-def contact_snapshot(person):
-    """The existing web CRM picker snapshot, kept within the same board."""
-    return {"person_id": person["id"], "name": person.get("name", ""), "role": person.get("role", ""),
-            "email": next((x["value"] for x in person_methods(person, "email")), ""),
-            "phone": next((x["value"] for x in person_methods(person, "phone")), "")}
+def card_contact_details(data):
+    """settings.card_contact_details (kit v110): copy a linked person's email and phone into the card's contact
+    snapshot. On unless it is exactly false; a board that keeps contact details only on the person record turns it off."""
+    return (data.get("settings") or {}).get("card_contact_details") is not False
+
+
+def contact_snapshot(person, data=None):
+    """The existing web CRM picker snapshot, kept within the same board. With settings.card_contact_details off, the
+    card keeps only the person id, name and role: email and phone stay on the person record."""
+    snap = {"person_id": person["id"], "name": person.get("name", ""), "role": person.get("role", "")}
+    if data is None or card_contact_details(data):
+        snap["email"] = next((x["value"] for x in person_methods(person, "email")), "")
+        snap["phone"] = next((x["value"] for x in person_methods(person, "phone")), "")
+    return snap
 
 
 def set_task_contact(data, task, ref, *, unlink=False):
@@ -6309,7 +6319,7 @@ def set_task_contact(data, task, ref, *, unlink=False):
     primary = task.get("contact")
     if primary and primary != ident and not any(k.get("person_id") == primary for k in contacts):
         previous = next((p for p in data.get("contacts", []) if p["id"] == primary), None)
-        contacts.append(contact_snapshot(previous) if previous else {"name": primary})
+        contacts.append(contact_snapshot(previous, data) if previous else {"name": primary})
     emails = {x["value"].casefold() for x in person_methods(person, "email")}
     existing = next((k for k in contacts if k.get("person_id") == ident), None)
     if existing is None:
@@ -6325,7 +6335,7 @@ def set_task_contact(data, task, ref, *, unlink=False):
                 existing = candidates[0]  # never infer identity from a shared address or name alone
     changed = task.get("contact") != ident or existing is None or existing.get("person_id") != ident
     if existing is None:
-        contacts.append(contact_snapshot(person))
+        contacts.append(contact_snapshot(person, data))
     elif not existing.get("person_id"):
         existing["person_id"] = ident
     task["contact"] = ident  # older readers still have a primary link
@@ -8328,6 +8338,8 @@ def cmd_settings(a):
     print(f"inbox_lapse_days: {inbox_lapse_days(data) or 'off (questions never lapse)'}")
     br = backlog_research(data)
     print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
+    print("card_contact_details: " + ("on (email and phone are copied into linked cards)" if card_contact_details(data)
+                                       else "off (cards keep only the person id, name and role)"))
     print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
@@ -8341,7 +8353,8 @@ DOCS_HOSTED_READONLY = ("docs_home_confirmation_required: hosted CLI docs-home s
 
 
 DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
-                     "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit")
+                     "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit",
+                     "card_contact_details")
 
 
 def docs_home_confirmation(data, home, clear):
@@ -8364,6 +8377,17 @@ def docs_home_confirmation(data, home, clear):
     return owner, before
 
 
+def _inside_board_checkout(path):
+    """True when a local docs-home path is this board repo's working tree or sits in it. Compares paths only: the
+    destination is never created, listed or read."""
+    if not ROOT:
+        return False
+    def norm(x):
+        return os.path.normcase(os.path.realpath(os.path.abspath(x)))
+    top, target = norm(ROOT), norm(path)
+    return target == top or target.startswith(top.rstrip(os.sep) + os.sep)
+
+
 def cmd_settings_set(a):
     """Change board settings: title, stale minutes, pipeline stages (with renames)."""
     provider, root = getattr(a, "docs_provider", None), getattr(a, "docs_root", None)
@@ -8379,6 +8403,9 @@ def cmd_settings_set(a):
     if provider is not None:
         try: home = validate_docs_home({"provider": provider, "root": root})
         except ValueError as e: sys.exit(str(e))
+        if home["provider"] == "local" and _inside_board_checkout(home["root"]):
+            sys.exit("local docs home must not be inside this board repo's checkout: files there can be committed and "
+                     "pushed with the board. Choose a folder outside the repository.")
     consent = None
     if home is not None or clear:
         data, _ = load()
@@ -8426,13 +8453,18 @@ def cmd_settings_set(a):
                              "python3 board/keeptrack.py kit-update")
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
-                                                                  "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root")) or clear:
+                                                                  "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root",
+                                                                  "card_contact_details")) or clear:
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
             elif not cur <= a.min_kit <= KIT_VERSION:   # never lowered (that would hide a newer field from doctor), never above this kit
                 sys.exit(f"min kit must be between the stored value ({cur or 'none'}) and this kit's version ({KIT_VERSION})")
             st["min_kit"] = a.min_kit; print(f"min_kit: {a.min_kit}")
+        if getattr(a, "card_contact_details", None) is not None:
+            st["card_contact_details"] = a.card_contact_details == "on"
+            print("card_contact_details: " + ("on" if st["card_contact_details"] else
+                                               "off (new links keep only the person id, name and role; existing cards are not changed)"))
         if getattr(a, "backlog_research", None) is not None or getattr(a, "research_per_run", None) is not None:
             br = dict(st.get("backlog_research")) if isinstance(st.get("backlog_research"), dict) else {}
             if getattr(a, "backlog_research", None) is not None:
@@ -12174,6 +12206,8 @@ def main():
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
     s.add_argument("--rename-stage", dest="rename_stage", action="append", help="OLD=NEW (repeatable); moves people in OLD")
+    s.add_argument("--card-contact-details", dest="card_contact_details", choices=["on", "off"],
+                   help="copy a linked person's email and phone into the card (default on); off keeps them on the person only")
     s.add_argument("--backlog-research", dest="backlog_research", choices=["on", "off"],
                    help="backlog auto-research: the relay dispatcher adds details to bare Backlog cards (default off)")
     s.add_argument("--research-per-run", dest="research_per_run", type=int, help="bare Backlog cards one dispatcher run researches (1-10, default 2)")
