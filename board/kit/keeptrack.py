@@ -361,7 +361,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 108  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 109  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -553,7 +553,7 @@ def hosted_api_url():
 _HOSTED_API_NOTE = False
 
 
-def http(method, path, body=None, accept="application/vnd.github+json"):
+def http(method, path, body=None, accept="application/vnd.github+json", retries=None):
     if BACKEND == "hosted" and not FILE:
         sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
     t = token()
@@ -564,7 +564,8 @@ def http(method, path, body=None, accept="application/vnd.github+json"):
                                  headers={"Authorization": f"Bearer {t}", "Accept": accept,
                                           "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "board-cli",
                                           **({"Content-Type": "application/json"} if body is not None else {})})
-    for attempt in range(RATE_TRIES + 1):
+    tries = RATE_TRIES if retries is None else retries
+    for attempt in range(tries + 1):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return 0, r.read().decode(), ""
@@ -573,7 +574,7 @@ def http(method, path, body=None, accept="application/vnd.github+json"):
             wait = _rate_wait(e.code, e.headers, out, attempt)
             if wait is None:
                 return 1, out, f"HTTP {e.code}: {e.reason}"
-            if attempt == RATE_TRIES:
+            if attempt == tries:
                 return 1, out, f"HTTP {e.code}: rate limited"
             time.sleep(wait)
         except (urllib.error.URLError, OSError) as e:
@@ -4529,17 +4530,67 @@ def _watch_emit(rows, as_json):
             print(row["line"])
 
 
+WATCH_TIMEOUT = 3600       # watch stops by itself after an hour unless --timeout says otherwise (at most a day)
+WATCH_MIN_EVERY = 10       # seconds between reads of a GitHub or hosted board; a local --file board may poll faster
+WATCH_HEAD_TIMEOUT = 30    # seconds a head read (git ls-remote or gh api) may take before the poll counts as failed
+WATCH_HEAD_FAILS = 3       # failed head reads in a row before the watch reloads the board, so a lasting error shows
+
+
+def _watch_head():
+    """The board branch's head commit, read cheaply, or None when it cannot be (hosted, --file, an error): then the
+    caller reloads. One small ref read per poll instead of a whole-board reload when nothing was committed."""
+    if FILE or BACKEND != "github":
+        return None
+    try:
+        if WRITE == "git":   # bounded and never prompts: a hung remote or credential prompt must not stall the watch
+            p = subprocess.run(["git", "-C", ROOT, "ls-remote", "origin", f"refs/heads/{BRANCH}"], stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=WATCH_HEAD_TIMEOUT,
+                               env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+            if p.returncode:
+                return None
+            want = f"refs/heads/{BRANCH}"   # ls-remote matches a pattern's tail: refs/heads/x/refs/heads/main matches too
+            return next((f[0] for f in (ln.split() for ln in p.stdout.splitlines()) if len(f) == 2 and f[1] == want), None)
+        ref = f"repos/{REPO}/git/ref/heads/{urllib.parse.quote(BRANCH, safe='')}"
+        if use_http():
+            rc, out, _ = http("GET", ref, retries=0)   # a rate-limited probe skips the poll; it never waits or retries
+        else:   # the gh CLI, bounded the same way and without gh()'s rate-limit retries: a failed probe just skips a poll
+            p = subprocess.run(["gh", "api", ref], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=WATCH_HEAD_TIMEOUT)
+            rc, out = p.returncode, p.stdout
+        return json.loads(out)["object"]["sha"] if not rc else None
+    except (ValueError, KeyError, IndexError, TypeError, OSError, SystemExit, subprocess.TimeoutExpired):
+        return None   # unknown: the caller skips this poll (or reloads when it never knew a head)
+
+
+def _loaded_head(data):
+    """The branch head a load() just read, kept as the next poll's baseline (a commit landing during the reload is not
+    missed). Drops the load's save state: watch never saves, and a long watch must not keep every reloaded board.
+    None for hosted and --file boards, which have no cheap head and reload each poll."""
+    state = _BOARD_STATES.pop(id(data), None) or {}
+    if FILE or BACKEND != "github":
+        return None
+    head = state.get("head")
+    return head if isinstance(head, str) and head else None
+
+
 def cmd_watch(a):
     """Poll the board until a watched card changes, or (with --until) reaches a column. Reads only.
-    A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when --timeout runs out."""
+    A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when the timeout runs out (default an
+    hour). Every poll shares the board token's API allowance with heartbeats and saves: a GitHub or hosted board is read
+    at most every 10 seconds, and a GitHub board reads only the branch head while nothing new was committed."""
     every = 15 if a.every is None else a.every
-    if not isinstance(every, (int, float)) or isinstance(every, bool) or every < 0.2 or every > 3600:
-        sys.exit("--every must be between 0.2 and 3600 seconds")
-    if a.timeout is not None and (not isinstance(a.timeout, (int, float)) or isinstance(a.timeout, bool) or a.timeout <= 0 or a.timeout > 86400):
+    floor = 0.2 if FILE else WATCH_MIN_EVERY
+    finite = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v not in (float("inf"), float("-inf"))
+    if not finite(every) or every < floor or every > 3600:
+        sys.exit(f"--every must be between {floor:g} and 3600 seconds" + ("" if FILE else " for a GitHub or hosted board"))
+    if a.timeout is None:
+        a.timeout = WATCH_TIMEOUT
+    if not finite(a.timeout) or a.timeout <= 0 or a.timeout > 86400:   # nan would pass both comparisons
         sys.exit("--timeout must be greater than 0 and at most 86400 seconds")
     if a.all and not a.until:
         sys.exit("--all needs --until")
     data, _ = load()
+    head = _loaded_head(data)
     until = (a.until or "").strip()
     if until:
         cols = {c.get("id") for c in data.get("columns") or [] if isinstance(c, dict)}
@@ -4574,14 +4625,22 @@ def cmd_watch(a):
             report(got, True); return
     print("watching " + ", ".join(f"#{t.get('num')}" for t in cards) + f" every {every:g}s"
           + (f", until {until}" + (" (all)" if a.all else "") if until else "")
-          + (f", timeout {a.timeout:g}s" if a.timeout is not None else ""), file=sys.stderr)
+          + f", timeout {a.timeout:g}s", file=sys.stderr)
     deadline = None if a.timeout is None else time.monotonic() + a.timeout
+    fails = 0
     while True:
         now_m = time.monotonic()
         if deadline is not None and now_m >= deadline:
             print("timed out; no watched card changed", file=sys.stderr); sys.exit(2)
         time.sleep(every if deadline is None else min(every, max(0, deadline - now_m)))
+        if head is not None:
+            now_head = _watch_head()
+            fails = fails + 1 if now_head is None else 0
+            if now_head == head or (now_head is None and fails < WATCH_HEAD_FAILS):
+                continue   # nothing committed, or the head read failed: no board reload this poll
+            fails = 0      # a moved head, or failures enough in a row: reload, which stops with the error if it lasts
         board, _ = load()
+        head = _loaded_head(board)
         pairs = current(board)
         if until:
             got = ready(pairs)
@@ -11868,8 +11927,8 @@ def main():
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
     s = sub.add_parser("watch", help="poll until a card changes, or reaches a column (--until done); a heartbeat alone does not count")
     s.add_argument("ids", nargs="+", metavar="ID")
-    s.add_argument("--every", type=float, default=15, help="seconds between reads (default 15; 0.2 to 3600)")
-    s.add_argument("--timeout", type=float, help="stop after this many seconds and exit 2; omit to wait")
+    s.add_argument("--every", type=float, default=15, help="seconds between reads (default 15; 10 to 3600, or 0.2 to 3600 for a --file board)")
+    s.add_argument("--timeout", type=float, help="stop after this many seconds and exit 2 (default 3600, at most 86400)")
     s.add_argument("--until", help="wait until a card is in this column (for example done) instead of any change")
     s.add_argument("--all", action="store_true", help="with --until: wait until every named card is in that column")
     s.add_argument("--json", action="store_true", help="print one JSON object (or a list, with --all)"); s.set_defaults(f=cmd_watch)

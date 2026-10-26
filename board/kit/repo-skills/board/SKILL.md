@@ -96,7 +96,9 @@ python3 board/keeptrack.py watch '#31'                         # any comment, mo
 python3 board/keeptrack.py watch '#31' '#32' --until done      # exit when one of them is Done
 python3 board/keeptrack.py watch '#31' '#32' --until done --all --timeout 3600 --json
 ```
-`watch` polls until another card changes or reaches a column.
+`watch` polls until another card changes or reaches a column. It stops by itself after an hour (exit 2) unless
+`--timeout` says otherwise, and reads a GitHub board at most every 10 seconds: each read uses the board token's API
+allowance, which heartbeats and saves share.
 
 ## 5. Finish
 ```bash
