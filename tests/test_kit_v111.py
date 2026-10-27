@@ -39,7 +39,7 @@ class Spellings(unittest.TestCase):
                  (r"\\?\C:\Users\o\repo", True, r"C:\Users\o\repo"), (r"\\?\UNC\host\share\x", True, r"\\host\share\x"),
                  (r"\\localhost\C$\Users\o", True, r"C:\Users\o"), (r"\\127.0.0.1\d$", True, "d:\\"),
                  (r"\\.\C:\x", True, r"C:\x"), (r"\\.\UNC\localhost\C$\Users\o", True, r"C:\Users\o"),
-                 (r"\\?\UNC\127.0.0.1\c$\x", True, r"c:\x"), (r"\\server\share\x", True, r"\\server\share\x"), ("C:/a/b", True, r"C:\a\b")]
+                 (r"\\?\UNC\127.0.0.1\c$\x", True, r"c:\x"), (r"\\.\C$\x", True, r"\\.\C$\x"), (r"\\?\C:", True, r"\\?\C:"), (r"\\server\share\x", True, r"\\server\share\x"), ("C:/a/b", True, r"C:\a\b")]
         for given, windows, want in cases:
             self.assertEqual(want, f(given, windows), given)
 
@@ -59,12 +59,15 @@ class WithoutGit(unittest.TestCase):
             def no_git(*a, **k):
                 raise FileNotFoundError("git")
             try:
-                os.chdir(os.path.join(clone, "board"))
-                for file in (board, None):   # a --file board, and a board clone the command runs in
-                    with mock.patch.object(keeptrack, "ROOT", None), mock.patch.object(keeptrack, "FILE", file), \
-                         mock.patch.object(keeptrack.subprocess, "run", no_git):
-                        self.assertTrue(keeptrack._inside_board_checkout(os.path.join(clone, "docs")), file)
-                        self.assertFalse(keeptrack._inside_board_checkout(clone + "-docs"), file)
+                with tempfile.TemporaryDirectory() as elsewhere:
+                    # a --file board run from outside the clone, then a board clone the command runs in
+                    for file, cwd in ((board, elsewhere), (None, os.path.join(clone, "board"))):
+                        os.chdir(cwd)
+                        with mock.patch.object(keeptrack, "ROOT", None), mock.patch.object(keeptrack, "FILE", file), \
+                             mock.patch.object(keeptrack.subprocess, "run", no_git):
+                            self.assertTrue(keeptrack._inside_board_checkout(os.path.join(clone, "docs")), file)
+                            self.assertFalse(keeptrack._inside_board_checkout(clone + "-docs"), file)
+                        os.chdir(here)
             finally:
                 os.chdir(here)
 

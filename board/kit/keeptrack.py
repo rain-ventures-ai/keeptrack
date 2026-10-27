@@ -8428,7 +8428,8 @@ def _local_spelling(path, windows=None):
     m = re.match(r"^\\\\(?:localhost|127\.0\.0\.1)\\([A-Za-z])\$(\\.*)?$", p, re.I)
     if m:
         p = f"{m.group(1)}:" + (m.group(2) or "\\")
-    return p
+    import ntpath
+    return p if ntpath.isabs(p) else path   # a stripped prefix that leaves a relative path: keep the spelling given
 
 
 def _inside_board_checkout(path):
