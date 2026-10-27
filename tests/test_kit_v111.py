@@ -38,7 +38,8 @@ class Spellings(unittest.TestCase):
         cases = [("//home/o/repo/docs", False, "/home/o/repo/docs"), ("///x", False, "/x"), ("/a//b", False, "/a//b"),
                  (r"\\?\C:\Users\o\repo", True, r"C:\Users\o\repo"), (r"\\?\UNC\host\share\x", True, r"\\host\share\x"),
                  (r"\\localhost\C$\Users\o", True, r"C:\Users\o"), (r"\\127.0.0.1\d$", True, "d:\\"),
-                 (r"\\.\C:\x", True, r"C:\x"), (r"\\server\share\x", True, r"\\server\share\x"), ("C:/a/b", True, r"C:\a\b")]
+                 (r"\\.\C:\x", True, r"C:\x"), (r"\\.\UNC\localhost\C$\Users\o", True, r"C:\Users\o"),
+                 (r"\\?\UNC\127.0.0.1\c$\x", True, r"c:\x"), (r"\\server\share\x", True, r"\\server\share\x"), ("C:/a/b", True, r"C:\a\b")]
         for given, windows, want in cases:
             self.assertEqual(want, f(given, windows), given)
 

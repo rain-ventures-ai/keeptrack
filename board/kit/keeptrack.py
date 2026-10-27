@@ -8413,19 +8413,19 @@ def _board_checkouts():
 
 def _local_spelling(path, windows=None):
     """One spelling for a local path before the text comparison: POSIX leading slashes collapse to one (normpath keeps
-    a leading double slash), and on Windows the long-path prefix (backslash backslash ? backslash, with or without UNC)
-    and the localhost, 127.0.0.1 or "." admin shares (C$) become the plain drive path. Text only: nothing is resolved
+    a leading double slash), and on Windows the long-path and device prefixes (backslash backslash ? or . backslash, with or
+    without UNC) and the localhost or 127.0.0.1 admin shares (C$) become the plain drive path. Text only: nothing is resolved
     or opened."""
     windows = sys.platform == "win32" if windows is None else windows
     if not windows:
         return "/" + path.lstrip("/") if path.startswith("//") else path
     p = path.replace("/", "\\")
     low = p.lower()
-    if low.startswith("\\\\?\\unc\\"):
+    if low.startswith("\\\\?\\unc\\") or low.startswith("\\\\.\\unc\\"):
         p = "\\\\" + p[8:]
     elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
         p = p[4:]
-    m = re.match(r"^\\\\(?:localhost|127\.0\.0\.1|\.)\\([A-Za-z])\$(\\.*)?$", p, re.I)
+    m = re.match(r"^\\\\(?:localhost|127\.0\.0\.1)\\([A-Za-z])\$(\\.*)?$", p, re.I)
     if m:
         p = f"{m.group(1)}:" + (m.group(2) or "\\")
     return p
