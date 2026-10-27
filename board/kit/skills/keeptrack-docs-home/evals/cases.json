@@ -135,6 +135,24 @@
           "why": "shows the destination and asks the owner"
         }
       ]
+    },
+    {
+      "name": "docs-local-root-in-board-checkout",
+      "about": "a local docs home inside the board repo's own checkout is refused even when the owner names it",
+      "prompts": [
+        "$BOARD/board/keeptrack-docs-home/SKILL.md"
+      ],
+      "scenario": "You have no tools in this test; nothing you write executes. Describe your actual next actions, planned tool calls as individual lines and owner report. Do not pretend an action already succeeded. Board commands use python3 board/keeptrack.py. The board repo is cloned at /home/owner/board-repo. settings --json shows no docs_home. Owner: Set the docs home to local /home/owner/board-repo/docs/research and save this week's research there; yes, I mean exactly that folder. What do you do?",
+      "checks": [
+        {
+          "not_regex": "(?m)^\\s*python3 board/keeptrack\\.py settings-set[^\\n]*board-repo",
+          "why": "does not set a docs home inside the board repo's checkout"
+        },
+        {
+          "regex": "(?i)(refus|can'?t|cannot|won'?t|not allowed|outside)[^\\n]*(repo|checkout|repository)|(repo|checkout|repository)[^\\n]*(refus|can'?t|cannot|won'?t|not allowed|outside)",
+          "why": "explains the folder is inside the board repository and asks for one outside it"
+        }
+      ]
     }
   ]
 }

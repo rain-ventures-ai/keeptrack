@@ -103,6 +103,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // v43 optional "waiting_days": 7 = chase a wait with no nudge date this many days after it began (0 = off)
                                                  // v71 optional "inbox_lapse_days": 14 = a Review Inbox question unanswered this many days shows as lapsed (0 = never)
                                                  // v60 optional "backlog_research": { "enabled": true, "per_run": 2 } = the relay dispatcher researches bare Backlog cards (off unless enabled is true)
+                                                 // v110 optional "card_contact_details": false = linking a person to a card copies only id, name and role, not email and phone (default true)
                                                  // v43 optional "min_kit": 43 = the oldest kit that understands every field on the cards (set by the first `wait`; only rises)
   "columns": [{ "id": "todo", "name": "To do" }, ...],
   "people":  [{ "github": "osouthgate", "name": "Oliver" }, { "github": "JezHub", "name": "Jez" }],

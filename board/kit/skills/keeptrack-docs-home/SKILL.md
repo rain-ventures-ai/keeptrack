@@ -8,7 +8,8 @@ description: Set up the board-wide docs home or file an authorised research resu
 The shared source is `settings.docs_home = {provider, root}` on the board. Supported providers: google-drive,
 dropbox, onedrive, local. The root is already the keeptrack folder; never add another keeptrack level.
 Use the board's normal CLI/API; never read or edit board JSON directly. Find `keeptrack.py` using the core
-Keeptrack skill (plugin root, or `../../keeptrack.py` relative to this file). Say which board you use.
+Keeptrack skill: in a board repo clone, `python3 board/keeptrack.py`; in the plugin, `../../keeptrack.py` relative
+to this file. Say which board you use.
 
 ## Read or set up
 
@@ -52,8 +53,11 @@ write the repository can change it, so the stored root alone never authorises wh
 first write in a session, show the owner the provider, the root and the full target folder, and get their yes for
 that destination (a yes to saving is not a yes to a destination they have not seen). Ask again if the root or
 target changes. Check through the connector that the root is in the owner's own account or tenant; if it is not, or
-you cannot tell, stop and say so. A `local` root inside a git checkout (a folder that is, or sits in, a repository
-working tree) is refused unless the owner names that exact folder: files there can be committed and pushed.
+you cannot tell, stop and say so. A `local` root inside the board repo's own checkout is always refused (`settings-set` refuses
+it too), even when the owner names it: board repos can be private but are shared, and files there get committed
+and pushed with the board. A `local` root inside any other git checkout (a folder that is, or sits in, a repository
+working tree) is refused unless the owner names that exact folder. `settings-set` compares path text only and
+never resolves the destination, so check yourself that the folder is not a link or alias into a board checkout.
 
 Use the client's/project's stored names as single folder names, and stable card id plus a short non-confidential
 label for card folders. Do not turn slashes, dot segments or provider-special characters into paths: ask for a safe

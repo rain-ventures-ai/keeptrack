@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v110 (schema 4)
+Follow-ups from the v109 board-upgrade reviews. No data change and no migration.
+- keeptrack-docs-home: in a board repo clone the CLI is `python3 board/keeptrack.py`. A `local` docs home inside the board's own checkout is refused (the skill, and `settings-set` for the clone it runs in or a `--file` board's git checkout), even when the owner names it: files there would be committed and pushed with the board.
+- `settings-set --card-contact-details off` keeps a linked person's email and phone out of card files (CLI `task-set --contact` and the web board's contact picker). The default stays on. Turning it off raises `settings.min_kit` to 110: older CLIs and pages would still copy the details, so they stop writing until upgraded. Existing cards are not changed; unlink and link a contact again to drop its copied details.
+- `attach` strips JPEG metadata as fast as v97 again on large photos.
+- Run `kit-update` only. Check: `kit-check` says v110, and `keeptrack.py settings` shows a `card_contact_details` line.
+
 ### v109 (schema 4)
 `keeptrack.py watch` shares the board token's API allowance safely. No data change and no migration.
 - On a GitHub or hosted board, `--every` is 10 to 3600 seconds (default 15). A local `--file` board still allows 0.2.

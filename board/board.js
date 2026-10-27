@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 109;
+  const PAGE_KIT = 110;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1708,6 +1708,16 @@ if (typeof window !== 'undefined') (() => {
     if (c.status === 'done' || c.status === 'stuck' || c.status === 'blocked') return c.status;
     const mins = (Date.now() - Date.parse(c.heartbeat_at || c.claimed_at)) / 60000;
     return mins > (c.attended ? 12 * 60 : ((board.settings || {}).stale_after_minutes || 30)) ? 'stale' : 'running';
+  }
+  // A card's contact snapshot (the CRM picker, kept within the board). settings.card_contact_details false (kit v110)
+  // keeps email and phone on the person record only, as keeptrack.py contact_snapshot does.
+  function contactSnapshot(p, b) {
+    const snap = { person_id: p.id, name: p.name, role: p.role || '' };
+    if (((b || {}).settings || {}).card_contact_details !== false) {
+      snap.email = ((p.emails || [])[0] || {}).value || p.email || '';
+      snap.phone = ((p.phones || [])[0] || {}).value || p.phone || '';
+    }
+    return snap;
   }
   const ago = iso => {
     const at = Date.parse(iso); if (!Number.isFinite(at)) return '';
@@ -4484,7 +4494,7 @@ if (typeof window !== 'undefined') (() => {
     const pick = i => {
       const p = items[i], id = editing; if (!p || !id || ro) return;
       edit(id, (t, n) => { const person = n.contacts.find(x => x.id === p.id); if (!person || linked(t, person)) return;
-        t.contacts.push({ person_id: person.id, name: person.name, role: person.role || '', email: person.email || '', phone: person.phone || '' });
+        t.contacts.push(contactSnapshot(person, n));
       }, `Contacts: ${titleOf(id)}`);
       input.value = ''; close(); input.focus();
     };
@@ -8503,8 +8513,9 @@ if (typeof window !== 'undefined') (() => {
   }
   function addPersonTask(v) {
     const p = contactNow(); if (!p) return false;
-    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], contacts: [{ person_id: p.id, name: p.name, role: p.role || '', email: ((p.emails || [])[0] || {}).value || p.email || '', phone: ((p.phones || [])[0] || {}).value || p.phone || '' }], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
-    mutate(n => { n.tasks.push(t); }, `Add task: ${v}`);
+    const t = { id: uid(), title: v, column: reopenColId(), client: p.company || '', contact: p.id, priority: 'medium', due: '', labels: [], assignees: me() ? [me()] : [], details: '', links: [], todos: [], comments: [], history: [], claim: null, created: nowIso(), updated: nowIso() };
+    // the snapshot reads settings.card_contact_details from the board being saved, so a retried save checks it again
+    mutate(n => { n.tasks.push({ ...t, contacts: [contactSnapshot(p, n)] }); }, `Add task: ${v}`);
   }
 
   $('pName').addEventListener('change', e => { const v = e.target.value.trim(); if (v) pedit(editingContact, x => { x.name = v; }); });
