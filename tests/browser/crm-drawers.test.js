@@ -161,6 +161,24 @@ const INIT = () => { localStorage.setItem('kb_repo', 'acme/board'); localStorage
 
       } finally { await ctx.close(); }
     }
+    // kit v111: the card's contact picker honours settings.card_contact_details false, like the person drawer's Add task
+    {
+      const api = new Github();
+      api.files['tasks.json'] = text({ ...root, settings: { ...root.settings, card_contact_details: false, min_kit: 110 } });
+      api.files['people/p_one.json'] = text({ ...person, emails: [{ value: 'casey@acme.test', label: 'Work' }], phones: [{ value: '+440000000000', label: 'Work' }] });
+      api.files['cards/t_one.json'] = text({ ...card, contact: undefined, contacts: [] });
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      try {
+        const pg = await ctx.newPage(); await pg.addInitScript(INIT); await pg.route('https://api.test/**', r => api.route(r));
+        await pg.goto(base + '/board/index.html?repo=acme%2Fboard&card=t_one#1'); await pg.locator('#dlgCard[open]').waitFor();
+        await pg.locator('#cContactSec .ui-addrow__ghost').click(); await pg.locator('#cContactNew').fill('Casey');
+        const suggestion = pg.locator('#cContactSuggestions [role="option"]'); await suggestion.first().waitFor();
+        const adding = pg.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/contents/board/'));
+        await suggestion.first().click(); await adding;
+        const linked = JSON.parse(api.files['cards/t_one.json']).contacts;
+        assert.deepEqual(linked, [{ person_id: 'p_one', name: 'Casey Example', role: linked[0].role }], 'picker: id, name and role only');
+      } finally { await ctx.close(); }
+    }
     const api = new Github();
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = [], native = [];
     page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { native.push(d.type() + ': ' + d.message()); d.dismiss().catch(() => {}); });

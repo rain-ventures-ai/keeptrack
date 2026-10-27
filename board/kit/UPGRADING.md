@@ -25,6 +25,11 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v111 (schema 4)
+Follow-ups from the v110 reviews. No data change and no migration.
+- The docs-home checkout refusal also catches other spellings of a folder in the board checkout: `//path` on POSIX, and `\\?\C:\...`, `\\?\UNC\...` and `\\localhost\C$\...` on Windows. When git cannot answer it walks up to the `.git` entry instead of letting the folder through.
+- Run `kit-update` only. Check: `kit-check` says v111.
+
 ### v110 (schema 4)
 Follow-ups from the v109 board-upgrade reviews. No data change and no migration.
 - keeptrack-docs-home: in a board repo clone the CLI is `python3 board/keeptrack.py`. A `local` docs home inside the board's own checkout is refused (the skill, and `settings-set` for the clone it runs in or a `--file` board's git checkout), even when the owner names it: files there would be committed and pushed with the board.

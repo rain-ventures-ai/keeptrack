@@ -361,7 +361,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 110  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 111  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -8386,10 +8386,22 @@ def _board_checkouts():
     board/tasks.json) the command is run from, whatever BOARD_REPO says."""
     def top_of(folder):
         try:
-            return subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                                  stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
+            top = subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                 stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
         except (OSError, subprocess.SubprocessError):
-            return ""
+            top = ""
+        if top:
+            return top
+        # git could not answer (not installed, safe.directory, a timeout): find the working tree from its .git entry,
+        # so the refusal fails closed instead of skipping this checkout
+        d = os.path.abspath(folder)
+        while True:
+            if os.path.exists(os.path.join(d, ".git")):
+                return d
+            up = os.path.dirname(d)
+            if up == d:
+                return ""
+            d = up
     tops = [ROOT] if ROOT else []
     if FILE:
         tops.append(top_of(os.path.dirname(os.path.abspath(FILE))))
@@ -8399,13 +8411,33 @@ def _board_checkouts():
     return [t for t in tops if t]
 
 
+def _local_spelling(path, windows=None):
+    """One spelling for a local path before the text comparison: POSIX leading slashes collapse to one (normpath keeps
+    a leading double slash), and on Windows the long-path prefix (backslash backslash ? backslash, with or without UNC)
+    and the localhost, 127.0.0.1 or "." admin shares (C$) become the plain drive path. Text only: nothing is resolved
+    or opened."""
+    windows = sys.platform == "win32" if windows is None else windows
+    if not windows:
+        return "/" + path.lstrip("/") if path.startswith("//") else path
+    p = path.replace("/", "\\")
+    low = p.lower()
+    if low.startswith("\\\\?\\unc\\"):
+        p = "\\\\" + p[8:]
+    elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
+        p = p[4:]
+    m = re.match(r"^\\\\(?:localhost|127\.0\.0\.1|\.)\\([A-Za-z])\$(\\.*)?$", p, re.I)
+    if m:
+        p = f"{m.group(1)}:" + (m.group(2) or "\\")
+    return p
+
+
 def _inside_board_checkout(path):
     """True when a local docs-home path is a board checkout's working tree or sits in it. Compares path text only:
     the destination is never resolved, created, listed or read (no realpath on it: on Windows that would open a UNC
     host). Case-insensitive on macOS and Windows, whose usual filesystems are."""
     fold = sys.platform in ("darwin", "win32")
     def norm(x, resolve):
-        x = os.path.realpath(x) if resolve else os.path.normpath(os.path.abspath(x))
+        x = os.path.realpath(x) if resolve else os.path.normpath(os.path.abspath(_local_spelling(x)))
         x = os.path.normcase(x)
         return x.casefold() if fold else x
     target = norm(path, False)
