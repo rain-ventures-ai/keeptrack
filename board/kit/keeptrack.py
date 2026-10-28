@@ -94,7 +94,7 @@ def repo_from_git():
     """owner/name of this clone's origin, so the same keeptrack.py works in every board repo. "" when git can't say."""
     try:
         p = subprocess.run(["git", "-C", ROOT, "remote", "get-url", "origin"], capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=10)
+                           stdin=subprocess.DEVNULL, timeout=_git_timeout())
     except (OSError, subprocess.SubprocessError):   # git not installed or hung: BOARD_REPO or a .keeptrack config says
         return ""
     m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", p.stdout.strip()) if p.returncode == 0 else None
@@ -287,19 +287,46 @@ for _k, _v in (("BOARD_REPO", "repo"), ("BOARD_BRANCH", "branch"), ("BOARD_PATH"
         os.environ.setdefault(_k, str(PROJECT[_v]))
 if os.path.basename(os.path.dirname(os.path.abspath(__file__))) != "board":
     ROOT = None   # this keeptrack.py is not inside a board repo (e.g. the Claude plugin): no git remote, no kit files
+_GIT_START = time.monotonic()
+
+
+def _git_timeout():
+    """Seconds a git call may take: the start-up calls (every command and the heartbeat hook run them) share about
+    5 s, so a hung git can't use up the hook's 20 s; later calls get 10 s."""
+    left = 5 - (time.monotonic() - _GIT_START)
+    return max(2.0, left) if left > 0 else 10.0
+
+
 def _git_toplevel(folder):
-    """(the git working tree holding folder, whether git answered). git saying "not a repository" is an answer;
-    git missing, hung, or refusing the repo for its owner (safe.directory) is not."""
+    """(the git working tree holding folder, how git answered): "ok"; "none" (git says it is not a repository);
+    "refused" (git refused the repo for its owner: safe.directory); "error" (any other failure); "missing" (git not
+    installed, or it hung). Run in the C locale so the messages are never translated."""
     try:
         p = subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=10)
+                           stdin=subprocess.DEVNULL, timeout=_git_timeout(), env={**os.environ, "LC_ALL": "C"})
     except (OSError, subprocess.SubprocessError):
-        return "", False
+        return "", "missing"
     top = p.stdout.strip()
     if top:
-        return top, True
+        return top, "ok"
     err = (p.stderr or "").lower()
-    return "", not ("safe.directory" in err or "dubious ownership" in err)
+    if "safe.directory" in err or "dubious ownership" in err:
+        return "", "refused"
+    return "", ("none" if "not a git repository" in err else "error")
+
+
+def _own_tree(top):
+    """Is top a folder with its .git that this user owns and no one else can write? (False where there are no user
+    ids, e.g. Windows.) The check git's own safe.directory makes, for when git itself is missing."""
+    if not hasattr(os, "getuid"):
+        return False
+    try:
+        for st in (os.stat(top), os.lstat(os.path.join(top, ".git"))):
+            if st.st_uid != os.getuid() or st.st_mode & 0o022:
+                return False
+    except OSError:
+        return False
+    return True
 
 
 def _dot_git_top(folder):
@@ -316,9 +343,10 @@ def _dot_git_top(folder):
 
 
 if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a board repo clone: use that clone
-    _top, _answered = _git_toplevel(os.getcwd())
-    if not _top and not _answered:
+    _top, _how = _git_toplevel(os.getcwd())
+    if _how == "missing":   # no git: the .git entry, only in a tree this user owns (git's refusal is final)
         _top = _dot_git_top(os.getcwd())
+        _top = _top if _top and _own_tree(_top) else ""
     if _top and os.path.isfile(os.path.join(_top, "board", "tasks.json")):
         ROOT = _top
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
@@ -410,7 +438,7 @@ def _default_branch():
     if ROOT:
         try:
             out = subprocess.run(["git", "-C", ROOT, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], capture_output=True,
-                                 text=True, stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
+                                 text=True, stdin=subprocess.DEVNULL, timeout=_git_timeout()).stdout.strip()
         except (OSError, subprocess.SubprocessError):   # no git: the older boards' default
             out = ""
         if out.startswith("origin/"):
@@ -484,8 +512,10 @@ def local_lock():
 def _local_dir():
     """This repo's personal Keeptrack folder: .keeptrack/ at the top of the current git repo, so a board set once
     in the home folder still keeps one claim per repo; outside git, the config's own folder or here."""
-    top, answered = _git_toplevel(os.getcwd())
-    top = top or ("" if answered else _dot_git_top(os.getcwd()))   # no git: the .git entry says where the repo is
+    top, how = _git_toplevel(os.getcwd())
+    if how == "missing":   # no git: the .git entry, only in a tree this user owns
+        top = _dot_git_top(os.getcwd())
+        top = top if top and _own_tree(top) else ""
     if top:
         legacy = os.path.join(top, ".board", "config.json")
         return os.path.join(top, ".board" if os.path.isfile(legacy) and not os.path.isdir(os.path.join(top, CONFIG_DIRS[0])) else CONFIG_DIRS[0])
@@ -8428,10 +8458,10 @@ def _board_checkouts():
     or ~/.agents copy run elsewhere), the git checkout holding a --file board, and a board repo clone (one with
     board/tasks.json) the command is run from, whatever BOARD_REPO says."""
     def top_of(folder):
-        top, answered = _git_toplevel(folder)
-        # git could not answer (not installed, safe.directory, a timeout): find the working tree from its .git entry,
-        # so the refusal fails closed instead of skipping this checkout. "Not a repository" from git stands.
-        return top or ("" if answered else _dot_git_top(folder))
+        top, how = _git_toplevel(folder)
+        # only git's own "not a repository" stands; any other failure (missing, hung, safe.directory, an error) finds
+        # the working tree from its .git entry, so this refusal fails closed instead of skipping the checkout
+        return top or ("" if how == "none" else _dot_git_top(folder))
     tops = [ROOT] if ROOT else []
     if FILE:
         tops.append(top_of(os.path.dirname(os.path.abspath(FILE))))
@@ -8452,6 +8482,7 @@ def _local_spelling(path, windows=None):
         return "/" + path.lstrip("/") if path.startswith("//") else path
     p = path.replace("/", "\\")
     low = p.lower()
+    literal = low.startswith("\\\\?\\")   # \\?\ paths keep trailing dots and spaces: no Win32 name clean-up
     if low.startswith("\\\\?\\unc\\") or low.startswith("\\\\.\\unc\\"):
         p = "\\\\" + p[8:]
     elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
@@ -8464,7 +8495,7 @@ def _local_spelling(path, windows=None):
         return path   # a stripped prefix that leaves a relative path: keep the spelling given
     # Win32 drops trailing dots and spaces from each name: C:\repo.\docs is C:\repo\docs
     head, sep, rest = p.partition("\\") if not p.startswith("\\\\") else ("", "", p)
-    if rest and not p.startswith("\\\\"):
+    if rest and not p.startswith("\\\\") and not literal:
         p = head + sep + "\\".join(x if x in (".", "..") else x.rstrip(". ") for x in rest.split("\\"))
     return p
 
@@ -8473,22 +8504,26 @@ def _this_machine(host):
     """Is a UNC host this computer: localhost, any 127.x.x.x, [::1] (or its ipv6-literal.net form), or this
     computer's own name? Text only: no name lookup."""
     h = host.strip("[]").lower()
-    if h in ("localhost", "::1", "0--1.ipv6-literal.net") or re.fullmatch(r"127(?:\.\d{1,3}){3}", h):
-        return True
+    if h in ("localhost", "::1", "0--1.ipv6-literal.net") or re.fullmatch(r"127(?:\.\d{1,10}){0,3}", h):
+        return True   # 127.1 and 127.0.1 are loopback too
     try:
         own = socket.gethostname().lower()
     except OSError:
         return False
-    return bool(own) and h in (own, own.split(".")[0])
+    # Windows gives the short name; a share may name the full one (MYPC.corp.example), or the other way round
+    return bool(own) and h.split(".")[0] == own.split(".")[0]
 
 
 def _unverifiable_local(path, windows=None):
-    """A Windows volume or device path (the GLOBALROOT or Volume{...} forms after the long-path or device prefix)
-    can't be matched to a drive letter by text: settings-set refuses it rather than guess."""
+    """A Windows device or volume path (after the long-path or device prefix, anything but a drive letter or
+    UNC share: GLOBALROOT, Volume{...}, HarddiskVolumeN) can't be matched to a folder by text: settings-set refuses it
+    rather than guess."""
     windows = sys.platform == "win32" if windows is None else windows
     low = path.replace("/", "\\").lower()
-    return windows and any(low.startswith(pre + kind) for pre in ("\\\\?\\", "\\\\.\\")
-                           for kind in ("globalroot", "volume{"))
+    if not windows or not (low.startswith("\\\\?\\") or low.startswith("\\\\.\\")):
+        return False
+    rest = low[4:]   # after the prefix only a drive (X:\) or a share (UNC\host\share) can be matched to a folder
+    return not (re.match(r"[a-z]:\\", rest) or re.match(r"unc\\[^\\]+\\[^\\]+", rest))
 
 
 def _inside_board_checkout(path):
