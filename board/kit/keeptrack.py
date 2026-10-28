@@ -78,6 +78,17 @@ try:
     import fcntl
 except ImportError:   # Windows
     fcntl = None
+
+_GIT_START = time.monotonic()
+_GIT_STARTUP = True   # until main() knows the command; the heartbeat hook stays in it to the end
+
+
+def _git_timeout():
+    """Seconds a git call may take. In start-up (module import, and the whole auto-heartbeat hook) every call shares
+    one 5 s budget, with 1 s once it is spent, so a hung git can't use up the hook's 20 s; other commands get 10 s."""
+    if _GIT_STARTUP:
+        return max(1.0, 5 - (time.monotonic() - _GIT_START))
+    return 10.0
 try:
     import msvcrt
 except ImportError:   # POSIX
@@ -165,7 +176,7 @@ def _untrusted(d, name):
         return True
     try:
         r = subprocess.run(["git", "-C", d, "ls-files", "--error-unmatch", "--", os.path.join(name, "config.json")],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=_git_timeout())
         if r.returncode == 0:
             return True   # committed: it travels with the repo
         return r.returncode != 1 and "not a git repository" not in r.stderr   # 1: untracked; outside git: fine
@@ -189,7 +200,7 @@ def _board_clones():
         tops = [ROOT]
         try:
             tops.append(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                                       timeout=10).stdout.strip())
+                                       timeout=_git_timeout()).stdout.strip())
         except (OSError, subprocess.SubprocessError):
             pass
         found = _CLONES[cwd] = {}
@@ -198,7 +209,7 @@ def _board_clones():
             if c and os.path.isfile(os.path.join(c, "board", "tasks.json")) and (cwd == c or cwd.startswith(c.rstrip(os.sep) + os.sep)):
                 try:
                     out = subprocess.run(["git", "-C", c, "remote", "get-url", "origin"], capture_output=True, text=True,
-                                         timeout=10).stdout.strip()
+                                         timeout=_git_timeout()).stdout.strip()
                 except (OSError, subprocess.SubprocessError):
                     out = ""
                 m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", out)
@@ -287,16 +298,6 @@ for _k, _v in (("BOARD_REPO", "repo"), ("BOARD_BRANCH", "branch"), ("BOARD_PATH"
         os.environ.setdefault(_k, str(PROJECT[_v]))
 if os.path.basename(os.path.dirname(os.path.abspath(__file__))) != "board":
     ROOT = None   # this keeptrack.py is not inside a board repo (e.g. the Claude plugin): no git remote, no kit files
-_GIT_START = time.monotonic()
-
-
-def _git_timeout():
-    """Seconds a git call may take: the start-up calls (every command and the heartbeat hook run them) share about
-    5 s, so a hung git can't use up the hook's 20 s; later calls get 10 s."""
-    left = 5 - (time.monotonic() - _GIT_START)
-    return max(2.0, left) if left > 0 else 10.0
-
-
 def _git_toplevel(folder):
     """(the git working tree holding folder, how git answered): "ok"; "none" (git says it is not a repository);
     "refused" (git refused the repo for its owner: safe.directory); "error" (any other failure); "missing" (git not
@@ -2472,7 +2473,7 @@ def _tracked_by_git(path):
     runs in may hold one."""
     try:
         r = subprocess.run(["git", "-C", os.path.dirname(path) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(path)],
-                           capture_output=True, text=True, timeout=10, env=_git_c_env())   # the stderr text is matched below
+                           capture_output=True, text=True, timeout=_git_timeout(), env=_git_c_env())   # the stderr text is matched below
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode == 0:
@@ -12435,6 +12436,8 @@ def main():
         if name not in have and name in COMMAND_HELP:
             sub._choices_actions.append(sub._ChoicesPseudoAction(name, (), COMMAND_HELP[name]))
     a = p.parse_args()
+    global _GIT_STARTUP
+    _GIT_STARTUP = a.cmd == "auto-heartbeat"   # the hook keeps the start-up git budget; every other command gets 10 s
     _proposals_only(a)
     FILE = a.file
     read_stdin_args(a)

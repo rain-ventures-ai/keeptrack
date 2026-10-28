@@ -72,6 +72,20 @@ class GitAnswers(unittest.TestCase):
                     self.assertTrue(keeptrack._inside_board_checkout(os.path.join(home, "Documents")), err)
 
 
+class GitBudget(unittest.TestCase):
+    def test_start_up_calls_share_five_seconds_and_never_get_ten(self):
+        start = keeptrack._GIT_START
+        for elapsed, startup, want in ((0, True, 5.0), (3, True, 2.0), (4.5, True, 1.0), (60, True, 1.0), (60, False, 10.0)):
+            with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
+                 mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
+                self.assertAlmostEqual(want, keeptrack._git_timeout(), places=3, msg=(elapsed, startup))
+
+    def test_only_the_heartbeat_hook_keeps_the_start_up_budget(self):
+        src = read("board/kit/keeptrack.py")
+        self.assertIn('_GIT_STARTUP = a.cmd == "auto-heartbeat"', src)
+        self.assertNotIn("timeout=10, env=_git_c_env())   # the stderr text", src, "the hook's own git call uses the budget")
+
+
 class TrustedClone(unittest.TestCase):
     """Finding the board clone (ROOT) trusts it: automations run from it. Only git's own answer, or with no git
     at all a .git this user owns, may name it; git's safe.directory refusal is final."""
