@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v112 (schema 4)
+keeptrack.py runs without git, and the docs-home checkout refusal is more exact. No data change and no migration.
+- Without git installed, a plugin or board-clone copy starts normally (set `BOARD_REPO`, or use a `.keeptrack` config, so it knows the board); before, it stopped with a Python error.
+- The docs-home refusal walks up to a `.git` entry only when git could not answer, so a folder git calls "not a repository" is no longer refused because of a `.git` higher up.
+- Windows: `\\[::1]\C$`, `\\127.x.x.x\C$` and `\\<this computer>\C$` read as `C:`; trailing dots and spaces leave each name. A `\\?\GLOBALROOT` or `\\?\Volume{...}` docs home is refused: use the drive letter.
+- Run `kit-update` only. Check: `kit-check` says v112.
+
 ### v111 (schema 4)
 Follow-ups from the v110 reviews. No data change and no migration.
 - The docs-home checkout refusal also catches other spellings of a folder in the board checkout: `//path` on POSIX, and `\\?\C:\...`, `\\?\UNC\...` and `\\localhost\C$\...` on Windows. When git cannot answer it walks up to the `.git` entry instead of letting the folder through.

@@ -91,8 +91,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def repo_from_git():
-    """owner/name of this clone's origin, so the same keeptrack.py works in every board repo."""
-    p = subprocess.run(["git", "-C", ROOT, "remote", "get-url", "origin"], capture_output=True, text=True)
+    """owner/name of this clone's origin, so the same keeptrack.py works in every board repo. "" when git can't say."""
+    try:
+        p = subprocess.run(["git", "-C", ROOT, "remote", "get-url", "origin"], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):   # git not installed or hung: BOARD_REPO or a .keeptrack config says
+        return ""
     m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", p.stdout.strip()) if p.returncode == 0 else None
     return m.group(1) if m else ""
 
@@ -283,8 +287,38 @@ for _k, _v in (("BOARD_REPO", "repo"), ("BOARD_BRANCH", "branch"), ("BOARD_PATH"
         os.environ.setdefault(_k, str(PROJECT[_v]))
 if os.path.basename(os.path.dirname(os.path.abspath(__file__))) != "board":
     ROOT = None   # this keeptrack.py is not inside a board repo (e.g. the Claude plugin): no git remote, no kit files
+def _git_toplevel(folder):
+    """(the git working tree holding folder, whether git answered). git saying "not a repository" is an answer;
+    git missing, hung, or refusing the repo for its owner (safe.directory) is not."""
+    try:
+        p = subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "", False
+    top = p.stdout.strip()
+    if top:
+        return top, True
+    err = (p.stderr or "").lower()
+    return "", not ("safe.directory" in err or "dubious ownership" in err)
+
+
+def _dot_git_top(folder):
+    """The nearest folder at or above folder holding a .git entry (folder or file), "" at the root: git's own
+    answer when git can't give one."""
+    d = os.path.abspath(folder)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        up = os.path.dirname(d)
+        if up == d:
+            return ""
+        d = up
+
+
 if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a board repo clone: use that clone
-    _top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    _top, _answered = _git_toplevel(os.getcwd())
+    if not _top and not _answered:
+        _top = _dot_git_top(os.getcwd())
     if _top and os.path.isfile(os.path.join(_top, "board", "tasks.json")):
         ROOT = _top
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
@@ -361,7 +395,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 111  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 112  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -374,7 +408,11 @@ def _default_branch():
     if os.environ.get("BOARD_BRANCH"):
         return os.environ["BOARD_BRANCH"]
     if ROOT:
-        out = subprocess.run(["git", "-C", ROOT, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], capture_output=True, text=True).stdout.strip()
+        try:
+            out = subprocess.run(["git", "-C", ROOT, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], capture_output=True,
+                                 text=True, stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):   # no git: the older boards' default
+            out = ""
         if out.startswith("origin/"):
             return out[len("origin/"):]
     return "master"
@@ -446,7 +484,8 @@ def local_lock():
 def _local_dir():
     """This repo's personal Keeptrack folder: .keeptrack/ at the top of the current git repo, so a board set once
     in the home folder still keeps one claim per repo; outside git, the config's own folder or here."""
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    top, answered = _git_toplevel(os.getcwd())
+    top = top or ("" if answered else _dot_git_top(os.getcwd()))   # no git: the .git entry says where the repo is
     if top:
         legacy = os.path.join(top, ".board", "config.json")
         return os.path.join(top, ".board" if os.path.isfile(legacy) and not os.path.isdir(os.path.join(top, CONFIG_DIRS[0])) else CONFIG_DIRS[0])
@@ -2272,7 +2311,11 @@ def claim_state(data, c):
 
 
 def git_branch():
-    p = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True)
+    try:
+        p = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -8385,23 +8428,10 @@ def _board_checkouts():
     or ~/.agents copy run elsewhere), the git checkout holding a --file board, and a board repo clone (one with
     board/tasks.json) the command is run from, whatever BOARD_REPO says."""
     def top_of(folder):
-        try:
-            top = subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                                 stdin=subprocess.DEVNULL, timeout=10).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            top = ""
-        if top:
-            return top
+        top, answered = _git_toplevel(folder)
         # git could not answer (not installed, safe.directory, a timeout): find the working tree from its .git entry,
-        # so the refusal fails closed instead of skipping this checkout
-        d = os.path.abspath(folder)
-        while True:
-            if os.path.exists(os.path.join(d, ".git")):
-                return d
-            up = os.path.dirname(d)
-            if up == d:
-                return ""
-            d = up
+        # so the refusal fails closed instead of skipping this checkout. "Not a repository" from git stands.
+        return top or ("" if answered else _dot_git_top(folder))
     tops = [ROOT] if ROOT else []
     if FILE:
         tops.append(top_of(os.path.dirname(os.path.abspath(FILE))))
@@ -8413,9 +8443,10 @@ def _board_checkouts():
 
 def _local_spelling(path, windows=None):
     """One spelling for a local path before the text comparison: POSIX leading slashes collapse to one (normpath keeps
-    a leading double slash), and on Windows the long-path and device prefixes (backslash backslash ? or . backslash, with or
-    without UNC) and the localhost or 127.0.0.1 admin shares (C$) become the plain drive path. Text only: nothing is resolved
-    or opened."""
+    a leading double slash). On Windows the long-path and device prefixes (backslash backslash ? or . backslash, with
+    or without UNC) are dropped, an admin share (C$) on this computer (localhost, 127.x.x.x, [::1], its own name)
+    becomes the drive path, and trailing dots and spaces leave each name, as Win32 does. Text only: nothing is
+    resolved, opened or looked up."""
     windows = sys.platform == "win32" if windows is None else windows
     if not windows:
         return "/" + path.lstrip("/") if path.startswith("//") else path
@@ -8425,11 +8456,39 @@ def _local_spelling(path, windows=None):
         p = "\\\\" + p[8:]
     elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
         p = p[4:]
-    m = re.match(r"^\\\\(?:localhost|127\.0\.0\.1)\\([A-Za-z])\$(\\.*)?$", p, re.I)
-    if m:
-        p = f"{m.group(1)}:" + (m.group(2) or "\\")
+    m = re.match(r"^\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?$", p, re.I)
+    if m and _this_machine(m.group(1)):
+        p = f"{m.group(2)}:" + (m.group(3) or "\\")
     import ntpath
-    return p if ntpath.isabs(p) else path   # a stripped prefix that leaves a relative path: keep the spelling given
+    if not ntpath.isabs(p):
+        return path   # a stripped prefix that leaves a relative path: keep the spelling given
+    # Win32 drops trailing dots and spaces from each name: C:\repo.\docs is C:\repo\docs
+    head, sep, rest = p.partition("\\") if not p.startswith("\\\\") else ("", "", p)
+    if rest and not p.startswith("\\\\"):
+        p = head + sep + "\\".join(x if x in (".", "..") else x.rstrip(". ") for x in rest.split("\\"))
+    return p
+
+
+def _this_machine(host):
+    """Is a UNC host this computer: localhost, any 127.x.x.x, [::1] (or its ipv6-literal.net form), or this
+    computer's own name? Text only: no name lookup."""
+    h = host.strip("[]").lower()
+    if h in ("localhost", "::1", "0--1.ipv6-literal.net") or re.fullmatch(r"127(?:\.\d{1,3}){3}", h):
+        return True
+    try:
+        own = socket.gethostname().lower()
+    except OSError:
+        return False
+    return bool(own) and h in (own, own.split(".")[0])
+
+
+def _unverifiable_local(path, windows=None):
+    """A Windows volume or device path (the GLOBALROOT or Volume{...} forms after the long-path or device prefix)
+    can't be matched to a drive letter by text: settings-set refuses it rather than guess."""
+    windows = sys.platform == "win32" if windows is None else windows
+    low = path.replace("/", "\\").lower()
+    return windows and any(low.startswith(pre + kind) for pre in ("\\\\?\\", "\\\\.\\")
+                           for kind in ("globalroot", "volume{"))
 
 
 def _inside_board_checkout(path):
@@ -8464,6 +8523,9 @@ def cmd_settings_set(a):
     if provider is not None:
         try: home = validate_docs_home({"provider": provider, "root": root})
         except ValueError as e: sys.exit(str(e))
+        if home["provider"] == "local" and _unverifiable_local(home["root"]):
+            sys.exit("local docs home must be a drive-letter or share path: a volume or device path can't be checked "
+                     "against the board checkout. Use the drive letter (C:\\...) instead.")
         if home["provider"] == "local" and _inside_board_checkout(home["root"]):
             sys.exit("local docs home must not be inside this board repo's checkout: files there can be committed and "
                      "pushed with the board. Choose a folder outside the repository.")
