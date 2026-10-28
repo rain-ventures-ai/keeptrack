@@ -80,20 +80,26 @@ except ImportError:   # Windows
     fcntl = None
 
 _GIT_START = time.monotonic()
-_GIT_STARTUP = True   # until main() knows the command; the heartbeat hook stays in it to the end
+_GIT_STARTUP = sys.argv[1:2] == ["auto-heartbeat"]   # the heartbeat hook runs under one git budget, from the start
 
 
 _GIT_DECIDES = 3.0   # the least a start-up git call gets when its answer decides something (see _git_timeout)
 
 
 def _git_timeout(floor=1.0):
-    """Seconds a git call may take. In start-up (module import, and the whole auto-heartbeat hook) the calls share one
-    5 s budget, so a hung git can't use up the hook's 20 s: a probe gets 1 s once it is spent, a call whose answer
-    decides something (the clone's top, its default branch, whether git tracks the claim record) _GIT_DECIDES; such
-    a call that still times out trusts nothing or stops, never guesses. Other commands give git 10 s."""
+    """Seconds a git call may take. In the auto-heartbeat hook the calls share one 5 s budget, so a hung git leaves
+    the hook its 20 s: once it is spent a probe gets 1 s and a call whose answer decides something (the clone's top,
+    its default branch, whether git tracks the claim record) _GIT_DECIDES, down to 1 s after 12 s. Such a call that
+    still times out trusts nothing or stops, never guesses. Every other command gives git 10 s."""
     if _GIT_STARTUP:
-        return max(floor, 5 - (time.monotonic() - _GIT_START))
+        spent = time.monotonic() - _GIT_START
+        return max(min(floor, max(1.0, 12 - spent)), 5 - spent)
     return 10.0
+
+
+def _stop(message):
+    """Stop a command that a slow git left unsure; the heartbeat hook stops quietly (it never fails loudly)."""
+    sys.exit(0 if _GIT_STARTUP else message)
 try:
     import msvcrt
 except ImportError:   # POSIX
@@ -468,8 +474,8 @@ def _default_branch():
             out = subprocess.run(["git", "-C", ROOT, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], capture_output=True,
                                  text=True, stdin=subprocess.DEVNULL, timeout=_git_timeout(_GIT_DECIDES)).stdout.strip()
         except subprocess.TimeoutExpired:   # a slow git: guessing master could read and write the wrong branch
-            sys.exit(f"git did not say this clone's default branch in time ({ROOT}); set BOARD_BRANCH to the board's "
-                     "branch, or try again")
+            _stop(f"git did not say this clone's default branch in time ({ROOT}); set BOARD_BRANCH to the board's "
+                  "branch, or try again")
         except (OSError, subprocess.SubprocessError):   # no git: the older boards' default
             out = ""
         if out.startswith("origin/"):
@@ -543,12 +549,12 @@ def local_lock():
 def _local_dir():
     """This repo's personal Keeptrack folder: .keeptrack/ at the top of the current git repo, so a board set once
     in the home folder still keeps one claim per repo; outside git, the config's own folder or here."""
+    if _git_toplevel(os.getcwd())[1] == "hung" and _dot_git_top(os.getcwd()):
+        # a .git above that a slow git did not place: guessing (its tree, or the fallback folder) could split the
+        # claim between two places, so stop
+        _stop(f"git did not answer in time for {os.getcwd()}, so Keeptrack can't tell which repo's claim to use; "
+              "try again")
     top = _trusted_top(os.getcwd())
-    if not top and _git_toplevel(os.getcwd())[1] == "hung" and _dot_git_top(os.getcwd()):
-        # a repo here that a slow git could not confirm and nothing else vouches for: a record in the fallback folder
-        # would split the claim between two places, so stop
-        sys.exit(f"git did not answer in time for {os.getcwd()}, so Keeptrack can't tell which repo's claim to use; "
-                 "try again")
     if top:
         legacy = os.path.join(top, ".board", "config.json")
         return os.path.join(top, ".board" if os.path.isfile(legacy) and not os.path.isdir(os.path.join(top, CONFIG_DIRS[0])) else CONFIG_DIRS[0])
@@ -8523,11 +8529,13 @@ def _local_spelling(path, windows=None):
     import ntpath
     if not ntpath.isabs(p):
         return path   # a stripped prefix that leaves a relative path: keep the spelling given
-    # Win32 drops trailing dots and spaces from each name: C:\repo.\docs is C:\repo\docs
-    head, sep, rest = p.partition("\\") if not p.startswith("\\\\") else ("", "", p)
-    if rest and not p.startswith("\\\\"):
-        p = head + sep + "\\".join(x if x in (".", "..") else x.rstrip(". ") for x in rest.split("\\"))
-    return p
+    # Win32 drops trailing dots and spaces from each name: C:\repo.\docs is C:\repo\docs, after a share's host and name too
+    strip = lambda names: [x if x in (".", "..") else x.rstrip(". ") for x in names]
+    if p.startswith("\\\\"):
+        names = p[2:].split("\\")
+        return "\\\\" + "\\".join(names[:2] + strip(names[2:]))
+    head, sep, rest = p.partition("\\")
+    return head + sep + "\\".join(strip(rest.split("\\"))) if rest else p
 
 
 def _unverifiable_local(path, windows=None):
@@ -12465,7 +12473,7 @@ def main():
             sub._choices_actions.append(sub._ChoicesPseudoAction(name, (), COMMAND_HELP[name]))
     a = p.parse_args()
     global _GIT_STARTUP
-    _GIT_STARTUP = a.cmd == "auto-heartbeat"   # the hook keeps the start-up git budget; every other command gets 10 s
+    _GIT_STARTUP = a.cmd == "auto-heartbeat"   # the hook keeps the git budget; every other command gives git 10 s
     _proposals_only(a)
     FILE = a.file
     read_stdin_args(a)

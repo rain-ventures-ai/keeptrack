@@ -95,7 +95,7 @@ class GitBudget(unittest.TestCase):
                  mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
                 self.assertAlmostEqual(want, keeptrack._git_timeout(), places=3, msg=(elapsed, startup))
         # a call whose answer decides something keeps a floor once the budget is spent, never more than 10 s
-        for elapsed, startup, want in ((0, True, 5.0), (3, True, 3.0), (60, True, 3.0), (60, False, 10.0)):
+        for elapsed, startup, want in ((0, True, 5.0), (3, True, 3.0), (9, True, 3.0), (10.5, True, 1.5), (60, True, 1.0), (60, False, 10.0)):
             with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
                  mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
                 self.assertAlmostEqual(want, keeptrack._git_timeout(keeptrack._GIT_DECIDES), places=3, msg=(elapsed, startup))
@@ -126,10 +126,17 @@ class GitBudget(unittest.TestCase):
             cwd = os.getcwd()
             try:
                 os.chdir(repo)
+                for owned in (False, True):   # a stray .git this user owns may not be the folder's repo either
+                    with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
+                         mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned):
+                        with self.assertRaises(SystemExit) as stop:
+                            keeptrack._local_dir()
+                    self.assertIn("in time", str(stop.exception.code))
                 with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
-                     mock.patch.object(keeptrack, "_own_tree", lambda t: False):   # Windows: nothing vouches for it
-                    with self.assertRaises(SystemExit):
+                     mock.patch.object(keeptrack, "_GIT_STARTUP", True):
+                    with self.assertRaises(SystemExit) as stop:
                         keeptrack._local_dir()
+                self.assertEqual(0, stop.exception.code, "the heartbeat hook stops quietly")
                 with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "missing")), \
                      mock.patch.object(keeptrack, "_own_tree", lambda t: False), \
                      mock.patch.object(keeptrack, "PROJECT_DIR", tmp):
@@ -145,6 +152,8 @@ class GitBudget(unittest.TestCase):
     def test_only_the_heartbeat_hook_keeps_the_start_up_budget(self):
         src = read("board/kit/keeptrack.py")
         self.assertIn('_GIT_STARTUP = a.cmd == "auto-heartbeat"', src)
+        self.assertIn('_GIT_STARTUP = sys.argv[1:2] == ["auto-heartbeat"]', src, "from import on: other commands give git 10 s")
+        self.assertFalse(keeptrack._GIT_STARTUP, "a module imported by tests is not the hook")
         self.assertNotIn("timeout=10, env=_git_c_env())   # the stderr text", src, "the hook's own git call uses the budget")
 
 
@@ -161,7 +170,7 @@ class TrustedClone(unittest.TestCase):
                     self.assertEqual(want, keeptrack._trusted_top(tmp), (how, owned))
         src = read("board/kit/keeptrack.py")
         self.assertIn("_top = _trusted_top(os.getcwd())", src, "the board clone is found through _trusted_top")
-        self.assertIn("top = _trusted_top(os.getcwd())", src.split("def _local_dir")[1][:600], "so is the claim folder")
+        self.assertIn("top = _trusted_top(os.getcwd())", src.split("def _local_dir")[1][:900], "so is the claim folder")
 
     def test_a_git_that_refuses_for_ownership_leaves_the_clone_unnamed_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,14 +250,16 @@ class WindowsSpellings(unittest.TestCase):
         f = lambda p: keeptrack._local_spelling(p, True)
         for given, want in ((r"C:\repo.\docs ", r"C:\repo\docs"), (r"C:\a\..\b", r"C:\a\..\b"),
                             (r"\\?\C:\repo.\docs", r"C:\repo\docs"), (r"\\?\UNC\host\share\x", r"\\host\share\x"),
-                            (r"\\server\share\x.", r"\\server\share\x.")):
+                            (r"\\server\share\x.", r"\\server\share\x"),
+                            (r"\\server\share.\repo. \docs", r"\\server\share.\repo\docs")):
             self.assertEqual(want, f(given), given)
 
     def test_spellings_text_cannot_compare_are_refused(self):
         for p in (r"\\127.1\C$\x", r"\\[::1]\c$", r"\\2130706433\C$\repo", r"\\0x7f000001\C$\repo",
                   r"\\0--0-0-0-0-0-0-1.ipv6-literal.net\C$\repo", r"\\otherpc\d$\x", r"\\?\UNC\host\C$\x",
                   r"C:\Users\o\BOARD-~1\docs", r"C:\PROGRA~2\x", r"C:\x\REPORT~1.DOC", r"C:\repo::$INDEX_ALLOCATION\docs", r"C:\repo\docs:alt",
-                  r"\\host\share\x::$INDEX_ALLOCATION"):
+                  r"\\host\share\x::$INDEX_ALLOCATION",
+                  r"\\server\share\REPO~1 \docs"):
             self.assertTrue(keeptrack._unverifiable_local(p, True), p)
         for p in (r"C:\Users\o\Docs", r"\\host\share\x", r"\\host\docs$\x", r"C:\a~b\x", r"\\?\C:\x",
                   r"C:\docs\backup~2024", r"C:\docs\notes~1.backup"):
