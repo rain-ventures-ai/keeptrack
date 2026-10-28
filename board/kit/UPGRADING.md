@@ -27,10 +27,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ## Versions
 ### v112 (schema 4)
 keeptrack.py runs without git, and git's answers are read exactly. No data change and no migration.
-- Without git installed, a plugin or board-clone copy starts normally (set `BOARD_REPO`, or use a `.keeptrack` config, so it knows the board); before, it stopped with a Python error. A plugin copy finds the clone from its `.git` entry only in a tree you own that others can't write; when git refuses a repo for its owner (`safe.directory`), that stands.
+- Without git installed, a plugin or board-clone copy starts normally (set `BOARD_REPO`, or use a `.keeptrack` config, so it knows the board); before, it stopped with a Python error. A plugin copy finds the clone from its `.git` entry only in a tree you own that not everyone can write; when git refuses a repo for its owner (`safe.directory`), that stands.
 - Start-up git calls (every command runs them), and every git call in the heartbeat hook, share one 5 s budget (1 s each once it is spent), so a hung git can't use up the hook's 20 s.
 - The docs-home refusal stands on git's "not a repository" and walks up to a `.git` entry on any other git failure.
-- Windows: admin shares on this computer (`\\127.1\C$`, `\\[::1]\C$`, `\\<this computer>\C$`) read as `C:`; trailing dots and spaces leave names (not for `\\?\` paths). A device or volume docs home (`GLOBALROOT`, `Volume{...}`, `HarddiskVolumeN`) is refused: use the drive letter.
+- Windows: admin shares on this computer (`\\127.1\C$`, `\\[::1]\C$`, `\\<this computer>\C$`) read as `C:`; trailing dots and spaces leave names. A device or volume docs home (`GLOBALROOT`, `Volume{...}`, `HarddiskVolumeN`) is refused: use the drive letter.
 - Run `kit-update` only. Check: `kit-check` says v112.
 
 ### v111 (schema 4)

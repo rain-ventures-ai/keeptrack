@@ -92,16 +92,36 @@ class TrustedClone(unittest.TestCase):
     def test_git_refusal_and_foreign_trees_never_name_the_clone(self):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".git"))
-            os.makedirs(os.path.join(tmp, "board"))
-            open(os.path.join(tmp, "board", "tasks.json"), "w").close()
-            for how, owned, want in (("refused", True, ""), ("error", True, ""), ("missing", False, ""), ("missing", True, tmp)):
+            for how, owned, want in (("refused", True, ""), ("error", True, ""), ("none", True, ""),
+                                     ("missing", False, ""), ("missing", True, tmp)):
                 with mock.patch.object(keeptrack, "_git_toplevel", lambda f, how=how: ("", how)), \
                      mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned):
-                    top, h = keeptrack._git_toplevel(tmp)
-                    if h == "missing":
-                        top = keeptrack._dot_git_top(tmp)
-                        top = top if top and keeptrack._own_tree(top) else ""
-                    self.assertEqual(want, top, (how, owned))
+                    self.assertEqual(want, keeptrack._trusted_top(tmp), (how, owned))
+        src = read("board/kit/keeptrack.py")
+        self.assertIn("_top = _trusted_top(os.getcwd())", src, "the board clone is found through _trusted_top")
+        self.assertIn("top = _trusted_top(os.getcwd())", src.split("def _local_dir")[1][:600], "so is the claim folder")
+
+    def test_a_git_that_refuses_for_ownership_leaves_the_clone_unnamed_end_to_end(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clone, bin_dir = os.path.join(tmp, "clone"), os.path.join(tmp, "bin")
+            for d in (os.path.join(clone, ".git"), os.path.join(clone, "board"), bin_dir):
+                os.makedirs(d)
+            open(os.path.join(clone, "board", "tasks.json"), "w").close()
+            plugin = os.path.join(tmp, "plugin")
+            os.makedirs(plugin)
+            shutil.copy(os.path.join(KIT, "keeptrack.py"), os.path.join(plugin, "keeptrack.py"))
+            git = os.path.join(bin_dir, "git")
+            with open(git, "w") as f:
+                f.write("#!/bin/sh\necho \"fatal: detected dubious ownership in repository at '$PWD'\" >&2\n"
+                        "echo \"To add an exception for this directory, call: git config --global --add safe.directory\" >&2\nexit 128\n")
+            os.chmod(git, 0o755)
+            os.symlink(sys.executable, os.path.join(bin_dir, "python3"))
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("BOARD_", "GH_", "GITHUB_"))}
+            env.update(PATH=bin_dir, HOME=tmp)
+            code = f"import sys; sys.argv=['keeptrack.py']; sys.path.insert(0, {plugin!r}); import keeptrack as k; print('ROOT=' + str(k.ROOT))"
+            p = subprocess.run([os.path.join(bin_dir, "python3"), "-c", code], capture_output=True, text=True, cwd=clone, env=env)
+            self.assertEqual(0, p.returncode, p.stderr)
+            self.assertEqual("ROOT=None", p.stdout.strip().splitlines()[-1], "git's ownership refusal is final")
 
     def test_own_tree_checks_owner_and_write_bits(self):
         if not hasattr(os, "getuid"):
@@ -110,8 +130,10 @@ class TrustedClone(unittest.TestCase):
             os.makedirs(os.path.join(tmp, ".git"))
             os.chmod(tmp, 0o755); os.chmod(os.path.join(tmp, ".git"), 0o755)
             self.assertTrue(keeptrack._own_tree(tmp))
+            os.chmod(os.path.join(tmp, ".git"), 0o775)
+            self.assertTrue(keeptrack._own_tree(tmp), "group write is allowed, as git allows it (umask 002)")
             os.chmod(os.path.join(tmp, ".git"), 0o777)
-            self.assertFalse(keeptrack._own_tree(tmp), "a .git others can write is not trusted")
+            self.assertFalse(keeptrack._own_tree(tmp), "a .git everyone can write is not trusted")
             os.chmod(os.path.join(tmp, ".git"), 0o755)
             me = os.getuid()
             with mock.patch.object(keeptrack.os, "getuid", lambda: me + 1):
@@ -137,6 +159,8 @@ class WithoutGitInstalled(unittest.TestCase):
             plugin = os.path.join(tmp, "plugin")
             os.makedirs(plugin)
             shutil.copy(os.path.join(KIT, "keeptrack.py"), os.path.join(plugin, "keeptrack.py"))
+            for d in (clone, os.path.join(clone, ".git")):
+                os.chmod(d, 0o775)   # a umask 002 clone (Ubuntu, Fedora) is found too
             p = self.run_without_git(plugin, clone)
             self.assertEqual(0, p.returncode, p.stderr)
             self.assertEqual("ROOT=" + clone, p.stdout.strip().splitlines()[-1], "a plugin copy finds the clone from its .git")
@@ -158,7 +182,7 @@ class WindowsSpellings(unittest.TestCase):
                                 (r"\\0--1.ipv6-literal.net\c$\z", r"c:\z"), (r"\\mypc\C$\repo", r"C:\repo"),
                                 (r"\\MYPC.corp.example\C$\repo", r"C:\repo"), (r"\\otherpc\C$\repo", r"\\otherpc\C$\repo"),
                                 (r"C:\repo.\docs ", r"C:\repo\docs"), (r"C:\a\..\b", r"C:\a\..\b"),
-                                (r"\\?\C:\repo.\docs", r"C:\repo.\docs"), (r"\\127.1\C$\x", r"C:\x"),
+                                (r"\\127.1\C$\x", r"C:\x"),
                                 (r"\\server\share\x.", r"\\server\share\x.")):
                 self.assertEqual(want, f(given), given)
 

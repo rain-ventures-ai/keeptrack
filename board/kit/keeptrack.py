@@ -317,13 +317,14 @@ def _git_toplevel(folder):
 
 
 def _own_tree(top):
-    """Is top a folder with its .git that this user owns and no one else can write? (False where there are no user
-    ids, e.g. Windows.) The check git's own safe.directory makes, for when git itself is missing."""
+    """Is top a folder with its .git that this user owns and not everyone can write? (False where there are no user
+    ids, e.g. Windows.) Git's own safe.directory check (ownership), for when git itself is missing; group write is
+    allowed, as git allows it (a umask 002 clone), world write is not. A .git symlink (lstat: 0777) never passes."""
     if not hasattr(os, "getuid"):
         return False
     try:
         for st in (os.stat(top), os.lstat(os.path.join(top, ".git"))):
-            if st.st_uid != os.getuid() or st.st_mode & 0o022:
+            if st.st_uid != os.getuid() or st.st_mode & 0o002:
                 return False
     except OSError:
         return False
@@ -343,11 +344,18 @@ def _dot_git_top(folder):
         d = up
 
 
+def _trusted_top(folder):
+    """The git working tree holding folder, to be trusted (board clone, claim folder): git's own answer; with no git
+    (missing or hung) the .git entry above, only in a tree this user owns. A refusal or any other git error: ""."""
+    top, how = _git_toplevel(folder)
+    if how == "missing":
+        top = _dot_git_top(folder)
+        return top if top and _own_tree(top) else ""
+    return top
+
+
 if not ROOT and not os.environ.get("BOARD_REPO"):   # plugin copy run inside a board repo clone: use that clone
-    _top, _how = _git_toplevel(os.getcwd())
-    if _how == "missing":   # no git: the .git entry, only in a tree this user owns (git's refusal is final)
-        _top = _dot_git_top(os.getcwd())
-        _top = _top if _top and _own_tree(_top) else ""
+    _top = _trusted_top(os.getcwd())
     if _top and os.path.isfile(os.path.join(_top, "board", "tasks.json")):
         ROOT = _top
 REPO = os.environ.get("BOARD_REPO") or (repo_from_git() if ROOT else "")
@@ -513,10 +521,7 @@ def local_lock():
 def _local_dir():
     """This repo's personal Keeptrack folder: .keeptrack/ at the top of the current git repo, so a board set once
     in the home folder still keeps one claim per repo; outside git, the config's own folder or here."""
-    top, how = _git_toplevel(os.getcwd())
-    if how == "missing":   # no git: the .git entry, only in a tree this user owns
-        top = _dot_git_top(os.getcwd())
-        top = top if top and _own_tree(top) else ""
+    top = _trusted_top(os.getcwd())
     if top:
         legacy = os.path.join(top, ".board", "config.json")
         return os.path.join(top, ".board" if os.path.isfile(legacy) and not os.path.isdir(os.path.join(top, CONFIG_DIRS[0])) else CONFIG_DIRS[0])
@@ -8483,7 +8488,6 @@ def _local_spelling(path, windows=None):
         return "/" + path.lstrip("/") if path.startswith("//") else path
     p = path.replace("/", "\\")
     low = p.lower()
-    literal = low.startswith("\\\\?\\")   # \\?\ paths keep trailing dots and spaces: no Win32 name clean-up
     if low.startswith("\\\\?\\unc\\") or low.startswith("\\\\.\\unc\\"):
         p = "\\\\" + p[8:]
     elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
@@ -8496,7 +8500,7 @@ def _local_spelling(path, windows=None):
         return path   # a stripped prefix that leaves a relative path: keep the spelling given
     # Win32 drops trailing dots and spaces from each name: C:\repo.\docs is C:\repo\docs
     head, sep, rest = p.partition("\\") if not p.startswith("\\\\") else ("", "", p)
-    if rest and not p.startswith("\\\\") and not literal:
+    if rest and not p.startswith("\\\\"):
         p = head + sep + "\\".join(x if x in (".", "..") else x.rstrip(". ") for x in rest.split("\\"))
     return p
 
