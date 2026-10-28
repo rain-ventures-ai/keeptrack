@@ -51,10 +51,25 @@ class GitAnswers(unittest.TestCase):
             raise FileNotFoundError("git")
         with mock.patch.object(keeptrack.subprocess, "run", missing):
             self.assertEqual(("", "missing"), keeptrack._git_toplevel("/x"))
+        def hung(*a, **k):
+            raise subprocess.TimeoutExpired("git", 3)
+        with mock.patch.object(keeptrack.subprocess, "run", hung):
+            self.assertEqual(("", "hung"), keeptrack._git_toplevel("/x"))
         seen = {}
         with mock.patch.object(keeptrack.subprocess, "run", lambda *a, **k: seen.update(k) or done(0, out="/top\n")):
             self.assertEqual(("/top", "ok"), keeptrack._git_toplevel("/x"))
         self.assertEqual("C", seen["env"]["LC_ALL"], "messages are matched in English")
+
+    def test_git_is_asked_once_per_folder_while_loading_and_afresh_after(self):
+        self.assertIsNone(keeptrack._TOPLEVEL, "loaded: no cache")
+        calls = []
+        with mock.patch.object(keeptrack.subprocess, "run", lambda *a, **k: calls.append(1) or done(0, out="/top\n")):
+            with mock.patch.object(keeptrack, "_TOPLEVEL", {}):   # as while the module loads
+                for _ in range(3):
+                    self.assertEqual(("/top", "ok"), keeptrack._git_toplevel("/x"))
+            self.assertEqual(1, len(calls), "the clone and the claim folder share one answer")
+            keeptrack._git_toplevel("/x")
+            self.assertEqual(2, len(calls))
 
     def test_a_folder_git_calls_not_a_repository_is_not_refused_for_a_git_entry_higher_up(self):
         with tempfile.TemporaryDirectory() as home:
@@ -79,6 +94,53 @@ class GitBudget(unittest.TestCase):
             with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
                  mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
                 self.assertAlmostEqual(want, keeptrack._git_timeout(), places=3, msg=(elapsed, startup))
+        # a call whose answer decides something keeps a floor once the budget is spent, never more than 10 s
+        for elapsed, startup, want in ((0, True, 5.0), (3, True, 3.0), (60, True, 3.0), (60, False, 10.0)):
+            with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
+                 mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
+                self.assertAlmostEqual(want, keeptrack._git_timeout(keeptrack._GIT_DECIDES), places=3, msg=(elapsed, startup))
+
+    def test_deciding_calls_use_the_floor(self):
+        src = read("board/kit/keeptrack.py")
+        for name in ("def _ask_toplevel", "def _default_branch", "def _tracked_by_git"):
+            self.assertIn("timeout=_git_timeout(_GIT_DECIDES)", src.split(name)[1][:900], name)
+
+    def test_a_slow_git_stops_rather_than_guess_the_branch(self):
+        def hung(*a, **k):
+            raise subprocess.TimeoutExpired("git", 3)
+        with mock.patch.dict(os.environ, {"BOARD_BRANCH": ""}), mock.patch.object(keeptrack, "ROOT", "/clone"), \
+             mock.patch.object(keeptrack.subprocess, "run", hung):
+            with self.assertRaises(SystemExit) as stop:
+                keeptrack._default_branch()
+        self.assertIn("BOARD_BRANCH", str(stop.exception))
+        def missing(*a, **k):
+            raise FileNotFoundError("git")
+        with mock.patch.dict(os.environ, {"BOARD_BRANCH": ""}), mock.patch.object(keeptrack, "ROOT", "/clone"), \
+             mock.patch.object(keeptrack.subprocess, "run", missing):
+            self.assertEqual("master", keeptrack._default_branch(), "no git at all: the older boards' default")
+
+    def test_a_slow_git_never_moves_the_claim_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            cwd = os.getcwd()
+            try:
+                os.chdir(repo)
+                with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
+                     mock.patch.object(keeptrack, "_own_tree", lambda t: False):   # Windows: nothing vouches for it
+                    with self.assertRaises(SystemExit):
+                        keeptrack._local_dir()
+                with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "missing")), \
+                     mock.patch.object(keeptrack, "_own_tree", lambda t: False), \
+                     mock.patch.object(keeptrack, "PROJECT_DIR", tmp):
+                    self.assertEqual(os.path.join(tmp, keeptrack.CONFIG_DIR_NAME), keeptrack._local_dir(), "no git: the config's folder")
+                os.chdir(tmp)
+                with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
+                     mock.patch.object(keeptrack, "PROJECT_DIR", tmp), \
+                     mock.patch.object(keeptrack, "_dot_git_top", lambda f: ""):   # no repo here at all
+                    self.assertEqual(os.path.join(tmp, keeptrack.CONFIG_DIR_NAME), keeptrack._local_dir())
+            finally:
+                os.chdir(cwd)
 
     def test_only_the_heartbeat_hook_keeps_the_start_up_budget(self):
         src = read("board/kit/keeptrack.py")
@@ -93,7 +155,7 @@ class TrustedClone(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".git"))
             for how, owned, want in (("refused", True, ""), ("error", True, ""), ("none", True, ""),
-                                     ("missing", False, ""), ("missing", True, tmp)):
+                                     ("missing", False, ""), ("missing", True, tmp), ("hung", False, ""), ("hung", True, tmp)):
                 with mock.patch.object(keeptrack, "_git_toplevel", lambda f, how=how: ("", how)), \
                      mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned):
                     self.assertEqual(want, keeptrack._trusted_top(tmp), (how, owned))
@@ -175,16 +237,22 @@ class WithoutGitInstalled(unittest.TestCase):
 
 
 class WindowsSpellings(unittest.TestCase):
-    def test_this_machine_admin_shares_and_trailing_dots(self):
+    def test_trailing_dots_and_prefixes(self):
         f = lambda p: keeptrack._local_spelling(p, True)
-        with mock.patch.object(keeptrack.socket, "gethostname", lambda: "MYPC"):   # Windows gives the short name
-            for given, want in ((r"\\[::1]\C$\Users\o", r"C:\Users\o"), (r"\\127.1.2.3\d$\x", r"d:\x"),
-                                (r"\\0--1.ipv6-literal.net\c$\z", r"c:\z"), (r"\\mypc\C$\repo", r"C:\repo"),
-                                (r"\\MYPC.corp.example\C$\repo", r"C:\repo"), (r"\\otherpc\C$\repo", r"\\otherpc\C$\repo"),
-                                (r"C:\repo.\docs ", r"C:\repo\docs"), (r"C:\a\..\b", r"C:\a\..\b"),
-                                (r"\\127.1\C$\x", r"C:\x"),
-                                (r"\\server\share\x.", r"\\server\share\x.")):
-                self.assertEqual(want, f(given), given)
+        for given, want in ((r"C:\repo.\docs ", r"C:\repo\docs"), (r"C:\a\..\b", r"C:\a\..\b"),
+                            (r"\\?\C:\repo.\docs", r"C:\repo\docs"), (r"\\?\UNC\host\share\x", r"\\host\share\x"),
+                            (r"\\server\share\x.", r"\\server\share\x.")):
+            self.assertEqual(want, f(given), given)
+
+    def test_spellings_text_cannot_compare_are_refused(self):
+        for p in (r"\\127.1\C$\x", r"\\[::1]\c$", r"\\2130706433\C$\repo", r"\\0x7f000001\C$\repo",
+                  r"\\0--0-0-0-0-0-0-1.ipv6-literal.net\C$\repo", r"\\otherpc\d$\x", r"\\?\UNC\host\C$\x",
+                  r"C:\Users\o\BOARD-~1\docs", r"C:\PROGRA~2\x", r"C:\x\REPORT~1.DOC", r"C:\repo::$INDEX_ALLOCATION\docs", r"C:\repo\docs:alt",
+                  r"\\host\share\x::$INDEX_ALLOCATION"):
+            self.assertTrue(keeptrack._unverifiable_local(p, True), p)
+        for p in (r"C:\Users\o\Docs", r"\\host\share\x", r"\\host\docs$\x", r"C:\a~b\x", r"\\?\C:\x",
+                  r"C:\docs\backup~2024", r"C:\docs\notes~1.backup"):
+            self.assertFalse(keeptrack._unverifiable_local(p, True), p)
 
     def test_volume_and_device_paths_are_refused(self):
         for p in (r"\\?\GLOBALROOT\Device\HarddiskVolume3\x", r"\\?\Volume{1b2c}\x", r"\\.\Volume{1b2c}\x",

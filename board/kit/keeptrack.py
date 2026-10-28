@@ -83,11 +83,16 @@ _GIT_START = time.monotonic()
 _GIT_STARTUP = True   # until main() knows the command; the heartbeat hook stays in it to the end
 
 
-def _git_timeout():
-    """Seconds a git call may take. In start-up (module import, and the whole auto-heartbeat hook) every call shares
-    one 5 s budget, with 1 s once it is spent, so a hung git can't use up the hook's 20 s; other commands get 10 s."""
+_GIT_DECIDES = 3.0   # the least a start-up git call gets when its answer decides something (see _git_timeout)
+
+
+def _git_timeout(floor=1.0):
+    """Seconds a git call may take. In start-up (module import, and the whole auto-heartbeat hook) the calls share one
+    5 s budget, so a hung git can't use up the hook's 20 s: a probe gets 1 s once it is spent, a call whose answer
+    decides something (the clone's top, its default branch, whether git tracks the claim record) _GIT_DECIDES; such
+    a call that still times out trusts nothing or stops, never guesses. Other commands give git 10 s."""
     if _GIT_STARTUP:
-        return max(1.0, 5 - (time.monotonic() - _GIT_START))
+        return max(floor, 5 - (time.monotonic() - _GIT_START))
     return 10.0
 try:
     import msvcrt
@@ -298,13 +303,27 @@ for _k, _v in (("BOARD_REPO", "repo"), ("BOARD_BRANCH", "branch"), ("BOARD_PATH"
         os.environ.setdefault(_k, str(PROJECT[_v]))
 if os.path.basename(os.path.dirname(os.path.abspath(__file__))) != "board":
     ROOT = None   # this keeptrack.py is not inside a board repo (e.g. the Claude plugin): no git remote, no kit files
+_TOPLEVEL = {}   # folder -> _git_toplevel's answer while the module loads (the clone and the claim folder ask the same); None after
+
+
 def _git_toplevel(folder):
     """(the git working tree holding folder, how git answered): "ok"; "none" (git says it is not a repository);
     "refused" (git refused the repo for its owner: safe.directory); "error" (any other failure); "missing" (git not
-    installed, or it hung). Run in the C locale so the messages are never translated."""
+    installed); "hung" (no answer in time). Run in the C locale so the messages are never translated."""
+    if _TOPLEVEL is None:
+        return _ask_toplevel(folder)
+    key = os.path.abspath(folder)
+    if key not in _TOPLEVEL:
+        _TOPLEVEL[key] = _ask_toplevel(folder)
+    return _TOPLEVEL[key]
+
+
+def _ask_toplevel(folder):
     try:
         p = subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=_git_timeout(), env={**os.environ, "LC_ALL": "C"})
+                           stdin=subprocess.DEVNULL, timeout=_git_timeout(_GIT_DECIDES), env={**os.environ, "LC_ALL": "C"})
+    except subprocess.TimeoutExpired:
+        return "", "hung"
     except (OSError, subprocess.SubprocessError):
         return "", "missing"
     top = p.stdout.strip()
@@ -348,7 +367,7 @@ def _trusted_top(folder):
     """The git working tree holding folder, to be trusted (board clone, claim folder): git's own answer; with no git
     (missing or hung) the .git entry above, only in a tree this user owns. A refusal or any other git error: ""."""
     top, how = _git_toplevel(folder)
-    if how == "missing":
+    if how in ("missing", "hung"):
         top = _dot_git_top(folder)
         return top if top and _own_tree(top) else ""
     return top
@@ -447,7 +466,10 @@ def _default_branch():
     if ROOT:
         try:
             out = subprocess.run(["git", "-C", ROOT, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], capture_output=True,
-                                 text=True, stdin=subprocess.DEVNULL, timeout=_git_timeout()).stdout.strip()
+                                 text=True, stdin=subprocess.DEVNULL, timeout=_git_timeout(_GIT_DECIDES)).stdout.strip()
+        except subprocess.TimeoutExpired:   # a slow git: guessing master could read and write the wrong branch
+            sys.exit(f"git did not say this clone's default branch in time ({ROOT}); set BOARD_BRANCH to the board's "
+                     "branch, or try again")
         except (OSError, subprocess.SubprocessError):   # no git: the older boards' default
             out = ""
         if out.startswith("origin/"):
@@ -522,6 +544,11 @@ def _local_dir():
     """This repo's personal Keeptrack folder: .keeptrack/ at the top of the current git repo, so a board set once
     in the home folder still keeps one claim per repo; outside git, the config's own folder or here."""
     top = _trusted_top(os.getcwd())
+    if not top and _git_toplevel(os.getcwd())[1] == "hung" and _dot_git_top(os.getcwd()):
+        # a repo here that a slow git could not confirm and nothing else vouches for: a record in the fallback folder
+        # would split the claim between two places, so stop
+        sys.exit(f"git did not answer in time for {os.getcwd()}, so Keeptrack can't tell which repo's claim to use; "
+                 "try again")
     if top:
         legacy = os.path.join(top, ".board", "config.json")
         return os.path.join(top, ".board" if os.path.isfile(legacy) and not os.path.isdir(os.path.join(top, CONFIG_DIRS[0])) else CONFIG_DIRS[0])
@@ -579,6 +606,7 @@ def write_private(path, text):
 # The active claim, for the heartbeat hook. A board repo keeps it at its root (gitignored there); any other project
 # keeps it in its own .keeptrack/ folder, so two projects never share one.
 CLAIM_FILE = (os.path.join(ROOT, ".board-claim.json") if ROOT and not PROJECT_DIR else os.path.join(_local_dir(), "claim.json"))
+_TOPLEVEL = None   # loaded: later questions (the docs-home check) ask git afresh
 HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats of one card
 HEARTBEAT_RETRY = 60   # seconds before the hook looks again (after a failed beat too)
 ATTENDED_STALE_MINUTES = 12 * 60  # an attended claim (a person drives the session) sends no heartbeats
@@ -2478,7 +2506,7 @@ def _tracked_by_git(path):
     runs in may hold one."""
     try:
         r = subprocess.run(["git", "-C", os.path.dirname(path) or ".", "ls-files", "--error-unmatch", "--", os.path.basename(path)],
-                           capture_output=True, text=True, timeout=_git_timeout(), env=_git_c_env())   # the stderr text is matched below
+                           capture_output=True, text=True, timeout=_git_timeout(_GIT_DECIDES), env=_git_c_env())   # the stderr text is matched below
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode == 0:
@@ -8480,8 +8508,8 @@ def _board_checkouts():
 def _local_spelling(path, windows=None):
     """One spelling for a local path before the text comparison: POSIX leading slashes collapse to one (normpath keeps
     a leading double slash). On Windows the long-path and device prefixes (backslash backslash ? or . backslash, with
-    or without UNC) are dropped, an admin share (C$) on this computer (localhost, 127.x.x.x, [::1], its own name)
-    becomes the drive path, and trailing dots and spaces leave each name, as Win32 does. Text only: nothing is
+    or without UNC) are dropped and trailing dots and spaces leave each name, as Win32 does. Spellings text can't
+    compare (admin shares, short names, streams) are refused before this (_unverifiable_local). Text only: nothing is
     resolved, opened or looked up."""
     windows = sys.platform == "win32" if windows is None else windows
     if not windows:
@@ -8492,9 +8520,6 @@ def _local_spelling(path, windows=None):
         p = "\\\\" + p[8:]
     elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
         p = p[4:]
-    m = re.match(r"^\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?$", p, re.I)
-    if m and _this_machine(m.group(1)):
-        p = f"{m.group(2)}:" + (m.group(3) or "\\")
     import ntpath
     if not ntpath.isabs(p):
         return path   # a stripped prefix that leaves a relative path: keep the spelling given
@@ -8505,30 +8530,28 @@ def _local_spelling(path, windows=None):
     return p
 
 
-def _this_machine(host):
-    """Is a UNC host this computer: localhost, any 127.x.x.x, [::1] (or its ipv6-literal.net form), or this
-    computer's own name? Text only: no name lookup."""
-    h = host.strip("[]").lower()
-    if h in ("localhost", "::1", "0--1.ipv6-literal.net") or re.fullmatch(r"127(?:\.\d{1,10}){0,3}", h):
-        return True   # 127.1 and 127.0.1 are loopback too
-    try:
-        own = socket.gethostname().lower()
-    except OSError:
-        return False
-    # Windows gives the short name; a share may name the full one (MYPC.corp.example), or the other way round
-    return bool(own) and h.split(".")[0] == own.split(".")[0]
-
-
 def _unverifiable_local(path, windows=None):
-    """A Windows device or volume path (after the long-path or device prefix, anything but a drive letter or
-    UNC share: GLOBALROOT, Volume{...}, HarddiskVolumeN) can't be matched to a folder by text: settings-set refuses it
-    rather than guess."""
+    """Windows spellings text can't match to a folder, which settings-set refuses rather than guess: a device or
+    volume path (after the long-path or device prefix, anything but a drive letter or UNC share: GLOBALROOT,
+    Volume{...}, HarddiskVolumeN); an admin share (C$ on any host: any name or address may be this computer); an 8.3
+    short name (BOARD-~1); a colon after the drive or share (a stream: ::$INDEX_ALLOCATION)."""
     windows = sys.platform == "win32" if windows is None else windows
-    low = path.replace("/", "\\").lower()
-    if not windows or not (low.startswith("\\\\?\\") or low.startswith("\\\\.\\")):
+    if not windows:
         return False
-    rest = low[4:]   # after the prefix only a drive (X:\) or a share (UNC\host\share) can be matched to a folder
-    return not (re.match(r"[a-z]:\\", rest) or re.match(r"unc\\[^\\]+\\[^\\]+", rest))
+    low = path.replace("/", "\\").lower()
+    if low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
+        rest = low[4:]   # after the prefix only a drive (X:\) or a share (UNC\host\share) can be matched to a folder
+        if not (re.match(r"[a-z]:\\", rest) or re.match(r"unc\\[^\\]+\\[^\\]+", rest)):
+            return True
+    p = _local_spelling(path, True)
+    if p.startswith("\\\\"):
+        body = p[2:].partition("\\")[2]   # the share and the path after the host
+        if re.match(r"[a-z]\$(\\|$)", body, re.I):
+            return True
+    else:
+        body = p[2:] if re.match(r"[A-Za-z]:", p) else p
+    short = lambda name: len(name.split(".")[0]) <= 8 and re.fullmatch(r"[^.~]*~\d+(\.[^.]{0,3})?", name)
+    return ":" in body or any(short(name) for name in body.split("\\"))
 
 
 def _inside_board_checkout(path):
@@ -8564,8 +8587,9 @@ def cmd_settings_set(a):
         try: home = validate_docs_home({"provider": provider, "root": root})
         except ValueError as e: sys.exit(str(e))
         if home["provider"] == "local" and _unverifiable_local(home["root"]):
-            sys.exit("local docs home must be a drive-letter or share path: a volume or device path can't be checked "
-                     "against the board checkout. Use the drive letter (C:\\...) instead.")
+            sys.exit("local docs home must be a plain drive-letter or share path: a volume or device path, an admin "
+                     "share (C$), a short 8.3 name (~1) or a stream can't be checked against the board checkout. Use "
+                     "the drive letter and full folder names (C:\\...) instead.")
         if home["provider"] == "local" and _inside_board_checkout(home["root"]):
             sys.exit("local docs home must not be inside this board repo's checkout: files there can be committed and "
                      "pushed with the board. Choose a folder outside the repository.")

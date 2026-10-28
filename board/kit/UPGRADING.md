@@ -28,9 +28,9 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ### v112 (schema 4)
 keeptrack.py runs without git, and git's answers are read exactly. No data change and no migration.
 - Without git installed, a plugin or board-clone copy starts normally (set `BOARD_REPO`, or use a `.keeptrack` config, so it knows the board); before, it stopped with a Python error. A plugin copy finds the clone from its `.git` entry only in a tree you own that not everyone can write; when git refuses a repo for its owner (`safe.directory`), that stands.
-- Start-up git calls (every command runs them), and every git call in the heartbeat hook, share one 5 s budget (1 s each once it is spent), so a hung git can't use up the hook's 20 s.
+- Start-up git probes (every command runs them) and the heartbeat hook's own git checks share one 5 s budget (1 s each once it is spent), so a hung git can't use up the hook's 20 s. A check whose answer decides something (the clone's top, its default branch, whether git tracks the claim record) gets at least 3 s; if git still does not answer, Keeptrack trusts nothing (no claim record is read) or stops with a message rather than guess (set `BOARD_BRANCH` to skip the branch check).
 - The docs-home refusal stands on git's "not a repository" and walks up to a `.git` entry on any other git failure.
-- Windows: admin shares on this computer (`\\127.1\C$`, `\\[::1]\C$`, `\\<this computer>\C$`) read as `C:`; trailing dots and spaces leave names. A device or volume docs home (`GLOBALROOT`, `Volume{...}`, `HarddiskVolumeN`) is refused: use the drive letter.
+- Windows: trailing dots and spaces leave names. A docs home text can't compare is refused: a device or volume path (`GLOBALROOT`, `Volume{...}`, `HarddiskVolumeN`), an admin share (`\\host\C$`, on any host), an 8.3 short name (`BOARD-~1`) or a stream (`C:\repo::$INDEX_ALLOCATION`). Use the drive letter and full folder names.
 - Run `kit-update` only. Check: `kit-check` says v112.
 
 ### v111 (schema 4)
