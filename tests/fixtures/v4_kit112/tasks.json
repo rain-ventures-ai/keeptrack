@@ -87,14 +87,7 @@
   },
   "inbound": {
     "done": {
-      "inbound:calendar:b-1": {
-        "at": "2026-10-28T09:00:00.000Z",
-        "file": "20261028T085900Z-calendar-b-1.json",
-        "mode": "review",
-        "proposals": [
-          "r_inbound001"
-        ]
-      }
+      "inbound:calendar:b-1": "2026-10-28 review r_inbound001"
     },
     "failed": {
       "20261028T100000Z-calendar-bad.json": {

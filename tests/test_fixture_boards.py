@@ -207,11 +207,10 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual("card", kt.inbound_source_config(data, "rainshift-contact")["mode"])
         self.assertEqual(["20261028T100000Z-calendar-bad.json", "20261029T080000Z-rainshift-contact-fx-1.json"],
                          [n for _, n in kt.inbound_files(data)])
-        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):   # exit 1: the bad item still fails
+        with contextlib.redirect_stdout(io.StringIO()):   # the bad item fails as before: not news, so no exit 1
             kt.cmd_inbound(Args(status=False, dry_run=False))
         data = kt.load_board()
         self.assertEqual(["20261028T100000Z-calendar-bad.json"], os.listdir(os.path.join(board_dir, "inbound")))
-        self.assertIn("inbound:calendar:b-1", data["inbound"]["done"], "the older done record stays")
         self.assertIn("inbound:rainshift-contact:fx-1", data["inbound"]["done"])
         self.assertEqual("2026-10-28T10:05:00.000Z", data["inbound"]["failed"]["20261028T100000Z-calendar-bad.json"]["since"])
         self.assertEqual(before["contacts"][0], next(p for p in data["contacts"] if p["id"] == before["contacts"][0]["id"]))

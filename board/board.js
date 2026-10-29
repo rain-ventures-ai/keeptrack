@@ -526,9 +526,10 @@ if (typeof window !== 'undefined') (() => {
     const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
     while (i < lines.length) {
       const line = lines[i];
-      if (/^\s*```[^`]*$/.test(line)) {   // fenced code: kept exactly, to the closing fence (or the end)
-        endPara(); endLists(); const body = []; i++;
-        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) body.push(lines[i++]);
+      const fm = /^\s*(`{3,})[^`]*$/.exec(line);
+      if (fm) {   // fenced code: kept exactly, to a closing fence at least as long (or the end); kit v112: longer fences too
+        endPara(); endLists(); const body = [], n = fm[1].length; i++;
+        while (i < lines.length && !((m => m && m[1].length >= n)(/^\s*(`{3,})\s*$/.exec(lines[i])))) body.push(lines[i++]);
         i++; const pre = el('pre', 'mdpre'); pre.append(el('code', null, body.join('\n'))); parent.append(pre); continue;
       }
       if (!line.trim()) { endPara(); if (!(lists.length && LIST.test(lines[i + 1] || ''))) endLists(); i++; continue; }
@@ -9364,7 +9365,7 @@ if (typeof window !== 'undefined') (() => {
     return { failed: bad.length, waiting: late.length, oldest: late.reduce((m, n) => Math.max(m, stamp(n) === null ? 0 : Math.floor((at - stamp(n)) / 60000)), 0) };
   }
   function inboundBar() {
-    const a = inboundAlert(splitMeta && splitMeta.inbound, state && state.inbound, state && state.settings), key = `${a.failed}:${a.waiting}`;
+    const a = inboundAlert(splitMeta && splitMeta.inbound, state && state.inbound, state && state.settings), key = (splitMeta && splitMeta.inbound || []).join('|').slice(0, 2000);   // dismissed for these items only
     if (DEMO || (!a.failed && !a.waiting) || LS.get('kb_inboundbar_off') === key) { showBar('inboundBar', null); return; }
     const age = a.oldest >= 2880 ? Math.floor(a.oldest / 1440) + ' days' : a.oldest >= 120 ? Math.floor(a.oldest / 60) + ' hours' : a.oldest + ' minutes';
     const parts = [a.failed ? `${a.failed} could not be handled` : '', a.waiting ? `${a.waiting} ${a.waiting === 1 ? 'has' : 'have'} waited ${age}` : ''].filter(Boolean);
