@@ -1,0 +1,61 @@
+{
+  "id": "r_askpick044",
+  "version": 1,
+  "kind": "ask.choose",
+  "status": "answered",
+  "title": "Which landing page design?",
+  "source": {
+    "kind": "other",
+    "id": "agent-run-7",
+    "revision": "1",
+    "title": "Design review",
+    "date": "2026-10-12",
+    "url": ""
+  },
+  "action_key": "ak-r_askpick044",
+  "work_key": "wk-r_askpick044",
+  "reason": "Needs a decision.",
+  "target": null,
+  "change": {
+    "question": "Which landing page design?",
+    "task": "t_first",
+    "options": [
+      {
+        "key": "a",
+        "label": "Design A",
+        "url": "https://example.invalid/a.png"
+      },
+      {
+        "key": "b",
+        "label": "Design B"
+      }
+    ],
+    "allow_other": true
+  },
+  "likely_duplicates": [],
+  "decision": {
+    "action": "answer",
+    "by": "alex",
+    "at": "2026-10-12T10:00:00Z",
+    "answer": {
+      "choice": "b",
+      "note": "Darker header"
+    },
+    "result": null,
+    "commit": null,
+    "done": {
+      "at": "2026-10-12T10:05:00Z",
+      "by": "claude@alex",
+      "note": "used B"
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-12T09:00:00Z",
+      "by": "claude@alex",
+      "text": "proposed"
+    }
+  ],
+  "created": "2026-10-12T09:00:00Z",
+  "createdBy": "claude@alex"
+}

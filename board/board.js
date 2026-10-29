@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 111;
+  const PAGE_KIT = 112;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -842,7 +842,8 @@ if (typeof window !== 'undefined') (() => {
     // another top-level board file in this folder (a one-file board such as alice.json): the boards share archive/.
     // The kit's own files there (widgets.json, manifest.json) are not boards.
     const own = c.path.slice(c.path.lastIndexOf('/') + 1), sharedFolder = (td.tree || []).some(x => x.type === 'blob' && !x.path.includes('/') && /\.json$/i.test(x.path) && !KIT_ROOT_JSON.has(x.path) && x.path !== own);
-    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true, sharedFolder };
+    const inbound = (td.tree || []).filter(x => x.type === 'blob' && /^inbound\/[^/]+\.json$/.test(x.path)).map(x => x.path.slice(8));   // kit v112: outside items waiting for keeptrack.py inbound (names only)
+    const meta = { key: `${c.repo}:${c.branch}:${c.path}`, head, headEtag, rootTree, boardTree: tree, files, projectsLoaded: true, sharedFolder, inbound };
     await pruneBlobCache(new Set((td.tree || []).filter(x => x.type === 'blob').map(x => x.sha)), c, gen);
     if (!sameArchiveBoard(c, gen)) throw new Error('The board changed while loading.');
     return { unchanged: false, data: modelFromSplit(files), meta };
@@ -9354,7 +9355,24 @@ if (typeof window !== 'undefined') (() => {
     info.append(ui.props([{ label: 'Repository', value: c.repo || '—' }, { label: 'Branch', value: c.repo ? c.branch : '—' }, { label: 'File', value: c.repo ? c.path : '—' },
       { label: 'Format', value: !c.repo ? '—' : `${isSplit(state) ? 'Split: one file per card and person' : 'One file'} · this page reads up to schema v${KNOWN_SCHEMA}` }]));
   }
+  // kit v112: outside items (board/inbound/) that failed, or waited longer than settings.inbound_alert_minutes (default 120).
+  // Names come from the tree listing the page reads anyway; failures from tasks.json "inbound".failed. Nothing is fetched.
+  function inboundAlert(names, rec, settings, at = Date.now()) {
+    const lim = Number.isInteger(settings && settings.inbound_alert_minutes) && settings.inbound_alert_minutes >= 1 && settings.inbound_alert_minutes <= 10080 ? settings.inbound_alert_minutes : 120;
+    const failed = rec && typeof rec.failed === 'object' && rec.failed ? rec.failed : {}, stamp = n => { const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-/.exec(n); return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null; };
+    const bad = (names || []).filter(n => Object.prototype.hasOwnProperty.call(failed, n)), late = (names || []).filter(n => !bad.includes(n) && (stamp(n) === null || at - stamp(n) >= lim * 60000));
+    return { failed: bad.length, waiting: late.length, oldest: late.reduce((m, n) => Math.max(m, stamp(n) === null ? 0 : Math.floor((at - stamp(n)) / 60000)), 0) };
+  }
+  function inboundBar() {
+    const a = inboundAlert(splitMeta && splitMeta.inbound, state && state.inbound, state && state.settings), key = `${a.failed}:${a.waiting}`;
+    if (DEMO || (!a.failed && !a.waiting) || LS.get('kb_inboundbar_off') === key) { showBar('inboundBar', null); return; }
+    const age = a.oldest >= 2880 ? Math.floor(a.oldest / 1440) + ' days' : a.oldest >= 120 ? Math.floor(a.oldest / 60) + ' hours' : a.oldest + ' minutes';
+    const parts = [a.failed ? `${a.failed} could not be handled` : '', a.waiting ? `${a.waiting} ${a.waiting === 1 ? 'has' : 'have'} waited ${age}` : ''].filter(Boolean);
+    showBar('inboundBar', { tone: a.failed ? 'warn' : 'neutral', icon: 'inbox', text: `Outside items (board/inbound/, from forms and other sources): ${parts.join(', ')}. The scheduled inbound run handles them; to see why, run keeptrack.py inbound --status.`,
+      onDismiss: () => LS.set('kb_inboundbar_off', key) });
+  }
   function sizeBar() {   // a quiet nudge once the board file gets large
+    inboundBar();
     const limit = isSplit(state) ? 5 * 1024 * 1024 : SIZE_WARN, big = !ro && boardSize > limit && LS.get('kb_sizebar_off') !== String(Math.floor(boardSize / 102400));
     if (!big) { showBar('sizeBar', null); return; }
     const arch = splitMeta && splitMeta.files ? [...splitMeta.files].reduce((n, [p, x]) => n + (/^archive\/[0-9]{4}(?:-[1-9][0-9]{0,5})?\.json$/.test(p) ? (x.size || 0) : 0), 0) : 0, mostlyArchive = isSplit(state) && arch * 2 > boardSize;   // archiving only moves bytes between files that all count

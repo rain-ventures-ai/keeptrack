@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "source": "rainshift-contact",
+  "kind": "enquiry",
+  "id": "fx-1",
+  "received": "2026-10-29T08:00:00Z",
+  "payload": {
+    "name": "Casey Example",
+    "email": "casey@example.com",
+    "company": "Example Ltd",
+    "message": "Fictional enquiry"
+  }
+}

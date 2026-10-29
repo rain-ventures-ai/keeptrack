@@ -1,0 +1,106 @@
+{
+  "version": 4,
+  "layout": "split",
+  "settings": {
+    "stale_after_minutes": 30,
+    "stages": [
+      "New",
+      "Contacted",
+      "Won",
+      "Lost"
+    ],
+    "min_kit": 107,
+    "waiting_days": 5,
+    "review_inbox": {
+      "enabled": false
+    },
+    "inbox_lapse_days": 10,
+    "inbound": {
+      "rainshift-contact": {
+        "mode": "card",
+        "assign": [
+          "alex"
+        ],
+        "labels": [
+          "enquiry"
+        ],
+        "stage": "New"
+      },
+      "calendar": {
+        "mode": "review"
+      }
+    },
+    "inbound_alert_minutes": 90
+  },
+  "columns": [
+    {
+      "id": "todo",
+      "name": "To do"
+    },
+    {
+      "id": "in-progress",
+      "name": "In progress"
+    },
+    {
+      "id": "done",
+      "name": "Done"
+    }
+  ],
+  "people": [
+    {
+      "github": "alex",
+      "name": "Alex"
+    }
+  ],
+  "agents": [
+    "codex",
+    "claude"
+  ],
+  "clients": [
+    "Acme"
+  ],
+  "labels": [
+    {
+      "name": "call",
+      "color": "#0c66e4"
+    }
+  ],
+  "client_info": {
+    "Acme": {
+      "north_star": "One trusted view of every order",
+      "links": []
+    }
+  },
+  "next_num": 3,
+  "archive": {
+    "files": {
+      "2020": {
+        "tasks": 0,
+        "contacts": 0
+      },
+      "2020-1": {
+        "tasks": 1,
+        "contacts": 0
+      }
+    },
+    "last_run": "2026-10-01T00:00:00Z"
+  },
+  "inbound": {
+    "done": {
+      "inbound:calendar:b-1": {
+        "at": "2026-10-28T09:00:00.000Z",
+        "file": "20261028T085900Z-calendar-b-1.json",
+        "mode": "review",
+        "proposals": [
+          "r_inbound001"
+        ]
+      }
+    },
+    "failed": {
+      "20261028T100000Z-calendar-bad.json": {
+        "error": "not valid JSON (Expecting value: line 1 column 1 (char 0))",
+        "since": "2026-10-28T10:05:00.000Z"
+      }
+    }
+  }
+}
