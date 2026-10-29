@@ -25,6 +25,15 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v112 (schema 4)
+Inbound items: outside sources that cannot run keeptrack.py (a website form, a booking page, a webhook) put one JSON file per item in `board/inbound/`, and `keeptrack.py inbound` turns them into Review Inbox proposals (default) or cards (a source the owner trusts), deleting each file in the same commit. See `board/INBOUND.md`. No data change and no migration: `settings.inbound`, `settings.inbound_alert_minutes` and the `tasks.json` `inbound` record are new and optional, and older kits keep them.
+- New commands: `inbound` (`--status`, `--dry-run`) and `inbound-source SOURCE --mode review|card [--handler PATH] [--assign ..] [--label ..] [--todo ..] [--column ..] [--stage ..] [--remove]`. An agent run without `--attended` may only set `--mode review` or `--remove`. Nothing accepts a proposal.
+- The web board shows fenced code blocks with longer fences (four or more backticks) as code too, as GitHub does.
+- `list --attention` and the web board show inbound items that failed or waited longer than `settings.inbound_alert_minutes` (default 120).
+- Fix: a delete through the git transport (`BOARD_WRITE=git`, or the sandbox fallback) failed with `unknown option 'ignore-unmatch'`; it now removes the path from the commit.
+- Run `kit-update` only. Check: `kit-check` says v112, `keeptrack.py inbound --status` runs, and `board/INBOUND.md` is there. To use it, set each source (`inbound-source`) and a runner (INBOUND.md, "Running the drain").
+- A board with its own intake script: make it a handler (it prints a plan instead of calling keeptrack.py) and set `inbound-source SOURCE --handler PATH`. No repo-specific keep line is needed: the handler and its settings live outside kit files.
+
 ### v111 (schema 4)
 Follow-ups from the v110 reviews. No data change and no migration.
 - The docs-home checkout refusal also catches other spellings of a folder in the board checkout: `//path` on POSIX, and `\\?\C:\...`, `\\?\UNC\...` and `\\localhost\C$\...` on Windows. When git cannot answer it walks up to the `.git` entry instead of letting the folder through.

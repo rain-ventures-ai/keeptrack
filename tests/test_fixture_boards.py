@@ -195,6 +195,26 @@ class FixtureBoards(unittest.TestCase):
         self.assertEqual(0, kt.doctor_board(False)[2])
         self.assertEqual(kt.read_archive('2020-1', None)[0]['tasks'][0]['id'], 't_archived102')
 
+    def test_v112_inbound_preserves_frozen_board_then_drains(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit112", "fixture.json"))
+        board_dir, _ = self.use_fixture("v4_kit112", meta)
+        before = kt.load_board()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        self.assertEqual(before, data)
+        self.assertEqual(0, kt.doctor_board(False)[2])
+        self.assertEqual("card", kt.inbound_source_config(data, "rainshift-contact")["mode"])
+        self.assertEqual(["20261028T100000Z-calendar-bad.json", "20261029T080000Z-rainshift-contact-fx-1.json"],
+                         [n for _, n in kt.inbound_files(data)])
+        with contextlib.redirect_stdout(io.StringIO()):   # the bad item fails as before: not news, so no exit 1
+            kt.cmd_inbound(Args(status=False, dry_run=False))
+        data = kt.load_board()
+        self.assertEqual(["20261028T100000Z-calendar-bad.json"], os.listdir(os.path.join(board_dir, "inbound")))
+        self.assertIn("inbound:rainshift-contact:fx-1", data["inbound"]["done"])
+        self.assertEqual("2026-10-28T10:05:00.000Z", data["inbound"]["failed"]["20261028T100000Z-calendar-bad.json"]["since"])
+        self.assertEqual(before["contacts"][0], next(p for p in data["contacts"] if p["id"] == before["contacts"][0]["id"]))
+
     def test_v103_docs_home_preserves_frozen_board(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit103", "fixture.json"))
         self.use_fixture("v4_kit103", meta)
