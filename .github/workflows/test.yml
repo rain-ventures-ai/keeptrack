@@ -111,3 +111,6 @@ jobs:
       - name: Archive view, People Archived and the remembered Include archive (kit v96)
         working-directory: tests/browser
         run: node archive-view.test.js
+      - name: Inbound strip for failed and waiting outside items (kit v112)
+        working-directory: tests/browser
+        run: node inbound-bar.test.js

@@ -1,11 +1,12 @@
 {
-  "version": 112,
+  "version": 113,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
   ],
   "files": {
     "board/ROUTINES.md": "ROUTINES.md",
+    "board/INBOUND.md": "INBOUND.md",
     "board/keeptrack.py": "keeptrack.py",
     "board/upgrade.py": "upgrade.py",
     "board/README.md": "README.md",

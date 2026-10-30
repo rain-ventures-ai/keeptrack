@@ -25,13 +25,22 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v112 (schema 4)
+### v113 (schema 4)
 keeptrack.py runs without git, and git's answers are read exactly. No data change and no migration.
 - Without git installed, a plugin or board-clone copy starts normally (set `BOARD_REPO`, or use a `.keeptrack` config, so it knows the board); before, it stopped with a Python error. A plugin copy finds the clone from its `.git` entry only in a tree you own that not everyone can write; when git refuses a repo for its owner (`safe.directory`), that stands.
 - Every command gives git 10 s. When a git call that decides something (the clone's top, its default branch, whether git tracks the claim record) does not answer, Keeptrack trusts nothing (no claim record is read) or stops with a message rather than guess (set `BOARD_BRANCH` to skip the branch check). The heartbeat hook's git calls share one 5 s budget instead (1 s each once it is spent, 3 s for a deciding call until 12 s in), so a hung git leaves the hook its 20 s; it stops quietly.
 - The docs-home refusal stands on git's "not a repository" and walks up to a `.git` entry on any other git failure.
 - Windows: trailing dots and spaces leave names (after a share's name too). These docs homes are refused, as text can't compare them: a device or volume path (`GLOBALROOT`, `Volume{...}`, `HarddiskVolumeN`), an admin share (`\\host\C$`, on any host), an 8.3 short name (`BOARD-~1`) or a stream (`C:\repo::$INDEX_ALLOCATION`). Use the drive letter and full folder names. Other shares, mapped drives and junctions are compared as written, not resolved.
-- Run `kit-update` only. Check: `kit-check` says v112.
+- Run `kit-update` only. Check: `kit-check` says v113.
+
+### v112 (schema 4)
+Inbound items: outside sources that cannot run keeptrack.py (a website form, a booking page, a webhook) put one JSON file per item in `board/inbound/`, and `keeptrack.py inbound` turns them into Review Inbox proposals (default) or cards (a source the owner trusts), deleting each file in the same commit. See `board/INBOUND.md`. No data change and no migration: `settings.inbound`, `settings.inbound_alert_minutes` and the `tasks.json` `inbound` record are new and optional, and older kits keep them.
+- New commands: `inbound` (`--status`, `--dry-run`) and `inbound-source SOURCE --mode review|card [--handler PATH] [--assign ..] [--label ..] [--todo ..] [--column ..] [--stage ..] [--remove]`. An agent run without `--attended` may only set `--mode review` or `--remove`. Nothing accepts a proposal.
+- The web board shows fenced code blocks with longer fences (four or more backticks) as code too, as GitHub does.
+- `list --attention` and the web board show inbound items that failed or waited longer than `settings.inbound_alert_minutes` (default 120).
+- Fix: a delete through the git transport (`BOARD_WRITE=git`, or the sandbox fallback) failed with `unknown option 'ignore-unmatch'`; it now removes the path from the commit.
+- Run `kit-update` only. Check: `kit-check` says v112, `keeptrack.py inbound --status` runs, and `board/INBOUND.md` is there. To use it, set each source (`inbound-source`) and a runner (INBOUND.md, "Running the drain").
+- A board with its own intake script: make it a handler (it prints a plan instead of calling keeptrack.py) and set `inbound-source SOURCE --handler PATH`. No repo-specific keep line is needed: the handler and its settings live outside kit files.
 
 ### v111 (schema 4)
 Follow-ups from the v110 reviews. No data change and no migration.
