@@ -80,26 +80,40 @@ except ImportError:   # Windows
     fcntl = None
 
 _GIT_START = time.monotonic()
-_GIT_STARTUP = sys.argv[1:2] == ["auto-heartbeat"]   # the heartbeat hook runs under one git budget, from the start
+_GIT_STARTUP = sys.argv[1:2] == ["auto-heartbeat"] or sys.argv[1:3] == ["here", "--hook"]   # the hooks run under one git budget, from the start
 
 
 _GIT_DECIDES = 3.0   # the least a start-up git call gets when its answer decides something (see _git_timeout)
 
 
+# in a hook, git's time ends here, counted from the hook's start: session-start.sh may first spend 3 s on its own check
+_GIT_DEADLINE = 14.0 - (3.0 if sys.argv[1:3] == ["here", "--hook"] else 0.0)
+
+
 def _git_timeout(floor=1.0):
-    """Seconds a git call may take. In the auto-heartbeat hook the calls share one 5 s budget, so a hung git leaves
-    the hook its 20 s: once it is spent a probe gets 1 s and a call whose answer decides something (the clone's top,
-    its default branch, whether git tracks the claim record) _GIT_DECIDES, down to 1 s after 12 s. Such a call that
-    still times out trusts nothing or stops, never guesses. Every other command gives git 10 s."""
+    """Seconds a git call may take. In a hook (auto-heartbeat, here --hook) the calls share one 5 s budget, then a
+    probe gets 1 s and a call whose answer decides something (the clone's top, its default branch, whether git tracks
+    the claim record) _GIT_DECIDES until 9 s in, 1 s by 11 s; no call runs past _GIT_DEADLINE (a call there gets 0.1 s,
+    so it times out), however slowly git answers. A call that times out trusts nothing or stops, never guesses. Every
+    other command gives git 10 s."""
     if _GIT_STARTUP:
         spent = time.monotonic() - _GIT_START
-        return max(min(floor, max(1.0, 12 - spent)), 5 - spent)
+        return max(0.1, min(max(min(floor, max(1.0, 12 - spent)), 5 - spent), _GIT_DEADLINE - spent))
     return 10.0
 
 
 def _stop(message):
     """Stop a command that a slow git left unsure; the heartbeat hook stops quietly (it never fails loudly)."""
     sys.exit(0 if _GIT_STARTUP else message)
+
+
+_CLAIM_UNSURE = ""   # why the claim record's place is unknown (a slow git), so commands that use it stop: _claim_sure
+
+
+def _claim_sure():
+    """Stop before reading or writing the claim record when a slow git left its place unknown (_local_dir)."""
+    if _CLAIM_UNSURE and not FILE:   # a --file board keeps no record
+        _stop(_CLAIM_UNSURE)
 try:
     import msvcrt
 except ImportError:   # POSIX
@@ -457,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 114  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 115  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -549,11 +563,12 @@ def local_lock():
 def _local_dir():
     """This repo's personal Keeptrack folder: .keeptrack/ at the top of the current git repo, so a board set once
     in the home folder still keeps one claim per repo; outside git, the config's own folder or here."""
+    global _CLAIM_UNSURE
     if _git_toplevel(os.getcwd())[1] == "hung" and _dot_git_top(os.getcwd()):
         # a .git above that a slow git did not place: guessing (its tree, or the fallback folder) could split the
-        # claim between two places, so stop
-        _stop(f"git did not answer in time for {os.getcwd()}, so Keeptrack can't tell which repo's claim to use; "
-              "try again")
+        # claim between two places, so the commands that use the record stop (_claim_sure); the others go on
+        _CLAIM_UNSURE = (f"git did not answer in time for {os.getcwd()}, so Keeptrack can't tell which repo's claim "
+                         "to use; try again")
     top = _trusted_top(os.getcwd())
     if top:
         legacy = os.path.join(top, ".board", "config.json")
@@ -568,6 +583,8 @@ def ensure_local_dir(path, warn=True, check_tracked=True):
     folder that is a symlink or holds files git tracks: that folder came with the repo, not from Keeptrack, and
     writing into it could be redirected anywhere. A board repo's root record that is not ignored is written anyway,
     with a warning (a .gitignore from before the kit's template would let `git add -A` commit the session id)."""
+    if path == CLAIM_FILE:
+        _claim_sure()
     d = os.path.dirname(path)
     if os.path.islink(d):
         raise OSError(f"{d} is a symlink; Keeptrack will not write through it")
@@ -612,7 +629,8 @@ def write_private(path, text):
 # The active claim, for the heartbeat hook. A board repo keeps it at its root (gitignored there); any other project
 # keeps it in its own .keeptrack/ folder, so two projects never share one.
 CLAIM_FILE = (os.path.join(ROOT, ".board-claim.json") if ROOT and not PROJECT_DIR else os.path.join(_local_dir(), "claim.json"))
-_TOPLEVEL = None   # loaded: later questions (the docs-home check) ask git afresh
+if not _GIT_STARTUP:
+    _TOPLEVEL = None   # loaded: later questions (the docs-home check) ask git afresh; a hook keeps its answers (_here)
 HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats of one card
 HEARTBEAT_RETRY = 60   # seconds before the hook looks again (after a failed beat too)
 ATTENDED_STALE_MINUTES = 12 * 60  # an attended claim (a person drives the session) sends no heartbeats
@@ -2496,6 +2514,9 @@ def claim_record():
     tracked record came with the repo, not from this clone's own claim, so a board writer who commits one cannot
     hand every pulling clone a known session id: it is ignored, with one note. Not checked for a --file board
     (which keeps no record) or outside a git repo."""
+    if _CLAIM_UNSURE and FILE:
+        return None   # a --file board goes on, but never reads a record from a place git did not confirm
+    _claim_sure()
     if _REC.get("on") and _REC.get("path") == CLAIM_FILE and "info" in _REC:
         return _REC["info"]
     info, tracked = None, None
@@ -2587,6 +2608,7 @@ def record_json(cards, session):
 def record_lock():
     """An exclusive lock (<record>.lock, beside it) around one re-read and rewrite of the local claim record, so parallel
     sessions in one clone never write over each other's entries. Never follows a symlink at the lock's path."""
+    _claim_sure()
     fd = os.open(CLAIM_FILE + ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "a+b") as f:   # closing the file releases the lock
         if fcntl:
@@ -3441,6 +3463,7 @@ def with_record(run):
 
 
 def cmd_claim(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     if getattr(a, "on_behalf_of", None):
         sys.exit("--on-behalf-of works only with BOARD_BACKEND=hosted (a hosted dispatcher); on a GitHub board, claim as BOARD_USER")
     _PENDING_CLAIM.clear()
@@ -3448,6 +3471,7 @@ def cmd_claim(a):
 
 
 def cmd_next(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     _default_scope(a)
     def fn(data):
         user = a.for_user or default_user()
@@ -3534,6 +3558,7 @@ def move_task_to_column(data, task, column, a=None):
 
 
 def cmd_release(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     def fn(data):
         t = find(data, a.id)
         if a.column == "done" and open_waiting(t):
@@ -3637,6 +3662,7 @@ def check_moved_todos(data, t, cancel=False):
 
 
 def cmd_done(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     def fn(data):
         t = find(data, a.id)
         claim_owner_check(data, t, a, "done")
@@ -3701,6 +3727,7 @@ def cmd_review(a):
     decision, a choice between options. Like done it ends the claim with a run record and refuses open to-dos; unlike
     done the card stays open, in Pending review, and the note goes on the card as a comment that @mentions who decides.
     The person then moves it to Done, or back to To do (or claims it) for more work."""
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     def fn(data):
         t = find(data, a.id)
         claim_owner_check(data, t, a, "review")
@@ -3796,6 +3823,7 @@ def cmd_wait(a):
 def cmd_unwait(a):
     """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
     person's to clear. A claim `wait` blocked runs again (a young one) or goes back to To do (one older than the stale limit)."""
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
         sys.exit("unwait needs --note with why the wait is over")
@@ -4805,6 +4833,7 @@ def cmd_auto_heartbeat(a):
     """Hook entry point. Never fails loudly: a hook must not break the agent's session. The record's mtime is a cheap gate
     (at most one look a minute); each card entry keeps its own beat time (beat_at), so every session in the clone gets its
     beats, and a failed beat is tried again about a minute later, not at every tool call."""
+    _claim_sure()
     try:
         if os.path.islink(os.path.dirname(CLAIM_FILE)):
             return   # lstat/utime follow symlinks in parent components; reject the personal folder before touching its target
@@ -6143,8 +6172,10 @@ def cmd_use(a):
             sys.exit("--token-env needs a board-specific variable, not an automatic auth alias; use BOARD_TOKEN_PRIVATE")
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
         sys.exit("repo must be owner/name, e.g. osouthgate/private-tasks")
-    rc, top, _ = (lambda p: (p.returncode, p.stdout.strip(), p.stderr))(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True))
-    base = top if rc == 0 and top else os.getcwd()
+    top, how = _git_toplevel(os.getcwd())   # bounded: a hung git stops here rather than guess where the config goes
+    if how == "hung":
+        sys.exit(f"git did not answer in time for {os.getcwd()}, so Keeptrack can't tell which repo to connect; try again")
+    base = top or os.getcwd()
     cfg_path = os.path.join(base, CONFIG_DIRS[0], "config.json")
     branch = a.branch
     if not branch:   # ask GitHub for the repo's default branch (new repos use main); fall back to master
@@ -6195,7 +6226,9 @@ def _here(a):
         print("Keeptrack: no board for this repo. Connect one with `keeptrack.py use <owner/board-repo> --project <name>`.")
         return
     where = os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, "config.json") if PROJECT_DIR else "environment"
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    top, how = _git_toplevel(os.getcwd())   # bounded like every start-up git call
+    if not top and how != "none":   # git could not place this folder: judge "connected" by its .git, never show the board on a guess
+        top = _dot_git_top(os.getcwd())
     inside = lambda p, d: os.path.realpath(p) == os.path.realpath(d) or os.path.realpath(p).startswith(os.path.realpath(d) + os.sep)
     if top and PROJECT_DIR and not inside(PROJECT_DIR, top) and not DEFAULT_PROJECT:
         # a board set once in a parent folder (usually home): available here, but this repo is not connected to it
@@ -6329,7 +6362,7 @@ def cmd_where(a):
         print(f"         (ignored {PARENT_CONFIG}: it is above this board clone, whose own git remote names the board)")
     if UNTRUSTED_CLONE:
         print(f"         (used it, not this clone of {_flat(UNTRUSTED_CLONE[0])}: `keeptrack.py use` never named that board here)")
-    print(f"claims:  {CLAIM_FILE}")
+    print(f"claims:  {CLAIM_FILE}" + (f"  (unsure: {_CLAIM_UNSURE})" if _CLAIM_UNSURE else ""))
 
 
 # ---- Keeptrack CRM: people with a stage and a next step ------------------------------------------------
@@ -13304,7 +13337,7 @@ def main():
             sub._choices_actions.append(sub._ChoicesPseudoAction(name, (), COMMAND_HELP[name]))
     a = p.parse_args()
     global _GIT_STARTUP
-    _GIT_STARTUP = a.cmd == "auto-heartbeat"   # the hook keeps the git budget; every other command gives git 10 s
+    _GIT_STARTUP = a.cmd == "auto-heartbeat" or (a.cmd == "here" and getattr(a, "hook", False))   # the hooks keep the git budget; every other command gives git 10 s
     _proposals_only(a)
     FILE = a.file
     read_stdin_args(a)

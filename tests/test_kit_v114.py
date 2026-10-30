@@ -26,7 +26,7 @@ def read(path):
 class Release(unittest.TestCase):
     def test_release_114_is_consistent(self):
         version = json.loads(read("board/kit/manifest.json"))["version"]
-        self.assertEqual(version, 114)
+        self.assertGreaterEqual(version, 114)   # the exact version is asserted by the newest tests/test_kit_v*.py
         self.assertEqual(str(version), re.search(r"^KIT_VERSION = (\d+)", read("board/kit/keeptrack.py"), re.M)[1])
         self.assertIn(f"const PAGE_KIT = {version};", read("board/board.js"))
         for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
@@ -90,12 +90,12 @@ class GitAnswers(unittest.TestCase):
 class GitBudget(unittest.TestCase):
     def test_start_up_calls_share_five_seconds_and_never_get_ten(self):
         start = keeptrack._GIT_START
-        for elapsed, startup, want in ((0, True, 5.0), (3, True, 2.0), (4.5, True, 1.0), (60, True, 1.0), (60, False, 10.0)):
+        for elapsed, startup, want in ((0, True, 5.0), (3, True, 2.0), (4.5, True, 1.0), (13, True, 1.0), (60, False, 10.0)):
             with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
                  mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
                 self.assertAlmostEqual(want, keeptrack._git_timeout(), places=3, msg=(elapsed, startup))
         # a call whose answer decides something keeps a floor once the budget is spent, never more than 10 s
-        for elapsed, startup, want in ((0, True, 5.0), (3, True, 3.0), (9, True, 3.0), (10.5, True, 1.5), (60, True, 1.0), (60, False, 10.0)):
+        for elapsed, startup, want in ((0, True, 5.0), (3, True, 3.0), (9, True, 3.0), (10.5, True, 1.5), (13, True, 1.0), (60, False, 10.0)):
             with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
                  mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
                 self.assertAlmostEqual(want, keeptrack._git_timeout(keeptrack._GIT_DECIDES), places=3, msg=(elapsed, startup))
@@ -128,14 +128,16 @@ class GitBudget(unittest.TestCase):
                 os.chdir(repo)
                 for owned in (False, True):   # a stray .git this user owns may not be the folder's repo either
                     with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
-                         mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned):
-                        with self.assertRaises(SystemExit) as stop:
-                            keeptrack._local_dir()
+                         mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned), \
+                         mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""), mock.patch.object(keeptrack, "FILE", None):
+                        with self.assertRaises(SystemExit) as stop:   # v115: the commands that use the record stop
+                            keeptrack._local_dir(); keeptrack._claim_sure()
                     self.assertIn("in time", str(stop.exception.code))
                 with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
-                     mock.patch.object(keeptrack, "_GIT_STARTUP", True):
+                     mock.patch.object(keeptrack, "_GIT_STARTUP", True), mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""), \
+                     mock.patch.object(keeptrack, "FILE", None):
                     with self.assertRaises(SystemExit) as stop:
-                        keeptrack._local_dir()
+                        keeptrack._local_dir(); keeptrack._claim_sure()
                 self.assertEqual(0, stop.exception.code, "the heartbeat hook stops quietly")
                 with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "missing")), \
                      mock.patch.object(keeptrack, "_own_tree", lambda t: False), \

@@ -25,10 +25,18 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v115 (schema 4)
+Follow-ups from the v114 reviews. No data change and no migration.
+- The session-start hook (`here --hook`) shares the heartbeat hook's git budget, and its `git rev-parse` is bounded. When git can't place the folder, its `.git` entry decides whether the repo is connected: board details never show on a guess.
+- In a hook no start-up or claim-record git check runs past 14 s from the hook's start, however slowly git answers (the session-start script's own check stops after 3 s and counts in it). A save through the git transport (`BOARD_WRITE=git`) is not bounded yet.
+- `use` stops with a message on a hung git instead of waiting; `where` marks a claim path it is unsure of.
+- A git too slow to place the claim record stops only the commands that read or write it (claim, next, done, review, release, unwait, the hook, and, without `BOARD_SESSION`, any change that needs to know whose claim it is: heartbeat, wait, move to done, reopening a card with a leftover wait, accepting or merging a proposal into or out of Done), before they save anything; a `--file` board keeps no record and goes on (it reads none from an unconfirmed place); the other commands go on (`kit-update`'s own git calls are not bounded yet).
+- Run `kit-update` only. Check: `kit-check` says v115.
+
 ### v114 (schema 4)
 keeptrack.py runs without git, and git's answers are read exactly. No data change and no migration.
 - Without git installed, a plugin or board-clone copy starts normally (set `BOARD_REPO`, or use a `.keeptrack` config, so it knows the board); before, it stopped with a Python error. A plugin copy finds the clone from its `.git` entry only in a tree you own that not everyone can write; when git refuses a repo for its owner (`safe.directory`), that stands.
-- Every command gives git 10 s. When a git call that decides something (the clone's top, its default branch, whether git tracks the claim record) does not answer, Keeptrack trusts nothing (no claim record is read) or stops with a message rather than guess (set `BOARD_BRANCH` to skip the branch check). The heartbeat hook's git calls share one 5 s budget instead (1 s each once it is spent, 3 s for a deciding call until 12 s in), so a hung git leaves the hook its 20 s; it stops quietly.
+- Every command gives git 10 s. When a git call that decides something (the clone's top, its default branch, whether git tracks the claim record) does not answer, Keeptrack trusts nothing (no claim record is read) or stops with a message rather than guess (set `BOARD_BRANCH` to skip the branch check). The heartbeat hook's git calls share one 5 s budget instead (1 s each once it is spent, 3 s for a deciding call until 9 s in, 1 s by 11 s), so a hung git leaves the hook its 20 s; it stops quietly.
 - The docs-home refusal stands on git's "not a repository" and walks up to a `.git` entry on any other git failure.
 - Windows: trailing dots and spaces leave names (after a share's name too). These docs homes are refused, as text can't compare them: a device or volume path (`GLOBALROOT`, `Volume{...}`, `HarddiskVolumeN`), an admin share (`\\host\C$`, on any host), an 8.3 short name (`BOARD-~1`) or a stream (`C:\repo::$INDEX_ALLOCATION`). Use the drive letter and full folder names. Other shares, mapped drives and junctions are compared as written, not resolved.
 - Run `kit-update` only. Check: `kit-check` says v114.
