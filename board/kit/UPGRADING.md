@@ -25,6 +25,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v113 (schema 4)
+Inbound items can attach to the card an earlier item made: a handler's plan `{"attach": {"to": "<earlier id>", "comment": "…"}, "card": {…}}` adds the comment to the card made from the earlier item of the same source (card mode: at once; review mode: as a `task.update` proposal a person accepts), with no new card. Only the card the earlier item itself made counts (its own accepted `task.create`, never a merged or look-alike proposal). While that card does not exist yet, the item waits (`tasks.json` `inbound.held`, not a failure, no alert); after the source's `attach_days` (default 3; `inbound-source SOURCE --attach-days N`, a person's setting) or when the card is archived, it goes to the Review Inbox as a proposal. See `board/INBOUND.md`, "Attaching a later item". No data change and no migration.
+- Run `kit-update` only. Check: `kit-check` says v113, and `keeptrack.py inbound-source --help` lists `--attach-days`. A board that wants it changes its own handler to return `attach` for the later items.
+
 ### v112 (schema 4)
 Inbound items: outside sources that cannot run keeptrack.py (a website form, a booking page, a webhook) put one JSON file per item in `board/inbound/`, and `keeptrack.py inbound` turns them into Review Inbox proposals (default) or cards (a source the owner trusts), deleting each file in the same commit. See `board/INBOUND.md`. No data change and no migration: `settings.inbound`, `settings.inbound_alert_minutes` and the `tasks.json` `inbound` record are new and optional, and older kits keep them.
 - New commands: `inbound` (`--status`, `--dry-run`) and `inbound-source SOURCE --mode review|card [--handler PATH] [--assign ..] [--label ..] [--todo ..] [--column ..] [--stage ..] [--remove]`. An agent run without `--attended` may only set `--mode review` or `--remove`. Nothing accepts a proposal.
