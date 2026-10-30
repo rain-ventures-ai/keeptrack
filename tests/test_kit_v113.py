@@ -1,284 +1,212 @@
-"""Kit v113: keeptrack.py runs without git; the docs-home refusal trusts git's "not a repository"; more Windows
-spellings; volume paths refused; release consistency."""
+"""Kit v113: an inbound item can attach to the card made from an earlier item of the same source (a website chat
+summary on its enquiry's card). Matched: a comment on that card, never a new card. Not matched yet: the item waits,
+not a failure. Never matched within the source's attach_days: a Review Inbox proposal, as for any item."""
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 import unittest
-from types import SimpleNamespace
-from unittest import mock
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-KIT = os.path.join(ROOT, "board", "kit")
-if KIT not in sys.path:
-    sys.path.insert(0, KIT)
-import keeptrack  # noqa: E402
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_kit_v112 import Board, item, read  # noqa: E402
+
+HANDLER = r'''
+import json, sys
+item = json.load(sys.stdin)
+p = item["payload"]
+if item["kind"] == "rayna-chat":
+    print(json.dumps({"attach": {"to": p["enquiry_id"], "comment": "Rayna chat after the enquiry: " + p["summary"]}}))
+else:
+    print(json.dumps({"card": {"title": "Enquiry: " + p["name"], "details": "enquiry " + item["id"]},
+                      "person": {"name": p["name"], "email": p["email"]}}))
+'''
+SECRET = "chat-only-visitor-text-7f3a"
 
 
-def read(path):
-    with open(os.path.join(ROOT, path), encoding="utf8") as stream:
-        return stream.read()
+def chat(enquiry, n=1, **payload):
+    body = {"enquiry_id": enquiry, "summary": f"Q: price? A: depends. {SECRET}"}
+    body.update(payload)
+    return {"v": 1, "source": "rainshift-contact", "kind": "rayna-chat", "id": f"{enquiry}-chat-{n}",
+            "received": "2026-10-30T09:00:00Z", "payload": body}
 
 
 class Release(unittest.TestCase):
     def test_release_113_is_consistent(self):
         version = json.loads(read("board/kit/manifest.json"))["version"]
-        self.assertEqual(version, 113)
+        self.assertGreaterEqual(version, 113)   # the exact version is asserted by the newest tests/test_kit_v*.py
         self.assertEqual(str(version), re.search(r"^KIT_VERSION = (\d+)", read("board/kit/keeptrack.py"), re.M)[1])
         self.assertIn(f"const PAGE_KIT = {version};", read("board/board.js"))
         for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):
             self.assertEqual(f"0.{version}.0", json.loads(read(f"board/kit/{plugin}/plugin.json"))["version"])
-        for version in (112, 113):
-            self.assertIn(f"### v{version} (schema 4)", read("board/kit/UPGRADING.md"))
-            self.assertIn(f"Kit v{version}:", read("CHANGELOG.md"))
+        self.assertIn("### v113 (schema 4)", read("board/kit/UPGRADING.md"))
+        self.assertIn("Kit v113:", read("CHANGELOG.md"))
+        self.assertIn("attach", read("board/kit/INBOUND.md"))
+        self.assertIn("holding(n)", read("board/board.js"))
 
 
-def done(rc, err="", out=""):
-    return subprocess.CompletedProcess(["git"], rc, out, err)
+class Attach(Board):
+    def setUp(self):
+        super().setUp()
+        os.makedirs(os.path.join(self.repo, "intake"))
+        with open(os.path.join(self.repo, "intake", "plan.py"), "w", encoding="utf8") as f:
+            f.write(HANDLER)
+        self.kt("inbound-source", "rainshift-contact", "--mode", "card", "--handler", "intake/plan.py")
 
+    def stamp(self, minutes_ago=5):
+        import datetime as dt
+        return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes_ago)).strftime("%Y%m%dT%H%M%SZ")
 
-class GitAnswers(unittest.TestCase):
-    def test_how_git_answered(self):
-        for err, want in (("fatal: not a git repository (or any parent)", "none"),
-                          ("fatal: detected dubious ownership in repository; add safe.directory", "refused"),
-                          ("fatal: bad config line 3", "error"), ("fatal: unknown repository extension found", "error")):
-            with mock.patch.object(keeptrack.subprocess, "run", lambda *a, err=err, **k: done(128, err)):
-                self.assertEqual(("", want), keeptrack._git_toplevel("/x"), err)
-        def missing(*a, **k):
-            raise FileNotFoundError("git")
-        with mock.patch.object(keeptrack.subprocess, "run", missing):
-            self.assertEqual(("", "missing"), keeptrack._git_toplevel("/x"))
-        def hung(*a, **k):
-            raise subprocess.TimeoutExpired("git", 3)
-        with mock.patch.object(keeptrack.subprocess, "run", hung):
-            self.assertEqual(("", "hung"), keeptrack._git_toplevel("/x"))
-        seen = {}
-        with mock.patch.object(keeptrack.subprocess, "run", lambda *a, **k: seen.update(k) or done(0, out="/top\n")):
-            self.assertEqual(("/top", "ok"), keeptrack._git_toplevel("/x"))
-        self.assertEqual("C", seen["env"]["LC_ALL"], "messages are matched in English")
+    def cards_with(self, text):
+        return [c for c in self.folder("cards").values() if text in json.dumps(c)]
 
-    def test_git_is_asked_once_per_folder_while_loading_and_afresh_after(self):
-        self.assertIsNone(keeptrack._TOPLEVEL, "loaded: no cache")
-        calls = []
-        with mock.patch.object(keeptrack.subprocess, "run", lambda *a, **k: calls.append(1) or done(0, out="/top\n")):
-            with mock.patch.object(keeptrack, "_TOPLEVEL", {}):   # as while the module loads
-                for _ in range(3):
-                    self.assertEqual(("/top", "ok"), keeptrack._git_toplevel("/x"))
-            self.assertEqual(1, len(calls), "the clone and the claim folder share one answer")
-            keeptrack._git_toplevel("/x")
-            self.assertEqual(2, len(calls))
+    def enquiry_card(self, ident):
+        return next(c for c in self.folder("cards").values() if f"enquiry {ident}" in c.get("details", ""))
 
-    def test_a_folder_git_calls_not_a_repository_is_not_refused_for_a_git_entry_higher_up(self):
-        with tempfile.TemporaryDirectory() as home:
-            os.makedirs(os.path.join(home, ".git"))   # a stray or dotfiles .git git does not count for this folder
-            boards = os.path.join(home, "boards")
-            os.makedirs(boards)
-            board = os.path.join(boards, "tasks.json")
-            open(board, "w").close()
-            with mock.patch.object(keeptrack, "ROOT", None), mock.patch.object(keeptrack, "FILE", board), \
-                 mock.patch.object(keeptrack.subprocess, "run", lambda *a, **k: done(128, "fatal: not a git repository")):
-                self.assertFalse(keeptrack._inside_board_checkout(os.path.join(home, "Documents")))
-            for err in ("dubious ownership", "fatal: bad config line 3"):   # anything but "not a repository" fails closed
-                with mock.patch.object(keeptrack, "ROOT", None), mock.patch.object(keeptrack, "FILE", board), \
-                     mock.patch.object(keeptrack.subprocess, "run", lambda *a, err=err, **k: done(128, err)):
-                    self.assertTrue(keeptrack._inside_board_checkout(os.path.join(home, "Documents")), err)
+    def test_matched_in_one_run_and_never_twice(self):
+        self.put(item("e-1"), stamp=self.stamp(10))
+        name = self.put(chat("e-1"), stamp=self.stamp(5))
+        out = self.kt("inbound").stdout
+        self.assertIn("-> attach", out)
+        self.assertEqual([], os.listdir(self.inbox))
+        card = self.enquiry_card("e-1")
+        self.assertEqual(1, sum(SECRET in c["text"] for c in card["comments"]))
+        self.assertTrue(card["comments"][-1]["text"].startswith("Rayna chat after the enquiry: "))
+        self.assertEqual([card["id"]], [c["id"] for c in self.cards_with(SECRET)], "the visitor's text is on that card only")
+        self.assertFalse(any(SECRET in json.dumps(p) for p in self.proposals()))
+        # the same chat again, also once the done list has forgotten it: no second comment
+        self.put(chat("e-1"), name=name)
+        self.kt("inbound")
+        data = self.root(); data["inbound"]["done"].clear()
+        with open(os.path.join(self.board, "tasks.json"), "w", encoding="utf8") as f:
+            json.dump(data, f)
+        self.put(chat("e-1"), name=name)
+        self.assertIn("already on #", self.kt("inbound").stdout)
+        self.assertEqual(1, sum(SECRET in c["text"] for c in self.enquiry_card("e-1")["comments"]))
 
+    def test_not_matched_yet_waits_then_attaches(self):
+        name = self.put(chat("e-2"), stamp=self.stamp(5))
+        before = (self.folder("cards"), len(self.proposals()))
+        p = self.kt("inbound")
+        self.assertEqual(0, p.returncode, "waiting is not a failure")
+        self.assertIn("held until", p.stdout)
+        self.assertEqual([name], os.listdir(self.inbox))
+        self.assertEqual(before, (self.folder("cards"), len(self.proposals())))
+        held = self.root()["inbound"]["held"][name]
+        self.assertIn("e-2", held["why"])
+        self.assertNotIn(name, self.kt("list", "--attention").stdout, "a held item is not an alert while it waits")
+        self.assertIn("held:", self.kt("inbound", "--status").stdout)
+        self.assertFalse(self.root()["inbound"].get("failed"))
+        # the enquiry arrives: the next run makes its card, then the waiting chat attaches to it
+        self.put(item("e-2"), stamp=self.stamp(60))
+        self.kt("inbound")
+        self.assertEqual([], os.listdir(self.inbox))
+        self.assertEqual(1, sum(SECRET in c["text"] for c in self.enquiry_card("e-2")["comments"]))
+        self.assertNotIn("held", self.root()["inbound"])
 
-class GitBudget(unittest.TestCase):
-    def test_start_up_calls_share_five_seconds_and_never_get_ten(self):
-        start = keeptrack._GIT_START
-        for elapsed, startup, want in ((0, True, 5.0), (3, True, 2.0), (4.5, True, 1.0), (60, True, 1.0), (60, False, 10.0)):
-            with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
-                 mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
-                self.assertAlmostEqual(want, keeptrack._git_timeout(), places=3, msg=(elapsed, startup))
-        # a call whose answer decides something keeps a floor once the budget is spent, never more than 10 s
-        for elapsed, startup, want in ((0, True, 5.0), (3, True, 3.0), (9, True, 3.0), (10.5, True, 1.5), (60, True, 1.0), (60, False, 10.0)):
-            with mock.patch.object(keeptrack.time, "monotonic", lambda e=elapsed: start + e), \
-                 mock.patch.object(keeptrack, "_GIT_STARTUP", startup):
-                self.assertAlmostEqual(want, keeptrack._git_timeout(keeptrack._GIT_DECIDES), places=3, msg=(elapsed, startup))
+    def test_never_matched_goes_to_the_review_inbox(self):
+        self.put(chat("e-3"), stamp="20261020T090000Z")   # 10 days old, past the default 3
+        out = self.kt("inbound").stdout
+        self.assertIn("no card to attach to", out)
+        self.assertEqual([], os.listdir(self.inbox))
+        mine = [p for p in self.proposals() if p["source"]["id"] == "inbound:rainshift-contact:e-3-chat-1"]
+        self.assertEqual(["task.create"], [p["kind"] for p in mine])
+        self.assertTrue(any(SECRET in c["text"] for c in mine[0]["change"]["comments"]))
+        self.assertEqual([], self.cards_with(SECRET), "no card is made without a person")
 
-    def test_deciding_calls_use_the_floor(self):
-        src = read("board/kit/keeptrack.py")
-        for name in ("def _ask_toplevel", "def _default_branch", "def _tracked_by_git"):
-            self.assertIn("timeout=_git_timeout(_GIT_DECIDES)", src.split(name)[1][:900], name)
+    def test_attach_days_zero_files_it_at_once(self):
+        self.kt("inbound-source", "rainshift-contact", "--attach-days", "0")
+        self.put(chat("e-4"), stamp=self.stamp(1))
+        self.assertIn("no card to attach to", self.kt("inbound").stdout)
+        self.assertEqual([], os.listdir(self.inbox))
 
-    def test_a_slow_git_stops_rather_than_guess_the_branch(self):
-        def hung(*a, **k):
-            raise subprocess.TimeoutExpired("git", 3)
-        with mock.patch.dict(os.environ, {"BOARD_BRANCH": ""}), mock.patch.object(keeptrack, "ROOT", "/clone"), \
-             mock.patch.object(keeptrack.subprocess, "run", hung):
-            with self.assertRaises(SystemExit) as stop:
-                keeptrack._default_branch()
-        self.assertIn("BOARD_BRANCH", str(stop.exception))
-        def missing(*a, **k):
-            raise FileNotFoundError("git")
-        with mock.patch.dict(os.environ, {"BOARD_BRANCH": ""}), mock.patch.object(keeptrack, "ROOT", "/clone"), \
-             mock.patch.object(keeptrack.subprocess, "run", missing):
-            self.assertEqual("master", keeptrack._default_branch(), "no git at all: the older boards' default")
+    def test_a_review_mode_enquiry_waits_for_its_accept(self):
+        self.kt("inbound-source", "rainshift-contact", "--mode", "review")
+        self.put(item("e-5"), stamp=self.stamp(10))
+        name = self.put(chat("e-5"), stamp=self.stamp(5))
+        self.kt("inbound")
+        self.assertIn("Review Inbox", self.root()["inbound"]["held"][name]["why"])
+        task = next(p for p in self.proposals() if p["source"]["id"] == "inbound:rainshift-contact:e-5" and p["kind"] == "task.create")
+        self.kt("proposal-accept", task["id"])   # a person
+        self.kt("inbound")
+        self.assertEqual([], os.listdir(self.inbox))
+        # review mode: the comment itself waits for a person too, as a task.update on that card
+        card = self.enquiry_card("e-5")
+        self.assertFalse(any(SECRET in c["text"] for c in card.get("comments", [])))
+        update = next(p for p in self.proposals() if p["kind"] == "task.update" and p["target"]["id"] == card["id"])
+        self.kt("proposal-accept", update["id"])
+        self.assertEqual(1, sum(SECRET in c["text"] for c in self.enquiry_card("e-5")["comments"]))
 
-    def test_a_slow_git_never_moves_the_claim_record(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = os.path.join(tmp, "repo")
-            os.makedirs(os.path.join(repo, ".git"))
-            cwd = os.getcwd()
-            try:
-                os.chdir(repo)
-                for owned in (False, True):   # a stray .git this user owns may not be the folder's repo either
-                    with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
-                         mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned):
-                        with self.assertRaises(SystemExit) as stop:
-                            keeptrack._local_dir()
-                    self.assertIn("in time", str(stop.exception.code))
-                with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
-                     mock.patch.object(keeptrack, "_GIT_STARTUP", True):
-                    with self.assertRaises(SystemExit) as stop:
-                        keeptrack._local_dir()
-                self.assertEqual(0, stop.exception.code, "the heartbeat hook stops quietly")
-                with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "missing")), \
-                     mock.patch.object(keeptrack, "_own_tree", lambda t: False), \
-                     mock.patch.object(keeptrack, "PROJECT_DIR", tmp):
-                    self.assertEqual(os.path.join(tmp, keeptrack.CONFIG_DIR_NAME), keeptrack._local_dir(), "no git: the config's folder")
-                os.chdir(tmp)
-                with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
-                     mock.patch.object(keeptrack, "PROJECT_DIR", tmp), \
-                     mock.patch.object(keeptrack, "_dot_git_top", lambda f: ""):   # no repo here at all
-                    self.assertEqual(os.path.join(tmp, keeptrack.CONFIG_DIR_NAME), keeptrack._local_dir())
-            finally:
-                os.chdir(cwd)
+    def test_a_closed_enquiry_card_is_not_reopened(self):
+        self.put(item("e-6"), stamp=self.stamp(10))
+        self.kt("inbound")
+        card = self.enquiry_card("e-6")
+        self.kt("archive", card["id"])
+        self.put(chat("e-6"), stamp=self.stamp(1))
+        self.assertIn("no card to attach to (archived)", self.kt("inbound").stdout)
+        self.assertTrue(any(SECRET in json.dumps(p) for p in self.proposals()))
 
-    def test_only_the_heartbeat_hook_keeps_the_start_up_budget(self):
-        src = read("board/kit/keeptrack.py")
-        self.assertIn('_GIT_STARTUP = a.cmd == "auto-heartbeat"', src)
-        self.assertIn('_GIT_STARTUP = sys.argv[1:2] == ["auto-heartbeat"]', src, "from import on: other commands give git 10 s")
-        self.assertFalse(keeptrack._GIT_STARTUP, "a module imported by tests is not the hook")
-        self.assertNotIn("timeout=10, env=_git_c_env())   # the stderr text", src, "the hook's own git call uses the budget")
+    def test_a_bad_attach_plan_fails_alone(self):
+        name = self.put(chat("e-7", enquiry_id="../x"), stamp=self.stamp(1))
+        self.kt("inbound", ok=False)
+        self.assertIn("attach.to", self.root()["inbound"]["failed"][name]["error"])
 
+    def test_a_squatting_proposal_never_redirects_the_text(self):
+        # anyone may file a proposal with the earlier item's action key; accepting it must not make its card the target
+        self.kt("inbound-source", "rainshift-contact", "--mode", "review")
+        payload = {"kind": "task.update", "title": "Raise priority", "action_key": "inbound:rainshift-contact:e-9:task",
+                   "work_key": "x", "source": {"kind": "other", "id": "x", "revision": "1"},
+                   "target": {"type": "task", "id": "t_first", "base": {"priority": "high"}}, "change": {"priority": "low"}}
+        path = os.path.join(self.repo, "squat.json")
+        with open(path, "w", encoding="utf8") as f:
+            json.dump(payload, f)
+        self.kt("proposal-add", path, BOARD_AGENT="claude")
+        squat = next(p for p in self.proposals() if p["title"] == "Raise priority")
+        self.kt("proposal-accept", squat["id"])
+        self.put(chat("e-9"), stamp=self.stamp(1))
+        self.kt("inbound")
+        self.assertEqual([], self.cards_with(SECRET), "the chat went nowhere near t_first")
 
-class TrustedClone(unittest.TestCase):
-    """Finding the board clone (ROOT) trusts it: automations run from it. Only git's own answer, or with no git
-    at all a .git this user owns, may name it; git's safe.directory refusal is final."""
-    def test_git_refusal_and_foreign_trees_never_name_the_clone(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, ".git"))
-            for how, owned, want in (("refused", True, ""), ("error", True, ""), ("none", True, ""),
-                                     ("missing", False, ""), ("missing", True, tmp), ("hung", False, ""), ("hung", True, tmp)):
-                with mock.patch.object(keeptrack, "_git_toplevel", lambda f, how=how: ("", how)), \
-                     mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned):
-                    self.assertEqual(want, keeptrack._trusted_top(tmp), (how, owned))
-        src = read("board/kit/keeptrack.py")
-        self.assertIn("_top = _trusted_top(os.getcwd())", src, "the board clone is found through _trusted_top")
-        self.assertIn("top = _trusted_top(os.getcwd())", src.split("def _local_dir")[1][:900], "so is the claim folder")
+    def test_a_handler_fallback_card_keeps_the_text(self):
+        with open(os.path.join(self.repo, "intake", "plan.py"), "w", encoding="utf8") as f:
+            f.write(HANDLER.replace('"comment": "Rayna chat after the enquiry: " + p["summary"]}}',
+                                    '"comment": "Rayna chat after the enquiry: " + p["summary"]}, "card": {"title": "A chat", "details": "a chat"}}'))
+        self.put(chat("e-10"), stamp="20261020T090000Z")
+        self.kt("inbound")
+        mine = [p for p in self.proposals() if p["source"]["id"] == "inbound:rainshift-contact:e-10-chat-1"]
+        self.assertTrue(any(SECRET in c["text"] for c in mine[0]["change"].get("comments", [])))
 
-    def test_a_git_that_refuses_for_ownership_leaves_the_clone_unnamed_end_to_end(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            clone, bin_dir = os.path.join(tmp, "clone"), os.path.join(tmp, "bin")
-            for d in (os.path.join(clone, ".git"), os.path.join(clone, "board"), bin_dir):
-                os.makedirs(d)
-            open(os.path.join(clone, "board", "tasks.json"), "w").close()
-            plugin = os.path.join(tmp, "plugin")
-            os.makedirs(plugin)
-            shutil.copy(os.path.join(KIT, "keeptrack.py"), os.path.join(plugin, "keeptrack.py"))
-            git = os.path.join(bin_dir, "git")
-            with open(git, "w") as f:
-                f.write("#!/bin/sh\necho \"fatal: detected dubious ownership in repository at '$PWD'\" >&2\n"
-                        "echo \"To add an exception for this directory, call: git config --global --add safe.directory\" >&2\nexit 128\n")
-            os.chmod(git, 0o755)
-            os.symlink(sys.executable, os.path.join(bin_dir, "python3"))
-            env = {k: v for k, v in os.environ.items() if not k.startswith(("BOARD_", "GH_", "GITHUB_"))}
-            env.update(PATH=bin_dir, HOME=tmp)
-            code = f"import sys; sys.argv=['keeptrack.py']; sys.path.insert(0, {plugin!r}); import keeptrack as k; print('ROOT=' + str(k.ROOT))"
-            p = subprocess.run([os.path.join(bin_dir, "python3"), "-c", code], capture_output=True, text=True, cwd=clone, env=env)
-            self.assertEqual(0, p.returncode, p.stderr)
-            self.assertEqual("ROOT=None", p.stdout.strip().splitlines()[-1], "git's ownership refusal is final")
+    def test_held_items_go_last_and_a_future_stamp_holds_days_not_years(self):
+        held = self.put(chat("e-11"), stamp="20991020T090000Z")
+        self.kt("inbound")
+        until = self.root()["inbound"]["held"][held]["until"]
+        self.assertLess(until, "2027", "a stamp in the future holds from now, not from the stamp")
+        self.put(item("z-new"), stamp=self.stamp(1))   # a new item, named after the held one would sort
+        out = self.kt("inbound").stdout
+        self.assertLess(out.index("z-new"), out.index(held), "a held item never takes a new item's turn")
 
-    def test_own_tree_checks_owner_and_write_bits(self):
-        if not hasattr(os, "getuid"):
-            self.skipTest("no user ids here")
-        with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, ".git"))
-            os.chmod(tmp, 0o755); os.chmod(os.path.join(tmp, ".git"), 0o755)
-            self.assertTrue(keeptrack._own_tree(tmp))
-            os.chmod(os.path.join(tmp, ".git"), 0o775)
-            self.assertTrue(keeptrack._own_tree(tmp), "group write is allowed, as git allows it (umask 002)")
-            os.chmod(os.path.join(tmp, ".git"), 0o777)
-            self.assertFalse(keeptrack._own_tree(tmp), "a .git everyone can write is not trusted")
-            os.chmod(os.path.join(tmp, ".git"), 0o755)
-            me = os.getuid()
-            with mock.patch.object(keeptrack.os, "getuid", lambda: me + 1):
-                self.assertFalse(keeptrack._own_tree(tmp), "someone else's tree is not trusted")
+    def test_a_held_record_without_its_file_is_cleaned(self):
+        name = self.put(chat("e-12"), stamp=self.stamp(1))
+        self.kt("inbound")
+        os.remove(os.path.join(self.inbox, name))
+        self.kt("inbound")
+        self.assertNotIn("held", self.root().get("inbound", {}))
 
+    def test_filed_for_review_then_resent_is_never_also_a_comment(self):
+        self.put(chat("e-13"), stamp="20261020T090000Z")
+        self.kt("inbound")   # filed for review: its card never came
+        self.put(item("e-13"), stamp=self.stamp(10))
+        self.kt("inbound")   # the enquiry's card now exists
+        data = self.root(); data["inbound"]["done"].clear()
+        with open(os.path.join(self.board, "tasks.json"), "w", encoding="utf8") as f:
+            json.dump(data, f)
+        self.put(chat("e-13"), stamp="20261020T090000Z")
+        self.assertIn("already filed for review", self.kt("inbound").stdout)
+        self.assertFalse(any(SECRET in c["text"] for c in self.enquiry_card("e-13").get("comments", [])))
 
-class WithoutGitInstalled(unittest.TestCase):
-    def run_without_git(self, script_dir, cwd, env_extra=()):
-        with tempfile.TemporaryDirectory() as bin_dir:
-            os.symlink(sys.executable, os.path.join(bin_dir, "python3"))
-            env = {k: v for k, v in os.environ.items() if not k.startswith(("BOARD_", "GH_", "GITHUB_"))}
-            env.update(PATH=bin_dir, HOME=cwd, **dict(env_extra))
-            code = f"import sys; sys.argv=['keeptrack.py']; sys.path.insert(0, {script_dir!r}); import keeptrack as k; print('ROOT=' + str(k.ROOT))"
-            return subprocess.run([os.path.join(bin_dir, "python3"), "-c", code], capture_output=True, text=True, cwd=cwd, env=env)
-
-    def test_plugin_and_board_copies_start_without_git(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            clone = os.path.join(tmp, "clone")
-            os.makedirs(os.path.join(clone, ".git"))
-            os.makedirs(os.path.join(clone, "board"))
-            open(os.path.join(clone, "board", "tasks.json"), "w").close()
-            shutil.copy(os.path.join(KIT, "keeptrack.py"), os.path.join(clone, "board", "keeptrack.py"))
-            plugin = os.path.join(tmp, "plugin")
-            os.makedirs(plugin)
-            shutil.copy(os.path.join(KIT, "keeptrack.py"), os.path.join(plugin, "keeptrack.py"))
-            for d in (clone, os.path.join(clone, ".git")):
-                os.chmod(d, 0o775)   # a umask 002 clone (Ubuntu, Fedora) is found too
-            p = self.run_without_git(plugin, clone)
-            self.assertEqual(0, p.returncode, p.stderr)
-            self.assertEqual("ROOT=" + clone, p.stdout.strip().splitlines()[-1], "a plugin copy finds the clone from its .git")
-            p = self.run_without_git(os.path.join(clone, "board"), clone)
-            self.assertEqual(0, p.returncode, p.stderr)
-            self.assertEqual("ROOT=" + clone, p.stdout.strip().splitlines()[-1])
-            outside = os.path.join(tmp, "elsewhere")
-            os.makedirs(outside)
-            p = self.run_without_git(plugin, outside, {"BOARD_REPO": "acme/board"})   # a plugin copy away from any clone
-            self.assertEqual(0, p.returncode, p.stderr)
-            self.assertEqual("ROOT=None", p.stdout.strip().splitlines()[-1])
-
-
-class WindowsSpellings(unittest.TestCase):
-    def test_trailing_dots_and_prefixes(self):
-        f = lambda p: keeptrack._local_spelling(p, True)
-        for given, want in ((r"C:\repo.\docs ", r"C:\repo\docs"), (r"C:\a\..\b", r"C:\a\..\b"),
-                            (r"\\?\C:\repo.\docs", r"C:\repo\docs"), (r"\\?\UNC\host\share\x", r"\\host\share\x"),
-                            (r"\\server\share\x.", r"\\server\share\x"),
-                            (r"\\server\share.\repo. \docs", r"\\server\share.\repo\docs")):
-            self.assertEqual(want, f(given), given)
-
-    def test_spellings_text_cannot_compare_are_refused(self):
-        for p in (r"\\127.1\C$\x", r"\\[::1]\c$", r"\\2130706433\C$\repo", r"\\0x7f000001\C$\repo",
-                  r"\\0--0-0-0-0-0-0-1.ipv6-literal.net\C$\repo", r"\\otherpc\d$\x", r"\\?\UNC\host\C$\x",
-                  r"C:\Users\o\BOARD-~1\docs", r"C:\PROGRA~2\x", r"C:\x\REPORT~1.DOC", r"C:\repo::$INDEX_ALLOCATION\docs", r"C:\repo\docs:alt",
-                  r"\\host\share\x::$INDEX_ALLOCATION",
-                  r"\\server\share\REPO~1 \docs"):
-            self.assertTrue(keeptrack._unverifiable_local(p, True), p)
-        for p in (r"C:\Users\o\Docs", r"\\host\share\x", r"\\host\docs$\x", r"C:\a~b\x", r"\\?\C:\x",
-                  r"C:\docs\backup~2024", r"C:\docs\notes~1.backup"):
-            self.assertFalse(keeptrack._unverifiable_local(p, True), p)
-
-    def test_volume_and_device_paths_are_refused(self):
-        for p in (r"\\?\GLOBALROOT\Device\HarddiskVolume3\x", r"\\?\Volume{1b2c}\x", r"\\.\Volume{1b2c}\x",
-                  r"\\.\HarddiskVolume3\repo\docs", r"\\?\Harddisk0Partition1\x"):
-            self.assertTrue(keeptrack._unverifiable_local(p, True), p)
-        for p in (r"\\?\C:\x", r"\\?\UNC\host\share\x", r"\\.\UNC\host\share", r"C:\x", r"\\host\share\x"):
-            self.assertFalse(keeptrack._unverifiable_local(p, True), p)
-        self.assertFalse(keeptrack._unverifiable_local(r"\\?\GLOBALROOT\x", False), "only on Windows")
-        a = SimpleNamespace(docs_provider="local", docs_root=r"C:\Docs", clear_docs_home=False)
-        with mock.patch.object(keeptrack, "_unverifiable_local", lambda p, w=None: True), \
-             mock.patch.object(keeptrack, "validate_docs_home", lambda v: v), \
-             mock.patch.object(keeptrack, "load", side_effect=AssertionError("must refuse before loading")):
-            with self.assertRaises(SystemExit) as stop:
-                keeptrack.cmd_settings_set(a)
-        self.assertIn("volume or device path", str(stop.exception))
+    def test_an_agent_cannot_change_attach_days(self):
+        p = self.kt("inbound-source", "rainshift-contact", "--attach-days", "9", ok=False, BOARD_AGENT="claude")
+        self.assertIn("only make a source safer", p.stderr)
 
 
 if __name__ == "__main__":

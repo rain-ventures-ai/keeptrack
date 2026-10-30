@@ -25,13 +25,17 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v113 (schema 4)
+### v114 (schema 4)
 keeptrack.py runs without git, and git's answers are read exactly. No data change and no migration.
 - Without git installed, a plugin or board-clone copy starts normally (set `BOARD_REPO`, or use a `.keeptrack` config, so it knows the board); before, it stopped with a Python error. A plugin copy finds the clone from its `.git` entry only in a tree you own that not everyone can write; when git refuses a repo for its owner (`safe.directory`), that stands.
 - Every command gives git 10 s. When a git call that decides something (the clone's top, its default branch, whether git tracks the claim record) does not answer, Keeptrack trusts nothing (no claim record is read) or stops with a message rather than guess (set `BOARD_BRANCH` to skip the branch check). The heartbeat hook's git calls share one 5 s budget instead (1 s each once it is spent, 3 s for a deciding call until 12 s in), so a hung git leaves the hook its 20 s; it stops quietly.
 - The docs-home refusal stands on git's "not a repository" and walks up to a `.git` entry on any other git failure.
 - Windows: trailing dots and spaces leave names (after a share's name too). These docs homes are refused, as text can't compare them: a device or volume path (`GLOBALROOT`, `Volume{...}`, `HarddiskVolumeN`), an admin share (`\\host\C$`, on any host), an 8.3 short name (`BOARD-~1`) or a stream (`C:\repo::$INDEX_ALLOCATION`). Use the drive letter and full folder names. Other shares, mapped drives and junctions are compared as written, not resolved.
-- Run `kit-update` only. Check: `kit-check` says v113.
+- Run `kit-update` only. Check: `kit-check` says v114.
+
+### v113 (schema 4)
+Inbound items can attach to the card an earlier item made: a handler's plan `{"attach": {"to": "<earlier id>", "comment": "…"}, "card": {…}}` adds the comment to the card made from the earlier item of the same source (card mode: at once; review mode: as a `task.update` proposal a person accepts), with no new card. Only the card the earlier item itself made counts (its own accepted `task.create`, never a merged or look-alike proposal). While that card does not exist yet, the item waits (`tasks.json` `inbound.held`, not a failure, no alert); after the source's `attach_days` (default 3; `inbound-source SOURCE --attach-days N`, a person's setting) or when the card is archived, it goes to the Review Inbox as a proposal. See `board/INBOUND.md`, "Attaching a later item". No data change and no migration.
+- Run `kit-update` only. Check: `kit-check` says v113, and `keeptrack.py inbound-source --help` lists `--attach-days`. A board that wants it changes its own handler to return `attach` for the later items.
 
 ### v112 (schema 4)
 Inbound items: outside sources that cannot run keeptrack.py (a website form, a booking page, a webhook) put one JSON file per item in `board/inbound/`, and `keeptrack.py inbound` turns them into Review Inbox proposals (default) or cards (a source the owner trusts), deleting each file in the same commit. See `board/INBOUND.md`. No data change and no migration: `settings.inbound`, `settings.inbound_alert_minutes` and the `tasks.json` `inbound` record are new and optional, and older kits keep them.

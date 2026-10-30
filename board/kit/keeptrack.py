@@ -457,7 +457,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 113  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 114  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -9713,7 +9713,10 @@ INBOUND_RUN_MAX = 100              # items one run handles; the rest wait for th
 INBOUND_HANDLER_SECONDS = 60
 INBOUND_CARD_FIELDS = {"title", "details", "column", "client", "project", "priority", "due", "labels", "assignees", "todos", "links"}
 INBOUND_PERSON_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "stage", "source", "notes", "next", "next_due"}
-INBOUND_SETTING_FIELDS = {"mode", "handler", "column", "assign", "labels", "todos", "client", "project", "stage", "priority"}
+INBOUND_SETTING_FIELDS = {"mode", "handler", "column", "assign", "labels", "todos", "client", "project", "stage", "priority",
+                          "attach_days"}
+INBOUND_ATTACH_DAYS = 3            # kit v113: how long an item that attaches to an earlier item's card waits for that card
+INBOUND_ATTACH_TEXT = 20000
 INBOUND_FIRST = ("name", "email", "company", "linkedin", "phone", "topic", "page", "submitted_at")
 LOGIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 
@@ -9753,10 +9756,16 @@ def inbound_alert_minutes(data):
 
 
 def inbound_record(data):
-    """tasks.json "inbound": {"done": {key: {...}}, "failed": {file name: {...}}}, read-only view (never created here)."""
+    """tasks.json "inbound": {"done": {key: "..."}, "failed": {file name: {...}}, "held": {file name: {...}}}, read-only
+    view (never created here). held (kit v113): items waiting for the card they attach to; not failures."""
     v = data.get("inbound")
     v = v if isinstance(v, dict) else {}
-    return {k: (v.get(k) if isinstance(v.get(k), dict) else {}) for k in ("done", "failed")}
+    return {k: (v.get(k) if isinstance(v.get(k), dict) else {}) for k in ("done", "failed", "held")}
+
+
+def inbound_attach_days(cfg):
+    v = cfg.get("attach_days")
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 30 else INBOUND_ATTACH_DAYS
 
 
 def inbound_stamp(name):
@@ -9979,14 +9988,40 @@ def inbound_handler_plan(item, cfg):
         raise InboundError(f"handler {cfg['handler']} did not print a JSON plan") from None
 
 
-def inbound_check_plan(plan):
-    """A plan (from the handler or the default): {card, person?, comment?} or {skip: "why"}. Checked like a proposal."""
-    if not isinstance(plan, dict) or set(plan) - {"card", "person", "comment", "skip"}:
-        raise InboundError("a plan is a JSON object with card, person, comment or skip only")
+def inbound_check_plan(plan, item=None):
+    """A plan (from the handler or the default): {card, person?, comment?}, {skip: "why"}, or (kit v113)
+    {attach: {to, comment}, card?}: a comment on the card made from the earlier item `to` of the same source, with an
+    optional card for when that card never comes. Checked like a proposal."""
+    if not isinstance(plan, dict) or set(plan) - {"card", "person", "comment", "skip", "attach"}:
+        raise InboundError("a plan is a JSON object with card, person, comment, attach or skip only")
     if plan.get("skip"):
         if not isinstance(plan["skip"], str) or _has_break(plan["skip"]):
             raise InboundError("plan skip must be one line saying why")
         return {"skip": clean(plan["skip"], 200)}
+    attach = plan.get("attach")
+    if attach is not None:
+        if not isinstance(attach, dict) or set(attach) - {"to", "comment"}:
+            raise InboundError("plan attach is {to, comment} only")
+        if not isinstance(attach.get("to"), str) or not INBOUND_ID.fullmatch(attach["to"]):
+            raise InboundError("plan attach.to must be the id of an earlier item of this source")
+        if item is not None and attach["to"] == item.get("id"):
+            raise InboundError("plan attach.to names this item itself")
+        text = attach.get("comment")
+        if not isinstance(text, str) or not text.strip():
+            raise InboundError("plan attach.comment must be the text to add to that card")
+        if len(text) > INBOUND_ATTACH_TEXT:
+            raise InboundError(f"plan attach.comment is longer than {INBOUND_ATTACH_TEXT} characters")
+        if set(plan) - {"attach", "card"}:
+            raise InboundError("a plan with attach may only add a card (used if the earlier card never comes)")
+        fallback = plan.get("card")
+        if fallback is None:
+            kind = (item or {}).get("kind", "item")
+            fallback = {"title": f"{kind.replace('-', ' ').replace('_', ' ').capitalize()} for {attach['to']}",
+                        "details": f"Its card (from item {attach['to']}) was not found; the text is in the comment."}
+        checked = inbound_check_plan({"card": fallback}, item)
+        # the text always goes with it: on the matched card, or as the comment of the one fallback proposal
+        return {"attach": {"to": attach["to"], "comment": text.strip()}, "card": checked["card"], "person": None,
+                "comment": text.strip()}
     card = plan.get("card")
     if not isinstance(card, dict) or not isinstance(card.get("title"), str) or not card["title"].strip() or _has_break(card["title"]):
         raise InboundError("plan card needs a title on one line")
@@ -10135,6 +10170,68 @@ def _inbound_archived_ids(data):
     return _ARCHIVED_IDS[key]
 
 
+def inbound_attach_target(data, source, to):
+    """(card or None, why) for the card made from the earlier item (source, to): in card mode its id comes from the
+    source and id; in review mode it is the card that accepting the earlier item's own task.create proposal created
+    (that proposal's source.id is the earlier item, and the card's history says it was created from it). A proposal
+    merged into another card, or one anyone else filed with the same action key, never counts. A card in the archive
+    counts as closed (why "archived"): nothing is added to it."""
+    key = f"inbound:{source}:{to}"
+    ids = [(proposal_result_id({"id": key}, "t_"), f"created from inbound {source} {to}")]
+    waiting = False
+    for p in _all_proposals(data):
+        if not (isinstance(p, dict) and p.get("action_key") == key + ":task" and p.get("kind") == "task.create"
+                and (p.get("source") or {}).get("id") == key and isinstance(p.get("id"), str)):
+            continue
+        if p.get("status") == "pending":
+            waiting = True
+        elif p.get("status") == "accepted":
+            ids.append((proposal_result_id(p, "t_"), f"created from proposal {p['id']}"))   # the card an accept creates
+    for tid, mark in ids:
+        card = next((t for t in data.get("tasks", []) if t.get("id") == tid), None)
+        if card and any(isinstance(h, dict) and h.get("text") == mark for h in card.get("history") or []):
+            return card, "found"
+    if any(tid in _inbound_archived_ids(data) for tid, _ in ids):
+        return None, "archived"
+    return None, "its proposal waits in the Review Inbox" if waiting else "no card yet"
+
+
+def inbound_attach(data, item, plan, card):
+    """Add the plan's comment to the earlier item's card. The comment id comes from this item's (source, id), so a
+    repeat never adds it twice."""
+    cid = "c_" + hashlib.sha1(inbound_key(item).encode()).hexdigest()[:10]
+    num = card.get("num", "?")
+    filed = next((p for p in _all_proposals(data) if isinstance(p, dict) and p.get("action_key") in
+                  (inbound_key(item) + ":task", inbound_key(item) + ":attach")), None)
+    if filed:   # filed for review before (the card had not come, or this source is in review mode): never twice
+        return f"review {filed.get('id')}", [f"  already filed for review ({filed.get('id')})"]
+    if any(isinstance(c, dict) and c.get("id") == cid for c in card.get("comments") or []):
+        return f"attach {card['id']}", [f"  already on #{num} ({card['id']})"]
+    ts = now()
+    card.setdefault("comments", []).append({"id": cid, "at": ts, "by": who_am_i(), "text": plan["attach"]["comment"]})
+    hist(card, f"comment from inbound {item['source']} {item['id']}")
+    card["updated"] = ts; card["updatedBy"] = who_am_i()
+    return f"attach {card['id']}", [f"  comment added to #{num} ({card['id']})"]
+
+
+def inbound_attach_review(data, item, plan, card):
+    """Review mode: the comment waits in the Review Inbox as a task.update proposal on that card (comments are added,
+    never replaced). A person accepts it; nothing here accepts."""
+    key = inbound_key(item)
+    filed = next((p for p in _all_proposals(data) if isinstance(p, dict) and p.get("action_key") == key + ":task"), None)
+    if filed:   # filed for review before, when its card had not come: never twice
+        return f"review {filed.get('id')}", [f"  already filed for review ({filed.get('id')})"]
+    src = {"kind": "other", "id": key, "revision": "1", "title": f"Inbound {item['source']}", "date": item["received"][:10]}
+    reason = (f"From the {item['source']} inbound source ({item['kind']}), received {item['received']}, for card "
+              f"#{card.get('num', '?')}. Outside input: check it before you accept.")[:PROPOSAL_DETAIL_LIMIT]
+    value = {"kind": "task.update", "title": f"Add a comment to #{card.get('num', '?')}: {clean(card.get('title', ''), 80)}",
+             "source": src, "action_key": key + ":attach", "work_key": key + ":attach", "reason": reason,
+             "target": {"type": "task", "id": card["id"], "base": {}},
+             "change": {"comments": [{"text": plan["attach"]["comment"]}]}}
+    added, lines = _inbound_call(_prepare_proposals, data, [value])
+    return "review " + " ".join(p["id"] for p in added), [f"  {x}" for x in lines]
+
+
 def _inbound_prune(done, today):
     cut = (today - dt.timedelta(days=INBOUND_KEEP_DAYS)).isoformat()
     for k in [k for k, v in done.items() if not isinstance(v, str) or v[:10] < cut]:
@@ -10157,7 +10254,12 @@ def inbound_waiting(data, now_at=None):
 def inbound_attention(data, now_at=None):
     """The inbound lines list --attention prints: failed items, and items waiting longer than the alert time."""
     limit, out = inbound_alert_minutes(data), []
+    held, now_at = inbound_record(data)["held"], now_at or dt.datetime.now(dt.timezone.utc)
     for name, waited, fail in inbound_waiting(data, now_at):
+        h = held.get(name) if isinstance(held.get(name), dict) else None
+        if h and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(h.get("until") or "")) \
+                and h["until"] > now_at.strftime("%Y-%m-%dT%H:%M:%SZ"):
+            continue   # kit v113: waiting on purpose for the card it attaches to
         if isinstance(fail, dict):
             out.append(f"inbound failed {_flat(name)}: {_flat(clean(fail.get('error', ''), 200))}")
         elif waited is None or waited >= limit:
@@ -10178,8 +10280,11 @@ def cmd_inbound(a):
             print(_line_guard(f"source {source}: {cfg['mode']}" + (f" ({extra})" if extra else "")))
         if not settings:
             print("no inbound sources set: every source's items become Review Inbox proposals (inbound-source SOURCE --mode card to trust one)")
+        held = inbound_record(data)["held"]
         for name, waited, fail in waiting:
-            state = f"failed: {clean(fail.get('error', ''), 200)}" if isinstance(fail, dict) else "waiting"
+            h = held.get(name) if isinstance(held.get(name), dict) else None
+            state = (f"failed: {clean(fail.get('error', ''), 200)}" if isinstance(fail, dict) else
+                     f"held: {clean(h.get('why', ''), 120)}, until {clean(h.get('until', ''), 25)}" if h else "waiting")
             print(_line_guard(f"{_flat(name)}  {_age(waited) if waited is not None else '?'}  {state}"))
         print(f"{len(waiting)} item{'s' if len(waiting) != 1 else ''} in {INBOUND_DIR}/; "
               f"{len(inbound_record(data)['done'])} handled in the last {INBOUND_KEEP_DAYS} days")
@@ -10190,18 +10295,22 @@ def cmd_inbound(a):
         report.clear()
         guard_schema(data)
         files = inbound_files(data)
-        if not files and not inbound_record(data)["failed"]:
+        held_before = inbound_record(data)["held"]
+        files = sorted(files, key=lambda f: (f[1] in held_before, f[1]))   # kit v113: waiting items after the rest
+        if not files and not inbound_record(data)["failed"] and not held_before:
             print("inbound: nothing waiting")
             return
-        rec = {"done": dict(inbound_record(data)["done"]), "failed": {}}
-        old_failed = inbound_record(data)["failed"]
+        rec = {"done": dict(inbound_record(data)["done"]), "failed": {}, "held": {}}
+        old_failed, old_held = inbound_record(data)["failed"], inbound_record(data)["held"]
         today = board_today(data)
         for rel, name in files[INBOUND_RUN_MAX:]:   # left for the next run: keep what is known about them
             if isinstance(old_failed.get(name), dict):
                 rec["failed"][name] = old_failed[name]
+            if isinstance(old_held.get(name), dict):
+                rec["held"][name] = old_held[name]
         if len(files) > INBOUND_RUN_MAX:
             print(f"{len(files) - INBOUND_RUN_MAX} more item(s) wait for the next run (at most {INBOUND_RUN_MAX} per run)")
-        for rel, name in files[:INBOUND_RUN_MAX]:
+        for rel, name in files[:INBOUND_RUN_MAX]:   # (sorted below: items already held go last, so they never starve new ones)
             shown = _flat(name)   # a file name is outside input too: one line, safe characters only
             snap, after_n = copy.deepcopy(data), len(_MUT["after"])
             try:
@@ -10214,10 +10323,39 @@ def cmd_inbound(a):
                     _MUT["extra"][rel] = None; report[name] = "duplicate"
                     continue
                 cfg = inbound_source_config(data, item["source"])
-                plan = inbound_check_plan(inbound_handler_plan(item, cfg) if cfg.get("handler") else inbound_default_plan(item, cfg))
+                plan = inbound_check_plan(inbound_handler_plan(item, cfg) if cfg.get("handler") else inbound_default_plan(item, cfg), item)
+                mode = cfg["mode"]
+                if plan.get("attach"):
+                    target, why = inbound_attach_target(data, item["source"], plan["attach"]["to"])
+                    days, now_at = inbound_attach_days(cfg), dt.datetime.now(dt.timezone.utc)
+                    prev = old_held.get(name) if isinstance(old_held.get(name), dict) else {}
+                    try:   # the hold starts at the file's time, never later than now or than when it was first held
+                        first = dt.datetime.fromisoformat(str(prev.get("since") or "").replace("Z", "+00:00"))
+                    except ValueError:
+                        first = now_at
+                    start = min(x for x in (inbound_stamp(name), now_at, first) if x is not None and x.tzinfo is not None)
+                    age = (now_at - start).total_seconds() / 86400
+                    if target is None and why != "archived" and age < days:
+                        since = prev.get("since") or now()
+                        until = (start + dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        held_why = f"waiting for the card of {plan['attach']['to']} ({why})"
+                        rec["held"][name] = prev if prev.get("why") == held_why and prev.get("until") == until else \
+                            {"why": held_why, "since": since, "until": until}
+                        report[name] = "held"
+                        print(f"{shown}: held until {until}: {_flat(held_why)}")
+                        continue
+                    if target is None:
+                        mode = "review"   # the earlier card never came, or is closed: a person decides, as for any item
+                        print(f"{shown}: no card to attach to ({_flat(why)}); filed for review")
                 if plan.get("skip"):
                     result, lines = "skip", [f"  skipped: {_flat(plan['skip'])}"]
-                elif cfg["mode"] == "card":
+                elif plan.get("attach") and target is not None and cfg["mode"] == "card":
+                    result, lines = inbound_attach(data, item, plan, target)
+                    mode = "attach"
+                elif plan.get("attach") and target is not None:   # review mode: a person accepts the comment
+                    result, lines = inbound_attach_review(data, item, plan, target)
+                    mode = "review (comment on its card)"
+                elif mode == "card":
                     made, lines = inbound_card(data, item, plan)
                     result = "card " + " ".join(v for v in (made.get("card"), made.get("person")) if v)
                 else:
@@ -10227,7 +10365,7 @@ def cmd_inbound(a):
                 rec["done"][key] = f"{now()[:10]} {result}".strip()
                 _MUT["extra"][rel] = None
                 report[name] = "done"
-                print(f"{shown}: {item['source']} {item['kind']} -> " + ("skipped" if plan.get("skip") else cfg["mode"]))
+                print(f"{shown}: {item['source']} {item['kind']} -> " + ("skipped" if plan.get("skip") else mode))
                 for x in lines: print(_line_guard(x))
             except Exception as e:   # one item, whatever went wrong with it (InboundError, a helper's exit, a bug): never the run
                 data.clear(); data.update(snap); del _MUT["after"][after_n:]   # nothing of a failed item stays on the board
@@ -10247,7 +10385,9 @@ def cmd_inbound(a):
                 report[name] = "failed" if prev.get("error") != msg else "failed again"
                 print(f"{shown}: FAILED, left in {INBOUND_DIR}/: {_flat(msg)}")
         _inbound_prune(rec["done"], today)
-        if rec["done"] or rec["failed"]:
+        if not rec["held"]:
+            rec.pop("held")
+        if rec["done"] or rec["failed"] or rec.get("held"):
             data["inbound"] = rec
         else:
             data.pop("inbound", None)
@@ -10279,7 +10419,7 @@ def cmd_inbound_source(a):
         sys.exit("refused: an agent never sets a source to card mode (that skips review): the board owner does, in a shell "
                  "without BOARD_AGENT, or in a session they drive and name it: --attended")
     if agent_unattended(a) and any(getattr(a, k) is not None for k in ("handler", "column", "client", "project", "stage", "priority",
-                                                                        "assign", "label", "todo")):
+                                                                        "assign", "label", "todo", "attach_days")):
         sys.exit("refused: an unattended agent may only make a source safer (--mode review or --remove); what a source's items "
                  "become is the board owner's to set, or --attended in a session they drive")
     if a.handler:
@@ -10326,6 +10466,10 @@ def cmd_inbound_source(a):
             todos = [" ".join(x.split()) for x in a.todo if x.strip()]
             if todos: cfg["todos"] = todos
             else: cfg.pop("todos", None)
+        if a.attach_days is not None:
+            if not 0 <= a.attach_days <= 30:
+                sys.exit("--attach-days is 0 to 30 (days an item waits for the card it attaches to)")
+            cfg["attach_days"] = a.attach_days
         all_[a.source] = {k: cfg[k] for k in sorted(cfg) if k in INBOUND_SETTING_FIELDS}
         st["inbound"] = all_
         print(_line_guard(f"source {a.source}: {cfg['mode']}" + "".join(f", {k} {json.dumps(v, ensure_ascii=False)}"
@@ -13100,6 +13244,8 @@ def main():
     s.add_argument("--assign", nargs="*", metavar="LOGIN", help="who the card is for (no value clears)")
     s.add_argument("--label", nargs="*", metavar="NAME", help="labels for the card (no value clears)")
     s.add_argument("--todo", nargs="*", metavar="TEXT", help="checklist items for the card (no value clears)")
+    s.add_argument("--attach-days", type=int, dest="attach_days", help="days an item that attaches to an earlier item's card "
+                   f"waits for that card before it goes to the Review Inbox (0-30, default {INBOUND_ATTACH_DAYS})")
     s.add_argument("--remove", action="store_true", help="remove this source's settings (back to review)")
     s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and asked for this (kit v77)")
     s.set_defaults(f=cmd_inbound_source)
