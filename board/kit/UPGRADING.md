@@ -27,9 +27,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ## Versions
 ### v115 (schema 4)
 Follow-ups from the v114 reviews. No data change and no migration.
-- The session-start hook (`here --hook`) shares the heartbeat hook's git budget, and its `git rev-parse` is bounded.
-- In a hook no git call runs past 14 s, however slowly git answers; the save keeps the rest of the hook's 20 s.
-- A git too slow to place the claim record stops only the commands that read or write it (claim, heartbeat, done, release, the hook); `where`, `use`, `kit-update` and the rest go on.
+- The session-start hook (`here --hook`) shares the heartbeat hook's git budget, and its `git rev-parse` is bounded. When git can't place the folder, its `.git` entry decides whether the repo is connected: board details never show on a guess.
+- In a hook no start-up or claim-record git check runs past 14 s, however slowly git answers (the session-start script's own check stops after 3 s). A save through the git transport (`BOARD_WRITE=git`) is not bounded yet.
+- `use` stops with a message on a hung git instead of waiting; `where` marks a claim path it is unsure of.
+- A git too slow to place the claim record stops only the commands that read or write it (claim, next, done, review, release, unwait, the hook), before they save anything; the other commands go on (`kit-update`'s own git calls are not bounded yet).
 - Run `kit-update` only. Check: `kit-check` says v115.
 
 ### v114 (schema 4)

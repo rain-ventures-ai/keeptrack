@@ -3459,6 +3459,7 @@ def with_record(run):
 
 
 def cmd_claim(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     if getattr(a, "on_behalf_of", None):
         sys.exit("--on-behalf-of works only with BOARD_BACKEND=hosted (a hosted dispatcher); on a GitHub board, claim as BOARD_USER")
     _PENDING_CLAIM.clear()
@@ -3466,6 +3467,7 @@ def cmd_claim(a):
 
 
 def cmd_next(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     _default_scope(a)
     def fn(data):
         user = a.for_user or default_user()
@@ -3552,6 +3554,7 @@ def move_task_to_column(data, task, column, a=None):
 
 
 def cmd_release(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     def fn(data):
         t = find(data, a.id)
         if a.column == "done" and open_waiting(t):
@@ -3655,6 +3658,7 @@ def check_moved_todos(data, t, cancel=False):
 
 
 def cmd_done(a):
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     def fn(data):
         t = find(data, a.id)
         claim_owner_check(data, t, a, "done")
@@ -3719,6 +3723,7 @@ def cmd_review(a):
     decision, a choice between options. Like done it ends the claim with a run record and refuses open to-dos; unlike
     done the card stays open, in Pending review, and the note goes on the card as a comment that @mentions who decides.
     The person then moves it to Done, or back to To do (or claims it) for more work."""
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     def fn(data):
         t = find(data, a.id)
         claim_owner_check(data, t, a, "review")
@@ -3814,6 +3819,7 @@ def cmd_wait(a):
 def cmd_unwait(a):
     """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
     person's to clear. A claim `wait` blocked runs again (a young one) or goes back to To do (one older than the stale limit)."""
+    _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
         sys.exit("unwait needs --note with why the wait is over")
@@ -6162,8 +6168,10 @@ def cmd_use(a):
             sys.exit("--token-env needs a board-specific variable, not an automatic auth alias; use BOARD_TOKEN_PRIVATE")
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
         sys.exit("repo must be owner/name, e.g. osouthgate/private-tasks")
-    rc, top, _ = (lambda p: (p.returncode, p.stdout.strip(), p.stderr))(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True))
-    base = top if rc == 0 and top else os.getcwd()
+    top, how = _git_toplevel(os.getcwd())   # bounded: a hung git stops here rather than guess where the config goes
+    if how == "hung":
+        sys.exit(f"git did not answer in time for {os.getcwd()}, so Keeptrack can't tell which repo to connect; try again")
+    base = top or os.getcwd()
     cfg_path = os.path.join(base, CONFIG_DIRS[0], "config.json")
     branch = a.branch
     if not branch:   # ask GitHub for the repo's default branch (new repos use main); fall back to master
@@ -6214,7 +6222,9 @@ def _here(a):
         print("Keeptrack: no board for this repo. Connect one with `keeptrack.py use <owner/board-repo> --project <name>`.")
         return
     where = os.path.join(PROJECT_DIR, CONFIG_DIR_NAME, "config.json") if PROJECT_DIR else "environment"
-    top = _git_toplevel(os.getcwd())[0]   # bounded like every start-up git call ("" when git can't say)
+    top, how = _git_toplevel(os.getcwd())   # bounded like every start-up git call
+    if not top and how != "none":   # git could not place this folder: judge "connected" by its .git, never show the board on a guess
+        top = _dot_git_top(os.getcwd())
     inside = lambda p, d: os.path.realpath(p) == os.path.realpath(d) or os.path.realpath(p).startswith(os.path.realpath(d) + os.sep)
     if top and PROJECT_DIR and not inside(PROJECT_DIR, top) and not DEFAULT_PROJECT:
         # a board set once in a parent folder (usually home): available here, but this repo is not connected to it
@@ -6348,7 +6358,7 @@ def cmd_where(a):
         print(f"         (ignored {PARENT_CONFIG}: it is above this board clone, whose own git remote names the board)")
     if UNTRUSTED_CLONE:
         print(f"         (used it, not this clone of {_flat(UNTRUSTED_CLONE[0])}: `keeptrack.py use` never named that board here)")
-    print(f"claims:  {CLAIM_FILE}")
+    print(f"claims:  {CLAIM_FILE}" + (f"  (unsure: {_CLAIM_UNSURE})" if _CLAIM_UNSURE else ""))
 
 
 # ---- Keeptrack CRM: people with a stage and a next step ------------------------------------------------

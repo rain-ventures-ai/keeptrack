@@ -1,5 +1,7 @@
 """Kit v115: follow-ups from the v114 reviews. The session-start hook shares the git budget; in a hook no git call
 runs past the deadline; a git too slow to place the claim record stops only the commands that use the record."""
+import contextlib
+import io
 import json
 import os
 import re
@@ -91,9 +93,68 @@ class ClaimPlaceUnknown(unittest.TestCase):
                 self.assertEqual(0, stop.exception.code, "the heartbeat hook stops quietly")
         self.assertEqual("", keeptrack._CLAIM_UNSURE)
 
+    def test_claim_commands_stop_before_they_save(self):
+        with mock.patch.object(keeptrack, "_CLAIM_UNSURE", "git did not answer in time"), \
+             mock.patch.object(keeptrack, "mutate", side_effect=AssertionError("saved before stopping")), \
+             mock.patch.object(keeptrack, "load", side_effect=AssertionError("read before stopping")):
+            for cmd in (keeptrack.cmd_claim, keeptrack.cmd_next, keeptrack.cmd_done, keeptrack.cmd_review,
+                        keeptrack.cmd_release, keeptrack.cmd_unwait):
+                with self.assertRaises(SystemExit) as stop:
+                    cmd(SimpleNamespace(id="t_x", note="n", on_behalf_of=None))
+                self.assertIn("in time", str(stop.exception.code), cmd.__name__)
+
     def test_a_known_place_never_stops(self):
         with mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""):
             keeptrack._claim_sure()
+
+    def test_the_session_start_hook_never_shows_the_board_on_a_guess(self):
+        with tempfile.TemporaryDirectory() as home:
+            repo = os.path.join(home, "work", "repo")
+            os.makedirs(os.path.join(repo, ".git"))
+            cwd = os.getcwd()
+            try:
+                os.chdir(repo)
+                for how in ("hung", "error", "missing"):
+                    out = io.StringIO()
+                    with mock.patch.object(keeptrack, "_git_toplevel", lambda f, how=how: ("", how)), \
+                         mock.patch.object(keeptrack, "REPO", "acme/board"), mock.patch.object(keeptrack, "PROJECT_DIR", home), \
+                         mock.patch.object(keeptrack, "DEFAULT_PROJECT", ""), \
+                         mock.patch.object(keeptrack, "load", side_effect=AssertionError("board read for an unconnected repo")), \
+                         contextlib.redirect_stdout(out):
+                        keeptrack._here(SimpleNamespace(hook=True))
+                    self.assertIn("not connected", out.getvalue(), how)
+            finally:
+                os.chdir(cwd)
+
+    @unittest.skipIf(os.name == "nt", "a POSIX shell stub stands in for git")
+    def test_the_session_start_script_gives_git_three_seconds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir, proj, plugin = (os.path.join(tmp, d) for d in ("bin", "proj", "plugin"))
+            for d in (bin_dir, os.path.join(proj, ".keeptrack"), plugin):
+                os.makedirs(d)
+            with open(os.path.join(proj, ".keeptrack", "config.json"), "w") as f:
+                f.write('{"repo": "o/b"}')
+            git = os.path.join(bin_dir, "git")
+            with open(git, "w") as f:
+                f.write("#!/bin/sh\nexec sleep 60\n")
+            os.chmod(git, 0o755)
+            with open(os.path.join(plugin, "keeptrack.py"), "w") as f:   # stands in for the real one: say it ran
+                f.write("import sys; print('ran', *sys.argv[1:])\n")
+            env = {"PATH": bin_dir + os.pathsep + "/usr/bin:/bin", "HOME": tmp, "CLAUDE_PLUGIN_ROOT": plugin}
+            began = time.monotonic()
+            p = subprocess.run(["sh", os.path.join(KIT, "hooks", "session-start.sh")], cwd=proj, env=env,
+                               capture_output=True, text=True, timeout=30)
+            took = time.monotonic() - began
+            self.assertEqual((0, "ran here --hook"), (p.returncode, p.stdout.strip()), p.stderr)
+            self.assertLess(took, 8, "the prefilter stops waiting for git after 3 s; keeptrack.py decides")
+
+    def test_use_stops_on_a_hung_git_and_where_marks_an_unsure_path(self):
+        with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")):
+            with self.assertRaises(SystemExit) as stop:
+                keeptrack.cmd_use(SimpleNamespace(token_env=None, repo="acme/board"))
+        self.assertIn("in time", str(stop.exception.code))
+        src = read("board/kit/keeptrack.py")
+        self.assertIn('(f"  (unsure: {_CLAIM_UNSURE})" if _CLAIM_UNSURE else "")', src)
 
     @unittest.skipIf(os.name == "nt", "a POSIX shell stub stands in for git")
     def test_a_hung_git_leaves_other_commands_and_the_hook_alone_end_to_end(self):
