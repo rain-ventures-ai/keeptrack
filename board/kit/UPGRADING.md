@@ -30,7 +30,7 @@ Follow-ups from the v114 reviews. No data change and no migration.
 - The session-start hook (`here --hook`) shares the heartbeat hook's git budget, and its `git rev-parse` is bounded. When git can't place the folder, its `.git` entry decides whether the repo is connected: board details never show on a guess.
 - In a hook no start-up or claim-record git check runs past 14 s from the hook's start, however slowly git answers (the session-start script's own check stops after 3 s and counts in it). A save through the git transport (`BOARD_WRITE=git`) is not bounded yet.
 - `use` stops with a message on a hung git instead of waiting; `where` marks a claim path it is unsure of.
-- A git too slow to place the claim record stops only the commands that read or write it (claim, next, done, review, release, unwait, the hook, and heartbeat, wait and move to done without `BOARD_SESSION`), before they save anything; a `--file` board keeps no record and goes on (it reads none from an unconfirmed place); the other commands go on (`kit-update`'s own git calls are not bounded yet).
+- A git too slow to place the claim record stops only the commands that read or write it (claim, next, done, review, release, unwait, the hook, and, without `BOARD_SESSION`, any change that needs to know whose claim it is: heartbeat, wait, move to done, reopening a card with a leftover wait, accepting or merging a proposal into or out of Done), before they save anything; a `--file` board keeps no record and goes on (it reads none from an unconfirmed place); the other commands go on (`kit-update`'s own git calls are not bounded yet).
 - Run `kit-update` only. Check: `kit-check` says v115.
 
 ### v114 (schema 4)
