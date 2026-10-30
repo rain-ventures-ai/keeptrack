@@ -111,7 +111,7 @@ class Attach(Board):
         self.assertEqual([], os.listdir(self.inbox))
         mine = [p for p in self.proposals() if p["source"]["id"] == "inbound:rainshift-contact:e-3-chat-1"]
         self.assertEqual(["task.create"], [p["kind"] for p in mine])
-        self.assertIn(SECRET, mine[0]["change"]["details"])
+        self.assertTrue(any(SECRET in c["text"] for c in mine[0]["change"]["comments"]))
         self.assertEqual([], self.cards_with(SECRET), "no card is made without a person")
 
     def test_attach_days_zero_files_it_at_once(self):
@@ -130,6 +130,11 @@ class Attach(Board):
         self.kt("proposal-accept", task["id"])   # a person
         self.kt("inbound")
         self.assertEqual([], os.listdir(self.inbox))
+        # review mode: the comment itself waits for a person too, as a task.update on that card
+        card = self.enquiry_card("e-5")
+        self.assertFalse(any(SECRET in c["text"] for c in card.get("comments", [])))
+        update = next(p for p in self.proposals() if p["kind"] == "task.update" and p["target"]["id"] == card["id"])
+        self.kt("proposal-accept", update["id"])
         self.assertEqual(1, sum(SECRET in c["text"] for c in self.enquiry_card("e-5")["comments"]))
 
     def test_a_closed_enquiry_card_is_not_reopened(self):
@@ -145,6 +150,59 @@ class Attach(Board):
         name = self.put(chat("e-7", enquiry_id="../x"), stamp=self.stamp(1))
         self.kt("inbound", ok=False)
         self.assertIn("attach.to", self.root()["inbound"]["failed"][name]["error"])
+
+    def test_a_squatting_proposal_never_redirects_the_text(self):
+        # anyone may file a proposal with the earlier item's action key; accepting it must not make its card the target
+        self.kt("inbound-source", "rainshift-contact", "--mode", "review")
+        payload = {"kind": "task.update", "title": "Raise priority", "action_key": "inbound:rainshift-contact:e-9:task",
+                   "work_key": "x", "source": {"kind": "other", "id": "x", "revision": "1"},
+                   "target": {"type": "task", "id": "t_first", "base": {"priority": "high"}}, "change": {"priority": "low"}}
+        path = os.path.join(self.repo, "squat.json")
+        with open(path, "w", encoding="utf8") as f:
+            json.dump(payload, f)
+        self.kt("proposal-add", path, BOARD_AGENT="claude")
+        squat = next(p for p in self.proposals() if p["title"] == "Raise priority")
+        self.kt("proposal-accept", squat["id"])
+        self.put(chat("e-9"), stamp=self.stamp(1))
+        self.kt("inbound")
+        self.assertEqual([], self.cards_with(SECRET), "the chat went nowhere near t_first")
+
+    def test_a_handler_fallback_card_keeps_the_text(self):
+        with open(os.path.join(self.repo, "intake", "plan.py"), "w", encoding="utf8") as f:
+            f.write(HANDLER.replace('"comment": "Rayna chat after the enquiry: " + p["summary"]}}',
+                                    '"comment": "Rayna chat after the enquiry: " + p["summary"]}, "card": {"title": "A chat", "details": "a chat"}}'))
+        self.put(chat("e-10"), stamp="20261020T090000Z")
+        self.kt("inbound")
+        mine = [p for p in self.proposals() if p["source"]["id"] == "inbound:rainshift-contact:e-10-chat-1"]
+        self.assertTrue(any(SECRET in c["text"] for c in mine[0]["change"].get("comments", [])))
+
+    def test_held_items_go_last_and_a_future_stamp_holds_days_not_years(self):
+        held = self.put(chat("e-11"), stamp="20991020T090000Z")
+        self.kt("inbound")
+        until = self.root()["inbound"]["held"][held]["until"]
+        self.assertLess(until, "2027", "a stamp in the future holds from now, not from the stamp")
+        self.put(item("z-new"), stamp=self.stamp(1))   # a new item, named after the held one would sort
+        out = self.kt("inbound").stdout
+        self.assertLess(out.index("z-new"), out.index(held), "a held item never takes a new item's turn")
+
+    def test_a_held_record_without_its_file_is_cleaned(self):
+        name = self.put(chat("e-12"), stamp=self.stamp(1))
+        self.kt("inbound")
+        os.remove(os.path.join(self.inbox, name))
+        self.kt("inbound")
+        self.assertNotIn("held", self.root().get("inbound", {}))
+
+    def test_filed_for_review_then_resent_is_never_also_a_comment(self):
+        self.put(chat("e-13"), stamp="20261020T090000Z")
+        self.kt("inbound")   # filed for review: its card never came
+        self.put(item("e-13"), stamp=self.stamp(10))
+        self.kt("inbound")   # the enquiry's card now exists
+        data = self.root(); data["inbound"]["done"].clear()
+        with open(os.path.join(self.board, "tasks.json"), "w", encoding="utf8") as f:
+            json.dump(data, f)
+        self.put(chat("e-13"), stamp="20261020T090000Z")
+        self.assertIn("already filed for review", self.kt("inbound").stdout)
+        self.assertFalse(any(SECRET in c["text"] for c in self.enquiry_card("e-13").get("comments", [])))
 
     def test_an_agent_cannot_change_attach_days(self):
         p = self.kt("inbound-source", "rainshift-contact", "--attach-days", "9", ok=False, BOARD_AGENT="claude")

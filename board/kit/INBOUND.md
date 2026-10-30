@@ -144,20 +144,29 @@ the later item is:
 
 - **Matched:** `to` names an earlier item of the **same source**. The drain finds its card:
   - if the earlier item was in card mode, the card made from it (its id comes from the source and id);
-  - if it was in review mode, the card that accepting its proposal made.
+  - if it was in review mode, the card that accepting **its own** `task.create` proposal created.
 
-  The comment is added to that card and the file is deleted, in one commit. No new card is made. The comment's id
-  comes from this item's source and id, so a repeat never adds it twice.
+  Only those count. A proposal someone else filed with the same action key, or one merged into another card, never
+  makes a card the target.
+
+  In **card** mode the comment is added to that card and the file is deleted, in one commit. No new card is made, and
+  the comment's id comes from this item's source and id, so a repeat never adds it twice. In **review** mode the
+  comment waits in the Review Inbox as a `task.update` proposal on that card (it adds a comment, nothing else); a
+  person accepts it.
 - **Not matched yet:** the earlier item has not been handled, or its proposal still waits in the Review Inbox. The
   file stays in `board/inbound/`, `tasks.json` `inbound.held["<file name>"]` says what it waits for and until when,
   and the next run tries again. This is not a failure: `inbound` exits 0, and `list --attention` and the web board do
-  not point at it while it waits.
+  not point at it while it waits. Held items are handled after the others in each run, so they never hold up new
+  items, and a file-name time in the future counts as now.
 - **Never matched:** after the source's `attach_days` (`inbound-source SOURCE --attach-days N`, 0 to 30, default 3,
   counted from the time in the file name), or at once when the earlier card is in the archive, the item goes to the
-  Review Inbox as a `task.create` proposal built from the plan's `card`, whatever the source's mode. Without a
-  `card`, the proposal is titled from the item's kind and the earlier id, and holds the comment text.
+  Review Inbox as a `task.create` proposal built from the plan's `card` (or a title from the item's kind and the
+  earlier id), whatever the source's mode, with the text as its comment. Once filed, a resent copy never also lands
+  on the card.
 - The comment text goes only on the matched card, or into that one proposal: never on any other card. As with any
   handler text, put outside text in code.
+- `to` must come from the producer's own records (for example the enquiry id it stored when the form was sent),
+  never from anything the visitor can type or change: whoever controls `to` chooses the card.
 - `--attach-days` is a person's setting: an agent run may not change it.
 
 ## Running the drain

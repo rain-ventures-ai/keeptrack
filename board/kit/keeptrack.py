@@ -9883,9 +9883,11 @@ def inbound_check_plan(plan, item=None):
         if fallback is None:
             kind = (item or {}).get("kind", "item")
             fallback = {"title": f"{kind.replace('-', ' ').replace('_', ' ').capitalize()} for {attach['to']}",
-                        "details": text.strip()}
+                        "details": f"Its card (from item {attach['to']}) was not found; the text is in the comment."}
         checked = inbound_check_plan({"card": fallback}, item)
-        return {"attach": {"to": attach["to"], "comment": text.strip()}, "card": checked["card"], "person": None, "comment": ""}
+        # the text always goes with it: on the matched card, or as the comment of the one fallback proposal
+        return {"attach": {"to": attach["to"], "comment": text.strip()}, "card": checked["card"], "person": None,
+                "comment": text.strip()}
     card = plan.get("card")
     if not isinstance(card, dict) or not isinstance(card.get("title"), str) or not card["title"].strip() or _has_break(card["title"]):
         raise InboundError("plan card needs a title on one line")
@@ -10036,24 +10038,28 @@ def _inbound_archived_ids(data):
 
 def inbound_attach_target(data, source, to):
     """(card or None, why) for the card made from the earlier item (source, to): in card mode its id comes from the
-    source and id; in review mode it is the card the accepted task.create proposal made. A card in the archive counts
-    as closed (why "archived"): nothing is added to it."""
+    source and id; in review mode it is the card that accepting the earlier item's own task.create proposal created
+    (that proposal's source.id is the earlier item, and the card's history says it was created from it). A proposal
+    merged into another card, or one anyone else filed with the same action key, never counts. A card in the archive
+    counts as closed (why "archived"): nothing is added to it."""
     key = f"inbound:{source}:{to}"
-    ids = [proposal_result_id({"id": key}, "t_")]
+    ids = [(proposal_result_id({"id": key}, "t_"), f"created from inbound {source} {to}")]
+    waiting = False
     for p in _all_proposals(data):
-        if isinstance(p, dict) and p.get("action_key") == key + ":task":
-            result = (p.get("decision") or {}).get("result") or {}
-            if p.get("status") == "accepted" and result.get("type") == "task" and isinstance(result.get("id"), str):
-                ids.append(result["id"])
-            elif p.get("status") == "pending":
-                return None, "its proposal waits in the Review Inbox"
-    for tid in ids:
+        if not (isinstance(p, dict) and p.get("action_key") == key + ":task" and p.get("kind") == "task.create"
+                and (p.get("source") or {}).get("id") == key and isinstance(p.get("id"), str)):
+            continue
+        if p.get("status") == "pending":
+            waiting = True
+        elif p.get("status") == "accepted":
+            ids.append((proposal_result_id(p, "t_"), f"created from proposal {p['id']}"))   # the card an accept creates
+    for tid, mark in ids:
         card = next((t for t in data.get("tasks", []) if t.get("id") == tid), None)
-        if card:
+        if card and any(isinstance(h, dict) and h.get("text") == mark for h in card.get("history") or []):
             return card, "found"
-    if any(tid in _inbound_archived_ids(data) for tid in ids):
+    if any(tid in _inbound_archived_ids(data) for tid, _ in ids):
         return None, "archived"
-    return None, "no card yet"
+    return None, "its proposal waits in the Review Inbox" if waiting else "no card yet"
 
 
 def inbound_attach(data, item, plan, card):
@@ -10061,6 +10067,10 @@ def inbound_attach(data, item, plan, card):
     repeat never adds it twice."""
     cid = "c_" + hashlib.sha1(inbound_key(item).encode()).hexdigest()[:10]
     num = card.get("num", "?")
+    filed = next((p for p in _all_proposals(data) if isinstance(p, dict) and p.get("action_key") in
+                  (inbound_key(item) + ":task", inbound_key(item) + ":attach")), None)
+    if filed:   # filed for review before (the card had not come, or this source is in review mode): never twice
+        return f"review {filed.get('id')}", [f"  already filed for review ({filed.get('id')})"]
     if any(isinstance(c, dict) and c.get("id") == cid for c in card.get("comments") or []):
         return f"attach {card['id']}", [f"  already on #{num} ({card['id']})"]
     ts = now()
@@ -10070,16 +10080,22 @@ def inbound_attach(data, item, plan, card):
     return f"attach {card['id']}", [f"  comment added to #{num} ({card['id']})"]
 
 
-def _inbound_age_days(name, item):
-    at = inbound_stamp(name)
-    if at is None:
-        m = TIMESTAMP_RE.fullmatch(item.get("received", ""))
-        try:
-            at = dt.datetime.fromisoformat(item["received"].replace("Z", "+00:00")) if m else None
-            at = at.replace(tzinfo=dt.timezone.utc) if at and at.tzinfo is None else at
-        except ValueError:
-            at = None
-    return None if at is None else (dt.datetime.now(dt.timezone.utc) - at).total_seconds() / 86400
+def inbound_attach_review(data, item, plan, card):
+    """Review mode: the comment waits in the Review Inbox as a task.update proposal on that card (comments are added,
+    never replaced). A person accepts it; nothing here accepts."""
+    key = inbound_key(item)
+    filed = next((p for p in _all_proposals(data) if isinstance(p, dict) and p.get("action_key") == key + ":task"), None)
+    if filed:   # filed for review before, when its card had not come: never twice
+        return f"review {filed.get('id')}", [f"  already filed for review ({filed.get('id')})"]
+    src = {"kind": "other", "id": key, "revision": "1", "title": f"Inbound {item['source']}", "date": item["received"][:10]}
+    reason = (f"From the {item['source']} inbound source ({item['kind']}), received {item['received']}, for card "
+              f"#{card.get('num', '?')}. Outside input: check it before you accept.")[:PROPOSAL_DETAIL_LIMIT]
+    value = {"kind": "task.update", "title": f"Add a comment to #{card.get('num', '?')}: {clean(card.get('title', ''), 80)}",
+             "source": src, "action_key": key + ":attach", "work_key": key + ":attach", "reason": reason,
+             "target": {"type": "task", "id": card["id"], "base": {}},
+             "change": {"comments": [{"text": plan["attach"]["comment"]}]}}
+    added, lines = _inbound_call(_prepare_proposals, data, [value])
+    return "review " + " ".join(p["id"] for p in added), [f"  {x}" for x in lines]
 
 
 def _inbound_prune(done, today):
@@ -10107,7 +10123,8 @@ def inbound_attention(data, now_at=None):
     held, now_at = inbound_record(data)["held"], now_at or dt.datetime.now(dt.timezone.utc)
     for name, waited, fail in inbound_waiting(data, now_at):
         h = held.get(name) if isinstance(held.get(name), dict) else None
-        if h and str(h.get("until") or "") > now_at.strftime("%Y-%m-%dT%H:%M:%S"):
+        if h and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(h.get("until") or "")) \
+                and h["until"] > now_at.strftime("%Y-%m-%dT%H:%M:%SZ"):
             continue   # kit v113: waiting on purpose for the card it attaches to
         if isinstance(fail, dict):
             out.append(f"inbound failed {_flat(name)}: {_flat(clean(fail.get('error', ''), 200))}")
@@ -10144,7 +10161,9 @@ def cmd_inbound(a):
         report.clear()
         guard_schema(data)
         files = inbound_files(data)
-        if not files and not inbound_record(data)["failed"]:
+        held_before = inbound_record(data)["held"]
+        files = sorted(files, key=lambda f: (f[1] in held_before, f[1]))   # kit v113: waiting items after the rest
+        if not files and not inbound_record(data)["failed"] and not held_before:
             print("inbound: nothing waiting")
             return
         rec = {"done": dict(inbound_record(data)["done"]), "failed": {}, "held": {}}
@@ -10157,7 +10176,7 @@ def cmd_inbound(a):
                 rec["held"][name] = old_held[name]
         if len(files) > INBOUND_RUN_MAX:
             print(f"{len(files) - INBOUND_RUN_MAX} more item(s) wait for the next run (at most {INBOUND_RUN_MAX} per run)")
-        for rel, name in files[:INBOUND_RUN_MAX]:
+        for rel, name in files[:INBOUND_RUN_MAX]:   # (sorted below: items already held go last, so they never starve new ones)
             shown = _flat(name)   # a file name is outside input too: one line, safe characters only
             snap, after_n = copy.deepcopy(data), len(_MUT["after"])
             try:
@@ -10174,11 +10193,16 @@ def cmd_inbound(a):
                 mode = cfg["mode"]
                 if plan.get("attach"):
                     target, why = inbound_attach_target(data, item["source"], plan["attach"]["to"])
-                    age, days = _inbound_age_days(name, item), inbound_attach_days(cfg)
-                    if target is None and why != "archived" and (age is None or age < days):
-                        prev = old_held.get(name) if isinstance(old_held.get(name), dict) else {}
+                    days, now_at = inbound_attach_days(cfg), dt.datetime.now(dt.timezone.utc)
+                    prev = old_held.get(name) if isinstance(old_held.get(name), dict) else {}
+                    try:   # the hold starts at the file's time, never later than now or than when it was first held
+                        first = dt.datetime.fromisoformat(str(prev.get("since") or "").replace("Z", "+00:00"))
+                    except ValueError:
+                        first = now_at
+                    start = min(x for x in (inbound_stamp(name), now_at, first) if x is not None and x.tzinfo is not None)
+                    age = (now_at - start).total_seconds() / 86400
+                    if target is None and why != "archived" and age < days:
                         since = prev.get("since") or now()
-                        start = inbound_stamp(name) or dt.datetime.now(dt.timezone.utc)
                         until = (start + dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
                         held_why = f"waiting for the card of {plan['attach']['to']} ({why})"
                         rec["held"][name] = prev if prev.get("why") == held_why and prev.get("until") == until else \
@@ -10191,9 +10215,12 @@ def cmd_inbound(a):
                         print(f"{shown}: no card to attach to ({_flat(why)}); filed for review")
                 if plan.get("skip"):
                     result, lines = "skip", [f"  skipped: {_flat(plan['skip'])}"]
-                elif plan.get("attach") and target is not None:
+                elif plan.get("attach") and target is not None and cfg["mode"] == "card":
                     result, lines = inbound_attach(data, item, plan, target)
                     mode = "attach"
+                elif plan.get("attach") and target is not None:   # review mode: a person accepts the comment
+                    result, lines = inbound_attach_review(data, item, plan, target)
+                    mode = "review (comment on its card)"
                 elif mode == "card":
                     made, lines = inbound_card(data, item, plan)
                     result = "card " + " ".join(v for v in (made.get("card"), made.get("person")) if v)
