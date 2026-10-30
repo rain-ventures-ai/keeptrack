@@ -86,7 +86,8 @@ _GIT_STARTUP = sys.argv[1:2] == ["auto-heartbeat"] or sys.argv[1:3] == ["here", 
 _GIT_DECIDES = 3.0   # the least a start-up git call gets when its answer decides something (see _git_timeout)
 
 
-_GIT_DEADLINE = 14.0   # in a hook, git's time ends here: the rest of the hook's 20 s is the board's save
+# in a hook, git's time ends here, counted from the hook's start: session-start.sh may first spend 3 s on its own check
+_GIT_DEADLINE = 14.0 - (3.0 if sys.argv[1:3] == ["here", "--hook"] else 0.0)
 
 
 def _git_timeout(floor=1.0):
@@ -111,7 +112,7 @@ _CLAIM_UNSURE = ""   # why the claim record's place is unknown (a slow git), so 
 
 def _claim_sure():
     """Stop before reading or writing the claim record when a slow git left its place unknown (_local_dir)."""
-    if _CLAIM_UNSURE:
+    if _CLAIM_UNSURE and not FILE:   # a --file board keeps no record
         _stop(_CLAIM_UNSURE)
 try:
     import msvcrt
@@ -628,7 +629,8 @@ def write_private(path, text):
 # The active claim, for the heartbeat hook. A board repo keeps it at its root (gitignored there); any other project
 # keeps it in its own .keeptrack/ folder, so two projects never share one.
 CLAIM_FILE = (os.path.join(ROOT, ".board-claim.json") if ROOT and not PROJECT_DIR else os.path.join(_local_dir(), "claim.json"))
-_TOPLEVEL = None   # loaded: later questions (the docs-home check) ask git afresh
+if not _GIT_STARTUP:
+    _TOPLEVEL = None   # loaded: later questions (the docs-home check) ask git afresh; a hook keeps its answers (_here)
 HEARTBEAT_EVERY = 900  # seconds between automatic heartbeats of one card
 HEARTBEAT_RETRY = 60   # seconds before the hook looks again (after a failed beat too)
 ATTENDED_STALE_MINUTES = 12 * 60  # an attended claim (a person drives the session) sends no heartbeats

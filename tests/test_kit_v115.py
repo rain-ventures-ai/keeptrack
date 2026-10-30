@@ -107,6 +107,17 @@ class ClaimPlaceUnknown(unittest.TestCase):
         with mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""):
             keeptrack._claim_sure()
 
+    def test_a_file_board_keeps_no_record_and_goes_on(self):
+        with mock.patch.object(keeptrack, "_CLAIM_UNSURE", "git did not answer in time"), \
+             mock.patch.object(keeptrack, "FILE", "/tmp/copy.json"):
+            keeptrack._claim_sure()
+
+    def test_hooks_keep_their_git_answers_and_count_the_script_time(self):
+        src = read("board/kit/keeptrack.py")
+        self.assertIn('_GIT_DEADLINE = 14.0 - (3.0 if sys.argv[1:3] == ["here", "--hook"] else 0.0)', src)
+        self.assertIn("if not _GIT_STARTUP:\n    _TOPLEVEL = None", src, "a hook reuses the load-time answer in _here")
+        self.assertIsNone(keeptrack._TOPLEVEL, "outside a hook later questions ask git afresh")
+
     def test_the_session_start_hook_never_shows_the_board_on_a_guess(self):
         with tempfile.TemporaryDirectory() as home:
             repo = os.path.join(home, "work", "repo")
