@@ -131,6 +131,35 @@ longer than any backtick run in the text, or inline code without backticks), as 
 intake script usually becomes a handler by printing the plan where it used to call `keeptrack.py add`, `person-add`
 and `comment`.
 
+## Attaching a later item to an earlier item's card (kit v113)
+
+Some items belong on a card that an earlier item made. Example: a visitor sends the contact form (one item), then
+chats with the website's assistant, and a summary of that chat arrives later as a second item. The handler's plan for
+the later item is:
+
+```json
+{ "attach": { "to": "<the earlier item's id>", "comment": "the text to add to its card (Markdown)" },
+  "card": { "title": "…", "details": "…" } }
+```
+
+- **Matched:** `to` names an earlier item of the **same source**. The drain finds its card:
+  - if the earlier item was in card mode, the card made from it (its id comes from the source and id);
+  - if it was in review mode, the card that accepting its proposal made.
+
+  The comment is added to that card and the file is deleted, in one commit. No new card is made. The comment's id
+  comes from this item's source and id, so a repeat never adds it twice.
+- **Not matched yet:** the earlier item has not been handled, or its proposal still waits in the Review Inbox. The
+  file stays in `board/inbound/`, `tasks.json` `inbound.held["<file name>"]` says what it waits for and until when,
+  and the next run tries again. This is not a failure: `inbound` exits 0, and `list --attention` and the web board do
+  not point at it while it waits.
+- **Never matched:** after the source's `attach_days` (`inbound-source SOURCE --attach-days N`, 0 to 30, default 3,
+  counted from the time in the file name), or at once when the earlier card is in the archive, the item goes to the
+  Review Inbox as a `task.create` proposal built from the plan's `card`, whatever the source's mode. Without a
+  `card`, the proposal is titled from the item's kind and the earlier id, and holds the comment text.
+- The comment text goes only on the matched card, or into that one proposal: never on any other card. As with any
+  handler text, put outside text in code.
+- `--attach-days` is a person's setting: an agent run may not change it.
+
 ## Running the drain
 
 The drain needs a copy of the board and a way to push. It is quick when nothing is waiting (one fetch, no commit).

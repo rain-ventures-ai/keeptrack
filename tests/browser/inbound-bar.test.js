@@ -53,6 +53,9 @@ async function open(browser, base, api) {
     // a fresh item alone: no strip
     let page = await open(browser, base, board({}, [fresh]));
     assert.equal(await page.locator('#inboundBar').isHidden(), true, 'a fresh item shows nothing'); await page.close();
+    // kit v113: an old item held for the card it attaches to shows nothing while its hold lasts
+    page = await open(browser, base, board({ inbound: { held: { [old]: { why: 'waiting for the card of e-1', until: new Date(now + 86400000).toISOString() } } } }, [old]));
+    assert.equal(await page.locator('#inboundBar').isHidden(), true, 'a held item is not an alert'); await page.close();
     // an old one and a failed one: one strip with both counts
     page = await open(browser, base, board({ inbound: { done: {}, failed: { [bad]: { error: 'bad JSON', since: '2026-10-29T00:00:00Z' } } } }, [fresh, old, bad]));
     const bar = page.locator('#inboundBar'); await bar.waitFor({ state: 'visible' });
