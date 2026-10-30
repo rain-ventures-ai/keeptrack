@@ -129,12 +129,13 @@ class GitBudget(unittest.TestCase):
                 for owned in (False, True):   # a stray .git this user owns may not be the folder's repo either
                     with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
                          mock.patch.object(keeptrack, "_own_tree", lambda t, owned=owned: owned), \
-                         mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""):
+                         mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""), mock.patch.object(keeptrack, "FILE", None):
                         with self.assertRaises(SystemExit) as stop:   # v115: the commands that use the record stop
                             keeptrack._local_dir(); keeptrack._claim_sure()
                     self.assertIn("in time", str(stop.exception.code))
                 with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")), \
-                     mock.patch.object(keeptrack, "_GIT_STARTUP", True), mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""):
+                     mock.patch.object(keeptrack, "_GIT_STARTUP", True), mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""), \
+                     mock.patch.object(keeptrack, "FILE", None):
                     with self.assertRaises(SystemExit) as stop:
                         keeptrack._local_dir(); keeptrack._claim_sure()
                 self.assertEqual(0, stop.exception.code, "the heartbeat hook stops quietly")

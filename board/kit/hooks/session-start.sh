@@ -17,7 +17,7 @@ while :; do
     # a config git tracks came with the repo, not from `keeptrack.py use`: never trust it
     # (a prefilter only: keeptrack.py makes the final, fail-closed check)
     [ -f "$d/$f" ] && [ ! -L "$d/${f%/*}" ] && [ ! -L "$d/$f" ] \
-      && ! tracked "$d" "$f" && found=1
+      && ! tracked "$d" "$f" && found=1 && break   # one wait at most: keeptrack.py decides
   done
   [ -n "$found" ] || [ "$d" = "/" ] && break
   d=$(dirname "$d")

@@ -79,7 +79,7 @@ class ClaimPlaceUnknown(unittest.TestCase):
                 os.chdir(cwd)
 
     def test_only_the_record_users_stop(self):
-        with mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""):
+        with mock.patch.object(keeptrack, "_CLAIM_UNSURE", ""), mock.patch.object(keeptrack, "FILE", None):
             why = self.unsure()
             self.assertIn("in time", why)
             for use in (keeptrack.claim_record, lambda: keeptrack.record_lock().__enter__(),
@@ -95,6 +95,7 @@ class ClaimPlaceUnknown(unittest.TestCase):
 
     def test_claim_commands_stop_before_they_save(self):
         with mock.patch.object(keeptrack, "_CLAIM_UNSURE", "git did not answer in time"), \
+             mock.patch.object(keeptrack, "FILE", None), \
              mock.patch.object(keeptrack, "mutate", side_effect=AssertionError("saved before stopping")), \
              mock.patch.object(keeptrack, "load", side_effect=AssertionError("read before stopping")):
             for cmd in (keeptrack.cmd_claim, keeptrack.cmd_next, keeptrack.cmd_done, keeptrack.cmd_review,
@@ -109,10 +110,13 @@ class ClaimPlaceUnknown(unittest.TestCase):
 
     def test_a_file_board_keeps_no_record_and_goes_on(self):
         with mock.patch.object(keeptrack, "_CLAIM_UNSURE", "git did not answer in time"), \
-             mock.patch.object(keeptrack, "FILE", "/tmp/copy.json"):
+             mock.patch.object(keeptrack, "FILE", "/tmp/copy.json"), \
+             mock.patch.object(keeptrack, "_tracked_by_git", side_effect=AssertionError("read a guessed record")):
             keeptrack._claim_sure()
+            self.assertIsNone(keeptrack.claim_record(), "a record git did not place is never read")
 
     def test_hooks_keep_their_git_answers_and_count_the_script_time(self):
+        self.assertIn("found=1 && break", read("board/kit/hooks/session-start.sh"), "one 3 s wait at most")
         src = read("board/kit/keeptrack.py")
         self.assertIn('_GIT_DEADLINE = 14.0 - (3.0 if sys.argv[1:3] == ["here", "--hook"] else 0.0)', src)
         self.assertIn("if not _GIT_STARTUP:\n    _TOPLEVEL = None", src, "a hook reuses the load-time answer in _here")

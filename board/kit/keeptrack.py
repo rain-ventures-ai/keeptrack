@@ -2514,6 +2514,8 @@ def claim_record():
     tracked record came with the repo, not from this clone's own claim, so a board writer who commits one cannot
     hand every pulling clone a known session id: it is ignored, with one note. Not checked for a --file board
     (which keeps no record) or outside a git repo."""
+    if _CLAIM_UNSURE and FILE:
+        return None   # a --file board goes on, but never reads a record from a place git did not confirm
     _claim_sure()
     if _REC.get("on") and _REC.get("path") == CLAIM_FILE and "info" in _REC:
         return _REC["info"]
