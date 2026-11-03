@@ -29,7 +29,7 @@ class Release(unittest.TestCase):
     def test_release_116_is_consistent(self):
         import re
         version = json.loads(read("board/kit/manifest.json"))["version"]
-        self.assertEqual(version, 116)
+        self.assertGreaterEqual(version, 116)   # the exact version is asserted by the newest tests/test_kit_v*.py
         self.assertEqual(str(version), re.search(r"^KIT_VERSION = (\d+)", read("board/kit/keeptrack.py"), re.M)[1])
         self.assertIn(f"const PAGE_KIT = {version};", read("board/board.js"))
         for plugin in (".claude-plugin", ".codex-plugin", ".cursor-plugin"):

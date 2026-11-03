@@ -1,5 +1,5 @@
 {
-  "version": 116,
+  "version": 117,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
