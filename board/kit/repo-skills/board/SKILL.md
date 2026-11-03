@@ -41,7 +41,7 @@ If a claim is refused because another session holds it, stop and tell the human.
 ## 3b. Checklist
 If `show` lists to-dos, work through them in order and tick each one as soon as it is done. Add steps you discover.
 ```bash
-python3 board/keeptrack.py todo-done <id> <N>      # N is the number shown by `show`
+python3 board/keeptrack.py todo-done <id> <N>      # N is the number shown by `show`, or the to-do's own id (d_...)
 python3 board/keeptrack.py todo-add <id> "<new step>"
 python3 board/keeptrack.py todo-edit <id> <N> "<corrected text>"   # reword in place; keeps its place and done state
 python3 board/keeptrack.py todo-move <id> <N> --details "<what it waits on>"   # move a step that must wait to a new follow-up card
