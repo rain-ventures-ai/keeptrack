@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v116 (schema 4)
+Which board and project a folder belongs to. New optional project field `repos`; no migration.
+- `project-set REF --repo owner/name` (repeatable; `--unrepo` removes) lists the code repos a project's work happens in. A repo belongs to one project on a board: a second is refused, and `doctor` warns (`PROJECT`) if one gets in another way.
+- `resolve [FOLDER] [--json]`: a trusted `.keeptrack/config.json` at the repo's own top wins; otherwise the project, on any board you use (`boards`), whose `repos` lists the repo's origin. A folder outside git gets what its child repos share.
+- `projects --json`; to-do commands take a to-do's `d_` id as well as its number.
+- After the upgrade, move any project link that stands for a whole repo into `repos` (`project-set REF --repo owner/name`), so `resolve` sees it.
+- Run `kit-update` only. Check: `kit-check` says v116.
+
 ### v115 (schema 4)
 Follow-ups from the v114 reviews. No data change and no migration.
 - The session-start hook (`here --hook`) shares the heartbeat hook's git budget, and its `git rev-parse` is bounded. When git can't place the folder, its `.git` entry decides whether the repo is connected: board details never show on a guess.

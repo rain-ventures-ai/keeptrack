@@ -26,7 +26,7 @@ python3 board/keeptrack.py done <id> --note "<result, PR or file link>"         
 python3 board/keeptrack.py review <id> --who <user> --note "<result + options>"    # finished, but a person must decide: Pending review
 python3 board/keeptrack.py release <id> --column todo                              # giving up / handing back
 python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM-DD --client "<client>" --details "<text>"
-python3 board/keeptrack.py todo-done <id> <N>                                      # tick checklist item N (numbers come from `show`)
+python3 board/keeptrack.py todo-done <id> <N>                                      # tick checklist item N (numbers come from `show`; or its d_ id)
 python3 board/keeptrack.py todo-add <id> "new step"                                # add a checklist item you discovered
 python3 board/keeptrack.py todo-edit <id> <N> "reworded step"                      # fix an item's wording in place
 python3 board/keeptrack.py todo-move <id> <N> --details "<what waits on whom>"     # a step that must wait: moves it to a new linked follow-up card
