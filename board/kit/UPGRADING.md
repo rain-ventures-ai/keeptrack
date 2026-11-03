@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v118 (schema 4)
+`resolve` says when its answer is incomplete, caches each board's projects by head commit, and reads boards with a local clone through git. No data change and no migration.
+- `resolve --json` adds `complete`, `unread` and `stale`. A tool that reads it must treat `complete: false` as unknown, never as "no board".
+- New `board-head`.
+- Run `kit-update` only. Check: `kit-check` says v118.
+
 ### v117 (schema 4)
 `watch` watches the board, not only named cards. No data change and no migration.
 - `watch` with no ids: `list`'s filters, `--on KINDS`, `--not-by me`, `--cursor FILE`, `--follow`, `--boards all`. Events never fire on a heartbeat alone; `stale`, `overdue` and `chase` come from the clock.
