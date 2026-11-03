@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v117 (schema 4)
+`watch` watches the board, not only named cards. No data change and no migration.
+- `watch` with no ids: `list`'s filters, `--on KINDS`, `--not-by me`, `--cursor FILE`, `--follow`, `--boards all`. Events never fire on a heartbeat alone; `stale`, `overdue` and `chase` come from the clock.
+- `list --running`: cards with a live claim.
+- Run `kit-update` only. Check: `kit-check` says v117.
+
 ### v116 (schema 4)
 Which board and project a folder belongs to. New optional project field `repos`; no migration.
 - `project-set REF --repo owner/name` (repeatable; `--unrepo` removes) lists the code repos a project's work happens in. A repo belongs to one project on a board: a second is refused, and `doctor` warns (`PROJECT`) if one gets in another way.

@@ -100,6 +100,18 @@ python3 board/keeptrack.py watch '#31' '#32' --until done --all --timeout 3600 -
 `--timeout` says otherwise, and reads a GitHub board at most every 10 seconds: each read uses the board token's API
 allowance, which heartbeats and saves share.
 
+To wait for anything on the board, not named cards (kit v117), leave the ids out and use `list`'s filters:
+```bash
+python3 board/keeptrack.py watch --project loam --not-by me                  # anything on loam cards someone else did
+python3 board/keeptrack.py watch --assignee $BOARD_USER --on mention,review,blocked,stale
+python3 board/keeptrack.py watch --cursor .keeptrack/watch.json --not-by me  # also what changed since the last run
+python3 board/keeptrack.py watch --boards all --on mention --follow --json   # every board you use, one event per line
+```
+Events: new, entered, left, column, review, claim, blocked, stale, comment, mention, todo, wait, chase, overdue,
+fields, proposal (the Review Inbox, when no card filter is given or `--on proposal`). `stale`, `overdue` and `chase`
+come from the clock, with no commit, and `--not-by` never hides them. `--cursor FILE` keeps the last snapshot, so a
+change between two runs is reported by the next one.
+
 ## 5. Finish
 ```bash
 python3 board/keeptrack.py done <id> --note "<result and link to the file/PR>"

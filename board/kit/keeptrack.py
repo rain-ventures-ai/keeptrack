@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 116  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 117  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3214,6 +3214,45 @@ def cmd_cleared_ack(a):
     mutate(fn, f"Agent cleared checked: {a.id}")
 
 
+def card_matcher(data, a):
+    """The card filters `list` takes, as one test: matches(card, today) -> bool. `watch` (kit v117) uses the same test,
+    so "the cards I watch" and "the cards I list" never mean two things. Exits on a filter that names nothing."""
+    query = (getattr(a, "q", None) or "").casefold()
+    wait_on = (getattr(a, "waiting_on", None) or "").strip().lstrip("@").lower()
+    if wait_on == "me":
+        wait_on = default_user().lower()
+        if not wait_on:
+            sys.exit("--waiting-on me needs to know who you are: set BOARD_USER (or log in with gh)")
+    goal_ref, goal_ids = None, {g.get("id") for g in goal_list(data)}
+    if getattr(a, "goal", None) and a.goal.strip().lower() != "none":   # 'none': cards that link to no goal on the board
+        goal_ref = find_goal(data, a.goal)["id"]
+    pref = getattr(a, "project", None)
+    if pref:
+        try:
+            pref = find_project(data, pref)["id"]
+        except SystemExit:
+            pass
+    column, assignee = getattr(a, "column", None), getattr(a, "assignee", None)
+
+    def matches(t, today):
+        if query and query not in json.dumps(searchable(t), ensure_ascii=False).casefold(): return False   # never a substring oracle for a session id
+        if column and t.get("column") != column: return False
+        if assignee and assignee.lower() not in [str(x).lower() for x in t.get("assignees") or []]: return False
+        if getattr(a, "unclaimed", False) and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): return False
+        if getattr(a, "running", False) and claim_state(data, t.get("claim")) != "running": return False
+        if getattr(a, "attention", False) and claim_state(data, t.get("claim")) not in ("stale", "stuck", "blocked") \
+                and not chase_now(data, t, today) and not recently_cleared(t): return False
+        if getattr(a, "waiting", False) and not open_waiting(t): return False
+        if wait_on and str((open_waiting(t) or {}).get("who") or "").lower() != wait_on: return False
+        if pref and t.get("project") != pref: return False
+        if getattr(a, "client", None) and t.get("client") != a.client: return False
+        if getattr(a, "goal", None) and (card_goal(t) != goal_ref if goal_ref else card_goal(t) in goal_ids): return False
+        if getattr(a, "label", None) and a.label not in (t.get("labels") or []): return False
+        if getattr(a, "bare", False) and not bare_card(t): return False
+        return True
+    return matches
+
+
 def cmd_list(a):
     _default_scope(a)
     data, _ = load()
@@ -3226,35 +3265,10 @@ def cmd_list(a):
     query = (getattr(a, "q", None) or "").casefold()
     today = board_today(data).isoformat()
     wait_on = (getattr(a, "waiting_on", None) or "").strip().lstrip("@").lower()
-    if wait_on == "me":
-        wait_on = default_user().lower()
-        if not wait_on:
-            sys.exit("--waiting-on me needs to know who you are: set BOARD_USER (or log in with gh)")
-    goal_ref, goal_ids = None, {g.get("id") for g in goal_list(data)}
-    if getattr(a, "goal", None) and a.goal.strip().lower() != "none":   # 'none': cards that link to no goal on the board
-        goal_ref = find_goal(data, a.goal)["id"]
+    matches = card_matcher(data, a)
     json_items = []
     for t in ordered:
-        if query and query not in json.dumps(searchable(t), ensure_ascii=False).casefold(): continue   # never a substring oracle for a session id
-        if a.column and t["column"] != a.column: continue
-        if a.assignee and a.assignee.lower() not in [x.lower() for x in t.get("assignees", [])]: continue
-        if a.unclaimed and claim_state(data, t.get("claim")) in ("running", "blocked", "stuck"): continue
-        if a.attention and claim_state(data, t.get("claim")) not in ("stale", "stuck", "blocked") \
-                and not chase_now(data, t, today) and not recently_cleared(t): continue
-        if getattr(a, "waiting", False) and not open_waiting(t): continue
-        if wait_on and str((open_waiting(t) or {}).get("who") or "").lower() != wait_on: continue
-        if getattr(a, "project", None):
-            pref = a.project
-            try:
-                pref = find_project(data, pref)["id"]
-            except SystemExit:
-                pass
-            if t.get("project") != pref:
-                continue
-        if getattr(a, "client", None) and t.get("client") != a.client: continue
-        if getattr(a, "goal", None) and (card_goal(t) != goal_ref if goal_ref else card_goal(t) in goal_ids): continue
-        if getattr(a, "label", None) and a.label not in t.get("labels", []): continue
-        if getattr(a, "bare", False) and not bare_card(t): continue
+        if not matches(t, today): continue
         if getattr(a, "json", False):
             json_items.append(t); continue
         cleared = f"  [agent cleared: {len(unchecked_cleared(t))}]" if a.attention and recently_cleared(t) else ""
@@ -3263,7 +3277,7 @@ def cmd_list(a):
         url = f"  {card_url(t.get('num'), t.get('id'))}" if getattr(a, "links", False) and card_url(t.get("num"), t.get("id")) else ""
         # the whole printed line passes the guard: value, effort and the link come from the card file too
         print(_line_guard(line(data, t, today=today) + cleared + scoring + url))
-    card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "waiting", "project", "client", "goal", "label", "bare")) or query or wait_on
+    card_filter = any(getattr(a, k, None) for k in ("column", "unclaimed", "running", "waiting", "project", "client", "goal", "label", "bare")) or query or wait_on
     if a.attention and not getattr(a, "json", False) and not card_filter:
         # kit v71: Review Inbox questions nobody answered in settings.inbox_lapse_days. One self-contained line each (relay
         # reads every line as an item). An agent does not ask a lapsed question again unless the person brings it up.
@@ -4754,11 +4768,364 @@ def _loaded_head(data):
     return head if isinstance(head, str) and head else None
 
 
+# ---- watching the board, not named cards (kit v117) ---------------------------------------------------------------
+# `watch` with no card ids watches every card `list`'s filters pick, and the Review Inbox. Each poll makes a snapshot
+# (per card: what a watcher cares about, plus states that change with the clock alone: stale claims, overdue, waits due
+# for a chase) and turns the difference with the last one into events. Heartbeats never make an event; a stale claim
+# does, though no commit made it. With --cursor FILE the last snapshot is kept on disk, so a change that lands between
+# two watch runs is reported by the next one: never missed (a crash between printing and saving can repeat one batch).
+WATCH_KINDS = ("new", "entered", "left", "column", "review", "claim", "blocked", "stale", "comment", "mention", "todo",
+               "wait", "chase", "overdue", "fields", "proposal")
+WATCH_FIELDS = ("title", "details", "priority", "due", "labels", "assignees", "links", "outcome", "project", "client")
+WATCH_CURSOR_V = 1
+
+
+def _wh(v):
+    import hashlib
+    return hashlib.sha1(json.dumps(v, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:12]
+
+
+def watch_entry(data, t, today, match):
+    """One card in a board-watch snapshot. Hashes stand in for text, so a cursor file holds no card text but the title."""
+    if not match:
+        return {"m": False}
+    c = t.get("claim") if isinstance(t.get("claim"), dict) else None
+    w = open_waiting(t)
+    col = t.get("column") or ""
+    due = str(t.get("due") or "")
+    hist_at = [str(h.get("at") or "") for h in t.get("history") or [] if isinstance(h, dict)]
+    return {"m": True, "num": t.get("num"), "title": t.get("title") or "", "column": col,
+            "claim": claim_state(data, c), "agent": (c or {}).get("agent") or "",
+            "wait": _wh([w.get("on"), w.get("who")]) if w else None,
+            "chase": bool(w) and chase_now(data, t, today),
+            "overdue": bool(due) and due < today and col != done_col(data),
+            "todos": [[d.get("id") or _wh(d.get("text")), bool(d.get("done")), _wh(d.get("text"))]
+                      for d in t.get("todos") or [] if isinstance(d, dict)],
+            "comments": [x.get("id") or _wh([x.get("at"), x.get("text")]) for x in t.get("comments") or [] if isinstance(x, dict)],
+            "fields": {k: _wh(t.get(k)) for k in WATCH_FIELDS},
+            "last": max(hist_at) if hist_at else ""}
+
+
+def watch_snapshot(data, matches, today):
+    cards = {}
+    for t in data.get("tasks") or []:
+        if isinstance(t, dict) and t.get("id"):
+            cards[t["id"]] = watch_entry(data, t, today, matches(t, today))
+    props = {p.get("id"): _wh(p.get("title")) for p in data.get("proposals") or []
+             if isinstance(p, dict) and p.get("id") and p.get("status") == "pending"}
+    return {"cards": cards, "proposals": props}
+
+
+def _is_me(by, me):
+    """by (a history or comment author: 'login' or 'agent@login') is this person or one of their agents."""
+    by, me = str(by or "").lower(), str(me or "").lower()
+    return bool(me) and (by == me or by.endswith("@" + me))
+
+
+def watch_events(old, new, data, me=""):
+    """Events between two snapshots, by card number. Each: kind, card (or proposal), text and by (who made it; '' for a
+    change the clock made, which no --not-by ever hides)."""
+    by_id = {t.get("id"): t for t in data.get("tasks") or [] if isinstance(t, dict)}
+    out = []
+
+    def ev(kind, cid, entry, text, by=""):
+        t = by_id.get(cid) or {}
+        out.append({"board": _current_board(), "kind": kind, "text": text, "by": by, "at": now(),
+                    "card": {"id": cid, "num": t.get("num", (entry or {}).get("num")),
+                             "title": t.get("title") or (entry or {}).get("title") or "", "column": t.get("column") or ""}})
+
+    def bys(t, since):   # who made the changes since the last snapshot: the card's newer history entries
+        return sorted({str(h.get("by") or "") for h in t.get("history") or [] if isinstance(h, dict)
+                       and str(h.get("at") or "") > since and h.get("by")})
+
+    ids = sorted(set(old["cards"]) | set(new["cards"]),
+                 key=lambda i: ((by_id.get(i) or {}).get("num") or (old["cards"].get(i) or {}).get("num") or 0, i))
+    for cid in ids:
+        o, n = old["cards"].get(cid), new["cards"].get(cid)
+        om, nm = bool(o and o.get("m")), bool(n and n.get("m"))
+        if not (om or nm):
+            continue
+        t = by_id.get(cid) or {}
+        who = ", ".join(bys(t, (o or {}).get("last") or "")) if t else ""
+        if not om:
+            ev("new" if o is None else "entered", cid, n, "new card" if o is None else "now matches", who)
+            continue
+        if not nm:
+            ev("left", cid, o, "left the board (archived or removed)" if n is None else "no longer matches", who)
+            continue
+        if o["column"] != n["column"]:
+            ev("column", cid, n, f"{o['column']} -> {n['column']}", who)
+            if n["column"] == REVIEW_COL:
+                ev("review", cid, n, "pending review", who)
+        if (o["claim"], o["agent"]) != (n["claim"], n["agent"]):
+            if n["claim"] == "blocked":
+                ev("blocked", cid, n, f"blocked ({n['agent'] or 'claim'})", who)
+            elif n["claim"] in ("stale", "stuck") and o["claim"] not in ("stale", "stuck"):
+                ev("stale", cid, n, f"claim {n['claim']} ({n['agent'] or 'agent'})")   # the clock, nobody's change
+            elif not n["claim"]:
+                ev("claim", cid, n, "claim ended", who)
+            elif not o["claim"]:
+                ev("claim", cid, n, f"claimed by {n['agent'] or 'someone'}", who)
+            else:
+                ev("claim", cid, n, f"claim {n['claim']} ({n['agent'] or 'agent'})", who)
+        seen = set(o["comments"])
+        for x in t.get("comments") or []:
+            if not isinstance(x, dict):
+                continue
+            key = x.get("id") or _wh([x.get("at"), x.get("text")])
+            if key in seen or key not in n["comments"]:
+                continue
+            text = str(x.get("text") or "")
+            mention = bool(me) and re.search(r"(?<![\w@])@" + re.escape(me) + r"(?![\w-])", text, re.I)
+            ev("mention" if mention else "comment", cid, n, clean(text, 120), str(x.get("by") or ""))
+        if o["todos"] != n["todos"]:
+            done_before = {i for i, d, _ in o["todos"] if d}
+            ticked = [i for i, d, _ in n["todos"] if d and i not in done_before]
+            texts = {d.get("id") or _wh(d.get("text")): d.get("text") for d in t.get("todos") or [] if isinstance(d, dict)}
+            ev("todo", cid, n, ("ticked: " + clean(texts.get(ticked[0]) or "", 100)) if len(ticked) == 1 else "checklist changed", who)
+        if o["wait"] != n["wait"]:
+            w = open_waiting(t) or {}
+            ev("wait", cid, n, f"waiting on {clean(str(w.get('on') or ''), 100)}" if n["wait"] else "wait ended", who)
+        if n["chase"] and not o["chase"]:
+            ev("chase", cid, n, "wait due for a chase")
+        if n["overdue"] and not o["overdue"]:
+            ev("overdue", cid, n, f"overdue (due {t.get('due')})")
+        changed = [k for k in WATCH_FIELDS if o["fields"].get(k) != n["fields"].get(k)]
+        if changed:
+            ev("fields", cid, n, "changed " + ", ".join(changed), who)
+    for pid in sorted(set(new["proposals"]) - set(old["proposals"])):
+        p = next((x for x in data.get("proposals") or [] if isinstance(x, dict) and x.get("id") == pid), {})
+        out.append({"board": _current_board(), "kind": "proposal", "text": clean(str(p.get("title") or ""), 120),
+                    "by": str(p.get("createdBy") or ""), "at": now(), "card": None,
+                    "proposal": {"id": pid, "title": str(p.get("title") or ""), "kind": str(p.get("kind") or "")}})
+    return out
+
+
+def _watch_keep(events, kinds, not_by):
+    """The events a watcher asked for: of these kinds, and not made only by the people in not_by (a change the clock
+    made has no author and always stays)."""
+    out = []
+    for e in events:
+        if e["kind"] not in kinds:
+            continue
+        authors = [x.strip() for x in str(e.get("by") or "").split(",") if x.strip()]
+        if not_by and authors and all(any(_is_me(x, nb) for nb in not_by) for x in authors):
+            continue
+        out.append(e)
+    return out
+
+
+def _event_line(e, board_tag=False):
+    tag = f"[{e['board'].split('/')[-1]}] " if board_tag else ""
+    by = f" (by {e['by']})" if e.get("by") else ""
+    if e.get("card"):
+        c = e["card"]
+        return _line_guard(f"{tag}#{c.get('num')} {clean(c.get('title') or '', 80)}: {e['kind']}: {e['text']}{by}")
+    return _line_guard(f"{tag}Review Inbox: {e['kind']}: {e['text']}{by}")
+
+
+WATCH_FILTERS = ("q", "column", "assignee", "unclaimed", "running", "attention", "waiting", "waiting_on", "project",
+                 "client", "label", "goal", "bare")
+
+
+def _watch_board_args(a):
+    """The filters a board watch was started with: a cursor belongs to them (another filter would turn its snapshot
+    into false events)."""
+    return {k: getattr(a, k, None) for k in WATCH_FILTERS if getattr(a, k, None) not in (None, False, "")}
+
+
+def _read_cursor(path, board, filt):
+    try:
+        with open(path, encoding="utf-8") as f:
+            cur = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        sys.exit(f"cannot read the cursor {path}: {e}")
+    if not isinstance(cur, dict) or cur.get("v") != WATCH_CURSOR_V or not isinstance(cur.get("snap"), dict):
+        sys.exit(f"{path} is not a watch cursor of this kit; remove it to start from now")
+    if cur.get("board") != board or cur.get("filter") != filt:
+        sys.exit(f"{path} was made for another board or other filters; use one cursor file per watch")
+    return cur["snap"]
+
+
+def _write_cursor(path, board, filt, snap):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    write_private(path, json.dumps({"v": WATCH_CURSOR_V, "board": board, "filter": filt, "at": now(), "snap": snap}) + "\n")
+
+
+def _watch_kinds(a, card_filter):
+    if not a.on:
+        kinds = set(WATCH_KINDS)
+        if card_filter:
+            kinds.discard("proposal")   # Review Inbox items belong to no card: a filtered watch asks for them by name
+        return kinds
+    kinds = {k.strip() for x in a.on for k in x.split(",") if k.strip()}
+    bad = sorted(kinds - set(WATCH_KINDS))
+    if bad:
+        sys.exit(f"--on: no kind {', '.join(bad)}. Kinds: {', '.join(WATCH_KINDS)}")
+    return kinds
+
+
+def cmd_watch_board(a, every):
+    """`watch` with no card ids: events on the cards the filters pick (and the Review Inbox) until some come, or each
+    one as it comes with --follow. Exit 0 after events, 2 at the timeout with none."""
+    data, _ = load()
+    head = _loaded_head(data)
+    matches = card_matcher(data, a)
+    filt = _watch_board_args(a)
+    kinds = _watch_kinds(a, bool(filt))
+    wants_me = "mention" in kinds or any(x.strip().lower() == "me" for x in a.not_by or [])
+    me = default_user() if wants_me else ""
+    not_by = [me if x.strip().lower() == "me" else x.strip().lstrip("@") for x in a.not_by or [] if x.strip()]
+    if any(not x for x in not_by):
+        sys.exit("--not-by me needs to know who you are: set BOARD_USER (or log in with gh)")
+    board = _current_board()
+    base = _read_cursor(a.cursor, board, filt) if a.cursor else None
+    emitted = 0
+
+    def emit(evs):
+        nonlocal emitted
+        emitted += len(evs)
+        if a.json and not a.follow:
+            print(json.dumps(evs, ensure_ascii=False), flush=True)
+            return
+        for e in evs:
+            print(json.dumps(e, ensure_ascii=False) if a.json else _event_line(e), flush=True)
+
+    def step(snap):
+        """Report what changed since the last snapshot, then keep this one (on disk too, with --cursor)."""
+        nonlocal base
+        evs = _watch_keep(watch_events(base, snap, data, me), kinds, not_by) if base is not None else []
+        if evs:
+            emit(evs)
+        if a.cursor and snap != base:
+            _write_cursor(a.cursor, board, filt, snap)
+        base = snap
+        return evs
+
+    if step(watch_snapshot(data, matches, board_today(data).isoformat())) and not a.follow:
+        return   # what changed while nobody watched (--cursor): reported before the first poll
+    print(f"watching {board}" + (f" ({', '.join(f'{k}={v}' for k, v in filt.items())})" if filt else "")
+          + f" every {every:g}s, timeout {a.timeout:g}s" + (", following" if a.follow else ""), file=sys.stderr)
+    deadline = time.monotonic() + a.timeout
+    fails = 0
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            if emitted:
+                return
+            print("timed out; nothing changed", file=sys.stderr); sys.exit(2)
+        time.sleep(min(every, left))
+        reload = True
+        if head is not None:
+            now_head = _watch_head()
+            fails = fails + 1 if now_head is None else 0
+            if now_head == head or (now_head is None and fails < WATCH_HEAD_FAILS):
+                reload = False   # nothing committed: the same board, but the clock may still have moved a state
+            else:
+                fails = 0
+        if reload:
+            data, _ = load()
+            head = _loaded_head(data)
+            matches = card_matcher(data, a)
+        if step(watch_snapshot(data, matches, board_today(data).isoformat())) and not a.follow:
+            return
+
+
+def _board_env(b):
+    """(environment, folder) that make this keeptrack.py read board b: named in the environment, from the folder of the
+    config that names it, so that config's token setting applies."""
+    env = {k: v for k, v in os.environ.items() if k not in ("BOARD_PROJECT", "BOARD_BRANCH")}
+    env.update(BOARD_REPO=b["board"], BOARD_PATH=b.get("path") or "board/tasks.json")
+    if b.get("branch"):
+        env["BOARD_BRANCH"] = b["branch"]
+    cwd = os.path.dirname(os.path.dirname(b["config"])) if b.get("config") else os.path.expanduser("~")
+    return env, cwd
+
+
+def _watch_child_args(a, every, board):
+    args = [sys.executable, os.path.abspath(__file__), "watch", "--json", "--every", f"{every:g}", "--timeout", f"{a.timeout:g}"]
+    for k, v in _watch_board_args(a).items():
+        flag = "-q" if k == "q" else "--" + k.replace("_", "-")
+        args += [flag] if v is True else [flag, str(v)]
+    for x in a.on or []:
+        args += ["--on", x]
+    for x in a.not_by or []:
+        args += ["--not-by", x]
+    if a.follow:
+        args.append("--follow")
+    if a.cursor:
+        args += ["--cursor", f"{a.cursor}.{re.sub(r'[^A-Za-z0-9.-]+', '_', board)}"]
+    return args
+
+
+def cmd_watch_boards(a, every):
+    """--boards all: one board watch per board this person uses (`boards`), each a child process of this same
+    keeptrack.py; their events come out here tagged with the board. A board that cannot be read is said and skipped."""
+    import queue
+    import threading
+    boards = [b for b in known_boards() if not b["board"].startswith("file:")]
+    if not boards:
+        sys.exit("no boards: connect one with `keeptrack.py use <owner/board-repo>`")
+    q, procs = queue.Queue(), []
+    for b in boards:
+        env, cwd = _board_env(b)
+        p = subprocess.Popen(_watch_child_args(a, every, b["board"]), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=subprocess.DEVNULL, text=True, env=env, cwd=cwd)
+        procs.append(p)
+
+        def pump(name=b["board"], p=p):
+            for ln in p.stdout:
+                q.put(("out", name, ln))
+            err = p.stderr.read()
+            q.put(("end", name, (p.wait(), err)))
+        threading.Thread(target=pump, daemon=True).start()
+    print(f"watching {len(procs)} boards: " + ", ".join(b["board"] for b in boards), file=sys.stderr)
+    running, emitted, failed = len(procs), 0, 0
+    try:
+        while running:
+            kind, name, val = q.get()
+            if kind == "end":
+                running -= 1
+                code, err = val
+                if code not in (0, 2):
+                    failed += 1
+                    last = err.strip().splitlines()[-1] if err.strip() else f"exit {code}"
+                    print(f"{name}: could not watch ({clean(last, 160)})", file=sys.stderr)
+                continue
+            try:
+                got = json.loads(val)
+            except ValueError:
+                continue
+            evs = [e for e in (got if isinstance(got, list) else [got]) if isinstance(e, dict)]
+            emitted += len(evs)
+            if a.json and not a.follow:
+                print(json.dumps(evs, ensure_ascii=False), flush=True)
+            else:
+                for e in evs:
+                    print(json.dumps(e, ensure_ascii=False) if a.json else _event_line(e, board_tag=True), flush=True)
+            if evs and not a.follow:
+                return
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+    if emitted:
+        return
+    if failed == len(procs):
+        sys.exit(1)
+    print("timed out; nothing changed", file=sys.stderr); sys.exit(2)
+
+
 def cmd_watch(a):
     """Poll the board until a watched card changes, or (with --until) reaches a column. Reads only.
     A heartbeat that changes nothing else does not count. Exit 0 on a change, 2 when the timeout runs out (default an
     hour). Every poll shares the board token's API allowance with heartbeats and saves: a GitHub or hosted board is read
     at most every 10 seconds, and a GitHub board reads only the branch head while nothing new was committed."""
+    for k in WATCH_FILTERS + ("on", "not_by", "cursor", "follow", "boards"):   # callers built before v117 omit them
+        if not hasattr(a, k):
+            setattr(a, k, None)
     every = 15 if a.every is None else a.every
     floor = 0.2 if FILE else WATCH_MIN_EVERY
     finite = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v not in (float("inf"), float("-inf"))
@@ -4770,6 +5137,17 @@ def cmd_watch(a):
         sys.exit("--timeout must be greater than 0 and at most 86400 seconds")
     if a.all and not a.until:
         sys.exit("--all needs --until")
+    board_mode = bool(_watch_board_args(a) or a.on or a.not_by or a.cursor or a.follow or a.boards)
+    if not a.ids:
+        if a.until:
+            sys.exit("--until needs card ids (a board watch reports events: --on column)")
+        if a.boards:
+            if a.boards != "all":
+                sys.exit("--boards takes all")
+            return cmd_watch_boards(a, every)
+        return cmd_watch_board(a, every)
+    if board_mode:
+        sys.exit("card ids and board-watch options don't mix: name cards, or use filters, --on, --not-by, --cursor, --follow")
     data, _ = load()
     head = _loaded_head(data)
     until = (a.until or "").strip()
@@ -6344,11 +6722,7 @@ def _board_projects(b):
     if b.get("current"):
         data, _ = load()
         return [project_json(p) for p in data.get("projects", [])], ""
-    env = {k: v for k, v in os.environ.items() if k not in ("BOARD_PROJECT", "BOARD_BRANCH")}
-    env.update(BOARD_REPO=b["board"], BOARD_PATH=b.get("path") or "board/tasks.json")
-    if b.get("branch"):
-        env["BOARD_BRANCH"] = b["branch"]
-    cwd = os.path.dirname(os.path.dirname(b["config"])) if b.get("config") else os.path.expanduser("~")
+    env, cwd = _board_env(b)
     try:
         p = subprocess.run([sys.executable, os.path.abspath(__file__), "projects", "--json"], capture_output=True,
                            text=True, env=env, cwd=cwd, stdin=subprocess.DEVNULL, timeout=60)
@@ -13272,6 +13646,7 @@ def main():
 
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
     s.add_argument("--unclaimed", action="store_true")
+    s.add_argument("--running", action="store_true", help="only cards with a live claim: an agent working now (kit v117)")
     s.add_argument("--json", action="store_true", help="print filtered cards as JSON")
     s.add_argument("--attention", action="store_true", help="stale, stuck or blocked claims, waits due for a chase, waits an agent cleared this week")
     s.add_argument("--waiting", action="store_true", help="only cards waiting on someone or something")
@@ -13291,13 +13666,24 @@ def main():
     position.add_argument("--top", action="store_true"); position.add_argument("--bottom", action="store_true")
     s.set_defaults(f=cmd_priority_move)
     s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(f=cmd_show)
-    s = sub.add_parser("watch", help="poll until a card changes, or reaches a column (--until done); a heartbeat alone does not count")
-    s.add_argument("ids", nargs="+", metavar="ID")
+    s = sub.add_parser("watch", help="poll until a card changes (or reaches a column: --until done); no ids: events on the cards list's filters pick")
+    s.add_argument("ids", nargs="*", metavar="ID", help="cards to watch; none: watch the board (kit v117)")
+    for k in ("column", "assignee", "project", "client", "label", "goal"):
+        s.add_argument("--" + k, help=f"board watch: as list --{k}")
+    s.add_argument("-q", help="board watch: as list -q")
+    s.add_argument("--waiting-on", dest="waiting_on", help="board watch: as list --waiting-on")
+    for k in ("unclaimed", "running", "attention", "waiting", "bare"):
+        s.add_argument("--" + k, action="store_true", help=f"board watch: as list --{k}")
+    s.add_argument("--on", action="append", help="board watch: only these kinds (comma list, repeatable): " + ", ".join(WATCH_KINDS))
+    s.add_argument("--not-by", dest="not_by", action="append", help="board watch: skip changes made only by this login and its agents ('me' = BOARD_USER)")
+    s.add_argument("--cursor", help="board watch: keep the last snapshot in this file, so a change between two watches is never missed")
+    s.add_argument("--follow", action="store_true", help="board watch: keep going and print each event (JSON lines with --json) until the timeout")
+    s.add_argument("--boards", help="board watch: 'all' watches every board you use (`boards`)")
     s.add_argument("--every", type=float, default=15, help="seconds between reads (default 15; 10 to 3600, or 0.2 to 3600 for a --file board)")
     s.add_argument("--timeout", type=float, help="stop after this many seconds and exit 2 (default 3600, at most 86400)")
     s.add_argument("--until", help="wait until a card is in this column (for example done) instead of any change")
     s.add_argument("--all", action="store_true", help="with --until: wait until every named card is in that column")
-    s.add_argument("--json", action="store_true", help="print one JSON object (or a list, with --all)"); s.set_defaults(f=cmd_watch)
+    s.add_argument("--json", action="store_true", help="print one JSON object (or a list, with --all); a board watch prints a list of events"); s.set_defaults(f=cmd_watch)
     s = sub.add_parser("research-suggest", help="backlog auto-research: put a card with no project in the Review Inbox (suggest a project, or ask)")
     s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--project", help="the project to suggest (id or name); its client comes with it")
