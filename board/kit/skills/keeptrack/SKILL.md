@@ -1,6 +1,6 @@
 ---
 name: keeptrack
-description: Use a Keeptrack board (people, follow-ups, pipeline and tasks in the board/ folder of a private GitHub repo) from any project, including a code repo connected to a board (the session then starts with a "Keeptrack: this repo is tracked on the board ..." line). Use for "what should I work on here", "my cards for this repo", claiming and finishing cards, follow-ups, contacts, leads, messages and pipeline, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.
+description: 'Use a Keeptrack board (people, follow-ups, pipeline and tasks in the board/ folder of a private GitHub repo) from any project, including a code repo connected to a board (the session then starts with a "Keeptrack: this repo is tracked on the board ..." line). Use for "what should I work on here", "my cards for this repo", claiming and finishing cards, follow-ups, contacts, leads, messages and pipeline, and when asked whether the board is accurate, truthful or up to date or to reconcile task status against GitHub pull requests, releases or deployments.'
 ---
 
 # Keeptrack (people, follow-ups, pipeline and tasks)
