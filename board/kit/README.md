@@ -320,7 +320,9 @@ You work from the team board in `board/` using `board/keeptrack.py` (`board/task
    If blocked:     keeptrack.py heartbeat <id> --status blocked --note "<why>"
    Need a person:  keeptrack.py wait <id> --on "<who: what>" --who <user>; comment @<user> with the question; assign <id> <user>; stop
                    (never unwait a wait you did not set in this session, or one on someone else: a person ends it)
-4. Finish:         keeptrack.py done <id> --note "<result, PR link>"            # or: keeptrack.py release <id> --column todo
+4. Finish:         keeptrack.py done <id> --note "<result, PR link>"
+   Handoff:        keeptrack.py release <id> --column todo --watch   # frees the claim, then polls (kit v119; does not block claims)
+   Give up:        keeptrack.py release <id> --column todo
    Needs a decision: keeptrack.py review <id> --who <user> --note "<result + options + recommendation>"   # Pending review, not Done
 Write cards a newcomer can act on (board/CARDS.md). Every PR, issue, document or page a card mentions goes in its
 links:  keeptrack.py link <id> <full URL> --title "<what it is>"

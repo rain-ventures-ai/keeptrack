@@ -115,9 +115,11 @@ change between two runs is reported by the next one.
 ## 5. Finish
 ```bash
 python3 board/keeptrack.py done <id> --note "<result and link to the file/PR>"
-# or hand back:
-python3 board/keeptrack.py release <id> --column todo
+# or hand off / hand back (default when another agent may continue):
+python3 board/keeptrack.py release <id> --column todo --watch
 ```
+**Handoff (kit v119):** when you finish a stretch but the card stays open for another agent, **release the claim and watch** — do not keep the claim. `release --watch` frees the card (another session can `claim` it) and then polls it like `watch`, so you wake on comments, questions or other changes. Watching does not block claims. It ends when the user asks you to stop, this session ends (the poll is foreground in this process), or `--timeout` expires. Plain `release` (no `--watch`) is for giving up without staying attached. `done` / `review` already clear the claim; after `review`, a separate `watch` is optional if you still want to follow the decision.
+
 `done` is refused while checklist items are open: tick them, or use `done <id> --cancel --note "<why>"` when they are being dropped.
 
 **Done or Pending review?** When the work is finished but its result needs a person's decision (research or a review

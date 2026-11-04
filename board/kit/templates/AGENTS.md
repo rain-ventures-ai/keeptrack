@@ -24,7 +24,8 @@ python3 board/keeptrack.py wait <id> --on "<who: what>" --who <user>            
 # never `unwait` a wait you did not set in this session, or one on someone else: a person ends those
 python3 board/keeptrack.py done <id> --note "<result, PR or file link>"            # finished
 python3 board/keeptrack.py review <id> --who <user> --note "<result + options>"    # finished, but a person must decide: Pending review
-python3 board/keeptrack.py release <id> --column todo                              # giving up / handing back
+python3 board/keeptrack.py release <id> --column todo --watch                      # handoff: free the claim, then watch (does not block claims)
+python3 board/keeptrack.py release <id> --column todo                              # giving up without staying attached
 python3 board/keeptrack.py add "Title" --assign <user> --label <x> --due YYYY-MM-DD --client "<client>" --details "<text>"
 python3 board/keeptrack.py todo-done <id> <N>                                      # tick checklist item N (numbers come from `show`; or its d_ id)
 python3 board/keeptrack.py todo-add <id> "new step"                                # add a checklist item you discovered
@@ -44,6 +45,8 @@ Auth: `gh` logged in with access to this repo, or (cloud sandboxes, CI, no `gh`)
 **Comments:** cards have a comment stream for talking between people and agents. Read it (`show`/`comments`) before starting. Post a comment when you finish (what you did, links), when you have a question, or when you hand something back; if you need an answer, also set status `blocked`. Comments are append-only; do not try to edit them. Write longer comments and details in Markdown (`comment <id> - <<'TEXT'` reads stdin). A comment that needs a person always recommends: what waits and why, 2-4 options each with a score out of 10, your recommendation and the reason, and the next step (`board/CARDS.md`, "Comments that need a person").
 
 **Heartbeats:** `claim` records your active task in a local, gitignored `.board-claim.json`. In Claude Code a project hook runs `keeptrack.py auto-heartbeat` after tool calls, which refreshes the claim at most every 15 minutes and does nothing when no claim is active. Codex and other agents have no hook, so run `keeptrack.py heartbeat <id>` yourself every ~15 minutes. A session a person drives sends none: claim with `--attended`, or set `BOARD_ATTENDED=1` in your own environment. `done` and `release` clear the local record.
+
+**Handoff:** when you finish a stretch but another agent may continue the card, `release <id> --column todo --watch` (kit v119). That frees the claim so they can pick it up, then polls the card until it changes, the user asks you to stop, this session ends, or `--timeout` expires. Watching never blocks claims.
  Use `--file <copy.json>` to test safely against a local copy.
 
 Web board: https://rain-ventures-ai.github.io/keeptrack/board/?repo={repo}&path=board/tasks.json

@@ -11,7 +11,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py next --for osouthgate --agent claude --session ABC     # claim the first claimable todo task
   keeptrack.py claim ID --for osouthgate --agent claude --session ABC [--note ...] [--force]
   keeptrack.py heartbeat ID [--note ...] [--status running|blocked|stuck]      # from the session that holds the claim
-  keeptrack.py release ID [--column todo]                                      # anyone may release a stale, stuck or blocked claim
+  keeptrack.py release ID [--column todo] [--watch]                            # hand back; --watch then polls that card (does not block claims)
   keeptrack.py done ID --note "result"  |  done ID --cancel --note "why"       # done refuses open to-dos; --cancel drops them
   keeptrack.py review ID --note "result + decision" [--who LOGIN]   # work done, a person decides: Pending review, not Done
   keeptrack.py add "Title" [--assign osouthgate] [--label x] [--due 2026-10-20] [--client "Acme"] [--details ...] [--todo "step 1" --todo "step 2"] [--link URL "title"]
@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 118  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 119  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3573,6 +3573,10 @@ def move_task_to_column(data, task, column, a=None):
 
 def cmd_release(a):
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
+    watch = bool(getattr(a, "watch", False))
+    if not watch and (getattr(a, "every", None) is not None or getattr(a, "timeout", None) is not None
+                      or getattr(a, "until", None) or getattr(a, "json", False) or getattr(a, "all", False)):
+        sys.exit("--every, --timeout, --until, --json and --all need --watch")
     def fn(data):
         t = find(data, a.id)
         if a.column == "done" and open_waiting(t):
@@ -3585,6 +3589,13 @@ def cmd_release(a):
         if a.column: move_task_to_column(data, t, a.column, a)
         t["updated"] = now(); print(f"released {t['id']} -> {t['column']}")
     mutate(fn, f"Agent release: {a.id}")
+    if watch:   # claim is gone; poll this card so a handoff agent can claim while this session stays loosely attached
+        w = argparse.Namespace(ids=[a.id], every=getattr(a, "every", None), timeout=getattr(a, "timeout", None),
+                               until=getattr(a, "until", None), all=bool(getattr(a, "all", False)),
+                               json=bool(getattr(a, "json", False)))
+        for k in WATCH_FILTERS + ("on", "not_by", "cursor", "follow", "boards"):
+            setattr(w, k, None)
+        cmd_watch(w)
 
 
 def card_url(num, ident=None):
@@ -7057,7 +7068,7 @@ COMMAND_HELP = {   # one line each, for commands whose parser has none
     "link": "attach a link to a card, e.g. its pull request (- reads several from stdin)",
     "claim": "take a card for an agent session (refuses a live claim unless --force)",
     "heartbeat": "refresh your claim; --note what you are doing; --status blocked|stuck|running",
-    "release": "give a card back without finishing it (--column to move it)",
+    "release": "give a card back without finishing it (--column to move it; --watch then polls it without blocking claims)",
     "done": "finish a claimed card (--note result and links)",
     "auto-heartbeat": "for hooks: refresh the active claim at most every 15 minutes (never for --attended claims); silent otherwise",
     "todo-add": "add a checklist item (- reads several from stdin)", "todo-move": "move to-do N to a new follow-up card, linked both ways", "todo-done": "tick checklist item N", "todo-undo": "untick checklist item N",
@@ -13834,7 +13845,15 @@ def main():
     s.add_argument("--status", choices=["running", "blocked", "stuck"]); s.add_argument("--session")
     s.add_argument("--force", action="store_true", help="act on a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_heartbeat)
     s = sub.add_parser("release"); s.add_argument("id"); s.add_argument("--column"); s.add_argument("--session")
-    s.add_argument("--force", action="store_true", help="release a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_release)
+    s.add_argument("--force", action="store_true", help="release a claim that is not this session's (a person told you to)")
+    s.add_argument("--watch", action="store_true",
+                   help="after releasing, poll this card like watch (handoff: frees the claim, this session stays loosely attached)")
+    s.add_argument("--every", type=float, help="with --watch: seconds between polls (same as watch)")
+    s.add_argument("--timeout", type=float, help="with --watch: give up after this many seconds (same as watch)")
+    s.add_argument("--until", help="with --watch: wait until the card is in this column (same as watch)")
+    s.add_argument("--all", action="store_true", help="with --watch --until: unused for a single card; kept for watch parity")
+    s.add_argument("--json", action="store_true", help="with --watch: print JSON when the watch wakes (same as watch)")
+    s.set_defaults(f=cmd_release)
     s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--note", help="the result: what was delivered, where it is (required)"); s.add_argument("--session")
     s.add_argument("--cancel", action="store_true", help="close the card without finishing it (needs --note; open to-dos are dropped)")
     s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_done)

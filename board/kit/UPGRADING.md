@@ -25,6 +25,12 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v119 (schema 4)
+`release --watch` hands a card back and then polls it, so a handoff agent can claim while this session stays loosely attached. No data change and no migration.
+- `release ID --watch` releases the claim, then runs `watch` on that card (`--every`, `--timeout`, `--until`, `--json` pass through). Watching never blocks claims; it ends when the user stops it, the session ends (foreground poll dies with the process), or `--timeout` expires.
+- Agent docs: after a handoff stretch, prefer `release --watch` (not a live claim). `done` / `review` stay as they are.
+- Run `kit-update` only. Check: `kit-check` says v119, and `keeptrack.py release --help` lists `--watch`.
+
 ### v118 (schema 4)
 `resolve` says when its answer is incomplete, caches each board's projects by head commit, and reads boards with a local clone through git. No data change and no migration.
 - `resolve --json` adds `complete`, `unread` and `stale`. A tool that reads it must treat `complete: false` as unknown, never as "no board".
