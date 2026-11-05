@@ -430,11 +430,15 @@ class FixtureBoards(unittest.TestCase):
         first = next(t for t in data["tasks"] if t["id"] == "t_first")
         for field in ("waiting", "agent_cleared", "claim"):
             self.assertEqual(card[field], first[field], field)
+        # Static fixture dates age out of doctor's 30-day AGENT_CLEARED window; keep the flag fresh for the assert.
+        first["agent_cleared"] = [{**first["agent_cleared"][0], "at": kt.now()}]
         first["details"] += " Updated fixture."
         self.assertTrue(kt.save_changes(data, message="Waiting fixture roundtrip"))
         saved = read_json(os.path.join(board_dir, "cards", "t_first.json"))
-        for field in ("waiting", "agent_cleared", "claim"):
+        for field in ("waiting", "claim"):
             self.assertEqual(card[field], saved[field], field)
+        self.assertEqual(card["agent_cleared"][0]["what"], saved["agent_cleared"][0]["what"])
+        self.assertEqual(card["agent_cleared"][0]["by"], saved["agent_cleared"][0]["by"])
         self.assertEqual(settings, read_json(os.path.join(board_dir, "tasks.json"))["settings"])
         issues, _, code = kt.doctor_board(False)
         self.assertEqual(0, code, issues)
