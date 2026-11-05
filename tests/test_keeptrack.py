@@ -2968,6 +2968,66 @@ class AgentClaimLimit(unittest.TestCase):
         args.__dict__.update(kw)
         self.quiet(kt.cmd_claim, args)
 
+    def test_attended_self_assignment_and_claim_save_together(self):
+        d = self.read()
+        d["columns"].insert(0, {"id": "backlog", "name": "Backlog"})
+        d["tasks"][2].update(assignees=[], column="backlog")
+        write(self.file, d)
+        self.claim("t_c1", "s1")
+        self.claim("t_c2", "s2")
+        self.claim("t_c3", "me", for_user=None, attended=True, assign_to_me=True)
+        card = self.read()["tasks"][2]
+        self.assertEqual(card["assignees"], ["osouthgate"])
+        self.assertEqual(card["claim"]["on_behalf_of"], "osouthgate")
+        self.assertTrue(card["claim"]["attended"])
+        self.assertEqual(card["column"], "in-progress")
+
+    def test_self_assignment_requires_explicit_attended_claim(self):
+        d = self.read()
+        d["tasks"][0]["assignees"] = []
+        write(self.file, d)
+        for options, error in (
+            ({"for_user": None, "attended": True}, "assigned to nobody"),
+            ({"for_user": None, "assign_to_me": True}, "requires explicit --attended"),
+            ({"attended": True, "assign_to_me": True}, "cannot be used with --for or --force"),
+            ({"for_user": None, "attended": True, "assign_to_me": True, "force": True},
+             "cannot be used with --for or --force"),
+        ):
+            with self.subTest(options=options), self.assertRaisesRegex(SystemExit, error):
+                self.claim("t_c1", "me", **options)
+        self.assertEqual(self.read(), d)
+
+    def test_self_assignment_respects_existing_claim_and_wait(self):
+        self.claim("t_c1", "other")
+        d = self.read()
+        d["tasks"][0].update(assignees=[], column="todo")
+        d["tasks"][1].update(assignees=[], waiting={"on": "person", "who": "osouthgate"})
+        d["tasks"][2]["assignees"] = ["someone-else"]
+        d["tasks"][3].update(assignees=[], column="done")
+        write(self.file, d)
+        for tid, error in (("t_c1", "already claimed"), ("t_c2", "is waiting on"),
+                           ("t_c3", "task is assigned to"), ("t_c4", "only for cards in Backlog or To do")):
+            with self.subTest(tid=tid), self.assertRaisesRegex(SystemExit, error):
+                self.claim(tid, "me", for_user=None, attended=True, assign_to_me=True)
+        self.assertEqual(self.read(), d)
+
+    def test_self_assignment_rechecks_assignee_on_save_conflict(self):
+        d = self.read()
+        d["tasks"][0]["assignees"] = []
+        write(self.file, d)
+        real_save = kt.save
+        def racing_save(data, sha, message):
+            d["tasks"][0]["assignees"] = ["someone-else"]
+            write(self.file, d)
+            return False
+        kt.save = racing_save
+        try:
+            with self.assertRaisesRegex(SystemExit, "task is assigned to"):
+                self.claim("t_c1", "me", for_user=None, attended=True, assign_to_me=True)
+        finally:
+            kt.save = real_save
+        self.assertEqual(self.read(), d)
+
     def test_third_agent_claim_is_refused(self):
         self.claim("t_c1", "s1"); self.claim("t_c2", "s2")
         with self.assertRaises(SystemExit) as e:
