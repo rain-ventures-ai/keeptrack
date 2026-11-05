@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v120 (schema 4)
+On GitHub boards, an attended session can assign an unassigned Backlog or To do card to the acting member and claim it in one save. No data change and no migration.
+- `claim ID --attended --assign-to-me` (no `--for`, no `--force`): only when the acting board member asked to start that card.
+- Missing `assignees` counts as unassigned. Live claims, waits and existing assignees still refuse. Hosted boards refuse `--assign-to-me`.
+- Agent docs: kit README and `repo-skills/board/SKILL.md` name the command.
+- Run `kit-update` only. Check: `kit-check` says v120, and `keeptrack.py claim --help` lists `--assign-to-me`.
+
 ### v119 (schema 4)
 `release --watch` hands a card back and then polls it, so a handoff agent can claim while this session stays loosely attached. No data change and no migration.
 - `release ID --watch` releases the claim, then runs `watch` on that card (`--every`, `--timeout`, `--until`, `--json` pass through). Watching never blocks claims; it ends when the user stops it, the session ends (foreground poll dies with the process), or `--timeout` expires.
