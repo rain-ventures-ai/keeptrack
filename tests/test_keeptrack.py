@@ -2982,6 +2982,16 @@ class AgentClaimLimit(unittest.TestCase):
         self.assertTrue(card["claim"]["attended"])
         self.assertEqual(card["column"], "in-progress")
 
+    def test_attended_self_assignment_treats_missing_assignees_as_unassigned(self):
+        d = self.read()
+        d["tasks"][0].pop("assignees", None)
+        d["tasks"][0]["column"] = "todo"
+        write(self.file, d)
+        self.claim("t_c1", "me", for_user=None, attended=True, assign_to_me=True)
+        card = self.read()["tasks"][0]
+        self.assertEqual(card["assignees"], ["osouthgate"])
+        self.assertEqual(card["claim"]["on_behalf_of"], "osouthgate")
+
     def test_self_assignment_requires_explicit_attended_claim(self):
         d = self.read()
         d["tasks"][0]["assignees"] = []

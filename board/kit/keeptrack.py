@@ -3420,7 +3420,7 @@ def do_claim(a, tid, data):
     sid = session_id(a)
     assign_to_me = getattr(a, "assign_to_me", False)
     startable_column = t["column"] in ("backlog", "todo")
-    unassigned = t.get("assignees") == []
+    unassigned = not (t.get("assignees") or [])
     self_assign = assign_to_me and unassigned
     if assign_to_me:
         if not startable_column:
