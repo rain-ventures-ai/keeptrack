@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-On GitHub boards, `claim --attended --assign-to-me` can assign an unassigned Backlog or To do card to the acting member and claim it in one save. Use it only when that member directly asks to start the card. Existing assignments, waits and live claims still apply. No migration.
+Kit v120: on GitHub boards, `claim --attended --assign-to-me` assigns an unassigned Backlog or To do card to the acting member and claims it in one save, only when that member asks directly. Missing `assignees` counts as unassigned. Existing assignments, waits and live claims still apply. Hosted boards refuse the option. No data change and no migration. ([#200](https://github.com/rain-ventures-ai/keeptrack/pull/200))
 
 Kit v119: `release --watch` releases the claim and then polls that card (`watch`), so a handoff agent can claim while the original session stays loosely attached. Watching never blocks claims; it ends when the user stops it, the session ends (the foreground poll dies with the process), or `--timeout` expires. `--every`, `--timeout`, `--until` and `--json` pass through to `watch`. Agent skill and AGENTS template tell agents to release+watch on handoff by default. No data change and no migration. ([#198](https://github.com/rain-ventures-ai/keeptrack/issues/198))
 
