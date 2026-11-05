@@ -315,7 +315,10 @@ You work from the team board in `board/` using `board/keeptrack.py` (`board/task
 1. Find work:      python3 board/keeptrack.py list --assignee <github-user> --column todo --unclaimed
 2. Claim it:       python3 board/keeptrack.py claim <id> --for <github-user> --agent <claude|codex> --session <session-id> --note "starting"
                    (or:  keeptrack.py next --for <github-user> --agent claude --session <id>)
-   - You may only claim tasks assigned to the human you work for. A fresh claim by another session is refused.
+   - Claim tasks assigned to the human you work for. A fresh claim by another session is refused.
+   - When the acting board member directly asks you to start an unassigned Backlog or To do card on a GitHub board, use
+     `keeptrack.py claim <id> --attended --assign-to-me`. It assigns the card to the acting member and claims it in one save.
+     Omit `--for` and `--force`. Existing assignments, waits and other sessions’ claims still apply.
 3. While working:  keeptrack.py heartbeat <id> --note "<what you are doing>"      # at least every 15 minutes (not for --attended)
    If blocked:     keeptrack.py heartbeat <id> --status blocked --note "<why>"
    Need a person:  keeptrack.py wait <id> --on "<who: what>" --who <user>; comment @<user> with the question; assign <id> <user>; stop

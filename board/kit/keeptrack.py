@@ -1644,6 +1644,8 @@ def hosted_dispatch(a):
         sys.exit("capability_unavailable: hosted settings-set is read-only; legacy settings flags are refused; use settings --json or web Settings → Board → Docs home")
     if a.cmd == "settings-set":
         sys.exit(DOCS_HOSTED_READONLY)
+    if a.cmd == "claim" and getattr(a, "assign_to_me", False):
+        sys.exit("capability_unavailable: claim --assign-to-me is only available on GitHub boards")
     adapter = storage_adapter()
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
@@ -3416,8 +3418,18 @@ def do_claim(a, tid, data):
     user = a.for_user or default_user()
     agent = a.agent or os.environ.get("BOARD_AGENT") or "agent"
     sid = session_id(a)
-    if not a.force and user and user.lower() not in [x.lower() for x in t.get("assignees", [])]:
-        sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} (use --force to override)")
+    assign_to_me = getattr(a, "assign_to_me", False)
+    startable_column = t["column"] in ("backlog", "todo")
+    unassigned = not (t.get("assignees") or [])
+    self_assign = assign_to_me and unassigned
+    if assign_to_me:
+        if not startable_column:
+            sys.exit("refused: --assign-to-me is only for cards in Backlog or To do")
+        user = member_login(data, user)
+    if not a.force and not self_assign and user and user.lower() not in [x.lower() for x in (t.get("assignees") or [])]:
+        hint = ("use --attended --assign-to-me without --for if the acting board member asked to start it"
+                if unassigned and startable_column and getattr(a, "attended", False) else "use --force to override")
+        sys.exit(f"refused: task is assigned to {t.get('assignees') or 'nobody'}, not @{user} ({hint})")
     cs = claim_state(data, t.get("claim"))
     # re-claiming your own running card is never refused; reviving your own stale, stuck or blocked claim counts
     _MUT["recheck"] = True   # a lost race re-runs this on the newer board: never a three-way merge of two claims
@@ -3444,6 +3456,10 @@ def do_claim(a, tid, data):
     # keep a link the board already found for this run (it sends the routine, then the routine's own claim replaces the placeholder)
     keep = old.get("session_url", "") if old.get("agent") == agent and (old.get("on_behalf_of") or "").lower() == (user or "").lower() else ""
     url = a.session_url or cloud_session_url() or keep
+    if self_assign:
+        t["assignees"] = [user]
+        hist(t, f"assigned to @{user}: attended claim", f"{agent}@{user}")
+        print(f"#{t['num']} assignees: {user}")
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
@@ -3480,6 +3496,8 @@ def cmd_claim(a):
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     if getattr(a, "on_behalf_of", None):
         sys.exit("--on-behalf-of works only with BOARD_BACKEND=hosted (a hosted dispatcher); on a GitHub board, claim as BOARD_USER")
+    if getattr(a, "assign_to_me", False) and (not a.attended or a.for_user or a.force):
+        sys.exit("refused: --assign-to-me requires explicit --attended and cannot be used with --for or --force")
     _PENDING_CLAIM.clear()
     with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
 
@@ -13838,7 +13856,10 @@ def main():
     s.add_argument("ids", nargs="+", metavar="id"); s.set_defaults(f=cmd_card_link)
     s = sub.add_parser("approve", help="hosted boards only (BOARD_BACKEND=hosted): approve an assigned card (on a GitHub board, move it to To do)")
     s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
-    s = sub.add_parser("claim"); s.add_argument("id"); cl(s); s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
+    s = sub.add_parser("claim"); s.add_argument("id"); cl(s)
+    s.add_argument("--assign-to-me", action="store_true",
+                   help="with --attended on a GitHub board, assign an unassigned Backlog or To do card to you in the claim")
+    s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
     s.add_argument("--project"); s.add_argument("--all", action="store_true", help="ignore this repo's default project"); s.set_defaults(f=cmd_next)
     s = sub.add_parser("heartbeat"); s.add_argument("id"); s.add_argument("--note")

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+On GitHub boards, `claim --attended --assign-to-me` can assign an unassigned Backlog or To do card to the acting member and claim it in one save. Use it only when that member directly asks to start the card. Existing assignments, waits and live claims still apply. No migration.
+
 Kit v119: `release --watch` releases the claim and then polls that card (`watch`), so a handoff agent can claim while the original session stays loosely attached. Watching never blocks claims; it ends when the user stops it, the session ends (the foreground poll dies with the process), or `--timeout` expires. `--every`, `--timeout`, `--until` and `--json` pass through to `watch`. Agent skill and AGENTS template tell agents to release+watch on handoff by default. No data change and no migration. ([#198](https://github.com/rain-ventures-ai/keeptrack/issues/198))
 
 Kit v118: `resolve` never passes a partial answer off as a whole one. A board it could not read is unknown, not empty: the answer says `complete: false` and lists `unread`, and names no board it could not check (a trusted config's board stays named, with its project unknown). Each board's projects (id, name, status, repos) are cached under `~/.cache/keeptrack/projects/` with the head commit they were read at, so an unchanged board is not read again; a failed read falls back to the last good one, listed in `stale`. A board with a local clone is read with git (`git ls-remote` for its head, the clone's own keeptrack.py with `BOARD_WRITE=git` for its projects), so `resolve` uses none of the GitHub API allowance there. New `board-head` prints the board branch's head commit. No data change and no migration.
