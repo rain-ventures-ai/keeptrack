@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v121: default document rules, so every board inherits them on `kit-update`. The AGENTS template has a new rule 5 and `CARDS.md` a new section: one master copy of a document (shared storage for anything people edit, comment on or share, personal or pupil data, and files), the repo holds only short agent notes and pointers, a card links only what a person must act on now (background goes in project links), full URLs, and documents are edited in place so the link stays and version history is kept; never bin an old file without asking. Text only; no data change and no migration.
+
 Kit v120: on GitHub boards, `claim --attended --assign-to-me` assigns an unassigned Backlog or To do card to the acting member and claims it in one save, only when that member asks directly. Missing `assignees` counts as unassigned. Existing assignments, waits and live claims still apply. Hosted boards refuse the option. No data change and no migration. ([#200](https://github.com/rain-ventures-ai/keeptrack/pull/200))
 
 Kit v119: `release --watch` releases the claim and then polls that card (`watch`), so a handoff agent can claim while the original session stays loosely attached. Watching never blocks claims; it ends when the user stops it, the session ends (the foreground poll dies with the process), or `--timeout` expires. `--every`, `--timeout`, `--until` and `--json` pass through to `watch`. Agent skill and AGENTS template tell agents to release+watch on handoff by default. No data change and no migration. ([#198](https://github.com/rain-ventures-ai/keeptrack/issues/198))

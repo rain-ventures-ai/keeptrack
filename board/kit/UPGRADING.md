@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v121 (schema 4)
+Default document rules for every board. Text only: no data change, no migration, no new command.
+- `templates/AGENTS.md` has a new rule 5 (documents: one master copy, linked by full URL, edited in place, never binned without asking). The old rule 5 is now rule 6.
+- `CARDS.md` has a new section "Documents: one master, linked, edited in place", and the "For agents" list points to it.
+- `kit-update` copies `CARDS.md` but never edits a board's own `AGENTS.md`. The upgrading agent must read the new rule 5 in the kit's `templates/AGENTS.md` and add it to the board's `AGENTS.md` by hand, keeping any rule the board already has on where documents live (merge the two; never keep two rules that disagree). `upgrade.py` already tells the agent to compare `AGENTS.md` with the template.
+- Check: `kit-check` says v121, and `board/CARDS.md` has the section "Documents: one master".
+
 ### v120 (schema 4)
 On GitHub boards, an attended session can assign an unassigned Backlog or To do card to the acting member and claim it in one save. No data change and no migration.
 - `claim ID --attended --assign-to-me` (no `--for`, no `--force`): only when the acting board member asked to start that card.
