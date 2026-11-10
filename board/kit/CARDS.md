@@ -230,6 +230,14 @@ Rules:
 - When a link stops being useful (a closed draft, a moved file), remove it with `unlink`, or say in its title that it is
   old.
 
+
+## Documents: one master, linked, edited in place
+
+- **One master copy.** A document that people edit, comment on or share, that holds personal or pupil data, or that is a file (PDF, export, deck) lives in shared storage (Drive, Dropbox, OneDrive). The repo keeps only short notes for agents, and a pointer when the master is elsewhere. Never keep two live copies.
+- **A card links only what a person must act on now:** the master document and the open items (a pull request that still needs review, a question that still waits). Put background in the project's links. A merged pull request needs no link once the document is linked.
+- **Edit in place.** Change the existing document, so its link stays the same and its version history is kept. Do not make a new file for each version, and do not add a new link to the card each time.
+- **Never bin or delete an old file without asking.** If your tool cannot edit in place, say so on the card and offer options (for example: replace the content of the file by hand, or make a new version and link only that one).
+
 ## Example: a bad card
 
 ```text
@@ -311,7 +319,7 @@ Why it is good:
   link in the same run.
 - When you find a card that fails a test while you work on it, fix the card if it is yours to change, or say so in a
   comment.
-- Keep the card short. Put long content in a document and link it.
+- Keep the card short. Put long content in a document and link it. Edit that document in place; do not add a link for each version (see "Documents: one master, linked, edited in place").
 - Write details and comments in Markdown (see "Format the text"). Use `-` and stdin for multi-line text.
 - Write in plain, simple English (see "Write in plain, simple English"): short active sentences, common words,
   no filler.
