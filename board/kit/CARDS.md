@@ -205,7 +205,7 @@ replies to a person in a thread or a chat.
 
 ## Links: what goes in the links section
 
-Add a link each time the card names or depends on one of these:
+Add a link each time the card names or depends on one of these. Keep only what a person must act on now (see "Documents: one master, linked, edited in place"):
 
 | The card mentions | Link it like this |
 |---|---|
@@ -224,12 +224,11 @@ Rules:
 - Use the full URL, not a short reference. `#481` means a card number on the board, not a pull request.
 - Give each link a title that says what it is and why it matters ("PR #481: the change that raised these questions").
 - Add the link when you write the text that mentions it, not later.
-- When you open a pull request for a card, link it at once (`link '#N' <PR url> --title "PR"`). Use the bare PR URL
+- When you open a pull request for a card, link it at once (`link '#N' <PR url> --title "PR"`) and keep it until it is merged. Use the bare PR URL
   (`https://github.com/<owner>/<repo>/pull/<n>`, no `/files`, `#...` or `?...`): the web board's Pull requests panel
   shows only links in that form.
 - When a link stops being useful (a closed draft, a moved file), remove it with `unlink`, or say in its title that it is
   old.
-
 
 ## Documents: one master, linked, edited in place
 

@@ -28,7 +28,7 @@ class Release(unittest.TestCase):
         agents = read("board", "kit", "templates", "AGENTS.md")
         self.assertIn("one master copy", agents)
         self.assertIn("edited in place", agents)
-        self.assertIn("Never bin or delete an old file without asking", agents)
+        self.assertIn("never bin or delete an old file without asking", agents)
         self.assertIn("6. **Do not send anything outside the repo**", agents)
         cards = read("board", "kit", "CARDS.md")
         self.assertIn("## Documents: one master, linked, edited in place", cards)
