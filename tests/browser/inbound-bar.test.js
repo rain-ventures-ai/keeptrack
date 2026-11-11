@@ -39,8 +39,8 @@ function board(rootExtra, inbound) {
   };
 }
 
-async function open(browser, base, api) {
-  const page = await browser.newPage(); page.on('pageerror', e => console.error('page error:', e.message));
+async function open(browser, base, api, fixedTime) {
+  const page = await browser.newPage(); if (fixedTime) await page.clock.setFixedTime(new Date(fixedTime)); page.on('pageerror', e => console.error('page error:', e.message));
   await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); sessionStorage.setItem('kb_view', 'board'); });
   await page.route('https://api.test/**', api); await page.goto(base + '/board/index.html'); await page.waitForSelector('.card, .todayhead'); return page;
 }
@@ -66,6 +66,21 @@ async function open(browser, base, api) {
     page = await open(browser, base, board({ settings: { title: 'Test', inbound_alert_minutes: 600 }, inbound: { failed: { [bad]: { error: 'x' } } } }, [old, bad]));
     await page.locator('#inboundBar').waitFor({ state: 'visible' });
     assert.doesNotMatch(await page.locator('#inboundBar').textContent(), /waited/); await page.close();
+    // kit v122: with settings.inbound_schedule a normal overnight or weekend wait is not an alert; a missed run, or a drain that has not run, is
+    const sched = { title: 'Test', inbound_schedule: { days: ['mon', 'tue', 'wed', 'thu', 'fri'], times: ['09:07', '11:07', '14:07', '16:07'], tz: 'Europe/London', grace_minutes: 30 } };
+    const weekend = '20261030T170000Z-form-d.json';   // Friday 17:00 UTC, after the last run of the day
+    page = await open(browser, base, board({ settings: sched }, [weekend]), '2026-11-02T09:20:00Z');
+    assert.equal(await page.locator('#inboundBar').isHidden(), true, 'a weekend wait is not late before Monday\'s run is past its grace time'); await page.close();
+    page = await open(browser, base, board({ settings: sched }, [weekend]), '2026-11-02T09:40:00Z');
+    await page.locator('#inboundBar').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#inboundBar').textContent(), /1 missed the Mon 09:07 run/); await page.close();
+    const lastRun = at => ({ inbound: { last_run: { at, handled: 0, failed: 0 } } });
+    page = await open(browser, base, board({ settings: sched, ...lastRun('2026-10-30T09:08:01.000Z') }, []), '2026-11-02T09:40:00Z');
+    await page.locator('#inboundBar').waitFor({ state: 'visible' });
+    const stopped = await page.locator('#inboundBar').textContent();
+    assert.match(stopped, /the drain has not run since Fri 09:08 \(expected Mon 09:07\)/); assert.match(stopped, /Last drain run: Fri 09:08/); await page.close();
+    page = await open(browser, base, board({ settings: sched, ...lastRun('2026-11-02T09:08:01.000Z') }, []), '2026-11-02T09:40:00Z');
+    assert.equal(await page.locator('#inboundBar').isHidden(), true, 'a drain that ran this morning is fine'); await page.close();
     console.log('inbound bar: ok');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

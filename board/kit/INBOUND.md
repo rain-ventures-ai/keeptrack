@@ -78,13 +78,42 @@ Each item, in file-name order (at most 100 per run; the rest wait for the next r
 
 ## Visibility
 
-- `python3 board/keeptrack.py list --attention` prints `inbound failed <file>: <error>` and
-  `inbound waiting <file> (<age>)` for an item older than `settings.inbound_alert_minutes` (board-wide runs only, like
+The alert needs to know how often the drain runs. A drain that runs four times a day leaves an item waiting 16 hours
+overnight and more over a weekend, and that is normal. Say when it runs, once, with `inbound-schedule` (kit v122):
+
+```
+python3 board/keeptrack.py inbound-schedule --days mon-fri --time 09:07 --time 11:07 --time 14:07 --time 16:07 \
+    --tz Europe/London --grace 30    # on GitHub Actions cron (runs in UTC): --tz UTC and UTC times
+python3 board/keeptrack.py inbound-schedule            # show it
+python3 board/keeptrack.py inbound-schedule --clear    # back to the alert time below
+```
+
+The schedule is `settings.inbound_schedule` = `{days, times, tz, grace_minutes}` (days `mon`..`sun`; times `HH:MM`, 24 hours,
+in `tz`, an IANA zone name such as `Europe/London`; the command stores yours when you leave it out, and a stored schedule with no `tz` is read as UTC by everyone, so two members never get different answers; grace 1 to 720 minutes, default 30). A stored schedule that cannot be used (a bad zone name, for example) is named by `inbound-schedule`, `inbound --status` and `list --attention`, and the older rule applies meanwhile. It starts nothing: it only
+tells the alert what a normal wait is, so the runner (a cloud task, a timer, Actions) keeps its own schedule and the two
+must say the same. A person sets it (an agent that is not attended may only `--clear` it, which brings back the older
+rule), in the shell or in the web board's Settings, Board, Inbound.
+
+- **With a schedule**, an item is late only when it came in *before* a run that was expected and that run's time plus the
+  grace time has passed ("missed the Mon 09:07 run"). An overnight or weekend wait is not late.
+- **Without one** (or with an invalid one), an item is late when it has waited longer than
+  `settings.inbound_alert_minutes` (default 120).
+- **A drain that has stopped.** Every run records its time in `tasks.json` `inbound.last_run` = `{at, handled, failed}`.
+  A run that handled nothing records it once a quiet day, and only when a schedule is set (the first run of the day, or when none is recorded since the
+  first expected run of today), so a quiet board gets about one small commit a day, not one for every run. When the
+  recorded time is older than the first expected run of the latest scheduled day (plus grace), the alert says
+  `inbound drain has not run since <time>` (a recorded time more than a few minutes in the future is reported too: it must not hide a dead drain). A board with a schedule but no recorded run yet is not alarmed: the first run records one.
+  Older kits ignore `last_run` and drop it the next time they write the record.
+
+- `python3 board/keeptrack.py list --attention` prints `inbound failed <file>: <error>`, `inbound waiting <file> (<age>), missed the <run> run` (with a schedule; without one, for an item older than `settings.inbound_alert_minutes`) and `inbound drain has not run since <time>` (board-wide runs only, like
   lapsed questions).
-- The web board shows a strip under the header with the same counts (it reads the names from the folder listing it
-  loads anyway; nothing extra is fetched). Dismissing it hides it until the waiting items change. Split boards only:
+- The web board shows a strip under the header with the same counts and the last drain run (it reads the names from the folder listing it
+  loads anyway; nothing extra is fetched). Its link opens Settings, Board, Inbound (kit v122): the schedule, each source's settings
+  (mode, handler, column, assignee, labels, checklist, client, project, stage, priority, attach days; card mode and a handler each
+  ask for a confirmation), and the waiting and failed items with their errors as plain text. A person edits it there, with the same rules as
+  `inbound-source` and `inbound-schedule`. Dismissing it hides it until the waiting items change. Split boards only:
   a one-file board has no folder listing, so use `list --attention` there.
-- `inbound --status` lists each source's settings and every waiting or failed item.
+- `inbound --status` lists each source's settings, the schedule, the last run and every waiting or failed item.
 
 ## A board's own card logic: a handler
 

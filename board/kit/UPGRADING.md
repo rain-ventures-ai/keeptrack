@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v122 (schema 4)
+The inbound alert knows the drain's schedule, the drain records when it last ran, and the web Settings edit the inbound sources. No data change and no migration: `settings.inbound_schedule` and `inbound.last_run` are new and optional, and older kits ignore them (an older kit's drain drops `last_run` when it writes the record, so a board whose runner still runs an older kit should upgrade it too).
+- New command `inbound-schedule [--days mon-fri] [--time HH:MM ...] [--tz ZONE] [--grace N] [--clear]`. A person sets it; an agent that is not attended may only `--clear`.
+- `list --attention` and the web strip: with a schedule, an item is late only when it missed an expected run; a drain that has not run since the first expected run of the latest scheduled day is reported. `inbound` records its time (a quiet run once a day). `inbound --status` shows the schedule and the last run.
+- Web board: Settings, Board, Inbound (the schedule, each source's settings, waiting and failed items). Card mode and a handler ask for a confirmation.
+- Run `kit-update` only (a board with the repo-specific line in `board/upgrade-keep.txt`: `python3 board/upgrade.py`). Check: `kit-check` says v122, `keeptrack.py inbound-schedule --help` runs. To use it, set the schedule once, matching the runner: `inbound-schedule --days mon-fri --time 09:07 --time 11:07 --time 14:07 --time 16:07 --tz Europe/London`, then commit it. Until one is set, the alert keeps the older rule (`settings.inbound_alert_minutes`).
+
 ### v121 (schema 4)
 Default document rules for every board. Text only: no data change, no migration, no new command.
 - `templates/AGENTS.md` has a new rule 5 (documents: one master copy, linked by full URL, edited in place, never binned without asking). The old rule 5 is now rule 6.
